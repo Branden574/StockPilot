@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter, JetBrains_Mono } from 'next/font/google';
+import { Inter, Inter_Tight, Instrument_Serif, JetBrains_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 
 import { Toaster } from '@/components/ui/sonner';
@@ -14,6 +14,21 @@ const inter = Inter({
   subsets: ['latin'],
   display: 'swap',
   variable: '--font-sans',
+});
+
+const interTight = Inter_Tight({
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
+  display: 'swap',
+  variable: '--font-display',
+});
+
+const instrumentSerif = Instrument_Serif({
+  subsets: ['latin'],
+  weight: ['400'],
+  style: ['normal', 'italic'],
+  display: 'swap',
+  variable: '--font-serif',
 });
 
 const jetbrains = JetBrains_Mono({
@@ -79,7 +94,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning className={`${inter.variable} ${jetbrains.variable}`}>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${inter.variable} ${interTight.variable} ${instrumentSerif.variable} ${jetbrains.variable}`}
+    >
       <body className="min-h-screen bg-background font-sans antialiased">
         <ThemeProvider>
           <QueryProvider>
