@@ -14,12 +14,19 @@ interface CookieToSet {
 const PROTECTED_PREFIXES = ['/dashboard', '/onboarding'];
 const AUTH_ROUTES = ['/signin', '/signup', '/reset'];
 
+/** Header keys forwarded from middleware to the page render. */
+export const SESSION_HEADER_USER_ID = 'x-stockpilot-user-id';
+export const SESSION_HEADER_USER_EMAIL = 'x-stockpilot-user-email';
+
 /**
  * Refreshes the Supabase session on every request and gates protected routes.
- * Mounted from `apps/web/src/middleware.ts`.
+ * After validating with auth.getUser() (the only secure path), exposes the
+ * user id + email as request headers so server components can trust them
+ * without making a second round trip to the Auth API.
  */
 export async function updateSession(request: NextRequest) {
-  let response = NextResponse.next({ request });
+  // Track any cookies the supabase client wants to set (token refreshes).
+  const pendingCookies: CookieToSet[] = [];
 
   const supabase = createServerClient<Database>(
     env.NEXT_PUBLIC_SUPABASE_URL,
@@ -30,22 +37,23 @@ export async function updateSession(request: NextRequest) {
           return request.cookies.getAll();
         },
         setAll(cookiesToSet: CookieToSet[]) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options),
-          );
+          cookiesToSet.forEach(({ name, value, options }) => {
+            // Mirror onto the request so subsequent reads in the same call
+            // see the fresh values.
+            request.cookies.set(name, value);
+            pendingCookies.push({ name, value, options });
+          });
         },
       },
     },
   );
 
+  // The single auth.getUser() call per request.
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
   const { pathname, search } = request.nextUrl;
-
   const isProtected = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
   const isAuthRoute = AUTH_ROUTES.some((p) => pathname.startsWith(p));
 
@@ -53,15 +61,32 @@ export async function updateSession(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = '/signin';
     url.searchParams.set('redirect', `${pathname}${search}`);
-    return NextResponse.redirect(url);
+    const redirectRes = NextResponse.redirect(url);
+    pendingCookies.forEach(({ name, value, options }) => redirectRes.cookies.set(name, value, options));
+    return redirectRes;
   }
 
   if (isAuthRoute && user) {
     const url = request.nextUrl.clone();
     url.pathname = '/dashboard';
     url.search = '';
-    return NextResponse.redirect(url);
+    const redirectRes = NextResponse.redirect(url);
+    pendingCookies.forEach(({ name, value, options }) => redirectRes.cookies.set(name, value, options));
+    return redirectRes;
   }
 
+  // Forward the validated identity downstream as headers.
+  const requestHeaders = new Headers(request.headers);
+  if (user) {
+    requestHeaders.set(SESSION_HEADER_USER_ID, user.id);
+    requestHeaders.set(SESSION_HEADER_USER_EMAIL, user.email ?? '');
+  } else {
+    requestHeaders.delete(SESSION_HEADER_USER_ID);
+    requestHeaders.delete(SESSION_HEADER_USER_EMAIL);
+  }
+
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  // Apply any token-refresh cookies onto the final response.
+  pendingCookies.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
   return response;
 }

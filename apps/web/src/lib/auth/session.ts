@@ -1,7 +1,9 @@
 import { cache } from 'react';
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { createClient } from '@/lib/supabase/server';
+import { SESSION_HEADER_USER_EMAIL, SESSION_HEADER_USER_ID } from '@/lib/supabase/middleware';
 
 import type { Role } from '@stockpilot/core';
 
@@ -19,39 +21,42 @@ export interface OrgContext extends ServerSession {
 }
 
 /**
- * Loads user + profile + active membership.
+ * Loads user + active membership.
  *
- * Performance: uses `auth.getSession()` (cookie-only, no HTTP) instead of
- * `auth.getUser()` (validates against Supabase Auth API, ~250ms round trip).
- * Safe because:
- *   - The proxy/middleware already calls getUser() on every request, which
- *     validates the JWT and refreshes the cookie.
- *   - Cookies are HttpOnly + Secure + SameSite=Lax, so the page render can
- *     trust whatever is in them after middleware ran.
+ * Performance:
+ *   - User id comes from a request header set by the proxy middleware
+ *     after it called auth.getUser() (the only secure validation path).
+ *     Page renders skip the redundant ~250ms HTTP round trip to Auth.
+ *   - Profile + membership lookups run in parallel.
+ *   - Wrapped in React.cache() so every service call inside the same
+ *     render shares one fetch.
  *
- * Wrapped in React.cache() so every service inside the same render shares
- * one fetch.
+ * Security:
+ *   - Headers come from the proxy, which validated the JWT against
+ *     Supabase Auth and refreshed the cookie if needed. Server components
+ *     can't be reached without going through the proxy, so the header is
+ *     trusted within this request.
+ *   - Per-query authorization still happens via the JWT cookie + RLS.
  */
 const loadSessionAndContext = cache(
   async (): Promise<{ session: ServerSession | null; orgRole: Role | null; orgId: string | null }> => {
-    const supabase = await createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const user = session?.user;
-    if (!user) return { session: null, orgRole: null, orgId: null };
+    const h = await headers();
+    const userId = h.get(SESSION_HEADER_USER_ID);
+    if (!userId) return { session: null, orgRole: null, orgId: null };
 
-    // Profile + "any active membership" run in parallel.
+    const email = h.get(SESSION_HEADER_USER_EMAIL) ?? '';
+    const supabase = await createClient();
+
     const [profileRes, anyMemberRes] = await Promise.all([
       supabase
         .from('user_profiles')
         .select('id, email, full_name, avatar_url, default_organization_id')
-        .eq('id', user.id)
+        .eq('id', userId)
         .maybeSingle(),
       supabase
         .from('organization_members')
         .select('organization_id, role')
-        .eq('user_id', user.id)
+        .eq('user_id', userId)
         .not('accepted_at', 'is', null)
         .limit(1)
         .maybeSingle(),
@@ -67,7 +72,7 @@ const loadSessionAndContext = cache(
         }
       | null;
 
-    const serverSession: ServerSession = profile
+    const session: ServerSession = profile
       ? {
           userId: profile.id,
           email: profile.email,
@@ -76,8 +81,8 @@ const loadSessionAndContext = cache(
           defaultOrganizationId: profile.default_organization_id,
         }
       : {
-          userId: user.id,
-          email: user.email ?? '',
+          userId,
+          email,
           fullName: null,
           avatarUrl: null,
           defaultOrganizationId: null,
@@ -87,19 +92,19 @@ const loadSessionAndContext = cache(
 
     if (
       member &&
-      serverSession.defaultOrganizationId &&
-      member.organization_id !== serverSession.defaultOrganizationId
+      session.defaultOrganizationId &&
+      member.organization_id !== session.defaultOrganizationId
     ) {
       const { data: targeted } = await supabase
         .from('organization_members')
         .select('organization_id, role')
-        .eq('user_id', user.id)
-        .eq('organization_id', serverSession.defaultOrganizationId)
+        .eq('user_id', userId)
+        .eq('organization_id', session.defaultOrganizationId)
         .not('accepted_at', 'is', null)
         .maybeSingle();
       if (targeted) {
         return {
-          session: serverSession,
+          session,
           orgRole: (targeted.role as Role) ?? null,
           orgId: (targeted.organization_id as string) ?? null,
         };
@@ -107,7 +112,7 @@ const loadSessionAndContext = cache(
     }
 
     return {
-      session: serverSession,
+      session,
       orgRole: member?.role ?? null,
       orgId: member?.organization_id ?? null,
     };
