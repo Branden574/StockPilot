@@ -10,9 +10,7 @@ export default function manifest(): MetadataRoute.Manifest {
     background_color: '#0a0f1f',
     theme_color: '#0a0f1f',
     orientation: 'portrait-primary',
-    icons: [
-      { src: '/icon.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-      { src: '/icon-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-    ],
+    // Branded PNG icons can be added later under public/icon.png + icon-maskable.png.
+    icons: [],
   };
 }
