@@ -56,5 +56,6 @@ logs/
 # typescript
 *.tsbuildinfo
 
-# generated
-packages/core/src/types/database.ts
+# Note: packages/core/src/types/database.ts is committed as a placeholder
+# (currently `Database = any`). After running `pnpm db:types` you'll commit
+# the real generated types over it.
