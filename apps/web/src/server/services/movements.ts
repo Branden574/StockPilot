@@ -2,6 +2,22 @@ import 'server-only';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
 
+export interface MovementWithItem {
+  id: string;
+  movement_type: string;
+  quantity_change: number;
+  previous_quantity: number;
+  new_quantity: number;
+  from_location_id: string | null;
+  to_location_id: string | null;
+  reason: string | null;
+  notes: string | null;
+  created_at: string;
+  item_id: string;
+  user_id: string | null;
+  item: { id: string; name: string; sku: string } | null;
+}
+
 export class MovementsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -9,6 +25,11 @@ export class MovementsService {
     return new MovementsService(await withContext());
   }
 
+  /**
+   * Lists recent movements with the parent inventory item embedded via the
+   * existing FK in a single PostgREST round trip — eliminates the separate
+   * IN(...) lookup that the dashboard + movements pages used to do.
+   */
   async list(params: { itemId?: string; limit?: number } = {}) {
     const limit = Math.min(params.limit ?? 100, 500);
     let query = this.ctx.supabase
@@ -17,7 +38,8 @@ export class MovementsService {
         `
         id, movement_type, quantity_change, previous_quantity, new_quantity,
         from_location_id, to_location_id, reason, notes, created_at,
-        item_id, user_id
+        item_id, user_id,
+        item:inventory_items!item_id (id, name, sku)
       `,
       )
       .eq('organization_id', this.ctx.organizationId)
@@ -28,37 +50,52 @@ export class MovementsService {
 
     const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
-    return data ?? [];
+
+    // PostgREST returns the related row as an array when the relation is
+    // ambiguous; flatten to a single object.
+    return (data ?? []).map((row) => {
+      const r = row as Record<string, unknown>;
+      const itemField = r.item as
+        | { id: string; name: string; sku: string }
+        | { id: string; name: string; sku: string }[]
+        | null
+        | undefined;
+      const item = Array.isArray(itemField) ? (itemField[0] ?? null) : (itemField ?? null);
+      return { ...r, item } as MovementWithItem;
+    });
   }
 }
 
-export async function getDashboardSummary() {
-  const ctx = await withContext();
-  const { supabase, organizationId } = ctx;
+export interface DashboardSummary {
+  itemCount: number;
+  outOfStockCount: number;
+  lowStockCount: number;
+  inventoryValue: number;
+}
 
-  const [{ count: itemCount }, { count: outOfStockCount }, valueRpc, lowRpc] = await Promise.all([
-    supabase
-      .from('inventory_items')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', organizationId)
-      .eq('status', 'active')
-      .is('deleted_at', null),
-    supabase
-      .from('inventory_items')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', organizationId)
-      .eq('status', 'active')
-      .lte('quantity_on_hand', 0)
-      .is('deleted_at', null),
-    supabase.rpc('inventory_value', { p_org_id: organizationId }),
-    supabase.rpc('low_stock_count', { p_org_id: organizationId }),
-  ]);
+/**
+ * One round trip — combines item count, out-of-stock count, low-stock count,
+ * and inventory value into a single index scan over inventory_items.
+ * See migration 0006_perf.sql for the get_dashboard_summary RPC.
+ */
+export async function getDashboardSummary(): Promise<DashboardSummary> {
+  const ctx = await withContext();
+  const { data, error } = await ctx.supabase.rpc('get_dashboard_summary', {
+    p_org_id: ctx.organizationId,
+  });
+  if (error) throw new ServiceError('internal_error', error.message);
+
+  // Postgres `returns table` shows up as an array of one row.
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | { item_count: number; out_of_stock_count: number; low_stock_count: number; inventory_value: number }
+    | null
+    | undefined;
 
   return {
-    itemCount: itemCount ?? 0,
-    outOfStockCount: outOfStockCount ?? 0,
-    inventoryValue: typeof valueRpc.data === 'number' ? valueRpc.data : 0,
-    lowStockCount: typeof lowRpc.data === 'number' ? lowRpc.data : 0,
+    itemCount: row?.item_count ?? 0,
+    outOfStockCount: row?.out_of_stock_count ?? 0,
+    lowStockCount: row?.low_stock_count ?? 0,
+    inventoryValue: typeof row?.inventory_value === 'number' ? row.inventory_value : 0,
   };
 }
 

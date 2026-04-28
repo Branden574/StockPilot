@@ -36,7 +36,9 @@ export class InventoryService {
       .from('inventory_items')
       .select(
         'id, sku, barcode, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, created_at, updated_at',
-        { count: 'exact' },
+        // Estimated counts use pg_class.reltuples (~1ms) instead of a full
+        // sequential count under RLS. Display purposes don't need precision.
+        { count: 'estimated' },
       )
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)

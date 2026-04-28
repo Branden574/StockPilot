@@ -9,29 +9,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { requireOrgContext } from '@/lib/auth/session';
-import { createClient } from '@/lib/supabase/server';
 import { MovementsService } from '@/server/services/movements';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
 export default async function MovementsPage() {
-  const ctx = await requireOrgContext();
   const movementsSvc = await MovementsService.forCurrentUser();
-
   const movements = await movementsSvc.list({ limit: 200 });
-
-  // Only fetch the items actually referenced by these movements.
-  const referencedIds = Array.from(new Set(movements.map((m) => m.item_id as string).filter(Boolean)));
-  const supabase = await createClient();
-  const { data: itemRows } =
-    referencedIds.length > 0
-      ? await supabase
-          .from('inventory_items')
-          .select('id, name')
-          .eq('organization_id', ctx.organizationId)
-          .in('id', referencedIds)
-      : { data: [] };
-  const itemsById = new Map((itemRows ?? []).map((r) => [r.id as string, r.name as string]));
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -63,7 +46,7 @@ export default async function MovementsPage() {
             </TableHeader>
             <TableBody>
               {movements.map((m) => {
-                const itemName = itemsById.get(m.item_id as string);
+                const itemName = m.item?.name;
                 const change = Number(m.quantity_change);
                 return (
                   <TableRow key={m.id as string}>
