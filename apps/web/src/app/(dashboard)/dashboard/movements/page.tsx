@@ -9,20 +9,29 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { InventoryService } from '@/server/services/inventory';
+import { requireOrgContext } from '@/lib/auth/session';
+import { createClient } from '@/lib/supabase/server';
 import { MovementsService } from '@/server/services/movements';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
 export default async function MovementsPage() {
+  const ctx = await requireOrgContext();
   const movementsSvc = await MovementsService.forCurrentUser();
-  const inventorySvc = await InventoryService.forCurrentUser();
 
-  const [movements, inventory] = await Promise.all([
-    movementsSvc.list({ limit: 200 }),
-    inventorySvc.list({ limit: 1000, status: 'all' }),
-  ]);
+  const movements = await movementsSvc.list({ limit: 200 });
 
-  const itemsById = new Map(inventory.items.map((i) => [i.id, i]));
+  // Only fetch the items actually referenced by these movements.
+  const referencedIds = Array.from(new Set(movements.map((m) => m.item_id as string).filter(Boolean)));
+  const supabase = await createClient();
+  const { data: itemRows } =
+    referencedIds.length > 0
+      ? await supabase
+          .from('inventory_items')
+          .select('id, name')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', referencedIds)
+      : { data: [] };
+  const itemsById = new Map((itemRows ?? []).map((r) => [r.id as string, r.name as string]));
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -54,14 +63,14 @@ export default async function MovementsPage() {
             </TableHeader>
             <TableBody>
               {movements.map((m) => {
-                const item = itemsById.get(m.item_id as string);
+                const itemName = itemsById.get(m.item_id as string);
                 const change = Number(m.quantity_change);
                 return (
                   <TableRow key={m.id as string}>
                     <TableCell className="text-xs text-muted-foreground">
                       {formatRelative(m.created_at as string)}
                     </TableCell>
-                    <TableCell className="font-medium">{item?.name ?? '—'}</TableCell>
+                    <TableCell className="font-medium">{itemName ?? '—'}</TableCell>
                     <TableCell className="text-xs uppercase tracking-wider text-muted-foreground">
                       {m.movement_type as string}
                     </TableCell>
