@@ -2,6 +2,8 @@ import { Boxes, DollarSign, MapPin, Package2, Tag, Truck } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { BarcodeDisplay } from '@/components/inventory/barcode-display';
+import { ImageUploader } from '@/components/inventory/image-uploader';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { Button } from '@/components/ui/button';
@@ -18,6 +20,7 @@ import {
 import { CategoriesService } from '@/server/services/categories';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
+import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { MovementsService } from '@/server/services/movements';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -36,12 +39,20 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
     throw e;
   }
 
-  const [categories, locations, suppliers, movements] = await Promise.all([
+  const imagesSvc = await ItemImagesService.forCurrentUser();
+  const [categories, locations, suppliers, movements, imageRows] = await Promise.all([
     (await CategoriesService.forCurrentUser()).list(),
     (await LocationsService.forCurrentUser()).list(),
     (await SuppliersService.forCurrentUser()).list(),
     movementsSvc.list({ itemId: id, limit: 50 }),
+    imagesSvc.list(id),
   ]);
+  const signed = await imagesSvc.signedUrls(imageRows.map((r) => r.storage_path as string));
+  const images = imageRows.map((r) => ({
+    id: r.id as string,
+    url: signed.get(r.storage_path as string) ?? '',
+    isPrimary: Boolean(r.is_primary),
+  }));
 
   const category = categories.find((c) => c.id === item.category_id);
   const location = locations.find((l) => l.id === item.primary_location_id);
@@ -62,10 +73,16 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
           <h1 className="text-2xl font-semibold tracking-tight">{item.name as string}</h1>
           <p className="mt-1 font-mono text-xs text-muted-foreground">{item.sku as string}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button asChild variant="outline">
             <Link href={`/dashboard/inventory/${id}/edit`}>Edit</Link>
           </Button>
+          <BarcodeDisplay
+            itemId={id}
+            itemName={item.name as string}
+            sku={item.sku as string}
+            barcode={(item.barcode as string | null) ?? null}
+          />
           <StockAdjustDialog
             itemId={id}
             itemName={item.name as string}
@@ -145,6 +162,15 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
           </CardContent>
         </Card>
       </div>
+
+      <Card className="mt-8">
+        <CardHeader>
+          <CardTitle className="text-base">Images</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ImageUploader itemId={id} initialImages={images} />
+        </CardContent>
+      </Card>
 
       <Card className="mt-8">
         <CardHeader>
