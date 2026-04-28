@@ -1,0 +1,16 @@
+{
+  "name": "@stockpilot/config",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "files": [
+    "tsconfig.base.json",
+    "eslint-preset.js",
+    "tailwind-preset.ts"
+  ],
+  "exports": {
+    "./tsconfig": "./tsconfig.base.json",
+    "./eslint": "./eslint-preset.js"
+  }
+}

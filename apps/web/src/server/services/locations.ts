@@ -1,0 +1,80 @@
+import 'server-only';
+
+import { z } from 'zod';
+
+import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+
+export const createLocationSchema = z.object({
+  name: z.string().min(1).max(120).trim(),
+  type: z.enum(['warehouse', 'room', 'shelf', 'bin', 'vehicle', 'jobsite', 'other']).optional(),
+  parentId: z.string().uuid().nullable().optional(),
+  notes: z.string().max(2000).optional(),
+});
+export type CreateLocationInput = z.infer<typeof createLocationSchema>;
+
+export const updateLocationSchema = createLocationSchema.partial();
+export type UpdateLocationInput = z.infer<typeof updateLocationSchema>;
+
+export class LocationsService {
+  constructor(private readonly ctx: ServiceContext) {}
+
+  static async forCurrentUser() {
+    return new LocationsService(await withContext());
+  }
+
+  async list() {
+    const { data, error } = await this.ctx.supabase
+      .from('locations')
+      .select('id, parent_id, name, type, notes, created_at, updated_at')
+      .eq('organization_id', this.ctx.organizationId)
+      .is('deleted_at', null)
+      .order('name', { ascending: true });
+    if (error) throw new ServiceError('internal_error', error.message);
+    return data ?? [];
+  }
+
+  async create(input: CreateLocationInput) {
+    assertPermission(this.ctx, 'locations:manage');
+    const { data, error } = await this.ctx.supabase
+      .from('locations')
+      .insert({
+        organization_id: this.ctx.organizationId,
+        name: input.name,
+        type: input.type ?? null,
+        parent_id: input.parentId ?? null,
+        notes: input.notes ?? null,
+      })
+      .select('*')
+      .single();
+    if (error) throw new ServiceError('internal_error', error.message);
+    return data;
+  }
+
+  async update(id: string, patch: UpdateLocationInput) {
+    assertPermission(this.ctx, 'locations:manage');
+    const updates: Record<string, unknown> = {};
+    if (patch.name !== undefined) updates.name = patch.name;
+    if (patch.type !== undefined) updates.type = patch.type ?? null;
+    if (patch.parentId !== undefined) updates.parent_id = patch.parentId ?? null;
+    if (patch.notes !== undefined) updates.notes = patch.notes ?? null;
+    const { data, error } = await this.ctx.supabase
+      .from('locations')
+      .update(updates)
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw new ServiceError('internal_error', error.message);
+    return data;
+  }
+
+  async archive(id: string) {
+    assertPermission(this.ctx, 'locations:manage');
+    const { error } = await this.ctx.supabase
+      .from('locations')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+  }
+}
