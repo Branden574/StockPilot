@@ -1,0 +1,69 @@
+# Supabase project configuration. See https://supabase.com/docs/reference/cli/config
+
+project_id = "stockpilot"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 16
+
+[db.pooler]
+enabled = false
+
+[realtime]
+enabled = true
+
+[studio]
+enabled = true
+port = 54323
+api_url = "http://127.0.0.1:54321"
+
+[inbucket]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+buckets.item-images.public = false
+buckets.item-images.file_size_limit = "10MiB"
+buckets.item-images.allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/avif"]
+
+buckets.item-attachments.public = false
+buckets.item-attachments.file_size_limit = "20MiB"
+
+buckets.org-logos.public = true
+buckets.org-logos.file_size_limit = "2MiB"
+buckets.org-logos.allowed_mime_types = ["image/png", "image/jpeg", "image/webp", "image/svg+xml"]
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000/auth/callback"]
+jwt_expiry = 3600
+enable_signup = true
+enable_confirmations = true
+minimum_password_length = 8
+password_requirements = "lower_upper_letters_digits"
+
+[auth.email]
+double_confirm_changes = true
+enable_confirmations = true
+secure_password_change = true
+
+[auth.sms]
+enable_signup = false
+
+[edge_runtime]
+enabled = true
+policy = "oneshot"
+
+[analytics]
+enabled = false
