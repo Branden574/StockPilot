@@ -7,7 +7,6 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { Button } from '@/components/ui/button';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
-import { createClient } from '@/lib/supabase/server';
 import { getDashboardSummary, getLowStockItems, MovementsService } from '@/server/services/movements';
 import { requireOrgContext } from '@/lib/auth/session';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
@@ -18,34 +17,17 @@ const TODAY_LABEL = new Intl.DateTimeFormat('en-US', { weekday: 'long', month: '
 export default async function DashboardHome() {
   const ctx = await requireOrgContext();
 
-  // Run independent queries in parallel; thanks to `cache()` on
-  // requireOrgContext, the membership lookup is shared across them.
+  // One PostgREST round trip per Promise.all branch; cache() de-dupes the
+  // identity load across them.
   const movementsSvc = await MovementsService.forCurrentUser();
   const [summary, lowStock, recentMovements] = await Promise.all([
-    getDashboardSummary(),
-    getLowStockItems(5),
-    movementsSvc.list({ limit: 6 }),
+    getDashboardSummary(), // 1 RPC: combined item count, OOS, low-stock, value
+    getLowStockItems(5), // 1 RPC
+    movementsSvc.list({ limit: 6 }), // 1 query, items embedded via FK
   ]);
 
-  // Only fetch the items actually referenced by the recent movements,
-  // instead of pulling the whole catalog.
-  const referencedItemIds = Array.from(
-    new Set(recentMovements.map((m) => m.item_id as string).filter(Boolean)),
-  );
-  const supabase = await createClient();
-  const { data: referencedRows } =
-    referencedItemIds.length > 0
-      ? await supabase
-          .from('inventory_items')
-          .select('id, name, sku')
-          .eq('organization_id', ctx.organizationId)
-          .in('id', referencedItemIds)
-      : { data: [] };
-  const itemsById = new Map(
-    (referencedRows ?? []).map((r) => [r.id as string, r as { id: string; name: string; sku: string }]),
-  );
-
-  // Build a synthetic 30-day inventory-value series until a real time-series RPC ships.
+  // Build a synthetic 30-day inventory-value series until a real time-series
+  // RPC ships. Cheap, render-only.
   const valueSeries = Array.from({ length: 30 }, (_, i) => {
     const base = summary.inventoryValue || 1000;
     const sin = Math.sin(i / 4) * base * 0.04;
@@ -302,7 +284,7 @@ export default async function DashboardHome() {
           ) : (
             <ul>
               {recentMovements.map((m, i) => {
-                const item = itemsById.get(m.item_id as string);
+                const item = m.item;
                 const change = Number(m.quantity_change);
                 return (
                   <li
