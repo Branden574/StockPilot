@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { requireSession } from '@/lib/auth/session';
-import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { slugify } from '@/lib/utils';
 
 import {
@@ -14,6 +14,13 @@ import {
   type CreateOrganizationInput,
 } from '@stockpilot/core';
 
+/**
+ * Bootstraps a new organization. Uses the admin (service-role) client because:
+ *   - The current user can't be an org member of an org that doesn't exist yet,
+ *     so RLS would reject the INSERT.
+ *   - We bind the membership to `session.userId` taken from the validated
+ *     server session, NOT from any client input — so this remains safe.
+ */
 export async function createOrganizationAction(
   input: CreateOrganizationInput,
 ): Promise<ActionResult<{ organizationId: string; slug: string }>> {
@@ -24,13 +31,21 @@ export async function createOrganizationAction(
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
 
-  const supabase = await createClient();
+  let admin;
+  try {
+    admin = createAdminClient();
+  } catch {
+    return err(
+      'internal_error',
+      'Server is missing SUPABASE_SERVICE_ROLE_KEY. Add it to apps/web/.env.local and restart the dev server.',
+    );
+  }
 
   const candidateSlug = parsed.data.slug?.length ? parsed.data.slug : slugify(parsed.data.name);
-  const slug = await ensureUniqueSlug(candidateSlug, supabase);
+  const slug = await ensureUniqueSlug(candidateSlug, admin);
 
-  // 1) Insert the org. The user must be authenticated (RLS policy allows insert).
-  const { data: org, error: orgError } = await supabase
+  // 1) Insert the org.
+  const { data: org, error: orgError } = await admin
     .from('organizations')
     .insert({
       name: parsed.data.name,
@@ -47,44 +62,49 @@ export async function createOrganizationAction(
     return err('internal_error', orgError?.message ?? 'Failed to create organization');
   }
 
+  const orgId = org.id as string;
+  const orgSlug = org.slug as string;
+
   // 2) Add the creator as owner.
-  const { error: memberError } = await supabase.from('organization_members').insert({
-    organization_id: org.id as string,
+  const { error: memberError } = await admin.from('organization_members').insert({
+    organization_id: orgId,
     user_id: session.userId,
     role: 'owner',
     accepted_at: new Date().toISOString(),
   });
 
   if (memberError) {
+    // Best-effort cleanup — try to roll back the org so the user can retry.
+    await admin.from('organizations').delete().eq('id', orgId);
     return err('internal_error', memberError.message);
   }
 
   // 3) Set as default org on the user profile.
-  await supabase
+  await admin
     .from('user_profiles')
-    .update({ default_organization_id: org.id as string })
+    .update({ default_organization_id: orgId })
     .eq('id', session.userId);
 
   // 4) Seed a default location so the user can immediately add items.
-  await supabase.from('locations').insert({
-    organization_id: org.id as string,
+  await admin.from('locations').insert({
+    organization_id: orgId,
     name: 'Main Warehouse',
     type: 'warehouse',
   });
 
   revalidatePath('/dashboard');
-  return ok({ organizationId: org.id as string, slug: org.slug as string });
+  return ok({ organizationId: orgId, slug: orgSlug });
 }
 
 async function ensureUniqueSlug(
   base: string,
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  admin: ReturnType<typeof createAdminClient>,
 ): Promise<string> {
   let candidate = base || `org-${Date.now()}`;
   let suffix = 0;
 
   while (true) {
-    const { data } = await supabase
+    const { data } = await admin
       .from('organizations')
       .select('id')
       .eq('slug', candidate)
