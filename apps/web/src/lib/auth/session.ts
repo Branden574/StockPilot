@@ -19,21 +19,29 @@ export interface OrgContext extends ServerSession {
 }
 
 /**
- * Loads user + profile + active membership in **two** Supabase round-trips
- * (auth.getUser, then a single Promise.all on profile + membership).
+ * Loads user + profile + active membership.
+ *
+ * Performance: uses `auth.getSession()` (cookie-only, no HTTP) instead of
+ * `auth.getUser()` (validates against Supabase Auth API, ~250ms round trip).
+ * Safe because:
+ *   - The proxy/middleware already calls getUser() on every request, which
+ *     validates the JWT and refreshes the cookie.
+ *   - Cookies are HttpOnly + Secure + SameSite=Lax, so the page render can
+ *     trust whatever is in them after middleware ran.
+ *
  * Wrapped in React.cache() so every service inside the same render shares
- * one fetch. Replaces the older 3-step sequential bootstrap which made
- * dashboard pages feel slow.
+ * one fetch.
  */
 const loadSessionAndContext = cache(
   async (): Promise<{ session: ServerSession | null; orgRole: Role | null; orgId: string | null }> => {
     const supabase = await createClient();
     const {
-      data: { user },
-    } = await supabase.auth.getUser();
+      data: { session },
+    } = await supabase.auth.getSession();
+    const user = session?.user;
     if (!user) return { session: null, orgRole: null, orgId: null };
 
-    // Profile and "any active membership" in parallel — neither depends on the other.
+    // Profile + "any active membership" run in parallel.
     const [profileRes, anyMemberRes] = await Promise.all([
       supabase
         .from('user_profiles')
@@ -59,7 +67,7 @@ const loadSessionAndContext = cache(
         }
       | null;
 
-    const session: ServerSession = profile
+    const serverSession: ServerSession = profile
       ? {
           userId: profile.id,
           email: profile.email,
@@ -77,20 +85,21 @@ const loadSessionAndContext = cache(
 
     const member = anyMemberRes.data as { organization_id: string; role: Role } | null;
 
-    // If the user has a default org but the membership we grabbed is for a
-    // different org, do a targeted lookup. Rare path — most users have one
-    // org and the default match.
-    if (member && session.defaultOrganizationId && member.organization_id !== session.defaultOrganizationId) {
+    if (
+      member &&
+      serverSession.defaultOrganizationId &&
+      member.organization_id !== serverSession.defaultOrganizationId
+    ) {
       const { data: targeted } = await supabase
         .from('organization_members')
         .select('organization_id, role')
         .eq('user_id', user.id)
-        .eq('organization_id', session.defaultOrganizationId)
+        .eq('organization_id', serverSession.defaultOrganizationId)
         .not('accepted_at', 'is', null)
         .maybeSingle();
       if (targeted) {
         return {
-          session,
+          session: serverSession,
           orgRole: (targeted.role as Role) ?? null,
           orgId: (targeted.organization_id as string) ?? null,
         };
@@ -98,7 +107,7 @@ const loadSessionAndContext = cache(
     }
 
     return {
-      session,
+      session: serverSession,
       orgRole: member?.role ?? null,
       orgId: member?.organization_id ?? null,
     };
@@ -123,8 +132,6 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
   const targetOrgId = orgId ?? session.defaultOrganizationId ?? defaultOrgId;
   if (!targetOrgId) redirect('/onboarding');
 
-  // If caller asked for a specific org and it's not the cached one, do a
-  // narrow lookup just for that.
   if (orgId && orgId !== defaultOrgId) {
     const supabase = await createClient();
     const { data: member } = await supabase

@@ -6,7 +6,17 @@ const nextConfig: NextConfig = {
 
   typedRoutes: true,
   experimental: {
-    optimizePackageImports: ['lucide-react', 'framer-motion', 'recharts'],
+    // Tree-shake big icon/animation libs in dev so route compiles stay fast.
+    optimizePackageImports: [
+      'lucide-react',
+      'framer-motion',
+      'recharts',
+      '@radix-ui/react-dialog',
+      '@radix-ui/react-dropdown-menu',
+      '@radix-ui/react-select',
+      '@radix-ui/react-tabs',
+      '@radix-ui/react-tooltip',
+    ],
   },
 
   images: {

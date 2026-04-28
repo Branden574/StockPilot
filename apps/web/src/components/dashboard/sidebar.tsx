@@ -117,6 +117,7 @@ export function Sidebar({ className, organizationName, userName, userRole }: Sid
                 <Link
                   key={item.href}
                   href={item.href}
+                  prefetch
                   className={cn(
                     'flex items-center gap-2.5 rounded-[5px] px-2.5 py-1.5 text-[13px] transition-colors',
                     active
