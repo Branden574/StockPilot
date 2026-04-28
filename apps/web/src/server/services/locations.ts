@@ -2,7 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 
 export const createLocationSchema = z.object({
   name: z.string().min(1).max(120).trim(),
@@ -35,6 +35,7 @@ export class LocationsService {
 
   async create(input: CreateLocationInput) {
     assertPermission(this.ctx, 'locations:manage');
+    await assertPlanLimit(this.ctx, 'locations');
     const { data, error } = await this.ctx.supabase
       .from('locations')
       .insert({

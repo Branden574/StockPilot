@@ -43,9 +43,14 @@ export default async function InventoryPage({
             Items, SKUs, stock levels — searchable and sortable.
           </p>
         </div>
-        <Button asChild variant="gradient">
-          <Link href="/dashboard/inventory/new">+ New item</Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline">
+            <Link href="/dashboard/inventory/import">Import CSV</Link>
+          </Button>
+          <Button asChild variant="gradient">
+            <Link href="/dashboard/inventory/new">+ New item</Link>
+          </Button>
+        </div>
       </div>
 
       <div className="mt-8">

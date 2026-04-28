@@ -9,7 +9,7 @@ import type {
   UpdateItemInput,
 } from '@stockpilot/core';
 
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 
 export interface ItemListFilters {
   q?: string;
@@ -100,6 +100,7 @@ export class InventoryService {
 
   async create(input: CreateItemInput) {
     assertPermission(this.ctx, 'items:create');
+    await assertPlanLimit(this.ctx, 'items');
 
     const sku = (input.sku && input.sku.trim()) || generateSku();
 
