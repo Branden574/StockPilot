@@ -1,127 +1,102 @@
-'use client';
-
 import { Check } from 'lucide-react';
 import Link from 'next/link';
-import * as React from 'react';
 
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
-import { PLANS, type PlanId, isUnlimited } from '@stockpilot/core';
+interface Plan {
+  name: string;
+  price: string;
+  desc: string;
+  features: string[];
+  cta: string;
+  href: string;
+  featured?: boolean;
+}
 
-type Interval = 'monthly' | 'yearly';
-
-const PLAN_ORDER: PlanId[] = ['free', 'pro', 'business', 'enterprise'];
+const PLANS: Plan[] = [
+  {
+    name: 'Maker',
+    price: '$0',
+    desc: 'For tiny operations getting started.',
+    features: ['Up to 50 SKUs', '1 location', '1 user', 'Email support'],
+    cta: 'Start free',
+    href: '/signup',
+  },
+  {
+    name: 'Roastery',
+    price: '$48',
+    desc: 'For growing single-site brands.',
+    features: ['500 SKUs · 5 locations', '5 users', 'Cycle counts · POs', 'Cmd-K · API access'],
+    cta: 'Start 14-day trial',
+    href: '/signup',
+    featured: true,
+  },
+  {
+    name: 'Workshop',
+    price: '$148',
+    desc: 'For multi-site operations.',
+    features: ['Unlimited SKUs', 'Unlimited locations', 'Roles & RLS', 'SSO · audit log'],
+    cta: 'Talk to us',
+    href: '/contact',
+  },
+];
 
 export function PricingCards() {
-  const [interval, setInterval] = React.useState<Interval>('monthly');
-
   return (
-    <section id="pricing" className="container mx-auto max-w-7xl px-4 py-24 sm:px-6">
-      <div className="mx-auto max-w-2xl text-center">
-        <p className="text-sm font-semibold uppercase tracking-wider text-primary">Pricing</p>
-        <h2 className="mt-3 text-balance text-3xl font-semibold tracking-tight sm:text-5xl">
-          Simple pricing. No surprises.
-        </h2>
-        <p className="mt-4 text-balance text-muted-foreground">
-          Start free. Upgrade when you outgrow it. Cancel anytime.
-        </p>
+    <section id="pricing" className="mx-auto max-w-[1280px] px-8 py-[72px]">
+      <p className="mb-4 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--ed-ink-4)]">
+        — Pricing
+      </p>
+      <h2 className="max-w-3xl font-display text-[clamp(32px,4vw,48px)] font-medium leading-[1.05] tracking-[-0.03em] text-balance">
+        Three plans. No <span className="font-serif-italic text-[var(--ed-ink-3)]">seat-tax surprises.</span>
+      </h2>
 
-        <div className="mt-8 inline-flex items-center rounded-full border bg-muted/40 p-1 text-sm">
-          {(['monthly', 'yearly'] as Interval[]).map((opt) => (
-            <button
-              key={opt}
-              type="button"
-              onClick={() => setInterval(opt)}
-              className={cn(
-                'rounded-full px-4 py-1.5 transition-colors',
-                interval === opt
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {opt === 'monthly' ? 'Monthly' : 'Yearly'}
-              {opt === 'yearly' && (
-                <Badge variant="secondary" className="ml-2">
-                  Save 17%
-                </Badge>
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-12 grid gap-6 lg:grid-cols-4">
-        {PLAN_ORDER.map((id) => {
-          const plan = PLANS[id];
-          const price =
-            plan.monthlyPrice < 0
-              ? null
-              : interval === 'monthly'
-                ? plan.monthlyPrice
-                : plan.yearlyPrice / 12;
-
-          const isHighlight = plan.highlight;
-
-          return (
-            <div
-              key={id}
-              className={cn(
-                'relative flex flex-col rounded-2xl border bg-card p-6 shadow-sm transition-shadow',
-                isHighlight && 'border-primary/40 shadow-lg ring-1 ring-primary/30',
-              )}
-            >
-              {isHighlight && (
-                <Badge className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gradient-to-r from-primary to-blue-500">
-                  Recommended
-                </Badge>
-              )}
-              <h3 className="text-lg font-semibold">{plan.name}</h3>
-              <p className="mt-1 text-sm text-muted-foreground">{plan.description}</p>
-
-              <div className="mt-5 flex items-baseline gap-1">
-                {price === null ? (
-                  <span className="text-3xl font-semibold">Custom</span>
-                ) : (
-                  <>
-                    <span className="text-4xl font-semibold tabular-nums">
-                      ${price.toFixed(0)}
-                    </span>
-                    <span className="text-sm text-muted-foreground">/ user / mo</span>
-                  </>
-                )}
-              </div>
-              {interval === 'yearly' && price !== null && price > 0 && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Billed annually · ${plan.yearlyPrice}/yr
-                </p>
-              )}
-
-              <Button
-                asChild
-                variant={isHighlight ? 'gradient' : id === 'free' ? 'outline' : 'default'}
-                className="mt-6"
+      <div className="mt-7 grid grid-cols-1 gap-3.5 md:grid-cols-3">
+        {PLANS.map((p) => (
+          <article
+            key={p.name}
+            className={cn(
+              'relative rounded-[10px] border bg-card p-6',
+              p.featured ? 'border-[1.5px] border-foreground' : 'border-border',
+            )}
+          >
+            {p.featured && (
+              <span
+                className="absolute -top-2.5 left-6 inline-flex items-center gap-1 rounded-[4px] bg-[hsl(var(--accent))] px-1.5 py-0.5 text-[11px] font-medium text-[hsl(var(--accent-foreground))]"
               >
-                <Link href={id === 'enterprise' ? '/contact' : '/signup'}>{plan.cta}</Link>
-              </Button>
+                <span className="h-1 w-1 rounded-full bg-current" /> Most chosen
+              </span>
+            )}
+            <div className="font-display text-[16px]">{p.name}</div>
+            <div className="mt-1 text-[12px] text-[var(--ed-ink-4)]">{p.desc}</div>
 
-              <ul className="mt-6 space-y-2 text-sm">
-                {plan.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2">
-                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-                    <span>{f}</span>
-                  </li>
-                ))}
-              </ul>
-
-              <div className="mt-auto pt-6 text-xs text-muted-foreground">
-                {isUnlimited(plan.limits.items) ? 'Unlimited items' : `${plan.limits.items.toLocaleString()} items`} ·{' '}
-                {isUnlimited(plan.limits.members) ? 'Unlimited users' : `${plan.limits.members} users`}
-              </div>
+            <div className="mt-4 font-display text-[44px] leading-none tracking-[-0.03em]">
+              {p.price}
+              <span className="ml-1 text-[13px] font-normal text-[var(--ed-ink-4)]">/mo</span>
             </div>
-          );
-        })}
+
+            <hr className="my-5 border-border" />
+
+            <ul className="mb-4 flex flex-col gap-2">
+              {p.features.map((f) => (
+                <li key={f} className="flex items-center gap-2 text-[12.5px]">
+                  <Check className="h-3 w-3" strokeWidth={2} />
+                  {f}
+                </li>
+              ))}
+            </ul>
+
+            <Button
+              asChild
+              size="lg"
+              variant={p.featured ? 'default' : 'outline'}
+              className="w-full"
+            >
+              <Link href={p.href}>{p.cta}</Link>
+            </Button>
+          </article>
+        ))}
       </div>
     </section>
   );

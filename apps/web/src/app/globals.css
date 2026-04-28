@@ -4,15 +4,19 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ─────────────────────────────────────────────────────────────────────
-   Theme tokens — Tailwind v4 reads these via @theme to expose utilities
-   like bg-background, text-foreground, border-border, etc.
+   StockPilot — quiet editorial system
+   Adapted from the Claude Design hand-off.
+   Warm off-white, ink black, hairline borders, mint accent.
    ───────────────────────────────────────────────────────────────────── */
 
 @theme {
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-display: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-display: 'Inter Tight', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-serif: 'Instrument Serif', 'Tinos', 'Times New Roman', serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
 
+  /* Map shadcn/Tailwind tokens to our quiet editorial palette so existing
+     dashboard components inherit the new look without rewrites. */
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
 
@@ -46,92 +50,122 @@
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
-}
 
-/* ─────────────────────────────────────────────────────────────────────
-   Light + dark palettes (HSL components, no hsl() wrapper)
-   Inspired by shadcn neutral with a more confident primary blue.
-   ───────────────────────────────────────────────────────────────────── */
+  /* Editorial-only tokens (use directly via CSS, not Tailwind classes). */
+  --ink: var(--ed-ink);
+  --ink-2: var(--ed-ink-2);
+  --ink-3: var(--ed-ink-3);
+  --ink-4: var(--ed-ink-4);
+  --ink-5: var(--ed-ink-5);
+  --line: var(--ed-line);
+  --line-strong: var(--ed-line-strong);
+  --bg-elev: var(--ed-bg-elev);
+  --bg-sunk: var(--ed-bg-sunk);
+}
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
+    /* Editorial raw values */
+    --ed-bg: #fafaf7;
+    --ed-bg-elev: #ffffff;
+    --ed-bg-sunk: #f4f3ee;
+    --ed-ink: #0e0f0d;
+    --ed-ink-2: #2a2c28;
+    --ed-ink-3: #5a5d56;
+    --ed-ink-4: #8b8e85;
+    --ed-ink-5: #b8baad;
+    --ed-line: #e7e5dd;
+    --ed-line-strong: #d4d2c8;
+
+    --ed-accent: 165 38% 56%;     /* mint, expressed as HSL of oklch(0.74 0.12 165) */
+    --ed-accent-ink: 165 22% 24%;
+    --ed-accent-wash: 165 35% 94%;
+
+    /* shadcn-compatible HSL components */
+    --background: 60 17% 97%;
+    --foreground: 80 7% 5%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 80 7% 5%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
+    --popover-foreground: 80 7% 5%;
 
-    --primary: 222 89% 56%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 80 7% 5%;          /* "primary" = ink black (the design's heavy-weight buttons) */
+    --primary-foreground: 60 17% 97%;
 
-    --secondary: 220 14% 96%;
-    --secondary-foreground: 222 47% 11%;
+    --secondary: 60 13% 95%;
+    --secondary-foreground: 80 7% 5%;
 
-    --muted: 220 14% 96%;
-    --muted-foreground: 220 9% 46%;
+    --muted: 60 13% 95%;
+    --muted-foreground: 80 4% 35%;
 
-    --accent: 220 14% 96%;
-    --accent-foreground: 222 47% 11%;
+    --accent: var(--ed-accent);
+    --accent-foreground: var(--ed-accent-ink);
 
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 18 65% 47%;
+    --destructive-foreground: 60 17% 97%;
 
-    --success: 142 71% 45%;
-    --success-foreground: 210 40% 98%;
+    --success: var(--ed-accent);
+    --success-foreground: var(--ed-accent-ink);
 
-    --warning: 38 92% 50%;
-    --warning-foreground: 210 40% 98%;
+    --warning: 38 60% 52%;
+    --warning-foreground: 80 7% 5%;
 
-    --border: 220 13% 91%;
-    --input: 220 13% 91%;
-    --ring: 222 89% 56%;
+    --border: 56 19% 89%;
+    --input: 56 19% 89%;
+    --ring: 80 7% 5%;
 
-    --radius: 0.625rem;
+    --radius: 0.4rem;
   }
 
   .dark {
-    --background: 222 47% 5%;
-    --foreground: 210 40% 98%;
+    --ed-bg: #0c0d0a;
+    --ed-bg-elev: #131410;
+    --ed-bg-sunk: #08090a;
+    --ed-ink: #f0efe8;
+    --ed-ink-2: #d8d6cc;
+    --ed-ink-3: #9a9b91;
+    --ed-ink-4: #6a6b62;
+    --ed-ink-5: #44453e;
+    --ed-line: #1f201b;
+    --ed-line-strong: #2a2b25;
 
-    --card: 222 47% 7%;
-    --card-foreground: 210 40% 98%;
+    --background: 80 7% 5%;
+    --foreground: 56 17% 92%;
 
-    --popover: 222 47% 7%;
-    --popover-foreground: 210 40% 98%;
+    --card: 75 8% 7%;
+    --card-foreground: 56 17% 92%;
 
-    --primary: 217 91% 60%;
-    --primary-foreground: 222 47% 11%;
+    --popover: 75 8% 7%;
+    --popover-foreground: 56 17% 92%;
 
-    --secondary: 217 33% 13%;
-    --secondary-foreground: 210 40% 98%;
+    --primary: 56 17% 92%;
+    --primary-foreground: 80 7% 5%;
 
-    --muted: 217 33% 13%;
-    --muted-foreground: 215 20% 65%;
+    --secondary: 75 8% 12%;
+    --secondary-foreground: 56 17% 92%;
 
-    --accent: 217 33% 17%;
-    --accent-foreground: 210 40% 98%;
+    --muted: 75 8% 10%;
+    --muted-foreground: 60 4% 60%;
 
-    --destructive: 0 73% 50%;
-    --destructive-foreground: 210 40% 98%;
+    --accent: 165 45% 64%;
+    --accent-foreground: 165 60% 92%;
 
-    --success: 142 71% 45%;
-    --success-foreground: 210 40% 98%;
+    --destructive: 12 70% 55%;
+    --destructive-foreground: 56 17% 92%;
 
-    --warning: 38 92% 50%;
-    --warning-foreground: 222 47% 11%;
+    --success: 165 45% 64%;
+    --success-foreground: 165 60% 92%;
 
-    --border: 217 33% 17%;
-    --input: 217 33% 17%;
-    --ring: 217 91% 60%;
+    --warning: 38 70% 60%;
+    --warning-foreground: 80 7% 5%;
+
+    --border: 75 8% 14%;
+    --input: 75 8% 14%;
+    --ring: 56 17% 92%;
   }
 }
-
-/* ─────────────────────────────────────────────────────────────────────
-   Base styles
-   ───────────────────────────────────────────────────────────────────── */
 
 @layer base {
   * {
@@ -143,15 +177,17 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    font-feature-settings: 'ss01', 'cv11', 'tnum';
   }
 
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    letter-spacing: -0.005em;
   }
 
-  /* Allow per-component reduction; respect OS preference globally. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -164,57 +200,124 @@
   }
 
   ::selection {
-    @apply bg-primary/20 text-primary;
+    @apply bg-foreground/15 text-foreground;
   }
 
-  /* Cleaner default focus ring */
   :focus-visible {
     @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
   }
 }
 
-/* ─────────────────────────────────────────────────────────────────────
-   Utilities — gradients, glass, scrollbars
-   ───────────────────────────────────────────────────────────────────── */
-
 @layer utilities {
-  .bg-gradient-radial {
-    background-image: radial-gradient(var(--tw-gradient-stops));
+  /* Display + serif emphasis utilities */
+  .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.022em;
+  }
+  .font-serif-italic {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-weight: 400;
+  }
+  .tnum {
+    font-variant-numeric: tabular-nums;
   }
 
-  .bg-grid {
+  /* Hairline 1-px borders that work across themes */
+  .hairline {
+    border: 1px solid hsl(var(--border));
+  }
+
+  /* Editorial preview-frame chrome dots (used by hero) */
+  .frame-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    background: var(--ed-line-strong);
+  }
+
+  /* Subtle warm radial used behind the scrollytelling stage */
+  .bg-warm-radial {
+    background-image: radial-gradient(
+        1200px 600px at 20% 10%,
+        color-mix(in oklab, hsl(var(--accent)) 6%, transparent),
+        transparent 60%
+      ),
+      hsl(var(--background));
+  }
+
+  .bg-grid-warm {
     background-image:
-      linear-gradient(to right, hsl(var(--border) / 0.4) 1px, transparent 1px),
-      linear-gradient(to bottom, hsl(var(--border) / 0.4) 1px, transparent 1px);
+      linear-gradient(to right, hsl(var(--border) / 0.7) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.7) 1px, transparent 1px);
     background-size: 32px 32px;
-  }
-
-  .bg-mesh {
-    background-image:
-      radial-gradient(at 20% 0%, hsl(var(--primary) / 0.18) 0px, transparent 50%),
-      radial-gradient(at 80% 0%, hsl(217 91% 60% / 0.16) 0px, transparent 50%),
-      radial-gradient(at 0% 50%, hsl(280 65% 60% / 0.12) 0px, transparent 50%),
-      radial-gradient(at 100% 100%, hsl(199 89% 48% / 0.14) 0px, transparent 50%);
-  }
-
-  .glass {
-    @apply bg-background/60 backdrop-blur-xl border border-border/60;
   }
 
   .text-balance {
     text-wrap: balance;
   }
+  .text-pretty {
+    text-wrap: pretty;
+  }
 
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
+    scrollbar-color: var(--ed-line-strong) transparent;
   }
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+}
+
+/* Scrollytelling specifics — a few rules that don't translate cleanly to
+   utility classes. */
+@layer components {
+  .scrolly-pin {
+    position: sticky;
+    top: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 64px 32px;
+    max-width: 1280px;
+    margin: 0 auto;
+    width: 100%;
+    box-sizing: border-box;
   }
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--muted-foreground) / 0.3);
-    border-radius: 9999px;
+
+  @media (max-width: 960px) {
+    .scrolly-pin {
+      padding: 48px 20px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .scrolly-section {
+      height: auto !important;
+    }
+    .scrolly-pin {
+      position: static;
+      min-height: auto;
+    }
+  }
+
+  @keyframes scn-pulse-dot {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.4;
+      transform: scale(0.8);
+    }
+  }
+  @keyframes scn-blink {
+    0%,
+    50% {
+      opacity: 1;
+    }
+    50.01%,
+    100% {
+      opacity: 0;
+    }
   }
 }
