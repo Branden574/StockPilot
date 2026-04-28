@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { redirect } from 'next/navigation';
 
 import { createClient } from '@/lib/supabase/server';
@@ -12,7 +13,12 @@ export interface ServerSession {
   defaultOrganizationId: string | null;
 }
 
-export async function getServerSession(): Promise<ServerSession | null> {
+/**
+ * `cache()` memoizes within a single React render — every service that
+ * calls getServerSession() during the same request hits Supabase once,
+ * not once per call. Massive perf win on data-heavy pages.
+ */
+export const getServerSession = cache(async (): Promise<ServerSession | null> => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -42,20 +48,20 @@ export async function getServerSession(): Promise<ServerSession | null> {
     avatarUrl: (profile.avatar_url as string | null) ?? null,
     defaultOrganizationId: (profile.default_organization_id as string | null) ?? null,
   };
-}
+});
 
-export async function requireSession(): Promise<ServerSession> {
+export const requireSession = cache(async (): Promise<ServerSession> => {
   const session = await getServerSession();
   if (!session) redirect('/signin');
   return session;
-}
+});
 
 export interface OrgContext extends ServerSession {
   organizationId: string;
   role: Role;
 }
 
-export async function requireOrgContext(orgId?: string): Promise<OrgContext> {
+export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContext> => {
   const session = await requireSession();
   const supabase = await createClient();
 
@@ -77,4 +83,4 @@ export async function requireOrgContext(orgId?: string): Promise<OrgContext> {
     organizationId: targetOrgId,
     role: member.role as Role,
   };
-}
+});
