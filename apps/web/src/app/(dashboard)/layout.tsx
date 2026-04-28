@@ -24,11 +24,19 @@ export default async function DashboardLayout({ children }: { children: ReactNod
 
   const active =
     memberships.find((m) => m.organization_id === session.defaultOrganizationId) ?? memberships[0];
-  const orgName = (active?.organizations as unknown as { name: string } | null)?.name ?? 'Workspace';
+  const orgs = active?.organizations as { name?: string } | { name?: string }[] | null | undefined;
+  const orgObj = Array.isArray(orgs) ? orgs[0] : orgs;
+  const orgName = orgObj?.name ?? 'Workspace';
+  const role = (active?.role as string | undefined) ?? 'Member';
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <Sidebar className="hidden lg:flex" />
+      <Sidebar
+        className="hidden lg:flex"
+        organizationName={orgName}
+        userName={session.fullName ?? session.email}
+        userRole={`${role.charAt(0).toUpperCase() + role.slice(1)} · ${orgName}`}
+      />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar
           email={session.email}

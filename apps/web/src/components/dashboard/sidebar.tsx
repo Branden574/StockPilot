@@ -5,13 +5,12 @@ import {
   BarChart3,
   Bell,
   Boxes,
-  Building2,
+  ChevronDown,
   ClipboardList,
-  CreditCard,
-  LayoutDashboard,
+  Cog,
+  Home,
   type LucideIcon,
-  Settings,
-  ShoppingCart,
+  MapPin,
   Tag,
   Truck,
   Users,
@@ -20,111 +19,143 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 import { IconMark } from '@/components/ui/icon-mark';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
+  badge?: string | number;
+  alert?: boolean;
 }
 
-interface NavGroup {
-  label: string;
+interface NavSection {
+  label?: string;
   items: NavItem[];
 }
 
-const NAV: NavGroup[] = [
+const NAV: NavSection[] = [
   {
-    label: 'Overview',
-    items: [
-      { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
-    ],
+    items: [{ href: '/dashboard', label: 'Overview', icon: Home }],
   },
   {
     label: 'Inventory',
     items: [
       { href: '/dashboard/inventory', label: 'Items', icon: Boxes },
-      { href: '/dashboard/locations', label: 'Locations', icon: Building2 },
       { href: '/dashboard/categories', label: 'Categories', icon: Tag },
-      { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck },
-    ],
-  },
-  {
-    label: 'Operations',
-    items: [
+      { href: '/dashboard/movements', label: 'Movements', icon: ArrowLeftRight },
       { href: '/dashboard/purchase-orders', label: 'Purchase orders', icon: ClipboardList },
-      { href: '/dashboard/movements', label: 'Stock movements', icon: ArrowLeftRight },
+      { href: '/dashboard/locations', label: 'Locations', icon: MapPin },
+      { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck },
       { href: '/dashboard/reports', label: 'Reports', icon: BarChart3 },
     ],
   },
   {
     label: 'Workspace',
     items: [
+      { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
       { href: '/dashboard/team', label: 'Team', icon: Users },
-      { href: '/dashboard/settings/billing', label: 'Billing', icon: CreditCard },
-      { href: '/dashboard/settings', label: 'Settings', icon: Settings },
+      { href: '/dashboard/settings', label: 'Settings', icon: Cog },
     ],
   },
 ];
 
-export function Sidebar({ className }: { className?: string }) {
+interface SidebarProps {
+  className?: string;
+  organizationName: string;
+  userName: string | null;
+  userRole?: string;
+}
+
+export function Sidebar({ className, organizationName, userName, userRole }: SidebarProps) {
   const pathname = usePathname();
+  const initials = (userName || 'U')
+    .split(/\s+/)
+    .map((s) => s[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('');
 
   return (
     <aside
       className={cn(
-        'flex h-full w-60 shrink-0 flex-col border-r border-border/60 bg-muted/20',
+        'flex h-screen w-[232px] shrink-0 flex-col border-r border-border bg-background',
         className,
       )}
     >
-      <div className="flex h-16 items-center px-5">
-        <Link href="/dashboard" className="text-base">
-          <IconMark />
+      {/* Brand head */}
+      <div className="flex h-13 items-center gap-2.5 border-b border-border px-3.5" style={{ height: 52 }}>
+        <Link href="/dashboard">
+          <IconMark size={22} />
         </Link>
       </div>
-      <Separator />
-      <ScrollArea className="flex-1 px-3 py-4">
-        <nav className="flex flex-col gap-6">
-          {NAV.map((group) => (
-            <div key={group.label}>
-              <p className="px-2 pb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {group.label}
-              </p>
-              <div className="flex flex-col gap-0.5">
-                {group.items.map((item) => {
-                  const active =
-                    pathname === item.href ||
-                    (pathname.startsWith(item.href) && item.href !== '/dashboard');
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
+
+      {/* Org pill */}
+      <button
+        type="button"
+        className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
+      >
+        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]" />
+        <span className="flex-1 truncate text-left">{organizationName}</span>
+        <ChevronDown className="h-3 w-3 opacity-60" />
+      </button>
+
+      {/* Nav */}
+      <nav className="flex-1 overflow-y-auto px-2 py-2.5 scrollbar-thin">
+        {NAV.map((section, idx) => (
+          <div key={idx} className="px-1.5 pb-1 pt-2.5">
+            {section.label && (
+              <div className="px-2 pb-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
+                {section.label}
+              </div>
+            )}
+            {section.items.map((item) => {
+              const active =
+                pathname === item.href ||
+                (pathname.startsWith(item.href) && item.href !== '/dashboard');
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    'flex items-center gap-2.5 rounded-[5px] px-2.5 py-1.5 text-[13px] transition-colors',
+                    active
+                      ? 'border border-border bg-card text-foreground shadow-[0_1px_0_rgba(14,15,13,0.04),_0_1px_2px_rgba(14,15,13,0.04)]'
+                      : 'border border-transparent text-[var(--ed-ink-2)] hover:bg-muted hover:text-foreground',
+                  )}
+                >
+                  <item.icon
+                    className={cn('h-4 w-4 shrink-0', active ? 'text-foreground' : 'text-[var(--ed-ink-3)]')}
+                  />
+                  <span className="flex-1">{item.label}</span>
+                  {item.badge != null && (
+                    <span
                       className={cn(
-                        'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors',
-                        active
-                          ? 'bg-primary/10 text-primary font-medium'
-                          : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                        'shrink-0 rounded-[3px] border px-1.5 py-px font-mono text-[10.5px]',
+                        item.alert
+                          ? 'border-transparent bg-[hsl(var(--destructive)/0.16)] text-[hsl(var(--destructive))]'
+                          : 'border-border bg-muted text-[var(--ed-ink-3)]',
                       )}
                     >
-                      <item.icon className="h-4 w-4" />
-                      {item.label}
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </nav>
-      </ScrollArea>
-      <Separator />
-      <div className="px-4 py-3 text-xs text-muted-foreground">
-        <Link href="/dashboard/settings/billing" className="flex items-center gap-2 hover:text-foreground">
-          <ShoppingCart className="h-3.5 w-3.5" />
-          Upgrade plan
-        </Link>
+                      {item.badge}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+
+      {/* User foot */}
+      <div className="flex items-center gap-2.5 border-t border-border px-3 py-2.5">
+        <span className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full bg-foreground text-[11px] font-semibold text-background">
+          {initials}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12.5px] leading-tight">{userName ?? '—'}</div>
+          <div className="truncate text-[11px] text-[var(--ed-ink-4)]">{userRole ?? 'Member'}</div>
+        </div>
       </div>
     </aside>
   );
