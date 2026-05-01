@@ -26,7 +26,7 @@ export function SignInForm() {
     formState: { errors, isSubmitting },
   } = useForm<SignInInput>({
     resolver: zodResolver(signInSchema),
-    defaultValues: { email: '', password: '' },
+    defaultValues: { email: '', password: '', rememberMe: true },
   });
 
   const onSubmit = handleSubmit(async (values) => {
@@ -52,13 +52,13 @@ export function SignInForm() {
           {...register('email')}
           aria-invalid={!!errors.email}
         />
-        {errors.email && <p className="text-xs text-destructive">{errors.email.message}</p>}
+        {errors.email && <p className="text-destructive text-xs">{errors.email.message}</p>}
       </div>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label htmlFor="password">Password</Label>
-          <Link href="/reset" className="text-xs text-muted-foreground hover:text-foreground">
+          <Link href="/reset" className="text-muted-foreground hover:text-foreground text-xs">
             Forgot?
           </Link>
         </div>
@@ -69,8 +69,17 @@ export function SignInForm() {
           {...register('password')}
           aria-invalid={!!errors.password}
         />
-        {errors.password && <p className="text-xs text-destructive">{errors.password.message}</p>}
+        {errors.password && <p className="text-destructive text-xs">{errors.password.message}</p>}
       </div>
+
+      <label className="text-muted-foreground flex items-center gap-2.5 text-sm">
+        <input
+          type="checkbox"
+          className="border-border accent-foreground h-4 w-4 rounded"
+          {...register('rememberMe')}
+        />
+        <span>Remember me on this device</span>
+      </label>
 
       <Button type="submit" className="w-full" variant="gradient" size="lg" disabled={isSubmitting}>
         {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign in'}

@@ -35,7 +35,7 @@ export function UserMenu({ email, fullName, avatarUrl, organizationName }: UserM
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="rounded-full">
+        <Button id="user-menu-trigger" variant="ghost" size="icon" className="rounded-full">
           <Avatar className="h-8 w-8">
             {avatarUrl && <AvatarImage src={avatarUrl} alt={fullName ?? email} />}
             <AvatarFallback>{initials}</AvatarFallback>
@@ -45,8 +45,8 @@ export function UserMenu({ email, fullName, avatarUrl, organizationName }: UserM
       <DropdownMenuContent align="end" className="w-60">
         <DropdownMenuLabel>
           <div className="text-sm font-semibold">{fullName ?? email}</div>
-          <div className="text-xs text-muted-foreground">{email}</div>
-          <div className="mt-1 text-xs text-muted-foreground">{organizationName}</div>
+          <div className="text-muted-foreground text-xs">{email}</div>
+          <div className="text-muted-foreground mt-1 text-xs">{organizationName}</div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>

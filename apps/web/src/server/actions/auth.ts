@@ -1,9 +1,11 @@
 'use server';
 
+import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { env } from '@/lib/env';
 import { createClient } from '@/lib/supabase/server';
+import { REMEMBER_SESSION_COOKIE, rememberPreferenceOptions } from '@/lib/supabase/session-cookies';
 
 import {
   completePasswordResetSchema,
@@ -19,7 +21,9 @@ import {
   type SignUpInput,
 } from '@stockpilot/core';
 
-export async function signUpAction(input: SignUpInput): Promise<ActionResult<{ requiresEmailConfirm: boolean }>> {
+export async function signUpAction(
+  input: SignUpInput,
+): Promise<ActionResult<{ requiresEmailConfirm: boolean }>> {
   const parsed = signUpSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -45,18 +49,28 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
 
-  const supabase = await createClient();
+  const supabase = await createClient({ rememberSession: parsed.data.rememberMe });
   const { error } = await supabase.auth.signInWithPassword({
     email: parsed.data.email,
     password: parsed.data.password,
   });
   if (error) return err('unauthenticated', 'Invalid email or password');
+
+  const cookieStore = await cookies();
+  cookieStore.set(
+    REMEMBER_SESSION_COOKIE,
+    parsed.data.rememberMe ? '1' : '0',
+    rememberPreferenceOptions(parsed.data.rememberMe),
+  );
+
   return ok({ next: '/dashboard' });
 }
 
 export async function signOutAction(): Promise<void> {
   const supabase = await createClient();
   await supabase.auth.signOut();
+  const cookieStore = await cookies();
+  cookieStore.delete(REMEMBER_SESSION_COOKIE);
   redirect('/');
 }
 

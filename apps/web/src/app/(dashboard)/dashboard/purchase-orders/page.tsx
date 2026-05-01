@@ -17,8 +17,10 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
 export default async function PurchaseOrdersPage() {
-  const poSvc = await PurchaseOrdersService.forCurrentUser();
-  const supplierSvc = await SuppliersService.forCurrentUser();
+  const [poSvc, supplierSvc] = await Promise.all([
+    PurchaseOrdersService.forCurrentUser(),
+    SuppliersService.forCurrentUser(),
+  ]);
 
   const [pos, suppliers] = await Promise.all([poSvc.list(), supplierSvc.list()]);
   const supplierMap = new Map(suppliers.map((s) => [s.id as string, s.name as string]));
@@ -28,7 +30,7 @@ export default async function PurchaseOrdersPage() {
       <div className="flex items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Purchase orders</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="text-muted-foreground mt-1 text-sm">
             Draft POs, send to suppliers, then receive against them to bump stock automatically.
           </p>
         </div>
@@ -50,7 +52,7 @@ export default async function PurchaseOrdersPage() {
             }
           />
         ) : (
-          <div className="overflow-hidden rounded-xl border bg-card">
+          <div className="bg-card overflow-hidden rounded-xl border">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -73,17 +75,19 @@ export default async function PurchaseOrdersPage() {
                         {po.po_number as string}
                       </Link>
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {po.supplier_id ? supplierMap.get(po.supplier_id as string) ?? '—' : '—'}
+                    <TableCell className="text-muted-foreground text-sm">
+                      {po.supplier_id ? (supplierMap.get(po.supplier_id as string) ?? '—') : '—'}
                     </TableCell>
                     <TableCell>
                       <PoStatusBadge status={po.status as string} />
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(po.total as number)}</TableCell>
-                    <TableCell className="text-right text-xs text-muted-foreground">
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(po.total as number)}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-right text-xs">
                       {po.expected_at ? formatRelative(po.expected_at as string) : '—'}
                     </TableCell>
-                    <TableCell className="text-right text-xs text-muted-foreground">
+                    <TableCell className="text-muted-foreground text-right text-xs">
                       {formatRelative(po.updated_at as string)}
                     </TableCell>
                   </TableRow>

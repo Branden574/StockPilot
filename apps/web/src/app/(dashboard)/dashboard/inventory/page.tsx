@@ -14,14 +14,19 @@ export default async function InventoryPage({
   searchParams: Promise<{ q?: string; status?: string }>;
 }) {
   const params = await searchParams;
+  const [inventorySvc, categoriesSvc, locationsSvc] = await Promise.all([
+    InventoryService.forCurrentUser(),
+    CategoriesService.forCurrentUser(),
+    LocationsService.forCurrentUser(),
+  ]);
 
   const [inventory, categories, locations] = await Promise.all([
-    (await InventoryService.forCurrentUser()).list({
+    inventorySvc.list({
       q: params.q,
       status: (params.status as 'active' | 'archived' | 'discontinued' | 'all') ?? 'active',
     }),
-    (await CategoriesService.forCurrentUser()).list(),
-    (await LocationsService.forCurrentUser()).list(),
+    categoriesSvc.list(),
+    locationsSvc.list(),
   ]);
 
   const lookups = {
@@ -39,7 +44,7 @@ export default async function InventoryPage({
       <div className="flex items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Inventory</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="text-muted-foreground mt-1 text-sm">
             Items, SKUs, stock levels — searchable and sortable.
           </p>
         </div>

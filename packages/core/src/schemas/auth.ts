@@ -12,6 +12,7 @@ export type SignUpInput = z.infer<typeof signUpSchema>;
 export const signInSchema = z.object({
   email: emailSchema,
   password: z.string().min(1, 'Password is required'),
+  rememberMe: z.boolean().default(true),
 });
 export type SignInInput = z.infer<typeof signInSchema>;
 

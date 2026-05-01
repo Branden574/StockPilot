@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { cache } from 'react';
+
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 
@@ -13,7 +15,7 @@ export interface ServiceContext {
   supabase: Awaited<ReturnType<typeof createClient>>;
 }
 
-export async function withContext(): Promise<ServiceContext> {
+export const withContext = cache(async (): Promise<ServiceContext> => {
   const ctx = await requireOrgContext();
   const supabase = await createClient();
   return {
@@ -22,7 +24,7 @@ export async function withContext(): Promise<ServiceContext> {
     role: ctx.role,
     supabase,
   };
-}
+});
 
 export class ServiceError extends Error {
   constructor(
@@ -67,7 +69,11 @@ export async function assertPlanLimit(
   if (isUnlimited(limit)) return;
 
   const table =
-    resource === 'items' ? 'inventory_items' : resource === 'locations' ? 'locations' : 'organization_members';
+    resource === 'items'
+      ? 'inventory_items'
+      : resource === 'locations'
+        ? 'locations'
+        : 'organization_members';
 
   let query = ctx.supabase
     .from(table)

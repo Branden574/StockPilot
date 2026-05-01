@@ -6,15 +6,16 @@ import { env } from '@/lib/env';
 import type { Role } from '@stockpilot/core';
 
 export default async function TeamPage() {
-  const ctx = await requireOrgContext();
-  const svc = await TeamService.forCurrentUser();
+  const [ctx, svc] = await Promise.all([requireOrgContext(), TeamService.forCurrentUser()]);
   const [members, invites] = await Promise.all([svc.listMembers(), svc.listPendingInvites()]);
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Team</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Invite, assign roles, and manage workspace access.</p>
+        <p className="text-muted-foreground mt-1 text-sm">
+          Invite, assign roles, and manage workspace access.
+        </p>
       </div>
       <TeamManager
         currentUserRole={ctx.role}
