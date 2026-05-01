@@ -7,20 +7,30 @@ import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 
 export default async function NewItemPage() {
+  const [categoriesSvc, locationsSvc, suppliersSvc] = await Promise.all([
+    CategoriesService.forCurrentUser(),
+    LocationsService.forCurrentUser(),
+    SuppliersService.forCurrentUser(),
+  ]);
   const [categories, locations, suppliers] = await Promise.all([
-    (await CategoriesService.forCurrentUser()).list(),
-    (await LocationsService.forCurrentUser()).list(),
-    (await SuppliersService.forCurrentUser()).list(),
+    categoriesSvc.list(),
+    locationsSvc.list(),
+    suppliersSvc.list(),
   ]);
 
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
-        <Link href="/dashboard/inventory" className="text-sm text-muted-foreground hover:text-foreground">
+        <Link
+          href="/dashboard/inventory"
+          className="text-muted-foreground hover:text-foreground text-sm"
+        >
           ← Back to inventory
         </Link>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">New item</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Add a single item. Use CSV import for bulk in Phase 5.</p>
+        <p className="text-muted-foreground mt-1 text-sm">
+          Add a single item. Use CSV import for bulk in Phase 5.
+        </p>
       </div>
       <Card>
         <CardHeader>

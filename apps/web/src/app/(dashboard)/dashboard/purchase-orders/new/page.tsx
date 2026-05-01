@@ -7,16 +7,24 @@ import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 
 export default async function NewPoPage() {
+  const [inventorySvc, suppliersSvc, locationsSvc] = await Promise.all([
+    InventoryService.forCurrentUser(),
+    SuppliersService.forCurrentUser(),
+    LocationsService.forCurrentUser(),
+  ]);
   const [inventory, suppliers, locations] = await Promise.all([
-    (await InventoryService.forCurrentUser()).list({ limit: 1000 }),
-    (await SuppliersService.forCurrentUser()).list(),
-    (await LocationsService.forCurrentUser()).list(),
+    inventorySvc.list({ limit: 1000 }),
+    suppliersSvc.list(),
+    locationsSvc.list(),
   ]);
 
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
       <div className="mb-6">
-        <Link href="/dashboard/purchase-orders" className="text-sm text-muted-foreground hover:text-foreground">
+        <Link
+          href="/dashboard/purchase-orders"
+          className="text-muted-foreground hover:text-foreground text-sm"
+        >
           ← Back to purchase orders
         </Link>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">New purchase order</h1>

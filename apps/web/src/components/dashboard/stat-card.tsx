@@ -13,25 +13,35 @@ interface StatCardProps {
   className?: string;
 }
 
-export function StatCard({ label, value, delta, series, foot, icon: Icon, className }: StatCardProps) {
+export function StatCard({
+  label,
+  value,
+  delta,
+  series,
+  foot,
+  icon: Icon,
+  className,
+}: StatCardProps) {
   const dir = delta?.direction ?? 'flat';
   return (
     <div
       className={cn(
-        'flex flex-col gap-2.5 overflow-hidden rounded-[10px] border border-border bg-card px-4 py-4 transition-colors hover:border-[var(--ed-line-strong)]',
+        'border-border bg-card flex min-h-[136px] flex-col justify-between gap-3 overflow-hidden rounded-lg border px-4 py-4 shadow-[0_10px_34px_rgba(14,15,13,0.04)] transition-colors hover:border-[var(--ed-line-strong)]',
         className,
       )}
     >
-      <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
+      <div className="flex items-center gap-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
         {Icon && <Icon className="h-3 w-3 text-[var(--ed-ink-4)]" />}
         {label}
       </div>
 
       <div className="flex items-end justify-between gap-3">
-        <p className="font-display text-[30px] font-medium leading-[1.05] tracking-[-0.025em] tabular-nums">
+        <p className="font-display text-[32px] font-medium tabular-nums leading-[1.05] tracking-[-0.025em]">
           {value}
         </p>
-        {series && series.length > 1 && <Sparkline data={series} width={84} height={26} tone={dir} />}
+        {series && series.length > 1 && (
+          <Sparkline data={series} width={84} height={26} tone={dir} />
+        )}
       </div>
 
       {(foot || delta) && (

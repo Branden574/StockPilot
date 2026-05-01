@@ -2,6 +2,7 @@ import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { env } from '@/lib/env';
+import { applyRememberSession, REMEMBER_SESSION_COOKIE } from '@/lib/supabase/session-cookies';
 
 import type { Database } from '@stockpilot/core';
 
@@ -27,6 +28,7 @@ export const SESSION_HEADER_USER_EMAIL = 'x-stockpilot-user-email';
 export async function updateSession(request: NextRequest) {
   // Track any cookies the supabase client wants to set (token refreshes).
   const pendingCookies: CookieToSet[] = [];
+  const rememberSession = request.cookies.get(REMEMBER_SESSION_COOKIE)?.value !== '0';
 
   const supabase = createServerClient<Database>(
     env.NEXT_PUBLIC_SUPABASE_URL,
@@ -41,7 +43,11 @@ export async function updateSession(request: NextRequest) {
             // Mirror onto the request so subsequent reads in the same call
             // see the fresh values.
             request.cookies.set(name, value);
-            pendingCookies.push({ name, value, options });
+            pendingCookies.push({
+              name,
+              value,
+              options: applyRememberSession(options, rememberSession),
+            });
           });
         },
       },
@@ -62,7 +68,9 @@ export async function updateSession(request: NextRequest) {
     url.pathname = '/signin';
     url.searchParams.set('redirect', `${pathname}${search}`);
     const redirectRes = NextResponse.redirect(url);
-    pendingCookies.forEach(({ name, value, options }) => redirectRes.cookies.set(name, value, options));
+    pendingCookies.forEach(({ name, value, options }) =>
+      redirectRes.cookies.set(name, value, options),
+    );
     return redirectRes;
   }
 
@@ -71,7 +79,9 @@ export async function updateSession(request: NextRequest) {
     url.pathname = '/dashboard';
     url.search = '';
     const redirectRes = NextResponse.redirect(url);
-    pendingCookies.forEach(({ name, value, options }) => redirectRes.cookies.set(name, value, options));
+    pendingCookies.forEach(({ name, value, options }) =>
+      redirectRes.cookies.set(name, value, options),
+    );
     return redirectRes;
   }
 

@@ -11,7 +11,12 @@ import { SuppliersService } from '@/server/services/suppliers';
 
 export default async function EditItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const inventorySvc = await InventoryService.forCurrentUser();
+  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc] = await Promise.all([
+    InventoryService.forCurrentUser(),
+    CategoriesService.forCurrentUser(),
+    LocationsService.forCurrentUser(),
+    SuppliersService.forCurrentUser(),
+  ]);
 
   let item;
   try {
@@ -22,15 +27,18 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
   }
 
   const [categories, locations, suppliers] = await Promise.all([
-    (await CategoriesService.forCurrentUser()).list(),
-    (await LocationsService.forCurrentUser()).list(),
-    (await SuppliersService.forCurrentUser()).list(),
+    categoriesSvc.list(),
+    locationsSvc.list(),
+    suppliersSvc.list(),
   ]);
 
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
-        <Link href={`/dashboard/inventory/${id}`} className="text-sm text-muted-foreground hover:text-foreground">
+        <Link
+          href={`/dashboard/inventory/${id}`}
+          className="text-muted-foreground hover:text-foreground text-sm"
+        >
           ← Back to item
         </Link>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">Edit item</h1>

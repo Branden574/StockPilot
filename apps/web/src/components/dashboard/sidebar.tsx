@@ -1,74 +1,31 @@
 'use client';
 
-import {
-  ArrowLeftRight,
-  BarChart3,
-  Bell,
-  Boxes,
-  ChevronDown,
-  ClipboardList,
-  Cog,
-  Home,
-  type LucideIcon,
-  MapPin,
-  Tag,
-  Truck,
-  Users,
-} from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import * as React from 'react';
 
+import { DASHBOARD_NAV_HREFS, NAV } from '@/components/dashboard/nav';
 import { IconMark } from '@/components/ui/icon-mark';
 import { cn } from '@/lib/utils';
-
-interface NavItem {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-  badge?: string | number;
-  alert?: boolean;
-}
-
-interface NavSection {
-  label?: string;
-  items: NavItem[];
-}
-
-const NAV: NavSection[] = [
-  {
-    items: [{ href: '/dashboard', label: 'Overview', icon: Home }],
-  },
-  {
-    label: 'Inventory',
-    items: [
-      { href: '/dashboard/inventory', label: 'Items', icon: Boxes },
-      { href: '/dashboard/categories', label: 'Categories', icon: Tag },
-      { href: '/dashboard/movements', label: 'Movements', icon: ArrowLeftRight },
-      { href: '/dashboard/purchase-orders', label: 'Purchase orders', icon: ClipboardList },
-      { href: '/dashboard/locations', label: 'Locations', icon: MapPin },
-      { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck },
-      { href: '/dashboard/reports', label: 'Reports', icon: BarChart3 },
-    ],
-  },
-  {
-    label: 'Workspace',
-    items: [
-      { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
-      { href: '/dashboard/team', label: 'Team', icon: Users },
-      { href: '/dashboard/settings', label: 'Settings', icon: Cog },
-    ],
-  },
-];
 
 interface SidebarProps {
   className?: string;
   organizationName: string;
   userName: string | null;
   userRole?: string;
+  onNavigate?: () => void;
 }
 
-export function Sidebar({ className, organizationName, userName, userRole }: SidebarProps) {
+export function Sidebar({
+  className,
+  organizationName,
+  userName,
+  userRole,
+  onNavigate,
+}: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const initials = (userName || 'U')
     .split(/\s+/)
     .map((s) => s[0])
@@ -76,16 +33,44 @@ export function Sidebar({ className, organizationName, userName, userRole }: Sid
     .slice(0, 2)
     .join('');
 
+  const warmRoute = React.useCallback(
+    (href: string) => {
+      if (href !== pathname) router.prefetch(href);
+    },
+    [pathname, router],
+  );
+
+  React.useEffect(() => {
+    const warmAllRoutes = () => {
+      DASHBOARD_NAV_HREFS.forEach((href) => warmRoute(href));
+    };
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    if (typeof idleWindow.requestIdleCallback === 'function') {
+      const idleId = idleWindow.requestIdleCallback(warmAllRoutes, { timeout: 1600 });
+      return () => idleWindow.cancelIdleCallback?.(idleId);
+    }
+
+    const timeoutId = globalThis.setTimeout(warmAllRoutes, 450);
+    return () => globalThis.clearTimeout(timeoutId);
+  }, [warmRoute]);
+
   return (
     <aside
       className={cn(
-        'flex h-screen w-[232px] shrink-0 flex-col border-r border-border bg-background',
+        'border-border flex h-screen w-[244px] shrink-0 flex-col border-r bg-[color-mix(in_oklab,hsl(var(--background))_94%,hsl(var(--foreground))_3%)]',
         className,
       )}
     >
       {/* Brand head */}
-      <div className="flex h-13 items-center gap-2.5 border-b border-border px-3.5" style={{ height: 52 }}>
-        <Link href="/dashboard">
+      <div
+        className="h-13 border-border flex items-center gap-2.5 border-b px-3.5"
+        style={{ height: 52 }}
+      >
+        <Link href="/dashboard" onClick={onNavigate}>
           <IconMark size={22} />
         </Link>
       </div>
@@ -93,7 +78,7 @@ export function Sidebar({ className, organizationName, userName, userRole }: Sid
       {/* Org pill */}
       <button
         type="button"
-        className="mx-3 mt-3 flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
+        className="border-border bg-card mx-3 mt-3 flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
       >
         <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]" />
         <span className="flex-1 truncate text-left">{organizationName}</span>
@@ -101,7 +86,7 @@ export function Sidebar({ className, organizationName, userName, userRole }: Sid
       </button>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto px-2 py-2.5 scrollbar-thin">
+      <nav className="scrollbar-thin flex-1 overflow-y-auto px-2 py-2.5">
         {NAV.map((section, idx) => (
           <div key={idx} className="px-1.5 pb-1 pt-2.5">
             {section.label && (
@@ -118,15 +103,22 @@ export function Sidebar({ className, organizationName, userName, userRole }: Sid
                   key={item.href}
                   href={item.href}
                   prefetch
+                  onFocus={() => warmRoute(item.href)}
+                  onPointerEnter={() => warmRoute(item.href)}
+                  onPointerDown={() => warmRoute(item.href)}
+                  onClick={onNavigate}
                   className={cn(
-                    'flex items-center gap-2.5 rounded-[5px] px-2.5 py-1.5 text-[13px] transition-colors',
+                    'flex min-h-8 items-center gap-2.5 rounded-[6px] px-2.5 py-1.5 text-[13px] transition-colors',
                     active
-                      ? 'border border-border bg-card text-foreground shadow-[0_1px_0_rgba(14,15,13,0.04),_0_1px_2px_rgba(14,15,13,0.04)]'
-                      : 'border border-transparent text-[var(--ed-ink-2)] hover:bg-muted hover:text-foreground',
+                      ? 'bg-card text-foreground border border-[var(--ed-line-strong)] shadow-[0_1px_0_rgba(14,15,13,0.05),_0_8px_22px_rgba(14,15,13,0.05)]'
+                      : 'hover:bg-card hover:text-foreground border border-transparent text-[var(--ed-ink-2)]',
                   )}
                 >
                   <item.icon
-                    className={cn('h-4 w-4 shrink-0', active ? 'text-foreground' : 'text-[var(--ed-ink-3)]')}
+                    className={cn(
+                      'h-4 w-4 shrink-0',
+                      active ? 'text-foreground' : 'text-[var(--ed-ink-3)]',
+                    )}
                   />
                   <span className="flex-1">{item.label}</span>
                   {item.badge != null && (
@@ -149,8 +141,8 @@ export function Sidebar({ className, organizationName, userName, userRole }: Sid
       </nav>
 
       {/* User foot */}
-      <div className="flex items-center gap-2.5 border-t border-border px-3 py-2.5">
-        <span className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full bg-foreground text-[11px] font-semibold text-background">
+      <div className="border-border flex items-center gap-2.5 border-t px-3 py-2.5">
+        <span className="bg-foreground text-background grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full text-[11px] font-semibold">
           {initials}
         </span>
         <div className="min-w-0 flex-1">

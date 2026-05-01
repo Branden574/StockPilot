@@ -22,7 +22,12 @@ import { formatCurrency, formatRelative } from '@/lib/utils';
 
 export default async function PoDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const poSvc = await PurchaseOrdersService.forCurrentUser();
+  const [poSvc, inventorySvc, suppliersSvc, locationsSvc] = await Promise.all([
+    PurchaseOrdersService.forCurrentUser(),
+    InventoryService.forCurrentUser(),
+    SuppliersService.forCurrentUser(),
+    LocationsService.forCurrentUser(),
+  ]);
 
   let result;
   try {
@@ -35,9 +40,9 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   const { po, lines } = result;
 
   const [inventory, suppliers, locations] = await Promise.all([
-    (await InventoryService.forCurrentUser()).list({ limit: 1000, status: 'all' }),
-    (await SuppliersService.forCurrentUser()).list(),
-    (await LocationsService.forCurrentUser()).list(),
+    inventorySvc.list({ limit: 1000, status: 'all' }),
+    suppliersSvc.list(),
+    locationsSvc.list(),
   ]);
   const itemsById = new Map(inventory.items.map((i) => [i.id, i]));
 
@@ -63,24 +68,31 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <div className="mb-6">
-        <Link href="/dashboard/purchase-orders" className="text-sm text-muted-foreground hover:text-foreground">
+        <Link
+          href="/dashboard/purchase-orders"
+          className="text-muted-foreground hover:text-foreground text-sm"
+        >
           ← Back to purchase orders
         </Link>
       </div>
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="font-mono text-2xl font-semibold tracking-tight">{po.po_number as string}</h1>
+          <h1 className="font-mono text-2xl font-semibold tracking-tight">
+            {po.po_number as string}
+          </h1>
           <div className="mt-2 flex items-center gap-2">
             <PoStatusBadge status={status} />
-            <span className="text-sm text-muted-foreground">
+            <span className="text-muted-foreground text-sm">
               · created {formatRelative(po.created_at as string)}
             </span>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <PoActions poId={id} status={status} />
-          {canReceive && <PoReceiveDialog poId={id} poNumber={po.po_number as string} lines={lineRows} />}
+          {canReceive && (
+            <PoReceiveDialog poId={id} poNumber={po.po_number as string} lines={lineRows} />
+          )}
         </div>
       </div>
 
@@ -105,12 +117,16 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                   <TableRow key={l.id}>
                     <TableCell>
                       <p className="font-medium">{l.name}</p>
-                      <p className="font-mono text-xs text-muted-foreground">{l.sku}</p>
+                      <p className="text-muted-foreground font-mono text-xs">{l.sku}</p>
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{l.quantityOrdered}</TableCell>
                     <TableCell className="text-right tabular-nums">{l.quantityReceived}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(l.unitCost)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(l.lineTotal)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(l.unitCost)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCurrency(l.lineTotal)}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -123,14 +139,17 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
             <CardTitle className="text-base">Summary</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
-            <Row label="Supplier" value={supplier?.name as string ?? '—'} />
-            <Row label="Destination" value={location?.name as string ?? '—'} />
-            <Row label="Expected" value={po.expected_at ? new Date(po.expected_at as string).toLocaleDateString() : '—'} />
+            <Row label="Supplier" value={(supplier?.name as string) ?? '—'} />
+            <Row label="Destination" value={(location?.name as string) ?? '—'} />
+            <Row
+              label="Expected"
+              value={po.expected_at ? new Date(po.expected_at as string).toLocaleDateString() : '—'}
+            />
             <Row label="Subtotal" value={formatCurrency(po.subtotal as number)} />
             <Row label="Total" value={formatCurrency(po.total as number)} bold />
             {po.notes && (
               <div className="space-y-1 border-t pt-3">
-                <p className="text-xs uppercase tracking-wider text-muted-foreground">Notes</p>
+                <p className="text-muted-foreground text-xs uppercase tracking-wider">Notes</p>
                 <p className="whitespace-pre-wrap text-sm">{po.notes as string}</p>
               </div>
             )}
