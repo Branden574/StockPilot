@@ -168,19 +168,4 @@ export class PurchaseOrdersService {
     if (error) throw new ServiceError('internal_error', error.message);
   }
 
-  async receive(id: string, input: ReceivePoInput) {
-    assertPermission(this.ctx, 'purchase_orders:manage');
-    await this.get(id);
-    const { error } = await this.ctx.supabase.rpc('receive_purchase_order', {
-      p_po_id: id,
-      p_lines: input.lines.map((l) => ({ line_id: l.lineId, quantity: l.quantity })),
-      p_notes: input.notes ?? null,
-    });
-    if (error) {
-      if (error.message.includes('po_already_closed')) {
-        throw new ServiceError('conflict', 'Purchase order is already closed.');
-      }
-      throw new ServiceError('internal_error', error.message);
-    }
-  }
 }

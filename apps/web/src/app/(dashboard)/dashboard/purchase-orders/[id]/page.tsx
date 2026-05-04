@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { PoReceiveDialog } from '@/components/po/po-receive-dialog';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
 import { PoActions } from '@/components/po/po-actions';
+import { ReceiptHistory } from '@/components/po/receipt-history';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
@@ -13,20 +14,26 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { requireOrgContext } from '@/lib/auth/session';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
+import { ReceivingService } from '@/server/services/receiving';
 import { SuppliersService } from '@/server/services/suppliers';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
+import { isManagerOrAbove } from '@stockpilot/core';
+
 export default async function PoDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [poSvc, inventorySvc, suppliersSvc, locationsSvc] = await Promise.all([
+  const [ctx, poSvc, inventorySvc, suppliersSvc, locationsSvc, receivingSvc] = await Promise.all([
+    requireOrgContext(),
     PurchaseOrdersService.forCurrentUser(),
     InventoryService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
     LocationsService.forCurrentUser(),
+    ReceivingService.forCurrentUser(),
   ]);
 
   let result;
@@ -39,18 +46,30 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
 
   const { po, lines } = result;
 
-  const [inventory, suppliers, locations] = await Promise.all([
+  const [inventory, suppliers, locations, receiptData] = await Promise.all([
     inventorySvc.list({ limit: 1000, status: 'all' }),
     suppliersSvc.list(),
     locationsSvc.list(),
+    receivingSvc.listForPurchaseOrder(id),
   ]);
   const itemsById = new Map(inventory.items.map((i) => [i.id, i]));
 
   const supplier = suppliers.find((s) => s.id === po.supplier_id);
   const location = locations.find((l) => l.id === po.destination_location_id);
 
+  // Receipts post against a warehouse. Derive it from the destination
+  // location's warehouse_id. If the PO has no destination, the receive button
+  // is disabled with a helpful tooltip.
+  const warehouseId =
+    (location?.warehouse_id as string | null | undefined) ?? null;
+
   const status = po.status as string;
-  const canReceive = status === 'ordered' || status === 'partially_received';
+  const canReceive =
+    (status === 'ordered' ||
+      status === 'expected_inbound' ||
+      status === 'partially_received') &&
+    warehouseId !== null;
+  const canReverse = isManagerOrAbove(ctx.role);
 
   const lineRows = lines.map((l) => {
     const item = itemsById.get(l.item_id as string);
@@ -90,8 +109,13 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
         </div>
         <div className="flex flex-wrap gap-2">
           <PoActions poId={id} status={status} />
-          {canReceive && (
-            <PoReceiveDialog poId={id} poNumber={po.po_number as string} lines={lineRows} />
+          {canReceive && warehouseId && (
+            <PoReceiveDialog
+              poId={id}
+              poNumber={po.po_number as string}
+              warehouseId={warehouseId}
+              lines={lineRows}
+            />
           )}
         </div>
       </div>
@@ -131,6 +155,22 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                 ))}
               </TableBody>
             </Table>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="text-base">Receipts</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ReceiptHistory
+              receipts={receiptData.receipts}
+              lines={receiptData.lines}
+              items={Object.fromEntries(
+                inventory.items.map((i) => [i.id, { name: i.name, sku: i.sku }]),
+              )}
+              canReverse={canReverse}
+            />
           </CardContent>
         </Card>
 
