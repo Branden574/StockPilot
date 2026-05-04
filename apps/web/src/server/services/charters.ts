@@ -42,7 +42,7 @@ export class ChartersService {
       .from('charters')
       .select(
         `id, name, code, description, notes, status, created_at, updated_at,
-         warehouses:warehouses!charter_id (id),
+         warehouses:warehouse_charters!charter_id (warehouse_id),
          users:user_warehouse_assignments!charter_id (user_id)`,
       )
       .eq('organization_id', this.ctx.organizationId)

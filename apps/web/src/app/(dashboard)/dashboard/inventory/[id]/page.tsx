@@ -6,6 +6,7 @@ import { BarcodeDisplay } from '@/components/inventory/barcode-display';
 import { ImageUploader } from '@/components/inventory/image-uploader';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
+import { StockTransferDialog } from '@/components/inventory/stock-transfer-dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -97,6 +98,19 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
             itemName={item.name as string}
             currentQuantity={item.quantity_on_hand as number}
           />
+          {locations.length >= 2 && (
+            <StockTransferDialog
+              itemId={id}
+              itemName={item.name as string}
+              currentQuantity={item.quantity_on_hand as number}
+              currentLocationId={(item.primary_location_id as string | null) ?? null}
+              locations={locations.map((l) => ({
+                id: l.id as string,
+                name: l.name as string,
+                warehouse_id: (l.warehouse_id as string | null) ?? null,
+              }))}
+            />
+          )}
         </div>
       </div>
 
