@@ -6,6 +6,8 @@ import { Sidebar } from '@/components/dashboard/sidebar';
 import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 
+import type { Role } from '@stockpilot/core';
+
 interface DashboardShellProps {
   children: React.ReactNode;
   email: string;
@@ -14,6 +16,7 @@ interface DashboardShellProps {
   organizationName: string;
   userName: string | null;
   userRole: string;
+  role: Role;
 }
 
 export function DashboardShell({
@@ -24,6 +27,7 @@ export function DashboardShell({
   organizationName,
   userName,
   userRole,
+  role,
 }: DashboardShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const [mounted, setMounted] = React.useState(false);
@@ -39,6 +43,7 @@ export function DashboardShell({
         organizationName={organizationName}
         userName={userName}
         userRole={userRole}
+        role={role}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -65,6 +70,7 @@ export function DashboardShell({
               organizationName={organizationName}
               userName={userName}
               userRole={userRole}
+              role={role}
               onNavigate={() => setMobileNavOpen(false)}
             />
           </SheetContent>

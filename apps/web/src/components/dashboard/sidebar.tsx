@@ -5,15 +5,19 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import * as React from 'react';
 
-import { DASHBOARD_NAV_HREFS, NAV } from '@/components/dashboard/nav';
+import { DASHBOARD_NAV_HREFS, navForRole, type NavSection } from '@/components/dashboard/nav';
 import { IconMark } from '@/components/ui/icon-mark';
 import { cn } from '@/lib/utils';
+
+import type { Role } from '@stockpilot/core';
 
 interface SidebarProps {
   className?: string;
   organizationName: string;
   userName: string | null;
   userRole?: string;
+  /** DB role token used to filter nav (admin section is admin-only). */
+  role: Role;
   onNavigate?: () => void;
 }
 
@@ -22,8 +26,10 @@ export function Sidebar({
   organizationName,
   userName,
   userRole,
+  role,
   onNavigate,
 }: SidebarProps) {
+  const sections: NavSection[] = navForRole(role);
   const pathname = usePathname();
   const router = useRouter();
   const initials = (userName || 'U')
@@ -87,7 +93,7 @@ export function Sidebar({
 
       {/* Nav */}
       <nav className="scrollbar-thin flex-1 overflow-y-auto px-2 py-2.5">
-        {NAV.map((section, idx) => (
+        {sections.map((section, idx) => (
           <div key={idx} className="px-1.5 pb-1 pt-2.5">
             {section.label && (
               <div className="px-2 pb-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">

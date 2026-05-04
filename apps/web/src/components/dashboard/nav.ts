@@ -3,15 +3,22 @@ import {
   BarChart3,
   Bell,
   Boxes,
+  Building2,
   ClipboardList,
   Cog,
+  FileLock,
   Home,
   type LucideIcon,
   MapPin,
+  Network,
   Tag,
   Truck,
   Users,
+  Warehouse,
 } from 'lucide-react';
+
+import type { Role } from '@stockpilot/core';
+import { isAdminRole } from '@stockpilot/core';
 
 export interface NavItem {
   href: string;
@@ -26,7 +33,7 @@ export interface NavSection {
   items: NavItem[];
 }
 
-export const NAV: NavSection[] = [
+const BASE_NAV: NavSection[] = [
   {
     items: [{ href: '/dashboard', label: 'Overview', icon: Home }],
   },
@@ -52,4 +59,28 @@ export const NAV: NavSection[] = [
   },
 ];
 
-export const DASHBOARD_NAV_HREFS = NAV.flatMap((section) => section.items.map((item) => item.href));
+const ADMIN_NAV: NavSection = {
+  label: 'Admin',
+  items: [
+    { href: '/dashboard/admin', label: 'Admin overview', icon: Network },
+    { href: '/dashboard/admin/charters', label: 'Charters', icon: Building2 },
+    { href: '/dashboard/admin/warehouses', label: 'Warehouses', icon: Warehouse },
+    { href: '/dashboard/admin/users', label: 'Users', icon: Users },
+    { href: '/dashboard/admin/audit', label: 'Audit log', icon: FileLock },
+  ],
+};
+
+/**
+ * Returns the nav structure visible to the given role. Super Admins
+ * (owner/admin) see the Admin section; everyone else does not.
+ */
+export function navForRole(role: Role): NavSection[] {
+  if (isAdminRole(role)) return [...BASE_NAV, ADMIN_NAV];
+  return BASE_NAV;
+}
+
+export const NAV: NavSection[] = BASE_NAV;
+export const DASHBOARD_NAV_HREFS = [
+  ...BASE_NAV.flatMap((s) => s.items.map((i) => i.href)),
+  ...ADMIN_NAV.items.map((i) => i.href),
+];
