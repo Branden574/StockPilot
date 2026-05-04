@@ -1,0 +1,78 @@
+import 'server-only';
+
+import { createAdminClient } from '@/lib/supabase/admin';
+import { headers } from 'next/headers';
+
+import { withContext } from './context';
+
+export type AuditEvent =
+  | 'user.invited'
+  | 'user.invite.accepted'
+  | 'user.invite.revoked'
+  | 'user.role.changed'
+  | 'user.warehouse.changed'
+  | 'user.deactivated'
+  | 'user.reactivated'
+  | 'inventory.item.created'
+  | 'inventory.item.updated'
+  | 'inventory.item.archived'
+  | 'inventory.item.deleted'
+  | 'stock.adjusted'
+  | 'stock.received'
+  | 'stock.transferred'
+  | 'stock.removed'
+  | 'warehouse.created'
+  | 'warehouse.updated'
+  | 'warehouse.archived'
+  | 'charter.created'
+  | 'charter.updated'
+  | 'charter.archived'
+  | 'report.exported';
+
+interface AuditPayload {
+  event: AuditEvent;
+  entityType?: string;
+  entityId?: string | null;
+  warehouseId?: string | null;
+  before?: unknown;
+  after?: unknown;
+  reason?: string;
+  extra?: Record<string, unknown>;
+}
+
+/**
+ * Writes an audit log entry using the admin client (so logging never fails
+ * because of RLS). Captures user from the cached withContext(), plus IP +
+ * UA from request headers when available.
+ *
+ * Best-effort — never throws to the caller. Audit failures are logged to
+ * stderr only; we never want a logging error to break a user action.
+ */
+export async function audit(payload: AuditPayload): Promise<void> {
+  try {
+    const ctx = await withContext();
+    const h = await headers();
+    const ip = h.get('x-forwarded-for')?.split(',')[0]?.trim() || h.get('x-real-ip') || null;
+    const userAgent = h.get('user-agent') || null;
+
+    const admin = createAdminClient();
+    await admin.from('audit_logs').insert({
+      organization_id: ctx.organizationId,
+      user_id: ctx.userId,
+      event: payload.event,
+      ip,
+      user_agent: userAgent,
+      metadata: {
+        entity_type: payload.entityType ?? null,
+        entity_id: payload.entityId ?? null,
+        warehouse_id: payload.warehouseId ?? null,
+        before: payload.before ?? null,
+        after: payload.after ?? null,
+        reason: payload.reason ?? null,
+        ...(payload.extra ?? {}),
+      },
+    });
+  } catch (e) {
+    console.error('[audit] failed to write entry', payload.event, e);
+  }
+}

@@ -48,7 +48,11 @@ enabled = true
 site_url = "http://localhost:3000"
 additional_redirect_urls = ["http://localhost:3000/auth/callback"]
 jwt_expiry = 3600
-enable_signup = true
+# Internal-company tool: public self-signup is disabled. Accounts are created
+# by admin invite. Invite acceptance flows through supabase.auth.signUp called
+# from the server action, which bypasses this flag because it uses the
+# service-role key path via the admin client.
+enable_signup = false
 enable_confirmations = true
 minimum_password_length = 8
 password_requirements = "lower_upper_letters_digits"
