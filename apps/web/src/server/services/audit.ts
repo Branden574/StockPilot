@@ -24,6 +24,7 @@ export type AuditEvent =
   | 'warehouse.created'
   | 'warehouse.updated'
   | 'warehouse.archived'
+  | 'warehouse_charters.updated'
   | 'charter.created'
   | 'charter.updated'
   | 'charter.archived'

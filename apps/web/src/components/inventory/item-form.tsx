@@ -41,10 +41,32 @@ interface ItemFormProps {
   categories: Array<{ id: string; name: string }>;
   locations: Array<{ id: string; name: string }>;
   suppliers: Array<{ id: string; name: string }>;
+  /** All warehouses the current user can write to. */
+  warehouses: Array<{ id: string; name: string }>;
+  /** Every (warehouse_id, charter_id) pair in the org. Used to filter charter options. */
+  warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
+  /** All charters in the org (for label lookup). */
+  charters: Array<{ id: string; name: string }>;
+  /** Forced warehouse (for warehouse-scoped users) — picker is hidden when set. */
+  forcedWarehouseId?: string | null;
+  warehouseLabel: string;
+  charterLabel: string;
   onDone?: () => void;
 }
 
-export function ItemForm({ defaults, categories, locations, suppliers, onDone }: ItemFormProps) {
+export function ItemForm({
+  defaults,
+  categories,
+  locations,
+  suppliers,
+  warehouses,
+  warehouseCharters,
+  charters,
+  forcedWarehouseId,
+  warehouseLabel,
+  charterLabel,
+  onDone,
+}: ItemFormProps) {
   const router = useRouter();
   const isEdit = Boolean(defaults?.id);
   const [staged, setStaged] = React.useState<StagedImage[]>([]);
@@ -101,6 +123,8 @@ export function ItemForm({ defaults, categories, locations, suppliers, onDone }:
       categoryId: defaults?.categoryId ?? null,
       supplierId: defaults?.supplierId ?? null,
       primaryLocationId: defaults?.primaryLocationId ?? null,
+      warehouseId: defaults?.warehouseId ?? forcedWarehouseId ?? null,
+      charterId: defaults?.charterId ?? null,
       unitCost: defaults?.unitCost ?? 0,
       retailPrice: defaults?.retailPrice ?? 0,
       quantityOnHand: defaults?.quantityOnHand ?? 0,
@@ -112,6 +136,38 @@ export function ItemForm({ defaults, categories, locations, suppliers, onDone }:
       customFields: defaults?.customFields ?? {},
     },
   });
+
+  const watchedWarehouseId = watch('warehouseId') ?? forcedWarehouseId ?? null;
+  const watchedCharterId = watch('charterId') ?? null;
+  const charterById = React.useMemo(
+    () => new Map(charters.map((c) => [c.id, c.name])),
+    [charters],
+  );
+  const allowedCharterIds = React.useMemo(
+    () =>
+      new Set(
+        watchedWarehouseId
+          ? warehouseCharters
+              .filter((wc) => wc.warehouse_id === watchedWarehouseId)
+              .map((wc) => wc.charter_id)
+          : [],
+      ),
+    [warehouseCharters, watchedWarehouseId],
+  );
+  const allowedCharters = React.useMemo(
+    () =>
+      [...allowedCharterIds]
+        .map((id) => ({ id, name: charterById.get(id) ?? id }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [allowedCharterIds, charterById],
+  );
+
+  // If the warehouse changes and the current charter no longer fits, clear it.
+  React.useEffect(() => {
+    if (watchedCharterId && !allowedCharterIds.has(watchedCharterId)) {
+      setValue('charterId', null);
+    }
+  }, [watchedCharterId, allowedCharterIds, setValue]);
 
   async function uploadStagedImages(itemId: string) {
     if (staged.length === 0) return { uploaded: 0, failed: 0 };
@@ -305,6 +361,83 @@ export function ItemForm({ defaults, categories, locations, suppliers, onDone }:
           <Field label="Bin / shelf">
             <Input placeholder="A-12, Shelf 3…" {...register('binLocation')} />
           </Field>
+        </div>
+      </Section>
+
+      <Section title={`${warehouseLabel} & ${charterLabel.toLowerCase()}`}>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label>
+              {warehouseLabel}
+              <span className="ml-0.5 text-destructive">*</span>
+            </Label>
+            {forcedWarehouseId ? (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                {warehouses.find((w) => w.id === forcedWarehouseId)?.name ??
+                  'Your assigned warehouse'}
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  You can only create items at your assigned {warehouseLabel.toLowerCase()}.
+                </p>
+              </div>
+            ) : (
+              <Select
+                value={watchedWarehouseId ?? ''}
+                onValueChange={(v: string) => setValue('warehouseId', v || null)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={`Pick a ${warehouseLabel.toLowerCase()}`} />
+                </SelectTrigger>
+                <SelectContent>
+                  {warehouses.map((w) => (
+                    <SelectItem key={w.id} value={w.id}>
+                      {w.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>{charterLabel}</Label>
+            <Select
+              value={watchedCharterId ?? '__generic'}
+              onValueChange={(v: string) =>
+                setValue('charterId', v === '__generic' ? null : v)
+              }
+              disabled={!watchedWarehouseId}
+            >
+              <SelectTrigger>
+                <SelectValue
+                  placeholder={
+                    watchedWarehouseId
+                      ? `Generic (any ${charterLabel.toLowerCase()})`
+                      : `Pick a ${warehouseLabel.toLowerCase()} first`
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__generic">
+                  Generic — any {charterLabel.toLowerCase()}
+                </SelectItem>
+                {allowedCharters.length === 0 && watchedWarehouseId ? (
+                  <div className="px-3 py-2 text-[12px] text-muted-foreground">
+                    No {charterLabel.toLowerCase()}s linked to this {warehouseLabel.toLowerCase()}
+                    {' '}yet — admins can configure them in Admin → {warehouseLabel}s.
+                  </div>
+                ) : (
+                  allowedCharters.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground">
+              Generic stock is shared across every {charterLabel.toLowerCase()} the {warehouseLabel.toLowerCase()} services.
+            </p>
+          </div>
         </div>
       </Section>
 
