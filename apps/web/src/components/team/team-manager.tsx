@@ -486,35 +486,40 @@ function InviteDialog({
               onValueChange={(v: string) =>
                 setValue('charterId', v === NONE_VALUE ? '' : v)
               }
-              disabled={warehouseId !== '' && chartersForWarehouse.length === 0}
+              disabled={!warehouseId || chartersForWarehouse.length === 0}
             >
               <SelectTrigger>
-                <SelectValue placeholder={`All ${charterSingular.toLowerCase()}s at this ${warehouseSingular.toLowerCase()}`} />
+                <SelectValue
+                  placeholder={
+                    !warehouseId
+                      ? `Pick a ${warehouseSingular.toLowerCase()} first`
+                      : chartersForWarehouse.length === 0
+                      ? `No ${charterSingular.toLowerCase()}s linked to this ${warehouseSingular.toLowerCase()}`
+                      : `All ${charterSingular.toLowerCase()}s at this ${warehouseSingular.toLowerCase()}`
+                  }
+                />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={NONE_VALUE}>{`All ${charterSingular.toLowerCase()}s at this ${warehouseSingular.toLowerCase()}`}</SelectItem>
-                {warehouseId && chartersForWarehouse.length === 0 ? (
-                  <div className="px-3 py-2 text-[12px] text-muted-foreground">
-                    No {charterSingular.toLowerCase()}s linked to this {warehouseSingular.toLowerCase()} yet.
-                    Link some in Admin → {warehouseSingular}s, or invite without a {charterSingular.toLowerCase()}.
-                  </div>
-                ) : (
-                  chartersForWarehouse.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                    </SelectItem>
-                  ))
+                {warehouseId && chartersForWarehouse.length > 0 && (
+                  <SelectItem value={NONE_VALUE}>
+                    {`All ${charterSingular.toLowerCase()}s at this ${warehouseSingular.toLowerCase()}`}
+                  </SelectItem>
                 )}
+                {chartersForWarehouse.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
             <p className="text-[11px] text-muted-foreground">
-              {charterId
-                ? `Scoped to ${charters.find((c) => c.id === charterId)?.name ?? 'this'} only.`
-                : warehouseId
-                ? `No ${charterSingular.toLowerCase()} picked — they'll see every ${charterSingular.toLowerCase()} this ${warehouseSingular.toLowerCase()} services.`
-                : warehouseRequired
-                ? `Required — ${ROLE_LABELS[role].label.toLowerCase()}s only see inventory for their assigned ${warehouseSingular.toLowerCase()}.`
-                : `Optional.`}
+              {!warehouseId
+                ? `Pick a ${warehouseSingular.toLowerCase()} above to see its ${charterSingular.toLowerCase()}s.`
+                : chartersForWarehouse.length === 0
+                ? `This ${warehouseSingular.toLowerCase()} has no ${charterSingular.toLowerCase()}s linked yet. Link some in Admin → ${warehouseSingular}s, or invite without a ${charterSingular.toLowerCase()} (they'll see all stock at this ${warehouseSingular.toLowerCase()}).`
+                : charterId
+                ? `Scoped to ${charters.find((c) => c.id === charterId)?.name ?? 'this'} only at this ${warehouseSingular.toLowerCase()}.`
+                : `No ${charterSingular.toLowerCase()} picked — they'll see every ${charterSingular.toLowerCase()} this ${warehouseSingular.toLowerCase()} services.`}
             </p>
           </div>
 
