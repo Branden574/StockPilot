@@ -6,9 +6,7 @@ import { ServiceError } from '@/server/services/context';
 import {
   createPoSchema,
   PurchaseOrdersService,
-  receivePoSchema,
   type CreatePoInput,
-  type ReceivePoInput,
 } from '@/server/services/purchase-orders';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -44,18 +42,3 @@ export async function updatePoStatusAction(id: string, status: 'draft' | 'ordere
   }
 }
 
-export async function receivePoAction(id: string, input: ReceivePoInput): Promise<ActionResult<void>> {
-  const parsed = receivePoSchema.safeParse(input);
-  if (!parsed.success) return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
-  try {
-    const svc = await PurchaseOrdersService.forCurrentUser();
-    await svc.receive(id, parsed.data);
-    revalidatePath('/dashboard');
-    revalidatePath('/dashboard/inventory');
-    revalidatePath('/dashboard/purchase-orders');
-    revalidatePath(`/dashboard/purchase-orders/${id}`);
-    return ok(undefined);
-  } catch (e) {
-    return toResult(e);
-  }
-}
