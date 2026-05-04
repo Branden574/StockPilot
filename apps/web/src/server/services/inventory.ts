@@ -1,6 +1,12 @@
 import 'server-only';
 
 import { generateSku } from '@/lib/utils';
+import {
+  assertWarehouseAccess,
+  forcedWarehouseId,
+  getWarehouseAccess,
+  ForbiddenError,
+} from '@/lib/auth/warehouse';
 
 import type {
   AdjustStockInput,
@@ -17,6 +23,8 @@ export interface ItemListFilters {
   categoryId?: string | null;
   locationId?: string | null;
   supplierId?: string | null;
+  /** Optional filter for managers/admins. Ignored for warehouse-scoped users (forced). */
+  warehouseId?: string | null;
   lowStock?: boolean;
   outOfStock?: boolean;
   cursor?: string | null;
@@ -32,10 +40,12 @@ export class InventoryService {
 
   async list(filters: ItemListFilters = {}) {
     const limit = Math.min(filters.limit ?? 50, 200);
+    const access = await getWarehouseAccess();
+
     let query = this.ctx.supabase
       .from('inventory_items')
       .select(
-        'id, sku, barcode, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, created_at, updated_at',
+        'id, sku, barcode, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, created_at, updated_at',
         // Estimated counts use pg_class.reltuples (~1ms) instead of a full
         // sequential count under RLS. Display purposes don't need precision.
         { count: 'estimated' },
@@ -44,6 +54,19 @@ export class InventoryService {
       .is('deleted_at', null)
       .order('updated_at', { ascending: false })
       .limit(limit);
+
+    // Warehouse scoping: defense against URL/API tampering. Warehouse-scoped
+    // users (staff/viewer) never see items outside their assignments — even
+    // if the request omits or forges warehouseId. Managers/admins may pass
+    // an optional warehouseId filter; otherwise see everything.
+    if (!access.hasAllAccess) {
+      if (access.readableIds.length === 0) {
+        return { items: [], total: 0 };
+      }
+      query = query.in('warehouse_id', access.readableIds);
+    } else if (filters.warehouseId) {
+      query = query.eq('warehouse_id', filters.warehouseId);
+    }
 
     if (!filters.status || filters.status === 'active') {
       query = query.eq('status', 'active');
@@ -80,6 +103,7 @@ export class InventoryService {
         category_id: string | null;
         supplier_id: string | null;
         primary_location_id: string | null;
+        warehouse_id: string | null;
         created_at: string;
         updated_at: string;
       }>,
@@ -97,6 +121,19 @@ export class InventoryService {
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Item not found');
+
+    // Re-check warehouse access on the loaded row in case RLS was bypassed
+    // (e.g. service-role contexts). For warehouse-scoped users this enforces
+    // their assignment list.
+    const wh = (data as { warehouse_id?: string | null }).warehouse_id ?? null;
+    if (wh) {
+      try {
+        await assertWarehouseAccess(wh, 'read');
+      } catch (e) {
+        if (e instanceof ForbiddenError) throw new ServiceError('not_found', 'Item not found');
+        throw e;
+      }
+    }
     return data;
   }
 
@@ -106,10 +143,27 @@ export class InventoryService {
 
     const sku = (input.sku && input.sku.trim()) || generateSku();
 
+    // Resolve warehouse: warehouse-scoped users (staff/viewer) get their
+    // assignment forced regardless of input. Managers/admins must specify
+    // one (we can't pick "any" silently — items must belong to a warehouse).
+    const forced = await forcedWarehouseId();
+    const resolvedWarehouseId = forced ?? input.warehouseId ?? null;
+    if (!resolvedWarehouseId) {
+      throw new ServiceError(
+        'validation_error',
+        'A warehouse must be selected before creating an item.',
+      );
+    }
+    if (!forced) {
+      // Manager/admin path: validate they have write access to the chosen warehouse.
+      await assertWarehouseAccess(resolvedWarehouseId, 'write');
+    }
+
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
       .insert({
         organization_id: this.ctx.organizationId,
+        warehouse_id: resolvedWarehouseId,
         sku,
         barcode: input.barcode ?? null,
         name: input.name,
@@ -158,6 +212,13 @@ export class InventoryService {
   async update(id: string, patch: UpdateItemInput) {
     assertPermission(this.ctx, 'items:update');
 
+    // Load current row to enforce warehouse-write access and to lock down
+    // moves. Warehouse-scoped users cannot move an item to another warehouse;
+    // managers/admins can only move it if they have write access to both.
+    const current = await this.get(id);
+    const currentWarehouseId = (current as { warehouse_id?: string | null }).warehouse_id ?? null;
+    if (currentWarehouseId) await assertWarehouseAccess(currentWarehouseId, 'write');
+
     const updates: Record<string, unknown> = { updated_by: this.ctx.userId };
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.sku !== undefined) updates.sku = patch.sku;
@@ -175,6 +236,21 @@ export class InventoryService {
     if (patch.status !== undefined) updates.status = patch.status;
     if (patch.customFields !== undefined) updates.custom_fields = patch.customFields;
 
+    if (patch.warehouseId !== undefined && patch.warehouseId !== currentWarehouseId) {
+      const forced = await forcedWarehouseId();
+      if (forced) {
+        throw new ServiceError(
+          'forbidden',
+          'Warehouse-scoped users cannot move items to another warehouse.',
+        );
+      }
+      if (!patch.warehouseId) {
+        throw new ServiceError('validation_error', 'Item must remain assigned to a warehouse.');
+      }
+      await assertWarehouseAccess(patch.warehouseId, 'write');
+      updates.warehouse_id = patch.warehouseId;
+    }
+
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
       .update(updates)
@@ -189,6 +265,9 @@ export class InventoryService {
 
   async archive(id: string) {
     assertPermission(this.ctx, 'items:update');
+    const current = await this.get(id);
+    const wh = (current as { warehouse_id?: string | null }).warehouse_id ?? null;
+    if (wh) await assertWarehouseAccess(wh, 'write');
     const { error } = await this.ctx.supabase
       .from('inventory_items')
       .update({ status: 'archived', updated_by: this.ctx.userId })
@@ -199,6 +278,9 @@ export class InventoryService {
 
   async softDelete(id: string) {
     assertPermission(this.ctx, 'items:delete');
+    const current = await this.get(id);
+    const wh = (current as { warehouse_id?: string | null }).warehouse_id ?? null;
+    if (wh) await assertWarehouseAccess(wh, 'write');
     const { error } = await this.ctx.supabase
       .from('inventory_items')
       .update({ deleted_at: new Date().toISOString(), updated_by: this.ctx.userId })
@@ -209,6 +291,11 @@ export class InventoryService {
 
   async adjustStock(input: AdjustStockInput) {
     assertPermission(this.ctx, 'stock:adjust');
+    // Verify the item is in a warehouse the user can write to before
+    // delegating to the RPC. The RPC also enforces this server-side.
+    const item = await this.get(input.itemId);
+    const wh = (item as { warehouse_id?: string | null }).warehouse_id ?? null;
+    if (wh) await assertWarehouseAccess(wh, 'write');
     const { data, error } = await this.ctx.supabase.rpc('adjust_stock', {
       p_item_id: input.itemId,
       p_quantity_change: input.quantityChange,
