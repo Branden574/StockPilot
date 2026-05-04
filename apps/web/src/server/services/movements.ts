@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
+
 import { ServiceError, withContext, type ServiceContext } from './context';
 
 export interface MovementWithItem {
@@ -30,8 +32,17 @@ export class MovementsService {
    * existing FK in a single PostgREST round trip — eliminates the separate
    * IN(...) lookup that the dashboard + movements pages used to do.
    */
-  async list(params: { itemId?: string; limit?: number } = {}) {
+  async list(params: { itemId?: string; warehouseId?: string; limit?: number } = {}) {
     const limit = Math.min(params.limit ?? 100, 500);
+    const access = await getWarehouseAccess();
+
+    // Use `!inner` on the embed so we can filter parent rows by the item's
+    // warehouse_id without a second round trip.
+    const needsScope = !access.hasAllAccess || !!params.warehouseId;
+    const itemEmbed = needsScope
+      ? 'item:inventory_items!item_id!inner (id, name, sku, warehouse_id)'
+      : 'item:inventory_items!item_id (id, name, sku, warehouse_id)';
+
     let query = this.ctx.supabase
       .from('stock_movements')
       .select(
@@ -39,12 +50,19 @@ export class MovementsService {
         id, movement_type, quantity_change, previous_quantity, new_quantity,
         from_location_id, to_location_id, reason, notes, created_at,
         item_id, user_id,
-        item:inventory_items!item_id (id, name, sku)
+        ${itemEmbed}
       `,
       )
       .eq('organization_id', this.ctx.organizationId)
       .order('created_at', { ascending: false })
       .limit(limit);
+
+    if (!access.hasAllAccess) {
+      if (access.readableIds.length === 0) return [];
+      query = query.in('item.warehouse_id', access.readableIds);
+    } else if (params.warehouseId) {
+      query = query.eq('item.warehouse_id', params.warehouseId);
+    }
 
     if (params.itemId) query = query.eq('item_id', params.itemId);
 
