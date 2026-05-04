@@ -1,0 +1,58 @@
+import Link from 'next/link';
+import { redirect } from 'next/navigation';
+
+import { TerminologyEditor } from '@/components/settings/terminology-editor';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { requireOrgContext } from '@/lib/auth/session';
+import { createClient } from '@/lib/supabase/server';
+
+import { DEFAULT_TERMINOLOGY, resolveTerminology } from '@stockpilot/core';
+
+export default async function OrganizationSettingsPage() {
+  const ctx = await requireOrgContext();
+  if (ctx.role !== 'owner' && ctx.role !== 'admin') {
+    redirect('/dashboard/settings');
+  }
+
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from('organizations')
+    .select('terminology, name')
+    .eq('id', ctx.organizationId)
+    .maybeSingle();
+
+  const current = resolveTerminology(
+    (data?.terminology as Partial<typeof DEFAULT_TERMINOLOGY>) ?? null,
+  );
+
+  return (
+    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
+      <div className="mb-6">
+        <Link
+          href="/dashboard/settings"
+          className="text-muted-foreground hover:text-foreground text-sm"
+        >
+          ← Back to settings
+        </Link>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Organization</h1>
+        <p className="text-muted-foreground mt-1 text-sm">
+          Workspace name, labels for {current.charter_plural.toLowerCase()} and{' '}
+          {current.warehouse_plural.toLowerCase()}.
+        </p>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Labels</CardTitle>
+          <CardDescription>
+            Rename the top-level grouping and physical-site terms to match how your
+            organization talks about them. Applies everywhere in the app.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <TerminologyEditor current={current} defaults={DEFAULT_TERMINOLOGY} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
