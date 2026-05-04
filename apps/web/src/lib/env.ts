@@ -8,29 +8,47 @@ import { z } from 'zod';
 
 const optionalSecret = z.string().optional().default('');
 
+/**
+ * Trim + drop trailing slash. Vercel's env-var dashboard sometimes
+ * preserves trailing newlines/whitespace when you paste, and a trailing
+ * \n in NEXT_PUBLIC_APP_URL turns invite URLs into broken multi-line
+ * strings ("https://...vercel.app\n/i/<token>"). Belt-and-suspenders:
+ * this normalizer runs at zod-validation time so every consumer of
+ * env.NEXT_PUBLIC_APP_URL gets a clean value.
+ */
+const cleanUrl = (s: string) => s.trim().replace(/\/$/, '');
+
+const urlField = z
+  .string()
+  .transform(cleanUrl)
+  .pipe(z.string().url())
+  .default('http://localhost:3000');
+
+const supabaseUrlField = z.string().transform(cleanUrl).pipe(z.string().url());
+
 const serverSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  NEXT_PUBLIC_APP_URL: z.string().url().default('http://localhost:3000'),
-  NEXT_PUBLIC_SITE_NAME: z.string().default('StockPilot'),
+  NEXT_PUBLIC_APP_URL: urlField,
+  NEXT_PUBLIC_SITE_NAME: z.string().transform((s) => s.trim()).default('StockPilot'),
 
-  NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
-  SUPABASE_SERVICE_ROLE_KEY: optionalSecret,
+  NEXT_PUBLIC_SUPABASE_URL: supabaseUrlField,
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().transform((s) => s.trim()).pipe(z.string().min(1)),
+  SUPABASE_SERVICE_ROLE_KEY: optionalSecret.transform((s) => s.trim()),
 
-  STRIPE_SECRET_KEY: optionalSecret,
-  STRIPE_WEBHOOK_SECRET: optionalSecret,
-  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: optionalSecret,
+  STRIPE_SECRET_KEY: optionalSecret.transform((s) => s.trim()),
+  STRIPE_WEBHOOK_SECRET: optionalSecret.transform((s) => s.trim()),
+  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: optionalSecret.transform((s) => s.trim()),
 
-  RESEND_API_KEY: optionalSecret,
-  RESEND_FROM_EMAIL: z.string().default('StockPilot <hello@stockpilot.app>'),
+  RESEND_API_KEY: optionalSecret.transform((s) => s.trim()),
+  RESEND_FROM_EMAIL: z.string().transform((s) => s.trim()).default('StockPilot <hello@stockpilot.app>'),
 });
 
 const clientSchema = z.object({
-  NEXT_PUBLIC_APP_URL: z.string().url().default('http://localhost:3000'),
-  NEXT_PUBLIC_SITE_NAME: z.string().default('StockPilot'),
-  NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
-  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().optional().default(''),
+  NEXT_PUBLIC_APP_URL: urlField,
+  NEXT_PUBLIC_SITE_NAME: z.string().transform((s) => s.trim()).default('StockPilot'),
+  NEXT_PUBLIC_SUPABASE_URL: supabaseUrlField,
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().transform((s) => s.trim()).pipe(z.string().min(1)),
+  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().optional().default('').transform((s) => s.trim()),
 });
 
 const isDev = process.env.NODE_ENV !== 'production';
