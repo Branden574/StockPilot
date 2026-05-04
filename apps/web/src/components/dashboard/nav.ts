@@ -68,6 +68,7 @@ const ADMIN_NAV: NavSection = {
     { href: '/dashboard/admin', label: 'Admin overview', icon: Network },
     { href: '/dashboard/admin/charters', label: 'Charters', icon: Building2 },
     { href: '/dashboard/admin/warehouses', label: 'Warehouses', icon: Warehouse },
+    { href: '/dashboard/admin/bins', label: 'Bins', icon: MapPin },
     { href: '/dashboard/admin/users', label: 'Users', icon: Users },
     { href: '/dashboard/admin/vendor-mappings', label: 'Vendor mappings', icon: BookOpen },
     { href: '/dashboard/admin/uom-conversions', label: 'UoM conversions', icon: ArrowLeftRight },
