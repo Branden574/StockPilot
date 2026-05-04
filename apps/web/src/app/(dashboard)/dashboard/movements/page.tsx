@@ -10,11 +10,15 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { MovementsService } from '@/server/services/movements';
+import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
 export default async function MovementsPage() {
-  const movementsSvc = await MovementsService.forCurrentUser();
-  const movements = await movementsSvc.list({ limit: 200 });
+  const [movementsSvc, warehouseFilter] = await Promise.all([
+    MovementsService.forCurrentUser(),
+    getActiveWarehouseFilter(),
+  ]);
+  const movements = await movementsSvc.list({ limit: 200, warehouseId: warehouseFilter ?? undefined });
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">

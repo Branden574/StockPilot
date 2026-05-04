@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import * as React from 'react';
 
 import { ThemeToggle } from '@/components/theme/theme-toggle';
+import { WarehouseFilterPicker } from '@/components/dashboard/warehouse-filter-picker';
 import { cn } from '@/lib/utils';
 
 import { UserMenu } from './user-menu';
@@ -16,6 +17,12 @@ interface TopbarProps {
   avatarUrl: string | null;
   organizationName: string;
   onToggleSidebar?: () => void;
+  /** Pass-through filter UI props — only rendered when warehouses is non-empty. */
+  warehouseFilter?: {
+    warehouses: Array<{ id: string; name: string }>;
+    activeId: string | null;
+    warehouseLabel: string;
+  };
 }
 
 const CRUMBS: Array<[RegExp, string[]]> = [
@@ -52,6 +59,7 @@ export function Topbar({
   avatarUrl,
   organizationName,
   onToggleSidebar,
+  warehouseFilter,
 }: TopbarProps) {
   const pathname = usePathname();
   const crumbs = useCrumbs(pathname);
@@ -84,9 +92,19 @@ export function Topbar({
         ))}
       </nav>
 
+      <div className="ml-auto flex items-center gap-2">
+        {warehouseFilter && warehouseFilter.warehouses.length > 0 && (
+          <WarehouseFilterPicker
+            warehouses={warehouseFilter.warehouses}
+            activeId={warehouseFilter.activeId}
+            warehouseLabel={warehouseFilter.warehouseLabel}
+          />
+        )}
+      </div>
+
       <button
         type="button"
-        className="border-border bg-card ml-auto hidden h-8 min-w-[240px] max-w-[460px] flex-1 items-center gap-2 rounded-md border px-2.5 text-[12.5px] text-[var(--ed-ink-4)] shadow-[0_1px_0_rgba(14,15,13,0.03)] transition-colors hover:border-[var(--ed-line-strong)] md:flex"
+        className="border-border bg-card hidden h-8 min-w-[240px] max-w-[460px] flex-1 items-center gap-2 rounded-md border px-2.5 text-[12.5px] text-[var(--ed-ink-4)] shadow-[0_1px_0_rgba(14,15,13,0.03)] transition-colors hover:border-[var(--ed-line-strong)] md:flex"
         aria-label="Open command palette"
       >
         <Search className="h-3 w-3" />
