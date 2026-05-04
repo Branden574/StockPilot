@@ -30,6 +30,7 @@ export const createItemSchema = z.object({
   categoryId: uuidSchema.nullable().optional(),
   supplierId: uuidSchema.nullable().optional(),
   primaryLocationId: uuidSchema.nullable().optional(),
+  warehouseId: uuidSchema.nullable().optional(),
   unitCost: numericMoney.default(0),
   retailPrice: numericMoney.default(0),
   quantityOnHand: numericQty.default(0),
