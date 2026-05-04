@@ -50,7 +50,7 @@ import {
 } from '@/server/actions/team';
 import { formatRelative } from '@/lib/utils';
 
-import { ROLES, type Role } from '@stockpilot/core';
+import { ROLES, ROLE_LABELS, type Role } from '@stockpilot/core';
 
 interface Member {
   id: string;
@@ -74,11 +74,23 @@ interface TeamManagerProps {
   currentUserRole: Role;
   members: Member[];
   pendingInvites: PendingInvite[];
+  charters: Array<{ id: string; name: string }>;
+  warehouses: Array<{ id: string; name: string; charter_id: string | null }>;
+  charterSingular: string;
+  warehouseSingular: string;
 }
 
 const ASSIGNABLE_ROLES: Role[] = ROLES.filter((r) => r !== 'owner');
 
-export function TeamManager({ currentUserRole, members, pendingInvites }: TeamManagerProps) {
+export function TeamManager({
+  currentUserRole,
+  members,
+  pendingInvites,
+  charters,
+  warehouses,
+  charterSingular,
+  warehouseSingular,
+}: TeamManagerProps) {
   const [inviteOpen, setInviteOpen] = React.useState(false);
 
   return (
@@ -138,7 +150,14 @@ export function TeamManager({ currentUserRole, members, pendingInvites }: TeamMa
         </section>
       )}
 
-      <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
+      <InviteDialog
+        open={inviteOpen}
+        onOpenChange={setInviteOpen}
+        charters={charters}
+        warehouses={warehouses}
+        charterSingular={charterSingular}
+        warehouseSingular={warehouseSingular}
+      />
     </div>
   );
 }
@@ -269,7 +288,31 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
   );
 }
 
-function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+interface InviteFormValues {
+  email: string;
+  role: Role;
+  charterId: string;
+  warehouseId: string;
+  message: string;
+}
+
+const NONE_VALUE = '__none';
+
+function InviteDialog({
+  open,
+  onOpenChange,
+  charters,
+  warehouses,
+  charterSingular,
+  warehouseSingular,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  charters: Array<{ id: string; name: string }>;
+  warehouses: Array<{ id: string; name: string; charter_id: string | null }>;
+  charterSingular: string;
+  warehouseSingular: string;
+}) {
   const router = useRouter();
   const {
     register,
@@ -278,22 +321,52 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
     watch,
     reset,
     formState: { isSubmitting, errors },
-  } = useForm<{ email: string; role: Role }>({
-    defaultValues: { email: '', role: 'staff' },
+  } = useForm<InviteFormValues>({
+    defaultValues: { email: '', role: 'staff', charterId: '', warehouseId: '', message: '' },
   });
 
+  const role = watch('role');
+  const charterId = watch('charterId');
+  const warehouseId = watch('warehouseId');
+  const warehouseRequired = role === 'staff' || role === 'viewer';
+
+  // Filter warehouses by selected charter (when one is set).
+  const filteredWarehouses = React.useMemo(() => {
+    if (!charterId) return warehouses;
+    return warehouses.filter((w) => w.charter_id === charterId);
+  }, [warehouses, charterId]);
+
   React.useEffect(() => {
-    if (!open) reset({ email: '', role: 'staff' });
+    if (!open) reset({ email: '', role: 'staff', charterId: '', warehouseId: '', message: '' });
   }, [open, reset]);
 
+  // If user changes charter and the current warehouse no longer fits, clear it.
+  React.useEffect(() => {
+    if (warehouseId && !filteredWarehouses.some((w) => w.id === warehouseId)) {
+      setValue('warehouseId', '');
+    }
+  }, [filteredWarehouses, warehouseId, setValue]);
+
   const onSubmit = handleSubmit(async (values) => {
-    const res = await inviteMemberAction({ email: values.email, role: values.role });
+    if (warehouseRequired && !values.warehouseId) {
+      toast.error(
+        `Please pick a ${warehouseSingular.toLowerCase()} for this role — they'll be locked to it.`,
+      );
+      return;
+    }
+    const res = await inviteMemberAction({
+      email: values.email,
+      role: values.role,
+      charterId: values.charterId || null,
+      warehouseId: values.warehouseId || null,
+      message: values.message || undefined,
+    });
     if (!res.ok) {
       toast.error(res.error.message);
       return;
     }
     toast.success(`Invite sent to ${values.email}`, {
-      description: 'Copy the link from the pending invites table if email isn\'t configured.',
+      description: "Copy the link from the pending invites table if email isn't configured.",
     });
     onOpenChange(false);
     router.refresh();
@@ -301,11 +374,11 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Invite a member</DialogTitle>
           <DialogDescription>
-            They'll get an email with a link to accept and join your workspace.
+            They&apos;ll get an email with a link to accept and join your workspace.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-4" noValidate>
@@ -319,23 +392,116 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v:
             />
             {errors.email && <p className="text-xs text-destructive">Email is required</p>}
           </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Role</Label>
+              <Select
+                value={role}
+                onValueChange={(v: string) => setValue('role', v as Role)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ASSIGNABLE_ROLES.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {ROLE_LABELS[r].label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                {ROLE_LABELS[role].description}
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>{charterSingular} (optional)</Label>
+              <Select
+                value={charterId || NONE_VALUE}
+                onValueChange={(v: string) =>
+                  setValue('charterId', v === NONE_VALUE ? '' : v)
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={`No ${charterSingular.toLowerCase()}`} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE_VALUE}>{`No ${charterSingular.toLowerCase()}`}</SelectItem>
+                  {charters.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
           <div className="space-y-1.5">
-            <Label>Role</Label>
-            <Select value={watch('role')} onValueChange={(v: string) => setValue('role', v as Role)}>
+            <Label>
+              {warehouseSingular}
+              {warehouseRequired && <span className="ml-1 text-destructive">*</span>}
+            </Label>
+            <Select
+              value={warehouseId || NONE_VALUE}
+              onValueChange={(v: string) =>
+                setValue('warehouseId', v === NONE_VALUE ? '' : v)
+              }
+            >
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue
+                  placeholder={
+                    warehouseRequired
+                      ? `Pick a ${warehouseSingular.toLowerCase()}`
+                      : `No ${warehouseSingular.toLowerCase()}`
+                  }
+                />
               </SelectTrigger>
               <SelectContent>
-                {ASSIGNABLE_ROLES.map((r) => (
-                  <SelectItem key={r} value={r}>
-                    {r.charAt(0).toUpperCase() + r.slice(1)}
+                {!warehouseRequired && (
+                  <SelectItem value={NONE_VALUE}>
+                    No specific {warehouseSingular.toLowerCase()}
                   </SelectItem>
-                ))}
+                )}
+                {filteredWarehouses.length === 0 ? (
+                  <div className="px-3 py-2 text-[12px] text-muted-foreground">
+                    No {warehouseSingular.toLowerCase()}s match — clear the {charterSingular.toLowerCase()}
+                    {' '}or create one in Admin.
+                  </div>
+                ) : (
+                  filteredWarehouses.map((w) => (
+                    <SelectItem key={w.id} value={w.id}>
+                      {w.name}
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
+            <p className="text-[11px] text-muted-foreground">
+              {warehouseRequired
+                ? `Required — ${ROLE_LABELS[role].label.toLowerCase()}s only see inventory for their assigned ${warehouseSingular.toLowerCase()}.`
+                : `Optional — managers and admins see every ${warehouseSingular.toLowerCase()} in the company.`}
+            </p>
           </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="invite-message">Message (optional)</Label>
+            <Input
+              id="invite-message"
+              placeholder="Welcome to the team — see you Monday"
+              {...register('message', { maxLength: 2000 })}
+            />
+          </div>
+
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={isSubmitting}
+            >
               Cancel
             </Button>
             <Button type="submit" variant="gradient" disabled={isSubmitting}>
