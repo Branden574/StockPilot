@@ -71,6 +71,7 @@ const ADMIN_NAV: NavSection = {
     { href: '/dashboard/admin/users', label: 'Users', icon: Users },
     { href: '/dashboard/admin/vendor-mappings', label: 'Vendor mappings', icon: BookOpen },
     { href: '/dashboard/admin/uom-conversions', label: 'UoM conversions', icon: ArrowLeftRight },
+    { href: '/dashboard/admin/reconciliation', label: 'Reconciliation', icon: BarChart3 },
     { href: '/dashboard/admin/audit', label: 'Audit log', icon: FileLock },
   ],
 };

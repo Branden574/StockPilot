@@ -157,6 +157,9 @@ export class ReceivingService {
     }
 
     const receipt = data as unknown as ReceiptRow;
+    const totalAccepted = input.lines.reduce((s, l) => s + l.qtyAccepted, 0);
+    const totalRejected = input.lines.reduce((s, l) => s + (l.qtyRejected ?? 0), 0);
+
     await audit({
       event: 'stock.receipt.posted',
       entityType: 'receipt',
@@ -166,9 +169,27 @@ export class ReceivingService {
         purchaseOrderId: input.purchaseOrderId,
         receiptNumber: receipt.receipt_number,
         lineCount: input.lines.length,
-        totalAccepted: input.lines.reduce((s, l) => s + l.qtyAccepted, 0),
-        totalRejected: input.lines.reduce((s, l) => s + (l.qtyRejected ?? 0), 0),
+        totalAccepted,
+        totalRejected,
       },
+    });
+
+    // Publish to outbox for downstream consumers (notifications, analytics).
+    // Best-effort: a failure here doesn't undo the receipt.
+    void this.ctx.supabase.rpc('publish_outbox', {
+      p_org_id: this.ctx.organizationId,
+      p_topic: 'receipt.posted',
+      p_aggregate_type: 'receipt',
+      p_aggregate_id: receipt.id,
+      p_payload: {
+        purchaseOrderId: input.purchaseOrderId,
+        warehouseId: receipt.warehouse_id,
+        receiptNumber: receipt.receipt_number,
+        lineCount: input.lines.length,
+        totalAccepted,
+        totalRejected,
+      },
+      p_dedupe_key: `receipt.posted:${receipt.id}`,
     });
 
     return receipt;
