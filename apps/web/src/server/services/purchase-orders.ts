@@ -2,6 +2,8 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
+
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 const lineInputSchema = z.object({
@@ -38,14 +40,31 @@ export class PurchaseOrdersService {
     return new PurchaseOrdersService(await withContext());
   }
 
-  async list() {
-    const { data, error } = await this.ctx.supabase
+  async list(params: { warehouseId?: string } = {}) {
+    const access = await getWarehouseAccess();
+
+    // Scope by destination location's warehouse via inner-join when needed.
+    const needsScope = !access.hasAllAccess || !!params.warehouseId;
+    const destEmbed = needsScope
+      ? 'destination:locations!destination_location_id!inner (warehouse_id)'
+      : 'destination:locations!destination_location_id (warehouse_id)';
+
+    let query = this.ctx.supabase
       .from('purchase_orders')
       .select(
-        'id, po_number, status, supplier_id, destination_location_id, expected_at, total, created_at, updated_at',
+        `id, po_number, status, supplier_id, destination_location_id, expected_at, total, created_at, updated_at, ${destEmbed}`,
       )
       .eq('organization_id', this.ctx.organizationId)
       .order('created_at', { ascending: false });
+
+    if (!access.hasAllAccess) {
+      if (access.readableIds.length === 0) return [];
+      query = query.in('destination.warehouse_id', access.readableIds);
+    } else if (params.warehouseId) {
+      query = query.eq('destination.warehouse_id', params.warehouseId);
+    }
+
+    const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return data ?? [];
   }
@@ -53,12 +72,22 @@ export class PurchaseOrdersService {
   async get(id: string) {
     const { data: po, error } = await this.ctx.supabase
       .from('purchase_orders')
-      .select('*')
+      .select('*, destination:locations!destination_location_id (warehouse_id)')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!po) throw new ServiceError('not_found', 'Purchase order not found');
+
+    const dest = (po as { destination?: unknown }).destination;
+    const destRow = Array.isArray(dest) ? dest[0] : dest;
+    const wh = (destRow as { warehouse_id?: string | null } | null | undefined)?.warehouse_id ?? null;
+    if (wh) {
+      const access = await getWarehouseAccess();
+      if (!access.hasAllAccess && !access.readableIds.includes(wh)) {
+        throw new ServiceError('not_found', 'Purchase order not found');
+      }
+    }
 
     const { data: lines } = await this.ctx.supabase
       .from('purchase_order_items')
@@ -70,6 +99,18 @@ export class PurchaseOrdersService {
 
   async create(input: CreatePoInput) {
     assertPermission(this.ctx, 'purchase_orders:manage');
+
+    // Validate the destination location is in a warehouse the user can write to.
+    if (input.destinationLocationId) {
+      const { data: loc } = await this.ctx.supabase
+        .from('locations')
+        .select('warehouse_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', input.destinationLocationId)
+        .maybeSingle();
+      const wh = (loc as { warehouse_id?: string | null } | null)?.warehouse_id ?? null;
+      if (wh) await assertWarehouseAccess(wh, 'write');
+    }
 
     const { data: numberRpc } = await this.ctx.supabase.rpc('next_po_number', {
       p_org_id: this.ctx.organizationId,
@@ -114,6 +155,7 @@ export class PurchaseOrdersService {
 
   async updateStatus(id: string, status: 'draft' | 'ordered' | 'cancelled') {
     assertPermission(this.ctx, 'purchase_orders:manage');
+    await this.get(id); // throws not_found if user can't see this PO's warehouse
     const { error } = await this.ctx.supabase
       .from('purchase_orders')
       .update({
@@ -128,6 +170,7 @@ export class PurchaseOrdersService {
 
   async receive(id: string, input: ReceivePoInput) {
     assertPermission(this.ctx, 'purchase_orders:manage');
+    await this.get(id);
     const { error } = await this.ctx.supabase.rpc('receive_purchase_order', {
       p_po_id: id,
       p_lines: input.lines.map((l) => ({ line_id: l.lineId, quantity: l.quantity })),
