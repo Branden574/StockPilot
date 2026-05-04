@@ -65,6 +65,15 @@ secure_password_change = true
 [auth.sms]
 enable_signup = false
 
+# TOTP-based MFA (authenticator apps — Google Authenticator, 1Password, etc.).
+# Hosted Supabase has these on by default; mirror locally for dev parity.
+[auth.mfa]
+max_enrolled_factors = 10
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
 [edge_runtime]
 enabled = true
 policy = "oneshot"

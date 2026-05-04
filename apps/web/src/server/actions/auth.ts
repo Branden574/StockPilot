@@ -59,6 +59,14 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
     rememberPreferenceOptions(parsed.data.rememberMe),
   );
 
+  // If the user has any verified MFA factors, the password sign-in only
+  // brings them to AAL1. They must complete the TOTP challenge to reach
+  // AAL2 and access the dashboard.
+  const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (aal && aal.currentLevel === 'aal1' && aal.nextLevel === 'aal2') {
+    return ok({ next: '/signin/mfa' });
+  }
+
   return ok({ next: '/dashboard' });
 }
 
