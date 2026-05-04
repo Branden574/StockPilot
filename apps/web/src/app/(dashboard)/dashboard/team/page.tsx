@@ -64,7 +64,10 @@ export default async function TeamPage() {
           email: i.email as string,
           role: i.role as Role,
           expiresAt: i.expires_at as string,
-          acceptUrl: `${env.NEXT_PUBLIC_APP_URL}/invite/${i.token as string}`,
+          // Short /i/<token> alias — keeps the URL on one line in chat
+          // clients (Teams/Slack) so the whole link stays clickable.
+          // The /i route 308-redirects to /invite/<token>.
+          acceptUrl: `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/i/${i.token as string}`,
         }))}
         charters={chartersList.map((c) => ({ id: c.id, name: c.name }))}
         warehouses={warehousesList.map((w) => ({ id: w.id, name: w.name }))}

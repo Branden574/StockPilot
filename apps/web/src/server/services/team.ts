@@ -140,7 +140,9 @@ export class TeamService {
 
     const { organizationName, inviterName } = params;
 
-    const acceptUrl = `${env.NEXT_PUBLIC_APP_URL}/invite/${token}`;
+    // Short alias /i/<token> redirects to /invite/<token>; keeps the URL
+    // on one line in chat clients so the entire link stays clickable.
+    const acceptUrl = `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/i/${token}`;
     await sendEmail({
       to: normalizedEmail,
       subject: `You're invited to join ${organizationName} on StockPilot`,

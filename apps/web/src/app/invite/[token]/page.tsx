@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
@@ -6,11 +7,45 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { IconMark } from '@/components/ui/icon-mark';
 import { getServerSession } from '@/lib/auth/session';
+import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { acceptInviteAction } from '@/server/actions/team';
 
 import { AcceptInviteButton } from './accept-button';
 import { InviteSignupForm } from './signup-form';
+
+/**
+ * Per-token OG metadata so chat-client unfurls (Teams/Slack/iMessage) link
+ * to THIS specific invite URL — not the home page. Without this, Teams'
+ * link preview falls back to the root og:url and clicks bypass the token.
+ */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ token: string }>;
+}): Promise<Metadata> {
+  const { token } = await params;
+  const url = `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/invite/${token}`;
+  return {
+    title: 'You have a StockPilot invite',
+    description: 'Click to accept and set up your account.',
+    metadataBase: new URL(env.NEXT_PUBLIC_APP_URL),
+    openGraph: {
+      title: 'You have a StockPilot invite',
+      description: 'Accept your invite and set up your account.',
+      url,
+      siteName: 'StockPilot',
+      type: 'website',
+    },
+    twitter: {
+      card: 'summary',
+      title: 'You have a StockPilot invite',
+      description: 'Accept your invite and set up your account.',
+    },
+    robots: { index: false, follow: false },
+    alternates: { canonical: url },
+  };
+}
 
 export default async function InvitePage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
