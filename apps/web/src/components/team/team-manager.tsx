@@ -335,27 +335,44 @@ function InviteDialog({
   const warehouseId = watch('warehouseId');
   const warehouseRequired = role === 'staff' || role === 'viewer';
 
-  // Filter warehouses by selected charter using the M:N junction.
-  const filteredWarehouses = React.useMemo(() => {
-    if (!charterId) return warehouses;
-    const allowedWh = new Set(
+  // ALL warehouses are always pickable — the (warehouse, charter) pair just
+  // has to be valid (or charter must be empty = "all charters at this warehouse").
+  // Filtering warehouses by charter previously hid warehouses that simply
+  // hadn't been linked to a charter yet, which led to "where did my warehouse
+  // go?" confusion.
+
+  // Charters that the *currently selected* warehouse services. Drives the
+  // charter dropdown below. If no warehouse picked yet, show all charters
+  // (with a hint).
+  const chartersForWarehouse = React.useMemo(() => {
+    if (!warehouseId) return charters;
+    const allowedCharterIds = new Set(
       warehouseCharters
-        .filter((wc) => wc.charter_id === charterId)
-        .map((wc) => wc.warehouse_id),
+        .filter((wc) => wc.warehouse_id === warehouseId)
+        .map((wc) => wc.charter_id),
     );
-    return warehouses.filter((w) => allowedWh.has(w.id));
-  }, [warehouses, warehouseCharters, charterId]);
+    return charters.filter((c) => allowedCharterIds.has(c.id));
+  }, [charters, warehouseCharters, warehouseId]);
+
+  // Diagnostic: is the currently selected pair actually serviced?
+  const pairValid = React.useMemo(() => {
+    if (!warehouseId || !charterId) return true;
+    return warehouseCharters.some(
+      (wc) => wc.warehouse_id === warehouseId && wc.charter_id === charterId,
+    );
+  }, [warehouseId, charterId, warehouseCharters]);
 
   React.useEffect(() => {
     if (!open) reset({ email: '', role: 'staff', charterId: '', warehouseId: '', message: '' });
   }, [open, reset]);
 
-  // If user changes charter and the current warehouse no longer fits, clear it.
+  // If user changes warehouse and the current charter doesn't fit, clear it
+  // so an invalid pair never gets submitted.
   React.useEffect(() => {
-    if (warehouseId && !filteredWarehouses.some((w) => w.id === warehouseId)) {
-      setValue('warehouseId', '');
+    if (charterId && warehouseId && !pairValid) {
+      setValue('charterId', '');
     }
-  }, [filteredWarehouses, warehouseId, setValue]);
+  }, [charterId, warehouseId, pairValid, setValue]);
 
   const onSubmit = handleSubmit(async (values) => {
     if (warehouseRequired && !values.warehouseId) {
@@ -427,21 +444,34 @@ function InviteDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label>{charterSingular} (optional)</Label>
+              <Label>
+                {warehouseSingular}
+                {warehouseRequired && <span className="ml-1 text-destructive">*</span>}
+              </Label>
               <Select
-                value={charterId || NONE_VALUE}
+                value={warehouseId || NONE_VALUE}
                 onValueChange={(v: string) =>
-                  setValue('charterId', v === NONE_VALUE ? '' : v)
+                  setValue('warehouseId', v === NONE_VALUE ? '' : v)
                 }
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={`No ${charterSingular.toLowerCase()}`} />
+                  <SelectValue
+                    placeholder={
+                      warehouseRequired
+                        ? `Pick a ${warehouseSingular.toLowerCase()}`
+                        : `No ${warehouseSingular.toLowerCase()}`
+                    }
+                  />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={NONE_VALUE}>{`No ${charterSingular.toLowerCase()}`}</SelectItem>
-                  {charters.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
+                  {!warehouseRequired && (
+                    <SelectItem value={NONE_VALUE}>
+                      No specific {warehouseSingular.toLowerCase()}
+                    </SelectItem>
+                  )}
+                  {warehouses.map((w) => (
+                    <SelectItem key={w.id} value={w.id}>
+                      {w.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -450,49 +480,41 @@ function InviteDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label>
-              {warehouseSingular}
-              {warehouseRequired && <span className="ml-1 text-destructive">*</span>}
-            </Label>
+            <Label>{charterSingular} (optional)</Label>
             <Select
-              value={warehouseId || NONE_VALUE}
+              value={charterId || NONE_VALUE}
               onValueChange={(v: string) =>
-                setValue('warehouseId', v === NONE_VALUE ? '' : v)
+                setValue('charterId', v === NONE_VALUE ? '' : v)
               }
+              disabled={warehouseId !== '' && chartersForWarehouse.length === 0}
             >
               <SelectTrigger>
-                <SelectValue
-                  placeholder={
-                    warehouseRequired
-                      ? `Pick a ${warehouseSingular.toLowerCase()}`
-                      : `No ${warehouseSingular.toLowerCase()}`
-                  }
-                />
+                <SelectValue placeholder={`All ${charterSingular.toLowerCase()}s at this ${warehouseSingular.toLowerCase()}`} />
               </SelectTrigger>
               <SelectContent>
-                {!warehouseRequired && (
-                  <SelectItem value={NONE_VALUE}>
-                    No specific {warehouseSingular.toLowerCase()}
-                  </SelectItem>
-                )}
-                {filteredWarehouses.length === 0 ? (
+                <SelectItem value={NONE_VALUE}>{`All ${charterSingular.toLowerCase()}s at this ${warehouseSingular.toLowerCase()}`}</SelectItem>
+                {warehouseId && chartersForWarehouse.length === 0 ? (
                   <div className="px-3 py-2 text-[12px] text-muted-foreground">
-                    No {warehouseSingular.toLowerCase()}s match — clear the {charterSingular.toLowerCase()}
-                    {' '}or create one in Admin.
+                    No {charterSingular.toLowerCase()}s linked to this {warehouseSingular.toLowerCase()} yet.
+                    Link some in Admin → {warehouseSingular}s, or invite without a {charterSingular.toLowerCase()}.
                   </div>
                 ) : (
-                  filteredWarehouses.map((w) => (
-                    <SelectItem key={w.id} value={w.id}>
-                      {w.name}
+                  chartersForWarehouse.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
                     </SelectItem>
                   ))
                 )}
               </SelectContent>
             </Select>
             <p className="text-[11px] text-muted-foreground">
-              {warehouseRequired
+              {charterId
+                ? `Scoped to ${charters.find((c) => c.id === charterId)?.name ?? 'this'} only.`
+                : warehouseId
+                ? `No ${charterSingular.toLowerCase()} picked — they'll see every ${charterSingular.toLowerCase()} this ${warehouseSingular.toLowerCase()} services.`
+                : warehouseRequired
                 ? `Required — ${ROLE_LABELS[role].label.toLowerCase()}s only see inventory for their assigned ${warehouseSingular.toLowerCase()}.`
-                : `Optional — managers and admins see every ${warehouseSingular.toLowerCase()} in the company.`}
+                : `Optional.`}
             </p>
           </div>
 
