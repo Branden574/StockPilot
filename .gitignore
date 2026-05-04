@@ -38,6 +38,11 @@ yarn-error.log*
 .env.development
 .env.production
 
+# personal secret notebooks — never commit
+secrets.local.md
+*.secrets.local
+*.secrets.local.md
+
 # vercel
 .vercel
 
