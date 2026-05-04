@@ -38,7 +38,13 @@ export type AuditEvent =
   | 'stock.receipt.posted'
   | 'stock.receipt.reversed'
   | 'idempotency.replay'
-  | 'idempotency.conflict';
+  | 'idempotency.conflict'
+  | 'uom_conversion.upserted'
+  | 'uom_conversion.deleted'
+  | 'item.tracking_type.changed'
+  | 'lot.received'
+  | 'serial.received'
+  | 'serial.duplicate_rejected';
 
 interface AuditPayload {
   event: AuditEvent;
