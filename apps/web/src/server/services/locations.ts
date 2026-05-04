@@ -25,7 +25,7 @@ export class LocationsService {
   async list() {
     const { data, error } = await this.ctx.supabase
       .from('locations')
-      .select('id, parent_id, name, type, notes, created_at, updated_at')
+      .select('id, parent_id, name, type, notes, warehouse_id, created_at, updated_at')
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
       .order('name', { ascending: true });
