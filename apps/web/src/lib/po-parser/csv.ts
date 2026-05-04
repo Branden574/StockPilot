@@ -36,12 +36,12 @@ export function parseCsvText(input: string): CanonicalPo {
   let totalAmount: number | null = null;
   let poDate: string | null = null;
 
-  if (headerRowIdx >= 0 && all[headerRowIdx + 1]) {
-    const header = all[headerRowIdx];
-    const value = all[headerRowIdx + 1];
+  const headerRow = headerRowIdx >= 0 ? all[headerRowIdx] : undefined;
+  const valueRow = headerRowIdx >= 0 ? all[headerRowIdx + 1] : undefined;
+  if (headerRow && valueRow) {
     const at = (key: string) => {
-      const i = header.indexOf(key);
-      return i >= 0 ? value[i] : undefined;
+      const i = headerRow.indexOf(key);
+      return i >= 0 ? valueRow[i] : undefined;
     };
     poNumber = at('po_number') ?? null;
     vendorName = at('vendor') ?? null;
@@ -50,13 +50,13 @@ export function parseCsvText(input: string): CanonicalPo {
   }
 
   const lines: CanonicalPoLine[] = [];
-  if (lineHeaderIdx >= 0) {
-    const header = all[lineHeaderIdx];
+  const linesHeader = lineHeaderIdx >= 0 ? all[lineHeaderIdx] : undefined;
+  if (linesHeader) {
     for (let i = lineHeaderIdx + 1; i < all.length; i++) {
       const row = all[i];
       if (!row || row.every((c) => !c?.trim())) continue;
       const at = (key: RawLineKey): string | undefined => {
-        const idx = header.indexOf(key);
+        const idx = linesHeader.indexOf(key);
         return idx >= 0 ? row[idx] : undefined;
       };
       const description = at('description') ?? null;
