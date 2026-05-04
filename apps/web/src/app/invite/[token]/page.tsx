@@ -10,6 +10,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { acceptInviteAction } from '@/server/actions/team';
 
 import { AcceptInviteButton } from './accept-button';
+import { InviteSignupForm } from './signup-form';
 
 export default async function InvitePage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
@@ -77,17 +78,24 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
               </>
             )}
           </CardHeader>
-          <CardContent className="space-y-3">
+          <CardContent className="space-y-4">
             {invite && !accepted && !expired && (
               <>
                 {!session ? (
                   <>
-                    <Button asChild variant="gradient" className="w-full">
-                      <Link href={`/signup?redirect=/invite/${token}`}>Create an account</Link>
-                    </Button>
-                    <Button asChild variant="outline" className="w-full">
-                      <Link href={`/signin?redirect=/invite/${token}`}>I already have an account</Link>
-                    </Button>
+                    <InviteSignupForm
+                      token={token}
+                      email={invite.email as string}
+                    />
+                    <div className="border-t border-border pt-3 text-center text-[12px] text-muted-foreground">
+                      Already have an account?{' '}
+                      <Link
+                        href={`/signin?redirect=/invite/${token}`}
+                        className="font-medium text-foreground hover:underline"
+                      >
+                        Sign in
+                      </Link>
+                    </div>
                   </>
                 ) : session.email.toLowerCase() !== (invite.email as string).toLowerCase() ? (
                   <p className="text-center text-sm text-muted-foreground">
