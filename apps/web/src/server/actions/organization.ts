@@ -1,9 +1,13 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { z } from 'zod';
 
-import { requireSession } from '@/lib/auth/session';
+import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
+import { audit } from '@/server/services/audit';
+import { ServiceError } from '@/server/services/context';
 import { slugify } from '@/lib/utils';
 
 import {
@@ -94,6 +98,58 @@ export async function createOrganizationAction(
 
   revalidatePath('/dashboard');
   return ok({ organizationId: orgId, slug: orgSlug });
+}
+
+const terminologySchema = z.object({
+  charter_singular: z.string().min(1).max(40).trim(),
+  charter_plural: z.string().min(1).max(40).trim(),
+  warehouse_singular: z.string().min(1).max(40).trim(),
+  warehouse_plural: z.string().min(1).max(40).trim(),
+});
+
+export type TerminologyInput = z.infer<typeof terminologySchema>;
+
+export async function updateTerminologyAction(
+  input: TerminologyInput,
+): Promise<ActionResult<void>> {
+  const parsed = terminologySchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const ctx = await requireOrgContext();
+    if (ctx.role !== 'owner' && ctx.role !== 'admin') {
+      return err('forbidden', 'Only admins can change terminology.');
+    }
+
+    const supabase = await createClient();
+    const { data: prev } = await supabase
+      .from('organizations')
+      .select('terminology')
+      .eq('id', ctx.organizationId)
+      .maybeSingle();
+
+    const { error } = await supabase
+      .from('organizations')
+      .update({ terminology: parsed.data })
+      .eq('id', ctx.organizationId);
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    await audit({
+      event: 'warehouse.updated',
+      entityType: 'organization',
+      entityId: ctx.organizationId,
+      before: { terminology: prev?.terminology ?? null },
+      after: { terminology: parsed.data },
+    });
+
+    revalidatePath('/dashboard', 'layout');
+    return ok(undefined);
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    console.error(e);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
 }
 
 async function ensureUniqueSlug(
