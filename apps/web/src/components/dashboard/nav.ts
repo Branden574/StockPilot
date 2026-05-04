@@ -1,6 +1,7 @@
 import {
   ArrowLeftRight,
   BarChart3,
+  BookOpen,
   Bell,
   Boxes,
   Building2,
@@ -13,6 +14,7 @@ import {
   Network,
   Tag,
   Truck,
+  Upload,
   Users,
   Warehouse,
 } from 'lucide-react';
@@ -44,6 +46,7 @@ const BASE_NAV: NavSection[] = [
       { href: '/dashboard/categories', label: 'Categories', icon: Tag },
       { href: '/dashboard/movements', label: 'Movements', icon: ArrowLeftRight },
       { href: '/dashboard/purchase-orders', label: 'Purchase orders', icon: ClipboardList },
+      { href: '/dashboard/purchase-orders/imports', label: 'PO imports', icon: Upload },
       { href: '/dashboard/locations', label: 'Locations', icon: MapPin },
       { href: '/dashboard/suppliers', label: 'Suppliers', icon: Truck },
       { href: '/dashboard/reports', label: 'Reports', icon: BarChart3 },
@@ -66,6 +69,7 @@ const ADMIN_NAV: NavSection = {
     { href: '/dashboard/admin/charters', label: 'Charters', icon: Building2 },
     { href: '/dashboard/admin/warehouses', label: 'Warehouses', icon: Warehouse },
     { href: '/dashboard/admin/users', label: 'Users', icon: Users },
+    { href: '/dashboard/admin/vendor-mappings', label: 'Vendor mappings', icon: BookOpen },
     { href: '/dashboard/admin/audit', label: 'Audit log', icon: FileLock },
   ],
 };
