@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
+import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
 export default async function InventoryPage({
   searchParams,
@@ -14,16 +15,18 @@ export default async function InventoryPage({
   searchParams: Promise<{ q?: string; status?: string }>;
 }) {
   const params = await searchParams;
-  const [inventorySvc, categoriesSvc, locationsSvc] = await Promise.all([
+  const [inventorySvc, categoriesSvc, locationsSvc, warehouseFilter] = await Promise.all([
     InventoryService.forCurrentUser(),
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
+    getActiveWarehouseFilter(),
   ]);
 
   const [inventory, categories, locations] = await Promise.all([
     inventorySvc.list({
       q: params.q,
       status: (params.status as 'active' | 'archived' | 'discontinued' | 'all') ?? 'active',
+      warehouseId: warehouseFilter,
     }),
     categoriesSvc.list(),
     locationsSvc.list(),

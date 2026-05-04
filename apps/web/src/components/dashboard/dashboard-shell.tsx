@@ -17,6 +17,11 @@ interface DashboardShellProps {
   userName: string | null;
   userRole: string;
   role: Role;
+  warehouseFilter?: {
+    warehouses: Array<{ id: string; name: string }>;
+    activeId: string | null;
+    warehouseLabel: string;
+  };
 }
 
 export function DashboardShell({
@@ -28,6 +33,7 @@ export function DashboardShell({
   userName,
   userRole,
   role,
+  warehouseFilter,
 }: DashboardShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const [mounted, setMounted] = React.useState(false);
@@ -53,6 +59,7 @@ export function DashboardShell({
           avatarUrl={avatarUrl}
           organizationName={organizationName}
           onToggleSidebar={() => setMobileNavOpen(true)}
+          warehouseFilter={warehouseFilter}
         />
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>

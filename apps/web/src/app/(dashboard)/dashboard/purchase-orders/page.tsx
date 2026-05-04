@@ -14,15 +14,20 @@ import {
 } from '@/components/ui/table';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { SuppliersService } from '@/server/services/suppliers';
+import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
 export default async function PurchaseOrdersPage() {
-  const [poSvc, supplierSvc] = await Promise.all([
+  const [poSvc, supplierSvc, warehouseFilter] = await Promise.all([
     PurchaseOrdersService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
+    getActiveWarehouseFilter(),
   ]);
 
-  const [pos, suppliers] = await Promise.all([poSvc.list(), supplierSvc.list()]);
+  const [pos, suppliers] = await Promise.all([
+    poSvc.list({ warehouseId: warehouseFilter ?? undefined }),
+    supplierSvc.list(),
+  ]);
   const supplierMap = new Map(suppliers.map((s) => [s.id as string, s.name as string]));
 
   return (
