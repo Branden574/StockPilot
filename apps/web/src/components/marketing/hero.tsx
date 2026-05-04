@@ -38,20 +38,20 @@ export function Hero() {
         </h1>
 
         <p className="mx-auto mt-6 max-w-xl text-[17px] leading-[1.5] text-[var(--ed-ink-3)] text-balance">
-          StockPilot is a multi-tenant operations platform for roasters, makers, and small-batch brands. Counts,
+          StockPilot is the internal inventory platform for our charters and warehouses. Counts,
           costs, and movements you can trust — without the dashboard slop.
         </p>
 
         <div className="mt-7 flex flex-wrap items-center justify-center gap-2">
           <Button asChild size="lg" className="gap-1.5">
-            <Link href="/signup">
-              Open the demo workspace <ArrowRight className="h-3 w-3" />
+            <Link href="/signin">
+              Sign in to your workspace <ArrowRight className="h-3 w-3" />
             </Link>
           </Button>
           <Button asChild variant="outline" size="lg" className="gap-1.5">
-            <Link href="/docs">
+            <Link href="/signin">
               <BookOpen className="h-3 w-3" />
-              Read the blueprint
+              Need access? Ask your admin
             </Link>
           </Button>
         </div>

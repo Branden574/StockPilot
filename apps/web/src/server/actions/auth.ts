@@ -13,7 +13,6 @@ import {
   ok,
   requestPasswordResetSchema,
   signInSchema,
-  signUpSchema,
   type ActionResult,
   type CompletePasswordResetInput,
   type RequestPasswordResetInput,
@@ -21,26 +20,23 @@ import {
   type SignUpInput,
 } from '@stockpilot/core';
 
+/**
+ * Public self-signup is disabled — this is an internal-company tool.
+ * Account creation happens via the invite-acceptance flow only.
+ *
+ * The function is kept exported (rather than deleted) so the existing
+ * /signup page can render a "request access from your admin" notice
+ * without import errors during the migration. Returns a forbidden error
+ * if anything actually invokes it.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function signUpAction(
-  input: SignUpInput,
+  _input: SignUpInput,
 ): Promise<ActionResult<{ requiresEmailConfirm: boolean }>> {
-  const parsed = signUpSchema.safeParse(input);
-  if (!parsed.success) {
-    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
-  }
-
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.signUp({
-    email: parsed.data.email,
-    password: parsed.data.password,
-    options: {
-      data: { full_name: parsed.data.fullName },
-      emailRedirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/onboarding`,
-    },
-  });
-
-  if (error) return err('internal_error', error.message);
-  return ok({ requiresEmailConfirm: !data.session });
+  return err(
+    'forbidden',
+    'Public sign-up is disabled. Ask your administrator to send you an invite.',
+  );
 }
 
 export async function signInAction(input: SignInInput): Promise<ActionResult<{ next: string }>> {

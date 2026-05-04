@@ -9,13 +9,9 @@ import { Button } from '@/components/ui/button';
 import { IconMark } from '@/components/ui/icon-mark';
 import { cn } from '@/lib/utils';
 
-const NAV = [
-  { href: '/#product', label: 'Product' },
-  { href: '/pricing', label: 'Pricing' },
-  { href: '/#customers', label: 'Customers' },
-  { href: '/changelog', label: 'Changelog' },
-  { href: '/docs', label: 'Docs' },
-];
+// Internal-company tool — no public pricing/customer pages. The marketing
+// landing is mostly a welcome screen for staff that arrive at the root URL.
+const NAV: Array<{ href: string; label: string }> = [];
 
 export function MarketingHeader() {
   const [scrolled, setScrolled] = React.useState(false);
@@ -59,7 +55,7 @@ export function MarketingHeader() {
               <Link href="/signin">Sign in</Link>
             </Button>
             <Button asChild size="sm" className="gap-1.5">
-              <Link href="/signup">
+              <Link href="/signin">
                 Open app
                 <ArrowRight className="h-3 w-3" />
               </Link>

@@ -1,14 +1,14 @@
 import { FinalCta } from '@/components/marketing/cta-final';
 import { FeatureGrid } from '@/components/marketing/feature-grid';
 import { Hero } from '@/components/marketing/hero';
-import { PricingCards } from '@/components/marketing/pricing-cards';
 import { ScrollyFeature } from '@/components/marketing/scrolly-feature';
 import { StatRow } from '@/components/marketing/stat-row';
 
 /**
- * Marketing landing — quiet editorial design from the Claude Design hand-off.
- * Order matches the prototype: hero (with dashboard preview) → trust stats →
- * feature grid → 4-scene scrollytelling → pricing → final CTA.
+ * Internal-company landing. The pricing section was removed when we pivoted
+ * from public SaaS to invite-only internal tool. Sign-in only — no public
+ * sign-up. The pages still exist as a polished welcome screen for staff
+ * landing on the root URL.
  */
 export default function HomePage() {
   return (
@@ -17,7 +17,6 @@ export default function HomePage() {
       <StatRow />
       <FeatureGrid />
       <ScrollyFeature />
-      <PricingCards />
       <FinalCta />
     </>
   );

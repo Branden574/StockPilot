@@ -1,18 +1,9 @@
-import type { Metadata } from 'next';
+import { redirect } from 'next/navigation';
 
-import { Faq } from '@/components/marketing/faq';
-import { PricingCards } from '@/components/marketing/pricing-cards';
-
-export const metadata: Metadata = {
-  title: 'Pricing',
-  description: 'Simple, transparent pricing. Free, Pro, Business, and Enterprise tiers.',
-};
-
-export default function PricingPage() {
-  return (
-    <>
-      <PricingCards />
-      <Faq />
-    </>
-  );
+/**
+ * Pricing no longer applies — this is an internal-company tool, not a
+ * paid SaaS. Anyone landing here gets bounced to sign-in.
+ */
+export default function PricingPage(): never {
+  redirect('/signin');
 }
