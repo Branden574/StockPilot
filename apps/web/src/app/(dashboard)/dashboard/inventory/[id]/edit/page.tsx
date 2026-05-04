@@ -3,19 +3,49 @@ import { notFound } from 'next/navigation';
 
 import { ItemForm } from '@/components/inventory/item-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { forcedWarehouseId } from '@/lib/auth/warehouse';
+import { requireOrgContext } from '@/lib/auth/session';
+import { createClient } from '@/lib/supabase/server';
 import { CategoriesService } from '@/server/services/categories';
+import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
+import { WarehousesService } from '@/server/services/warehouses';
+import { WarehouseChartersService } from '@/server/services/warehouse-charters';
+
+import { resolveTerminology } from '@stockpilot/core';
 
 export default async function EditItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc] = await Promise.all([
+  const ctx = await requireOrgContext();
+  const supabase = await createClient();
+
+  const [
+    inventorySvc,
+    categoriesSvc,
+    locationsSvc,
+    suppliersSvc,
+    warehousesSvc,
+    chartersSvc,
+    whChartersSvc,
+    forced,
+    orgRow,
+  ] = await Promise.all([
     InventoryService.forCurrentUser(),
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
+    WarehousesService.forCurrentUser(),
+    ChartersService.forCurrentUser(),
+    WarehouseChartersService.forCurrentUser(),
+    forcedWarehouseId(),
+    supabase
+      .from('organizations')
+      .select('terminology')
+      .eq('id', ctx.organizationId)
+      .maybeSingle(),
   ]);
 
   let item;
@@ -26,11 +56,22 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
     throw e;
   }
 
-  const [categories, locations, suppliers] = await Promise.all([
-    categoriesSvc.list(),
-    locationsSvc.list(),
-    suppliersSvc.list(),
-  ]);
+  const [categories, locations, suppliers, warehouses, charters, warehouseCharters] =
+    await Promise.all([
+      categoriesSvc.list(),
+      locationsSvc.list(),
+      suppliersSvc.list(),
+      warehousesSvc.list(),
+      chartersSvc.list(),
+      whChartersSvc.listPairs(),
+    ]);
+
+  const terminology = resolveTerminology(
+    (orgRow.data?.terminology as Partial<{
+      charter_singular: string;
+      warehouse_singular: string;
+    }> | null) ?? null,
+  );
 
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
@@ -58,6 +99,8 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
               categoryId: (item.category_id as string | null) ?? null,
               supplierId: (item.supplier_id as string | null) ?? null,
               primaryLocationId: (item.primary_location_id as string | null) ?? null,
+              warehouseId: (item.warehouse_id as string | null) ?? null,
+              charterId: (item.charter_id as string | null) ?? null,
               unitCost: item.unit_cost as number,
               retailPrice: item.retail_price as number,
               quantityOnHand: item.quantity_on_hand as number,
@@ -71,6 +114,12 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
             categories={categories.map((c) => ({ id: c.id as string, name: c.name as string }))}
             locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
+            warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
+            charters={charters.map((c) => ({ id: c.id, name: c.name }))}
+            warehouseCharters={warehouseCharters}
+            forcedWarehouseId={forced}
+            warehouseLabel={terminology.warehouse_singular}
+            charterLabel={terminology.charter_singular}
           />
         </CardContent>
       </Card>

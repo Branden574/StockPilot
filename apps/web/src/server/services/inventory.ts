@@ -45,7 +45,7 @@ export class InventoryService {
     let query = this.ctx.supabase
       .from('inventory_items')
       .select(
-        'id, sku, barcode, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, created_at, updated_at',
+        'id, sku, barcode, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, created_at, updated_at',
         // Estimated counts use pg_class.reltuples (~1ms) instead of a full
         // sequential count under RLS. Display purposes don't need precision.
         { count: 'estimated' },
@@ -104,6 +104,7 @@ export class InventoryService {
         supplier_id: string | null;
         primary_location_id: string | null;
         warehouse_id: string | null;
+        charter_id: string | null;
         created_at: string;
         updated_at: string;
       }>,
@@ -159,11 +160,32 @@ export class InventoryService {
       await assertWarehouseAccess(resolvedWarehouseId, 'write');
     }
 
+    // Resolve charter: null = generic stock; otherwise (warehouse, charter)
+    // must be a real pairing in warehouse_charters. The composite FK enforces
+    // it on insert, but a friendlier error here saves a round trip.
+    const resolvedCharterId = input.charterId ?? null;
+    if (resolvedCharterId) {
+      const { data: pair } = await this.ctx.supabase
+        .from('warehouse_charters')
+        .select('charter_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('warehouse_id', resolvedWarehouseId)
+        .eq('charter_id', resolvedCharterId)
+        .maybeSingle();
+      if (!pair) {
+        throw new ServiceError(
+          'validation_error',
+          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the item as Generic.',
+        );
+      }
+    }
+
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
       .insert({
         organization_id: this.ctx.organizationId,
         warehouse_id: resolvedWarehouseId,
+        charter_id: resolvedCharterId,
         sku,
         barcode: input.barcode ?? null,
         name: input.name,
@@ -249,6 +271,28 @@ export class InventoryService {
       }
       await assertWarehouseAccess(patch.warehouseId, 'write');
       updates.warehouse_id = patch.warehouseId;
+    }
+
+    if (patch.charterId !== undefined) {
+      // Validate the (final) (warehouse, charter) pair if non-null
+      const finalWarehouseId =
+        (updates.warehouse_id as string | undefined) ?? currentWarehouseId ?? null;
+      if (patch.charterId && finalWarehouseId) {
+        const { data: pair } = await this.ctx.supabase
+          .from('warehouse_charters')
+          .select('charter_id')
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('warehouse_id', finalWarehouseId)
+          .eq('charter_id', patch.charterId)
+          .maybeSingle();
+        if (!pair) {
+          throw new ServiceError(
+            'validation_error',
+            'This charter is not serviced by the chosen warehouse.',
+          );
+        }
+      }
+      updates.charter_id = patch.charterId ?? null;
     }
 
     const { data, error } = await this.ctx.supabase

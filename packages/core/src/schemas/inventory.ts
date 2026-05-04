@@ -31,6 +31,8 @@ export const createItemSchema = z.object({
   supplierId: uuidSchema.nullable().optional(),
   primaryLocationId: uuidSchema.nullable().optional(),
   warehouseId: uuidSchema.nullable().optional(),
+  /** null/undefined = generic stock (any charter the warehouse services can use). */
+  charterId: uuidSchema.nullable().optional(),
   unitCost: numericMoney.default(0),
   retailPrice: numericMoney.default(0),
   quantityOnHand: numericQty.default(0),
