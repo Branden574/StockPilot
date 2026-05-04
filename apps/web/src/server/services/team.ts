@@ -291,24 +291,44 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   // For warehouse-scoped roles, create the user_warehouse_assignment row.
   // For manager+ roles, the assignment is informational (they have implicit
   // access to all warehouses anyway) but we still record the "home" warehouse.
+  //
+  // Migration 0008 dropped the (user, warehouse) unique constraint and added
+  // partial uniques per charter. If the exact (user, warehouse, charter) row
+  // already exists we treat the invite as a no-op assignment.
   if (warehouseId) {
-    const { error: assignErr } = await admin
+    let existingQuery = admin
       .from('user_warehouse_assignments')
-      .upsert(
-        {
-          organization_id: orgId,
-          user_id: userId,
-          warehouse_id: warehouseId,
-          charter_id: charterId,
-          is_primary: true,
-          assigned_by: invite.invited_by as string | null,
-          assigned_at: now,
-        },
-        { onConflict: 'user_id,warehouse_id' },
-      );
-    if (assignErr) {
-      console.error('[acceptInvite] failed to create warehouse assignment', assignErr);
-      // Non-fatal — membership exists, admin can fix assignment later.
+      .select('id')
+      .eq('user_id', userId)
+      .eq('warehouse_id', warehouseId);
+    existingQuery =
+      charterId === null
+        ? existingQuery.is('charter_id', null)
+        : existingQuery.eq('charter_id', charterId);
+    const { data: existing } = await existingQuery.maybeSingle();
+
+    if (!existing) {
+      const { error: assignErr } = await admin.from('user_warehouse_assignments').insert({
+        organization_id: orgId,
+        user_id: userId,
+        warehouse_id: warehouseId,
+        charter_id: charterId,
+        is_primary: true,
+        assigned_by: invite.invited_by as string | null,
+        assigned_at: now,
+      });
+      if (assignErr) {
+        console.error('[acceptInvite] failed to create warehouse assignment', assignErr);
+        // Non-fatal — membership exists, admin can fix assignment later.
+      } else {
+        await audit({
+          event: 'user.warehouse.changed',
+          entityType: 'user',
+          entityId: userId,
+          warehouseId,
+          after: { warehouseId, charterId },
+        });
+      }
     }
   }
 
