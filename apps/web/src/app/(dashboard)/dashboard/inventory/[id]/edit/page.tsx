@@ -108,6 +108,11 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
               reorderQuantity: item.reorder_quantity as number,
               unitOfMeasure: item.unit_of_measure as string,
               binLocation: (item.bin_location as string | null) ?? '',
+              trackingType:
+                ((item.tracking_type as 'none' | 'lot' | 'serial' | null | undefined) ?? 'none') as
+                  | 'none'
+                  | 'lot'
+                  | 'serial',
               status: item.status as 'active' | 'archived' | 'discontinued',
               customFields: (item.custom_fields as Record<string, unknown>) ?? {},
             }}

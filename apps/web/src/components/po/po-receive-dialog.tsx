@@ -26,6 +26,7 @@ interface Line {
   sku: string;
   quantityOrdered: number;
   quantityReceived: number;
+  trackingType: 'none' | 'lot' | 'serial';
 }
 
 interface PoReceiveDialogProps {
@@ -35,16 +36,33 @@ interface PoReceiveDialogProps {
   lines: Line[];
 }
 
+interface LotRow {
+  lotNumber: string;
+  expirationDate: string; // YYYY-MM-DD or ''
+  qtyBase: number;
+}
+
 interface LineEntry {
   received: number;
   accepted: number;
   rejected: number;
   notes: string;
+  /** For lot-tracked items: one row per lot. */
+  lots: LotRow[];
+  /** For serial-tracked items: one entry per accepted unit. */
+  serials: string[];
 }
 
 function blankEntry(remaining: number): LineEntry {
   const r = Math.max(remaining, 0);
-  return { received: r, accepted: r, rejected: 0, notes: '' };
+  return {
+    received: r,
+    accepted: r,
+    rejected: 0,
+    notes: '',
+    lots: [],
+    serials: [],
+  };
 }
 
 export function PoReceiveDialog({
@@ -94,11 +112,47 @@ export function PoReceiveDialog({
       return;
     }
 
-    // Per-line validation: accepted + rejected ≤ received
+    // Per-line validation
     for (const { line, entry } of submittable) {
       if (entry.accepted + entry.rejected > entry.received + 0.0001) {
         toast.error(`Line "${line.name}": accepted + rejected can't exceed received`);
         return;
+      }
+
+      if (line.trackingType === 'lot' && entry.accepted > 0) {
+        if (entry.lots.length === 0) {
+          toast.error(`Line "${line.name}" is lot-tracked. Add at least one lot.`);
+          return;
+        }
+        const lotSum = entry.lots.reduce((s, l) => s + (Number(l.qtyBase) || 0), 0);
+        if (Math.abs(lotSum - entry.accepted) > 0.0001) {
+          toast.error(
+            `Line "${line.name}": lot quantities sum to ${lotSum}, must equal accepted (${entry.accepted}).`,
+          );
+          return;
+        }
+        if (entry.lots.some((l) => !l.lotNumber.trim())) {
+          toast.error(`Line "${line.name}": all lots need a lot number.`);
+          return;
+        }
+      }
+
+      if (line.trackingType === 'serial' && entry.accepted > 0) {
+        if (entry.serials.length !== entry.accepted) {
+          toast.error(
+            `Line "${line.name}": expected ${entry.accepted} serials, got ${entry.serials.length}.`,
+          );
+          return;
+        }
+        if (entry.serials.some((s) => !s.trim())) {
+          toast.error(`Line "${line.name}": every serial number must be non-empty.`);
+          return;
+        }
+        const dedup = new Set(entry.serials.map((s) => s.trim()));
+        if (dedup.size !== entry.serials.length) {
+          toast.error(`Line "${line.name}": duplicate serials in the list.`);
+          return;
+        }
       }
     }
 
@@ -112,6 +166,18 @@ export function PoReceiveDialog({
         qtyAccepted: entry.accepted,
         qtyRejected: entry.rejected,
         notes: entry.notes || undefined,
+        lots:
+          line.trackingType === 'lot' && entry.accepted > 0
+            ? entry.lots.map((l) => ({
+                lotNumber: l.lotNumber.trim(),
+                expirationDate: l.expirationDate || null,
+                qtyBase: Number(l.qtyBase),
+              }))
+            : undefined,
+        serials:
+          line.trackingType === 'serial' && entry.accepted > 0
+            ? entry.serials.map((s) => s.trim())
+            : undefined,
       })),
       notes: notes || undefined,
       idempotencyKey,
@@ -217,6 +283,24 @@ export function PoReceiveDialog({
                     All
                   </Button>
                 </div>
+                {l.trackingType === 'lot' && e.accepted > 0 && (
+                  <div className="sm:col-span-12">
+                    <LotCapture
+                      lots={e.lots}
+                      requiredQty={e.accepted}
+                      onChange={(lots) => setField(l.id, { lots })}
+                    />
+                  </div>
+                )}
+                {l.trackingType === 'serial' && e.accepted > 0 && (
+                  <div className="sm:col-span-12">
+                    <SerialCapture
+                      serials={e.serials}
+                      requiredCount={e.accepted}
+                      onChange={(serials) => setField(l.id, { serials })}
+                    />
+                  </div>
+                )}
               </div>
             );
           })}
@@ -235,5 +319,154 @@ export function PoReceiveDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function LotCapture({
+  lots,
+  requiredQty,
+  onChange,
+}: {
+  lots: LotRow[];
+  requiredQty: number;
+  onChange: (next: LotRow[]) => void;
+}) {
+  const sum = lots.reduce((s, l) => s + (Number(l.qtyBase) || 0), 0);
+  const valid = Math.abs(sum - requiredQty) < 0.0001;
+
+  function update(i: number, patch: Partial<LotRow>) {
+    onChange(lots.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  }
+  function add() {
+    onChange([...lots, { lotNumber: '', expirationDate: '', qtyBase: 0 }]);
+  }
+  function remove(i: number) {
+    onChange(lots.filter((_, idx) => idx !== i));
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50/40 p-3 text-xs dark:border-amber-900/40 dark:bg-amber-950/20">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-medium">Lot capture</span>
+        <span className={valid ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'}>
+          {sum.toLocaleString()} / {requiredQty.toLocaleString()}
+        </span>
+      </div>
+      <div className="space-y-2">
+        {lots.map((row, i) => (
+          <div key={i} className="grid grid-cols-12 gap-2">
+            <Input
+              className="col-span-5"
+              placeholder="Lot #"
+              value={row.lotNumber}
+              onChange={(e) => update(i, { lotNumber: e.target.value })}
+            />
+            <Input
+              className="col-span-3"
+              type="date"
+              value={row.expirationDate}
+              onChange={(e) => update(i, { expirationDate: e.target.value })}
+            />
+            <Input
+              className="col-span-3"
+              type="number"
+              min="0"
+              step="1"
+              placeholder="Qty"
+              value={row.qtyBase}
+              onChange={(e) => update(i, { qtyBase: Number(e.target.value) || 0 })}
+            />
+            <Button type="button" variant="ghost" size="icon" onClick={() => remove(i)} aria-label="Remove lot">
+              ×
+            </Button>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={add}>
+          + Add lot
+        </Button>
+        {lots.length === 0 && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              onChange([{ lotNumber: '', expirationDate: '', qtyBase: requiredQty }])
+            }
+          >
+            Single lot of {requiredQty}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SerialCapture({
+  serials,
+  requiredCount,
+  onChange,
+}: {
+  serials: string[];
+  requiredCount: number;
+  onChange: (next: string[]) => void;
+}) {
+  // Resize the array whenever requiredCount changes (accepted qty changed).
+  React.useEffect(() => {
+    if (serials.length === requiredCount) return;
+    const next = Array.from({ length: requiredCount }, (_, i) => serials[i] ?? '');
+    onChange(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requiredCount]);
+
+  const filled = serials.filter((s) => s.trim().length > 0).length;
+  const dedup = new Set(serials.map((s) => s.trim())).size;
+  const hasDup = dedup !== serials.length && serials.some((s) => s.trim().length > 0);
+
+  function update(i: number, value: string) {
+    onChange(serials.map((s, idx) => (idx === i ? value : s)));
+  }
+  function focusNext(e: React.KeyboardEvent<HTMLInputElement>, i: number) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const next = e.currentTarget.parentElement?.parentElement?.querySelector<HTMLInputElement>(
+        `[data-serial-idx="${i + 1}"]`,
+      );
+      next?.focus();
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-blue-200 bg-blue-50/40 p-3 text-xs dark:border-blue-900/40 dark:bg-blue-950/20">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-medium">Serial capture</span>
+        <span
+          className={
+            hasDup
+              ? 'text-destructive'
+              : filled === requiredCount
+              ? 'text-emerald-700 dark:text-emerald-300'
+              : 'text-blue-700 dark:text-blue-300'
+          }
+        >
+          {filled} / {requiredCount}
+          {hasDup ? ' · duplicate detected' : ''}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {Array.from({ length: requiredCount }, (_, i) => (
+          <Input
+            key={i}
+            data-serial-idx={i}
+            placeholder={`Serial #${i + 1}`}
+            value={serials[i] ?? ''}
+            onChange={(e) => update(i, e.target.value)}
+            onKeyDown={(e) => focusNext(e, i)}
+            className="font-mono"
+          />
+        ))}
+      </div>
+    </div>
   );
 }

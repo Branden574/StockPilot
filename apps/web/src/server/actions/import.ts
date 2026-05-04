@@ -66,6 +66,7 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
           categoryId: null,
           supplierId: null,
           primaryLocationId: null,
+          trackingType: 'none',
           customFields: {},
           status: 'active',
         });
