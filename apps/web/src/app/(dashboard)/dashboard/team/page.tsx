@@ -3,6 +3,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { ChartersService } from '@/server/services/charters';
 import { TeamService } from '@/server/services/team';
 import { WarehousesService } from '@/server/services/warehouses';
+import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 import { createClient } from '@/lib/supabase/server';
 import { env } from '@/lib/env';
 
@@ -12,10 +13,11 @@ export default async function TeamPage() {
   const ctx = await requireOrgContext();
   const supabase = await createClient();
 
-  const [team, charterSvc, warehouseSvc, orgRow] = await Promise.all([
+  const [team, charterSvc, warehouseSvc, whCharterSvc, orgRow] = await Promise.all([
     TeamService.forCurrentUser(),
     ChartersService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
+    WarehouseChartersService.forCurrentUser(),
     supabase
       .from('organizations')
       .select('terminology')
@@ -23,11 +25,12 @@ export default async function TeamPage() {
       .maybeSingle(),
   ]);
 
-  const [members, invites, chartersList, warehousesList] = await Promise.all([
+  const [members, invites, chartersList, warehousesList, warehouseCharters] = await Promise.all([
     team.listMembers(),
     team.listPendingInvites(),
     charterSvc.list(),
     warehouseSvc.list(),
+    whCharterSvc.listPairs(),
   ]);
 
   const terminology = resolveTerminology(
@@ -64,11 +67,8 @@ export default async function TeamPage() {
           acceptUrl: `${env.NEXT_PUBLIC_APP_URL}/invite/${i.token as string}`,
         }))}
         charters={chartersList.map((c) => ({ id: c.id, name: c.name }))}
-        warehouses={warehousesList.map((w) => ({
-          id: w.id,
-          name: w.name,
-          charter_id: w.charter_id,
-        }))}
+        warehouses={warehousesList.map((w) => ({ id: w.id, name: w.name }))}
+        warehouseCharters={warehouseCharters}
         charterSingular={terminology.charter_singular}
         warehouseSingular={terminology.warehouse_singular}
       />

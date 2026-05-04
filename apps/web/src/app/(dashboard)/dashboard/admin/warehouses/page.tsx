@@ -51,8 +51,8 @@ export default async function WarehousesAdminPage() {
           {term.warehouse_plural}
         </h1>
         <p className="mt-1 text-[13.5px] text-[var(--ed-ink-3)]">
-          Physical locations stock lives in. Each {term.warehouse_singular.toLowerCase()} can be
-          assigned to a {term.charter_singular.toLowerCase()} and a manager.
+          Physical locations stock lives in. Each {term.warehouse_singular.toLowerCase()} can
+          service multiple {term.charter_plural.toLowerCase()} and have a manager.
         </p>
       </div>
 

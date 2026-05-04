@@ -8,7 +8,8 @@ import { assertPermission, ServiceError, withContext, type ServiceContext } from
 export const createWarehouseSchema = z.object({
   name: z.string().min(1).max(120).trim(),
   code: z.string().min(1).max(32).trim(),
-  charterId: z.string().uuid().nullable().optional(),
+  /** Charters this warehouse services. Replaces old single charterId. */
+  charterIds: z.array(z.string().uuid()).default([]),
   contactName: z.string().max(120).optional(),
   contactEmail: z.string().email().max(254).optional().or(z.literal('')),
   contactPhone: z.string().max(40).optional(),
@@ -35,8 +36,8 @@ export interface WarehouseRow {
   id: string;
   name: string;
   code: string;
-  charter_id: string | null;
-  charter_name: string | null;
+  /** All charters this warehouse services (M:N via warehouse_charters). */
+  charters: Array<{ id: string; name: string }>;
   contact_name: string | null;
   contact_email: string | null;
   contact_phone: string | null;
@@ -61,12 +62,12 @@ export class WarehousesService {
     const { data, error } = await this.ctx.supabase
       .from('warehouses')
       .select(
-        `id, name, code, charter_id, contact_name, contact_email, contact_phone,
+        `id, name, code, contact_name, contact_email, contact_phone,
          manager_user_id, status, notes, created_at, updated_at,
-         charter:charters!charter_id (name),
          manager:user_profiles!manager_user_id (full_name, email),
          assignments:user_warehouse_assignments!warehouse_id (user_id),
-         items:inventory_items!warehouse_id (id)`,
+         items:inventory_items!warehouse_id (id),
+         wh_charters:warehouse_charters!warehouse_id (charter:charters!charter_id (id, name))`,
       )
       .eq('organization_id', this.ctx.organizationId)
       .neq('status', 'archived')
@@ -74,21 +75,35 @@ export class WarehousesService {
     if (error) throw new ServiceError('internal_error', error.message);
 
     return (data ?? []).map((r) => {
-      const ch = (r as { charter?: unknown }).charter;
-      const charter = Array.isArray(ch) ? ch[0] : ch;
       const mg = (r as { manager?: unknown }).manager;
       const manager = Array.isArray(mg) ? mg[0] : mg;
       const assignments = (r as { assignments?: unknown }).assignments;
       const items = (r as { items?: unknown }).items;
+      const whCharters = (r as { wh_charters?: unknown }).wh_charters;
       const userIds = Array.isArray(assignments)
         ? new Set(assignments.map((a) => (a as { user_id: string }).user_id)).size
         : 0;
+
+      const charters: Array<{ id: string; name: string }> = Array.isArray(whCharters)
+        ? whCharters
+            .map((wc) => {
+              const ch = (wc as { charter?: unknown }).charter;
+              const c = Array.isArray(ch) ? ch[0] : ch;
+              if (!c) return null;
+              return {
+                id: (c as { id: string }).id,
+                name: (c as { name: string }).name,
+              };
+            })
+            .filter((x): x is { id: string; name: string } => x !== null)
+            .sort((a, b) => a.name.localeCompare(b.name))
+        : [];
+
       return {
         id: r.id as string,
         name: r.name as string,
         code: r.code as string,
-        charter_id: (r.charter_id as string | null) ?? null,
-        charter_name: (charter as { name?: string } | null)?.name ?? null,
+        charters,
         contact_name: (r.contact_name as string | null) ?? null,
         contact_email: (r.contact_email as string | null) ?? null,
         contact_phone: (r.contact_phone as string | null) ?? null,
@@ -115,7 +130,6 @@ export class WarehousesService {
         organization_id: this.ctx.organizationId,
         name: input.name,
         code: input.code,
-        charter_id: input.charterId ?? null,
         contact_name: input.contactName ?? null,
         contact_email: input.contactEmail ? input.contactEmail.toLowerCase() : null,
         contact_phone: input.contactPhone ?? null,
@@ -133,14 +147,27 @@ export class WarehousesService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+    const newId = data.id as string;
+
+    if (input.charterIds && input.charterIds.length > 0) {
+      const { error: linkErr } = await this.ctx.supabase.from('warehouse_charters').insert(
+        input.charterIds.map((charter_id) => ({
+          organization_id: this.ctx.organizationId,
+          warehouse_id: newId,
+          charter_id,
+        })),
+      );
+      if (linkErr) throw new ServiceError('internal_error', linkErr.message);
+    }
+
     await audit({
       event: 'warehouse.created',
       entityType: 'warehouse',
-      entityId: data.id as string,
-      warehouseId: data.id as string,
+      entityId: newId,
+      warehouseId: newId,
       after: input,
     });
-    return { id: data.id as string };
+    return { id: newId };
   }
 
   async update(id: string, patch: UpdateWarehouseInput) {
@@ -148,7 +175,6 @@ export class WarehousesService {
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.code !== undefined) updates.code = patch.code;
-    if (patch.charterId !== undefined) updates.charter_id = patch.charterId ?? null;
     if (patch.contactName !== undefined) updates.contact_name = patch.contactName ?? null;
     if (patch.contactEmail !== undefined)
       updates.contact_email = patch.contactEmail ? patch.contactEmail.toLowerCase() : null;
@@ -157,12 +183,23 @@ export class WarehousesService {
     if (patch.address !== undefined) updates.address = patch.address ?? null;
     if (patch.notes !== undefined) updates.notes = patch.notes ?? null;
     if (patch.status !== undefined) updates.status = patch.status;
-    const { error } = await this.ctx.supabase
-      .from('warehouses')
-      .update(updates)
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (Object.keys(updates).length > 0) {
+      const { error } = await this.ctx.supabase
+        .from('warehouses')
+        .update(updates)
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', id);
+      if (error) throw new ServiceError('internal_error', error.message);
+    }
+
+    // Charter list reconciliation lives in WarehouseChartersService — calling
+    // it from here keeps the audit log + item-conflict checks in one place.
+    if (patch.charterIds !== undefined) {
+      const { WarehouseChartersService } = await import('./warehouse-charters');
+      const svc = new WarehouseChartersService(this.ctx);
+      await svc.setForWarehouse(id, patch.charterIds);
+    }
+
     await audit({
       event: 'warehouse.updated',
       entityType: 'warehouse',
