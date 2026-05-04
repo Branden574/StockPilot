@@ -40,6 +40,8 @@ export const createItemSchema = z.object({
   reorderQuantity: numericQty.default(0),
   unitOfMeasure: z.string().max(32).default('unit'),
   binLocation: z.string().max(64).optional(),
+  /** 'none' (default), 'lot', or 'serial'. Drives capture requirements at receive time. */
+  trackingType: z.enum(['none', 'lot', 'serial']).default('none'),
   customFields: z.record(z.string(), z.unknown()).default({}),
   status: itemStatusSchema.default('active'),
 });

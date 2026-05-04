@@ -45,7 +45,7 @@ export class InventoryService {
     let query = this.ctx.supabase
       .from('inventory_items')
       .select(
-        'id, sku, barcode, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, created_at, updated_at',
+        'id, sku, barcode, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, created_at, updated_at',
         // Estimated counts use pg_class.reltuples (~1ms) instead of a full
         // sequential count under RLS. Display purposes don't need precision.
         { count: 'estimated' },
@@ -105,6 +105,7 @@ export class InventoryService {
         primary_location_id: string | null;
         warehouse_id: string | null;
         charter_id: string | null;
+        tracking_type: 'none' | 'lot' | 'serial';
         created_at: string;
         updated_at: string;
       }>,
@@ -200,6 +201,7 @@ export class InventoryService {
         reorder_quantity: input.reorderQuantity,
         unit_of_measure: input.unitOfMeasure,
         bin_location: input.binLocation ?? null,
+        tracking_type: input.trackingType,
         custom_fields: input.customFields,
         status: input.status,
         created_by: this.ctx.userId,
@@ -255,6 +257,7 @@ export class InventoryService {
     if (patch.reorderQuantity !== undefined) updates.reorder_quantity = patch.reorderQuantity;
     if (patch.unitOfMeasure !== undefined) updates.unit_of_measure = patch.unitOfMeasure;
     if (patch.binLocation !== undefined) updates.bin_location = patch.binLocation ?? null;
+    if (patch.trackingType !== undefined) updates.tracking_type = patch.trackingType;
     if (patch.status !== undefined) updates.status = patch.status;
     if (patch.customFields !== undefined) updates.custom_fields = patch.customFields;
 
