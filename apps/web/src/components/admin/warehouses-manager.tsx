@@ -44,8 +44,7 @@ interface WarehouseRow {
   id: string;
   name: string;
   code: string;
-  charter_id: string | null;
-  charter_name: string | null;
+  charters: Array<{ id: string; name: string }>;
   contact_name: string | null;
   contact_email: string | null;
   contact_phone: string | null;
@@ -69,7 +68,7 @@ interface ManagerOption {
 interface FormValues {
   name: string;
   code: string;
-  charterId: string;
+  charterIds: string[];
   managerUserId: string;
   contactName: string;
   contactEmail: string;
@@ -188,7 +187,22 @@ function WarehouseTableRow({ row, onEdit }: { row: WarehouseRow; onEdit: () => v
     <TableRow>
       <TableCell className="font-medium">{row.name}</TableCell>
       <TableCell className="font-mono text-xs text-muted-foreground">{row.code}</TableCell>
-      <TableCell className="text-sm text-muted-foreground">{row.charter_name ?? '—'}</TableCell>
+      <TableCell className="text-sm text-muted-foreground">
+        {row.charters.length === 0 ? (
+          '—'
+        ) : (
+          <span className="flex flex-wrap gap-1">
+            {row.charters.map((c) => (
+              <span
+                key={c.id}
+                className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px]"
+              >
+                {c.name}
+              </span>
+            ))}
+          </span>
+        )}
+      </TableCell>
       <TableCell className="text-sm text-muted-foreground">{row.manager_name ?? '—'}</TableCell>
       <TableCell className="text-right tabular-nums">{row.user_count}</TableCell>
       <TableCell className="text-right tabular-nums">{row.item_count}</TableCell>
@@ -231,7 +245,7 @@ function WarehouseDialog({
     defaultValues: {
       name: '',
       code: '',
-      charterId: '',
+      charterIds: [],
       managerUserId: '',
       contactName: '',
       contactEmail: '',
@@ -245,7 +259,7 @@ function WarehouseDialog({
       reset({
         name: editing?.name ?? '',
         code: editing?.code ?? '',
-        charterId: editing?.charter_id ?? '',
+        charterIds: editing?.charters.map((c) => c.id) ?? [],
         managerUserId: editing?.manager_user_id ?? '',
         contactName: editing?.contact_name ?? '',
         contactEmail: editing?.contact_email ?? '',
@@ -255,11 +269,20 @@ function WarehouseDialog({
     }
   }, [open, editing, reset]);
 
+  const charterIds = watch('charterIds');
+
+  function toggleCharter(id: string) {
+    const set = new Set(charterIds);
+    if (set.has(id)) set.delete(id);
+    else set.add(id);
+    setValue('charterIds', [...set]);
+  }
+
   const onSubmit = handleSubmit(async (values) => {
     const payload = {
       name: values.name,
       code: values.code,
-      charterId: values.charterId || null,
+      charterIds: values.charterIds,
       managerUserId: values.managerUserId || null,
       contactName: values.contactName || undefined,
       contactEmail: values.contactEmail || undefined,
@@ -312,21 +335,60 @@ function WarehouseDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <SelectField
-              label="Charter"
-              value={watch('charterId') || NONE_VALUE}
-              onChange={(v: string) => setValue('charterId', v === NONE_VALUE ? '' : v)}
-              options={charters}
-              placeholder="No charter"
-            />
-            <SelectField
-              label="Manager"
+          <div className="space-y-1.5">
+            <Label>Charters serviced</Label>
+            <p className="text-[11px] text-muted-foreground">
+              Pick every charter this {termSingular.toLowerCase()} carries inventory for.
+              Items can be tagged to one of these, or marked Generic for shared stock.
+            </p>
+            {charters.length === 0 ? (
+              <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                No charters defined yet. Create one in Admin → Charters first.
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {charters.map((c) => {
+                  const active = charterIds.includes(c.id);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => toggleCharter(c.id)}
+                      className={
+                        'rounded-full border px-3 py-1 text-xs transition-colors ' +
+                        (active
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-border bg-card hover:bg-muted')
+                      }
+                    >
+                      {c.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Manager</Label>
+            <Select
               value={watch('managerUserId') || NONE_VALUE}
-              onChange={(v: string) => setValue('managerUserId', v === NONE_VALUE ? '' : v)}
-              options={managers}
-              placeholder="No manager"
-            />
+              onValueChange={(v: string) =>
+                setValue('managerUserId', v === NONE_VALUE ? '' : v)
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="No manager" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE_VALUE}>No manager</SelectItem>
+                {managers.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="space-y-1.5">
@@ -366,35 +428,3 @@ function WarehouseDialog({
   );
 }
 
-function SelectField({
-  label,
-  value,
-  onChange,
-  options,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: Array<{ id: string; name: string }>;
-  placeholder: string;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger>
-          <SelectValue placeholder={placeholder} />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={NONE_VALUE}>{placeholder}</SelectItem>
-          {options.map((o) => (
-            <SelectItem key={o.id} value={o.id}>
-              {o.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}

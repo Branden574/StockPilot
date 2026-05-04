@@ -75,7 +75,8 @@ interface TeamManagerProps {
   members: Member[];
   pendingInvites: PendingInvite[];
   charters: Array<{ id: string; name: string }>;
-  warehouses: Array<{ id: string; name: string; charter_id: string | null }>;
+  warehouses: Array<{ id: string; name: string }>;
+  warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
   charterSingular: string;
   warehouseSingular: string;
 }
@@ -88,6 +89,7 @@ export function TeamManager({
   pendingInvites,
   charters,
   warehouses,
+  warehouseCharters,
   charterSingular,
   warehouseSingular,
 }: TeamManagerProps) {
@@ -155,6 +157,7 @@ export function TeamManager({
         onOpenChange={setInviteOpen}
         charters={charters}
         warehouses={warehouses}
+        warehouseCharters={warehouseCharters}
         charterSingular={charterSingular}
         warehouseSingular={warehouseSingular}
       />
@@ -303,13 +306,15 @@ function InviteDialog({
   onOpenChange,
   charters,
   warehouses,
+  warehouseCharters,
   charterSingular,
   warehouseSingular,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   charters: Array<{ id: string; name: string }>;
-  warehouses: Array<{ id: string; name: string; charter_id: string | null }>;
+  warehouses: Array<{ id: string; name: string }>;
+  warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
   charterSingular: string;
   warehouseSingular: string;
 }) {
@@ -330,11 +335,16 @@ function InviteDialog({
   const warehouseId = watch('warehouseId');
   const warehouseRequired = role === 'staff' || role === 'viewer';
 
-  // Filter warehouses by selected charter (when one is set).
+  // Filter warehouses by selected charter using the M:N junction.
   const filteredWarehouses = React.useMemo(() => {
     if (!charterId) return warehouses;
-    return warehouses.filter((w) => w.charter_id === charterId);
-  }, [warehouses, charterId]);
+    const allowedWh = new Set(
+      warehouseCharters
+        .filter((wc) => wc.charter_id === charterId)
+        .map((wc) => wc.warehouse_id),
+    );
+    return warehouses.filter((w) => allowedWh.has(w.id));
+  }, [warehouses, warehouseCharters, charterId]);
 
   React.useEffect(() => {
     if (!open) reset({ email: '', role: 'staff', charterId: '', warehouseId: '', message: '' });
