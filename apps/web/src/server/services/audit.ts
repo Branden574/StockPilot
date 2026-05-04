@@ -28,7 +28,13 @@ export type AuditEvent =
   | 'charter.created'
   | 'charter.updated'
   | 'charter.archived'
-  | 'report.exported';
+  | 'report.exported'
+  | 'po_import.uploaded'
+  | 'po_import.parsed'
+  | 'po_import.failed'
+  | 'po_import.approved'
+  | 'po_import.canceled'
+  | 'vendor_item_mapping.upserted';
 
 interface AuditPayload {
   event: AuditEvent;
