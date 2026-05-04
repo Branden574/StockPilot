@@ -118,7 +118,11 @@ export class TeamService {
       throw new ServiceError('conflict', 'An active invite already exists for that email.');
     }
 
-    const token = randomBytes(24).toString('base64url');
+    // 8 bytes = 11 base64url chars (~64 bits of entropy). Plenty for a
+    // 7-day-expiring single-use invite, AND short enough that the full URL
+    // (~57 chars) fits on one line in Teams/Slack/iMessage so the link
+    // doesn't visually word-wrap and break.
+    const token = randomBytes(8).toString('base64url');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
     const { data: invite, error } = await this.ctx.supabase
