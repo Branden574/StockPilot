@@ -2942,5 +2942,237 @@ create or replace view public.vw_vendor_performance as
 grant select on public.vw_vendor_performance to authenticated;
 
 -- ─────────────────────────────────────────────────────────────────────
+-- 0018_bins.sql — bins + per-bin inventory_stock + default_bin_for RPC.
+-- ─────────────────────────────────────────────────────────────────────
+
+create table if not exists public.bins (
+  id              uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  warehouse_id    uuid not null references public.warehouses(id) on delete cascade,
+  code            text not null,
+  name            text not null,
+  bin_type        text not null check (bin_type in (
+    'receiving','storage','qa_hold','damaged','rejected','shipping'
+  )),
+  is_default       boolean not null default false,
+  pick_sequence    integer,
+  putaway_sequence integer,
+  status          text not null default 'active'
+                    check (status in ('active','inactive','archived')),
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  unique (warehouse_id, code)
+);
+
+create unique index if not exists bins_default_per_type
+  on public.bins(warehouse_id, bin_type)
+  where is_default;
+
+create index if not exists bins_warehouse_idx
+  on public.bins(warehouse_id, status);
+
+create trigger bins_updated_at
+  before update on public.bins
+  for each row execute function public.tg_set_updated_at();
+
+alter table public.bins enable row level security;
+
+drop policy if exists bins_select on public.bins;
+create policy bins_select on public.bins
+  for select using (
+    exists (
+      select 1 from public.organization_members m
+      where m.user_id = auth.uid()
+        and m.organization_id = bins.organization_id
+        and m.accepted_at is not null
+    )
+  );
+
+drop policy if exists bins_write on public.bins;
+create policy bins_write on public.bins
+  for all using (public.has_org_role(organization_id, 'manager'));
+
+create table if not exists public.inventory_stock (
+  id              uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  warehouse_id    uuid not null references public.warehouses(id) on delete restrict,
+  bin_id          uuid not null references public.bins(id) on delete restrict,
+  item_id         uuid not null references public.inventory_items(id) on delete restrict,
+  qty_on_hand     numeric(18,4) not null default 0 check (qty_on_hand >= 0),
+  updated_at      timestamptz not null default now(),
+  version         integer not null default 0,
+  unique (warehouse_id, bin_id, item_id)
+);
+
+create index if not exists inventory_stock_item_idx
+  on public.inventory_stock(item_id, warehouse_id);
+
+create trigger inventory_stock_updated_at
+  before update on public.inventory_stock
+  for each row execute function public.tg_set_updated_at();
+
+alter table public.inventory_stock enable row level security;
+
+drop policy if exists inventory_stock_select on public.inventory_stock;
+create policy inventory_stock_select on public.inventory_stock
+  for select using (
+    exists (
+      select 1 from public.organization_members m
+      where m.user_id = auth.uid()
+        and m.organization_id = inventory_stock.organization_id
+        and m.accepted_at is not null
+    )
+  );
+
+drop policy if exists inventory_stock_write on public.inventory_stock;
+create policy inventory_stock_write on public.inventory_stock
+  for all using (public.has_org_role(organization_id, 'manager'));
+
+do $$
+declare
+  w record;
+begin
+  for w in
+    select id, organization_id from public.warehouses where status <> 'archived'
+  loop
+    insert into public.bins(organization_id, warehouse_id, code, name, bin_type, is_default)
+    values (w.organization_id, w.id, 'RECEIVING', 'Receiving Dock', 'receiving', true)
+    on conflict (warehouse_id, code) do nothing;
+  end loop;
+end$$;
+
+create or replace function public.default_bin_for(
+  p_warehouse_id uuid,
+  p_bin_type     text
+)
+returns uuid
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select id from public.bins
+   where warehouse_id = p_warehouse_id
+     and bin_type = p_bin_type
+     and is_default
+     and status = 'active'
+   limit 1;
+$$;
+
+grant execute on function public.default_bin_for(uuid, text) to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 0019_putaway.sql — putaway_moves + putaway_transfer RPC.
+-- ─────────────────────────────────────────────────────────────────────
+
+create table if not exists public.putaway_moves (
+  id              uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  warehouse_id    uuid not null references public.warehouses(id) on delete restrict,
+  item_id         uuid not null references public.inventory_items(id) on delete restrict,
+  from_bin_id     uuid not null references public.bins(id) on delete restrict,
+  to_bin_id       uuid not null references public.bins(id) on delete restrict,
+  qty_base        numeric(18,4) not null check (qty_base > 0),
+  movement_type   text not null check (movement_type in (
+    'putaway','qa_release','transfer','correction'
+  )),
+  performed_by    uuid not null references public.user_profiles(id) on delete restrict,
+  notes           text,
+  created_at      timestamptz not null default now()
+);
+
+create index if not exists putaway_moves_warehouse_idx
+  on public.putaway_moves(warehouse_id, created_at desc);
+create index if not exists putaway_moves_item_idx
+  on public.putaway_moves(item_id, created_at desc);
+
+alter table public.putaway_moves enable row level security;
+
+drop policy if exists putaway_moves_select on public.putaway_moves;
+create policy putaway_moves_select on public.putaway_moves
+  for select using (
+    exists (
+      select 1 from public.organization_members m
+      where m.user_id = auth.uid()
+        and m.organization_id = putaway_moves.organization_id
+        and m.accepted_at is not null
+    )
+  );
+
+drop policy if exists putaway_moves_write on public.putaway_moves;
+create policy putaway_moves_write on public.putaway_moves
+  for all using (public.has_org_role(organization_id, 'manager'));
+
+create or replace function public.putaway_transfer(
+  p_warehouse_id  uuid,
+  p_item_id       uuid,
+  p_from_bin_id   uuid,
+  p_to_bin_id     uuid,
+  p_qty           numeric,
+  p_movement_type text default 'putaway',
+  p_notes         text default null
+)
+returns public.putaway_moves
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_org   uuid;
+  v_from  public.inventory_stock%rowtype;
+  v_move  public.putaway_moves%rowtype;
+begin
+  if p_qty is null or p_qty <= 0 then
+    raise exception 'invalid_qty' using errcode = '22023';
+  end if;
+  if p_from_bin_id = p_to_bin_id then
+    raise exception 'same_bin' using errcode = '22023';
+  end if;
+
+  select organization_id into v_org from public.warehouses where id = p_warehouse_id;
+  if v_org is null then raise exception 'warehouse_not_found' using errcode = 'P0002'; end if;
+
+  if not public.has_org_role(v_org, 'manager') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+
+  select * into v_from from public.inventory_stock
+   where warehouse_id = p_warehouse_id
+     and bin_id = p_from_bin_id
+     and item_id = p_item_id
+   for update;
+  if not found or v_from.qty_on_hand < p_qty then
+    raise exception 'insufficient_stock' using errcode = '22023';
+  end if;
+
+  update public.inventory_stock
+    set qty_on_hand = qty_on_hand - p_qty,
+        version = version + 1
+   where id = v_from.id;
+
+  insert into public.inventory_stock(
+    organization_id, warehouse_id, bin_id, item_id, qty_on_hand
+  ) values (
+    v_org, p_warehouse_id, p_to_bin_id, p_item_id, p_qty
+  )
+  on conflict (warehouse_id, bin_id, item_id)
+  do update set qty_on_hand = public.inventory_stock.qty_on_hand + excluded.qty_on_hand,
+                version = public.inventory_stock.version + 1;
+
+  insert into public.putaway_moves(
+    organization_id, warehouse_id, item_id, from_bin_id, to_bin_id,
+    qty_base, movement_type, performed_by, notes
+  ) values (
+    v_org, p_warehouse_id, p_item_id, p_from_bin_id, p_to_bin_id,
+    p_qty, p_movement_type, auth.uid(), p_notes
+  ) returning * into v_move;
+
+  return v_move;
+end$$;
+
+grant execute on function public.putaway_transfer(uuid, uuid, uuid, uuid, numeric, text, text)
+  to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────
 -- DONE
 -- ─────────────────────────────────────────────────────────────────────
