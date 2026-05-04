@@ -9,6 +9,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { type Role } from '@stockpilot/core';
 
+import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 export class TeamService {
@@ -65,10 +66,26 @@ export class TeamService {
     return data ?? [];
   }
 
-  async invite(email: string, role: Exclude<Role, 'owner'>, organizationName: string, inviterName: string) {
+  async invite(params: {
+    email: string;
+    role: Exclude<Role, 'owner'>;
+    organizationName: string;
+    inviterName: string;
+    charterId?: string | null;
+    warehouseId?: string | null;
+    message?: string;
+  }) {
     assertPermission(this.ctx, 'members:invite');
 
-    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedEmail = params.email.toLowerCase().trim();
+
+    // For warehouse-scoped roles (staff/viewer), warehouse_id is required.
+    if ((params.role === 'staff' || params.role === 'viewer') && !params.warehouseId) {
+      throw new ServiceError(
+        'validation_error',
+        'A warehouse must be assigned for Warehouse User and Read-Only Auditor roles.',
+      );
+    }
 
     // Already a member?
     const { data: existingMember } = await this.ctx.supabase
@@ -109,14 +126,19 @@ export class TeamService {
       .insert({
         organization_id: this.ctx.organizationId,
         email: normalizedEmail,
-        role,
+        role: params.role,
         token,
         expires_at: expiresAt,
         invited_by: this.ctx.userId,
+        warehouse_id: params.warehouseId ?? null,
+        charter_id: params.charterId ?? null,
+        message: params.message ?? null,
       })
       .select('id, token')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
+
+    const { organizationName, inviterName } = params;
 
     const acceptUrl = `${env.NEXT_PUBLIC_APP_URL}/invite/${token}`;
     await sendEmail({
@@ -144,17 +166,42 @@ export class TeamService {
     if (role === 'owner') {
       throw new ServiceError('forbidden', 'Use transferOwnership to assign owner');
     }
+
+    // Self-mod block: a user cannot change their own role even if they
+    // hold members:update_role. Prevents the only-admin from accidentally
+    // demoting themselves and locking the org.
+    const { data: target } = await this.ctx.supabase
+      .from('organization_members')
+      .select('user_id, role')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', memberId)
+      .maybeSingle();
+    if (!target) throw new ServiceError('not_found', 'Member not found');
+    if ((target.user_id as string) === this.ctx.userId) {
+      throw new ServiceError(
+        'forbidden',
+        'You cannot change your own role. Ask another admin.',
+      );
+    }
+
     const { error } = await this.ctx.supabase
       .from('organization_members')
       .update({ role })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', memberId);
     if (error) throw new ServiceError('internal_error', error.message);
+
+    await audit({
+      event: 'user.role.changed',
+      entityType: 'organization_member',
+      entityId: memberId,
+      before: { role: target.role },
+      after: { role },
+    });
   }
 
   async removeMember(memberId: string) {
     assertPermission(this.ctx, 'members:remove');
-    // Don't allow removing self if owner. Other guards live in RLS + role rank checks.
     const { data: target } = await this.ctx.supabase
       .from('organization_members')
       .select('role, user_id')
@@ -165,12 +212,25 @@ export class TeamService {
     if ((target.role as string) === 'owner') {
       throw new ServiceError('forbidden', 'Cannot remove the owner');
     }
+    if ((target.user_id as string) === this.ctx.userId) {
+      throw new ServiceError(
+        'forbidden',
+        'You cannot remove your own membership. Ask another admin.',
+      );
+    }
     const { error } = await this.ctx.supabase
       .from('organization_members')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', memberId);
     if (error) throw new ServiceError('internal_error', error.message);
+
+    await audit({
+      event: 'user.deactivated',
+      entityType: 'organization_member',
+      entityId: memberId,
+      before: { user_id: target.user_id, role: target.role },
+    });
   }
 }
 
@@ -184,7 +244,9 @@ export async function acceptInviteWithToken(token: string, userId: string) {
 
   const { data: invite, error: inviteErr } = await admin
     .from('organization_invites')
-    .select('id, organization_id, email, role, expires_at, accepted_at')
+    .select(
+      'id, organization_id, email, role, expires_at, accepted_at, warehouse_id, charter_id, invited_by',
+    )
     .eq('token', token)
     .maybeSingle();
   if (inviteErr) throw new ServiceError('internal_error', inviteErr.message);
@@ -205,6 +267,10 @@ export async function acceptInviteWithToken(token: string, userId: string) {
     throw new ServiceError('forbidden', 'Invite is for a different email address');
   }
 
+  const orgId = invite.organization_id as string;
+  const role = invite.role as Role;
+  const warehouseId = (invite.warehouse_id as string | null) ?? null;
+  const charterId = (invite.charter_id as string | null) ?? null;
   const now = new Date().toISOString();
 
   // Create membership (idempotent on unique constraint).
@@ -212,21 +278,42 @@ export async function acceptInviteWithToken(token: string, userId: string) {
     .from('organization_members')
     .upsert(
       {
-        organization_id: invite.organization_id as string,
+        organization_id: orgId,
         user_id: userId,
-        role: invite.role as Role,
-        invited_by: null,
+        role,
+        invited_by: invite.invited_by as string | null,
         accepted_at: now,
       },
       { onConflict: 'organization_id,user_id' },
     );
   if (memberErr) throw new ServiceError('internal_error', memberErr.message);
 
+  // For warehouse-scoped roles, create the user_warehouse_assignment row.
+  // For manager+ roles, the assignment is informational (they have implicit
+  // access to all warehouses anyway) but we still record the "home" warehouse.
+  if (warehouseId) {
+    const { error: assignErr } = await admin
+      .from('user_warehouse_assignments')
+      .upsert(
+        {
+          organization_id: orgId,
+          user_id: userId,
+          warehouse_id: warehouseId,
+          charter_id: charterId,
+          is_primary: true,
+          assigned_by: invite.invited_by as string | null,
+          assigned_at: now,
+        },
+        { onConflict: 'user_id,warehouse_id' },
+      );
+    if (assignErr) {
+      console.error('[acceptInvite] failed to create warehouse assignment', assignErr);
+      // Non-fatal — membership exists, admin can fix assignment later.
+    }
+  }
+
   // Mark invite accepted.
-  await admin
-    .from('organization_invites')
-    .update({ accepted_at: now })
-    .eq('id', invite.id as string);
+  await admin.from('organization_invites').update({ accepted_at: now }).eq('id', invite.id as string);
 
   // If user has no default org, set this as default.
   const { data: prof2 } = await admin
@@ -237,9 +324,22 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   if (prof2 && !(prof2.default_organization_id as string | null)) {
     await admin
       .from('user_profiles')
-      .update({ default_organization_id: invite.organization_id as string })
+      .update({ default_organization_id: orgId })
       .eq('id', userId);
   }
 
-  return { organizationId: invite.organization_id as string };
+  // Audit log — invite accepted.
+  await admin.from('audit_logs').insert({
+    organization_id: orgId,
+    user_id: userId,
+    event: 'user.invite.accepted',
+    metadata: {
+      invite_id: invite.id,
+      role,
+      warehouse_id: warehouseId,
+      charter_id: charterId,
+    },
+  });
+
+  return { organizationId: orgId };
 }

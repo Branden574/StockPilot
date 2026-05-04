@@ -47,8 +47,17 @@ export async function inviteMemberAction(
     const inviter = session.fullName ?? session.email;
 
     const svc = await TeamService.forCurrentUser();
-    const result = await svc.invite(parsed.data.email, parsed.data.role as Exclude<Role, 'owner'>, orgName, inviter);
+    const result = await svc.invite({
+      email: parsed.data.email,
+      role: parsed.data.role as Exclude<Role, 'owner'>,
+      organizationName: orgName,
+      inviterName: inviter,
+      charterId: parsed.data.charterId ?? null,
+      warehouseId: parsed.data.warehouseId ?? null,
+      message: parsed.data.message,
+    });
     revalidatePath('/dashboard/team');
+    revalidatePath('/dashboard/admin/audit');
     return ok({ acceptUrl: result.acceptUrl });
   } catch (e) {
     return toResult(e);

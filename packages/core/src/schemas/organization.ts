@@ -27,6 +27,9 @@ export type UpdateOrganizationInput = z.infer<typeof updateOrganizationSchema>;
 export const inviteMemberSchema = z.object({
   email: emailSchema,
   role: z.enum(ROLES).default('staff'),
+  charterId: z.string().uuid().nullable().optional(),
+  warehouseId: z.string().uuid().nullable().optional(),
+  message: z.string().max(2000).optional(),
 });
 export type InviteMemberInput = z.infer<typeof inviteMemberSchema>;
 
