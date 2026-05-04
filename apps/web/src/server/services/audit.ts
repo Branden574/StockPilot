@@ -34,7 +34,11 @@ export type AuditEvent =
   | 'po_import.failed'
   | 'po_import.approved'
   | 'po_import.canceled'
-  | 'vendor_item_mapping.upserted';
+  | 'vendor_item_mapping.upserted'
+  | 'stock.receipt.posted'
+  | 'stock.receipt.reversed'
+  | 'idempotency.replay'
+  | 'idempotency.conflict';
 
 interface AuditPayload {
   event: AuditEvent;

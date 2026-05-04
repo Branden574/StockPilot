@@ -1,0 +1,216 @@
+import 'server-only';
+
+import { createHash } from 'node:crypto';
+
+import { audit } from './audit';
+import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+
+import type {
+  PostReceiptInput,
+  ReverseReceiptInput,
+} from '@stockpilot/core';
+
+export interface ReceiptRow {
+  id: string;
+  organization_id: string;
+  purchase_order_id: string;
+  warehouse_id: string;
+  receipt_number: string;
+  status: 'draft' | 'posted' | 'reversed' | 'reversal' | 'canceled';
+  reversed_receipt_id: string | null;
+  reversal_reason: string | null;
+  notes: string | null;
+  received_by: string;
+  received_at: string;
+  idempotency_key: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReceiptLineRow {
+  id: string;
+  receipt_id: string;
+  purchase_order_line_id: string;
+  item_id: string;
+  qty_received_base: number;
+  qty_accepted_base: number;
+  qty_rejected_base: number;
+  base_uom: string;
+  unit_cost: number;
+  notes: string | null;
+  created_at: string;
+}
+
+/**
+ * Computes a deterministic SHA-256 of the normalized receipt request, used
+ * by the post_receipt_v2 RPC for idempotency-key payload comparison.
+ *
+ * Normalization: stable sort lines by poLineId, fixed-decimal numeric fields,
+ * exclude the idempotency key itself (it's the lookup, not the payload).
+ */
+export function hashReceiptRequest(input: PostReceiptInput): string {
+  const normalized = JSON.stringify({
+    purchaseOrderId: input.purchaseOrderId,
+    warehouseId: input.warehouseId,
+    notes: input.notes ?? null,
+    lines: [...input.lines]
+      .sort((a, b) => a.poLineId.localeCompare(b.poLineId))
+      .map((l) => ({
+        poLineId: l.poLineId,
+        qtyReceived: Number(l.qtyReceived).toFixed(4),
+        qtyAccepted: Number(l.qtyAccepted).toFixed(4),
+        qtyRejected: Number(l.qtyRejected ?? 0).toFixed(4),
+        unitCost:
+          l.unitCost === undefined ? null : Number(l.unitCost).toFixed(4),
+        notes: l.notes ?? null,
+      })),
+  });
+  return createHash('sha256').update(normalized).digest('hex');
+}
+
+export class ReceivingService {
+  constructor(private readonly ctx: ServiceContext) {}
+
+  static async forCurrentUser() {
+    return new ReceivingService(await withContext());
+  }
+
+  async listForPurchaseOrder(poId: string): Promise<{
+    receipts: ReceiptRow[];
+    lines: ReceiptLineRow[];
+  }> {
+    const { data: receipts, error: rErr } = await this.ctx.supabase
+      .from('receipts')
+      .select('*')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('purchase_order_id', poId)
+      .order('received_at', { ascending: false });
+    if (rErr) throw new ServiceError('internal_error', rErr.message);
+
+    const ids = (receipts ?? []).map((r) => r.id as string);
+    if (ids.length === 0) return { receipts: [], lines: [] };
+
+    const { data: lines, error: lErr } = await this.ctx.supabase
+      .from('receipt_lines')
+      .select('*')
+      .in('receipt_id', ids);
+    if (lErr) throw new ServiceError('internal_error', lErr.message);
+
+    return {
+      receipts: (receipts ?? []) as unknown as ReceiptRow[],
+      lines: (lines ?? []) as unknown as ReceiptLineRow[],
+    };
+  }
+
+  /**
+   * Posts a receipt via the post_receipt_v2 RPC. Idempotency-key-protected:
+   * same key + same payload returns the original receipt; same key + different
+   * payload throws conflict.
+   */
+  async postReceipt(input: PostReceiptInput): Promise<ReceiptRow> {
+    assertPermission(this.ctx, 'stock:adjust');
+
+    const requestHash = hashReceiptRequest(input);
+
+    const { data, error } = await this.ctx.supabase.rpc('post_receipt_v2', {
+      p_purchase_order_id: input.purchaseOrderId,
+      p_warehouse_id: input.warehouseId,
+      p_lines: input.lines.map((l) => ({
+        po_line_id: l.poLineId,
+        qty_received: l.qtyReceived,
+        qty_accepted: l.qtyAccepted,
+        qty_rejected: l.qtyRejected ?? 0,
+        unit_cost: l.unitCost ?? 0,
+        notes: l.notes ?? null,
+      })),
+      p_idempotency_key: input.idempotencyKey,
+      p_request_hash: requestHash,
+      p_notes: input.notes ?? null,
+    });
+    if (error) {
+      // Postgres errcode 40001 = serialization_failure, used for
+      // idempotency conflict above.
+      if (error.message.includes('idempotency_conflict')) {
+        await audit({
+          event: 'idempotency.conflict',
+          entityType: 'receipt',
+          extra: { purchaseOrderId: input.purchaseOrderId },
+        });
+        throw new ServiceError(
+          'conflict',
+          'A different receipt was already submitted with this idempotency key. Refresh and try again.',
+        );
+      }
+      if (error.message.includes('po_already_closed')) {
+        throw new ServiceError(
+          'conflict',
+          'This PO is already closed and cannot accept further receipts.',
+        );
+      }
+      if (error.message.includes('forbidden')) {
+        throw new ServiceError('forbidden', 'You cannot post receipts for this PO.');
+      }
+      if (error.message.includes('po_not_found') || error.message.includes('po_line_not_found')) {
+        throw new ServiceError('not_found', 'PO or line not found.');
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
+
+    const receipt = data as unknown as ReceiptRow;
+    await audit({
+      event: 'stock.receipt.posted',
+      entityType: 'receipt',
+      entityId: receipt.id,
+      warehouseId: receipt.warehouse_id,
+      after: {
+        purchaseOrderId: input.purchaseOrderId,
+        receiptNumber: receipt.receipt_number,
+        lineCount: input.lines.length,
+        totalAccepted: input.lines.reduce((s, l) => s + l.qtyAccepted, 0),
+        totalRejected: input.lines.reduce((s, l) => s + (l.qtyRejected ?? 0), 0),
+      },
+    });
+
+    return receipt;
+  }
+
+  /**
+   * Reverses a previously posted receipt: writes a sibling reversal receipt
+   * with negative line quantities and stock movements. The original is marked
+   * 'reversed' but its row is preserved for audit history.
+   */
+  async reverseReceipt(input: ReverseReceiptInput): Promise<ReceiptRow> {
+    assertPermission(this.ctx, 'stock:adjust');
+
+    const { data, error } = await this.ctx.supabase.rpc('reverse_receipt', {
+      p_receipt_id: input.receiptId,
+      p_reason: input.reason,
+    });
+    if (error) {
+      if (error.message.includes('receipt_already_reversed')) {
+        throw new ServiceError('conflict', 'This receipt has already been reversed.');
+      }
+      if (error.message.includes('forbidden')) {
+        throw new ServiceError('forbidden', 'You cannot reverse this receipt.');
+      }
+      if (error.message.includes('receipt_not_found')) {
+        throw new ServiceError('not_found', 'Receipt not found.');
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
+
+    const reversal = data as unknown as ReceiptRow;
+    await audit({
+      event: 'stock.receipt.reversed',
+      entityType: 'receipt',
+      entityId: input.receiptId,
+      warehouseId: reversal.warehouse_id,
+      after: {
+        reversalReceiptId: reversal.id,
+        reason: input.reason,
+      },
+    });
+
+    return reversal;
+  }
+}
