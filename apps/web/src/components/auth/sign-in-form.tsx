@@ -35,6 +35,16 @@ export function SignInForm() {
       toast.error(res.error.message);
       return;
     }
+    // If the action returns next='/signin/mfa', the user has MFA enrolled
+    // and needs to complete the second factor before reaching the dashboard.
+    if (res.data.next === '/signin/mfa') {
+      const params = new URLSearchParams();
+      if (redirect && redirect !== '/dashboard') params.set('redirect', redirect);
+      const qs = params.toString();
+      router.replace(`/signin/mfa${qs ? `?${qs}` : ''}`);
+      router.refresh();
+      return;
+    }
     toast.success('Welcome back');
     router.replace(redirect);
     router.refresh();

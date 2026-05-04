@@ -4,10 +4,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { requireOrgContext } from '@/lib/auth/session';
 
 const SECTIONS = [
-  { href: '/dashboard/settings/organization', title: 'Organization', description: 'Name, logo, timezone, currency.' },
-  { href: '/dashboard/settings/billing', title: 'Billing', description: 'Plan, invoices, payment method.' },
+  { href: '/dashboard/settings/organization', title: 'Organization', description: 'Name, labels for charters and warehouses.' },
+  { href: '/dashboard/settings/security', title: 'Security', description: 'Two-factor authentication and org MFA policy.' },
   { href: '/dashboard/settings/profile', title: 'Profile', description: 'Your name and avatar.' },
-  { href: '/dashboard/settings/security', title: 'Security', description: 'Password, sessions, audit log.' },
+  { href: '/dashboard/settings/billing', title: 'Billing', description: 'Plan, invoices, payment method.' },
 ];
 
 export default async function SettingsPage() {

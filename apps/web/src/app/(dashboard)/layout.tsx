@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { redirect } from 'next/navigation';
+import { headers } from 'next/headers';
 
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -14,15 +16,36 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const ctx = await requireOrgContext();
   const supabase = await createClient();
 
-  const [access, activeWarehouseId, orgRow] = await Promise.all([
+  const [access, activeWarehouseId, orgRow, factorsRes] = await Promise.all([
     getWarehouseAccess(),
     getActiveWarehouseFilter(),
     supabase
       .from('organizations')
-      .select('terminology')
+      .select('terminology, mfa_policy')
       .eq('id', ctx.organizationId)
       .maybeSingle(),
+    supabase.auth.mfa.listFactors(),
   ]);
+
+  // ── MFA enforcement ────────────────────────────────────────────────
+  // If the org policy requires MFA for this user's role but they have no
+  // verified factor, push them to /dashboard/settings/security to enroll.
+  // Visiting that page is allowed — the redirect avoids a loop.
+  const policy = (orgRow.data?.mfa_policy as
+    | 'optional'
+    | 'admins_required'
+    | 'all_required'
+    | undefined) ?? 'optional';
+  const isAdmin = ctx.role === 'owner' || ctx.role === 'admin';
+  const required =
+    policy === 'all_required' || (policy === 'admins_required' && isAdmin);
+  const verified = (factorsRes.data?.all ?? []).some((f) => f.status === 'verified');
+  if (required && !verified) {
+    const path = (await headers()).get('x-pathname') ?? '';
+    if (!path.startsWith('/dashboard/settings/security')) {
+      redirect('/dashboard/settings/security?enroll=1');
+    }
+  }
 
   const term = resolveTerminology(
     (orgRow.data?.terminology as Partial<ReturnType<typeof resolveTerminology>>) ?? null,

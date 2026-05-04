@@ -1841,5 +1841,16 @@ create policy wc_admin_write on public.warehouse_charters
   );
 
 -- ─────────────────────────────────────────────────────────────────────
+-- 0009_mfa_policy.sql — Per-org MFA enforcement policy
+-- ─────────────────────────────────────────────────────────────────────
+
+alter table public.organizations
+  add column if not exists mfa_policy text not null default 'optional'
+    check (mfa_policy in ('optional', 'admins_required', 'all_required'));
+
+comment on column public.organizations.mfa_policy is
+  'Per-org MFA enforcement: optional | admins_required | all_required';
+
+-- ─────────────────────────────────────────────────────────────────────
 -- DONE
 -- ─────────────────────────────────────────────────────────────────────

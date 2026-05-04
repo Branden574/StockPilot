@@ -87,6 +87,9 @@ export async function updateSession(request: NextRequest) {
 
   // Forward the validated identity downstream as headers.
   const requestHeaders = new Headers(request.headers);
+  // Pathname is exposed so layouts/RSCs can branch on the current route
+  // without re-parsing the URL (server components don't have usePathname).
+  requestHeaders.set('x-pathname', request.nextUrl.pathname);
   if (user) {
     requestHeaders.set(SESSION_HEADER_USER_ID, user.id);
     requestHeaders.set(SESSION_HEADER_USER_EMAIL, user.email ?? '');
