@@ -3,6 +3,7 @@ import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { headers } from 'next/headers';
 
+import { reportError } from '@/lib/error-reporter';
 import { withContext } from './context';
 
 export type AuditEvent =
@@ -93,6 +94,10 @@ export async function audit(payload: AuditPayload): Promise<void> {
       },
     });
   } catch (e) {
-    console.error('[audit] failed to write entry', payload.event, e);
+    void reportError(e, {
+      tag: 'audit.write_failed',
+      level: 'warning',
+      extra: { event: payload.event, entityType: payload.entityType ?? null },
+    });
   }
 }
