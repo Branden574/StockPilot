@@ -2,8 +2,10 @@ import Link from 'next/link';
 
 import { MfaEnrollment } from '@/components/settings/mfa-enrollment';
 import { MfaPolicyEditor } from '@/components/settings/mfa-policy-editor';
+import { MfaRecoveryCodes } from '@/components/settings/mfa-recovery-codes';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getMfaRecoveryCodeStatus } from '@/server/actions/mfa-recovery';
 import { createClient } from '@/lib/supabase/server';
 
 type Policy = 'optional' | 'admins_required' | 'all_required';
@@ -18,13 +20,14 @@ export default async function SecuritySettingsPage({
   const ctx = await requireOrgContext();
   const supabase = await createClient();
 
-  const [factorsRes, orgRow] = await Promise.all([
+  const [factorsRes, orgRow, recoveryStatus] = await Promise.all([
     supabase.auth.mfa.listFactors(),
     supabase
       .from('organizations')
       .select('mfa_policy')
       .eq('id', ctx.organizationId)
       .maybeSingle(),
+    getMfaRecoveryCodeStatus(),
   ]);
 
   const verifiedFactors = (factorsRes.data?.all ?? [])
@@ -80,6 +83,24 @@ export default async function SecuritySettingsPage({
             />
           </CardContent>
         </Card>
+
+        {verifiedFactors.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Recovery codes</CardTitle>
+              <CardDescription>
+                Single-use codes that let you back into your account if you
+                lose access to your authenticator. Treat them like passwords.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <MfaRecoveryCodes
+                total={recoveryStatus.total}
+                unused={recoveryStatus.unused}
+              />
+            </CardContent>
+          </Card>
+        )}
 
         {isAdmin && (
           <Card>
