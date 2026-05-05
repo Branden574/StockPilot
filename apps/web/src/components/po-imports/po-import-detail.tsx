@@ -13,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { ItemCombobox } from '@/components/inventory/item-combobox';
 import {
   Select,
   SelectContent,
@@ -294,22 +295,21 @@ export function PoImportDetail({
                   </TableCell>
                   <TableCell>
                     {l.line_type === 'inventory' ? (
-                      <div className="flex items-center gap-1.5">
-                        <Select
-                          value={effectiveItemId ?? ''}
-                          onValueChange={(v) => setLineItem(l.id, v || null)}
-                        >
-                          <SelectTrigger className="h-8 text-xs">
-                            <SelectValue placeholder="Pick item" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {items.map((i) => (
-                              <SelectItem key={i.id} value={i.id}>
-                                {i.sku} — {i.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                      <div className="flex min-w-[220px] items-center gap-1.5">
+                        <ItemCombobox
+                          items={items.map((i) => ({
+                            id: i.id,
+                            sku: i.sku,
+                            name: i.name,
+                            detail:
+                              i.quantityOnHand != null
+                                ? `${i.quantityOnHand} on hand`
+                                : null,
+                          }))}
+                          value={effectiveItemId ?? null}
+                          onChange={(id) => setLineItem(l.id, id)}
+                          className="min-w-[200px]"
+                        />
                         {isUnmappedInventory && (
                           <Button
                             type="button"
