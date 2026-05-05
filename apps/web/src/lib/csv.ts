@@ -70,6 +70,14 @@ export function rowsToObjects<T extends Record<string, string>>(
   });
 }
 
+/** Build a date-stamped CSV filename, e.g. "inventory-valuation-2026-05-05.csv". */
+export function csvFilename(slug: string, suffix?: string): string {
+  const safe = slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  const stamp = new Date().toISOString().slice(0, 10);
+  const tail = suffix ? `-${suffix}` : '';
+  return `${safe}-${stamp}${tail}.csv`;
+}
+
 export function toCsv(header: string[], rows: Array<Record<string, string | number | null | undefined>>): string {
   const escape = (v: unknown) => {
     if (v == null) return '';
