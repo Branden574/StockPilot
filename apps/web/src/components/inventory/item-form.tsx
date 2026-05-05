@@ -166,7 +166,7 @@ export function ItemForm({
       if (!res.ok) {
         toast.message(`ISBN ${isbn} saved`, {
           description:
-            "We couldn't find this ISBN in Google Books or Open Library — type the title and author below.",
+            "We couldn't find this ISBN in any of our catalog sources — type the title and author below.",
         });
         return;
       }
