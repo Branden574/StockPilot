@@ -37,6 +37,7 @@ export async function createItemAction(input: CreateItemInput): Promise<ActionRe
     const item = await svc.create(parsed.data);
     revalidatePath('/dashboard');
     revalidatePath('/dashboard/inventory');
+    revalidatePath('/dashboard/books');
     return ok({ id: item.id as string });
   } catch (e) {
     return toResult(e);
@@ -55,6 +56,7 @@ export async function updateItemAction(
     const svc = await InventoryService.forCurrentUser();
     await svc.update(id, parsed.data);
     revalidatePath('/dashboard/inventory');
+    revalidatePath('/dashboard/books');
     revalidatePath(`/dashboard/inventory/${id}`);
     return ok({ id });
   } catch (e) {
