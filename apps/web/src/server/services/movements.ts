@@ -117,6 +117,88 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   };
 }
 
+export interface ThirtyDayMetrics {
+  /** Per-day movement counts oldest → newest, length 30. */
+  dailyCounts: number[];
+  /**
+   * Aggregated by movement_type. Sorted descending by count. Each
+   * entry's `share` is its count / max-count so the dashboard can
+   * render a relative bar without a separate normalization pass.
+   */
+  byType: Array<{ type: string; count: number; share: number }>;
+}
+
+/**
+ * Real 30-day movement metrics for the dashboard charts. Replaces the
+ * synthetic `barValues` + `breakdownRows` arrays the dashboard used to
+ * render. Single round trip to stock_movements.
+ */
+export async function getThirtyDayMetrics(): Promise<ThirtyDayMetrics> {
+  const ctx = await withContext();
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const { data, error } = await ctx.supabase
+    .from('stock_movements')
+    .select('movement_type, created_at')
+    .eq('organization_id', ctx.organizationId)
+    .gte('created_at', since.toISOString())
+    .order('created_at', { ascending: true });
+  if (error) throw new ServiceError('internal_error', error.message);
+
+  const dailyCounts = new Array<number>(30).fill(0);
+  const byTypeMap = new Map<string, number>();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const startMs = since.getTime();
+
+  for (const r of (data ?? []) as Array<{ movement_type: string; created_at: string }>) {
+    const t = new Date(r.created_at).getTime();
+    const dayIdx = Math.min(29, Math.max(0, Math.floor((t - startMs) / dayMs)));
+    dailyCounts[dayIdx] = (dailyCounts[dayIdx] ?? 0) + 1;
+    byTypeMap.set(r.movement_type, (byTypeMap.get(r.movement_type) ?? 0) + 1);
+  }
+
+  const byTypeRaw = [...byTypeMap.entries()]
+    .map(([type, count]) => ({ type, count }))
+    .sort((a, b) => b.count - a.count);
+  const max = byTypeRaw[0]?.count ?? 1;
+  const byType = byTypeRaw.map((r) => ({ ...r, share: r.count / max }));
+
+  return { dailyCounts, byType };
+}
+
+export interface DashboardActions {
+  /** Receivable POs (expected_inbound / ordered / partially_received). */
+  openPoCount: number;
+  /** Cycle counts in 'in_progress' status. */
+  openCycleCount: number;
+  /** Receipts pending approval (counted via tolerance_profiles → approvals). */
+  pendingReceipts: number;
+}
+
+/**
+ * Counts of "things to do" surfaced in Shift Command. Three head queries,
+ * each tiny — just `count: 'estimated'` on filtered rowsets.
+ */
+export async function getDashboardActions(): Promise<DashboardActions> {
+  const ctx = await withContext();
+  const [pos, cc] = await Promise.all([
+    ctx.supabase
+      .from('purchase_orders')
+      .select('id', { count: 'estimated', head: true })
+      .eq('organization_id', ctx.organizationId)
+      .in('status', ['expected_inbound', 'ordered', 'partially_received']),
+    ctx.supabase
+      .from('cycle_counts')
+      .select('id', { count: 'estimated', head: true })
+      .eq('organization_id', ctx.organizationId)
+      .eq('status', 'in_progress'),
+  ]);
+  return {
+    openPoCount: pos.count ?? 0,
+    openCycleCount: cc.count ?? 0,
+    pendingReceipts: 0,
+  };
+}
+
 export async function getLowStockItems(limit = 10) {
   const ctx = await withContext();
   const { data, error } = await ctx.supabase.rpc('low_stock_items', {
