@@ -1,0 +1,114 @@
+'use server';
+
+import { revalidatePath } from 'next/cache';
+
+import { requireSession } from '@/lib/auth/session';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
+import { ServiceError } from '@/server/services/context';
+
+import { err, ok, type ActionResult } from '@stockpilot/core';
+
+/**
+ * Generates 10 fresh recovery codes for the current user, wiping any
+ * existing ones. Returns the plaintexts — the UI must show them now,
+ * because they are unrecoverable after this call.
+ */
+export async function generateMfaRecoveryCodesAction(): Promise<
+  ActionResult<{ codes: string[] }>
+> {
+  try {
+    await requireSession();
+    const supabase = await createClient();
+    const { data, error } = await supabase.rpc('generate_mfa_recovery_codes');
+    if (error) throw new ServiceError('internal_error', error.message);
+    const codes = ((data ?? []) as Array<{ code: string }>).map((r) => r.code);
+    revalidatePath('/dashboard/settings/security');
+    return ok({ codes });
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
+/**
+ * Returns how many unused recovery codes the user has remaining. Used
+ * by the Security page to indicate "you've used N of 10".
+ */
+export async function getMfaRecoveryCodeStatus(): Promise<{
+  total: number;
+  unused: number;
+}> {
+  try {
+    const session = await requireSession();
+    const supabase = await createClient();
+    const [allRes, unusedRes] = await Promise.all([
+      supabase
+        .from('mfa_recovery_codes')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', session.userId),
+      supabase
+        .from('mfa_recovery_codes')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', session.userId)
+        .is('used_at', null),
+    ]);
+    return { total: allRes.count ?? 0, unused: unusedRes.count ?? 0 };
+  } catch {
+    return { total: 0, unused: 0 };
+  }
+}
+
+/**
+ * Used by /signin/mfa when the user can't reach their TOTP device.
+ * Verifies one of their unused recovery codes, and on success unenrolls
+ * every TOTP factor on the account using the admin client (RLS on
+ * auth.mfa requires service-role for this). The user can then sign in
+ * normally and re-enroll a fresh device.
+ */
+export async function consumeMfaRecoveryCodeAction(input: {
+  code: string;
+}): Promise<ActionResult<{ unenrolled: number }>> {
+  try {
+    const session = await requireSession();
+    const supabase = await createClient();
+
+    const { data: ok_, error } = await supabase.rpc('consume_mfa_recovery_code', {
+      p_code: input.code,
+    });
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!ok_) return err('validation_error', 'That recovery code is invalid or already used.');
+
+    // Unenroll every TOTP factor for this user via the admin client.
+    let admin;
+    try {
+      admin = createAdminClient();
+    } catch {
+      return err(
+        'internal_error',
+        'Server is missing SUPABASE_SERVICE_ROLE_KEY. Recovery cannot complete without it.',
+      );
+    }
+
+    const { data: factors } = await admin.auth.admin.mfa.listFactors({
+      userId: session.userId,
+    });
+    let unenrolled = 0;
+    for (const f of factors?.factors ?? []) {
+      // We only deliberately enroll TOTP today; play it safe and only
+      // remove totp factors so we don't surprise SSO/SAML setups later.
+      if (f.factor_type !== 'totp') continue;
+      const r = await admin.auth.admin.mfa.deleteFactor({
+        userId: session.userId,
+        id: f.id,
+      });
+      if (!r.error) unenrolled += 1;
+    }
+
+    revalidatePath('/dashboard', 'layout');
+    return ok({ unenrolled });
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
