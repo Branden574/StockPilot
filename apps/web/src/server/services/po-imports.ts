@@ -350,13 +350,21 @@ export class PoImportsService {
       0,
     );
 
+    // Receiving posts against a destination location, but the import flow
+    // only knows the destination warehouse. Find any existing location in
+    // that warehouse; if none exists, auto-create one named after the
+    // warehouse so the receive button shows up immediately on the new PO.
+    const destinationLocationId = await this.resolveDestinationLocation(
+      input.warehouseId,
+    );
+
     const { data: po, error: poErr } = await this.ctx.supabase
       .from('purchase_orders')
       .insert({
         organization_id: this.ctx.organizationId,
         po_number: poNumber,
         supplier_id: input.vendorId,
-        destination_location_id: null,
+        destination_location_id: destinationLocationId,
         notes: `Imported from PO file (po_import ${input.poImportId})`,
         subtotal,
         total: subtotal,
@@ -406,6 +414,47 @@ export class PoImportsService {
     });
 
     return { poId: po.id as string };
+  }
+
+  /**
+   * Returns a usable destination_location_id for the given warehouse.
+   * Tries to find an existing location belonging to that warehouse;
+   * if none, creates one named after the warehouse so receiving works
+   * out of the box on imported POs.
+   */
+  private async resolveDestinationLocation(warehouseId: string): Promise<string | null> {
+    const { data: existing, error: findErr } = await this.ctx.supabase
+      .from('locations')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle();
+    if (findErr) throw new ServiceError('internal_error', findErr.message);
+    if (existing?.id) return existing.id as string;
+
+    const { data: warehouse, error: whErr } = await this.ctx.supabase
+      .from('warehouses')
+      .select('name')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', warehouseId)
+      .maybeSingle();
+    if (whErr) throw new ServiceError('internal_error', whErr.message);
+    if (!warehouse) return null;
+
+    const { data: created, error: insErr } = await this.ctx.supabase
+      .from('locations')
+      .insert({
+        organization_id: this.ctx.organizationId,
+        warehouse_id: warehouseId,
+        name: warehouse.name as string,
+        type: 'warehouse',
+      })
+      .select('id')
+      .single();
+    if (insErr) throw new ServiceError('internal_error', insErr.message);
+    return created.id as string;
   }
 
   async cancel(id: string): Promise<void> {

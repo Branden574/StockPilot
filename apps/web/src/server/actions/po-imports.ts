@@ -165,10 +165,27 @@ export async function createItemsFromPoLinesAction(input: {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
   try {
-    await requireOrgContext();
+    const ctx = await requireOrgContext();
     const supabase = await createClient();
     const inventorySvc = await InventoryService.forCurrentUser();
     const mappingsSvc = await VendorItemMappingsService.forCurrentUser();
+
+    // Resolve a primary_location_id for the destination warehouse so the
+    // newly created items show their warehouse as a Location in the UI.
+    // Cosmetic only — the receive flow uses the PO's
+    // destination_location_id, not the items'.
+    let primaryLocationId: string | null = null;
+    if (parsed.data.warehouseId) {
+      const { data: loc } = await supabase
+        .from('locations')
+        .select('id')
+        .eq('organization_id', ctx.organizationId)
+        .eq('warehouse_id', parsed.data.warehouseId)
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle();
+      primaryLocationId = (loc?.id as string | undefined) ?? null;
+    }
 
     // Pull just the lines we're creating items for. RLS guarantees the
     // import belongs to the caller's org.
@@ -221,7 +238,7 @@ export async function createItemsFromPoLinesAction(input: {
         warehouseId: parsed.data.warehouseId,
         charterId: null,
         categoryId: null,
-        primaryLocationId: null,
+        primaryLocationId,
         trackingType: 'none',
         itemType: 'product',
         customFields: {},
