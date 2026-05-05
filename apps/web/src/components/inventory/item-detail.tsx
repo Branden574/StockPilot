@@ -1,4 +1,4 @@
-import { Boxes, DollarSign, MapPin, Package2, Tag, Truck } from 'lucide-react';
+import { Boxes, DollarSign, MapPin, Package2, Printer, Tag, Truck } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
@@ -95,6 +95,11 @@ export async function ItemDetail({ id, backHref, backLabel }: ItemDetailProps) {
             sku={item.sku as string}
             barcode={(item.barcode as string | null) ?? null}
           />
+          <Button asChild variant="outline">
+            <Link href={`/dashboard/inventory/labels?items=${id}`}>
+              <Printer className="h-4 w-4" /> Print label
+            </Link>
+          </Button>
           <StockAdjustDialog
             itemId={id}
             itemName={item.name as string}

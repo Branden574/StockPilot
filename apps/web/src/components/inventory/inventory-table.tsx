@@ -183,8 +183,15 @@ export function InventoryTable({
 
       {/* Bulk actions bar */}
       {selected.size > 0 && (
-        <div className="flex items-center gap-3 rounded-md border border-foreground/20 bg-card px-3 py-2 text-[12.5px]">
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-foreground/20 bg-card px-3 py-2 text-[12.5px]">
           <span className="font-mono tabular-nums text-[var(--ed-ink-2)]">{selected.size} selected</span>
+          <span className="text-[var(--ed-ink-4)]">·</span>
+          <Link
+            href={`/dashboard/inventory/labels?items=${[...selected].join(',')}`}
+            className="text-[var(--ed-ink-2)] hover:text-foreground"
+          >
+            Print labels
+          </Link>
           <span className="text-[var(--ed-ink-4)]">·</span>
           <button className="text-[var(--ed-ink-2)] hover:text-foreground">Adjust stock</button>
           <span className="text-[var(--ed-ink-4)]">·</span>
