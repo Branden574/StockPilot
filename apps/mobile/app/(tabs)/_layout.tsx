@@ -4,7 +4,7 @@ import { Text, View } from 'react-native';
 
 import { theme } from '@/lib/theme';
 
-type IconName = 'home' | 'inventory' | 'scan' | 'settings';
+type IconName = 'home' | 'inventory' | 'receive' | 'scan' | 'settings';
 
 export default function TabsLayout() {
   return (
@@ -32,6 +32,10 @@ export default function TabsLayout() {
         options={{ title: 'Inventory', tabBarIcon: ({ color }) => <Icon name="inventory" color={color} /> }}
       />
       <Tabs.Screen
+        name="receive"
+        options={{ title: 'Receive', tabBarIcon: ({ color }) => <Icon name="receive" color={color} /> }}
+      />
+      <Tabs.Screen
         name="scan"
         options={{
           title: 'Scan',
@@ -52,6 +56,7 @@ function Icon({ name, color }: { name: IconName; color: string }) {
   const map: Record<IconName, string> = {
     home: '⌂',
     inventory: '▣',
+    receive: '⇣',
     scan: '◫',
     settings: '⚙',
   };
