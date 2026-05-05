@@ -1,18 +1,24 @@
 /**
  * Placeholder Supabase database type.
  *
- * Until you run `pnpm db:types` (which writes the canonical generated
- * types from your live schema), the codebase falls back to a permissive
- * `any` shape. That's deliberate: it lets the scaffold compile before
- * Supabase is initialized, without forcing you to maintain a hand-written
- * mirror of the SQL schema.
+ * Until you run one of the type-gen scripts (which write the canonical
+ * generated types from your live schema), the codebase falls back to a
+ * permissive `any` shape. That's deliberate: it lets the scaffold
+ * compile before Supabase is initialized.
  *
- * To enable strong typing across all queries:
+ * To enable strong typing across all queries, pick whichever fits:
  *
- *   supabase start
+ *   # Linked to your hosted project (most common — run `supabase login`
+ *   # + `supabase link --project-ref <ref>` once first):
  *   pnpm db:types
  *
- * That overwrites this file with the real generated types.
+ *   # Local Supabase running via `supabase start`:
+ *   pnpm db:types:local
+ *
+ *   # CI / one-off without a linked config:
+ *   SUPABASE_PROJECT_ID=<ref> pnpm db:types:remote
+ *
+ * Any of those overwrites this file with the real generated types.
  */
 
 // Json is exported for the rest of the codebase to use as-is.

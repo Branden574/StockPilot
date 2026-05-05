@@ -14,6 +14,7 @@ import type { Role } from '@stockpilot/core';
 interface SidebarProps {
   className?: string;
   organizationName: string;
+  organizationLogoUrl?: string | null;
   userName: string | null;
   userRole?: string;
   /** DB role token used to filter nav (admin section is admin-only). */
@@ -24,6 +25,7 @@ interface SidebarProps {
 export function Sidebar({
   className,
   organizationName,
+  organizationLogoUrl,
   userName,
   userRole,
   role,
@@ -89,7 +91,17 @@ export function Sidebar({
         role="presentation"
         className="border-border bg-card mx-3 mt-3 flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px] text-[var(--ed-ink-2)]"
       >
-        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]" />
+        {organizationLogoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={organizationLogoUrl}
+            alt=""
+            aria-hidden
+            className="h-4 w-4 shrink-0 rounded-[3px] object-cover"
+          />
+        ) : (
+          <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]" />
+        )}
         <span className="flex-1 truncate text-left">
           <span className="sr-only">Organization: </span>
           {organizationName}
