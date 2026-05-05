@@ -37,6 +37,18 @@ interface InventoryTableProps {
   lookups: Lookups;
   total: number;
   initialQuery?: string;
+  /**
+   * URL prefix for the row click target. Used so the Books tab can
+   * link to /dashboard/books/{id} (keeping users in the books context)
+   * while the default Items tab links to /dashboard/inventory/{id}.
+   */
+  rowLinkPrefix?: string;
+  /**
+   * Base path for the filter chips ("All items / Low + critical /
+   * Out of stock"). Defaults to /dashboard/inventory; pass
+   * /dashboard/books from the books tab so chips don't jump tabs.
+   */
+  basePath?: string;
 }
 
 const VIEWS = ['All items', 'Low + critical', 'Out of stock'] as const;
@@ -76,7 +88,14 @@ function syntheticSeries(seed: string, base: number): number[] {
   return series;
 }
 
-export function InventoryTable({ items, lookups, total, initialQuery = '' }: InventoryTableProps) {
+export function InventoryTable({
+  items,
+  lookups,
+  total,
+  initialQuery = '',
+  rowLinkPrefix = '/dashboard/inventory',
+  basePath = '/dashboard/inventory',
+}: InventoryTableProps) {
   const router = useRouter();
   const params = useSearchParams();
   const [q, setQ] = React.useState(initialQuery);
@@ -89,7 +108,7 @@ export function InventoryTable({ items, lookups, total, initialQuery = '' }: Inv
     else if (v === 'Out of stock') next.set('stock', 'out');
     else next.delete('stock');
     const qs = next.toString();
-    return qs ? `/dashboard/inventory?${qs}` : '/dashboard/inventory';
+    return qs ? `${basePath}?${qs}` : basePath;
   }
 
   React.useEffect(() => {
@@ -97,7 +116,8 @@ export function InventoryTable({ items, lookups, total, initialQuery = '' }: Inv
       const next = new URLSearchParams(params.toString());
       if (q.trim()) next.set('q', q.trim());
       else next.delete('q');
-      router.replace(`/dashboard/inventory?${next.toString()}`);
+      const qs = next.toString();
+      router.replace(qs ? `${basePath}?${qs}` : basePath);
     }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -258,7 +278,7 @@ export function InventoryTable({ items, lookups, total, initialQuery = '' }: Inv
                         }}
                       />
                       <Link
-                        href={`/dashboard/inventory/${item.id}`}
+                        href={`${rowLinkPrefix}/${item.id}`}
                         className="font-medium hover:underline"
                       >
                         {item.name}
