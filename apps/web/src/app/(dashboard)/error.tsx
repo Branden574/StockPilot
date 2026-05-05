@@ -5,6 +5,7 @@ import Link from 'next/link';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
+import { reportError } from '@/lib/error-reporter';
 
 /**
  * RSC error boundary for the dashboard route group. Without this, a server
@@ -21,7 +22,11 @@ export default function DashboardError({
   reset: () => void;
 }) {
   React.useEffect(() => {
-    console.error('Dashboard render error:', error);
+    void reportError(error, {
+      tag: 'dashboard.render',
+      level: 'error',
+      extra: { digest: error.digest ?? null },
+    });
   }, [error]);
 
   return (

@@ -32,8 +32,8 @@ function line(
 describe('buildPreview', () => {
   it('marks an inventory line with no item_id as unmapped', () => {
     const { rows, summary } = buildPreview([line('1')], {}, [ITEM_A]);
-    expect(rows[0].status).toBe('unmapped');
-    expect(rows[0].projectedQty).toBeNull();
+    expect(rows[0]!.status).toBe('unmapped');
+    expect(rows[0]!.projectedQty).toBeNull();
     expect(summary.unmappedCount).toBe(1);
     expect(summary.mappedCount).toBe(0);
   });
@@ -41,10 +41,10 @@ describe('buildPreview', () => {
   it('marks a line with item_id pre-populated as mapped + projects qty', () => {
     const lines = [line('1', { item_id: 'item-a', qty_ordered_original: 10 })];
     const { rows, summary } = buildPreview(lines, {}, [ITEM_A]);
-    expect(rows[0].status).toBe('mapped');
-    expect(rows[0].itemId).toBe('item-a');
-    expect(rows[0].currentQty).toBe(5);
-    expect(rows[0].projectedQty).toBe(15);
+    expect(rows[0]!.status).toBe('mapped');
+    expect(rows[0]!.itemId).toBe('item-a');
+    expect(rows[0]!.currentQty).toBe(5);
+    expect(rows[0]!.projectedQty).toBe(15);
     expect(summary.mappedCount).toBe(1);
   });
 
@@ -54,9 +54,9 @@ describe('buildPreview', () => {
       '1': { itemId: 'item-b' },
     };
     const { rows } = buildPreview(lines, overrides, [ITEM_A, ITEM_B]);
-    expect(rows[0].itemId).toBe('item-b');
-    expect(rows[0].currentQty).toBe(0);
-    expect(rows[0].projectedQty).toBe(8);
+    expect(rows[0]!.itemId).toBe('item-b');
+    expect(rows[0]!.currentQty).toBe(0);
+    expect(rows[0]!.projectedQty).toBe(8);
   });
 
   it('explicit override of null reverts to unmapped', () => {
@@ -65,7 +65,7 @@ describe('buildPreview', () => {
       '1': { itemId: null },
     };
     const { rows } = buildPreview(lines, overrides, [ITEM_A]);
-    expect(rows[0].status).toBe('unmapped');
+    expect(rows[0]!.status).toBe('unmapped');
   });
 
   it('two lines mapped to the same item stack their projected qty', () => {
@@ -75,8 +75,8 @@ describe('buildPreview', () => {
     ];
     const { rows } = buildPreview(lines, {}, [ITEM_A]);
     // Both rows should show projected = 5 (current) + 7 + 3 = 15
-    expect(rows[0].projectedQty).toBe(15);
-    expect(rows[1].projectedQty).toBe(15);
+    expect(rows[0]!.projectedQty).toBe(15);
+    expect(rows[1]!.projectedQty).toBe(15);
   });
 
   it('skipped lines come back as skipped + ignore qty in totals', () => {
@@ -88,16 +88,16 @@ describe('buildPreview', () => {
       '2': { skip: true },
     };
     const { rows, summary } = buildPreview(lines, overrides, [ITEM_A]);
-    expect(rows[1].status).toBe('skipped');
+    expect(rows[1]!.status).toBe('skipped');
     expect(summary.skippedCount).toBe(1);
     expect(summary.totalUnits).toBe(5); // skipped row excluded
     expect(summary.totalCost).toBe(50);
   });
 
   it('non-inventory lines are surfaced separately from skipped', () => {
-    const lines = [line('1', { line_type: 'shipping', qty_ordered_original: 1, line_total: 12 })];
+    const lines = [line('1', { line_type: 'freight', qty_ordered_original: 1, line_total: 12 })];
     const { rows, summary } = buildPreview(lines, {}, []);
-    expect(rows[0].status).toBe('non-inventory');
+    expect(rows[0]!.status).toBe('non-inventory');
     expect(summary.nonInventoryCount).toBe(1);
     // non-inventory excluded from inventory units/cost
     expect(summary.totalUnits).toBe(0);
