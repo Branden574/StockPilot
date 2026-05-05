@@ -83,15 +83,14 @@ export function DashboardShell({
           warehouseFilter={warehouseFilter}
         />
         {/*
-          The inner min-h-full div is critical: without it, short page
-          content (e.g. the new-item form on a tall display) ends mid-
-          viewport and `main`'s overflow-y-auto lets the user scroll
-          past it into uncolored space — looked like a broken void.
-          Forcing the wrapper to always be ≥ main's visible height
-          means there's never scrollable empty space past page content,
-          and bg-muted/30 paints any genuinely empty area as panel.
+          main bg matches the Card bg so any empty area below short
+          forms is visually indistinguishable from the Card — no dark
+          strip / void. The body-locking useEffect above + the
+          min-h-full inner div together kill the second-scrollbar bug.
+          Net effect: one scrollbar (main's), no body scroll, and short
+          forms fill the whole panel without an obvious cut-off.
         */}
-        <main className="flex-1 overflow-y-auto bg-muted/30">
+        <main className="bg-card flex-1 overflow-y-auto">
           <div className="min-h-full">{children}</div>
         </main>
       </div>
