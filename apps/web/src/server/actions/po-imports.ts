@@ -4,9 +4,12 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { ServiceError } from '@/server/services/context';
+import { InventoryService } from '@/server/services/inventory';
 import { PoImportsService } from '@/server/services/po-imports';
+import { VendorItemMappingsService } from '@/server/services/vendor-item-mappings';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
+import { generateSku } from '@/lib/utils';
 
 import {
   approvePoImportSchema,
@@ -125,6 +128,123 @@ export async function approvePoImportAction(input: {
     revalidatePath(`/dashboard/purchase-orders/imports/${input.poImportId}`);
     revalidatePath('/dashboard/purchase-orders');
     return ok(result);
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
+const createItemsFromLinesSchema = z.object({
+  poImportId: z.string().uuid(),
+  lineIds: z.array(z.string().uuid()).min(1).max(200),
+  /**
+   * Vendor (supplier) the new items will be tagged with — also drives the
+   * vendor_item_mappings rows we create alongside, so future POs from the
+   * same vendor with the same vendor_item_number auto-match.
+   */
+  vendorId: z.string().uuid(),
+  /** Destination warehouse the new items will be created at. */
+  warehouseId: z.string().uuid().nullable(),
+});
+
+export async function createItemsFromPoLinesAction(input: {
+  poImportId: string;
+  lineIds: string[];
+  vendorId: string;
+  warehouseId: string | null;
+}): Promise<ActionResult<{ created: number; mapped: number }>> {
+  const parsed = createItemsFromLinesSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    await requireOrgContext();
+    const supabase = await createClient();
+    const inventorySvc = await InventoryService.forCurrentUser();
+    const mappingsSvc = await VendorItemMappingsService.forCurrentUser();
+
+    // Pull just the lines we're creating items for. RLS guarantees the
+    // import belongs to the caller's org.
+    const { data: lines, error: lErr } = await supabase
+      .from('po_import_lines')
+      .select(
+        'id, po_import_id, line_type, description, qty_ordered_original, uom_original, unit_cost, vendor_item_number, vendor_product_number, auxiliary_number, item_id',
+      )
+      .eq('po_import_id', parsed.data.poImportId)
+      .in('id', parsed.data.lineIds);
+    if (lErr) throw new ServiceError('internal_error', lErr.message);
+
+    let created = 0;
+    let mapped = 0;
+    for (const l of lines ?? []) {
+      // Skip lines that aren't inventory or already have an item — caller
+      // shouldn't pass them but be defensive.
+      if (l.line_type !== 'inventory') continue;
+      if (l.item_id) continue;
+      const description = (l.description as string | null)?.trim();
+      if (!description) continue;
+
+      const vendorItemNumber = (l.vendor_item_number as string | null) ?? null;
+      const vendorProductNumber = (l.vendor_product_number as string | null) ?? null;
+      const auxiliaryNumber = (l.auxiliary_number as string | null) ?? null;
+
+      const item = await inventorySvc.create({
+        name: description.slice(0, 200),
+        sku: generateSku(),
+        // Use the vendor's item number as the barcode so scanning the
+        // physical packaging finds it later.
+        barcode: vendorItemNumber ?? vendorProductNumber ?? undefined,
+        unitCost: Number(l.unit_cost ?? 0) || 0,
+        retailPrice: 0,
+        quantityOnHand: 0,
+        reorderPoint: 0,
+        reorderQuantity: 0,
+        unitOfMeasure: (l.uom_original as string | null)?.toLowerCase() ?? 'unit',
+        supplierId: parsed.data.vendorId,
+        warehouseId: parsed.data.warehouseId,
+        charterId: null,
+        categoryId: null,
+        primaryLocationId: null,
+        trackingType: 'none',
+        itemType: 'product',
+        customFields: {},
+        status: 'active',
+      });
+      created++;
+
+      // Map this line to the new item.
+      const { error: updErr } = await supabase
+        .from('po_import_lines')
+        .update({
+          item_id: item.id,
+          match_status: 'mapped',
+          exception_reason: null,
+        })
+        .eq('id', l.id as string);
+      if (updErr) throw new ServiceError('internal_error', updErr.message);
+
+      // Save a vendor_item_mapping so future POs from the same vendor
+      // with the same item number auto-match without manual mapping.
+      if (vendorItemNumber || vendorProductNumber || auxiliaryNumber) {
+        await mappingsSvc.upsert({
+          vendorId: parsed.data.vendorId,
+          itemId: item.id as string,
+          vendorItemNumber,
+          vendorProductNumber,
+          auxiliaryNumber,
+          vendorDescription: description,
+          vendorUom: (l.uom_original as string | null) ?? null,
+          packQty: null,
+          conversionFactor: null,
+        });
+        mapped++;
+      }
+    }
+
+    revalidatePath(`/dashboard/purchase-orders/imports/${parsed.data.poImportId}`);
+    revalidatePath('/dashboard/inventory');
+    revalidatePath('/dashboard');
+    return ok({ created, mapped });
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
