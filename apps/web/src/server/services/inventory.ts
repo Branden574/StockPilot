@@ -91,6 +91,10 @@ export class InventoryService {
     if (filters.locationId) query = query.eq('primary_location_id', filters.locationId);
     if (filters.supplierId) query = query.eq('supplier_id', filters.supplierId);
     if (filters.outOfStock) query = query.lte('quantity_on_hand', 0);
+    // PostgREST can't express qty_on_hand <= reorder_point in a single
+    // filter, so narrow to items that have a reorder_point set and do the
+    // final cross-column compare in JS below.
+    if (filters.lowStock) query = query.gt('reorder_point', 0);
 
     // item_type defaults to 'product' so the legacy /dashboard/inventory tab
     // doesn't accidentally show books/assets. Pass 'all' to disable.
@@ -103,8 +107,19 @@ export class InventoryService {
     const { data, error, count } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
 
+    let rows = data ?? [];
+    let totalCount = count ?? 0;
+    if (filters.lowStock) {
+      const filtered = rows.filter(
+        (r: { quantity_on_hand: number; reorder_point: number }) =>
+          r.quantity_on_hand <= r.reorder_point,
+      );
+      totalCount = filtered.length;
+      rows = filtered;
+    }
+
     return {
-      items: (data ?? []) as Array<{
+      items: rows as Array<{
         id: string;
         sku: string;
         barcode: string | null;
@@ -126,7 +141,7 @@ export class InventoryService {
         created_at: string;
         updated_at: string;
       }>,
-      total: count ?? 0,
+      total: totalCount,
     };
   }
 
