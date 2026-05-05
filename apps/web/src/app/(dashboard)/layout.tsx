@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react';
-import { redirect } from 'next/navigation';
-import { headers } from 'next/headers';
 
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
+import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
 import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
@@ -17,7 +16,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const ctx = await requireOrgContext();
   const supabase = await createClient();
 
-  const [access, activeWarehouseId, orgRow, factorsRes, hdrs] = await Promise.all([
+  const [access, activeWarehouseId, orgRow, factorsRes] = await Promise.all([
     getWarehouseAccess(),
     getActiveWarehouseFilter(),
     supabase
@@ -26,15 +25,16 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       .eq('id', ctx.organizationId)
       .maybeSingle(),
     supabase.auth.mfa.listFactors(),
-    headers(),
   ]);
 
   // ── MFA enforcement ────────────────────────────────────────────────
-  // Soft gate (option B during onboarding): require an enrolled+verified
-  // factor for users in scope of the org policy, but don't force every
-  // session through a fresh AAL2 challenge. The challenge happens once
-  // at sign-in via /signin/mfa; we don't re-require it on every request.
-  // Allowlist the MFA flow pages so the redirect can't loop on itself.
+  // Banner instead of redirect: the previous redirect-on-every-page-load
+  // approach raced with Chrome's prefetch behavior and triggered the
+  // "Throttling navigation to prevent the browser from hanging" warning,
+  // which renders as a black/blank screen on certain sections (Andrew,
+  // Chrome, no MFA enrolled). The banner is always visible above the
+  // page content until the user enrolls; can't loop, can't throttle,
+  // and behaves the same across browsers.
   const policy = (orgRow.data?.mfa_policy as
     | 'optional'
     | 'admins_required'
@@ -46,14 +46,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const hasVerifiedFactor = (factorsRes.data?.all ?? []).some(
     (f) => f.status === 'verified',
   );
-  const path = hdrs.get('x-pathname') ?? hdrs.get('referer') ?? '';
-  const onMfaFlowPath =
-    path.includes('/dashboard/settings/security') ||
-    path.includes('/signin/mfa');
-
-  if (mfaRequired && !hasVerifiedFactor && !onMfaFlowPath) {
-    redirect('/dashboard/settings/security?enroll=1');
-  }
+  const showMfaBanner = mfaRequired && !hasVerifiedFactor;
 
   const term = resolveTerminology(
     (orgRow.data?.terminology as Partial<ReturnType<typeof resolveTerminology>>) ?? null,
@@ -95,6 +88,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         role={ctx.role}
         warehouseFilter={warehouseFilter}
       >
+        {showMfaBanner && <MfaRequiredBanner />}
         {children}
       </DashboardShell>
     </>

@@ -32,36 +32,54 @@ export function InventoryRealtime({
   const refreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
-    const supabase = createClient();
-    const channel = supabase.channel(`org:${organizationId}:inventory`);
+    // Wrap the entire realtime setup in try/catch. If a browser blocks
+    // WebSockets (some Chrome enterprise policies, certain extensions,
+    // restrictive networks), an exception thrown here would unmount the
+    // dashboard shell and surface as a black screen — the live-update
+    // feature isn't worth that. Worst case: stale-until-refresh, which
+    // is exactly what we had before realtime existed.
+    const cleanup: Array<() => void> = [];
+    try {
+      const supabase = createClient();
+      const channel = supabase.channel(`org:${organizationId}:inventory`);
 
-    function nudge() {
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-      // 750ms debounce: a burst of updates from a CSV import shouldn't
-      // produce 100 router.refresh() calls; collapse to one.
-      refreshTimerRef.current = setTimeout(() => {
-        router.refresh();
-      }, 750);
+      function nudge() {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        // 750ms debounce: a burst of updates from a CSV import shouldn't
+        // produce 100 router.refresh() calls; collapse to one.
+        refreshTimerRef.current = setTimeout(() => {
+          router.refresh();
+        }, 750);
+      }
+
+      for (const table of tables) {
+        channel.on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table,
+            filter: `organization_id=eq.${organizationId}`,
+          },
+          nudge,
+        );
+      }
+
+      channel.subscribe();
+      cleanup.push(() => {
+        try {
+          supabase.removeChannel(channel);
+        } catch {
+          /* noop */
+        }
+      });
+    } catch (err) {
+      console.warn('[realtime] subscription failed; falling back to manual refresh', err);
     }
-
-    for (const table of tables) {
-      channel.on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table,
-          filter: `organization_id=eq.${organizationId}`,
-        },
-        nudge,
-      );
-    }
-
-    channel.subscribe();
 
     return () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-      supabase.removeChannel(channel);
+      for (const fn of cleanup) fn();
     };
   }, [organizationId, router, tables]);
 
