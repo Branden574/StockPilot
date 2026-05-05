@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { CRATE_COLORS, CRATE_NUMBERS } from '@/lib/book-storage';
 import { generateSku, cn } from '@/lib/utils';
 import { createItemAction, updateItemAction } from '@/server/actions/inventory';
 import { createImageUploadAction, recordImageAction } from '@/server/actions/item-images';
@@ -148,8 +149,24 @@ export function ItemForm({
   });
 
   const isBook = itemType === 'book' || (defaults?.itemType ?? itemType) === 'book';
+  const cfDefault =
+    (defaults?.customFields as Record<string, unknown> | undefined) ?? {};
   const [author, setAuthor] = React.useState<string>(
-    isBook ? String((defaults?.customFields as Record<string, unknown> | undefined)?.author ?? '') : '',
+    isBook ? String(cfDefault.author ?? '') : '',
+  );
+  // Book-only storage location fields. Persisted into custom_fields with
+  // the book_* prefix so they don't collide with anything else.
+  const [rackNumber, setRackNumber] = React.useState<string>(
+    isBook ? String(cfDefault.book_rack_number ?? '') : '',
+  );
+  const [rackRow, setRackRow] = React.useState<string>(
+    isBook ? String(cfDefault.book_rack_row ?? '') : '',
+  );
+  const [crateColor, setCrateColor] = React.useState<string>(
+    isBook ? String(cfDefault.book_crate_color ?? '') : '',
+  );
+  const [crateNumber, setCrateNumber] = React.useState<string>(
+    isBook ? String(cfDefault.book_crate_number ?? '') : '',
   );
   const [scannerOpen, setScannerOpen] = React.useState(false);
   const [lookingUp, setLookingUp] = React.useState(false);
@@ -258,7 +275,9 @@ export function ItemForm({
   }
 
   const onSubmit = handleSubmit(async (values) => {
-    // Merge book-specific fields (Author) into custom_fields before submit.
+    // Merge book-specific fields (Author + rack + crate) into
+    // custom_fields before submit. Empty fields are omitted so we don't
+    // overwrite an existing value with an empty string on edit.
     const mergedValues = isBook
       ? {
           ...values,
@@ -266,6 +285,14 @@ export function ItemForm({
           customFields: {
             ...(values.customFields ?? {}),
             ...(author.trim() ? { author: author.trim() } : {}),
+            ...(rackNumber.trim()
+              ? { book_rack_number: rackNumber.trim() }
+              : {}),
+            ...(rackRow.trim()
+              ? { book_rack_row: rackRow.trim().toUpperCase() }
+              : {}),
+            ...(crateColor ? { book_crate_color: crateColor } : {}),
+            ...(crateNumber ? { book_crate_number: crateNumber } : {}),
           },
         }
       : values;
@@ -482,6 +509,77 @@ export function ItemForm({
             <Input placeholder="A-12, Shelf 3…" {...register('binLocation')} />
           </Field>
         </div>
+        {isBook && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Rack number">
+                <Input
+                  placeholder="38"
+                  inputMode="numeric"
+                  value={rackNumber}
+                  onChange={(e) => setRackNumber(e.target.value)}
+                />
+              </Field>
+              <Field label="Rack row">
+                <Input
+                  placeholder="A"
+                  maxLength={4}
+                  value={rackRow}
+                  onChange={(e) =>
+                    setRackRow(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))
+                  }
+                />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Crate color</Label>
+                <Select
+                  value={crateColor || '__none'}
+                  onValueChange={(v) => setCrateColor(v === '__none' ? '' : v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="No crate" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">No crate</SelectItem>
+                    {CRATE_COLORS.map((c) => (
+                      <SelectItem key={c.slug} value={c.slug}>
+                        <span className="flex items-center gap-2">
+                          <span
+                            aria-hidden
+                            className="border-border inline-block h-3 w-3 rounded-full border"
+                            style={{ backgroundColor: c.hex }}
+                          />
+                          {c.label}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Crate number</Label>
+                <Select
+                  value={crateNumber || '__none'}
+                  onValueChange={(v) => setCrateNumber(v === '__none' ? '' : v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="—" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">—</SelectItem>
+                    {CRATE_NUMBERS.map((n) => (
+                      <SelectItem key={n} value={n}>
+                        {n}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </>
+        )}
       </Section>
 
       <Section title={`${warehouseLabel} & ${charterLabel.toLowerCase()}`}>

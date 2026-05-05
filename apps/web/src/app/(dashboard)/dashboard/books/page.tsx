@@ -112,6 +112,7 @@ export default async function BooksPage({
             initialQuery={params.q}
             rowLinkPrefix="/dashboard/books"
             basePath="/dashboard/books"
+            showBookFields
           />
         )}
       </div>

@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
+import { getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 
@@ -25,6 +26,7 @@ interface Item {
   category_id: string | null;
   primary_location_id: string | null;
   updated_at: string;
+  custom_fields?: Record<string, unknown> | null;
 }
 
 interface Lookups {
@@ -49,6 +51,13 @@ interface InventoryTableProps {
    * /dashboard/books from the books tab so chips don't jump tabs.
    */
   basePath?: string;
+  /**
+   * When true, the table renders book-specific columns: Rack
+   * (number-row, e.g. "38-A") and Crate (color dot + number).
+   * Driven by reading custom_fields.book_* off each row. Used by
+   * the Books tab; the default Items tab leaves the columns out.
+   */
+  showBookFields?: boolean;
 }
 
 const VIEWS = ['All items', 'Low + critical', 'Out of stock'] as const;
@@ -95,6 +104,7 @@ export function InventoryTable({
   initialQuery = '',
   rowLinkPrefix = '/dashboard/inventory',
   basePath = '/dashboard/inventory',
+  showBookFields = false,
 }: InventoryTableProps) {
   const router = useRouter();
   const params = useSearchParams();
@@ -226,12 +236,18 @@ export function InventoryTable({
                   ['SKU', 'left'],
                   ['Category', 'left'],
                   ['Location', 'left'],
+                  ...(showBookFields
+                    ? ([
+                        ['Rack', 'left'],
+                        ['Crate', 'left'],
+                      ] as const)
+                    : ([] as const)),
                   ['On hand', 'right'],
                   ['Coverage', 'left'],
                   ['14-day', 'right'],
                   ['Status', 'left'],
                   ['Updated', 'right'],
-                ] as const
+                ] as ReadonlyArray<readonly [string, 'left' | 'right']>
               ).map(([label, align]) => (
                 <th
                   key={label}
@@ -248,7 +264,10 @@ export function InventoryTable({
           <tbody>
             {items.length === 0 && (
               <tr>
-                <td colSpan={10} className="py-12 text-center text-[12.5px] text-[var(--ed-ink-4)]">
+                <td
+                  colSpan={showBookFields ? 12 : 10}
+                  className="py-12 text-center text-[12.5px] text-[var(--ed-ink-4)]"
+                >
                   No items match your filters.
                 </td>
               </tr>
@@ -315,6 +334,41 @@ export function InventoryTable({
                     )}
                   </td>
                   <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">{location?.name ?? '—'}</td>
+                  {showBookFields &&
+                    (() => {
+                      const storage = readBookStorage(item.custom_fields);
+                      const color = getCrateColor(storage.crateColor);
+                      return (
+                        <>
+                          <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+                            {storage.rackLabel ? (
+                              <span className="font-mono tabular-nums">
+                                {storage.rackLabel}
+                              </span>
+                            ) : (
+                              <span className="text-[var(--ed-ink-4)]">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+                            {color && storage.crateNumber ? (
+                              <span className="inline-flex items-center gap-1.5">
+                                <span
+                                  aria-hidden
+                                  title={color.label}
+                                  className="border-border inline-block h-2.5 w-2.5 rounded-full border"
+                                  style={{ backgroundColor: color.hex }}
+                                />
+                                <span className="font-mono tabular-nums">
+                                  {storage.crateNumber}
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="text-[var(--ed-ink-4)]">—</span>
+                            )}
+                          </td>
+                        </>
+                      );
+                    })()}
                   <td className="px-3 text-right font-mono tabular-nums">
                     {formatNumber(item.quantity_on_hand)}
                   </td>

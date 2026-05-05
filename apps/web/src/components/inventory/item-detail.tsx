@@ -1,4 +1,4 @@
-import { Boxes, DollarSign, MapPin, Package2, Printer, Tag, Truck } from 'lucide-react';
+import { Box, Boxes, DollarSign, MapPin, Package2, Printer, Tag, Truck } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
@@ -25,6 +25,7 @@ import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { MovementsService } from '@/server/services/movements';
 import { SuppliersService } from '@/server/services/suppliers';
+import { getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
 interface ItemDetailProps {
@@ -161,6 +162,41 @@ export async function ItemDetail({ id, backHref, backLabel }: ItemDetailProps) {
                 <span className="text-muted-foreground text-xs">{item.bin_location as string}</span>
               )}
             </DetailRow>
+            {(() => {
+              const storage = readBookStorage(
+                item.custom_fields as Record<string, unknown> | null,
+              );
+              const color = getCrateColor(storage.crateColor);
+              if (!storage.rackLabel && !(color && storage.crateNumber)) return null;
+              return (
+                <>
+                  {storage.rackLabel && (
+                    <DetailRow icon={MapPin} label="Rack">
+                      <span className="font-mono tabular-nums">
+                        {storage.rackLabel}
+                      </span>
+                    </DetailRow>
+                  )}
+                  {color && storage.crateNumber && (
+                    <DetailRow icon={Box} label="Crate">
+                      <span className="inline-flex items-center gap-2">
+                        <span
+                          aria-hidden
+                          className="border-border inline-block h-3 w-3 rounded-full border"
+                          style={{ backgroundColor: color.hex }}
+                        />
+                        <span>
+                          {color.label}{' '}
+                          <span className="font-mono tabular-nums">
+                            {storage.crateNumber}
+                          </span>
+                        </span>
+                      </span>
+                    </DetailRow>
+                  )}
+                </>
+              );
+            })()}
             <DetailRow icon={Truck} label="Supplier">
               {supplier ? (
                 <span>{supplier.name as string}</span>
