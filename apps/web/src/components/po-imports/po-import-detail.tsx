@@ -426,12 +426,20 @@ export function PoImportDetail({
         warehouseId={warehouseId || null}
         lines={createLines}
         onSuccess={(counts) => {
-          toast.success(
-            `Created ${counts.created} item${counts.created === 1 ? '' : 's'}` +
-              (counts.mapped > 0
-                ? ` and ${counts.mapped} vendor mapping${counts.mapped === 1 ? '' : 's'}`
-                : ''),
-          );
+          const parts: string[] = [];
+          if (counts.created > 0)
+            parts.push(`Created ${counts.created} item${counts.created === 1 ? '' : 's'}`);
+          if (counts.linked > 0)
+            parts.push(
+              `Linked ${counts.linked} line${counts.linked === 1 ? '' : 's'} to existing items`,
+            );
+          if (counts.skipped > 0)
+            parts.push(`Skipped ${counts.skipped}`);
+          if (counts.mapped > 0)
+            parts.push(
+              `${counts.mapped} vendor mapping${counts.mapped === 1 ? '' : 's'}`,
+            );
+          toast.success(parts.length > 0 ? parts.join(' · ') : 'Done');
           router.refresh();
         }}
       />

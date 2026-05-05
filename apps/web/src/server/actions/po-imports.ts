@@ -134,6 +134,12 @@ export async function approvePoImportAction(input: {
   }
 }
 
+const lineDecisionSchema = z.object({
+  mode: z.enum(['create', 'use_existing', 'skip']),
+  /** Required when mode === 'use_existing'. */
+  itemId: z.string().uuid().optional(),
+});
+
 const createItemsFromLinesSchema = z.object({
   poImportId: z.string().uuid(),
   lineIds: z.array(z.string().uuid()).min(1).max(200),
@@ -151,6 +157,12 @@ const createItemsFromLinesSchema = z.object({
    * cleaned PO line description.
    */
   nameOverrides: z.record(z.string().uuid(), z.string().min(1).max(200)).optional(),
+  /**
+   * Per-line decision: create a new item (default), link the PO line to
+   * an existing item (no creation), or skip the line entirely. Modal
+   * uses these when a duplicate match is detected.
+   */
+  decisions: z.record(z.string().uuid(), lineDecisionSchema).optional(),
 });
 
 export async function createItemsFromPoLinesAction(input: {
@@ -159,7 +171,8 @@ export async function createItemsFromPoLinesAction(input: {
   vendorId: string;
   warehouseId: string | null;
   nameOverrides?: Record<string, string>;
-}): Promise<ActionResult<{ created: number; mapped: number }>> {
+  decisions?: Record<string, { mode: 'create' | 'use_existing' | 'skip'; itemId?: string }>;
+}): Promise<ActionResult<{ created: number; mapped: number; linked: number; skipped: number }>> {
   const parsed = createItemsFromLinesSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -192,7 +205,7 @@ export async function createItemsFromPoLinesAction(input: {
     const { data: lines, error: lErr } = await supabase
       .from('po_import_lines')
       .select(
-        'id, po_import_id, line_type, description, qty_ordered_original, uom_original, unit_cost, vendor_item_number, vendor_product_number, auxiliary_number, item_id',
+        'id, po_import_id, line_number, line_type, description, qty_ordered_original, uom_original, unit_cost, vendor_item_number, vendor_product_number, auxiliary_number, item_id',
       )
       .eq('po_import_id', parsed.data.poImportId)
       .in('id', parsed.data.lineIds);
@@ -200,6 +213,8 @@ export async function createItemsFromPoLinesAction(input: {
 
     let created = 0;
     let mapped = 0;
+    let linked = 0;
+    let skipped = 0;
     for (const l of lines ?? []) {
       // Skip lines that aren't inventory or already have an item — caller
       // shouldn't pass them but be defensive.
@@ -212,45 +227,79 @@ export async function createItemsFromPoLinesAction(input: {
       const vendorProductNumber = (l.vendor_product_number as string | null) ?? null;
       const auxiliaryNumber = (l.auxiliary_number as string | null) ?? null;
 
-      // Prefer the user-edited name from the modal; otherwise auto-clean
-      // by stripping the trailing "(SOMETHING)" part of the PO description
-      // since the manufacturer's part number already lives in `barcode`.
-      const overrideName = parsed.data.nameOverrides?.[l.id as string]?.trim();
-      const cleanedName = description.replace(/\s*\([^)]*\)\s*$/, '').trim();
-      const finalName = (overrideName && overrideName.length > 0
-        ? overrideName
-        : cleanedName || description
-      ).slice(0, 200);
+      const decision = parsed.data.decisions?.[l.id as string] ?? { mode: 'create' };
 
-      const item = await inventorySvc.create({
-        name: finalName,
-        sku: generateSku(),
-        // Use the vendor's item number as the barcode so scanning the
-        // physical packaging finds it later.
-        barcode: vendorItemNumber ?? vendorProductNumber ?? undefined,
-        unitCost: Number(l.unit_cost ?? 0) || 0,
-        retailPrice: 0,
-        quantityOnHand: 0,
-        reorderPoint: 0,
-        reorderQuantity: 0,
-        unitOfMeasure: (l.uom_original as string | null)?.toLowerCase() ?? 'unit',
-        supplierId: parsed.data.vendorId,
-        warehouseId: parsed.data.warehouseId,
-        charterId: null,
-        categoryId: null,
-        primaryLocationId,
-        trackingType: 'none',
-        itemType: 'product',
-        customFields: {},
-        status: 'active',
-      });
-      created++;
+      if (decision.mode === 'skip') {
+        skipped++;
+        continue;
+      }
 
-      // Map this line to the new item.
+      let resolvedItemId: string;
+
+      if (decision.mode === 'use_existing') {
+        if (!decision.itemId) {
+          return err(
+            'validation_error',
+            `Line ${l.line_number} marked use_existing but no itemId provided`,
+          );
+        }
+        // Defense: confirm the chosen item belongs to the caller's org.
+        const { data: existing, error: chkErr } = await supabase
+          .from('inventory_items')
+          .select('id')
+          .eq('organization_id', ctx.organizationId)
+          .eq('id', decision.itemId)
+          .is('deleted_at', null)
+          .maybeSingle();
+        if (chkErr) throw new ServiceError('internal_error', chkErr.message);
+        if (!existing) {
+          return err('not_found', `Existing item for line ${l.line_number} not found`);
+        }
+        resolvedItemId = existing.id as string;
+        linked++;
+      } else {
+        // mode === 'create'
+        // Prefer the user-edited name from the modal; otherwise auto-clean
+        // by stripping the trailing "(SOMETHING)" part of the PO description
+        // since the manufacturer's part number already lives in `barcode`.
+        const overrideName = parsed.data.nameOverrides?.[l.id as string]?.trim();
+        const cleanedName = description.replace(/\s*\([^)]*\)\s*$/, '').trim();
+        const finalName = (overrideName && overrideName.length > 0
+          ? overrideName
+          : cleanedName || description
+        ).slice(0, 200);
+
+        const item = await inventorySvc.create({
+          name: finalName,
+          sku: generateSku(),
+          // Use the vendor's item number as the barcode so scanning the
+          // physical packaging finds it later.
+          barcode: vendorItemNumber ?? vendorProductNumber ?? undefined,
+          unitCost: Number(l.unit_cost ?? 0) || 0,
+          retailPrice: 0,
+          quantityOnHand: 0,
+          reorderPoint: 0,
+          reorderQuantity: 0,
+          unitOfMeasure: (l.uom_original as string | null)?.toLowerCase() ?? 'unit',
+          supplierId: parsed.data.vendorId,
+          warehouseId: parsed.data.warehouseId,
+          charterId: null,
+          categoryId: null,
+          primaryLocationId,
+          trackingType: 'none',
+          itemType: 'product',
+          customFields: {},
+          status: 'active',
+        });
+        created++;
+        resolvedItemId = item.id as string;
+      }
+
+      // Map the line (whether newly created or linked to existing).
       const { error: updErr } = await supabase
         .from('po_import_lines')
         .update({
-          item_id: item.id,
+          item_id: resolvedItemId,
           match_status: 'mapped',
           exception_reason: null,
         })
@@ -260,13 +309,13 @@ export async function createItemsFromPoLinesAction(input: {
       // Save a vendor_item_mapping so future POs from the same vendor
       // with the same item number auto-match without manual mapping.
       // Best-effort: a mapping failure shouldn't undo the item we just
-      // created. The user can still pick the new item from the dropdown
-      // even if the mapping didn't save.
+      // created. Applies whether we created a new item or linked to an
+      // existing one — the next PO from this vendor will auto-match.
       if (vendorItemNumber || vendorProductNumber || auxiliaryNumber) {
         try {
           await mappingsSvc.upsert({
             vendorId: parsed.data.vendorId,
-            itemId: item.id as string,
+            itemId: resolvedItemId,
             vendorItemNumber,
             vendorProductNumber,
             auxiliaryNumber,
@@ -278,7 +327,7 @@ export async function createItemsFromPoLinesAction(input: {
           mapped++;
         } catch (e) {
           console.error('vendor mapping upsert failed', {
-            itemId: item.id,
+            itemId: resolvedItemId,
             vendorItemNumber,
             error: e instanceof Error ? e.message : e,
           });
@@ -289,7 +338,116 @@ export async function createItemsFromPoLinesAction(input: {
     revalidatePath(`/dashboard/purchase-orders/imports/${parsed.data.poImportId}`);
     revalidatePath('/dashboard/inventory');
     revalidatePath('/dashboard');
-    return ok({ created, mapped });
+    return ok({ created, mapped, linked, skipped });
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
+/**
+ * Looks up existing inventory items that may already represent each PO
+ * line — by exact barcode match against vendor_item_number (highest
+ * confidence) or case-insensitive name match against the cleaned PO
+ * description (lower confidence). Used by the create-items modal to
+ * warn before creating dupes.
+ */
+const findDuplicatesSchema = z.object({
+  poImportId: z.string().uuid(),
+  lineIds: z.array(z.string().uuid()).min(1).max(200),
+});
+
+export interface DuplicateCandidate {
+  id: string;
+  name: string;
+  sku: string;
+  barcode: string | null;
+  quantityOnHand: number;
+  matchType: 'barcode' | 'name';
+}
+
+export async function findDuplicatesForPoLinesAction(input: {
+  poImportId: string;
+  lineIds: string[];
+}): Promise<ActionResult<{ matches: Record<string, DuplicateCandidate[]> }>> {
+  const parsed = findDuplicatesSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const ctx = await requireOrgContext();
+    const supabase = await createClient();
+
+    const { data: lines, error: lErr } = await supabase
+      .from('po_import_lines')
+      .select('id, description, vendor_item_number, vendor_product_number, auxiliary_number')
+      .eq('po_import_id', parsed.data.poImportId)
+      .in('id', parsed.data.lineIds);
+    if (lErr) throw new ServiceError('internal_error', lErr.message);
+
+    const matches: Record<string, DuplicateCandidate[]> = {};
+    for (const l of lines ?? []) {
+      const lineId = l.id as string;
+      const description = (l.description as string | null)?.trim();
+      const vendorNumbers = [
+        l.vendor_item_number,
+        l.vendor_product_number,
+        l.auxiliary_number,
+      ].filter((v): v is string => typeof v === 'string' && v.length > 0);
+
+      const candidates = new Map<string, DuplicateCandidate>();
+
+      // Barcode match: high confidence. Exact match against any of the
+      // vendor numbers — vendor_item_number gets stored as `barcode` when
+      // we create from a PO, so that's the primary hit.
+      if (vendorNumbers.length > 0) {
+        const { data: byBarcode } = await supabase
+          .from('inventory_items')
+          .select('id, name, sku, barcode, quantity_on_hand')
+          .eq('organization_id', ctx.organizationId)
+          .is('deleted_at', null)
+          .in('barcode', vendorNumbers);
+        for (const r of byBarcode ?? []) {
+          candidates.set(r.id as string, {
+            id: r.id as string,
+            name: r.name as string,
+            sku: r.sku as string,
+            barcode: (r.barcode as string | null) ?? null,
+            quantityOnHand: Number(r.quantity_on_hand ?? 0) || 0,
+            matchType: 'barcode',
+          });
+        }
+      }
+
+      // Name match: lower confidence. Case-insensitive equal on the
+      // cleaned description (strip trailing parentheses) — broad ILIKE
+      // would be noisy for short generic names.
+      if (description) {
+        const cleaned = description.replace(/\s*\([^)]*\)\s*$/, '').trim();
+        if (cleaned.length >= 4) {
+          const { data: byName } = await supabase
+            .from('inventory_items')
+            .select('id, name, sku, barcode, quantity_on_hand')
+            .eq('organization_id', ctx.organizationId)
+            .is('deleted_at', null)
+            .ilike('name', cleaned);
+          for (const r of byName ?? []) {
+            if (candidates.has(r.id as string)) continue; // barcode wins
+            candidates.set(r.id as string, {
+              id: r.id as string,
+              name: r.name as string,
+              sku: r.sku as string,
+              barcode: (r.barcode as string | null) ?? null,
+              quantityOnHand: Number(r.quantity_on_hand ?? 0) || 0,
+              matchType: 'name',
+            });
+          }
+        }
+      }
+
+      const list = [...candidates.values()];
+      if (list.length > 0) matches[lineId] = list;
+    }
+
+    return ok({ matches });
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
