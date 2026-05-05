@@ -1,7 +1,8 @@
-import { Box, Boxes, DollarSign, GraduationCap, MapPin, Package2, Printer, Tag, Truck } from 'lucide-react';
+import { Box, Boxes, DollarSign, GraduationCap, History, MapPin, Printer, Tag, Truck } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { ActivityFeed } from '@/components/inventory/activity-feed';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
 import { ImageUploader } from '@/components/inventory/image-uploader';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
@@ -10,23 +11,15 @@ import { StockTransferDialog } from '@/components/inventory/stock-transfer-dialo
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { ActivityService } from '@/server/services/activity';
 import { CategoriesService } from '@/server/services/categories';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
-import { MovementsService } from '@/server/services/movements';
 import { SuppliersService } from '@/server/services/suppliers';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
-import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
+import { formatCurrency, formatNumber } from '@/lib/utils';
 
 interface ItemDetailProps {
   id: string;
@@ -35,10 +28,10 @@ interface ItemDetailProps {
 }
 
 export async function ItemDetail({ id, backHref, backLabel }: ItemDetailProps) {
-  const [inventorySvc, movementsSvc, imagesSvc, categoriesSvc, locationsSvc, suppliersSvc] =
+  const [inventorySvc, activitySvc, imagesSvc, categoriesSvc, locationsSvc, suppliersSvc] =
     await Promise.all([
       InventoryService.forCurrentUser(),
-      MovementsService.forCurrentUser(),
+      ActivityService.forCurrentUser(),
       ItemImagesService.forCurrentUser(),
       CategoriesService.forCurrentUser(),
       LocationsService.forCurrentUser(),
@@ -53,11 +46,11 @@ export async function ItemDetail({ id, backHref, backLabel }: ItemDetailProps) {
     throw e;
   }
 
-  const [categories, locations, suppliers, movements, imageRows] = await Promise.all([
+  const [categories, locations, suppliers, activity, imageRows] = await Promise.all([
     categoriesSvc.list(),
     locationsSvc.list(),
     suppliersSvc.list(),
-    movementsSvc.list({ itemId: id, limit: 50 }),
+    activitySvc.forItem(id, 50),
     imagesSvc.list(id),
   ]);
   const signed = await imagesSvc.signedUrls(imageRows.map((r) => r.storage_path as string));
@@ -261,65 +254,11 @@ export async function ItemDetail({ id, backHref, backLabel }: ItemDetailProps) {
       <Card className="mt-8">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
-            <Package2 className="h-4 w-4" /> Movement history
+            <History className="h-4 w-4" /> Activity
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>When</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead className="text-right">Δ</TableHead>
-                <TableHead className="text-right">Before</TableHead>
-                <TableHead className="text-right">After</TableHead>
-                <TableHead>Note</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {movements.length === 0 && (
-                <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    className="text-muted-foreground py-10 text-center text-sm"
-                  >
-                    No movements yet. Adjust stock above to create one.
-                  </TableCell>
-                </TableRow>
-              )}
-              {movements.map((m) => {
-                const change = Number(m.quantity_change);
-                return (
-                  <TableRow key={m.id as string}>
-                    <TableCell className="text-muted-foreground text-xs">
-                      {formatRelative(m.created_at as string)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs uppercase tracking-wider">
-                      {m.movement_type as string}
-                    </TableCell>
-                    <TableCell
-                      className={
-                        'text-right font-mono tabular-nums ' +
-                        (change > 0 ? 'text-success' : change < 0 ? 'text-destructive' : '')
-                      }
-                    >
-                      {change > 0 ? '+' : ''}
-                      {formatNumber(change)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-right text-xs tabular-nums">
-                      {formatNumber(Number(m.previous_quantity))}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatNumber(Number(m.new_quantity))}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">
-                      {(m.reason as string | null) ?? (m.notes as string | null) ?? '—'}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+        <CardContent>
+          <ActivityFeed events={activity} />
         </CardContent>
       </Card>
     </div>
