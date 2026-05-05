@@ -16,7 +16,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const ctx = await requireOrgContext();
   const supabase = await createClient();
 
-  const [access, activeWarehouseId, orgRow, factorsRes] = await Promise.all([
+  const [access, activeWarehouseId, orgRow, factorsRes, aalRes, hdrs] = await Promise.all([
     getWarehouseAccess(),
     getActiveWarehouseFilter(),
     supabase
@@ -25,25 +25,43 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       .eq('id', ctx.organizationId)
       .maybeSingle(),
     supabase.auth.mfa.listFactors(),
+    supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
+    headers(),
   ]);
 
   // ── MFA enforcement ────────────────────────────────────────────────
-  // If the org policy requires MFA for this user's role but they have no
-  // verified factor, push them to /dashboard/settings/security to enroll.
-  // Visiting that page is allowed — the redirect avoids a loop.
+  // Two-stage gate. We need both an enrolled factor AND a session at
+  // AAL2 (challenge passed for this session). The previous version
+  // checked only "has verified factor", which could leave a user at
+  // AAL1 with a verified factor — silently failing some downstream
+  // gate and leaving them stuck.
+  //
+  // Allowlist the pages that are part of the MFA flow itself, otherwise
+  // we'd redirect users away from the only place they can satisfy the
+  // gate, creating a loop. Allowlist match is permissive (multiple
+  // signals) so that a missing x-pathname header doesn't trip the loop.
   const policy = (orgRow.data?.mfa_policy as
     | 'optional'
     | 'admins_required'
     | 'all_required'
     | undefined) ?? 'optional';
   const isAdmin = ctx.role === 'owner' || ctx.role === 'admin';
-  const required =
+  const mfaRequired =
     policy === 'all_required' || (policy === 'admins_required' && isAdmin);
-  const verified = (factorsRes.data?.all ?? []).some((f) => f.status === 'verified');
-  if (required && !verified) {
-    const path = (await headers()).get('x-pathname') ?? '';
-    if (!path.startsWith('/dashboard/settings/security')) {
+  const hasVerifiedFactor = (factorsRes.data?.all ?? []).some(
+    (f) => f.status === 'verified',
+  );
+  const currentAal = aalRes.data?.currentLevel ?? null;
+  const path = hdrs.get('x-pathname') ?? hdrs.get('referer') ?? '';
+  const onMfaFlowPath =
+    path.includes('/dashboard/settings/security') ||
+    path.includes('/signin/mfa');
+
+  if (mfaRequired && !onMfaFlowPath) {
+    if (!hasVerifiedFactor) {
       redirect('/dashboard/settings/security?enroll=1');
+    } else if (currentAal === 'aal1') {
+      redirect('/signin/mfa');
     }
   }
 
