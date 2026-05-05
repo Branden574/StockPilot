@@ -143,17 +143,21 @@ export function buildPreview(
     return { ...r, projectedQty: (r.currentQty ?? 0) + totalDelta };
   });
 
+  // Totals include unmapped inventory lines too — they're still part of
+  // the PO's inventory dollar value even before the user has decided
+  // which internal item each one maps to. Skipped + non-inventory lines
+  // are excluded since they won't post to stock or count toward the
+  // inventory portion of the PO.
+  const inventoryRows = rows.filter(
+    (r) => r.status === 'mapped' || r.status === 'unmapped',
+  );
   const summary: PreviewSummary = {
     mappedCount: rows.filter((r) => r.status === 'mapped').length,
     unmappedCount: rows.filter((r) => r.status === 'unmapped').length,
     skippedCount: rows.filter((r) => r.status === 'skipped').length,
     nonInventoryCount: rows.filter((r) => r.status === 'non-inventory').length,
-    totalUnits: rows
-      .filter((r) => r.status === 'mapped')
-      .reduce((sum, r) => sum + r.qty, 0),
-    totalCost: rows
-      .filter((r) => r.status === 'mapped')
-      .reduce((sum, r) => sum + r.cost, 0),
+    totalUnits: inventoryRows.reduce((sum, r) => sum + r.qty, 0),
+    totalCost: inventoryRows.reduce((sum, r) => sum + r.cost, 0),
   };
 
   return { rows, summary };
