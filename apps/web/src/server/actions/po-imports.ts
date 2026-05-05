@@ -145,6 +145,12 @@ const createItemsFromLinesSchema = z.object({
   vendorId: z.string().uuid(),
   /** Destination warehouse the new items will be created at. */
   warehouseId: z.string().uuid().nullable(),
+  /**
+   * Optional per-line name overrides. Keyed by line id. When present we
+   * use the user's edited name; when missing/empty we fall back to the
+   * cleaned PO line description.
+   */
+  nameOverrides: z.record(z.string().uuid(), z.string().min(1).max(200)).optional(),
 });
 
 export async function createItemsFromPoLinesAction(input: {
@@ -152,6 +158,7 @@ export async function createItemsFromPoLinesAction(input: {
   lineIds: string[];
   vendorId: string;
   warehouseId: string | null;
+  nameOverrides?: Record<string, string>;
 }): Promise<ActionResult<{ created: number; mapped: number }>> {
   const parsed = createItemsFromLinesSchema.safeParse(input);
   if (!parsed.success) {
@@ -188,8 +195,18 @@ export async function createItemsFromPoLinesAction(input: {
       const vendorProductNumber = (l.vendor_product_number as string | null) ?? null;
       const auxiliaryNumber = (l.auxiliary_number as string | null) ?? null;
 
+      // Prefer the user-edited name from the modal; otherwise auto-clean
+      // by stripping the trailing "(SOMETHING)" part of the PO description
+      // since the manufacturer's part number already lives in `barcode`.
+      const overrideName = parsed.data.nameOverrides?.[l.id as string]?.trim();
+      const cleanedName = description.replace(/\s*\([^)]*\)\s*$/, '').trim();
+      const finalName = (overrideName && overrideName.length > 0
+        ? overrideName
+        : cleanedName || description
+      ).slice(0, 200);
+
       const item = await inventorySvc.create({
-        name: description.slice(0, 200),
+        name: finalName,
         sku: generateSku(),
         // Use the vendor's item number as the barcode so scanning the
         // physical packaging finds it later.

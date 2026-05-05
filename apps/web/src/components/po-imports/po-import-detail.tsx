@@ -31,9 +31,9 @@ import {
 import {
   approvePoImportAction,
   cancelPoImportAction,
-  createItemsFromPoLinesAction,
   parsePoImportAction,
 } from '@/server/actions/po-imports';
+import { CreateItemsModal } from '@/components/po-imports/create-items-modal';
 import { PoImportStatusBadge } from '@/components/po-imports/po-import-status-badge';
 import {
   buildPreview,
@@ -70,6 +70,8 @@ export function PoImportDetail({
   >({});
   const [busy, setBusy] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const [createLines, setCreateLines] = React.useState<PoImportLineRow[]>([]);
 
   function setLineItem(lineId: string, itemId: string | null) {
     setOverrides((m) => ({ ...m, [lineId]: { ...(m[lineId] ?? {}), itemId } }));
@@ -97,31 +99,16 @@ export function PoImportDetail({
     if (!r.ok) toast.error(r.error.message);
     else router.refresh();
   }
-  async function createItemsFromLines(lineIds: string[]) {
+  function openCreateItems(lineIds: string[]) {
     if (!vendorId) {
       toast.error('Pick a vendor first — new items get tagged with it');
       return;
     }
-    if (lineIds.length === 0) return;
-    setBusy(true);
-    const r = await createItemsFromPoLinesAction({
-      poImportId: header.id,
-      lineIds,
-      vendorId,
-      warehouseId: warehouseId || null,
-    });
-    setBusy(false);
-    if (!r.ok) {
-      toast.error(r.error.message);
-      return;
-    }
-    toast.success(
-      `Created ${r.data.created} item${r.data.created === 1 ? '' : 's'}` +
-        (r.data.mapped > 0
-          ? ` and ${r.data.mapped} vendor mapping${r.data.mapped === 1 ? '' : 's'}`
-          : ''),
-    );
-    router.refresh();
+    const set = new Set(lineIds);
+    const subset = lines.filter((l) => set.has(l.id));
+    if (subset.length === 0) return;
+    setCreateLines(subset);
+    setCreateOpen(true);
   }
 
   function openConfirm() {
@@ -249,7 +236,7 @@ export function PoImportDetail({
               size="sm"
               variant="outline"
               className="ml-auto"
-              onClick={() => createItemsFromLines(unmappedIds)}
+              onClick={() => openCreateItems(unmappedIds)}
               disabled={busy || !vendorId}
               title={!vendorId ? 'Pick a vendor first' : undefined}
             >
@@ -329,7 +316,7 @@ export function PoImportDetail({
                             variant="outline"
                             size="sm"
                             className="h-8 shrink-0 px-2 text-[11px]"
-                            onClick={() => createItemsFromLines([l.id])}
+                            onClick={() => openCreateItems([l.id])}
                             disabled={busy || !vendorId}
                             title={
                               !vendorId
@@ -430,6 +417,24 @@ export function PoImportDetail({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CreateItemsModal
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        poImportId={header.id}
+        vendorId={vendorId}
+        warehouseId={warehouseId || null}
+        lines={createLines}
+        onSuccess={(counts) => {
+          toast.success(
+            `Created ${counts.created} item${counts.created === 1 ? '' : 's'}` +
+              (counts.mapped > 0
+                ? ` and ${counts.mapped} vendor mapping${counts.mapped === 1 ? '' : 's'}`
+                : ''),
+          );
+          router.refresh();
+        }}
+      />
     </div>
   );
 }
