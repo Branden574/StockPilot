@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 
+import { withApiContext } from '@/lib/auth/api-context';
 import { ServiceError } from '@/server/services/context';
 import { ReportsService } from '@/server/services/reports';
 import { csvFilename, toCsv } from '@/lib/csv';
@@ -33,7 +34,11 @@ export async function GET(
   const { slug } = await params;
   const url = new URL(request.url);
   try {
-    const svc = await ReportsService.forCurrentUser();
+    const ctx = await withApiContext();
+    if (!ctx) {
+      return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+    }
+    const svc = new ReportsService(ctx);
 
     if (slug === 'inventory-valuation') {
       const data = await svc.inventoryValuation();
