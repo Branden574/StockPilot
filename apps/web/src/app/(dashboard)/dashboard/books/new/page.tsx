@@ -60,7 +60,7 @@ export default async function NewBookPage() {
   );
 
   return (
-    <div className="container mx-auto min-h-full max-w-3xl px-4 pb-32 pt-8 sm:px-6">
+    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
         <Link
           href="/dashboard/books"
