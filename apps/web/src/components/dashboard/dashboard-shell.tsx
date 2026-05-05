@@ -42,6 +42,27 @@ export function DashboardShell({
     setMounted(true);
   }, []);
 
+  // Lock the body to exact viewport height while the dashboard shell is
+  // mounted. Without this, anything Next.js or Vercel injects after the
+  // shell (Toaster portal, Vercel preview toolbar, devtools indicator)
+  // pushes the body past 100vh — the body itself becomes scrollable past
+  // <main>'s scroll, producing a second scrollbar and a "void" below
+  // short pages. We restore the original classes on navigation away so
+  // marketing pages (long scrolly content) keep their natural scroll.
+  React.useEffect(() => {
+    const body = document.body;
+    const html = document.documentElement;
+    const prevBody = body.className;
+    const prevHtml = html.className;
+    body.classList.remove('min-h-screen');
+    body.classList.add('h-screen', 'overflow-hidden');
+    html.classList.add('h-screen', 'overflow-hidden');
+    return () => {
+      body.className = prevBody;
+      html.className = prevHtml;
+    };
+  }, []);
+
   return (
     <div className="bg-background flex h-screen overflow-hidden">
       <Sidebar
