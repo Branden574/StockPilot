@@ -65,7 +65,14 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
     setEnrollment(null);
     setCode('');
     setStep('idle');
-    router.refresh();
+    // Hard-navigate to clear the ?enroll=1 query and force a fresh
+    // session-aware render of the layout — router.refresh() alone left
+    // users on the same URL where the gate could fire again.
+    if (typeof window !== 'undefined') {
+      window.location.assign('/dashboard');
+    } else {
+      router.refresh();
+    }
   }
 
   async function disableFactor(factorId: string) {
