@@ -5,6 +5,7 @@ import {
   ChevronRight,
   DollarSign,
   MinusCircle,
+  Truck,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -41,6 +42,12 @@ const REPORTS: Report[] = [
     name: 'Shrinkage & adjustments',
     desc: 'Negative adjustments · cost impact · last 30 days',
     icon: MinusCircle,
+  },
+  {
+    slug: 'supplier-scorecard',
+    name: 'Supplier scorecard',
+    desc: 'On-time rate · lead time · fill rate · spend · last 90 days',
+    icon: Truck,
   },
 ];
 
