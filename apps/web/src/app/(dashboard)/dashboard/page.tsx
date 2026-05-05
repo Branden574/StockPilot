@@ -30,6 +30,7 @@ import {
   MovementsService,
 } from '@/server/services/movements';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
@@ -41,20 +42,29 @@ const TODAY_LABEL = new Intl.DateTimeFormat('en-US', {
 });
 
 export default async function DashboardHome() {
+  // Resolve the topbar warehouse filter once and pass it into every
+  // summary call so the dashboard tiles, low-stock list, and shift-
+  // command counts all narrow to the same scope.
+  const warehouseFilter = await getActiveWarehouseFilter();
+
   // One PostgREST round trip per Promise.all branch; cache() de-dupes the
   // identity/context load across them.
   const [ctx, summary, lowStock, recentMovements, metrics, actions] = await Promise.all([
     requireOrgContext(),
-    getDashboardSummary(), // 1 RPC: combined item count, OOS, low-stock, value
-    getLowStockItems(5), // 1 RPC
-    MovementsService.forCurrentUser().then((svc) => svc.list({ limit: 6 })), // 1 query, items embedded via FK
-    getThirtyDayMetrics(), // real per-day counts + by-type breakdown
-    getDashboardActions(), // open PO + cycle count counters for Shift Command
+    getDashboardSummary({ warehouseId: warehouseFilter ?? undefined }),
+    getLowStockItems(5, { warehouseId: warehouseFilter ?? undefined }),
+    MovementsService.forCurrentUser().then((svc) =>
+      svc.list({ limit: 6, warehouseId: warehouseFilter ?? undefined }),
+    ),
+    getThirtyDayMetrics({ warehouseId: warehouseFilter ?? undefined }),
+    getDashboardActions({ warehouseId: warehouseFilter ?? undefined }),
   ]);
 
   // Get-started checklist signals — only fetched cheap heads for counts.
+  // Also resolve the active warehouse name for the dashboard caption when
+  // a filter is set (one extra cheap select).
   const supabase = await createClient();
-  const [whCountRes, teamCountRes, factorsRes] = await Promise.all([
+  const [whCountRes, teamCountRes, factorsRes, activeWhNameRes] = await Promise.all([
     supabase
       .from('warehouses')
       .select('id', { count: 'exact', head: true })
@@ -66,7 +76,15 @@ export default async function DashboardHome() {
       .eq('organization_id', ctx.organizationId)
       .not('accepted_at', 'is', null),
     supabase.auth.mfa.listFactors(),
+    warehouseFilter
+      ? supabase
+          .from('warehouses')
+          .select('name')
+          .eq('id', warehouseFilter)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
+  const activeWarehouseName = (activeWhNameRes.data?.name as string | undefined) ?? null;
   const warehouseCount = whCountRes.count ?? 0;
   const teamCount = teamCountRes.count ?? 0;
   const hasVerifiedFactor = (factorsRes.data?.all ?? []).some(
@@ -148,14 +166,22 @@ export default async function DashboardHome() {
             <div>
               <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
                 {today}
+                {activeWarehouseName && (
+                  <>
+                    {' · '}
+                    <span className="text-foreground">
+                      filtered to {activeWarehouseName}
+                    </span>
+                  </>
+                )}
               </p>
               <h1 className="font-display text-[32px] font-medium leading-tight tracking-[-0.025em]">
                 {firstName ? `Good morning, ${firstName}.` : 'Welcome back.'}
               </h1>
               <p className="mt-1 text-[13.5px] text-[var(--ed-ink-3)]">
                 {attentionCount > 0
-                  ? `${attentionCount} item${attentionCount === 1 ? '' : 's'} need operator review before the next run.`
-                  : 'Stock posture is clean across the workspace.'}
+                  ? `${attentionCount} item${attentionCount === 1 ? '' : 's'} need operator review${activeWarehouseName ? ` at ${activeWarehouseName}` : ' before the next run'}.`
+                  : `Stock posture is clean${activeWarehouseName ? ` at ${activeWarehouseName}` : ' across the workspace'}.`}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
