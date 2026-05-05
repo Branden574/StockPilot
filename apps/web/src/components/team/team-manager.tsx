@@ -1,6 +1,6 @@
 'use client';
 
-import { Copy, Loader2, Mail, MoreHorizontal, Trash2, UserPlus } from 'lucide-react';
+import { Copy, Loader2, Mail, MoreHorizontal, Send, Trash2, UserPlus } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
@@ -45,6 +45,7 @@ import {
 import {
   inviteMemberAction,
   removeMemberAction,
+  resendInviteAction,
   revokeInviteAction,
   updateMemberRoleAction,
 } from '@/server/actions/team';
@@ -252,9 +253,25 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
 function InviteRow({ invite }: { invite: PendingInvite }) {
   const router = useRouter();
 
+  const [resending, setResending] = React.useState(false);
+
   async function copyLink() {
     await navigator.clipboard.writeText(invite.acceptUrl);
     toast.success('Invite link copied');
+  }
+
+  async function resend() {
+    setResending(true);
+    const res = await resendInviteAction(invite.id);
+    setResending(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success(`Invite resent to ${invite.email}`, {
+      description: 'Same link as before. Expiry refreshed to 7 days.',
+    });
+    router.refresh();
   }
 
   async function revoke() {
@@ -280,6 +297,14 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
       </TableCell>
       <TableCell className="text-xs text-muted-foreground">{formatRelative(invite.expiresAt)}</TableCell>
       <TableCell className="flex justify-end gap-1">
+        <Button variant="outline" size="sm" onClick={resend} disabled={resending}>
+          {resending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Send className="h-3.5 w-3.5" />
+          )}
+          Resend
+        </Button>
         <Button variant="outline" size="sm" onClick={copyLink}>
           <Copy className="h-3.5 w-3.5" /> Copy link
         </Button>
