@@ -60,7 +60,7 @@ export default async function NewBookPage() {
   );
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
+    <div className="container mx-auto flex min-h-full max-w-3xl flex-col px-4 py-8 sm:px-6">
       <div className="mb-6">
         <Link
           href="/dashboard/books"
@@ -74,7 +74,7 @@ export default async function NewBookPage() {
           tab. Title, ISBN, author, qty.
         </p>
       </div>
-      <Card>
+      <Card className="flex-1">
         <CardHeader>
           <CardTitle>Book details</CardTitle>
         </CardHeader>
