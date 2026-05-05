@@ -18,6 +18,10 @@ export interface MovementWithItem {
   item_id: string;
   user_id: string | null;
   item: { id: string; name: string; sku: string } | null;
+  /** Full name (or email fallback) of the user who triggered the movement.
+      null when the row was written by a system process (e.g. a trigger
+      with no auth.uid context). */
+  actor: { id: string; fullName: string | null; email: string | null } | null;
 }
 
 export class MovementsService {
@@ -50,7 +54,8 @@ export class MovementsService {
         id, movement_type, quantity_change, previous_quantity, new_quantity,
         from_location_id, to_location_id, reason, notes, created_at,
         item_id, user_id,
-        ${itemEmbed}
+        ${itemEmbed},
+        actor:user_profiles!user_id (id, full_name, email)
       `,
       )
       .eq('organization_id', this.ctx.organizationId)
@@ -79,7 +84,20 @@ export class MovementsService {
         | null
         | undefined;
       const item = Array.isArray(itemField) ? (itemField[0] ?? null) : (itemField ?? null);
-      return { ...r, item } as MovementWithItem;
+      const actorField = r.actor as
+        | { id: string; full_name: string | null; email: string | null }
+        | { id: string; full_name: string | null; email: string | null }[]
+        | null
+        | undefined;
+      const actorRaw = Array.isArray(actorField) ? (actorField[0] ?? null) : (actorField ?? null);
+      const actor = actorRaw
+        ? {
+            id: actorRaw.id,
+            fullName: actorRaw.full_name ?? null,
+            email: actorRaw.email ?? null,
+          }
+        : null;
+      return { ...r, item, actor } as MovementWithItem;
     });
   }
 }

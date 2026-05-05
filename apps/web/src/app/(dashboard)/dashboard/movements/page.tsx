@@ -45,6 +45,7 @@ export default async function MovementsPage() {
                 <TableHead>Type</TableHead>
                 <TableHead className="text-right">Δ</TableHead>
                 <TableHead className="text-right">After</TableHead>
+                <TableHead>By</TableHead>
                 <TableHead>Note</TableHead>
               </TableRow>
             </TableHeader>
@@ -52,6 +53,8 @@ export default async function MovementsPage() {
               {movements.map((m) => {
                 const itemName = m.item?.name;
                 const change = Number(m.quantity_change);
+                const actorLabel =
+                  m.actor?.fullName ?? m.actor?.email ?? (m.user_id ? 'Unknown' : 'System');
                 return (
                   <TableRow key={m.id as string}>
                     <TableCell className="text-xs text-muted-foreground">
@@ -72,6 +75,14 @@ export default async function MovementsPage() {
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatNumber(Number(m.new_quantity))}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      <div className="font-medium">{actorLabel}</div>
+                      {m.actor?.fullName && m.actor.email && (
+                        <div className="text-muted-foreground text-[11px]">
+                          {m.actor.email}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {(m.reason as string | null) ?? (m.notes as string | null) ?? '—'}
