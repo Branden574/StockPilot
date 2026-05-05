@@ -42,6 +42,8 @@ export const createItemSchema = z.object({
   binLocation: z.string().max(64).optional(),
   /** 'none' (default), 'lot', or 'serial'. Drives capture requirements at receive time. */
   trackingType: z.enum(['none', 'lot', 'serial']).default('none'),
+  /** 'product' (default), 'book', 'asset', or 'consumable'. Drives which UI tab the row appears under. */
+  itemType: z.enum(['product', 'book', 'asset', 'consumable']).default('product'),
   customFields: z.record(z.string(), z.unknown()).default({}),
   status: itemStatusSchema.default('active'),
 });

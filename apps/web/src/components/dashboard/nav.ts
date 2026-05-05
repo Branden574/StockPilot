@@ -43,6 +43,7 @@ const BASE_NAV: NavSection[] = [
     label: 'Inventory',
     items: [
       { href: '/dashboard/inventory', label: 'Items', icon: Boxes },
+      { href: '/dashboard/books', label: 'Books', icon: BookOpen },
       { href: '/dashboard/categories', label: 'Categories', icon: Tag },
       { href: '/dashboard/movements', label: 'Movements', icon: ArrowLeftRight },
       { href: '/dashboard/purchase-orders', label: 'Purchase orders', icon: ClipboardList },
