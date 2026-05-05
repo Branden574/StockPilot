@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
+import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
@@ -82,17 +83,20 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   }
 
   return (
-    <DashboardShell
-      email={ctx.email}
-      fullName={ctx.fullName}
-      avatarUrl={ctx.avatarUrl}
-      organizationName={ctx.organizationName}
-      userName={ctx.fullName ?? ctx.email}
-      userRole={`${ROLE_LABELS[ctx.role].label} · ${ctx.organizationName}`}
-      role={ctx.role}
-      warehouseFilter={warehouseFilter}
-    >
-      {children}
-    </DashboardShell>
+    <>
+      <InventoryRealtime organizationId={ctx.organizationId} />
+      <DashboardShell
+        email={ctx.email}
+        fullName={ctx.fullName}
+        avatarUrl={ctx.avatarUrl}
+        organizationName={ctx.organizationName}
+        userName={ctx.fullName ?? ctx.email}
+        userRole={`${ROLE_LABELS[ctx.role].label} · ${ctx.organizationName}`}
+        role={ctx.role}
+        warehouseFilter={warehouseFilter}
+      >
+        {children}
+      </DashboardShell>
+    </>
   );
 }
