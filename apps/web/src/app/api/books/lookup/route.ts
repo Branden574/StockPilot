@@ -2,6 +2,12 @@ import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 
+type LookupSource =
+  | 'google-books'
+  | 'open-library'
+  | 'open-library-search'
+  | 'library-of-congress';
+
 interface BookMetadata {
   isbn: string;
   title: string | null;
@@ -11,16 +17,40 @@ interface BookMetadata {
   description: string | null;
   pageCount: number | null;
   thumbnailUrl: string | null;
-  source:
-    | 'google-books'
-    | 'open-library'
-    | 'open-library-search'
-    | 'library-of-congress';
+  /** Detected K-12 / college grade level when the title or subjects mention one. */
+  grade: string | null;
+  source: LookupSource;
+  /** Every source that successfully returned data; useful for debugging. */
+  sources?: LookupSource[];
 }
 
 function normalizeIsbn(raw: string): string | null {
   const cleaned = raw.replace(/[^0-9Xx]/g, '').toUpperCase();
   if (cleaned.length === 10 || cleaned.length === 13) return cleaned;
+  return null;
+}
+
+/**
+ * Tries to extract a K-12 / college grade level from a title or subject
+ * blob. K-12 textbooks usually announce it directly: "Into Literature
+ * Grade 12", "Wonders Grade 4 Student Book", etc. Returns one of:
+ *   "K", "1".."12", "College", or null.
+ */
+function detectGrade(blob: string | null | undefined): string | null {
+  if (!blob) return null;
+  const s = blob.toLowerCase();
+  // "grade 12" / "grade k" / "g12" / "12th grade"
+  let m = s.match(/grade\s+(k|kindergarten|\d{1,2})/);
+  if (!m) m = s.match(/(\d{1,2})(?:st|nd|rd|th)\s+grade/);
+  if (!m) m = s.match(/\bg(\d{1,2})\b/);
+  if (m) {
+    const raw = m[1]!;
+    if (raw === 'k' || raw === 'kindergarten') return 'K';
+    const n = Number(raw);
+    if (n >= 1 && n <= 12) return String(n);
+  }
+  if (/\b(college|university|undergraduate|higher\s*ed)\b/.test(s)) return 'College';
+  if (/\bkindergarten\b/.test(s)) return 'K';
   return null;
 }
 
@@ -43,9 +73,21 @@ async function fetchGoogleBooks(isbn: string): Promise<BookMetadata | null> {
       };
     }>;
   };
-  const v = data.items?.[0]?.volumeInfo;
+  const v = data.items?.[0]?.volumeInfo as
+    | {
+        title?: string;
+        authors?: string[];
+        publisher?: string;
+        publishedDate?: string;
+        description?: string;
+        pageCount?: number;
+        imageLinks?: { thumbnail?: string; smallThumbnail?: string };
+        categories?: string[];
+      }
+    | undefined;
   if (!v) return null;
   const thumb = v.imageLinks?.thumbnail ?? v.imageLinks?.smallThumbnail ?? null;
+  const blob = [v.title ?? '', ...(v.categories ?? [])].join(' ');
   return {
     isbn,
     title: v.title ?? null,
@@ -55,6 +97,7 @@ async function fetchGoogleBooks(isbn: string): Promise<BookMetadata | null> {
     description: v.description ?? null,
     pageCount: v.pageCount ?? null,
     thumbnailUrl: thumb ? thumb.replace(/^http:/, 'https:') : null,
+    grade: detectGrade(blob),
     source: 'google-books',
   };
 }
@@ -89,6 +132,7 @@ async function fetchOpenLibrary(isbn: string): Promise<BookMetadata | null> {
     description: notes,
     pageCount: v.number_of_pages ?? null,
     thumbnailUrl: v.cover?.large ?? v.cover?.medium ?? v.cover?.small ?? null,
+    grade: detectGrade(v.title ?? ''),
     source: 'open-library',
   };
 }
@@ -127,6 +171,7 @@ async function fetchOpenLibrarySearch(isbn: string): Promise<BookMetadata | null
     thumbnailUrl: v.cover_i
       ? `https://covers.openlibrary.org/b/id/${v.cover_i}-L.jpg`
       : null,
+    grade: detectGrade(v.title),
     source: 'open-library-search',
   };
 }
@@ -177,8 +222,28 @@ async function fetchLibraryOfCongress(isbn: string): Promise<BookMetadata | null
     description,
     pageCount: null,
     thumbnailUrl: cover,
+    grade: detectGrade(`${v.title} ${description ?? ''}`),
     source: 'library-of-congress',
   };
+}
+
+/**
+ * Picks the first non-empty value across an ordered list of candidates.
+ * "Empty" = null/undefined or empty string for scalars, empty array for
+ * arrays. Used to merge fields across sources so a missing description
+ * from Google Books can be filled in from Library of Congress without
+ * losing the title that Google Books provided first.
+ */
+function pickFirst<T>(
+  values: ReadonlyArray<T | null | undefined>,
+  isEmpty: (v: T) => boolean = (v) => v == null,
+): T | null {
+  for (const v of values) {
+    if (v == null) continue;
+    if (isEmpty(v)) continue;
+    return v;
+  }
+  return null;
 }
 
 export async function GET(request: Request) {
@@ -192,30 +257,57 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Invalid ISBN format' }, { status: 400 });
   }
 
-  // Try sources in priority order; first hit wins. Each is a free,
-  // keyless public API. Order is: broadest consumer coverage first
-  // (Google Books → Open Library), then the search-style fallbacks
-  // that catch academic/textbook ISBNs.
-  const sources: Array<() => Promise<BookMetadata | null>> = [
-    () => fetchGoogleBooks(isbn),
-    () => fetchOpenLibrary(isbn),
-    () => fetchOpenLibrarySearch(isbn),
-    () => fetchLibraryOfCongress(isbn),
-  ];
+  // All four sources in parallel — each is a free keyless public API
+  // with its own AbortSignal.timeout(). Allowing up to ~7s for the
+  // slowest (LoC) means the whole lookup is bounded by that, not by
+  // the sum of the individual timeouts.
+  const settled = await Promise.allSettled([
+    fetchGoogleBooks(isbn),
+    fetchOpenLibrary(isbn),
+    fetchOpenLibrarySearch(isbn),
+    fetchLibraryOfCongress(isbn),
+  ]);
+  const hits: BookMetadata[] = settled
+    .filter((r): r is PromiseFulfilledResult<BookMetadata | null> => r.status === 'fulfilled')
+    .map((r) => r.value)
+    .filter((v): v is BookMetadata => v !== null);
 
-  try {
-    for (const source of sources) {
-      const hit = await source().catch(() => null);
-      if (hit) return NextResponse.json(hit);
-    }
+  if (hits.length === 0) {
     return NextResponse.json(
       { error: 'No metadata found for this ISBN' },
       { status: 404 },
     );
-  } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'Lookup failed' },
-      { status: 500 },
-    );
   }
+
+  // Field-by-field priority order. Google Books usually has the richest
+  // description and cover for trade books; Open Library is broader on
+  // older titles; LoC carries authoritative author + publisher data for
+  // US academic/educational publishers.
+  const titles = hits.map((h) => h.title);
+  const authorLists = hits.map((h) => h.authors);
+  const publishers = hits.map((h) => h.publisher);
+  const dates = hits.map((h) => h.publishedDate);
+  const descriptions = hits.map((h) => h.description);
+  const pages = hits.map((h) => h.pageCount);
+  const thumbs = hits.map((h) => h.thumbnailUrl);
+  const grades = hits.map((h) => h.grade);
+
+  const merged: BookMetadata = {
+    isbn,
+    title: pickFirst(titles, (s) => s.trim().length === 0),
+    // Take the first non-empty author list. Don't union across sources
+    // because formats differ (initials vs full names) and merging
+    // produces near-duplicates that look like co-authors.
+    authors: pickFirst(authorLists, (a) => a.length === 0) ?? [],
+    publisher: pickFirst(publishers, (s) => s.trim().length === 0),
+    publishedDate: pickFirst(dates, (s) => s.trim().length === 0),
+    description: pickFirst(descriptions, (s) => s.trim().length === 0),
+    pageCount: pickFirst(pages, (n) => n <= 0),
+    thumbnailUrl: pickFirst(thumbs, (s) => s.trim().length === 0),
+    grade: pickFirst(grades, (s) => s.trim().length === 0),
+    source: hits[0]!.source,
+    sources: hits.map((h) => h.source),
+  };
+
+  return NextResponse.json(merged);
 }

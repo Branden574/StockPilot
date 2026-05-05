@@ -1,4 +1,4 @@
-import { Box, Boxes, DollarSign, MapPin, Package2, Printer, Tag, Truck } from 'lucide-react';
+import { Box, Boxes, DollarSign, GraduationCap, MapPin, Package2, Printer, Tag, Truck } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
@@ -25,7 +25,7 @@ import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { MovementsService } from '@/server/services/movements';
 import { SuppliersService } from '@/server/services/suppliers';
-import { getCrateColor, readBookStorage } from '@/lib/book-storage';
+import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
 interface ItemDetailProps {
@@ -167,9 +167,18 @@ export async function ItemDetail({ id, backHref, backLabel }: ItemDetailProps) {
                 item.custom_fields as Record<string, unknown> | null,
               );
               const color = getCrateColor(storage.crateColor);
-              if (!storage.rackLabel && !(color && storage.crateNumber)) return null;
+              const hasAny =
+                storage.grade ||
+                storage.rackLabel ||
+                (color && storage.crateNumber);
+              if (!hasAny) return null;
               return (
                 <>
+                  {storage.grade && (
+                    <DetailRow icon={GraduationCap} label="Grade">
+                      <span>{formatGrade(storage.grade)}</span>
+                    </DetailRow>
+                  )}
                   {storage.rackLabel && (
                     <DetailRow icon={MapPin} label="Rack">
                       <span className="font-mono tabular-nums">
