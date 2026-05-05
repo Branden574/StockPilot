@@ -71,7 +71,7 @@ export default async function BooksPage({
       </div>
 
       <div className="mt-8">
-        {inventory.total === 0 && !params.q ? (
+        {inventory.total === 0 && !params.q && !params.stock ? (
           <EmptyState
             icon={BookOpen}
             title="No books yet"
@@ -79,6 +79,28 @@ export default async function BooksPage({
             action={
               <Button asChild variant="gradient">
                 <Link href="/dashboard/books/new">Add your first book</Link>
+              </Button>
+            }
+          />
+        ) : inventory.total === 0 && params.stock === 'low' ? (
+          <EmptyState
+            icon={BookOpen}
+            title="No low-stock books"
+            description="No books are at or below their reorder point right now."
+            action={
+              <Button asChild variant="outline">
+                <Link href="/dashboard/books">Show all books</Link>
+              </Button>
+            }
+          />
+        ) : inventory.total === 0 && params.stock === 'out' ? (
+          <EmptyState
+            icon={BookOpen}
+            title="No out-of-stock books"
+            description="No books are currently at zero quantity."
+            action={
+              <Button asChild variant="outline">
+                <Link href="/dashboard/books">Show all books</Link>
               </Button>
             }
           />
