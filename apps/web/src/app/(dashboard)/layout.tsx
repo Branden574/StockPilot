@@ -21,7 +21,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     getActiveWarehouseFilter(),
     supabase
       .from('organizations')
-      .select('terminology, mfa_policy')
+      .select('terminology, mfa_policy, logo_url')
       .eq('id', ctx.organizationId)
       .maybeSingle(),
     supabase.auth.mfa.listFactors(),
@@ -83,6 +83,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         fullName={ctx.fullName}
         avatarUrl={ctx.avatarUrl}
         organizationName={ctx.organizationName}
+        organizationLogoUrl={(orgRow.data?.logo_url as string | null) ?? null}
         userName={ctx.fullName ?? ctx.email}
         userRole={`${ROLE_LABELS[ctx.role].label} · ${ctx.organizationName}`}
         role={ctx.role}

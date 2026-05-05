@@ -16,6 +16,7 @@ interface DashboardShellProps {
   fullName: string | null;
   avatarUrl: string | null;
   organizationName: string;
+  organizationLogoUrl?: string | null;
   userName: string | null;
   userRole: string;
   role: Role;
@@ -32,6 +33,7 @@ export function DashboardShell({
   fullName,
   avatarUrl,
   organizationName,
+  organizationLogoUrl,
   userName,
   userRole,
   role,
@@ -82,6 +84,7 @@ export function DashboardShell({
       <Sidebar
         className="hidden lg:flex"
         organizationName={organizationName}
+        organizationLogoUrl={organizationLogoUrl ?? null}
         userName={userName}
         userRole={userRole}
         role={role}
@@ -124,6 +127,7 @@ export function DashboardShell({
             <Sidebar
               className="flex w-full border-r-0"
               organizationName={organizationName}
+              organizationLogoUrl={organizationLogoUrl ?? null}
               userName={userName}
               userRole={userRole}
               role={role}
