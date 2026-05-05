@@ -61,7 +61,14 @@ export function DashboardShell({
           onToggleSidebar={() => setMobileNavOpen(true)}
           warehouseFilter={warehouseFilter}
         />
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        {/*
+          bg-muted/30 makes empty viewport space below short forms read as
+          "panel area" instead of a void. The Cards inside pages keep
+          bg-card (lighter) so the visual hierarchy is: body bg → main panel
+          → card. Without this, a short form on a tall window looked like
+          a broken/cut-off page in dark mode.
+        */}
+        <main className="bg-muted/30 flex-1 overflow-y-auto">{children}</main>
       </div>
 
       {mounted && (
