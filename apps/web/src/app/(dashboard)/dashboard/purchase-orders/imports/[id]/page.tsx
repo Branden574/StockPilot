@@ -27,7 +27,7 @@ export default async function PoImportDetailPage({
   const [suppliers, warehouses, items] = await Promise.all([
     (await SuppliersService.forCurrentUser()).list(),
     (await WarehousesService.forCurrentUser()).list(),
-    (await InventoryService.forCurrentUser()).list({ limit: 200 }),
+    (await InventoryService.forCurrentUser()).list({ limit: 500, itemType: 'all' }),
   ]);
 
   return (
@@ -55,6 +55,7 @@ export default async function PoImportDetailPage({
           id: i.id,
           sku: i.sku,
           name: i.name,
+          quantityOnHand: Number(i.quantity_on_hand) || 0,
         }))}
       />
     </div>

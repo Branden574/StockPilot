@@ -7,6 +7,13 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -27,14 +34,15 @@ import {
   parsePoImportAction,
 } from '@/server/actions/po-imports';
 import { PoImportStatusBadge } from '@/components/po-imports/po-import-status-badge';
+import {
+  buildPreview,
+  StockImpactPreview,
+  type PreviewItem,
+} from '@/components/po-imports/stock-impact-preview';
 
 import type { PoImportLineRow, PoImportRow } from '@/server/services/po-imports';
 
-interface Item {
-  id: string;
-  sku: string;
-  name: string;
-}
+type Item = PreviewItem;
 
 interface Props {
   header: PoImportRow;
@@ -60,6 +68,7 @@ export function PoImportDetail({
     Record<string, { itemId?: string | null; skip?: boolean }>
   >({});
   const [busy, setBusy] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
 
   function setLineItem(lineId: string, itemId: string | null) {
     setOverrides((m) => ({ ...m, [lineId]: { ...(m[lineId] ?? {}), itemId } }));
@@ -87,11 +96,21 @@ export function PoImportDetail({
     if (!r.ok) toast.error(r.error.message);
     else router.refresh();
   }
-  async function approve() {
+  function openConfirm() {
     if (!vendorId || !warehouseId) {
       toast.error('Pick a vendor and warehouse before approving');
       return;
     }
+    if (preview.summary.unmappedCount > 0) {
+      toast.error(
+        `${preview.summary.unmappedCount} line(s) have no internal item — map or skip each one before approving.`,
+      );
+      return;
+    }
+    setConfirmOpen(true);
+  }
+
+  async function approve() {
     setBusy(true);
     const r = await approvePoImportAction({
       poImportId: header.id,
@@ -108,12 +127,18 @@ export function PoImportDetail({
       toast.error(r.error.message);
       return;
     }
+    setConfirmOpen(false);
     toast.success('Import approved — expected inbound PO created');
     router.push(`/dashboard/purchase-orders/${r.data.poId}`);
   }
 
   const canApprove =
     header.status === 'parsed' || header.status === 'needs_review';
+
+  const preview = React.useMemo(
+    () => buildPreview(lines, overrides, items),
+    [lines, overrides, items],
+  );
 
   return (
     <div className="space-y-6">
@@ -252,16 +277,74 @@ export function PoImportDetail({
       </div>
 
       {canApprove && (
+        <StockImpactPreview lines={lines} overrides={overrides} items={items} />
+      )}
+
+      {canApprove && (
         <div className="flex justify-end">
-          <Button onClick={approve} disabled={busy} variant="gradient">
-            {busy ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              'Approve & create expected inbound PO'
-            )}
+          <Button onClick={openConfirm} disabled={busy} variant="gradient">
+            Review & approve
           </Button>
         </div>
       )}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Approve this import?</DialogTitle>
+          </DialogHeader>
+          <div className="text-muted-foreground space-y-2 text-sm">
+            <p>
+              An expected inbound PO will be created. Stock will{' '}
+              <strong className="text-foreground">not</strong> change yet — the
+              quantities below are added when you receive the PO.
+            </p>
+            <ul className="list-disc pl-5">
+              <li>
+                <strong className="text-foreground">
+                  {preview.summary.mappedCount}
+                </strong>{' '}
+                item{preview.summary.mappedCount === 1 ? '' : 's'} will be
+                receivable
+              </li>
+              <li>
+                <strong className="text-foreground">
+                  {preview.summary.totalUnits}
+                </strong>{' '}
+                total units inbound
+              </li>
+              {preview.summary.skippedCount > 0 && (
+                <li>
+                  {preview.summary.skippedCount} line
+                  {preview.summary.skippedCount === 1 ? '' : 's'} skipped
+                </li>
+              )}
+              {preview.summary.nonInventoryCount > 0 && (
+                <li>
+                  {preview.summary.nonInventoryCount} non-inventory line
+                  {preview.summary.nonInventoryCount === 1 ? '' : 's'} ignored
+                </li>
+              )}
+            </ul>
+            <p className="text-[12px]">
+              You can still receive partial quantities later — receiving is
+              when the actual stock change posts.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setConfirmOpen(false)} disabled={busy}>
+              Back to review
+            </Button>
+            <Button onClick={approve} disabled={busy} variant="gradient">
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                'Approve & create PO'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
