@@ -12,7 +12,7 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 export default async function InventoryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; stock?: string }>;
 }) {
   const params = await searchParams;
   const [inventorySvc, categoriesSvc, locationsSvc, warehouseFilter] = await Promise.all([
@@ -22,10 +22,20 @@ export default async function InventoryPage({
     getActiveWarehouseFilter(),
   ]);
 
+  const lifecycleStatus =
+    params.status === 'archived' ||
+    params.status === 'discontinued' ||
+    params.status === 'all' ||
+    params.status === 'active'
+      ? params.status
+      : 'active';
+
   const [inventory, categories, locations] = await Promise.all([
     inventorySvc.list({
       q: params.q,
-      status: (params.status as 'active' | 'archived' | 'discontinued' | 'all') ?? 'active',
+      status: lifecycleStatus,
+      lowStock: params.stock === 'low',
+      outOfStock: params.stock === 'out',
       warehouseId: warehouseFilter,
     }),
     categoriesSvc.list(),
@@ -62,7 +72,7 @@ export default async function InventoryPage({
       </div>
 
       <div className="mt-8">
-        {inventory.total === 0 && !params.q ? (
+        {inventory.total === 0 && !params.q && !params.stock ? (
           <EmptyState
             icon={Boxes}
             title="No items yet"
@@ -70,6 +80,28 @@ export default async function InventoryPage({
             action={
               <Button asChild variant="gradient">
                 <Link href="/dashboard/inventory/new">Add your first item</Link>
+              </Button>
+            }
+          />
+        ) : inventory.total === 0 && params.stock === 'low' ? (
+          <EmptyState
+            icon={Boxes}
+            title="No low-stock items"
+            description="Nothing is at or below its reorder point right now. Nice."
+            action={
+              <Button asChild variant="outline">
+                <Link href="/dashboard/inventory">Show all items</Link>
+              </Button>
+            }
+          />
+        ) : inventory.total === 0 && params.stock === 'out' ? (
+          <EmptyState
+            icon={Boxes}
+            title="Nothing is out of stock"
+            description="No active items have a quantity of zero."
+            action={
+              <Button asChild variant="outline">
+                <Link href="/dashboard/inventory">Show all items</Link>
               </Button>
             }
           />

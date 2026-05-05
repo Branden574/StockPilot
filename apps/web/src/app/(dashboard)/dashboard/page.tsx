@@ -150,7 +150,7 @@ export default async function DashboardHome() {
 
           <div className="mt-3 grid gap-2">
             <QuickAction
-              href="/dashboard/inventory?status=low"
+              href="/dashboard/inventory?stock=low"
               icon={AlertTriangle}
               label="Review low stock"
             />
@@ -256,7 +256,7 @@ export default async function DashboardHome() {
             subtitle="Items below reorder point"
             action={
               <Link
-                href="/dashboard/inventory?status=low"
+                href="/dashboard/inventory?stock=low"
                 className="border-border bg-card inline-flex h-6 items-center gap-1 rounded-md border px-2.5 text-[12px] hover:border-[var(--ed-line-strong)]"
               >
                 View all <ChevronRight className="h-3 w-3" />
