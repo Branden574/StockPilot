@@ -152,6 +152,60 @@ export async function updateTerminologyAction(
   }
 }
 
+const renameSchema = z.object({ name: z.string().min(1).max(80).trim() });
+
+export async function renameOrganizationAction(input: {
+  name: string;
+}): Promise<ActionResult<void>> {
+  const parsed = renameSchema.safeParse(input);
+  if (!parsed.success) {
+    return err(
+      'validation_error',
+      parsed.error.issues[0]?.message ?? 'Invalid name',
+    );
+  }
+  try {
+    const ctx = await requireOrgContext();
+    if (ctx.role !== 'owner' && ctx.role !== 'admin') {
+      return err('forbidden', 'Only owners and admins can rename the org.');
+    }
+    const supabase = await createClient();
+    const { data: prev } = await supabase
+      .from('organizations')
+      .select('name')
+      .eq('id', ctx.organizationId)
+      .maybeSingle();
+
+    if ((prev?.name as string | undefined) === parsed.data.name) {
+      return ok(undefined);
+    }
+
+    const { error } = await supabase
+      .from('organizations')
+      .update({ name: parsed.data.name })
+      .eq('id', ctx.organizationId);
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    await audit({
+      event: 'warehouse.updated',
+      entityType: 'organization',
+      entityId: ctx.organizationId,
+      before: { name: prev?.name ?? null },
+      after: { name: parsed.data.name },
+    });
+
+    // The org name shows in the topbar/sidebar via DashboardShell,
+    // which is rendered from the (dashboard) layout — revalidate at
+    // layout level so the change appears everywhere immediately.
+    revalidatePath('/dashboard', 'layout');
+    return ok(undefined);
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    console.error(e);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
 async function ensureUniqueSlug(
   base: string,
   admin: ReturnType<typeof createAdminClient>,
