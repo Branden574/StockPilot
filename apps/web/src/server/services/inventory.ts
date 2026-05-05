@@ -47,7 +47,10 @@ export class InventoryService {
 
   async list(filters: ItemListFilters = {}) {
     const limit = Math.min(filters.limit ?? 50, 200);
-    const access = await getWarehouseAccess();
+    // Pass our ctx so getWarehouseAccess doesn't fall through to
+    // requireOrgContext() — same NEXT_REDIRECT trap that broke
+    // /api/v1/items/[id]/barcode when called from an API route.
+    const access = await getWarehouseAccess(this.ctx);
 
     let query = this.ctx.supabase
       .from('inventory_items')
@@ -159,10 +162,15 @@ export class InventoryService {
     // Re-check warehouse access on the loaded row in case RLS was bypassed
     // (e.g. service-role contexts). For warehouse-scoped users this enforces
     // their assignment list.
+    //
+    // Pass our own ctx so the helper doesn't fall back to
+    // requireOrgContext() — that path redirects to /signin and inside an
+    // API route the redirect throws NEXT_REDIRECT, surfacing as a 500
+    // (which broke the Print Label endpoint until this was fixed).
     const wh = (data as { warehouse_id?: string | null }).warehouse_id ?? null;
     if (wh) {
       try {
-        await assertWarehouseAccess(wh, 'read');
+        await assertWarehouseAccess(wh, 'read', this.ctx);
       } catch (e) {
         if (e instanceof ForbiddenError) throw new ServiceError('not_found', 'Item not found');
         throw e;
