@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { OrgLogoUploader } from '@/components/settings/org-logo-uploader';
 import { OrgNameEditor } from '@/components/settings/org-name-editor';
 import { TerminologyEditor } from '@/components/settings/terminology-editor';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -18,7 +19,7 @@ export default async function OrganizationSettingsPage() {
   const supabase = await createClient();
   const { data } = await supabase
     .from('organizations')
-    .select('terminology, name')
+    .select('terminology, name, logo_url')
     .eq('id', ctx.organizationId)
     .maybeSingle();
 
@@ -43,6 +44,22 @@ export default async function OrganizationSettingsPage() {
       </div>
 
       <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Logo</CardTitle>
+            <CardDescription>
+              Square or wordmark, max 5 MB. Shown in the sidebar and on
+              outbound emails.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OrgLogoUploader
+              organizationId={ctx.organizationId}
+              initialUrl={(data?.logo_url as string | null) ?? null}
+            />
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Name</CardTitle>
