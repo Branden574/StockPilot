@@ -27,6 +27,9 @@ interface Item {
   primary_location_id: string | null;
   updated_at: string;
   custom_fields?: Record<string, unknown> | null;
+  /** Signed URL to the primary item image, if any. Page is responsible
+   * for filling this in via ItemImagesService.primaryImagesForItems. */
+  image_url?: string | null;
 }
 
 interface Lookups {
@@ -296,14 +299,23 @@ export function InventoryTable({
                   </td>
                   <td className="py-2.5 pr-3">
                     <div className="flex items-center gap-2.5">
-                      <span
-                        aria-hidden
-                        className="h-7 w-7 shrink-0 rounded-[5px] border border-border"
-                        style={{
-                          background:
-                            'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
-                        }}
-                      />
+                      {item.image_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={item.image_url}
+                          alt=""
+                          className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
+                        />
+                      ) : (
+                        <span
+                          aria-hidden
+                          className="h-7 w-7 shrink-0 rounded-[5px] border border-border"
+                          style={{
+                            background:
+                              'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
+                          }}
+                        />
+                      )}
                       <Link
                         href={`${rowLinkPrefix}/${item.id}`}
                         className="font-medium hover:underline"

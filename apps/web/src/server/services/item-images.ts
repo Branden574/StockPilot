@@ -33,6 +33,46 @@ export class ItemImagesService {
     return map;
   }
 
+  /**
+   * Returns a Map<itemId, signedUrl> for the primary (or first) image
+   * per item across the given list. Two round trips total: one
+   * `item_images IN (...)` query, one `createSignedUrls` for all
+   * matched paths. Used by the inventory + books list pages so each
+   * row can show its actual photo instead of a placeholder.
+   */
+  async primaryImagesForItems(itemIds: string[]): Promise<Map<string, string>> {
+    if (itemIds.length === 0) return new Map();
+
+    // Order so the first row per item is the one we want to keep:
+    // primary first, then earliest sort_order.
+    const { data, error } = await this.ctx.supabase
+      .from('item_images')
+      .select('item_id, storage_path, is_primary, sort_order')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', itemIds)
+      .order('is_primary', { ascending: false })
+      .order('sort_order', { ascending: true });
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    const pathByItem = new Map<string, string>();
+    for (const row of (data ?? []) as Array<{
+      item_id: string;
+      storage_path: string;
+    }>) {
+      if (!pathByItem.has(row.item_id)) {
+        pathByItem.set(row.item_id, row.storage_path);
+      }
+    }
+
+    const urlByPath = await this.signedUrls([...pathByItem.values()]);
+    const result = new Map<string, string>();
+    for (const [itemId, path] of pathByItem) {
+      const url = urlByPath.get(path);
+      if (url) result.set(itemId, url);
+    }
+    return result;
+  }
+
   async record(itemId: string, storagePath: string, isFirst: boolean) {
     assertPermission(this.ctx, 'items:update');
     const { data, error } = await this.ctx.supabase
