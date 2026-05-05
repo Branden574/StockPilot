@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2 } from 'lucide-react';
+import { Loader2, Plus, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -31,6 +31,7 @@ import {
 import {
   approvePoImportAction,
   cancelPoImportAction,
+  createItemsFromPoLinesAction,
   parsePoImportAction,
 } from '@/server/actions/po-imports';
 import { PoImportStatusBadge } from '@/components/po-imports/po-import-status-badge';
@@ -96,6 +97,33 @@ export function PoImportDetail({
     if (!r.ok) toast.error(r.error.message);
     else router.refresh();
   }
+  async function createItemsFromLines(lineIds: string[]) {
+    if (!vendorId) {
+      toast.error('Pick a vendor first — new items get tagged with it');
+      return;
+    }
+    if (lineIds.length === 0) return;
+    setBusy(true);
+    const r = await createItemsFromPoLinesAction({
+      poImportId: header.id,
+      lineIds,
+      vendorId,
+      warehouseId: warehouseId || null,
+    });
+    setBusy(false);
+    if (!r.ok) {
+      toast.error(r.error.message);
+      return;
+    }
+    toast.success(
+      `Created ${r.data.created} item${r.data.created === 1 ? '' : 's'}` +
+        (r.data.mapped > 0
+          ? ` and ${r.data.mapped} vendor mapping${r.data.mapped === 1 ? '' : 's'}`
+          : ''),
+    );
+    router.refresh();
+  }
+
   function openConfirm() {
     if (!vendorId || !warehouseId) {
       toast.error('Pick a vendor and warehouse before approving');
@@ -200,6 +228,42 @@ export function PoImportDetail({
         </div>
       )}
 
+      {(() => {
+        const unmappedIds = lines
+          .filter((l) => {
+            const o = overrides[l.id] ?? {};
+            const effectiveItemId = o.itemId !== undefined ? o.itemId : l.item_id;
+            return l.line_type === 'inventory' && o.skip !== true && !effectiveItemId;
+          })
+          .map((l) => l.id);
+        if (unmappedIds.length === 0 || !canApprove) return null;
+        return (
+          <div className="border-border bg-card flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs">
+            <Sparkles className="text-muted-foreground h-3.5 w-3.5" />
+            <span>
+              <strong>{unmappedIds.length}</strong> unmapped line
+              {unmappedIds.length === 1 ? '' : 's'} — create new internal items
+              from the PO so you don't have to enter them manually.
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              onClick={() => createItemsFromLines(unmappedIds)}
+              disabled={busy || !vendorId}
+              title={!vendorId ? 'Pick a vendor first' : undefined}
+            >
+              {busy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Plus className="h-3.5 w-3.5" />
+              )}
+              Create {unmappedIds.length} as new items
+            </Button>
+          </div>
+        );
+      })()}
+
       <div className="overflow-hidden rounded-xl border bg-card">
         <Table>
           <TableHeader>
@@ -219,6 +283,8 @@ export function PoImportDetail({
               const o = overrides[l.id] ?? {};
               const effectiveItemId =
                 o.itemId !== undefined ? o.itemId : l.item_id;
+              const isUnmappedInventory =
+                l.line_type === 'inventory' && o.skip !== true && !effectiveItemId;
               return (
                 <TableRow key={l.id}>
                   <TableCell className="tabular-nums">{l.line_number}</TableCell>
@@ -241,21 +307,40 @@ export function PoImportDetail({
                   </TableCell>
                   <TableCell>
                     {l.line_type === 'inventory' ? (
-                      <Select
-                        value={effectiveItemId ?? ''}
-                        onValueChange={(v) => setLineItem(l.id, v || null)}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="Pick item" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {items.map((i) => (
-                            <SelectItem key={i.id} value={i.id}>
-                              {i.sku} — {i.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="flex items-center gap-1.5">
+                        <Select
+                          value={effectiveItemId ?? ''}
+                          onValueChange={(v) => setLineItem(l.id, v || null)}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="Pick item" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {items.map((i) => (
+                              <SelectItem key={i.id} value={i.id}>
+                                {i.sku} — {i.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {isUnmappedInventory && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 shrink-0 px-2 text-[11px]"
+                            onClick={() => createItemsFromLines([l.id])}
+                            disabled={busy || !vendorId}
+                            title={
+                              !vendorId
+                                ? 'Pick a vendor first'
+                                : 'Create a new internal item from this line'
+                            }
+                          >
+                            <Plus className="h-3 w-3" /> Create
+                          </Button>
+                        )}
+                      </div>
                     ) : (
                       <span className="text-muted-foreground text-xs">
                         non-inventory
