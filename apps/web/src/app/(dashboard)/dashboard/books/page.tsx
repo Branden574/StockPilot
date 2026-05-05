@@ -12,7 +12,7 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 export default async function BooksPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; stock?: string }>;
 }) {
   const params = await searchParams;
   const [inventorySvc, categoriesSvc, locationsSvc, warehouseFilter] = await Promise.all([
@@ -22,10 +22,20 @@ export default async function BooksPage({
     getActiveWarehouseFilter(),
   ]);
 
+  const lifecycleStatus =
+    params.status === 'archived' ||
+    params.status === 'discontinued' ||
+    params.status === 'all' ||
+    params.status === 'active'
+      ? params.status
+      : 'active';
+
   const [inventory, categories, locations] = await Promise.all([
     inventorySvc.list({
       q: params.q,
-      status: (params.status as 'active' | 'archived' | 'discontinued' | 'all') ?? 'active',
+      status: lifecycleStatus,
+      lowStock: params.stock === 'low',
+      outOfStock: params.stock === 'out',
       warehouseId: warehouseFilter,
       itemType: 'book',
     }),
@@ -78,6 +88,8 @@ export default async function BooksPage({
             total={inventory.total}
             lookups={lookups}
             initialQuery={params.q}
+            rowLinkPrefix="/dashboard/books"
+            basePath="/dashboard/books"
           />
         )}
       </div>
