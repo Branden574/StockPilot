@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { PoReceiveDialog } from '@/components/po/po-receive-dialog';
+import { PoSetDestination } from '@/components/po/po-set-destination';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
 import { PoActions } from '@/components/po/po-actions';
 import { ReceiptHistory } from '@/components/po/receipt-history';
@@ -21,19 +22,21 @@ import { LocationsService } from '@/server/services/locations';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ReceivingService } from '@/server/services/receiving';
 import { SuppliersService } from '@/server/services/suppliers';
+import { WarehousesService } from '@/server/services/warehouses';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
 import { isManagerOrAbove } from '@stockpilot/core';
 
 export default async function PoDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [ctx, poSvc, inventorySvc, suppliersSvc, locationsSvc, receivingSvc] = await Promise.all([
+  const [ctx, poSvc, inventorySvc, suppliersSvc, locationsSvc, receivingSvc, warehousesSvc] = await Promise.all([
     requireOrgContext(),
     PurchaseOrdersService.forCurrentUser(),
     InventoryService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
     LocationsService.forCurrentUser(),
     ReceivingService.forCurrentUser(),
+    WarehousesService.forCurrentUser(),
   ]);
 
   let result;
@@ -46,11 +49,12 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
 
   const { po, lines } = result;
 
-  const [inventory, suppliers, locations, receiptData] = await Promise.all([
-    inventorySvc.list({ limit: 1000, status: 'all' }),
+  const [inventory, suppliers, locations, receiptData, warehouses] = await Promise.all([
+    inventorySvc.list({ limit: 1000, status: 'all', itemType: 'all' }),
     suppliersSvc.list(),
     locationsSvc.list(),
     receivingSvc.listForPurchaseOrder(id),
+    warehousesSvc.list(),
   ]);
   const itemsById = new Map(inventory.items.map((i) => [i.id, i]));
 
@@ -120,6 +124,19 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
           )}
         </div>
       </div>
+
+      {!po.destination_location_id &&
+        (status === 'expected_inbound' ||
+          status === 'ordered' ||
+          status === 'partially_received' ||
+          status === 'draft') && (
+          <div className="mt-6">
+            <PoSetDestination
+              poId={id}
+              warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
+            />
+          </div>
+        )}
 
       <div className="mt-8 grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
