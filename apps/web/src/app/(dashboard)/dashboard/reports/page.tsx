@@ -1,52 +1,46 @@
-import { BarChart3, ChevronRight, Download, Plus } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowLeftRight,
+  BarChart3,
+  ChevronRight,
+  DollarSign,
+  MinusCircle,
+} from 'lucide-react';
 import Link from 'next/link';
 
-import { Button } from '@/components/ui/button';
 import { requireOrgContext } from '@/lib/auth/session';
 
 interface Report {
   slug: string;
   name: string;
   desc: string;
-  updated: string;
+  icon: typeof BarChart3;
 }
 
 const REPORTS: Report[] = [
   {
     slug: 'inventory-valuation',
     name: 'Inventory valuation',
-    desc: 'Cost basis · all locations · point-in-time',
-    updated: 'Hourly',
+    desc: 'Cost basis · per item, per warehouse, per category',
+    icon: DollarSign,
   },
   {
-    slug: 'stock-movement-summary',
+    slug: 'stock-movements',
     name: 'Stock movement summary',
-    desc: 'By type · by user · by location',
-    updated: 'Daily',
+    desc: 'By movement type · top movers · last 30 days',
+    icon: ArrowLeftRight,
   },
   {
     slug: 'reorder-forecast',
     name: 'Reorder forecast',
-    desc: 'Items below reorder point + projected stockouts',
-    updated: 'Hourly',
+    desc: 'Items at or below reorder point + estimated refill cost',
+    icon: AlertTriangle,
   },
   {
-    slug: 'margin-by-sku',
-    name: 'Margin by SKU',
-    desc: 'Sell price − cost · sorted by contribution',
-    updated: 'Daily',
-  },
-  {
-    slug: 'shrinkage-adjustments',
+    slug: 'shrinkage',
     name: 'Shrinkage & adjustments',
-    desc: 'All negative adjustments · with reason codes',
-    updated: 'Daily',
-  },
-  {
-    slug: 'supplier-scorecard',
-    name: 'Supplier scorecard',
-    desc: 'On-time rate · price drift · lead-time variance',
-    updated: 'Weekly',
+    desc: 'Negative adjustments · cost impact · last 30 days',
+    icon: MinusCircle,
   },
 ];
 
@@ -54,57 +48,36 @@ export default async function ReportsPage() {
   await requireOrgContext();
 
   return (
-    <div className="mx-auto w-full max-w-[1480px] px-8 pb-20 pt-7">
-      <div className="mb-5 flex items-end justify-between gap-6 border-b border-border pb-4">
+    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
+      <div className="border-border mb-6 flex items-end justify-between gap-6 border-b pb-4">
         <div>
-          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
-            Inventory
-          </p>
-          <h1 className="font-display text-[28px] font-medium tracking-[-0.025em]">Reports</h1>
-          <p className="mt-1 text-[13.5px] text-[var(--ed-ink-3)]">
-            {REPORTS.length} saved reports — exportable to CSV.
+          <h1 className="text-2xl font-semibold tracking-tight">Reports</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            {REPORTS.length} pre-baked reports — every one is exportable to CSV.
           </p>
         </div>
-        <Button size="sm" disabled title="Custom reports coming in Phase 9">
-          <Plus className="h-3 w-3" /> New report
-        </Button>
       </div>
 
-      <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {REPORTS.map((r) => (
-          <article
+          <Link
             key={r.slug}
-            className="rounded-[10px] border border-border bg-card p-5 transition-colors hover:border-[var(--ed-line-strong)]"
+            href={`/dashboard/reports/${r.slug}`}
+            className="border-border bg-card hover:border-foreground/30 group flex items-start gap-3 rounded-lg border p-4 transition-colors"
           >
-            <div className="flex items-center gap-2.5">
-              <BarChart3 className="h-4 w-4 text-foreground" strokeWidth={1.5} />
-              <div className="font-display text-[14px] font-medium tracking-[-0.01em]">{r.name}</div>
+            <div className="bg-muted rounded-md p-2">
+              <r.icon className="h-4 w-4" strokeWidth={1.5} />
             </div>
-            <p className="mt-1.5 text-[12.5px] text-[var(--ed-ink-3)]">{r.desc}</p>
-
-            <hr className="my-3.5 border-border" />
-
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-[11px] text-[var(--ed-ink-4)]">Updated {r.updated}</span>
-              <div className="flex items-center gap-1.5">
-                <Button variant="outline" size="sm" disabled className="h-7 gap-1 px-2">
-                  <Download className="h-3 w-3" /> CSV
-                </Button>
-                <Button asChild variant="outline" size="sm" className="h-7 gap-1 px-2">
-                  <Link href="/dashboard/inventory">
-                    Open <ChevronRight className="h-3 w-3" />
-                  </Link>
-                </Button>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between">
+                <div className="font-medium">{r.name}</div>
+                <ChevronRight className="text-muted-foreground h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
               </div>
+              <p className="text-muted-foreground mt-1 text-xs">{r.desc}</p>
             </div>
-          </article>
+          </Link>
         ))}
       </div>
-
-      <p className="mt-8 text-[12px] text-[var(--ed-ink-4)]">
-        Custom report builder lands in Phase 9 with the AI assistant. For now these are pre-baked queries
-        you can export.
-      </p>
     </div>
   );
 }
