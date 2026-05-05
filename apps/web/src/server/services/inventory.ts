@@ -148,6 +148,34 @@ export class InventoryService {
     };
   }
 
+  /**
+   * Loads only the (id, sku, name, tracking_type) tuple for a list of item
+   * ids. Lets callers like the PO detail page render line rows without
+   * over-fetching the entire inventory just for name/sku lookups. Order
+   * is not guaranteed; callers should index by id.
+   */
+  async byIds(
+    ids: string[],
+  ): Promise<Array<{ id: string; sku: string; name: string; tracking_type: 'none' | 'lot' | 'serial' }>> {
+    if (ids.length === 0) return [];
+    const { data, error } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id, sku, name, tracking_type')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', ids)
+      .is('deleted_at', null);
+    if (error) throw new ServiceError('internal_error', error.message);
+    return (data ?? []).map((r) => ({
+      id: r.id as string,
+      sku: r.sku as string,
+      name: r.name as string,
+      tracking_type: ((r.tracking_type as string | null) ?? 'none') as
+        | 'none'
+        | 'lot'
+        | 'serial',
+    }));
+  }
+
   async get(id: string) {
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
