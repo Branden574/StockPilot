@@ -20,12 +20,15 @@ This creates 25+ tables, RLS policies, triggers, and 6 RPC helper functions.
 ## 3. Configure storage buckets
 
 1. Sidebar → **Storage** → **Create a new bucket**
-2. Create three buckets with these names:
+2. Create four buckets with these names:
    - `item-images` — **Private**
    - `item-attachments` — **Private**
    - `org-logos` — **Public**
+   - `po-imports` — **Private** (or skip — migration `0021_po_imports_bucket.sql`
+     creates it programmatically)
 
-(Storage RLS policies for these are already set by `full-schema.sql`.)
+(Storage RLS policies for these are set by `full-schema.sql` and migration
+`0021_po_imports_bucket.sql`.)
 
 ## 4. Wire up your app
 
