@@ -413,7 +413,9 @@ export function InventoryTable({
 
       <div className="flex justify-end">
         <Button asChild>
-          <Link href="/dashboard/inventory/new">+ New item</Link>
+          <Link href={`${basePath}/new`}>
+            + New {showBookFields ? 'book' : 'item'}
+          </Link>
         </Button>
       </div>
     </div>
