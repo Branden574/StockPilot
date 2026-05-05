@@ -155,13 +155,19 @@ export function ItemForm({
   const [lookingUp, setLookingUp] = React.useState(false);
 
   async function handleIsbnDetected(isbn: string) {
+    // The scan succeeded — surface the ISBN immediately and keep it
+    // populated whether or not the metadata lookup finds anything.
+    // Educational/textbook publishers (HMH, Pearson, McGraw-Hill, etc.)
+    // often aren't in Google Books or Open Library, so a miss is common.
     setValue('barcode', isbn, { shouldDirty: true });
     setLookingUp(true);
     try {
       const res = await fetch(`/api/books/lookup?isbn=${encodeURIComponent(isbn)}`);
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        toast.error(body.error ?? 'No metadata found — fill in manually');
+        toast.message(`ISBN ${isbn} saved`, {
+          description:
+            "We couldn't find this ISBN in Google Books or Open Library — type the title and author below.",
+        });
         return;
       }
       const data = (await res.json()) as {

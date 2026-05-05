@@ -35,11 +35,18 @@ function looksLikeIsbn(raw: string): boolean {
   return true;
 }
 
+type Stage = 'idle' | 'permission' | 'camera' | 'detector' | 'scanning' | 'error';
+const STAGE_MESSAGES: Record<Exclude<Stage, 'idle' | 'scanning' | 'error'>, string> = {
+  permission: 'Waiting for camera permission…',
+  camera: 'Starting camera…',
+  detector: 'Loading scanner…',
+};
+
 export function IsbnScanner({ open, onOpenChange, onDetected }: IsbnScannerProps) {
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const streamRef = React.useRef<MediaStream | null>(null);
   const stopFnRef = React.useRef<(() => void) | null>(null);
-  const [status, setStatus] = React.useState<'idle' | 'starting' | 'scanning' | 'error'>('idle');
+  const [stage, setStage] = React.useState<Stage>('idle');
   const [error, setError] = React.useState<string | null>(null);
   const [manualIsbn, setManualIsbn] = React.useState('');
 
@@ -63,14 +70,26 @@ export function IsbnScanner({ open, onOpenChange, onDetected }: IsbnScannerProps
   React.useEffect(() => {
     if (!open) {
       stopAll();
-      setStatus('idle');
+      setStage('idle');
       setError(null);
       return;
     }
 
     let cancelled = false;
-    setStatus('starting');
+    setStage('permission');
     setError(null);
+
+    // The native BarcodeDetector is available on Chrome/Edge and iOS
+    // Safari 17+. When it isn't, we fall back to @zxing/browser — large
+    // module, ~80KB. Kick off the import in PARALLEL with camera setup
+    // so it's already resolved by the time the camera is ready, instead
+    // of stretching the warm-up by a sequential network round-trip.
+    const Native = (
+      globalThis as unknown as { BarcodeDetector?: BarcodeDetectorCtor }
+    ).BarcodeDetector;
+    const zxingPromise = Native
+      ? null
+      : Promise.all([import('@zxing/browser'), import('@zxing/library')]);
 
     (async () => {
       try {
@@ -85,15 +104,15 @@ export function IsbnScanner({ open, onOpenChange, onDetected }: IsbnScannerProps
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
+        if (!cancelled) setStage('camera');
         streamRef.current = stream;
         const video = videoRef.current;
         if (!video) throw new Error('Video element missing');
         video.srcObject = stream;
         await video.play();
 
-        const Native = (
-          globalThis as unknown as { BarcodeDetector?: BarcodeDetectorCtor }
-        ).BarcodeDetector;
+        if (!cancelled) setStage('detector');
+
         if (Native) {
           const detector = new Native({ formats: ISBN_FORMATS });
           let raf = 0;
@@ -112,9 +131,10 @@ export function IsbnScanner({ open, onOpenChange, onDetected }: IsbnScannerProps
           };
           raf = requestAnimationFrame(tick);
           stopFnRef.current = () => cancelAnimationFrame(raf);
-        } else {
-          const { BrowserMultiFormatReader } = await import('@zxing/browser');
-          const { BarcodeFormat, DecodeHintType } = await import('@zxing/library');
+        } else if (zxingPromise) {
+          const [{ BrowserMultiFormatReader }, { BarcodeFormat, DecodeHintType }] =
+            await zxingPromise;
+          if (cancelled) return;
           const hints = new Map();
           hints.set(DecodeHintType.POSSIBLE_FORMATS, [
             BarcodeFormat.EAN_13,
@@ -129,12 +149,12 @@ export function IsbnScanner({ open, onOpenChange, onDetected }: IsbnScannerProps
           stopFnRef.current = () => controls.stop();
         }
 
-        if (!cancelled) setStatus('scanning');
+        if (!cancelled) setStage('scanning');
       } catch (e) {
         if (cancelled) return;
         const msg = e instanceof Error ? e.message : 'Camera failed';
         setError(msg);
-        setStatus('error');
+        setStage('error');
         stopAll();
       }
     })();
@@ -172,19 +192,23 @@ export function IsbnScanner({ open, onOpenChange, onDetected }: IsbnScannerProps
             playsInline
             muted
           />
-          {status === 'starting' && (
-            <div className="text-muted-foreground absolute inset-0 flex items-center justify-center gap-2 text-xs">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting camera…
+          {(stage === 'permission' || stage === 'camera' || stage === 'detector') && (
+            <div className="bg-background/70 text-muted-foreground absolute inset-0 flex flex-col items-center justify-center gap-2 text-xs backdrop-blur-sm">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{STAGE_MESSAGES[stage]}</span>
+              <span className="text-[10.5px] opacity-70">
+                First scan can take a few seconds
+              </span>
             </div>
           )}
-          {status === 'error' && (
+          {stage === 'error' && (
             <div className="bg-background/90 text-destructive absolute inset-0 flex flex-col items-center justify-center gap-1 px-4 text-center text-xs">
               <Camera className="h-4 w-4" />
               <span>{error}</span>
               <span className="text-muted-foreground">Type the ISBN below instead.</span>
             </div>
           )}
-          {status === 'scanning' && (
+          {stage === 'scanning' && (
             <div className="pointer-events-none absolute inset-x-6 top-1/2 h-px -translate-y-1/2 bg-emerald-400/80 shadow-[0_0_12px_rgba(52,211,153,0.6)]" />
           )}
         </div>
