@@ -22,7 +22,12 @@ interface BarcodeDisplayProps {
 
 export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDisplayProps) {
   const [type, setType] = React.useState<'code128' | 'qr'>(barcode ? 'code128' : 'qr');
-  const src = `/api/v1/items/${itemId}/barcode?type=${type}`;
+  // Stable per-mount cache-buster. Prevents the browser/CDN from serving
+  // a previously cached 4xx HTML response (from before /api/v1/items/[id]
+  // /barcode was using the api-context auth helper) as if it were the new
+  // PNG. Also lets us regenerate the label without leaking stale state.
+  const [bust] = React.useState(() => Date.now().toString(36));
+  const src = `/api/v1/items/${itemId}/barcode?type=${type}&_v=${bust}`;
 
   function printIt() {
     // Build print-ready HTML and open via Blob URL to avoid document.write.
