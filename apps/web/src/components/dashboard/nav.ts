@@ -13,6 +13,7 @@ import {
   type LucideIcon,
   MapPin,
   Network,
+  Sparkles,
   Tag,
   Truck,
   Upload,
@@ -58,6 +59,7 @@ const BASE_NAV: NavSection[] = [
   {
     label: 'Workspace',
     items: [
+      { href: '/dashboard/ai', label: 'AI Assistant', icon: Sparkles, badge: 'Beta' },
       { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
       { href: '/dashboard/team', label: 'Team', icon: Users },
       { href: '/dashboard/settings', label: 'Settings', icon: Cog },
