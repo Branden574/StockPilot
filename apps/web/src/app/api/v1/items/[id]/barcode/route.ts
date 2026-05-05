@@ -38,11 +38,28 @@ export async function GET(
 
     let png: Buffer;
     if (type === 'qr') {
-      const QRCode = (await import('qrcode')).default;
-      png = await QRCode.toBuffer(value, { type: 'png', width: 400, margin: 2 });
+      // qrcode is CJS; the dynamic import returns either { default: ... }
+      // or the module namespace itself depending on bundler interop.
+      // Tolerate both.
+      const mod = (await import('qrcode')) as unknown as {
+        default?: { toBuffer: (text: string, opts: object) => Promise<Buffer> };
+        toBuffer?: (text: string, opts: object) => Promise<Buffer>;
+      };
+      const toBuffer = mod.default?.toBuffer ?? mod.toBuffer;
+      if (!toBuffer) throw new Error('qrcode module has no toBuffer export');
+      png = await toBuffer(value, { type: 'png', width: 400, margin: 2 });
     } else {
-      const bwipjs = (await import('bwip-js')).default;
-      png = await bwipjs.toBuffer({
+      // bwip-js v3+ requires the /node subpath for raster (PNG) output
+      // on Node runtime — the bare 'bwip-js' import resolves to the
+      // browser build that doesn't ship a Node Canvas implementation,
+      // which is why toBuffer was throwing here.
+      const mod = (await import('bwip-js/node')) as unknown as {
+        default?: { toBuffer: (opts: object) => Promise<Buffer> };
+        toBuffer?: (opts: object) => Promise<Buffer>;
+      };
+      const toBuffer = mod.default?.toBuffer ?? mod.toBuffer;
+      if (!toBuffer) throw new Error('bwip-js/node module has no toBuffer export');
+      png = await toBuffer({
         bcid: 'code128',
         text: value,
         scale: 3,
@@ -63,7 +80,12 @@ export async function GET(
     if (e instanceof ServiceError) {
       return new NextResponse(e.message, { status: e.code === 'not_found' ? 404 : 403 });
     }
-    console.error(e);
-    return new NextResponse('Internal error', { status: 500 });
+    console.error('barcode route error', e);
+    // Surface the real error to the caller. The Label dialog only
+    // renders for authenticated dashboard users, so leaking the
+    // message back is fine and makes the broken-image bug actually
+    // diagnosable.
+    const msg = e instanceof Error ? `${e.name}: ${e.message}` : 'Unknown error';
+    return new NextResponse(msg, { status: 500 });
   }
 }
