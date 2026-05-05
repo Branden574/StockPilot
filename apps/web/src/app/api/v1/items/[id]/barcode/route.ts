@@ -1,14 +1,23 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { withApiContext } from '@/lib/auth/api-context';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 /**
  * Returns a PNG barcode (Code 128) or QR code for the given item.
  * Query: ?type=qr|code128 (default code128)
  *        ?value=<override> (defaults to barcode || sku)
+ *
+ * Auth note: API routes don't run the proxy middleware, so the validated
+ * x-pathname / user-id headers we usually rely on aren't present. Use
+ * withApiContext() — it auths via Supabase cookies and returns null on
+ * failure so we can respond with a real 401 PNG-less response instead
+ * of redirecting (the previous code redirected to /signin, and the
+ * <img> tag rendered as a broken-image icon in the Print Label dialog).
  */
 export async function GET(
   req: NextRequest,
@@ -20,7 +29,9 @@ export async function GET(
     const type = url.searchParams.get('type') ?? 'code128';
     const valueOverride = url.searchParams.get('value');
 
-    const svc = await InventoryService.forCurrentUser();
+    const ctx = await withApiContext();
+    if (!ctx) return new NextResponse('unauthenticated', { status: 401 });
+    const svc = new InventoryService(ctx);
     const item = await svc.get(id);
     const value = valueOverride || ((item.barcode as string | null) ?? (item.sku as string));
     if (!value) return new NextResponse('No barcode value', { status: 400 });
