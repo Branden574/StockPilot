@@ -25,6 +25,13 @@ export interface ItemListFilters {
   supplierId?: string | null;
   /** Optional filter for managers/admins. Ignored for warehouse-scoped users (forced). */
   warehouseId?: string | null;
+  /**
+   * Filter by item_type. Common values:
+   *   - 'product' (default for the inventory tab)
+   *   - 'book' (books tab)
+   *   - 'all' (no filter — used by reports / dashboard rollups)
+   */
+  itemType?: 'product' | 'book' | 'asset' | 'consumable' | 'all';
   lowStock?: boolean;
   outOfStock?: boolean;
   cursor?: string | null;
@@ -45,7 +52,7 @@ export class InventoryService {
     let query = this.ctx.supabase
       .from('inventory_items')
       .select(
-        'id, sku, barcode, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, created_at, updated_at',
+        'id, sku, barcode, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, custom_fields, created_at, updated_at',
         // Estimated counts use pg_class.reltuples (~1ms) instead of a full
         // sequential count under RLS. Display purposes don't need precision.
         { count: 'estimated' },
@@ -85,6 +92,14 @@ export class InventoryService {
     if (filters.supplierId) query = query.eq('supplier_id', filters.supplierId);
     if (filters.outOfStock) query = query.lte('quantity_on_hand', 0);
 
+    // item_type defaults to 'product' so the legacy /dashboard/inventory tab
+    // doesn't accidentally show books/assets. Pass 'all' to disable.
+    if (filters.itemType === undefined) {
+      query = query.eq('item_type', 'product');
+    } else if (filters.itemType !== 'all') {
+      query = query.eq('item_type', filters.itemType);
+    }
+
     const { data, error, count } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
 
@@ -106,6 +121,8 @@ export class InventoryService {
         warehouse_id: string | null;
         charter_id: string | null;
         tracking_type: 'none' | 'lot' | 'serial';
+        item_type: 'product' | 'book' | 'asset' | 'consumable';
+        custom_fields: Record<string, unknown>;
         created_at: string;
         updated_at: string;
       }>,
@@ -202,6 +219,7 @@ export class InventoryService {
         unit_of_measure: input.unitOfMeasure,
         bin_location: input.binLocation ?? null,
         tracking_type: input.trackingType,
+        item_type: input.itemType,
         custom_fields: input.customFields,
         status: input.status,
         created_by: this.ctx.userId,
@@ -258,6 +276,7 @@ export class InventoryService {
     if (patch.unitOfMeasure !== undefined) updates.unit_of_measure = patch.unitOfMeasure;
     if (patch.binLocation !== undefined) updates.bin_location = patch.binLocation ?? null;
     if (patch.trackingType !== undefined) updates.tracking_type = patch.trackingType;
+    if (patch.itemType !== undefined) updates.item_type = patch.itemType;
     if (patch.status !== undefined) updates.status = patch.status;
     if (patch.customFields !== undefined) updates.custom_fields = patch.customFields;
 

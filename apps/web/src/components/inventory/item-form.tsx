@@ -51,6 +51,12 @@ interface ItemFormProps {
   forcedWarehouseId?: string | null;
   warehouseLabel: string;
   charterLabel: string;
+  /**
+   * Item type — drives small form variations:
+   *   'product'  (default) → "Barcode"
+   *   'book'              → "ISBN" + Author field that writes custom_fields.author
+   */
+  itemType?: 'product' | 'book' | 'asset' | 'consumable';
   onDone?: () => void;
 }
 
@@ -65,6 +71,7 @@ export function ItemForm({
   forcedWarehouseId,
   warehouseLabel,
   charterLabel,
+  itemType = 'product',
   onDone,
 }: ItemFormProps) {
   const router = useRouter();
@@ -133,10 +140,16 @@ export function ItemForm({
       unitOfMeasure: defaults?.unitOfMeasure ?? 'unit',
       binLocation: defaults?.binLocation ?? '',
       trackingType: defaults?.trackingType ?? 'none',
+      itemType: defaults?.itemType ?? itemType,
       status: defaults?.status ?? 'active',
       customFields: defaults?.customFields ?? {},
     },
   });
+
+  const isBook = itemType === 'book' || (defaults?.itemType ?? itemType) === 'book';
+  const [author, setAuthor] = React.useState<string>(
+    isBook ? String((defaults?.customFields as Record<string, unknown> | undefined)?.author ?? '') : '',
+  );
 
   const watchedWarehouseId = watch('warehouseId') ?? forcedWarehouseId ?? null;
   const watchedCharterId = watch('charterId') ?? null;
@@ -209,7 +222,18 @@ export function ItemForm({
   }
 
   const onSubmit = handleSubmit(async (values) => {
-    const action = isEdit && defaults?.id ? updateItemAction(defaults.id, values) : createItemAction(values);
+    // Merge book-specific fields (Author) into custom_fields before submit.
+    const mergedValues = isBook
+      ? {
+          ...values,
+          itemType: 'book' as const,
+          customFields: {
+            ...(values.customFields ?? {}),
+            ...(author.trim() ? { author: author.trim() } : {}),
+          },
+        }
+      : values;
+    const action = isEdit && defaults?.id ? updateItemAction(defaults.id, mergedValues) : createItemAction(mergedValues);
     const res = await action;
     if (!res.ok) {
       toast.error(res.error.message);
@@ -325,10 +349,25 @@ export function ItemForm({
               </Button>
             </div>
           </Field>
-          <Field label="Barcode" error={errors.barcode?.message}>
-            <Input placeholder="Scan or type" {...register('barcode')} />
+          <Field
+            label={isBook ? 'ISBN' : 'Barcode'}
+            error={errors.barcode?.message}
+          >
+            <Input
+              placeholder={isBook ? '978-…' : 'Scan or type'}
+              {...register('barcode')}
+            />
           </Field>
         </div>
+        {isBook && (
+          <Field label="Author">
+            <Input
+              placeholder="e.g. Toni Morrison"
+              value={author}
+              onChange={(e) => setAuthor(e.target.value)}
+            />
+          </Field>
+        )}
         <Field label="Description" error={errors.description?.message}>
           <Textarea rows={3} {...register('description')} />
         </Field>

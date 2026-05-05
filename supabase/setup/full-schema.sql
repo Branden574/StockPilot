@@ -3174,5 +3174,17 @@ grant execute on function public.putaway_transfer(uuid, uuid, uuid, uuid, numeri
   to authenticated;
 
 -- ─────────────────────────────────────────────────────────────────────
+-- 0020_item_type.sql — split inventory into product/book/asset/consumable
+-- ─────────────────────────────────────────────────────────────────────
+
+alter table public.inventory_items
+  add column if not exists item_type text not null default 'product'
+    check (item_type in ('product', 'book', 'asset', 'consumable'));
+
+create index if not exists inventory_items_item_type_idx
+  on public.inventory_items(organization_id, item_type)
+  where deleted_at is null;
+
+-- ─────────────────────────────────────────────────────────────────────
 -- DONE
 -- ─────────────────────────────────────────────────────────────────────
