@@ -166,11 +166,12 @@ export interface ScanInput {
   mimeType: string;
 }
 
-// Use the GA model name. The earlier `-exp` suffix was the experimental
-// release channel and got retired by Google; v1beta returns 404 for it.
-// Stable `gemini-2.0-flash` has the same vision + structured-output
-// capability (and the same free-tier quota on Google AI Studio).
-export const SCAN_MODEL_NAME = 'gemini-2.0-flash';
+// Model name comes from env so we can swap models without a code
+// deploy. Free-tier eligibility shifts per project — gemini-1.5-flash
+// has had the most reliable free quota; 2.0 / 2.5 work when enabled.
+// Default lives in lib/env.ts (currently gemini-1.5-flash); override
+// via GEMINI_MODEL env var.
+export const SCAN_MODEL_NAME = env.GEMINI_MODEL;
 
 /**
  * Sends one or more images / a PDF to Gemini Flash and returns a parsed,
