@@ -76,6 +76,19 @@ export async function revokeInviteAction(inviteId: string): Promise<ActionResult
   }
 }
 
+export async function resendInviteAction(
+  inviteId: string,
+): Promise<ActionResult<{ acceptUrl: string }>> {
+  try {
+    const svc = await TeamService.forCurrentUser();
+    const result = await svc.resendInvite(inviteId);
+    revalidatePath('/dashboard/team');
+    return ok(result);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 export async function updateMemberRoleAction(
   input: UpdateMemberRoleInput,
 ): Promise<ActionResult<void>> {

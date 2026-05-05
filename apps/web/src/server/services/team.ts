@@ -167,6 +167,82 @@ export class TeamService {
     if (error) throw new ServiceError('internal_error', error.message);
   }
 
+  /**
+   * Re-sends the invite email for an existing pending invite. Same
+   * token, same accept URL — the recipient still uses the link they
+   * would've gotten the first time. Useful when the original email
+   * was lost in spam, deleted, or never delivered. Bumps expires_at
+   * to a fresh 7 days from now so a stale invite doesn't expire mid-
+   * onboarding.
+   */
+  async resendInvite(inviteId: string): Promise<{ acceptUrl: string }> {
+    assertPermission(this.ctx, 'members:invite');
+
+    const { data: invite, error: fetchErr } = await this.ctx.supabase
+      .from('organization_invites')
+      .select(
+        `id, email, token, accepted_at, organizations:organization_id (name)`,
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', inviteId)
+      .maybeSingle();
+    if (fetchErr) throw new ServiceError('internal_error', fetchErr.message);
+    if (!invite) throw new ServiceError('not_found', 'Invite not found');
+    if (invite.accepted_at) {
+      throw new ServiceError(
+        'conflict',
+        'This invite has already been accepted — no need to resend.',
+      );
+    }
+
+    // Refresh the expiry so a recipient who acts on a re-sent email
+    // doesn't immediately hit "invite expired".
+    const { error: updErr } = await this.ctx.supabase
+      .from('organization_invites')
+      .update({
+        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', inviteId);
+    if (updErr) throw new ServiceError('internal_error', updErr.message);
+
+    // Inviter name: prefer current user's full_name, fallback to email.
+    const { data: profile } = await this.ctx.supabase
+      .from('user_profiles')
+      .select('full_name, email')
+      .eq('id', this.ctx.userId)
+      .maybeSingle();
+    const inviterName =
+      (profile?.full_name as string | null) ??
+      (profile?.email as string | null) ??
+      'Your teammate';
+
+    // organizations is returned as either an object or an array depending
+    // on whether the embed is one-or-many — flatten.
+    const orgField = invite.organizations as
+      | { name: string }
+      | { name: string }[]
+      | null;
+    const organizationName =
+      (Array.isArray(orgField) ? orgField[0]?.name : orgField?.name) ??
+      'StockPilot';
+
+    const acceptUrl = `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/i/${invite.token as string}`;
+    await sendEmail({
+      to: invite.email as string,
+      subject: `Reminder: you're invited to join ${organizationName} on StockPilot`,
+      html: inviteEmailHtml({ organizationName, inviterName, acceptUrl }),
+      text: inviteEmailText({ organizationName, inviterName, acceptUrl }),
+    });
+    await audit({
+      event: 'user.invited',
+      entityType: 'org_invite',
+      entityId: invite.id as string,
+      after: { resent: true, email: invite.email },
+    });
+    return { acceptUrl };
+  }
+
   async updateMemberRole(memberId: string, role: Role) {
     assertPermission(this.ctx, 'members:update_role');
     if (role === 'owner') {
