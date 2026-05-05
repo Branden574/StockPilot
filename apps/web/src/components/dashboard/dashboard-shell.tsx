@@ -62,13 +62,17 @@ export function DashboardShell({
           warehouseFilter={warehouseFilter}
         />
         {/*
-          bg-muted/30 makes empty viewport space below short forms read as
-          "panel area" instead of a void. The Cards inside pages keep
-          bg-card (lighter) so the visual hierarchy is: body bg → main panel
-          → card. Without this, a short form on a tall window looked like
-          a broken/cut-off page in dark mode.
+          The inner min-h-full div is critical: without it, short page
+          content (e.g. the new-item form on a tall display) ends mid-
+          viewport and `main`'s overflow-y-auto lets the user scroll
+          past it into uncolored space — looked like a broken void.
+          Forcing the wrapper to always be ≥ main's visible height
+          means there's never scrollable empty space past page content,
+          and bg-muted/30 paints any genuinely empty area as panel.
         */}
-        <main className="bg-muted/30 flex-1 overflow-y-auto">{children}</main>
+        <main className="flex-1 overflow-y-auto bg-muted/30">
+          <div className="min-h-full">{children}</div>
+        </main>
       </div>
 
       {mounted && (
