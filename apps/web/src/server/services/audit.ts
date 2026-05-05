@@ -44,7 +44,10 @@ export type AuditEvent =
   | 'item.tracking_type.changed'
   | 'lot.received'
   | 'serial.received'
-  | 'serial.duplicate_rejected';
+  | 'serial.duplicate_rejected'
+  | 'cycle_count.started'
+  | 'cycle_count.canceled'
+  | 'cycle_count.posted';
 
 interface AuditPayload {
   event: AuditEvent;
