@@ -43,6 +43,15 @@ const serverSchema = z.object({
   RESEND_FROM_EMAIL: z.string().transform((s) => s.trim()).default('StockPilot <hello@stockpilot.app>'),
 
   GEMINI_API_KEY: optionalSecret.transform((s) => s.trim()),
+  // Model override. Different Google AI Studio keys get different free-
+  // tier eligibility per model (we've seen 0 quota on gemini-2.0-flash
+  // for keys that work fine on 1.5-flash). Override per environment
+  // without a code deploy. Default lands on the most reliably-free model.
+  GEMINI_MODEL: z
+    .string()
+    .optional()
+    .default('gemini-1.5-flash')
+    .transform((s) => s.trim()),
 });
 
 const clientSchema = z.object({
