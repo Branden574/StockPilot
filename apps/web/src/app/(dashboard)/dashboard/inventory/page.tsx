@@ -8,6 +8,7 @@ import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
+import { SuppliersService } from '@/server/services/suppliers';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
 export default async function InventoryPage({
@@ -16,10 +17,11 @@ export default async function InventoryPage({
   searchParams: Promise<{ q?: string; status?: string; stock?: string; type?: string }>;
 }) {
   const params = await searchParams;
-  const [inventorySvc, categoriesSvc, locationsSvc, imagesSvc, warehouseFilter] = await Promise.all([
+  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, imagesSvc, warehouseFilter] = await Promise.all([
     InventoryService.forCurrentUser(),
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
+    SuppliersService.forCurrentUser(),
     ItemImagesService.forCurrentUser(),
     getActiveWarehouseFilter(),
   ]);
@@ -45,7 +47,7 @@ export default async function InventoryPage({
       : 'product';
   const showingAllTypes = itemType === 'all';
 
-  const [inventory, categories, locations] = await Promise.all([
+  const [inventory, categories, locations, suppliers] = await Promise.all([
     inventorySvc.list({
       q: params.q,
       status: lifecycleStatus,
@@ -56,6 +58,7 @@ export default async function InventoryPage({
     }),
     categoriesSvc.list(),
     locationsSvc.list(),
+    suppliersSvc.list(),
   ]);
 
   // Fetch primary images in batch (1 query + 1 createSignedUrls call,
@@ -138,6 +141,14 @@ export default async function InventoryPage({
             items={itemsWithImages}
             total={inventory.total}
             lookups={lookups}
+            categories={categories.map((c) => ({
+              id: c.id as string,
+              name: c.name as string,
+            }))}
+            suppliers={suppliers.map((s) => ({
+              id: s.id as string,
+              name: s.name as string,
+            }))}
             initialQuery={params.q}
           />
         )}

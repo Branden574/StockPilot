@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
+import { BulkActions } from '@/components/inventory/bulk-actions';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,6 +41,10 @@ interface Lookups {
 interface InventoryTableProps {
   items: Item[];
   lookups: Lookups;
+  /** Lists used by the bulk actions bar. Pass from the page server fetch
+      so we don't have to re-query for the dialog. */
+  categories?: Array<{ id: string; name: string }>;
+  suppliers?: Array<{ id: string; name: string }>;
   total: number;
   initialQuery?: string;
   /**
@@ -103,6 +108,8 @@ function syntheticSeries(seed: string, base: number): number[] {
 export function InventoryTable({
   items,
   lookups,
+  categories = [],
+  suppliers = [],
   total,
   initialQuery = '',
   rowLinkPrefix = '/dashboard/inventory',
@@ -196,30 +203,15 @@ export function InventoryTable({
 
       {/* Bulk actions bar */}
       {selected.size > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-md border border-foreground/20 bg-card px-3 py-2 text-[12.5px]">
-          <span className="font-mono tabular-nums text-[var(--ed-ink-2)]">{selected.size} selected</span>
-          <span className="text-[var(--ed-ink-4)]">·</span>
-          <Link
-            href={`/dashboard/inventory/labels?items=${[...selected].join(',')}`}
-            className="text-[var(--ed-ink-2)] hover:text-foreground"
-          >
-            Print labels
-          </Link>
-          <span className="text-[var(--ed-ink-4)]">·</span>
-          <button className="text-[var(--ed-ink-2)] hover:text-foreground">Adjust stock</button>
-          <span className="text-[var(--ed-ink-4)]">·</span>
-          <button className="text-[var(--ed-ink-2)] hover:text-foreground">Move</button>
-          <span className="text-[var(--ed-ink-4)]">·</span>
-          <button className="text-[var(--ed-ink-2)] hover:text-foreground">Tag</button>
-          <span className="text-[var(--ed-ink-4)]">·</span>
-          <button className="text-destructive hover:underline">Archive</button>
-          <button
-            onClick={() => setSelected(new Set())}
-            className="ml-auto text-[var(--ed-ink-4)] hover:text-foreground"
-          >
-            Clear
-          </button>
-        </div>
+        <BulkActions
+          selectedIds={[...selected]}
+          categories={categories}
+          suppliers={suppliers}
+          onClear={() => setSelected(new Set())}
+          hasArchivedSelection={items.some(
+            (i) => selected.has(i.id) && i.status === 'archived',
+          )}
+        />
       )}
 
       {/* Table */}

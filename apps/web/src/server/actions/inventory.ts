@@ -86,6 +86,35 @@ export async function deleteItemAction(id: string): Promise<ActionResult<void>> 
   }
 }
 
+export type BulkInventoryOp =
+  | { kind: 'archive' }
+  | { kind: 'unarchive' }
+  | { kind: 'set_category'; categoryId: string | null }
+  | { kind: 'set_supplier'; supplierId: string | null }
+  | { kind: 'set_status'; status: 'active' | 'archived' | 'discontinued' };
+
+export async function bulkUpdateInventoryAction(input: {
+  ids: string[];
+  op: BulkInventoryOp;
+}): Promise<ActionResult<{ ok: number; skipped: number }>> {
+  if (!Array.isArray(input.ids) || input.ids.length === 0) {
+    return err('validation_error', 'No items selected');
+  }
+  if (input.ids.some((id) => typeof id !== 'string' || id.length === 0)) {
+    return err('validation_error', 'Invalid item id in selection');
+  }
+  try {
+    const svc = await InventoryService.forCurrentUser();
+    const result = await svc.bulkUpdate(input);
+    revalidatePath('/dashboard/inventory');
+    revalidatePath('/dashboard/books');
+    revalidatePath('/dashboard');
+    return ok(result);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 export async function adjustStockAction(input: AdjustStockInput): Promise<ActionResult<void>> {
   const parsed = adjustStockSchema.safeParse(input);
   if (!parsed.success) {

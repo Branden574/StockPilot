@@ -186,23 +186,24 @@ export function CreateItemsModal({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !busy && onOpenChange(o)}>
-      <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
-        <DialogHeader>
+      <DialogContent
+        className="flex h-[90vh] max-h-[90vh] w-[calc(100vw-2rem)] max-w-[1100px] flex-col overflow-hidden p-0 sm:w-[calc(100vw-3rem)]"
+      >
+        <DialogHeader className="border-border space-y-1 border-b px-6 pb-4 pt-6">
           <DialogTitle>
             Review {lines.length} {isSingle ? 'line' : 'lines'} from PO
           </DialogTitle>
+          <p className="text-muted-foreground text-xs">
+            Names are pre-filled from the PO description with the trailing part
+            number stripped (it's already saved in the barcode field). When a
+            row matches an existing inventory item by barcode or name, you'll
+            see a yellow notice — pick "Use existing" to avoid duplicates, or
+            "Create anyway" if it's actually a different SKU.
+            {scanning && ' (scanning for matches…)'}
+          </p>
         </DialogHeader>
 
-        <p className="text-muted-foreground text-xs">
-          Names are pre-filled from the PO description with the trailing part
-          number stripped (it's already saved in the barcode field). When a
-          row matches an existing inventory item by barcode or name, you'll
-          see a yellow notice — pick "Use existing" to avoid duplicates, or
-          "Create anyway" if it's actually a different SKU.
-          {scanning && ' (scanning for matches…)'}
-        </p>
-
-        <div className="border-border bg-card divide-border divide-y rounded-md border text-sm">
+        <div className="border-border bg-card divide-border mx-6 my-4 flex-1 divide-y overflow-y-auto rounded-md border text-sm">
           {lines.map((l) => {
             const original = (l.description ?? '').trim();
             const cleaned = autoCleanItemName(original) || original;
@@ -352,7 +353,7 @@ export function CreateItemsModal({
           })}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="border-border bg-background border-t px-6 py-4">
           <div className="text-muted-foreground mr-auto self-center text-[11px]">
             {createCount > 0 && <span>{createCount} new</span>}
             {createCount > 0 && (linkCount > 0 || skipCount > 0) && <span> · </span>}

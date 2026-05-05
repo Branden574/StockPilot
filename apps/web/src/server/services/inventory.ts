@@ -393,6 +393,84 @@ export class InventoryService {
     if (error) throw new ServiceError('internal_error', error.message);
   }
 
+  /**
+   * Bulk-applies one of a small whitelist of mutations across multiple
+   * items. Validates per-item warehouse access (so a manager can't batch-
+   * mutate an item in a warehouse they can't write to). Returns counts.
+   *
+   * Why one method instead of bulkArchive / bulkSetCategory / etc.: the
+   * permission check + per-item warehouse-access loop is identical for
+   * all of them, and bundling keeps that loop in one place.
+   */
+  async bulkUpdate(input: {
+    ids: string[];
+    op:
+      | { kind: 'archive' }
+      | { kind: 'unarchive' }
+      | { kind: 'set_category'; categoryId: string | null }
+      | { kind: 'set_supplier'; supplierId: string | null }
+      | { kind: 'set_status'; status: 'active' | 'archived' | 'discontinued' };
+  }): Promise<{ ok: number; skipped: number }> {
+    assertPermission(this.ctx, 'items:update');
+    if (input.ids.length === 0) return { ok: 0, skipped: 0 };
+    if (input.ids.length > 500) {
+      throw new ServiceError(
+        'validation_error',
+        'Bulk operations are limited to 500 items at a time.',
+      );
+    }
+
+    const { data: rows, error: loadErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id, warehouse_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', input.ids)
+      .is('deleted_at', null);
+    if (loadErr) throw new ServiceError('internal_error', loadErr.message);
+
+    const access = await getWarehouseAccess(this.ctx);
+    const writableSet = new Set(access.writableIds);
+    const allowedIds: string[] = [];
+    let skipped = 0;
+    for (const r of rows ?? []) {
+      const wh = (r.warehouse_id as string | null) ?? null;
+      if (access.hasAllAccess || wh === null || writableSet.has(wh)) {
+        allowedIds.push(r.id as string);
+      } else {
+        skipped += 1;
+      }
+    }
+    if (allowedIds.length === 0) return { ok: 0, skipped };
+
+    const update: Record<string, unknown> = { updated_by: this.ctx.userId };
+    switch (input.op.kind) {
+      case 'archive':
+        update.status = 'archived';
+        break;
+      case 'unarchive':
+        update.status = 'active';
+        break;
+      case 'set_status':
+        update.status = input.op.status;
+        break;
+      case 'set_category':
+        update.category_id = input.op.categoryId;
+        break;
+      case 'set_supplier':
+        update.supplier_id = input.op.supplierId;
+        break;
+    }
+
+    const { error } = await this.ctx.supabase
+      .from('inventory_items')
+      .update(update)
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', allowedIds);
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    return { ok: allowedIds.length, skipped };
+  }
+
   async softDelete(id: string) {
     assertPermission(this.ctx, 'items:delete');
     const current = await this.get(id);
