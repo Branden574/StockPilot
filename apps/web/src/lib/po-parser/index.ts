@@ -4,12 +4,17 @@ import { parseCsvText } from './csv';
 
 export type ParseSourceType = 'pdf' | 'csv';
 
+export type ParsedPo = CanonicalPo & { rawText?: string };
+
 export async function parsePoFile(
   buffer: Buffer,
   source: ParseSourceType,
-): Promise<CanonicalPo> {
+): Promise<ParsedPo> {
   if (source === 'pdf') return parsePdf(buffer);
-  if (source === 'csv') return parseCsvText(buffer.toString('utf8'));
+  if (source === 'csv') {
+    const text = buffer.toString('utf8');
+    return { ...parseCsvText(text), rawText: text };
+  }
   throw new Error(`Unsupported source: ${source as string}`);
 }
 

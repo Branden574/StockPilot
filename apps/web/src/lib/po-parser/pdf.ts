@@ -2,114 +2,174 @@ import type { CanonicalPo, CanonicalPoLine } from '@stockpilot/core';
 import { classifyLine } from './classify';
 import { normalizeUom, parseMoney, parseQty } from './normalize';
 
-/**
- * Header regexes — robust to extra whitespace / case variations.
- */
-const PO_NUMBER_RE = /\bPO\s*Number\s*:?\s*(PO-[A-Z0-9-]{4,})/i;
-const PO_NUMBER_FALLBACK_RE = /\b(PO-[A-Z]{2,}-?\d{3,})/;
-const TOTAL_RE = /\bTotal[:\s]+\$?\s*([0-9,]+\.\d{2})/i;
-const VENDOR_HEADER_RE = /^\s*(Staples\s+Advantage|Vendor:\s*([^\n]+))/im;
-const SHIPPING_RE = /Shipping\s*Address[:\s]+([^\n]+)/i;
-const CONTACT_RE = /\bContact[:\s]+([^\n]+)/i;
-const PHONE_RE = /\bPhone[:\s]+([^\n]+)/i;
-const DATE_RE = /^\s*Date\s*:\s*([0-9/.-]+)/im;
-const DESCRIPTION_HEADER_RE = /^\s*Description\s*:\s*([^\n]+)/im;
-const PREPARED_BY_RE = /\bPrepared\s*By\s*:\s*([^\n]+)/i;
-const WORKFLOW_RE = /\bWorkflow\s*:\s*([^\n]+)/i;
-const REASON_RE = /\bReason\s*:\s*([^\n]+)/i;
-const COMMENTS_RE = /\bComments\s*:\s*([^\n]+)/i;
+// Header capture: tolerant to colon, no-colon, value-on-next-line.
+const PO_NUMBER_RE = /\b(PO-[A-Z]{2,}-?\d{3,})/i;
+const TOTAL_RE = /\bTOTAL[\s\n]+\$?\s*([0-9,]+\.\d{2})/i;
+const VENDOR_HEADER_RE = /(Staples\s+Advantage|Vendor:\s*([^\n]+))/i;
+const SHIPPING_HEADER_RE = /SHIPPING\s+INFORMATION\s*\n((?:[^\n]+\n){1,4})/i;
+const CONTACT_RE = /\bContact:\s*([^\n]+)/i;
+const PHONE_RE = /\bPhone:\s*([^\n]+?)(?:\s+Contact:|\s*$)/im;
 
-/**
- * A line begins with: "<qty> <UOM> <date?> <description...>" and ends with
- * two trailing money columns: "<unit_cost> <total>". UOM is 2-4 uppercase
- * letters. The date is optional (some POs have it on a continuation row).
- *
- * Followed (sometimes on the next line) by: "Item Number: <n>   Vendor
- * Product No: <n>   Auxiliary No: <n>   COA #: <code>".
- */
-const LINE_HEAD_RE =
-  /^\s*(?<qty>\d+(?:\.\d+)?)\s+(?<uom>[A-Z]{2,4})\s+(?<rest>.+?)$/;
-const ITEM_NUM_RE = /Item\s*Number[:\s]+(?<num>[A-Z0-9-]+)/i;
-const VENDOR_PRODUCT_RE = /Vendor\s*Product\s*No[.:\s]+(?<num>[A-Z0-9-]+)/i;
-const AUX_NUM_RE = /Auxiliary\s*No[.:\s]+(?<num>[A-Z0-9-]+)/i;
-const COA_RE = /COA\s*#?[:\s]+(?<code>[A-Z0-9-]+)/i;
-const TRAIL_MONEY_RE =
-  /(?<unit>\(?\$?\s*-?\d[\d,]*\.\d{2}\)?)\s+(?<total>\(?\$?\s*-?\d[\d,]*\.\d{2}\)?)\s*$/;
+const HEADER_RES = {
+  date: /^\s*DATE\s*:?\s*([0-9/.-]+)\s*$/im,
+  description: /^\s*DESCRIPTION\s*:?\s*(.+?)\s*$/im,
+  preparedBy: /^\s*PREPARED\s*BY\s*:?\s*([^\n]*)/im,
+  workflow: /^\s*WORKFLOW\s*:?\s*(.+?)\s*$/im,
+  reason: /^\s*Reason\s*:?\s*(.+?)\s*$/im,
+  comments: /^\s*Comments\s*:?\s*(.+?)\s*$/im,
+} as const;
 
-function pickFirst(s: string | undefined): string | null {
+// Line item start: "<qty><UOM><MM/DD/YYYY>" — concatenated with no spaces
+// in real pdf-parse output (e.g. "1PK4/29/2026Duracell..."). The /g flag
+// is for global scanning; we reset lastIndex before each call.
+const LINE_START_RE =
+  /(?<qty>\d+(?:\.\d+)?)(?<uom>[A-Z]{2,4})(?<date>\d{1,2}\/\d{1,2}\/\d{4})/g;
+
+// Trailing price pair "23.11$23.11" or "23.11 $23.11". The $ between the
+// two amounts is the only separator in the concatenated layout.
+const TRAIL_PRICE_PAIR_RE =
+  /\$?([0-9,]+\.\d{2})\s*\$?([0-9,]+\.\d{2})\s*$/;
+
+const ITEM_NUM_RE = /Item\s*Number\s*:?\s*([A-Z0-9-]+)/i;
+const VENDOR_PRODUCT_RE = /Vendor\s*Product\s*No\.?\s*:?\s*([A-Z0-9-]+)/i;
+// Accept the common Staples typo "Auxilary" alongside "Auxiliary".
+const AUX_NUM_RE = /Auxil(?:i)?ary\s*No\.?\s*:?\s*([A-Z0-9-]+)/i;
+const COA_RE = /COA\s*#?\s*:?\s*([A-Z0-9-]+)/i;
+
+function pickFirst(s: string | undefined | null): string | null {
   if (!s) return null;
   const t = s.trim();
   return t.length === 0 ? null : t;
 }
 
-export function parsePdfText(rawText: string): CanonicalPo {
-  const lines = rawText.split(/\r?\n/);
+function extractHeaderValue(
+  text: string,
+  key: keyof typeof HEADER_RES,
+): string | null {
+  const re = HEADER_RES[key];
+  const m = text.match(re);
+  if (!m) return null;
+  // Some labels (PREPARED BY) put the value on the next text line because
+  // the label sits in a table cell. If the captured group is empty or
+  // looks like another label, peek the next non-empty line.
+  const v = pickFirst(m[1]);
+  if (v && !/^[A-Z\s]+$/.test(v)) return v;
+  const after = text.slice((m.index ?? 0) + m[0].length);
+  const next = after.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return pickFirst(next ?? null) ?? v;
+}
 
-  // Header extraction
-  const poNumberMatch =
-    rawText.match(PO_NUMBER_RE)?.[1] ?? rawText.match(PO_NUMBER_FALLBACK_RE)?.[1] ?? null;
+interface LineHead {
+  qty: string;
+  uom: string;
+  index: number; // start of <qty>
+  endIndex: number; // just after <date>
+}
+
+function findLineHeads(text: string): LineHead[] {
+  const heads: LineHead[] = [];
+  LINE_START_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = LINE_START_RE.exec(text))) {
+    if (!m.groups) continue;
+    // Reject if <qty> is preceded by a digit — that means we're in the
+    // middle of a longer number (e.g. ZIP 75266-0409 or item number).
+    const prev = text[m.index - 1];
+    if (prev && /[0-9]/.test(prev)) continue;
+    heads.push({
+      qty: m.groups.qty!,
+      uom: m.groups.uom!,
+      index: m.index,
+      endIndex: m.index + m[0].length,
+    });
+  }
+  return heads;
+}
+
+export function parsePdfText(rawText: string): CanonicalPo {
+  const poNumber = pickFirst(rawText.match(PO_NUMBER_RE)?.[1]);
   const totalAmount = parseMoney(rawText.match(TOTAL_RE)?.[1] ?? null);
   const vendorMatch = rawText.match(VENDOR_HEADER_RE);
   const vendorName = vendorMatch
     ? pickFirst(vendorMatch[2] ?? vendorMatch[1])
     : null;
-  const shippingAddress = pickFirst(rawText.match(SHIPPING_RE)?.[1]);
+  const shippingBlock = rawText.match(SHIPPING_HEADER_RE)?.[1] ?? null;
+  const shippingAddress = shippingBlock
+    ? pickFirst(
+        shippingBlock
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter((l) => l && !/^Phone:/i.test(l) && !/^Contact:/i.test(l))
+          .join(', '),
+      )
+    : null;
   const contactName = pickFirst(rawText.match(CONTACT_RE)?.[1]);
   const contactPhone = pickFirst(rawText.match(PHONE_RE)?.[1]);
-  const poDate = pickFirst(rawText.match(DATE_RE)?.[1]);
-  const description = pickFirst(rawText.match(DESCRIPTION_HEADER_RE)?.[1]);
-  const preparedBy = pickFirst(rawText.match(PREPARED_BY_RE)?.[1]);
-  const workflow = pickFirst(rawText.match(WORKFLOW_RE)?.[1]);
-  const reason = pickFirst(rawText.match(REASON_RE)?.[1]);
-  const comments = pickFirst(rawText.match(COMMENTS_RE)?.[1]);
+  const poDate = extractHeaderValue(rawText, 'date');
+  const description = extractHeaderValue(rawText, 'description');
+  const preparedBy = extractHeaderValue(rawText, 'preparedBy');
+  const workflow = extractHeaderValue(rawText, 'workflow');
+  const reason = extractHeaderValue(rawText, 'reason');
+  const comments = extractHeaderValue(rawText, 'comments');
 
-  // Lines
+  // Find every line-item head and slice the body up to either the next
+  // head or the next "Item Number" / "TOTAL" sentinel.
+  const heads = findLineHeads(rawText);
   const out: CanonicalPoLine[] = [];
-  let n = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const head = lines[i];
-    if (!head) continue;
-    const m = head.match(LINE_HEAD_RE);
-    if (!m?.groups) continue;
-    // Skip header rows that look like "1 EA TAX" but actually are real data.
-    // The discriminator is: real lines have two trailing money columns.
-    let rest = m.groups.rest ?? '';
-    const trail = rest.match(TRAIL_MONEY_RE);
-    if (!trail?.groups) continue;
 
-    const qty = parseQty(m.groups.qty);
-    const uom = normalizeUom(m.groups.uom);
-    const unitCost = parseMoney(trail.groups.unit);
-    const lineTotal = parseMoney(trail.groups.total);
-    rest = rest.slice(0, trail.index!).trim();
+  for (let i = 0; i < heads.length; i++) {
+    const head = heads[i]!;
+    const next = heads[i + 1];
 
-    // Strip optional leading date from rest (MM/DD/YYYY).
-    const desc = rest.replace(/^\d{2}\/\d{2}\/\d{4}\s+/, '').trim() || null;
+    let chunkEnd = next ? next.index : rawText.length;
+    const itemNumberIdx = rawText.indexOf('Item Number', head.endIndex);
+    if (itemNumberIdx !== -1 && itemNumberIdx < chunkEnd) {
+      chunkEnd = itemNumberIdx;
+    }
+    const totalIdx = rawText.search(/\bTOTAL\b/);
+    if (totalIdx > head.endIndex && totalIdx < chunkEnd) {
+      chunkEnd = totalIdx;
+    }
 
-    // Look at the next 2 lines for metadata (Item Number / Vendor Product No / etc.)
-    const peek = `${lines[i + 1] ?? ''} ${lines[i + 2] ?? ''}`;
-    const vendorItemNumber = peek.match(ITEM_NUM_RE)?.groups?.num ?? null;
-    const vendorProductNumber = peek.match(VENDOR_PRODUCT_RE)?.groups?.num ?? null;
-    const auxiliaryNumber = peek.match(AUX_NUM_RE)?.groups?.num ?? null;
-    const coaCode = peek.match(COA_RE)?.groups?.code ?? null;
+    const chunk = rawText.slice(head.endIndex, chunkEnd).trim();
+    // Wrapped descriptions span multiple text lines. Flatten and collapse
+    // whitespace so the trailing-price regex can find the prices wherever
+    // they ended up.
+    const flat = chunk.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+    const trail = flat.match(TRAIL_PRICE_PAIR_RE);
+    if (!trail) continue;
+    const unitCost = parseMoney(trail[1]!);
+    const lineTotal = parseMoney(trail[2]!);
+    const desc = pickFirst(flat.slice(0, flat.length - trail[0].length).trim());
+
+    // Vendor metadata sits in the few lines after the chunk.
+    const tail = rawText
+      .slice(chunkEnd)
+      .split(/\r?\n/)
+      .slice(0, 6)
+      .join(' ');
+    const vendorItemRaw = tail.match(ITEM_NUM_RE)?.[1] ?? null;
+    const vendorProductRaw = tail.match(VENDOR_PRODUCT_RE)?.[1] ?? null;
+    const auxRaw = tail.match(AUX_NUM_RE)?.[1] ?? null;
+    const coaCode = tail.match(COA_RE)?.[1] ?? null;
 
     out.push({
-      lineNumber: ++n,
+      lineNumber: out.length + 1,
       lineType: classifyLine(desc, { signedAmount: lineTotal ?? undefined }),
-      qtyOrderedOriginal: qty,
-      uomOriginal: uom,
+      qtyOrderedOriginal: parseQty(head.qty),
+      uomOriginal: normalizeUom(head.uom),
       description: desc,
       unitCost,
       lineTotal,
-      vendorItemNumber,
-      vendorProductNumber,
-      auxiliaryNumber,
+      vendorItemNumber: vendorItemRaw === 'N/A' ? null : vendorItemRaw,
+      vendorProductNumber: vendorProductRaw === 'N/A' ? null : vendorProductRaw,
+      auxiliaryNumber: auxRaw === 'N/A' ? null : auxRaw,
       coaCode,
     });
   }
 
   return {
-    poNumber: poNumberMatch,
+    poNumber,
     vendorName,
     poDate,
     description,
@@ -126,14 +186,16 @@ export function parsePdfText(rawText: string): CanonicalPo {
 }
 
 /**
- * Streaming entry: takes a Buffer (the uploaded PDF) and returns a CanonicalPo.
- * Imports pdf-parse lazily so this file stays test-friendly with just the
- * text fixture in unit tests.
+ * Streaming entry: returns the parsed CanonicalPo plus the raw extracted
+ * text. Caller persists raw_text so the UI can surface it for debugging
+ * when the parser yields zero lines.
  */
-export async function parsePdf(buffer: Buffer): Promise<CanonicalPo> {
+export async function parsePdf(
+  buffer: Buffer,
+): Promise<CanonicalPo & { rawText: string }> {
   const mod = (await import('pdf-parse')) as unknown as {
     default: (b: Buffer) => Promise<{ text: string }>;
   };
   const { text } = await mod.default(buffer);
-  return parsePdfText(text);
+  return { ...parsePdfText(text), rawText: text };
 }
