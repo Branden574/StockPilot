@@ -67,55 +67,68 @@ export async function ItemDetail({ id, backHref, backLabel }: ItemDetailProps) {
   const value = (item.quantity_on_hand as number) * (item.unit_cost as number);
 
   return (
-    <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link href={backHref} className="text-muted-foreground hover:text-foreground text-sm">
+    <div className="container mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8">
+      <div className="mb-4 sm:mb-6">
+        <Link href={backHref} className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm">
           ← {backLabel}
         </Link>
       </div>
 
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{item.name as string}</h1>
-          <p className="text-muted-foreground mt-1 font-mono text-xs">{item.sku as string}</p>
+      <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="break-words text-xl font-semibold tracking-tight sm:text-2xl">
+            {item.name as string}
+          </h1>
+          <p className="text-muted-foreground mt-1 break-all font-mono text-xs">
+            {item.sku as string}
+          </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline">
-            <Link href={`/dashboard/inventory/${id}/edit`}>Edit</Link>
-          </Button>
-          <BarcodeDisplay
-            itemId={id}
-            itemName={item.name as string}
-            sku={item.sku as string}
-            barcode={(item.barcode as string | null) ?? null}
-          />
-          <Button asChild variant="outline">
-            <Link href={`/dashboard/inventory/labels?items=${id}`}>
-              <Printer className="h-4 w-4" /> Print label
-            </Link>
-          </Button>
-          <StockAdjustDialog
-            itemId={id}
-            itemName={item.name as string}
-            currentQuantity={item.quantity_on_hand as number}
-          />
-          {locations.length >= 2 && (
-            <StockTransferDialog
+        {/*
+          Action buttons: on small screens, scroll horizontally as a
+          single row instead of wrapping into 2-3 stacked rows that
+          push the rest of the page off the fold. Inner div uses
+          `w-max` so children keep their natural width inside the
+          scroll viewport.
+        */}
+        <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+          <div className="flex w-max gap-2 sm:flex-wrap">
+            <Button asChild variant="outline" size="sm" className="sm:size-auto">
+              <Link href={`/dashboard/inventory/${id}/edit`}>Edit</Link>
+            </Button>
+            <BarcodeDisplay
+              itemId={id}
+              itemName={item.name as string}
+              sku={item.sku as string}
+              barcode={(item.barcode as string | null) ?? null}
+            />
+            <Button asChild variant="outline" size="sm" className="sm:size-auto">
+              <Link href={`/dashboard/inventory/labels?items=${id}`}>
+                <Printer className="h-4 w-4" /> Print label
+              </Link>
+            </Button>
+            <StockAdjustDialog
               itemId={id}
               itemName={item.name as string}
               currentQuantity={item.quantity_on_hand as number}
-              currentLocationId={(item.primary_location_id as string | null) ?? null}
-              locations={locations.map((l) => ({
-                id: l.id as string,
-                name: l.name as string,
-                warehouse_id: (l.warehouse_id as string | null) ?? null,
-              }))}
             />
-          )}
+            {locations.length >= 2 && (
+              <StockTransferDialog
+                itemId={id}
+                itemName={item.name as string}
+                currentQuantity={item.quantity_on_hand as number}
+                currentLocationId={(item.primary_location_id as string | null) ?? null}
+                locations={locations.map((l) => ({
+                  id: l.id as string,
+                  name: l.name as string,
+                  warehouse_id: (l.warehouse_id as string | null) ?? null,
+                }))}
+              />
+            )}
+          </div>
         </div>
       </div>
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-3">
+      <div className="mt-6 grid gap-4 sm:mt-8 sm:gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="text-base">Details</CardTitle>
