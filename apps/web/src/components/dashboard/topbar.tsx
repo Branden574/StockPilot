@@ -106,6 +106,13 @@ export function Topbar({
         type="button"
         className="border-border bg-card hidden h-8 min-w-[240px] max-w-[460px] flex-1 items-center gap-2 rounded-md border px-2.5 text-[12.5px] text-[var(--ed-ink-4)] shadow-[0_1px_0_rgba(14,15,13,0.03)] transition-colors hover:border-[var(--ed-line-strong)] md:flex"
         aria-label="Open command palette"
+        onClick={() => {
+          // Synthesize a ⌘K so we don't need a global store. The palette
+          // toggles on this exact event.
+          window.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }),
+          );
+        }}
       >
         <Search className="h-3 w-3" />
         <span className="flex-1 text-left">Search items, POs, suppliers…</span>
