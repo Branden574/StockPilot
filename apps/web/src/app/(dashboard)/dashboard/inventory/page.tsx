@@ -6,6 +6,7 @@ import { InventoryTable } from '@/components/inventory/inventory-table';
 import { Button } from '@/components/ui/button';
 import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
+import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
@@ -15,10 +16,11 @@ export default async function InventoryPage({
   searchParams: Promise<{ q?: string; status?: string; stock?: string; type?: string }>;
 }) {
   const params = await searchParams;
-  const [inventorySvc, categoriesSvc, locationsSvc, warehouseFilter] = await Promise.all([
+  const [inventorySvc, categoriesSvc, locationsSvc, imagesSvc, warehouseFilter] = await Promise.all([
     InventoryService.forCurrentUser(),
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
+    ItemImagesService.forCurrentUser(),
     getActiveWarehouseFilter(),
   ]);
 
@@ -55,6 +57,16 @@ export default async function InventoryPage({
     categoriesSvc.list(),
     locationsSvc.list(),
   ]);
+
+  // Fetch primary images in batch (1 query + 1 createSignedUrls call,
+  // not N round trips). Returns Map<itemId, signedUrl>.
+  const imagesById = await imagesSvc.primaryImagesForItems(
+    inventory.items.map((i) => i.id),
+  );
+  const itemsWithImages = inventory.items.map((i) => ({
+    ...i,
+    image_url: imagesById.get(i.id) ?? null,
+  }));
 
   const lookups = {
     categories: new Map(
@@ -123,7 +135,7 @@ export default async function InventoryPage({
           />
         ) : (
           <InventoryTable
-            items={inventory.items}
+            items={itemsWithImages}
             total={inventory.total}
             lookups={lookups}
             initialQuery={params.q}

@@ -6,6 +6,7 @@ import { InventoryTable } from '@/components/inventory/inventory-table';
 import { Button } from '@/components/ui/button';
 import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
+import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
@@ -15,10 +16,11 @@ export default async function BooksPage({
   searchParams: Promise<{ q?: string; status?: string; stock?: string }>;
 }) {
   const params = await searchParams;
-  const [inventorySvc, categoriesSvc, locationsSvc, warehouseFilter] = await Promise.all([
+  const [inventorySvc, categoriesSvc, locationsSvc, imagesSvc, warehouseFilter] = await Promise.all([
     InventoryService.forCurrentUser(),
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
+    ItemImagesService.forCurrentUser(),
     getActiveWarehouseFilter(),
   ]);
 
@@ -42,6 +44,16 @@ export default async function BooksPage({
     categoriesSvc.list(),
     locationsSvc.list(),
   ]);
+
+  // Batched primary-image fetch (1 select + 1 createSignedUrls) so each
+  // book row in the list can show its actual thumbnail.
+  const imagesById = await imagesSvc.primaryImagesForItems(
+    inventory.items.map((i) => i.id),
+  );
+  const itemsWithImages = inventory.items.map((i) => ({
+    ...i,
+    image_url: imagesById.get(i.id) ?? null,
+  }));
 
   const lookups = {
     categories: new Map(
@@ -106,7 +118,7 @@ export default async function BooksPage({
           />
         ) : (
           <InventoryTable
-            items={inventory.items}
+            items={itemsWithImages}
             total={inventory.total}
             lookups={lookups}
             initialQuery={params.q}
