@@ -3,8 +3,22 @@ import 'server-only';
 import { cache } from 'react';
 
 import { createClient } from '@/lib/supabase/server';
-import { requireOrgContext, type OrgContext } from '@/lib/auth/session';
+import { requireOrgContext } from '@/lib/auth/session';
 import { isManagerOrAbove, isWarehouseScoped, type Role } from '@stockpilot/core';
+
+/**
+ * Minimal context shape the warehouse helpers actually use. Both
+ * `OrgContext` (server components) and `ServiceContext` (services
+ * built via withApiContext for API routes) satisfy it, which means
+ * an API-route caller can pass its own ctx to skip the redirect-
+ * based `requireOrgContext()` fallback that throws NEXT_REDIRECT
+ * when there's no x-pathname header.
+ */
+type WarehouseCtxLike = {
+  organizationId: string;
+  userId: string;
+  role: Role;
+};
 
 export interface WarehouseAccess {
   /** All warehouse IDs the user can read. Empty array if none. */
@@ -27,7 +41,7 @@ export interface WarehouseAccess {
  *   • staff   → readable + writable = assigned warehouses
  *   • viewer  → readable = assigned warehouses, writable = []
  */
-export const getWarehouseAccess = cache(async (ctx?: OrgContext): Promise<WarehouseAccess> => {
+export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<WarehouseAccess> => {
   const c = ctx ?? (await requireOrgContext());
   const supabase = await createClient();
 
@@ -75,7 +89,7 @@ export const getWarehouseAccess = cache(async (ctx?: OrgContext): Promise<Wareho
 export async function assertWarehouseAccess(
   warehouseId: string,
   op: 'read' | 'write' = 'read',
-  ctx?: OrgContext,
+  ctx?: WarehouseCtxLike,
 ): Promise<void> {
   const c = ctx ?? (await requireOrgContext());
   const access = await getWarehouseAccess(c);
@@ -102,7 +116,7 @@ export async function assertWarehouseAccess(
  * `warehouse_id` from request input for warehouse-scoped users — it derives
  * it from this function instead.
  */
-export async function forcedWarehouseId(ctx?: OrgContext): Promise<string | null> {
+export async function forcedWarehouseId(ctx?: WarehouseCtxLike): Promise<string | null> {
   const c = ctx ?? (await requireOrgContext());
   if (!isWarehouseScoped(c.role as Role)) return null;
   const access = await getWarehouseAccess(c);
