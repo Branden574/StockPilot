@@ -49,14 +49,20 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
 
   const { po, lines } = result;
 
-  const [inventory, suppliers, locations, receiptData, warehouses] = await Promise.all([
-    inventorySvc.list({ limit: 1000, status: 'all', itemType: 'all' }),
+  const [suppliers, locations, receiptData, warehouses] = await Promise.all([
     suppliersSvc.list(),
     locationsSvc.list(),
     receivingSvc.listForPurchaseOrder(id),
     warehousesSvc.list(),
   ]);
-  const itemsById = new Map(inventory.items.map((i) => [i.id, i]));
+
+  // Load only the items actually referenced on this PO (lines + receipts)
+  // instead of the whole inventory. Caps memory + DB scan to ~PO size.
+  const lineItemIds = lines.map((l) => l.item_id as string).filter(Boolean);
+  const receiptItemIds = receiptData.lines.map((l) => l.item_id as string).filter(Boolean);
+  const referencedIds = Array.from(new Set([...lineItemIds, ...receiptItemIds]));
+  const referencedItems = await inventorySvc.byIds(referencedIds);
+  const itemsById = new Map(referencedItems.map((i) => [i.id, i]));
 
   const supplier = suppliers.find((s) => s.id === po.supplier_id);
   const location = locations.find((l) => l.id === po.destination_location_id);
@@ -185,7 +191,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
               receipts={receiptData.receipts}
               lines={receiptData.lines}
               items={Object.fromEntries(
-                inventory.items.map((i) => [i.id, { name: i.name, sku: i.sku }]),
+                referencedItems.map((i) => [i.id, { name: i.name, sku: i.sku }]),
               )}
               canReverse={canReverse}
             />
