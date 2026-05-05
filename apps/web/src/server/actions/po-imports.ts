@@ -242,19 +242,30 @@ export async function createItemsFromPoLinesAction(input: {
 
       // Save a vendor_item_mapping so future POs from the same vendor
       // with the same item number auto-match without manual mapping.
+      // Best-effort: a mapping failure shouldn't undo the item we just
+      // created. The user can still pick the new item from the dropdown
+      // even if the mapping didn't save.
       if (vendorItemNumber || vendorProductNumber || auxiliaryNumber) {
-        await mappingsSvc.upsert({
-          vendorId: parsed.data.vendorId,
-          itemId: item.id as string,
-          vendorItemNumber,
-          vendorProductNumber,
-          auxiliaryNumber,
-          vendorDescription: description,
-          vendorUom: (l.uom_original as string | null) ?? null,
-          packQty: null,
-          conversionFactor: null,
-        });
-        mapped++;
+        try {
+          await mappingsSvc.upsert({
+            vendorId: parsed.data.vendorId,
+            itemId: item.id as string,
+            vendorItemNumber,
+            vendorProductNumber,
+            auxiliaryNumber,
+            vendorDescription: description,
+            vendorUom: (l.uom_original as string | null) ?? null,
+            packQty: null,
+            conversionFactor: null,
+          });
+          mapped++;
+        } catch (e) {
+          console.error('vendor mapping upsert failed', {
+            itemId: item.id,
+            vendorItemNumber,
+            error: e instanceof Error ? e.message : e,
+          });
+        }
       }
     }
 
