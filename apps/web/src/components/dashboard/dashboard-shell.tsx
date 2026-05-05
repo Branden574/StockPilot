@@ -5,6 +5,7 @@ import * as React from 'react';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { VersionNotifier } from '@/components/version-notifier';
 
 import type { Role } from '@stockpilot/core';
 
@@ -114,6 +115,8 @@ export function DashboardShell({
           </SheetContent>
         </Sheet>
       )}
+
+      <VersionNotifier />
     </div>
   );
 }
