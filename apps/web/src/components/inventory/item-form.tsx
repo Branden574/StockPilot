@@ -504,46 +504,13 @@ export function ItemForm({
         <Field label="Unit of measure">
           <Input placeholder="unit, kg, lb, hr…" {...register('unitOfMeasure')} />
         </Field>
-        <Field
-          label="Tracking"
-          error={errors.trackingType?.message}
-        >
-          <div className="grid grid-cols-3 gap-2">
-            {(
-              [
-                { value: 'none', title: 'None', desc: 'Just a quantity. Default.' },
-                { value: 'lot', title: 'Lot', desc: 'Capture lot # + expiry on receive.' },
-                {
-                  value: 'serial',
-                  title: 'Serial',
-                  desc: 'Unique serial per unit on receive.',
-                },
-              ] as const
-            ).map((opt) => {
-              const active = watch('trackingType') === opt.value;
-              return (
-                <label
-                  key={opt.value}
-                  className={
-                    'cursor-pointer rounded-lg border p-3 text-xs transition-colors ' +
-                    (active
-                      ? 'border-primary bg-primary/5'
-                      : 'border-border bg-card hover:bg-muted/40')
-                  }
-                >
-                  <input
-                    type="radio"
-                    value={opt.value}
-                    {...register('trackingType')}
-                    className="sr-only"
-                  />
-                  <div className="font-medium">{opt.title}</div>
-                  <div className="text-muted-foreground mt-0.5">{opt.desc}</div>
-                </label>
-              );
-            })}
-          </div>
-        </Field>
+        {/*
+          Tracking radio (None / Lot / Serial) removed per user request.
+          trackingType still defaults to 'none' in the schema; advanced
+          users can flip it via DB or a future admin form. The receive
+          dialog's lot/serial capture only fires when an item has
+          tracking_type set, so removing the field is safe.
+        */}
         {isEdit && (
           <p className="text-xs text-muted-foreground">
             On-hand quantity is read-only here. Use the &ldquo;Adjust stock&rdquo; action on the item page.
