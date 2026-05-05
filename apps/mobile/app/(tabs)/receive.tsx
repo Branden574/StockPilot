@@ -121,6 +121,15 @@ export default function Receive() {
         <Text style={styles.subtitle}>
           {pos.length} open purchase order{pos.length === 1 ? '' : 's'}
         </Text>
+        <Pressable
+          onPress={() => router.push('/scan-po')}
+          style={({ pressed }) => [
+            styles.scanCta,
+            pressed && { opacity: 0.7 },
+          ]}
+        >
+          <Text style={styles.scanCtaText}>📷  Scan a new PO with AI</Text>
+        </Pressable>
       </View>
       {loading ? (
         <View style={styles.center}>
@@ -196,6 +205,15 @@ const styles = StyleSheet.create({
   },
   title: { color: theme.text, fontSize: 24, fontWeight: '700' },
   subtitle: { color: theme.textMuted, fontSize: 13, marginTop: 2 },
+  scanCta: {
+    marginTop: space.md,
+    backgroundColor: theme.primary,
+    paddingVertical: space.sm + 2,
+    paddingHorizontal: space.md,
+    borderRadius: radius.md,
+    alignItems: 'center',
+  },
+  scanCtaText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   row: {
     flexDirection: 'row',

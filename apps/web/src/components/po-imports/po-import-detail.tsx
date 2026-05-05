@@ -156,6 +156,12 @@ export function PoImportDetail({
     [lines, overrides, items],
   );
 
+  const isScan = header.source_type === 'scan';
+  const overallConf = header.extraction_confidence;
+  const lowConfLineCount = lines.filter(
+    (l) => l.extraction_confidence != null && l.extraction_confidence < 0.85,
+  ).length;
+
   return (
     <div className="space-y-6">
       <div className="border-border bg-card flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 text-sm">
@@ -164,6 +170,21 @@ export function PoImportDetail({
           {header.source_type.toUpperCase()} ·{' '}
           {(header.file_size / 1024).toFixed(1)} KB
         </span>
+        {isScan && overallConf != null && (
+          <span
+            className={
+              'inline-flex items-center rounded-full border px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-wide ' +
+              (overallConf < 0.7
+                ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                : overallConf < 0.85
+                  ? 'border-warning/40 bg-warning/10 text-warning'
+                  : 'border-success/40 bg-success/10 text-success')
+            }
+            title={`Vision-model overall confidence: ${Math.round(overallConf * 100)}%`}
+          >
+            {Math.round(overallConf * 100)}% confidence
+          </span>
+        )}
         {header.parse_error && (
           <span className="text-destructive">{header.parse_error}</span>
         )}
@@ -178,6 +199,20 @@ export function PoImportDetail({
           )}
         </div>
       </div>
+
+      {isScan && lowConfLineCount > 0 && (
+        <div className="border-warning/40 bg-warning/5 text-foreground rounded-lg border px-4 py-3 text-sm">
+          <p className="font-medium">
+            {lowConfLineCount} line{lowConfLineCount === 1 ? '' : 's'} need a
+            quick review
+          </p>
+          <p className="text-muted-foreground mt-0.5 text-xs">
+            The vision model wasn't fully sure on those — they're highlighted
+            yellow (low confidence) or red (very low). Skim them, fix any
+            wrong character, then approve.
+          </p>
+        </div>
+      )}
 
       {canApprove && (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -273,11 +308,36 @@ export function PoImportDetail({
                 o.itemId !== undefined ? o.itemId : l.item_id;
               const isUnmappedInventory =
                 l.line_type === 'inventory' && o.skip !== true && !effectiveItemId;
+              // Extraction-confidence highlight (only meaningful for
+              // source_type='scan'; deterministic-parsed CSV/PDF rows
+              // have null confidence and render in the default tone).
+              const conf = l.extraction_confidence;
+              const confClass =
+                conf == null
+                  ? ''
+                  : conf < 0.7
+                    ? 'bg-destructive/5'
+                    : conf < 0.85
+                      ? 'bg-warning/5'
+                      : '';
               return (
-                <TableRow key={l.id}>
+                <TableRow key={l.id} className={confClass}>
                   <TableCell className="tabular-nums">{l.line_number}</TableCell>
                   <TableCell className="max-w-[280px] truncate">
                     {l.description}
+                    {conf != null && conf < 0.85 && (
+                      <span
+                        className={
+                          'ml-2 inline-flex items-center rounded-full border px-1.5 py-px text-[9.5px] font-medium uppercase tracking-wide ' +
+                          (conf < 0.7
+                            ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                            : 'border-warning/40 bg-warning/10 text-warning')
+                        }
+                        title={`Vision-model confidence: ${Math.round(conf * 100)}%`}
+                      >
+                        {Math.round(conf * 100)}%
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className="font-mono text-xs">
                     {l.vendor_item_number ?? '—'}

@@ -41,6 +41,8 @@ const serverSchema = z.object({
 
   RESEND_API_KEY: optionalSecret.transform((s) => s.trim()),
   RESEND_FROM_EMAIL: z.string().transform((s) => s.trim()).default('StockPilot <hello@stockpilot.app>'),
+
+  GEMINI_API_KEY: optionalSecret.transform((s) => s.trim()),
 });
 
 const clientSchema = z.object({
