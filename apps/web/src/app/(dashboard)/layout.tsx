@@ -16,7 +16,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const ctx = await requireOrgContext();
   const supabase = await createClient();
 
-  const [access, activeWarehouseId, orgRow, factorsRes] = await Promise.all([
+  const [access, activeWarehouseId, orgRow, factorsRes, membershipsRes] = await Promise.all([
     getWarehouseAccess(),
     getActiveWarehouseFilter(),
     supabase
@@ -25,7 +25,32 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       .eq('id', ctx.organizationId)
       .maybeSingle(),
     supabase.auth.mfa.listFactors(),
+    supabase
+      .from('organization_members')
+      .select('role, organizations:organization_id (id, name, logo_url)')
+      .eq('user_id', ctx.userId)
+      .not('accepted_at', 'is', null),
   ]);
+
+  const memberships = (membershipsRes.data ?? [])
+    .map((row) => {
+      const r = row as {
+        role: string;
+        organizations: { id: string; name: string; logo_url: string | null }
+          | { id: string; name: string; logo_url: string | null }[]
+          | null;
+      };
+      const org = Array.isArray(r.organizations) ? r.organizations[0] : r.organizations;
+      if (!org) return null;
+      return {
+        id: org.id,
+        name: org.name,
+        logoUrl: org.logo_url ?? null,
+        role: r.role,
+      };
+    })
+    .filter((m): m is { id: string; name: string; logoUrl: string | null; role: string } => Boolean(m))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   // ── MFA enforcement ────────────────────────────────────────────────
   // Banner instead of redirect: the previous redirect-on-every-page-load
@@ -82,8 +107,10 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         email={ctx.email}
         fullName={ctx.fullName}
         avatarUrl={ctx.avatarUrl}
+        organizationId={ctx.organizationId}
         organizationName={ctx.organizationName}
         organizationLogoUrl={(orgRow.data?.logo_url as string | null) ?? null}
+        memberships={memberships}
         userName={ctx.fullName ?? ctx.email}
         userRole={`${ROLE_LABELS[ctx.role].label} · ${ctx.organizationName}`}
         role={ctx.role}

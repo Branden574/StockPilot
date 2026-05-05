@@ -15,8 +15,10 @@ interface DashboardShellProps {
   email: string;
   fullName: string | null;
   avatarUrl: string | null;
+  organizationId: string;
   organizationName: string;
   organizationLogoUrl?: string | null;
+  memberships: Array<{ id: string; name: string; logoUrl: string | null; role: string }>;
   userName: string | null;
   userRole: string;
   role: Role;
@@ -32,8 +34,10 @@ export function DashboardShell({
   email,
   fullName,
   avatarUrl,
+  organizationId,
   organizationName,
   organizationLogoUrl,
+  memberships,
   userName,
   userRole,
   role,
@@ -83,8 +87,10 @@ export function DashboardShell({
 
       <Sidebar
         className="hidden lg:flex"
+        organizationId={organizationId}
         organizationName={organizationName}
         organizationLogoUrl={organizationLogoUrl ?? null}
+        memberships={memberships}
         userName={userName}
         userRole={userRole}
         role={role}
@@ -126,8 +132,10 @@ export function DashboardShell({
             <SheetTitle className="sr-only">Dashboard navigation</SheetTitle>
             <Sidebar
               className="flex w-full border-r-0"
+              organizationId={organizationId}
               organizationName={organizationName}
               organizationLogoUrl={organizationLogoUrl ?? null}
+              memberships={memberships}
               userName={userName}
               userRole={userRole}
               role={role}
