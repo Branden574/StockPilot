@@ -61,7 +61,13 @@ export async function updateSession(request: NextRequest) {
 
   const { pathname, search } = request.nextUrl;
   const isProtected = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
-  const isAuthRoute = AUTH_ROUTES.some((p) => pathname.startsWith(p));
+  // /signin/mfa is intentionally reachable WHILE signed in at AAL1 — that's
+  // the whole point of the challenge page. Treating it as a generic auth
+  // route caused a redirect loop with the dashboard layout's MFA gate.
+  const isAuthRoute =
+    AUTH_ROUTES.some((p) => pathname.startsWith(p)) &&
+    pathname !== '/signin/mfa' &&
+    !pathname.startsWith('/signin/mfa/');
 
   if (isProtected && !user) {
     const url = request.nextUrl.clone();
