@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { OrgNameEditor } from '@/components/settings/org-name-editor';
 import { TerminologyEditor } from '@/components/settings/terminology-editor';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -41,18 +42,33 @@ export default async function OrganizationSettingsPage() {
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Labels</CardTitle>
-          <CardDescription>
-            Rename the top-level grouping and physical-site terms to match how your
-            organization talks about them. Applies everywhere in the app.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <TerminologyEditor current={current} defaults={DEFAULT_TERMINOLOGY} />
-        </CardContent>
-      </Card>
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Name</CardTitle>
+            <CardDescription>
+              The display name of your organization. Shows in the sidebar header
+              and on outbound emails.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OrgNameEditor current={(data?.name as string | null) ?? ''} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Labels</CardTitle>
+            <CardDescription>
+              Rename the top-level grouping and physical-site terms to match how
+              your organization talks about them. Applies everywhere in the app.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <TerminologyEditor current={current} defaults={DEFAULT_TERMINOLOGY} />
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
