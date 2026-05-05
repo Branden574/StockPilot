@@ -38,6 +38,7 @@ function RootGate() {
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="item/[id]" options={{ presentation: 'card' }} />
+      <Stack.Screen name="scan-po/index" options={{ presentation: 'card' }} />
     </Stack>
   );
 }

@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import { audit } from './audit';
 import {
   VendorItemMappingsService,
@@ -15,6 +17,8 @@ import {
   type ServiceContext,
 } from './context';
 import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
+import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import type {
   ApprovePoImportInput,
@@ -28,7 +32,9 @@ export interface PoImportRow {
   id: string;
   organization_id: string;
   uploaded_by: string;
-  source_type: ParseSourceType | 'xlsx' | 'manual';
+  source_type: ParseSourceType | 'xlsx' | 'manual' | 'scan';
+  extraction_confidence: number | null;
+  extraction_model: string | null;
   vendor_id: string | null;
   warehouse_id: string | null;
   file_name: string;
@@ -60,6 +66,9 @@ export interface PoImportLineRow {
   item_id: string | null;
   match_status: PoImportMatchStatus;
   match_confidence: number | null;
+  /** OCR/extraction confidence (0-1). Populated for source_type='scan';
+      null for deterministic-parsed CSV/PDF imports (those are 100%). */
+  extraction_confidence: number | null;
   exception_reason: string | null;
 }
 
@@ -76,7 +85,8 @@ export class PoImportsService {
       .select(
         `id, organization_id, uploaded_by, source_type, vendor_id, warehouse_id,
          file_name, file_mime_type, file_size, storage_path, sha256, status,
-         parse_error, approved_po_id, created_at, updated_at`,
+         parse_error, approved_po_id, created_at, updated_at,
+         extraction_confidence, extraction_model`,
       )
       .eq('organization_id', this.ctx.organizationId)
       .order('created_at', { ascending: false });
@@ -155,6 +165,190 @@ export class PoImportsService {
       after: { fileName: input.fileName, sha256: input.sha256 },
     });
     return { id: data.id as string, duplicateOf: null };
+  }
+
+  /**
+   * Phone-scanned PO end-to-end. Accepts raw image/PDF buffers (one or
+   * more — multi-page POs supported), uploads them to the po-imports
+   * bucket, runs Gemini Flash extraction, persists the header + lines
+   * with extraction_confidence per line, applies vendor-mapping
+   * resolution, and returns the import id ready for review.
+   *
+   * Single transaction-ish flow that mirrors createFromUpload +
+   * parseImport, except we never call the deterministic parsers.
+   */
+  async createFromScan(input: {
+    files: Array<{ bytes: Uint8Array; mimeType: string; fileName: string }>;
+    vendorId?: string | null;
+    warehouseId?: string | null;
+  }): Promise<{ id: string; duplicateOf: string | null; lowConfidenceLines: number }> {
+    assertPermission(this.ctx, 'purchase_orders:manage');
+    if (input.files.length === 0) {
+      throw new ServiceError('validation_error', 'No files provided.');
+    }
+    if (input.files.length > 5) {
+      throw new ServiceError(
+        'validation_error',
+        'Limit is 5 frames per scan — split larger POs into separate scans.',
+      );
+    }
+
+    // Hash the concatenated bytes for dedup.
+    const hash = createHash('sha256');
+    let totalSize = 0;
+    for (const f of input.files) {
+      hash.update(f.bytes);
+      totalSize += f.bytes.byteLength;
+    }
+    const sha256 = hash.digest('hex');
+
+    // Duplicate check on the same scan (re-uploading the same bytes).
+    const { data: dup } = await this.ctx.supabase
+      .from('po_imports')
+      .select('id, status')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('sha256', sha256)
+      .not('status', 'in', '(failed,canceled,duplicate)')
+      .maybeSingle();
+    if (dup) {
+      return {
+        id: dup.id as string,
+        duplicateOf: dup.id as string,
+        lowConfidenceLines: 0,
+      };
+    }
+
+    // Upload each file to storage. Use the admin client because the
+    // standard po-imports bucket policy expects user-uploaded paths;
+    // service-role bypasses RLS for the bulk-upload case.
+    const admin = createAdminClient();
+    const baseFileName = input.files[0]!.fileName;
+    const baseFile = input.files[0]!;
+    const ext = baseFile.mimeType === 'application/pdf' ? 'pdf' : 'jpg';
+    const storagePath = `${this.ctx.organizationId}/po-imports/${sha256}.${ext}`;
+
+    // Upload only the FIRST file as the canonical record (used for re-display
+    // / re-extraction). Multi-frame uploads send all to Gemini but we keep
+    // one file tracked. Gemini's extraction merges them.
+    const { error: upErr } = await admin.storage
+      .from('po-imports')
+      .upload(storagePath, baseFile.bytes, {
+        contentType: baseFile.mimeType,
+        upsert: true,
+      });
+    if (upErr) {
+      throw new ServiceError('internal_error', `Storage upload failed: ${upErr.message}`);
+    }
+
+    // Run extraction over every frame.
+    const extracted = await extractPoFromMedia(
+      input.files.map((f) => ({
+        base64: Buffer.from(f.bytes).toString('base64'),
+        mimeType: f.mimeType,
+      })),
+    );
+
+    // Insert the po_imports row at status='needs_review' if any line is
+    // low-confidence, else 'parsed'. The review UI surfaces both.
+    const lowConfidenceCount = extracted.lines.filter((l) => l.confidence < 0.85).length;
+    const status: PoImportStatus =
+      lowConfidenceCount > 0 ? 'needs_review' : 'parsed';
+
+    const { data: imp, error: impErr } = await this.ctx.supabase
+      .from('po_imports')
+      .insert({
+        organization_id: this.ctx.organizationId,
+        uploaded_by: this.ctx.userId,
+        source_type: 'scan',
+        vendor_id: input.vendorId ?? null,
+        warehouse_id: input.warehouseId ?? null,
+        file_name: baseFileName,
+        file_mime_type: baseFile.mimeType,
+        file_size: totalSize,
+        storage_path: storagePath,
+        sha256,
+        status,
+        parsed_json: extracted,
+        extraction_confidence: extracted.overallConfidence,
+        extraction_model: SCAN_MODEL_NAME,
+      })
+      .select('id')
+      .single();
+    if (impErr || !imp) {
+      throw new ServiceError(
+        'internal_error',
+        `Could not record the scan: ${impErr?.message ?? 'unknown'}`,
+      );
+    }
+    const importId = imp.id as string;
+
+    // Apply vendor-mapping resolution if a vendor was specified.
+    const mappings: MappingRow[] = input.vendorId
+      ? await new VendorItemMappingsService(this.ctx).listForVendor(input.vendorId)
+      : [];
+
+    const linesPayload = extracted.lines.map((l) => {
+      const isInventory = l.lineType === 'inventory';
+      let item_id: string | null = null;
+      let match_status: PoImportMatchStatus = isInventory ? 'needs_review' : 'non_inventory';
+      let exception_reason: string | null = isInventory
+        ? 'No mapping for vendor item number'
+        : null;
+
+      if (isInventory && l.vendorSku) {
+        const m = matchByVendorNumber(mappings, {
+          vendorItemNumber: l.vendorSku,
+          vendorProductNumber: null,
+          auxiliaryNumber: null,
+        });
+        if (m) {
+          item_id = m.itemId;
+          match_status = 'mapped';
+          exception_reason = null;
+        }
+      }
+
+      return {
+        po_import_id: importId,
+        line_number: l.lineNumber,
+        line_type: l.lineType,
+        qty_ordered_original: l.quantity,
+        uom_original: l.uom,
+        description: l.description,
+        unit_cost: l.unitPrice,
+        line_total: l.lineTotal,
+        vendor_item_number: l.vendorSku || null,
+        item_id,
+        match_status,
+        match_confidence: null,
+        extraction_confidence: l.confidence,
+        exception_reason,
+        parsed_json: l,
+      };
+    });
+
+    if (linesPayload.length > 0) {
+      const { error: linesErr } = await this.ctx.supabase
+        .from('po_import_lines')
+        .insert(linesPayload);
+      if (linesErr) throw new ServiceError('internal_error', linesErr.message);
+    }
+
+    await audit({
+      event: 'po_import.uploaded',
+      entityType: 'po_import',
+      entityId: importId,
+      after: {
+        sourceType: 'scan',
+        fileName: baseFileName,
+        sha256,
+        overallConfidence: extracted.overallConfidence,
+        lineCount: extracted.lines.length,
+        lowConfidenceLines: lowConfidenceCount,
+      },
+    });
+
+    return { id: importId, duplicateOf: null, lowConfidenceLines: lowConfidenceCount };
   }
 
   /**
