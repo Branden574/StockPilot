@@ -67,6 +67,18 @@ export function DashboardShell({
 
   return (
     <div className="bg-background flex h-screen overflow-hidden">
+      {/*
+        Skip link: hidden until keyboard-focused. Lets keyboard / screen-
+        reader users jump past the sidebar + topbar straight into the
+        main content. Tabbing into a fresh page surfaces this first.
+      */}
+      <a
+        href="#main-content"
+        className="bg-foreground text-background focus-visible:outline-foreground/70 sr-only z-50 rounded-md px-3 py-2 text-sm font-medium focus-visible:not-sr-only focus-visible:absolute focus-visible:left-3 focus-visible:top-3 focus-visible:outline focus-visible:outline-2"
+      >
+        Skip to main content
+      </a>
+
       <Sidebar
         className="hidden lg:flex"
         organizationName={organizationName}
@@ -92,7 +104,11 @@ export function DashboardShell({
           Net effect: one scrollbar (main's), no body scroll, and short
           forms fill the whole panel without an obvious cut-off.
         */}
-        <main className="bg-card flex-1 overflow-y-auto">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="bg-card flex-1 overflow-y-auto focus:outline-none"
+        >
           <div className="min-h-full">{children}</div>
         </main>
       </div>

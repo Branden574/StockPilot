@@ -81,15 +81,21 @@ export function Sidebar({
         </Link>
       </div>
 
-      {/* Org pill */}
-      <button
-        type="button"
-        className="border-border bg-card mx-3 mt-3 flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
+      {/* Org pill — currently a static label; will become an org-switcher
+          once multi-org membership lands. Marked as a label rather than
+          a button so a screen reader doesn't promise interactive
+          behavior we don't have yet. */}
+      <div
+        role="presentation"
+        className="border-border bg-card mx-3 mt-3 flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px] text-[var(--ed-ink-2)]"
       >
         <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]" />
-        <span className="flex-1 truncate text-left">{organizationName}</span>
-        <ChevronDown className="h-3 w-3 opacity-60" />
-      </button>
+        <span className="flex-1 truncate text-left">
+          <span className="sr-only">Organization: </span>
+          {organizationName}
+        </span>
+        <ChevronDown aria-hidden className="h-3 w-3 opacity-60" />
+      </div>
 
       {/* Nav */}
       <nav className="scrollbar-thin flex-1 overflow-y-auto px-2 py-2.5">
