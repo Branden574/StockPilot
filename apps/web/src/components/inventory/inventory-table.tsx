@@ -39,7 +39,14 @@ interface InventoryTableProps {
   initialQuery?: string;
 }
 
-const VIEWS = ['All items', 'Low + critical', 'Out of stock', 'Recently updated'] as const;
+const VIEWS = ['All items', 'Low + critical', 'Out of stock'] as const;
+type View = (typeof VIEWS)[number];
+
+function paramsToView(stock: string | null): View {
+  if (stock === 'low') return 'Low + critical';
+  if (stock === 'out') return 'Out of stock';
+  return 'All items';
+}
 
 function deriveStatus(qty: number, reorder: number): 'ok' | 'warn' | 'crit' {
   if (qty <= 0) return 'crit';
@@ -73,8 +80,17 @@ export function InventoryTable({ items, lookups, total, initialQuery = '' }: Inv
   const router = useRouter();
   const params = useSearchParams();
   const [q, setQ] = React.useState(initialQuery);
-  const [view, setView] = React.useState<(typeof VIEWS)[number]>('All items');
+  const view = paramsToView(params.get('stock'));
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
+
+  function hrefForView(v: View): string {
+    const next = new URLSearchParams(params.toString());
+    if (v === 'Low + critical') next.set('stock', 'low');
+    else if (v === 'Out of stock') next.set('stock', 'out');
+    else next.delete('stock');
+    const qs = next.toString();
+    return qs ? `/dashboard/inventory?${qs}` : '/dashboard/inventory';
+  }
 
   React.useEffect(() => {
     const t = setTimeout(() => {
@@ -106,10 +122,10 @@ export function InventoryTable({ items, lookups, total, initialQuery = '' }: Inv
       {/* Saved views */}
       <div className="flex flex-wrap items-center gap-2">
         {VIEWS.map((v) => (
-          <button
+          <Link
             key={v}
-            type="button"
-            onClick={() => setView(v)}
+            href={hrefForView(v)}
+            scroll={false}
             className={cn(
               'inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[11.5px] transition-colors',
               v === view
@@ -118,7 +134,7 @@ export function InventoryTable({ items, lookups, total, initialQuery = '' }: Inv
             )}
           >
             {v}
-          </button>
+          </Link>
         ))}
         <button
           type="button"

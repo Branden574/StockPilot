@@ -1,12 +1,13 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ImagePlus, Loader2, Upload, X } from 'lucide-react';
+import { ImagePlus, Loader2, ScanLine, Upload, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { IsbnScanner } from '@/components/inventory/isbn-scanner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -150,6 +151,35 @@ export function ItemForm({
   const [author, setAuthor] = React.useState<string>(
     isBook ? String((defaults?.customFields as Record<string, unknown> | undefined)?.author ?? '') : '',
   );
+  const [scannerOpen, setScannerOpen] = React.useState(false);
+  const [lookingUp, setLookingUp] = React.useState(false);
+
+  async function handleIsbnDetected(isbn: string) {
+    setValue('barcode', isbn, { shouldDirty: true });
+    setLookingUp(true);
+    try {
+      const res = await fetch(`/api/books/lookup?isbn=${encodeURIComponent(isbn)}`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        toast.error(body.error ?? 'No metadata found — fill in manually');
+        return;
+      }
+      const data = (await res.json()) as {
+        title: string | null;
+        authors: string[];
+        description: string | null;
+      };
+      if (data.title) setValue('name', data.title, { shouldDirty: true });
+      if (data.description)
+        setValue('description', data.description.slice(0, 5000), { shouldDirty: true });
+      if (data.authors.length > 0) setAuthor(data.authors.join(', '));
+      toast.success('Book details filled from ISBN');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Lookup failed');
+    } finally {
+      setLookingUp(false);
+    }
+  }
 
   const watchedWarehouseId = watch('warehouseId') ?? forcedWarehouseId ?? null;
   const watchedCharterId = watch('charterId') ?? null;
@@ -353,10 +383,27 @@ export function ItemForm({
             label={isBook ? 'ISBN' : 'Barcode'}
             error={errors.barcode?.message}
           >
-            <Input
-              placeholder={isBook ? '978-…' : 'Scan or type'}
-              {...register('barcode')}
-            />
+            {isBook ? (
+              <div className="flex gap-2">
+                <Input placeholder="978-…" {...register('barcode')} />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setScannerOpen(true)}
+                  disabled={lookingUp}
+                >
+                  {lookingUp ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ScanLine className="h-3.5 w-3.5" />
+                  )}
+                  Scan
+                </Button>
+              </div>
+            ) : (
+              <Input placeholder="Scan or type" {...register('barcode')} />
+            )}
           </Field>
         </div>
         {isBook && (
@@ -539,6 +586,13 @@ export function ItemForm({
           )}
         </Button>
       </div>
+      {isBook && (
+        <IsbnScanner
+          open={scannerOpen}
+          onOpenChange={setScannerOpen}
+          onDetected={handleIsbnDetected}
+        />
+      )}
     </form>
   );
 }
