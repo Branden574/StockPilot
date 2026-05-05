@@ -8,6 +8,7 @@ import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
+import { SuppliersService } from '@/server/services/suppliers';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
 export default async function BooksPage({
@@ -16,10 +17,11 @@ export default async function BooksPage({
   searchParams: Promise<{ q?: string; status?: string; stock?: string }>;
 }) {
   const params = await searchParams;
-  const [inventorySvc, categoriesSvc, locationsSvc, imagesSvc, warehouseFilter] = await Promise.all([
+  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, imagesSvc, warehouseFilter] = await Promise.all([
     InventoryService.forCurrentUser(),
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
+    SuppliersService.forCurrentUser(),
     ItemImagesService.forCurrentUser(),
     getActiveWarehouseFilter(),
   ]);
@@ -32,7 +34,7 @@ export default async function BooksPage({
       ? params.status
       : 'active';
 
-  const [inventory, categories, locations] = await Promise.all([
+  const [inventory, categories, locations, suppliers] = await Promise.all([
     inventorySvc.list({
       q: params.q,
       status: lifecycleStatus,
@@ -43,6 +45,7 @@ export default async function BooksPage({
     }),
     categoriesSvc.list(),
     locationsSvc.list(),
+    suppliersSvc.list(),
   ]);
 
   // Batched primary-image fetch (1 select + 1 createSignedUrls) so each
@@ -121,6 +124,14 @@ export default async function BooksPage({
             items={itemsWithImages}
             total={inventory.total}
             lookups={lookups}
+            categories={categories.map((c) => ({
+              id: c.id as string,
+              name: c.name as string,
+            }))}
+            suppliers={suppliers.map((s) => ({
+              id: s.id as string,
+              name: s.name as string,
+            }))}
             initialQuery={params.q}
             rowLinkPrefix="/dashboard/books"
             basePath="/dashboard/books"
