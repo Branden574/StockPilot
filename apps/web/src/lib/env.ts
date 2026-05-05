@@ -50,7 +50,10 @@ const serverSchema = z.object({
   GEMINI_MODEL: z
     .string()
     .optional()
-    .default('gemini-1.5-flash')
+    // gemini-1.5-flash was retired (404 on v1beta). gemini-2.0-flash
+    // shows limit:0 free quota for some accounts. gemini-2.5-flash is
+    // the current production model with its own free quota allotment.
+    .default('gemini-2.5-flash')
     .transform((s) => s.trim()),
 });
 
