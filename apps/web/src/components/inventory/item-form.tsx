@@ -8,6 +8,7 @@ import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { IsbnScanner } from '@/components/inventory/isbn-scanner';
+import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -703,7 +704,36 @@ export function ItemForm({
         </div>
         <div className="grid grid-cols-3 gap-3">
           <Field label="On hand" error={errors.quantityOnHand?.message}>
-            <Input type="number" step="1" {...register('quantityOnHand', { valueAsNumber: true })} disabled={isEdit} />
+            {isEdit ? (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  step="1"
+                  {...register('quantityOnHand', { valueAsNumber: true })}
+                  disabled
+                  className="bg-muted/40 cursor-not-allowed opacity-70"
+                  aria-readonly
+                />
+                {defaults?.id && (
+                  <StockAdjustDialog
+                    itemId={defaults.id}
+                    itemName={defaults?.name ?? 'this item'}
+                    currentQuantity={defaults?.quantityOnHand ?? 0}
+                    trigger={
+                      <Button type="button" variant="outline" size="sm" className="shrink-0">
+                        Adjust
+                      </Button>
+                    }
+                  />
+                )}
+              </div>
+            ) : (
+              <Input
+                type="number"
+                step="1"
+                {...register('quantityOnHand', { valueAsNumber: true })}
+              />
+            )}
           </Field>
           <Field label="Reorder at" error={errors.reorderPoint?.message}>
             <Input type="number" step="1" min="0" {...register('reorderPoint', { valueAsNumber: true })} />
@@ -724,7 +754,10 @@ export function ItemForm({
         */}
         {isEdit && (
           <p className="text-xs text-muted-foreground">
-            On-hand quantity is read-only here. Use the &ldquo;Adjust stock&rdquo; action on the item page.
+            On hand is locked here so every change goes through a stock
+            movement (audit trail + dashboard math depends on it). Click
+            <span className="font-medium"> Adjust</span> next to the field
+            to add or remove stock without leaving this page.
           </p>
         )}
       </Section>
