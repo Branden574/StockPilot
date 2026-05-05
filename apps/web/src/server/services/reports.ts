@@ -79,6 +79,28 @@ export interface ShrinkageReport {
   totalCost: number;
 }
 
+export interface SupplierScorecardRow {
+  supplierId: string;
+  supplierName: string;
+  totalPos: number;
+  receivedPos: number;
+  openPos: number;
+  totalSpend: number;
+  openValue: number;
+  onTimeRate: number | null; // 0..1, null when no comparable POs
+  avgLeadDays: number | null; // null when nothing fully received
+  fillRate: number | null; // 0..1, null when nothing ordered
+  lastReceivedAt: string | null;
+}
+
+export interface SupplierScorecardReport {
+  rangeDays: number;
+  rows: SupplierScorecardRow[];
+  totalPos: number;
+  totalSpend: number;
+  totalOpenValue: number;
+}
+
 export class ReportsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -373,5 +395,183 @@ export class ReportsService {
     }
 
     return { rangeDays: days, rows, totalUnits, totalCost };
+  }
+
+  /**
+   * Per-supplier performance over the last `days` days. Aggregates
+   * purchase_orders + purchase_order_items into:
+   *   - PO count (total, received, still open)
+   *   - Spend (committed total + open dollar value)
+   *   - On-time rate (received_at <= expected_at, only POs where both
+   *     are set)
+   *   - Avg lead time in days (ordered_at → received_at, full receipts)
+   *   - Fill rate (sum quantity_received / sum quantity_ordered) across
+   *     all PO items, weighted by qty
+   *   - Last received_at
+   *
+   * Only includes suppliers that had at least one PO in the window.
+   */
+  async supplierScorecard(days = 90): Promise<SupplierScorecardReport> {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: pos, error: posErr } = await this.ctx.supabase
+      .from('purchase_orders')
+      .select(
+        `id, supplier_id, status, ordered_at, expected_at, received_at,
+         total, created_at,
+         supplier:suppliers!supplier_id (name)`,
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .not('supplier_id', 'is', null)
+      .gte('created_at', since)
+      .order('created_at', { ascending: false });
+    if (posErr) throw new ServiceError('internal_error', posErr.message);
+
+    const poList = (pos ?? []) as Array<{
+      id: string;
+      supplier_id: string;
+      status: string;
+      ordered_at: string | null;
+      expected_at: string | null;
+      received_at: string | null;
+      total: number;
+      created_at: string;
+      supplier:
+        | { name: string }
+        | { name: string }[]
+        | null;
+    }>;
+
+    const poIds = poList.map((p) => p.id);
+    let poItems: Array<{
+      purchase_order_id: string;
+      quantity_ordered: number;
+      quantity_received: number;
+    }> = [];
+    if (poIds.length > 0) {
+      const { data: items, error: itemsErr } = await this.ctx.supabase
+        .from('purchase_order_items')
+        .select('purchase_order_id, quantity_ordered, quantity_received')
+        .in('purchase_order_id', poIds);
+      if (itemsErr) throw new ServiceError('internal_error', itemsErr.message);
+      poItems = (items ?? []) as typeof poItems;
+    }
+    const itemsByPo = new Map<
+      string,
+      { qtyOrdered: number; qtyReceived: number }
+    >();
+    for (const it of poItems) {
+      const cur = itemsByPo.get(it.purchase_order_id) ?? { qtyOrdered: 0, qtyReceived: 0 };
+      cur.qtyOrdered += Number(it.quantity_ordered) || 0;
+      cur.qtyReceived += Number(it.quantity_received) || 0;
+      itemsByPo.set(it.purchase_order_id, cur);
+    }
+
+    interface Bucket {
+      supplierId: string;
+      supplierName: string;
+      totalPos: number;
+      receivedPos: number;
+      openPos: number;
+      totalSpend: number;
+      openValue: number;
+      onTimeMatched: number;
+      onTimeHits: number;
+      leadDaysSum: number;
+      leadDaysCount: number;
+      qtyOrdered: number;
+      qtyReceived: number;
+      lastReceivedAt: string | null;
+    }
+    const byId = new Map<string, Bucket>();
+
+    const RECEIVABLE = new Set([
+      'expected_inbound',
+      'ordered',
+      'partially_received',
+    ]);
+
+    for (const po of poList) {
+      const supplierObj = Array.isArray(po.supplier) ? po.supplier[0] : po.supplier;
+      const name = supplierObj?.name ?? 'Unknown supplier';
+      const b: Bucket =
+        byId.get(po.supplier_id) ?? {
+          supplierId: po.supplier_id,
+          supplierName: name,
+          totalPos: 0,
+          receivedPos: 0,
+          openPos: 0,
+          totalSpend: 0,
+          openValue: 0,
+          onTimeMatched: 0,
+          onTimeHits: 0,
+          leadDaysSum: 0,
+          leadDaysCount: 0,
+          qtyOrdered: 0,
+          qtyReceived: 0,
+          lastReceivedAt: null,
+        };
+      b.totalPos++;
+      const total = Number(po.total) || 0;
+      b.totalSpend += total;
+      const isOpen = RECEIVABLE.has(po.status);
+      if (isOpen) {
+        b.openPos++;
+        b.openValue += total;
+      }
+      if (po.status === 'received') b.receivedPos++;
+
+      if (po.received_at && po.expected_at) {
+        b.onTimeMatched++;
+        if (new Date(po.received_at) <= new Date(po.expected_at)) {
+          b.onTimeHits++;
+        }
+      }
+      const startedAt = po.ordered_at ?? po.created_at;
+      if (po.received_at && startedAt && po.status === 'received') {
+        const ms = new Date(po.received_at).getTime() - new Date(startedAt).getTime();
+        if (ms > 0) {
+          b.leadDaysSum += ms / (1000 * 60 * 60 * 24);
+          b.leadDaysCount++;
+        }
+      }
+      if (po.received_at) {
+        if (!b.lastReceivedAt || po.received_at > b.lastReceivedAt) {
+          b.lastReceivedAt = po.received_at;
+        }
+      }
+      const qty = itemsByPo.get(po.id);
+      if (qty) {
+        b.qtyOrdered += qty.qtyOrdered;
+        b.qtyReceived += qty.qtyReceived;
+      }
+      byId.set(po.supplier_id, b);
+    }
+
+    const rows: SupplierScorecardRow[] = [...byId.values()]
+      .map((b) => ({
+        supplierId: b.supplierId,
+        supplierName: b.supplierName,
+        totalPos: b.totalPos,
+        receivedPos: b.receivedPos,
+        openPos: b.openPos,
+        totalSpend: b.totalSpend,
+        openValue: b.openValue,
+        onTimeRate:
+          b.onTimeMatched > 0 ? b.onTimeHits / b.onTimeMatched : null,
+        avgLeadDays:
+          b.leadDaysCount > 0 ? b.leadDaysSum / b.leadDaysCount : null,
+        fillRate: b.qtyOrdered > 0 ? b.qtyReceived / b.qtyOrdered : null,
+        lastReceivedAt: b.lastReceivedAt,
+      }))
+      .sort((a, b) => b.totalSpend - a.totalSpend);
+
+    return {
+      rangeDays: days,
+      rows,
+      totalPos: rows.reduce((s, r) => s + r.totalPos, 0),
+      totalSpend: rows.reduce((s, r) => s + r.totalSpend, 0),
+      totalOpenValue: rows.reduce((s, r) => s + r.openValue, 0),
+    };
   }
 }

@@ -115,6 +115,39 @@ export async function GET(
       return csvResponse(slug, csv);
     }
 
+    if (slug === 'supplier-scorecard') {
+      const days = parseDays(url.searchParams.get('days'));
+      const data = await svc.supplierScorecard(days);
+      const csv = toCsv(
+        [
+          'Supplier',
+          'POs',
+          'Open POs',
+          'Open value',
+          'Spend',
+          'On-time rate',
+          'Avg lead days',
+          'Fill rate',
+          'Last received',
+        ],
+        data.rows.map((r) => ({
+          Supplier: r.supplierName,
+          POs: r.totalPos,
+          'Open POs': r.openPos,
+          'Open value': r.openValue.toFixed(2),
+          Spend: r.totalSpend.toFixed(2),
+          'On-time rate':
+            r.onTimeRate == null ? '' : (r.onTimeRate * 100).toFixed(1) + '%',
+          'Avg lead days':
+            r.avgLeadDays == null ? '' : r.avgLeadDays.toFixed(1),
+          'Fill rate':
+            r.fillRate == null ? '' : (r.fillRate * 100).toFixed(1) + '%',
+          'Last received': r.lastReceivedAt ?? '',
+        })),
+      );
+      return csvResponse(slug, csv, `${days}d`);
+    }
+
     if (slug === 'shrinkage') {
       const days = parseDays(url.searchParams.get('days'));
       const data = await svc.shrinkage(days);
