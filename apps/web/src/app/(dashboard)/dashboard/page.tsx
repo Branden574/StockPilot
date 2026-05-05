@@ -4,6 +4,8 @@ import {
   ArrowUpRight,
   Boxes,
   ChevronRight,
+  ClipboardCheck,
+  ClipboardList,
   DollarSign,
   Download,
   PackageCheck,
@@ -20,8 +22,10 @@ import { Button } from '@/components/ui/button';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
 import {
+  getDashboardActions,
   getDashboardSummary,
   getLowStockItems,
+  getThirtyDayMetrics,
   MovementsService,
 } from '@/server/services/movements';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -37,11 +41,13 @@ const TODAY_LABEL = new Intl.DateTimeFormat('en-US', {
 export default async function DashboardHome() {
   // One PostgREST round trip per Promise.all branch; cache() de-dupes the
   // identity/context load across them.
-  const [ctx, summary, lowStock, recentMovements] = await Promise.all([
+  const [ctx, summary, lowStock, recentMovements, metrics, actions] = await Promise.all([
     requireOrgContext(),
     getDashboardSummary(), // 1 RPC: combined item count, OOS, low-stock, value
     getLowStockItems(5), // 1 RPC
     MovementsService.forCurrentUser().then((svc) => svc.list({ limit: 6 })), // 1 query, items embedded via FK
+    getThirtyDayMetrics(), // real per-day counts + by-type breakdown
+    getDashboardActions(), // open PO + cycle count counters for Shift Command
   ]);
 
   // Build a synthetic 30-day inventory-value series until a real time-series
@@ -52,18 +58,15 @@ export default async function DashboardHome() {
     return { value: Math.round(base + sin + (i / 30) * base * 0.06), label: `D-${30 - i}` };
   });
 
-  // Synthetic 30-day movement bar values
-  const barValues = [
-    12, 18, 16, 9, 14, 22, 17, 19, 11, 15, 21, 16, 18, 4, 8, 12, 11, 17, 19, 22, 18, 15, 13, 9, 12,
-    14, 17, 19, 11, 8,
-  ];
-
-  const breakdownRows = [
-    { label: 'Receive', share: 0.42, val: 14 },
-    { label: 'Sale', share: 0.66, val: 22 },
-    { label: 'Transfer', share: 0.27, val: 9 },
-    { label: 'Adjust', share: 0.12, val: 4 },
-  ];
+  // Real 30-day movement metrics — replaces the synthetic barValues +
+  // breakdownRows that lived here. Both are bounded by stock_movements
+  // count over 30d, so query cost is small.
+  const barValues = metrics.dailyCounts;
+  const breakdownRows = metrics.byType.slice(0, 5).map((b) => ({
+    label: b.type.replace(/^./, (s) => s.toUpperCase()),
+    share: b.share,
+    val: b.count,
+  }));
 
   const today = TODAY_LABEL.format(new Date());
   const attentionCount = summary.lowStockCount + summary.outOfStockCount;
@@ -153,6 +156,23 @@ export default async function DashboardHome() {
               href="/dashboard/inventory?stock=low&type=all"
               icon={AlertTriangle}
               label="Review low stock"
+              badge={
+                summary.lowStockCount + summary.outOfStockCount > 0
+                  ? formatNumber(summary.lowStockCount + summary.outOfStockCount)
+                  : undefined
+              }
+            />
+            <QuickAction
+              href="/dashboard/purchase-orders"
+              icon={ClipboardList}
+              label="Open purchase orders"
+              badge={actions.openPoCount > 0 ? formatNumber(actions.openPoCount) : undefined}
+            />
+            <QuickAction
+              href="/dashboard/cycle-counts"
+              icon={ClipboardCheck}
+              label="Cycle counts in progress"
+              badge={actions.openCycleCount > 0 ? formatNumber(actions.openCycleCount) : undefined}
             />
             <QuickAction
               href="/dashboard/purchase-orders/new"
@@ -224,6 +244,11 @@ export default async function DashboardHome() {
             <MiniBarChart values={barValues} height={120} />
             <hr className="border-border my-4" />
             <div className="flex flex-col gap-3">
+              {breakdownRows.length === 0 && (
+                <p className="text-muted-foreground py-1 text-[12px]">
+                  No movements in the last 30 days.
+                </p>
+              )}
               {breakdownRows.map((r) => (
                 <div key={r.label} className="flex items-center justify-between">
                   <span className="text-[12.5px]">{r.label}</span>
@@ -483,10 +508,13 @@ function QuickAction({
   href,
   icon: Icon,
   label,
+  badge,
 }: {
   href: string;
   icon: LucideIcon;
   label: string;
+  /** Optional count pill rendered before the chevron (e.g. open PO count). */
+  badge?: string;
 }) {
   return (
     <Link
@@ -497,7 +525,14 @@ function QuickAction({
         <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--ed-ink-3)]" />
         <span className="truncate">{label}</span>
       </span>
-      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--ed-ink-4)]" />
+      <span className="flex shrink-0 items-center gap-1.5">
+        {badge && (
+          <span className="border-border bg-card text-foreground inline-flex h-5 min-w-[20px] items-center justify-center rounded-full border px-1.5 font-mono text-[10.5px] tabular-nums">
+            {badge}
+          </span>
+        )}
+        <ChevronRight className="h-3.5 w-3.5 text-[var(--ed-ink-4)]" />
+      </span>
     </Link>
   );
 }
