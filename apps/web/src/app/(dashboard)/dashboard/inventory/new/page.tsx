@@ -60,7 +60,7 @@ export default async function NewItemPage() {
   );
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
+    <div className="container mx-auto flex min-h-full max-w-3xl flex-col px-4 py-8 sm:px-6">
       <div className="mb-6">
         <Link
           href="/dashboard/inventory"
@@ -73,7 +73,7 @@ export default async function NewItemPage() {
           Add a single item. Use CSV import for bulk in Phase 5.
         </p>
       </div>
-      <Card>
+      <Card className="flex-1">
         <CardHeader>
           <CardTitle>Item details</CardTitle>
         </CardHeader>
