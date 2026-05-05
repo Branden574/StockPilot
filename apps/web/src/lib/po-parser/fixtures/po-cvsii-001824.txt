@@ -1,59 +1,95 @@
-Staples Advantage
+
+
 Purchase Order
-PO Number: PO-CVSII-001824
-Date: 04/29/2026
-Description: STAFF SUPPLIES ROC
-Prepared By: Lillian Partida
-Status: Accounts Payable Documents
-Workflow: CVSII Multi Site PO
-Reason: Staff supplies. ROC
-Comments: Please bill to West Shaw. ROC orders need AS approval.
+PO-CVSII-001824
+177 Holston Dr.
+Lancaster, CA 93535
+(661)272-1225
+VENDOR INFORMATION
+Invoice Number:
+Staples Advantage
+P.O. Box 660409
+Dallas, TX     75266-0409
+DATE04/29/2026
+DESCRIPTIONSTAFF SUPPLIES ROC
+PREPARED BY
+Lillian Partida
+STATUS
+Accounts Payable Documents
+WORKFLOWCVSII Multi Site PO
+ReasonStaff supplies. ROC
+CommentsPlease bill to West Shaw. ROC orders need AS
+approval.
+SHIPPING INFORMATION
+4065 W. Ashcroft Ave.
+Fresno, CA, 93722
+Phone: (559)267-3832 Contact: Andrew Rosas
+QTYUOMDATEDESCRIPTIONUNIT COSTTOTAL
+1EA4/29/2026TAX23.11$23.11
+Item Number N/A Vendor Product No N/A
+COA # 62-00
+1PK4/29/2026Duracell Coppertop AA Alkaline Batteries, 24/Pack (MN1500B240001)16.67$16.67
+Item Number 867474 Vendor Product No 867474 Auxilary No 867474
+COA # 62-00
+1PK4/29/2026Duracell Coppertop AAA Alkaline Batteries, 24/Pack (MN2400B240002)16.67$16.67
+Item Number 867473 Vendor Product No 867473 Auxilary No 867473
+COA # 62-00
+1PK4/29/2026Kleenex Professional Facial Tissue, 2-Ply, 90 Sheets/Box, 6/Pack (21271)12.35$12.35
+Item Number 826830 Vendor Product No 826830 Auxilary No 826830
+COA # 62-00
+1BX4/29/2026Quality Park Clasp & Moistenable Glue Kraft Catalog Envelopes, 10" x 13", Brown
+Kraft, 100/Box (QUA37897)
+25.79$25.79
+Item Number 823287 Vendor Product No 823287 Auxilary No 823287
+COA # 62-00
+2BX4/29/2026Avery Note Cards Matte General Use Notecards, White, 60/Box (05315)15.66$31.32
+Item Number 466029 Vendor Product No 466029 Auxilary No 466029
+COA # 62-00
+1CT4/29/20268.5" x 11" Copy Paper, 20 lbs., 92 Brightness, White, 5000 Sheets/Carton
+(324791/200230)
+39.49$39.49
+Item Number 324791 Vendor Product No 324791 Auxilary No 324791
+COA # 62-00
+1PK4/29/2026Perk Eco Compostable Paper Plates, 9", White, 250/Pack (PK61287)31.28$31.28
+Item Number 24533897 Vendor Product No 24533897 Auxilary No 24533897
+COA # 62-00
+2PK4/29/2026Staples Standard Staples, 1/4" Leg Length, 5000/Box, 5/Pack (TR58092)4.23$8.46
+Item Number 24418175 Vendor Product No 24418175 Auxilary No 24418175
+COA # 62-00
+1PK4/29/2026Perk Polystyrene Spoon, Medium-Weight, White, 300/Pack (PK56400)8.91$8.91
+Item Number 24391001 Vendor Product No 24391001 Auxilary No 24391001
+COA # 62-00
+1PK4/29/2026Perk Polystyrene Fork, Medium-Weight, White, 300/Pack (PK56401)9.17$9.17
+Item Number 24390987 Vendor Product No 24390987 Auxilary No 24390987
+COA # 62-00
+8551
+Page 1 of 2Monday, May 4, 2026
+Approved
 
-Shipping Address: 4065 W. Ashcroft Ave., Fresno, CA 93722
-Contact: Andrew Rosas
-Phone: (559)267-3832
-
-QTY  UOM  DATE        DESCRIPTION                                                  UNIT COST     TOTAL
-
-1    EA   04/29/2026  TAX                                                          23.11         23.11
-
-1    PK   04/29/2026  Duracell Coppertop AA Alkaline Batteries, 24/Pack            16.67         16.67
-Item Number: 867474   Vendor Product No: 867474   Auxiliary No: 867474   COA #: 62-00
-
-1    PK   04/29/2026  Duracell Coppertop AAA Alkaline Batteries, 24/Pack           16.67         16.67
-Item Number: 867473   Vendor Product No: 867473   Auxiliary No: 867473   COA #: 62-00
-
-1    PK   04/29/2026  Kleenex Professional Facial Tissue, 2-Ply, 90 Sheets/Box, 6/Pack  18.49    18.49
-Item Number: 826830   Vendor Product No: 826830   Auxiliary No: 826830   COA #: 62-00
-
-1    BX   04/29/2026  Quality Park Catalog Envelopes, 100/Box                      14.99         14.99
-Item Number: 823287   Vendor Product No: 823287   Auxiliary No: 823287   COA #: 62-00
-
-2    BX   04/29/2026  Avery Note Cards, 60/Box                                     9.99          19.98
-Item Number: 466029   Vendor Product No: 466029   Auxiliary No: 466029   COA #: 62-00
-
-1    CT   04/29/2026  8.5 x 11 Copy Paper, 5000 Sheets/Carton                      48.99         48.99
-Item Number: 324791   Vendor Product No: 324791   Auxiliary No: 324791   COA #: 62-00
-
-1    PK   04/29/2026  Perk Compostable Paper Plates, 250/Pack                      22.49         22.49
-Item Number: 24533897 Vendor Product No: 24533897 Auxiliary No: 24533897 COA #: 62-00
-
-2    PK   04/29/2026  Staples Standard Staples, 5000/Box, 5/Pack                   8.49          16.98
-Item Number: 24418175 Vendor Product No: 24418175 Auxiliary No: 24418175 COA #: 62-00
-
-1    PK   04/29/2026  Perk Polystyrene Spoon, 300/Pack                             7.99          7.99
-Item Number: 24391001 Vendor Product No: 24391001 Auxiliary No: 24391001 COA #: 62-00
-
-1    PK   04/29/2026  Perk Polystyrene Fork, 300/Pack                              7.99          7.99
-Item Number: 24390987 Vendor Product No: 24390987 Auxiliary No: 24390987 COA #: 62-00
-
-1    CT   04/29/2026  Perk Paper Hot Cup, 500/Carton                               34.99         34.99
-Item Number: 24375255 Vendor Product No: 24375255 Auxiliary No: 24375255 COA #: 62-00
-
-1    EA   04/29/2026  Logitech M330 Silent Plus Wireless Mouse                     22.88         22.88
-Item Number: 2406183  Vendor Product No: 2406183  Auxiliary No: 2406183  COA #: 62-00
-
-Total: $299.53
-
-Approval History:
-Approved by: Lillian Partida on 04/29/2026
+Purchase Order
+PO-CVSII-001824
+177 Holston Dr.
+Lancaster, CA 93535
+(661)272-1225
+1CT4/29/2026Perk Paper Hot Cup, 12 oz., White/Blue, 500/Carton (PK54367CT)53.32$53.32
+Item Number 24375255 Vendor Product No 24375255 Auxilary No 24375255
+COA # 62-00
+1EA4/29/2026Logitech M330 Silent Plus Wireless Optical USB Mouse, Black (910-004905)22.99$22.99
+Item Number 2406183 Vendor Product No 2406183
+COA # 62-00
+TOTAL
+$299.53
+Approval Information (Internal Use Only)
+Requester4/29/2026 5:17:19 PMLillian Partida Document Submitted for Approval - Total was 276.42
+Area Superintendent5/1/2026 6:36:11 PMGagendeep Gill General approved via Email - Total was 276.42
+Purchasing5/4/2026 10:35:57 AMCindy Parker General approved via Normal Method - Total was 299.53
+Terms and Conditions
+This Purchase Order Authorizes the purchase of the items or services in the quantities and the amounts specified above by the purchaser identified above on the presentation
+of proper identification at time of purchase.
+The Purchase Order # number must appear on billing invoices and packages and billing of the purchase must be submitted to the address shown above.
+Organization Name is exempt from payment of Sate sales tax under Exemption # xxxxxxxxxxxxx
+IMPORTANT: Please submit your invoice to microixattach@llac.org and include purchase order number PO-CVSII-001824. It will be processed by our Ai OCR system to
+expedite payment.
+8551
+Page 2 of 2Monday, May 4, 2026
+Approved

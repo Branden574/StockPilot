@@ -181,6 +181,7 @@ export class PoImportsService {
       .eq('id', id);
 
     let canonical: CanonicalPo;
+    let rawText: string | null = null;
     try {
       const { data: blob, error: dlErr } = await this.ctx.supabase.storage
         .from('po-imports')
@@ -192,7 +193,11 @@ export class PoImportsService {
       const buffer = Buffer.from(ab);
       const sourceType: ParseSourceType =
         (header.source_type as string) === 'pdf' ? 'pdf' : 'csv';
-      canonical = await parsePoFile(buffer, sourceType);
+      const parsed = await parsePoFile(buffer, sourceType);
+      canonical = parsed;
+      // Persist the raw extracted text so the UI can surface it for
+      // debugging when the parser yields zero lines on a real-world PO.
+      rawText = parsed.rawText ?? null;
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'parse error';
       await this.ctx.supabase
@@ -255,6 +260,14 @@ export class PoImportsService {
       };
     });
 
+    // Re-parse: wipe any prior lines first so we don't accumulate dupes
+    // when the user hits Re-parse after a parser fix.
+    const { error: delErr } = await this.ctx.supabase
+      .from('po_import_lines')
+      .delete()
+      .eq('po_import_id', id);
+    if (delErr) throw new ServiceError('internal_error', delErr.message);
+
     if (linesPayload.length > 0) {
       const { error: insErr } = await this.ctx.supabase
         .from('po_import_lines')
@@ -269,7 +282,7 @@ export class PoImportsService {
       .from('po_imports')
       .update({
         status: newStatus,
-        raw_text: null,
+        raw_text: rawText,
         parsed_json: canonical,
       })
       .eq('id', id);
