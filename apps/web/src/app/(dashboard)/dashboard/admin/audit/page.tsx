@@ -1,5 +1,6 @@
 import { FileLock } from 'lucide-react';
 
+import { AuditFilters, AUDIT_CATEGORIES } from '@/components/admin/audit-filters';
 import { EmptyState } from '@/components/dashboard/empty-state';
 import {
   Table,
@@ -11,7 +12,7 @@ import {
 } from '@/components/ui/table';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
-import { formatRelative } from '@/lib/utils';
+import { cn, formatRelative } from '@/lib/utils';
 
 interface AuditRow {
   id: string;
@@ -25,14 +26,53 @@ interface AuditRow {
 
 const PAGE_SIZE = 100;
 
+const EVENT_TONE: Array<{ match: (e: string) => boolean; tone: string }> = [
+  {
+    match: (e) =>
+      e.startsWith('stock.') ||
+      e === 'inventory.item.deleted' ||
+      e === 'inventory.item.archived',
+    tone: 'bg-warning/10 text-warning border-warning/30',
+  },
+  {
+    match: (e) => e.startsWith('inventory.'),
+    tone: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30',
+  },
+  {
+    match: (e) => e.startsWith('user.'),
+    tone: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30',
+  },
+  {
+    match: (e) => e.startsWith('warehouse'),
+    tone: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/30',
+  },
+  {
+    match: (e) => e.startsWith('cycle_count.'),
+    tone: 'bg-amber-500/10 text-amber-600 dark:text-amber-500 border-amber-500/30',
+  },
+  {
+    match: (e) => e.startsWith('po_import.'),
+    tone: 'bg-pink-500/10 text-pink-600 dark:text-pink-400 border-pink-500/30',
+  },
+];
+
+function eventTone(event: string): string {
+  const m = EVENT_TONE.find((s) => s.match(event));
+  return m?.tone ?? 'bg-muted text-foreground border-border';
+}
+
 export default async function AuditLogPage({
   searchParams,
 }: {
-  searchParams: Promise<{ event?: string; cursor?: string }>;
+  searchParams: Promise<{ event?: string; category?: string; actor?: string; cursor?: string }>;
 }) {
   const params = await searchParams;
   const ctx = await requireOrgContext();
   const supabase = await createClient();
+
+  const activeCategory = params.category ?? 'all';
+  const categoryDef = AUDIT_CATEGORIES.find((c) => c.slug === activeCategory);
+  const prefix = categoryDef?.prefix ?? null;
 
   let q = supabase
     .from('audit_logs')
@@ -45,22 +85,32 @@ export default async function AuditLogPage({
     .limit(PAGE_SIZE);
 
   if (params.event) q = q.eq('event', params.event);
+  if (prefix) q = q.like('event', `${prefix}%`);
 
   const { data, count } = await q;
 
-  const rows = (data ?? []).map((r) => {
-    const u = (r as { user?: unknown }).user;
-    const userObj = Array.isArray(u) ? u[0] : u;
-    return {
-      id: r.id as string,
-      event: r.event as string,
-      metadata: (r.metadata as Record<string, unknown> | null) ?? null,
-      ip: (r.ip as string | null) ?? null,
-      user_agent: (r.user_agent as string | null) ?? null,
-      created_at: r.created_at as string,
-      user: (userObj as AuditRow['user']) ?? null,
-    } satisfies AuditRow;
-  });
+  const actorTrim = params.actor?.trim().toLowerCase() ?? '';
+
+  const rows = (data ?? [])
+    .map((r) => {
+      const u = (r as { user?: unknown }).user;
+      const userObj = Array.isArray(u) ? u[0] : u;
+      return {
+        id: r.id as string,
+        event: r.event as string,
+        metadata: (r.metadata as Record<string, unknown> | null) ?? null,
+        ip: (r.ip as string | null) ?? null,
+        user_agent: (r.user_agent as string | null) ?? null,
+        created_at: r.created_at as string,
+        user: (userObj as AuditRow['user']) ?? null,
+      } satisfies AuditRow;
+    })
+    .filter((row) => {
+      if (!actorTrim) return true;
+      const name = (row.user?.full_name ?? '').toLowerCase();
+      const email = (row.user?.email ?? '').toLowerCase();
+      return name.includes(actorTrim) || email.includes(actorTrim);
+    });
 
   return (
     <div className="mx-auto w-full max-w-[1480px] px-8 pb-20 pt-7">
@@ -76,11 +126,21 @@ export default async function AuditLogPage({
         </p>
       </div>
 
+      <AuditFilters activeCategory={activeCategory} initialActor={params.actor ?? ''} />
+
       {rows.length === 0 ? (
         <EmptyState
           icon={FileLock}
-          title="No audit entries yet"
-          description="Sensitive actions are logged here automatically. Invite a user or change a role to see this populate."
+          title={
+            actorTrim || prefix
+              ? 'No matching audit entries'
+              : 'No audit entries yet'
+          }
+          description={
+            actorTrim || prefix
+              ? 'Try clearing filters or broadening the search.'
+              : 'Sensitive actions are logged here automatically. Invite a user or change a role to see this populate.'
+          }
         />
       ) : (
         <div className="overflow-x-auto rounded-xl border border-border bg-card">
@@ -88,7 +148,7 @@ export default async function AuditLogPage({
             <TableHeader>
               <TableRow>
                 <TableHead className="w-32">When</TableHead>
-                <TableHead className="w-64">Event</TableHead>
+                <TableHead className="w-72">Event</TableHead>
                 <TableHead>Actor</TableHead>
                 <TableHead>Details</TableHead>
                 <TableHead className="w-32">IP</TableHead>
@@ -100,9 +160,25 @@ export default async function AuditLogPage({
                   <TableCell className="text-xs text-muted-foreground">
                     {formatRelative(row.created_at)}
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{row.event}</TableCell>
+                  <TableCell>
+                    <span
+                      className={cn(
+                        'inline-flex max-w-full items-center rounded-full border px-2 py-0.5 font-mono text-[10.5px]',
+                        eventTone(row.event),
+                      )}
+                    >
+                      <span className="truncate">{row.event}</span>
+                    </span>
+                  </TableCell>
                   <TableCell className="text-sm">
-                    {row.user?.full_name ?? row.user?.email ?? '—'}
+                    <div className="font-medium">
+                      {row.user?.full_name ?? row.user?.email ?? '—'}
+                    </div>
+                    {row.user?.full_name && row.user?.email && (
+                      <div className="text-muted-foreground text-[11px]">
+                        {row.user.email}
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell className="max-w-md">
                     <details className="font-mono text-[11px] text-muted-foreground">
