@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as React from 'react';
 
 import { AuthProvider, useAuth } from '@/lib/auth-context';
+import { usePushNotifications } from '@/lib/use-push-notifications';
 
 export default function RootLayout() {
   return (
@@ -17,6 +18,10 @@ function RootGate() {
   const { session, loading } = useAuth();
   const segments = useSegments();
   const router = useRouter();
+
+  // Register an Expo push token + persist to push_tokens whenever the
+  // signed-in user changes. No-op for nullable session.
+  usePushNotifications(session?.user ?? null);
 
   React.useEffect(() => {
     if (loading) return;
