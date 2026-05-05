@@ -188,7 +188,7 @@ export function CycleCountDetail({ header, lines }: Props) {
         <FilterChips value={filter} onChange={setFilter} />
       </div>
 
-      <div className="bg-card overflow-hidden rounded-xl border">
+      <div className="bg-card overflow-x-auto rounded-xl border">
         <Table>
           <TableHeader>
             <TableRow>

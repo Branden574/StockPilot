@@ -107,7 +107,7 @@ export function TeamManager({
 
       <section className="space-y-3">
         <h2 className="text-sm font-semibold text-muted-foreground">Members ({members.length})</h2>
-        <div className="overflow-hidden rounded-xl border bg-card">
+        <div className="overflow-x-auto rounded-xl border bg-card">
           <Table>
             <TableHeader>
               <TableRow>
@@ -132,7 +132,7 @@ export function TeamManager({
           <h2 className="text-sm font-semibold text-muted-foreground">
             Pending invites ({pendingInvites.length})
           </h2>
-          <div className="overflow-hidden rounded-xl border bg-card">
+          <div className="overflow-x-auto rounded-xl border bg-card">
             <Table>
               <TableHeader>
                 <TableRow>

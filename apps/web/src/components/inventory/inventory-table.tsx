@@ -203,8 +203,8 @@ export function InventoryTable({
       )}
 
       {/* Table */}
-      <div className="overflow-hidden rounded-[10px] border border-border bg-card">
-        <table className="w-full text-[12.5px]">
+      <div className="overflow-x-auto rounded-[10px] border border-border bg-card">
+        <table className="w-full min-w-[720px] text-[12.5px]">
           <thead>
             <tr className="border-b border-border">
               <th className="w-8 px-3">

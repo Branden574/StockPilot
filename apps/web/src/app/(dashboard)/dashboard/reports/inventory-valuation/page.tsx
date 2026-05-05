@@ -27,7 +27,7 @@ export default async function InventoryValuationPage() {
         >
           ← Back to reports
         </Link>
-        <div className="mt-2 flex items-end justify-between gap-4">
+        <div className="mt-2 flex flex-wrap items-end justify-between gap-3 sm:gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Inventory valuation</h1>
             <p className="text-muted-foreground mt-1 text-sm">

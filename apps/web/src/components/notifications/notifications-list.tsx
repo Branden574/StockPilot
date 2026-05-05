@@ -72,7 +72,7 @@ export function NotificationsList({ notifications }: NotificationsListProps) {
           </Button>
         </div>
       )}
-      <ul className="overflow-hidden rounded-xl border bg-card divide-y">
+      <ul className="overflow-x-auto rounded-xl border bg-card divide-y">
         {notifications.map((n) => {
           const isUnread = !n.readAt;
           return (

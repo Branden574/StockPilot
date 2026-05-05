@@ -32,7 +32,7 @@ export default async function PurchaseOrdersPage() {
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="flex items-end justify-between gap-4">
+      <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Purchase orders</h1>
           <p className="text-muted-foreground mt-1 text-sm">
@@ -57,7 +57,7 @@ export default async function PurchaseOrdersPage() {
             }
           />
         ) : (
-          <div className="bg-card overflow-hidden rounded-xl border">
+          <div className="bg-card overflow-x-auto rounded-xl border">
             <Table>
               <TableHeader>
                 <TableRow>
