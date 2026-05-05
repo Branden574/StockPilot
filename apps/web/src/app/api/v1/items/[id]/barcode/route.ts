@@ -38,16 +38,29 @@ export async function GET(
 
     let png: Buffer;
     if (type === 'qr') {
-      // qrcode is CJS; the dynamic import returns either { default: ... }
-      // or the module namespace itself depending on bundler interop.
-      // Tolerate both.
+      // QR encodes the deep-link URL to the item's detail page so a
+      // regular phone camera (no StockPilot app needed) can scan the
+      // sticker and land on the item. The mobile scanner detects this
+      // shape too — see apps/mobile/app/(tabs)/scan.tsx — and resolves
+      // it as a direct id lookup. Code 128 below stays as the bare
+      // value because linear barcodes can't reliably carry long URLs.
+      const origin =
+        process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? req.nextUrl.origin;
+      const itemUrl = `${origin}/dashboard/inventory/${id}`;
       const mod = (await import('qrcode')) as unknown as {
         default?: { toBuffer: (text: string, opts: object) => Promise<Buffer> };
         toBuffer?: (text: string, opts: object) => Promise<Buffer>;
       };
       const toBuffer = mod.default?.toBuffer ?? mod.toBuffer;
       if (!toBuffer) throw new Error('qrcode module has no toBuffer export');
-      png = await toBuffer(value, { type: 'png', width: 400, margin: 2 });
+      png = await toBuffer(itemUrl, {
+        type: 'png',
+        width: 400,
+        margin: 2,
+        // Higher error-correction so partial smudges/curls on the
+        // physical sticker still resolve cleanly.
+        errorCorrectionLevel: 'M',
+      });
     } else {
       // bwip-js v3+ requires the /node subpath for raster (PNG) output
       // on Node runtime — the bare 'bwip-js' import resolves to the

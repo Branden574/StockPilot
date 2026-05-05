@@ -3,7 +3,9 @@ import * as React from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -18,9 +20,58 @@ interface FoundItem {
   id: string;
   name: string;
   sku: string;
+  barcode: string | null;
   quantity_on_hand: number;
   reorder_point: number;
+  retail_price: number;
+  unit_cost: number;
+  primary_location_name: string | null;
+  bin_location: string | null;
+  custom_fields: Record<string, unknown> | null;
+  image_url: string | null;
 }
+
+/**
+ * Pulls the deep-link URL pattern out of a scanned QR/barcode value.
+ * The /api/v1/items/[id]/barcode QR endpoint encodes
+ *   <origin>/dashboard/inventory/<uuid>
+ * (or /dashboard/books/<uuid>) so we look for either path.
+ */
+function parseItemId(scanned: string): string | null {
+  const match = scanned.match(
+    /\/dashboard\/(?:inventory|books)\/([0-9a-f-]{36})/i,
+  );
+  return match?.[1] ?? null;
+}
+
+function formatCurrency(n: number): string {
+  return `$${n.toFixed(2)}`;
+}
+
+function readBookStorage(cf: Record<string, unknown> | null) {
+  const f = cf ?? {};
+  const rackNumber = f.book_rack_number ? String(f.book_rack_number) : null;
+  const rackRow = f.book_rack_row ? String(f.book_rack_row) : null;
+  const crateColor = f.book_crate_color ? String(f.book_crate_color) : null;
+  const crateNumber = f.book_crate_number ? String(f.book_crate_number) : null;
+  const grade = f.book_grade ? String(f.book_grade) : null;
+  const rackLabel =
+    rackNumber || rackRow ? [rackNumber, rackRow].filter(Boolean).join('-') : null;
+  return { rackLabel, crateColor, crateNumber, grade };
+}
+
+const CRATE_HEX: Record<string, string> = {
+  red: '#ef4444',
+  orange: '#f97316',
+  yellow: '#eab308',
+  green: '#22c55e',
+  blue: '#3b82f6',
+  purple: '#a855f7',
+  pink: '#ec4899',
+  black: '#27272a',
+  white: '#f4f4f5',
+  gray: '#9ca3af',
+};
 
 export default function Scan() {
   const { user } = useAuth();
@@ -43,27 +94,95 @@ export default function Scan() {
       .then(({ data }) => setOrgId((data?.organization_id as string | undefined) ?? null));
   }, [user]);
 
+  /** Loads an item's rich detail (with image + location name) by id. */
+  async function loadItemById(id: string): Promise<FoundItem | null> {
+    if (!orgId) return null;
+    const { data: row } = await supabase
+      .from('inventory_items')
+      .select(
+        `id, name, sku, barcode, quantity_on_hand, reorder_point,
+         retail_price, unit_cost, bin_location, custom_fields,
+         primary_location:locations!primary_location_id (name)`,
+      )
+      .eq('organization_id', orgId)
+      .eq('id', id)
+      .is('deleted_at', null)
+      .maybeSingle();
+    if (!row) return null;
+
+    // Primary image (or first image) — the path lives in item_images,
+    // we sign a URL for the storage object.
+    const { data: imgRow } = await supabase
+      .from('item_images')
+      .select('storage_path')
+      .eq('item_id', (row as { id: string }).id)
+      .order('is_primary', { ascending: false })
+      .order('sort_order', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    let imageUrl: string | null = null;
+    if (imgRow?.storage_path) {
+      const { data: signed } = await supabase.storage
+        .from('item-images')
+        .createSignedUrl(imgRow.storage_path as string, 60 * 60);
+      imageUrl = signed?.signedUrl ?? null;
+    }
+
+    const r = row as Record<string, unknown>;
+    const loc = r.primary_location as { name?: string } | { name?: string }[] | null;
+    const locName = Array.isArray(loc) ? loc[0]?.name : loc?.name;
+    return {
+      id: r.id as string,
+      name: r.name as string,
+      sku: r.sku as string,
+      barcode: (r.barcode as string | null) ?? null,
+      quantity_on_hand: Number(r.quantity_on_hand) || 0,
+      reorder_point: Number(r.reorder_point) || 0,
+      retail_price: Number(r.retail_price) || 0,
+      unit_cost: Number(r.unit_cost) || 0,
+      primary_location_name: locName ?? null,
+      bin_location: (r.bin_location as string | null) ?? null,
+      custom_fields: (r.custom_fields as Record<string, unknown> | null) ?? null,
+      image_url: imageUrl,
+    };
+  }
+
+  /** Loads an item by scanned bare value (matches barcode or SKU). */
+  async function loadItemByValue(value: string): Promise<FoundItem | null> {
+    if (!orgId) return null;
+    const { data: row } = await supabase
+      .from('inventory_items')
+      .select('id')
+      .eq('organization_id', orgId)
+      .or(`barcode.eq.${value},sku.eq.${value}`)
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle();
+    if (!row) return null;
+    return loadItemById((row as { id: string }).id);
+  }
+
   async function onBarCodeScanned({ data }: { data: string }) {
     if (busy || !orgId || data === lastCode) return;
     setLastCode(data);
     setBusy(true);
     setScanning(false);
 
-    const { data: row } = await supabase
-      .from('inventory_items')
-      .select('id, name, sku, quantity_on_hand, reorder_point')
-      .eq('organization_id', orgId)
-      .or(`barcode.eq.${data},sku.eq.${data}`)
-      .is('deleted_at', null)
-      .limit(1)
-      .maybeSingle();
+    // QR code from a printed StockPilot label encodes a URL with
+    // /dashboard/inventory/<id> — pull the id out and load by id
+    // directly. Plain barcodes (Code 128 / EAN / UPC) don't carry the
+    // URL prefix, so they fall through to barcode/sku lookup.
+    const directId = parseItemId(data);
+    const found = directId
+      ? await loadItemById(directId)
+      : await loadItemByValue(data);
 
-    if (!row) {
+    if (!found) {
       Alert.alert('Not found', `No item matches ${data}.`, [{ text: 'OK', onPress: reset }]);
       setBusy(false);
       return;
     }
-    setItem(row as FoundItem);
+    setItem(found);
     setBusy(false);
   }
 
@@ -107,6 +226,14 @@ export default function Scan() {
     );
   }
 
+  const storage = item ? readBookStorage(item.custom_fields) : null;
+  const crateHex =
+    storage?.crateColor && CRATE_HEX[storage.crateColor]
+      ? CRATE_HEX[storage.crateColor]
+      : null;
+  const lowStock =
+    item && item.reorder_point > 0 && item.quantity_on_hand <= item.reorder_point;
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {scanning && !item ? (
@@ -127,28 +254,116 @@ export default function Scan() {
 
       {item && (
         <View style={styles.sheet}>
-          <Text style={styles.sheetSku}>{item.sku}</Text>
-          <Text style={styles.sheetName}>{item.name}</Text>
-          <View style={styles.sheetRow}>
-            <Text style={styles.sheetLabel}>On hand</Text>
-            <Text style={styles.sheetQty}>{item.quantity_on_hand}</Text>
-          </View>
+          <ScrollView contentContainerStyle={{ paddingBottom: space.md }}>
+            <View style={styles.headerRow}>
+              {item.image_url ? (
+                <Image source={{ uri: item.image_url }} style={styles.thumb} />
+              ) : (
+                <View style={[styles.thumb, styles.thumbPlaceholder]}>
+                  <Text style={styles.thumbPlaceholderText}>No image</Text>
+                </View>
+              )}
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.sheetSku} numberOfLines={1}>
+                  {item.sku}
+                  {item.barcode ? ` · ${item.barcode}` : ''}
+                </Text>
+                <Text style={styles.sheetName} numberOfLines={2}>
+                  {item.name}
+                </Text>
+              </View>
+            </View>
 
-          <View style={styles.actions}>
-            <ActionBtn label="−1" onPress={() => adjust(-1)} disabled={busy} />
-            <ActionBtn label="+1" onPress={() => adjust(1)} disabled={busy} primary />
-            <ActionBtn label="+5" onPress={() => adjust(5)} disabled={busy} primary />
-            <ActionBtn label="+25" onPress={() => adjust(25)} disabled={busy} />
-          </View>
+            <View style={styles.statRow}>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>On hand</Text>
+                <Text
+                  style={[styles.statValue, lowStock && { color: theme.warning }]}
+                >
+                  {item.quantity_on_hand}
+                </Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>Reorder at</Text>
+                <Text style={styles.statValueMuted}>{item.reorder_point}</Text>
+              </View>
+              <View style={styles.stat}>
+                <Text style={styles.statLabel}>Price</Text>
+                <Text style={styles.statValueMuted}>
+                  {formatCurrency(item.retail_price)}
+                </Text>
+              </View>
+            </View>
 
-          <Pressable style={styles.dismiss} onPress={reset}>
-            <Text style={styles.dismissLabel}>Scan another</Text>
-          </Pressable>
+            {(item.primary_location_name ||
+              item.bin_location ||
+              storage?.rackLabel ||
+              storage?.crateNumber ||
+              storage?.grade) && (
+              <View style={styles.locationBox}>
+                {item.primary_location_name && (
+                  <LocRow label="Location" value={item.primary_location_name} />
+                )}
+                {item.bin_location && (
+                  <LocRow label="Bin/shelf" value={item.bin_location} />
+                )}
+                {storage?.rackLabel && (
+                  <LocRow label="Rack" value={storage.rackLabel} mono />
+                )}
+                {storage?.crateNumber && crateHex && (
+                  <View style={styles.locRow}>
+                    <Text style={styles.locLabel}>Crate</Text>
+                    <View
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+                    >
+                      <View
+                        style={[
+                          styles.crateDot,
+                          { backgroundColor: crateHex },
+                        ]}
+                      />
+                      <Text style={styles.locValue}>{storage.crateNumber}</Text>
+                    </View>
+                  </View>
+                )}
+                {storage?.grade && (
+                  <LocRow
+                    label="Grade"
+                    value={
+                      /^\d{1,2}$/.test(storage.grade)
+                        ? `Grade ${storage.grade}`
+                        : storage.grade
+                    }
+                  />
+                )}
+              </View>
+            )}
+
+            <View style={styles.actions}>
+              <ActionBtn label="−1" onPress={() => adjust(-1)} disabled={busy} />
+              <ActionBtn label="+1" onPress={() => adjust(1)} disabled={busy} primary />
+              <ActionBtn label="+5" onPress={() => adjust(5)} disabled={busy} primary />
+              <ActionBtn label="+25" onPress={() => adjust(25)} disabled={busy} />
+            </View>
+
+            <Pressable style={styles.dismiss} onPress={reset}>
+              <Text style={styles.dismissLabel}>Scan another</Text>
+            </Pressable>
+          </ScrollView>
         </View>
       )}
 
       {busy && !item && <ActivityIndicator style={styles.spinner} color={theme.primary} size="large" />}
     </SafeAreaView>
+  );
+}
+
+function LocRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <View style={styles.locRow}>
+      <Text style={styles.locLabel}>{label}</Text>
+      <Text style={[styles.locValue, mono && { fontFamily: 'Menlo' }]}>{value}</Text>
+    </View>
   );
 }
 
@@ -198,17 +413,53 @@ const styles = StyleSheet.create({
     bottom: 90,
     left: space.lg,
     right: space.lg,
+    maxHeight: '75%',
     backgroundColor: theme.card,
     borderRadius: radius.xl,
     padding: space.lg,
     borderWidth: 1,
     borderColor: theme.border,
   },
+  headerRow: { flexDirection: 'row', gap: space.md, alignItems: 'center' },
+  thumb: { width: 72, height: 72, borderRadius: radius.md, backgroundColor: theme.bgElevated },
+  thumbPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+  thumbPlaceholderText: { color: theme.textMuted, fontSize: 10 },
   sheetSku: { color: theme.textMuted, fontSize: 11, fontFamily: 'Menlo' },
-  sheetName: { color: theme.text, fontSize: 18, fontWeight: '700', marginTop: 2 },
-  sheetRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: space.md },
-  sheetLabel: { color: theme.textMuted, fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
-  sheetQty: { color: theme.text, fontSize: 28, fontWeight: '700' },
+  sheetName: { color: theme.text, fontSize: 17, fontWeight: '700', marginTop: 2 },
+  statRow: {
+    flexDirection: 'row',
+    gap: space.md,
+    marginTop: space.lg,
+  },
+  stat: { flex: 1 },
+  statLabel: {
+    color: theme.textMuted,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    fontWeight: '600',
+  },
+  statValue: { color: theme.text, fontSize: 22, fontWeight: '700', marginTop: 2 },
+  statValueMuted: { color: theme.text, fontSize: 14, fontWeight: '600', marginTop: 2 },
+  locationBox: {
+    marginTop: space.md,
+    padding: space.md,
+    backgroundColor: theme.bgElevated,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: theme.border,
+    gap: 6,
+  },
+  locRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  locLabel: { color: theme.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },
+  locValue: { color: theme.text, fontSize: 13, fontWeight: '600' },
+  crateDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
   actions: { flexDirection: 'row', gap: space.sm, marginTop: space.lg },
   actionBtn: {
     flex: 1,
