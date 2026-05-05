@@ -79,6 +79,9 @@ export default async function BooksPage({
           </p>
         </div>
         <div className="flex gap-2">
+          <Button asChild variant="outline">
+            <Link href="/dashboard/books/import">Bulk ISBN import</Link>
+          </Button>
           <Button asChild variant="gradient">
             <Link href="/dashboard/books/new">+ New book</Link>
           </Button>

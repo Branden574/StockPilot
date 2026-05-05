@@ -504,7 +504,13 @@ export default async function DashboardHome() {
                         {item?.name ?? 'Unknown'}
                       </div>
                       <div className="mt-0.5 font-mono text-[10.5px] text-[var(--ed-ink-3)]">
-                        {(m.reason as string | null) ?? '—'}
+                        {m.actor?.fullName ?? m.actor?.email ?? (m.user_id ? 'Unknown' : 'System')}
+                        {((m.reason as string | null) ?? null) && (
+                          <>
+                            {' · '}
+                            {m.reason as string}
+                          </>
+                        )}
                       </div>
                     </div>
                     <div
