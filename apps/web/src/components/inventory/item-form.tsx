@@ -422,6 +422,30 @@ export function ItemForm({
 
       <Section title="Classification">
         <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label>Item type</Label>
+            <Select
+              value={watch('itemType') ?? 'product'}
+              onValueChange={(v) =>
+                setValue('itemType', v as 'product' | 'book' | 'asset' | 'consumable', {
+                  shouldDirty: true,
+                })
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="product">Product</SelectItem>
+                <SelectItem value="book">Book</SelectItem>
+                <SelectItem value="asset">Asset</SelectItem>
+                <SelectItem value="consumable">Consumable</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-muted-foreground text-[11px]">
+              Books appear under the Books tab; products under Items.
+            </p>
+          </div>
           <SelectField
             label="Category"
             value={watch('categoryId') ?? ''}
@@ -429,6 +453,8 @@ export function ItemForm({
             options={categories}
             placeholder="Uncategorized"
           />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
           <SelectField
             label="Supplier"
             value={watch('supplierId') ?? ''}
@@ -436,6 +462,7 @@ export function ItemForm({
             options={suppliers}
             placeholder="None"
           />
+          <div />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <SelectField
