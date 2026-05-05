@@ -19,7 +19,7 @@ export default async function PoImportsPage() {
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mb-6 flex items-end justify-between gap-4">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-3 sm:gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">PO imports</h1>
           <p className="text-muted-foreground mt-1 text-sm">
@@ -35,7 +35,7 @@ export default async function PoImportsPage() {
       {imports.length === 0 ? (
         <p className="text-muted-foreground text-sm">No imports yet.</p>
       ) : (
-        <div className="overflow-hidden rounded-xl border bg-card">
+        <div className="overflow-x-auto rounded-xl border bg-card">
           <Table>
             <TableHeader>
               <TableRow>

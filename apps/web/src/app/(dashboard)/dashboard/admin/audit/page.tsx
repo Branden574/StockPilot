@@ -83,7 +83,7 @@ export default async function AuditLogPage({
           description="Sensitive actions are logged here automatically. Invite a user or change a role to see this populate."
         />
       ) : (
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="overflow-x-auto rounded-xl border border-border bg-card">
           <Table>
             <TableHeader>
               <TableRow>

@@ -36,7 +36,7 @@ export default async function MovementsPage() {
           description="Movements are recorded automatically when you create items, adjust stock, or receive purchase orders."
         />
       ) : (
-        <div className="overflow-hidden rounded-xl border bg-card">
+        <div className="overflow-x-auto rounded-xl border bg-card">
           <Table>
             <TableHeader>
               <TableRow>

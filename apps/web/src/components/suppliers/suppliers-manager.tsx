@@ -88,7 +88,7 @@ export function SuppliersManager({ initial }: { initial: SupplierRow[] }) {
           }
         />
       ) : (
-        <div className="overflow-hidden rounded-xl border bg-card">
+        <div className="overflow-x-auto rounded-xl border bg-card">
           <Table>
             <TableHeader>
               <TableRow>
