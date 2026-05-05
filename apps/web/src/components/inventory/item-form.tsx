@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { CRATE_COLORS, CRATE_NUMBERS } from '@/lib/book-storage';
+import { CRATE_COLORS, CRATE_NUMBERS, GRADES } from '@/lib/book-storage';
 import { generateSku, cn } from '@/lib/utils';
 import { createItemAction, updateItemAction } from '@/server/actions/inventory';
 import { createImageUploadAction, recordImageAction } from '@/server/actions/item-images';
@@ -168,6 +168,9 @@ export function ItemForm({
   const [crateNumber, setCrateNumber] = React.useState<string>(
     isBook ? String(cfDefault.book_crate_number ?? '') : '',
   );
+  const [grade, setGrade] = React.useState<string>(
+    isBook ? String(cfDefault.book_grade ?? '') : '',
+  );
   const [scannerOpen, setScannerOpen] = React.useState(false);
   const [lookingUp, setLookingUp] = React.useState(false);
 
@@ -191,11 +194,15 @@ export function ItemForm({
         title: string | null;
         authors: string[];
         description: string | null;
+        grade: string | null;
       };
       if (data.title) setValue('name', data.title, { shouldDirty: true });
       if (data.description)
         setValue('description', data.description.slice(0, 5000), { shouldDirty: true });
       if (data.authors.length > 0) setAuthor(data.authors.join(', '));
+      // Only prefill grade when the user hasn't already set one — avoid
+      // clobbering a manual choice if they re-scan an ISBN.
+      if (data.grade && !grade) setGrade(data.grade);
       toast.success('Book details filled from ISBN');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Lookup failed');
@@ -293,6 +300,7 @@ export function ItemForm({
               : {}),
             ...(crateColor ? { book_crate_color: crateColor } : {}),
             ...(crateNumber ? { book_crate_number: crateNumber } : {}),
+            ...(grade ? { book_grade: grade } : {}),
           },
         }
       : values;
@@ -440,13 +448,38 @@ export function ItemForm({
           </Field>
         </div>
         {isBook && (
-          <Field label="Author">
-            <Input
-              placeholder="e.g. Toni Morrison"
-              value={author}
-              onChange={(e) => setAuthor(e.target.value)}
-            />
-          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Author">
+              <Input
+                placeholder="e.g. Toni Morrison"
+                value={author}
+                onChange={(e) => setAuthor(e.target.value)}
+              />
+            </Field>
+            <div className="space-y-1.5">
+              <Label>Grade level</Label>
+              <Select
+                value={grade || '__none'}
+                onValueChange={(v) => setGrade(v === '__none' ? '' : v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="—" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none">—</SelectItem>
+                  {GRADES.map((g) => (
+                    <SelectItem key={g} value={g}>
+                      {g === 'K'
+                        ? 'Kindergarten'
+                        : /^\d{1,2}$/.test(g)
+                          ? `Grade ${g}`
+                          : g}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         )}
         <Field label="Description" error={errors.description?.message}>
           <Textarea rows={3} {...register('description')} />

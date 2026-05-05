@@ -28,9 +28,45 @@ export type CrateColorSlug = (typeof CRATE_COLORS)[number]['slug'];
 
 export const CRATE_NUMBERS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as const;
 
+/**
+ * K-12 + post-secondary grade levels for educational books. Order
+ * matters: the form's <Select> renders in this order, and the lookup
+ * route's grade detector returns one of these slugs.
+ */
+export const GRADES = [
+  'Pre-K',
+  'K',
+  '1',
+  '2',
+  '3',
+  '4',
+  '5',
+  '6',
+  '7',
+  '8',
+  '9',
+  '10',
+  '11',
+  '12',
+  'College',
+  'Adult',
+] as const;
+
+export type Grade = (typeof GRADES)[number];
+
 export function getCrateColor(slug: string | null | undefined) {
   if (!slug) return null;
   return CRATE_COLORS.find((c) => c.slug === slug) ?? null;
+}
+
+/** Formats a grade slug for display ("3" → "Grade 3", "K" → "Kindergarten"). */
+export function formatGrade(slug: string | null | undefined): string | null {
+  if (!slug) return null;
+  if (slug === 'K') return 'Kindergarten';
+  if (slug === 'Pre-K') return 'Pre-K';
+  if (slug === 'College' || slug === 'Adult') return slug;
+  if (/^\d{1,2}$/.test(slug)) return `Grade ${slug}`;
+  return slug;
 }
 
 export interface BookStorageInfo {
@@ -38,6 +74,8 @@ export interface BookStorageInfo {
   rackRow: string | null;
   crateColor: string | null;
   crateNumber: string | null;
+  /** Grade level slug from GRADES. */
+  grade: string | null;
   /** Compact "rack-row" label, e.g. "38-A" — null when both pieces missing. */
   rackLabel: string | null;
   /** Compact "color #N" label, e.g. "Red 5" — null when either piece missing. */
@@ -63,10 +101,19 @@ export function readBookStorage(
   const rackRow = strOrNull(cf.book_rack_row);
   const crateColor = strOrNull(cf.book_crate_color);
   const crateNumber = strOrNull(cf.book_crate_number);
+  const grade = strOrNull(cf.book_grade);
   const rackLabel =
     rackNumber || rackRow ? [rackNumber, rackRow].filter(Boolean).join('-') : null;
   const color = getCrateColor(crateColor);
   const crateLabel =
     color && crateNumber ? `${color.label} ${crateNumber}` : null;
-  return { rackNumber, rackRow, crateColor, crateNumber, rackLabel, crateLabel };
+  return {
+    rackNumber,
+    rackRow,
+    crateColor,
+    crateNumber,
+    grade,
+    rackLabel,
+    crateLabel,
+  };
 }

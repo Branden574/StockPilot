@@ -238,6 +238,7 @@ export function InventoryTable({
                   ['Location', 'left'],
                   ...(showBookFields
                     ? ([
+                        ['Grade', 'left'],
                         ['Rack', 'left'],
                         ['Crate', 'left'],
                       ] as const)
@@ -265,7 +266,7 @@ export function InventoryTable({
             {items.length === 0 && (
               <tr>
                 <td
-                  colSpan={showBookFields ? 12 : 10}
+                  colSpan={showBookFields ? 13 : 10}
                   className="py-12 text-center text-[12.5px] text-[var(--ed-ink-4)]"
                 >
                   No items match your filters.
@@ -340,6 +341,17 @@ export function InventoryTable({
                       const color = getCrateColor(storage.crateColor);
                       return (
                         <>
+                          <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+                            {storage.grade ? (
+                              <span className="font-mono">
+                                {/^\d{1,2}$/.test(storage.grade)
+                                  ? `Gr ${storage.grade}`
+                                  : storage.grade}
+                              </span>
+                            ) : (
+                              <span className="text-[var(--ed-ink-4)]">—</span>
+                            )}
+                          </td>
                           <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
                             {storage.rackLabel ? (
                               <span className="font-mono tabular-nums">
