@@ -17,6 +17,7 @@ import Link from 'next/link';
 
 import { BigChart, MiniBarChart } from '@/components/dashboard/big-chart';
 import { EmptyState } from '@/components/dashboard/empty-state';
+import { GetStartedChecklist } from '@/components/dashboard/get-started-checklist';
 import { StatCard } from '@/components/dashboard/stat-card';
 import { Button } from '@/components/ui/button';
 import { Sparkline } from '@/components/ui/sparkline';
@@ -29,6 +30,7 @@ import {
   MovementsService,
 } from '@/server/services/movements';
 import { requireOrgContext } from '@/lib/auth/session';
+import { createClient } from '@/lib/supabase/server';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 
@@ -49,6 +51,63 @@ export default async function DashboardHome() {
     getThirtyDayMetrics(), // real per-day counts + by-type breakdown
     getDashboardActions(), // open PO + cycle count counters for Shift Command
   ]);
+
+  // Get-started checklist signals — only fetched cheap heads for counts.
+  const supabase = await createClient();
+  const [whCountRes, teamCountRes, factorsRes] = await Promise.all([
+    supabase
+      .from('warehouses')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', ctx.organizationId)
+      .neq('status', 'archived'),
+    supabase
+      .from('organization_members')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', ctx.organizationId)
+      .not('accepted_at', 'is', null),
+    supabase.auth.mfa.listFactors(),
+  ]);
+  const warehouseCount = whCountRes.count ?? 0;
+  const teamCount = teamCountRes.count ?? 0;
+  const hasVerifiedFactor = (factorsRes.data?.all ?? []).some(
+    (f) => f.status === 'verified',
+  );
+
+  const checklistSteps = [
+    {
+      id: 'warehouse',
+      done: warehouseCount > 0,
+      title: 'Confirm your warehouse',
+      description: 'A "Main Warehouse" was created automatically — rename it or add more in Admin.',
+      href: '/dashboard/admin/warehouses',
+      cta: 'Open',
+    },
+    {
+      id: 'team',
+      done: teamCount > 1,
+      title: 'Invite your team',
+      description: 'Send invites so staff can scan and receive alongside you.',
+      href: '/dashboard/team',
+      cta: 'Invite',
+    },
+    {
+      id: 'item',
+      done: summary.itemCount > 0,
+      title: 'Add your first item',
+      description: 'Create a product or scan a book by ISBN to populate the catalog.',
+      href: '/dashboard/inventory/new',
+      cta: 'Add',
+    },
+    {
+      id: 'mfa',
+      done: hasVerifiedFactor,
+      title: 'Secure your account',
+      description: 'Enroll an authenticator app and grab recovery codes.',
+      href: '/dashboard/settings/security',
+      cta: 'Set up',
+    },
+  ];
+  const checklistComplete = checklistSteps.every((s) => s.done);
 
   // Build a synthetic 30-day inventory-value series until a real time-series
   // RPC ships. Cheap, render-only.
@@ -78,6 +137,11 @@ export default async function DashboardHome() {
 
   return (
     <div className="mx-auto w-full max-w-[1760px] px-5 pb-20 pt-6 sm:px-7 2xl:px-9">
+      {!checklistComplete && (
+        <div className="mb-5">
+          <GetStartedChecklist steps={checklistSteps} />
+        </div>
+      )}
       <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         <section className="border-border border-b pb-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
