@@ -1,6 +1,10 @@
 import 'server-only';
 
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import {
+  GoogleGenerativeAI,
+  SchemaType,
+  type Part,
+} from '@google/generative-ai';
 
 import { env } from '@/lib/env';
 
@@ -81,20 +85,14 @@ const responseSchema = {
   required: ['candidates'],
 } as const;
 
-async function callGemini(text: string): Promise<AiExtractCandidate[]> {
+function buildModel() {
   if (!env.GEMINI_API_KEY) {
     throw new Error(
       'GEMINI_API_KEY is not set. AI extract is disabled until you add a key.',
     );
   }
-  const trimmed =
-    text.length > MAX_PROMPT_CHARS
-      ? text.slice(0, MAX_PROMPT_CHARS) +
-        `\n\n[truncated; original was ${text.length} chars]`
-      : text;
-
   const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({
+  return genAI.getGenerativeModel({
     model: MODEL_NAME,
     systemInstruction: SYSTEM_PROMPT,
     generationConfig: {
@@ -102,8 +100,9 @@ async function callGemini(text: string): Promise<AiExtractCandidate[]> {
       responseSchema: responseSchema as never,
     },
   });
-  const result = await model.generateContent(trimmed);
-  const raw = result.response.text();
+}
+
+function parseCandidates(raw: string): AiExtractCandidate[] {
   let parsed: { candidates?: AiExtractCandidate[] };
   try {
     parsed = JSON.parse(raw);
@@ -126,6 +125,40 @@ async function callGemini(text: string): Promise<AiExtractCandidate[]> {
     });
   }
   return out;
+}
+
+async function callGeminiOnText(text: string): Promise<AiExtractCandidate[]> {
+  const trimmed =
+    text.length > MAX_PROMPT_CHARS
+      ? text.slice(0, MAX_PROMPT_CHARS) +
+        `\n\n[truncated; original was ${text.length} chars]`
+      : text;
+  const model = buildModel();
+  const result = await model.generateContent(trimmed);
+  return parseCandidates(result.response.text());
+}
+
+/**
+ * Multimodal call. Sends the raw file bytes (PDF or image) to
+ * Gemini as inlineData, which means scanned/image PDFs and photos
+ * of order sheets get OCR'd by the model itself — no local
+ * tesseract dependency needed. PDF inline data is supported up to
+ * roughly 50 MB or 1000 pages on Gemini 2.5 Flash; we cap upload
+ * size separately at 10 MB so this is fine in practice.
+ */
+async function callGeminiOnBuffer(
+  buffer: Buffer,
+  mimeType: string,
+): Promise<AiExtractCandidate[]> {
+  const model = buildModel();
+  const parts: Part[] = [
+    { inlineData: { data: buffer.toString('base64'), mimeType } },
+    {
+      text: 'Extract every ISBN you can find in the attached document, including ones inside images, tables, or scans. Follow the schema.',
+    },
+  ];
+  const result = await model.generateContent(parts);
+  return parseCandidates(result.response.text());
 }
 
 /**
@@ -165,36 +198,18 @@ async function verifyLowConfidence(
   return verified;
 }
 
-export async function aiExtractIsbns(text: string): Promise<AiExtractResult> {
-  const regexHits = extractIsbnsFromText(text);
+/**
+ * Internal: do the merge + verification dance given a regex
+ * baseline and a set of AI candidates. Used by both the text-based
+ * and buffer-based public entry points.
+ */
+async function mergeRegexAndAi(
+  regexHits: string[],
+  aiCandidates: AiExtractCandidate[],
+): Promise<AiExtractResult> {
   const regexSet = new Set(regexHits);
-
-  let aiCandidates: AiExtractCandidate[] = [];
-  try {
-    aiCandidates = await callGemini(text);
-  } catch (err) {
-    // If Gemini fails (billing, rate limit, etc.) fall back to the
-    // regex-only result. Caller already saw regex hits as the
-    // primary signal anyway.
-    return {
-      isbns: regexHits,
-      candidates: regexHits.map((isbn) => ({
-        isbn,
-        title: null,
-        author: null,
-        confidence: 'high' as const,
-        verified: true,
-        source: 'regex' as const,
-      })),
-      notes: `AI extraction unavailable (${err instanceof Error ? err.message : 'error'}). Returning regex hits only.`,
-    };
-  }
-
   const verifiedLowConf = await verifyLowConfidence(aiCandidates);
 
-  // Build the union: regex hits first (already ordered by appearance),
-  // then AI candidates that aren't already in the regex set and pass
-  // verification when low-confidence.
   const seen = new Set<string>(regexHits);
   const finalIsbns: string[] = [...regexHits];
   const provenance: AiExtractResult['candidates'] = regexHits.map((isbn) => ({
@@ -212,25 +227,69 @@ export async function aiExtractIsbns(text: string): Promise<AiExtractResult> {
     if (!okToKeep) continue;
     seen.add(c.isbn);
     finalIsbns.push(c.isbn);
-    provenance.push({
-      ...c,
-      source: 'ai',
-      verified: c.confidence === 'low',
-    });
+    provenance.push({ ...c, source: 'ai', verified: c.confidence === 'low' });
   }
 
   const aiAdded = finalIsbns.length - regexHits.length;
-  const droppedLowConf =
-    aiCandidates.filter(
-      (c) => c.confidence === 'low' && !verifiedLowConf.has(c.isbn) && !regexSet.has(c.isbn),
-    ).length;
+  const droppedLowConf = aiCandidates.filter(
+    (c) =>
+      c.confidence === 'low' && !verifiedLowConf.has(c.isbn) && !regexSet.has(c.isbn),
+  ).length;
   const notes = [
     `${regexHits.length} regex hit${regexHits.length === 1 ? '' : 's'}`,
     aiAdded > 0 ? `+${aiAdded} from AI` : null,
-    droppedLowConf > 0 ? `${droppedLowConf} unverified guess${droppedLowConf === 1 ? '' : 'es'} dropped` : null,
+    droppedLowConf > 0
+      ? `${droppedLowConf} unverified guess${droppedLowConf === 1 ? '' : 'es'} dropped`
+      : null,
   ]
     .filter(Boolean)
     .join(', ');
 
   return { isbns: finalIsbns, candidates: provenance, notes };
+}
+
+/**
+ * Buffer entry point — call this for PDFs and images. Lets Gemini
+ * OCR scanned content directly. The regex pass runs against an empty
+ * baseline (we don't pre-extract text), so all hits come from the
+ * AI. Low-confidence guesses are still verified against the lookup
+ * pipeline before being kept.
+ */
+export async function aiExtractIsbnsFromBuffer(
+  buffer: Buffer,
+  mimeType: string,
+): Promise<AiExtractResult> {
+  let aiCandidates: AiExtractCandidate[] = [];
+  try {
+    aiCandidates = await callGeminiOnBuffer(buffer, mimeType);
+  } catch (err) {
+    return {
+      isbns: [],
+      candidates: [],
+      notes: `AI extraction unavailable (${err instanceof Error ? err.message : 'error'}).`,
+    };
+  }
+  return mergeRegexAndAi([], aiCandidates);
+}
+
+export async function aiExtractIsbns(text: string): Promise<AiExtractResult> {
+  const regexHits = extractIsbnsFromText(text);
+  let aiCandidates: AiExtractCandidate[] = [];
+  try {
+    aiCandidates = await callGeminiOnText(text);
+  } catch (err) {
+    return {
+      isbns: regexHits,
+      candidates: regexHits.map((isbn) => ({
+        isbn,
+        title: null,
+        author: null,
+        confidence: 'high' as const,
+        verified: true,
+        source: 'regex' as const,
+      })),
+      notes: `AI extraction unavailable (${err instanceof Error ? err.message : 'error'}). Returning regex hits only.`,
+    };
+  }
+  return mergeRegexAndAi(regexHits, aiCandidates);
 }

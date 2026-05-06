@@ -2,6 +2,7 @@
 
 import {
   Loader2,
+  Paperclip,
   Plus,
   Send,
   Sparkles,
@@ -53,10 +54,13 @@ export function ChatPanel() {
   const [turns, setTurns] = React.useState<ChatTurn[]>([]);
   const [input, setInput] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const [uploading, setUploading] = React.useState(false);
+  const [dragOver, setDragOver] = React.useState(false);
   const [sessionId, setSessionId] = React.useState<string | null>(null);
   const [sessions, setSessions] = React.useState<SessionRow[]>([]);
   const [hydrating, setHydrating] = React.useState(true);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   // Load persisted session list + restore active session on mount.
   React.useEffect(() => {
@@ -158,6 +162,58 @@ export function ChatPanel() {
       if (id === sessionId) startNewChat();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Delete failed');
+    }
+  }
+
+  /**
+   * Hand a file to the books-extract-isbns-ai endpoint, then auto-send
+   * a chat message containing the ISBN list. The AI sees the same
+   * format every time, recognizes it as a bulk-import trigger via the
+   * system prompt, and proceeds to call previewBulkBookImport.
+   */
+  async function uploadFile(file: File) {
+    if (uploading || busy) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/books/extract-isbns-ai', {
+        method: 'POST',
+        body: fd,
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        isbns?: string[];
+        notes?: string;
+        message?: string;
+      };
+      if (!res.ok || !json.ok) {
+        toast.error(json.message ?? `Couldn't read ${file.name} (${res.status}).`);
+        return;
+      }
+      const isbns = json.isbns ?? [];
+      if (isbns.length === 0) {
+        toast.warning(`No ISBNs found in ${file.name}.`);
+        return;
+      }
+      const synthetic = [
+        `[Uploaded ${file.name} — extracted ${isbns.length} ISBN${isbns.length === 1 ? '' : 's'}${
+          json.notes ? ` (${json.notes})` : ''
+        }]`,
+        '',
+        ...isbns,
+        '',
+        'Please preview the bulk import for these ISBNs and tell me which warehouse + charter you need.',
+      ].join('\n');
+      // setUploading off before send() to avoid the disabled-textarea
+      // race; send() flips its own busy flag.
+      setUploading(false);
+      await send(synthetic);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Upload failed.');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }
 
@@ -454,8 +510,61 @@ export function ChatPanel() {
             e.preventDefault();
             void send(input);
           }}
-          className="border-border bg-card flex items-end gap-2 rounded-xl border p-2 shadow-sm"
+          onDragEnter={(e) => {
+            if (e.dataTransfer?.types?.includes('Files')) {
+              e.preventDefault();
+              setDragOver(true);
+            }
+          }}
+          onDragOver={(e) => {
+            if (e.dataTransfer?.types?.includes('Files')) {
+              e.preventDefault();
+              setDragOver(true);
+            }
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            const f = e.dataTransfer?.files?.[0];
+            if (f) void uploadFile(f);
+          }}
+          className={cn(
+            'border-border bg-card relative flex items-end gap-2 rounded-xl border p-2 shadow-sm transition',
+            dragOver && 'border-foreground/50 bg-foreground/[0.04]',
+          )}
         >
+          {dragOver && (
+            <div className="bg-foreground/[0.06] text-foreground pointer-events-none absolute inset-0 flex items-center justify-center rounded-xl text-xs font-medium">
+              Drop a PDF, Word, Excel, image, or CSV to extract ISBNs
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.webp,.heic,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,text/plain,image/*"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void uploadFile(f);
+            }}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy || uploading}
+            onClick={() => fileInputRef.current?.click()}
+            className="shrink-0 px-2"
+            aria-label="Attach a file with ISBNs"
+            title="Attach a PDF, Word, Excel, image, or CSV — the assistant will pull ISBNs out of it."
+          >
+            {uploading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Paperclip className="h-3.5 w-3.5" />
+            )}
+          </Button>
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -465,10 +574,14 @@ export function ChatPanel() {
                 void send(input);
               }
             }}
-            placeholder="Ask about your stock, suppliers, or recent activity…"
+            placeholder={
+              uploading
+                ? 'Reading file…'
+                : 'Ask about your stock, suppliers, or recent activity…'
+            }
             rows={1}
             className="placeholder:text-muted-foreground max-h-32 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none"
-            disabled={busy}
+            disabled={busy || uploading}
             aria-label="Ask the inventory assistant"
           />
           <Button
@@ -485,7 +598,8 @@ export function ChatPanel() {
           </Button>
         </form>
         <p className="text-muted-foreground mt-1.5 px-1 text-[10.5px]">
-          ⌘ Enter or Enter to send · Shift+Enter for newline · Chats auto-save for 30 days.
+          ⌘ Enter or Enter to send · Shift+Enter for newline · Drop or attach
+          a PDF / Word / Excel / image to bulk-import books · Chats auto-save 30 days.
         </p>
       </div>
     </div>

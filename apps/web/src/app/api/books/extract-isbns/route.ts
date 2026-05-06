@@ -61,6 +61,17 @@ export async function POST(req: Request) {
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
     const result = await extractIsbnsFromFile(buffer, file.name, file.type || null);
+    if (result.kind === 'image') {
+      // Regex can't read images. Tell the client to use the AI path.
+      return NextResponse.json(
+        {
+          error: 'unsupported_for_regex',
+          message:
+            'Images and scanned files have no text layer the regex can scan. Use "Extract with AI" for images and scanned PDFs.',
+        },
+        { status: 400 },
+      );
+    }
     return NextResponse.json({
       ok: true,
       kind: result.kind,
