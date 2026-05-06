@@ -180,16 +180,13 @@ export function ChatPanel() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) {
-        toast.error(json.message || `Chat failed (${res.status})`);
-        setTurns((cur) => [
-          ...cur,
-          {
-            role: 'assistant',
-            content:
-              json.message ||
-              "Couldn't reach the assistant. Check that GEMINI_API_KEY is set in your project env, then try again.",
-          },
-        ]);
+        // Server returns a classified, user-safe message — show it
+        // verbatim instead of leaking SDK URLs / status text.
+        const friendly =
+          (json.message as string | undefined) ??
+          "The AI assistant ran into a problem. Try again in a moment.";
+        toast.error(friendly);
+        setTurns((cur) => [...cur, { role: 'assistant', content: friendly }]);
         return;
       }
       const newSessionId = (json.sessionId as string | null) ?? null;

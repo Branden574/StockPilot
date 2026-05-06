@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { runChat, type ChatTurn } from '@/lib/ai/chat';
+import { classifyAiError } from '@/lib/ai/errors';
 import {
   appendMessages,
   createSession,
@@ -115,16 +116,20 @@ export async function POST(req: Request) {
       toolCallsUsed: result.toolCallsUsed,
     });
   } catch (err) {
+    // Always log the raw error server-side — admins need the full
+    // detail (URLs, model name, status codes) to diagnose. Clients
+    // get a clean classified message only.
     void reportError(err, {
       tag: 'ai.chat',
       organizationId: ctx.organizationId,
     });
+    const classified = classifyAiError(err);
     return NextResponse.json(
       {
-        error: 'internal_error',
-        message: err instanceof Error ? err.message : 'Chat failed.',
+        error: classified.code,
+        message: classified.userMessage,
       },
-      { status: 500 },
+      { status: classified.status },
     );
   }
 }
