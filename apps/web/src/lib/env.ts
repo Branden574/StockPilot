@@ -42,6 +42,12 @@ const serverSchema = z.object({
   RESEND_API_KEY: optionalSecret.transform((s) => s.trim()),
   RESEND_FROM_EMAIL: z.string().transform((s) => s.trim()).default('StockPilot <hello@stockpilot.app>'),
 
+  // Random shared secret. Vercel Cron sends `Authorization: Bearer <secret>`
+  // to scheduled routes; we compare against this. Set the same value in
+  // Vercel project env. Only required if Vercel Cron is enabled — local
+  // dev and test runs ignore it.
+  CRON_SECRET: optionalSecret.transform((s) => s.trim()),
+
   GEMINI_API_KEY: optionalSecret.transform((s) => s.trim()),
   // Model override. Different Google AI Studio keys get different free-
   // tier eligibility per model (we've seen 0 quota on gemini-2.0-flash
