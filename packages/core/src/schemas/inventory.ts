@@ -22,10 +22,20 @@ export type MovementType = z.infer<typeof movementTypeSchema>;
 const numericMoney = z.coerce.number().nonnegative().max(1_000_000_000);
 const numericQty = z.coerce.number().max(1_000_000_000);
 
+/**
+ * Form fields default to '' when untouched by the user. min(1) on an
+ * optional string would reject those, when the actual intent of an
+ * empty SKU/barcode field is "auto-generate / leave blank". Normalize
+ * empty + whitespace-only strings to undefined BEFORE validation so
+ * the optional() path handles them cleanly. Real values pass through.
+ */
+const emptyToUndefined = (v: unknown) =>
+  typeof v === 'string' && v.trim().length === 0 ? undefined : v;
+
 export const createItemSchema = z.object({
   name: z.string().min(1).max(200).trim(),
-  sku: z.string().min(1).max(64).trim().optional(),
-  barcode: z.string().max(128).trim().optional(),
+  sku: z.preprocess(emptyToUndefined, z.string().min(1).max(64).trim().optional()),
+  barcode: z.preprocess(emptyToUndefined, z.string().max(128).trim().optional()),
   description: z.string().max(5000).optional(),
   categoryId: uuidSchema.nullable().optional(),
   supplierId: uuidSchema.nullable().optional(),
