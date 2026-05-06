@@ -82,19 +82,21 @@ async function loadCreatorNames(
 ): Promise<Map<string, string>> {
   const ids = [...new Set(rows.map((r) => r.created_by).filter((v): v is string => Boolean(v)))];
   if (ids.length === 0) return new Map();
+  // user_profiles.id is the PK and references auth.users(id) directly
+  // (see migration 0001_init.sql) — no separate user_id column.
   const { data, error } = await ctx.supabase
     .from('user_profiles')
-    .select('user_id, full_name, email')
-    .in('user_id', ids);
+    .select('id, full_name, email')
+    .in('id', ids);
   if (error) return new Map();
   const map = new Map<string, string>();
   for (const row of (data ?? []) as Array<{
-    user_id: string;
+    id: string;
     full_name: string | null;
     email: string | null;
   }>) {
     const display = row.full_name?.trim() || row.email || null;
-    if (display) map.set(row.user_id, display);
+    if (display) map.set(row.id, display);
   }
   return map;
 }
