@@ -435,7 +435,10 @@ export function BulkIsbnImport({
           <p className="text-muted-foreground text-[11px]">
             Up to 200 per batch. The system runs Google Books, Open Library,
             Open Library Search, and the Library of Congress in parallel for
-            each ISBN.
+            each ISBN. When all four come up empty (often the case for
+            HMH / Pearson / McGraw-Hill academic ISBNs), Gemini is used as
+            a fallback — only the entries it identifies with high or
+            medium confidence are kept.
           </p>
         </div>
 
