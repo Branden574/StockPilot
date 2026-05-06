@@ -33,8 +33,33 @@ export async function GET(
     if (!ctx) return new NextResponse('unauthenticated', { status: 401 });
     const svc = new InventoryService(ctx);
     const item = await svc.get(id);
-    const value = valueOverride || ((item.barcode as string | null) ?? (item.sku as string));
-    if (!value) return new NextResponse('No barcode value', { status: 400 });
+
+    // Resolve a printable value with sensible fallbacks. Order:
+    //   1. ?value=<override>           (explicit caller override)
+    //   2. item.barcode                (real linear barcode from vendor)
+    //   3. item.sku                    (auto-generated on create)
+    //   4. item.id                     (always present — last-resort
+    //                                   so label printing never fails
+    //                                   on items missing SKU/barcode)
+    // For QR codes we ignore the value lookup entirely below — the QR
+    // encodes the public item URL — so the only failure mode here is
+    // a Code-128 barcode for an item with literally nothing to encode,
+    // which we now also avoid by falling back to the id.
+    const itemBarcode =
+      typeof item.barcode === 'string' && item.barcode.trim().length > 0
+        ? item.barcode.trim()
+        : null;
+    const itemSku =
+      typeof item.sku === 'string' && item.sku.trim().length > 0
+        ? item.sku.trim()
+        : null;
+    const value =
+      (valueOverride && valueOverride.trim().length > 0
+        ? valueOverride.trim()
+        : null) ??
+      itemBarcode ??
+      itemSku ??
+      String((item as { id?: string }).id ?? id);
 
     let png: Buffer;
     if (type === 'qr') {
