@@ -260,6 +260,43 @@ export async function ItemDetail({ id, backHref, backLabel }: ItemDetailProps) {
           <CardTitle className="text-base">Images</CardTitle>
         </CardHeader>
         <CardContent>
+          {/* Fallback: when there are no rows in item_images yet but the
+              ISBN-import pipeline stashed a cover URL on the row's
+              custom_fields, render it inline so the detail page shows
+              the cover the list page is already showing. The uploader
+              still works underneath — uploading saves to item_images
+              and supersedes this preview. */}
+          {images.length === 0 ? (() => {
+            const cf = (item as { custom_fields?: Record<string, unknown> | null })
+              .custom_fields;
+            const cfThumb =
+              cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
+                ? (cf.thumbnail_url as string)
+                : null;
+            return cfThumb ? (
+              <div className="mb-4 flex items-start gap-3 rounded-md border border-border bg-muted/40 p-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={cfThumb}
+                  alt=""
+                  width={64}
+                  height={88}
+                  loading="lazy"
+                  decoding="async"
+                  className="rounded-sm border border-border bg-background object-cover"
+                  style={{ aspectRatio: '3/4' }}
+                />
+                <div className="text-muted-foreground text-[12px] leading-relaxed">
+                  <div className="text-foreground mb-0.5 text-[12.5px] font-medium">
+                    Cover from ISBN lookup
+                  </div>
+                  Imported from a third-party source (Google Books / Open Library /
+                  Library of Congress). Upload a photo below to replace it with
+                  your own — the uploaded image becomes the primary.
+                </div>
+              </div>
+            ) : null;
+          })() : null}
           <ImageUploader itemId={id} initialImages={images} />
         </CardContent>
       </Card>
