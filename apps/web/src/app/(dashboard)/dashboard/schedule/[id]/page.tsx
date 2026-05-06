@@ -2,6 +2,7 @@ import { ChevronLeft, MapPin, User2 } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { ScheduleStatusActions } from '@/components/schedule/schedule-status-actions';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ServiceError } from '@/server/services/context';
@@ -75,10 +76,11 @@ export default async function ScheduleEventDetailPage({
             {formatRange(event.startsAt, event.endsAt, event.allDay)}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="border-border text-muted-foreground inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px]">
             {STATUS_LABEL[event.status] ?? event.status}
           </span>
+          <ScheduleStatusActions eventId={id} currentStatus={event.status} />
           <Button asChild variant="outline" size="sm">
             <Link href={`/dashboard/schedule/${id}/edit`}>Edit</Link>
           </Button>
