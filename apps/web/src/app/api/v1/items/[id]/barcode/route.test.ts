@@ -119,7 +119,13 @@ describe('GET /api/v1/items/[id]/barcode', () => {
     expect(await res.text()).toBe('No access');
   });
 
-  it('returns 400 when item has no barcode and no sku', async () => {
+  it('falls back to the item id when both barcode and sku are missing', async () => {
+    // Defensive: every newly-created item gets an auto-generated SKU,
+    // but if data ever drifts (manual SQL insert, schema migration
+    // gone wrong) we'd rather print a usable label encoding the id
+    // than 400 the print dialog and block the user. The id is always
+    // present and is meaningful — scanning it via the QR/code-128
+    // still resolves the item via the mobile scanner's id lookup.
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     vi.mocked(InventoryService).mockImplementationOnce(
       () => ({
@@ -128,8 +134,20 @@ describe('GET /api/v1/items/[id]/barcode', () => {
     );
 
     const res = await GET(buildRequest(), buildParams());
-    expect(res.status).toBe(400);
-    expect(await res.text()).toBe('No barcode value');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('image/png');
+  });
+
+  it('falls back to the item id when sku is an empty string', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    vi.mocked(InventoryService).mockImplementationOnce(
+      () => ({
+        get: vi.fn(async () => ({ id: 'i-1', barcode: null, sku: '   ' })),
+      }) as unknown as InstanceType<typeof InventoryService>,
+    );
+
+    const res = await GET(buildRequest(), buildParams());
+    expect(res.status).toBe(200);
   });
 
   it('uses ?value= override even when item has its own barcode', async () => {
