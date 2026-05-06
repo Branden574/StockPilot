@@ -66,7 +66,8 @@ export default async function SchedulePage({
           </h1>
           <p className="text-muted-foreground mt-1 text-[13.5px]">
             Jobs, deliveries, pickups, drops — anything time + location based.
-            Visible to the whole team. Click a date to add an event.
+            Each event is scoped to its warehouse: only staff assigned to
+            that warehouse can see it. Click a date to add an event.
           </p>
         </div>
       </div>
