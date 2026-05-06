@@ -1,6 +1,7 @@
 import { BookOpen } from 'lucide-react';
 import Link from 'next/link';
 
+import { BackfillCoversButton } from '@/components/books/backfill-covers-button';
 import { EmptyState } from '@/components/dashboard/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
 import { Button } from '@/components/ui/button';
@@ -98,7 +99,8 @@ export default async function BooksPage({
             inventory value, low stock, and out of stock on the overview.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <BackfillCoversButton />
           <Button asChild variant="outline">
             <Link href="/dashboard/books/import">Bulk ISBN import</Link>
           </Button>
