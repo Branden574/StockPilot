@@ -37,7 +37,13 @@ export function extractIsbnsFromText(text: string): string[] {
   return out;
 }
 
-export type SupportedFileKind = 'pdf' | 'docx' | 'xlsx' | 'csv' | 'txt';
+export type SupportedFileKind =
+  | 'pdf'
+  | 'docx'
+  | 'xlsx'
+  | 'csv'
+  | 'txt'
+  | 'image';
 
 export interface ExtractFromFileResult {
   kind: SupportedFileKind;
@@ -61,6 +67,15 @@ export function detectFileKind(
   if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) return 'xlsx';
   if (lower.endsWith('.csv')) return 'csv';
   if (lower.endsWith('.txt')) return 'txt';
+  if (
+    lower.endsWith('.png') ||
+    lower.endsWith('.jpg') ||
+    lower.endsWith('.jpeg') ||
+    lower.endsWith('.webp') ||
+    lower.endsWith('.heic')
+  ) {
+    return 'image';
+  }
 
   const mt = (mimeType ?? '').toLowerCase();
   if (mt === 'application/pdf') return 'pdf';
@@ -71,6 +86,7 @@ export function detectFileKind(
   )
     return 'xlsx';
   if (mt === 'text/csv') return 'csv';
+  if (mt.startsWith('image/')) return 'image';
   if (mt.startsWith('text/')) return 'txt';
   return null;
 }
@@ -105,6 +121,11 @@ async function fileToText(buffer: Buffer, kind: SupportedFileKind): Promise<stri
     case 'csv':
     case 'txt':
       return buffer.toString('utf8');
+    case 'image':
+      // Images carry no text-layer content for our regex pass —
+      // callers should route image kinds to the AI multimodal path
+      // (lib/books/isbn-ai-extract.ts → aiExtractIsbnsFromBuffer).
+      return '';
   }
 }
 

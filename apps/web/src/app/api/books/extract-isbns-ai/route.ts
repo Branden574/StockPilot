@@ -1,25 +1,27 @@
 import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { aiExtractIsbns } from '@/lib/books/isbn-ai-extract';
+import {
+  aiExtractIsbns,
+  aiExtractIsbnsFromBuffer,
+} from '@/lib/books/isbn-ai-extract';
 import { detectFileKind } from '@/lib/books/isbn-extract';
 import { reportError } from '@/lib/error-reporter';
 import { classifyAiError } from '@/lib/ai/errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// Gemini call + verification round trips can stretch into 30s on
-// long documents; give plenty of headroom.
+// Multimodal Gemini calls on big PDFs can take 20-40s.
 export const maxDuration = 60;
 
 const MAX_BYTES = 10 * 1024 * 1024;
 
 /**
- * Like /api/books/extract-isbns but augmented with a Gemini pass.
- * Picks up ISBNs the regex misses (line breaks, weird formatting,
- * spreadsheet column ordering) and proposes ISBNs for title-only
- * references. Low-confidence guesses are verified against the live
- * lookup pipeline before being returned, so we never hallucinate.
+ * AI-augmented ISBN extraction. PDFs and images go straight to
+ * Gemini's multimodal API, so scanned/image PDFs and photos of
+ * order sheets get OCR'd and parsed in one call — no local OCR
+ * dependency. Office docs and plain text are extracted to a string
+ * locally first (cheaper) and run through the text-based path.
  */
 export async function POST(req: Request) {
   const ctx = await withApiContext(req);
@@ -63,20 +65,36 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         error: 'validation_error',
-        message: 'Unsupported file type. Accepted: PDF, Word, Excel, CSV, TXT.',
+        message:
+          'Unsupported file type. Accepted: PDF, Word, Excel, CSV, TXT, and common images (PNG/JPG/WEBP/HEIC).',
       },
       { status: 400 },
     );
   }
 
   try {
-    // Reuse the deterministic extractor's file-to-text pipeline by
-    // calling it for plain text; we only need the text dump here.
-    // The cheap path is just to call extractIsbnsFromFile and grab
-    // its text — but that doesn't expose the text. So we duplicate
-    // the file→text dispatch here. (Tiny cost; keeps the modules
-    // independent.)
     const buffer = Buffer.from(await file.arrayBuffer());
+
+    // PDFs (including scanned/image PDFs) and standalone images go
+    // through Gemini's multimodal API — it does the OCR for us, no
+    // tesseract dependency. Office docs and text get pre-extracted
+    // locally to keep tokens cheap.
+    if (kind === 'pdf' || kind === 'image') {
+      const mime =
+        kind === 'pdf' ? 'application/pdf' : (file.type || 'image/png');
+      const result = await aiExtractIsbnsFromBuffer(buffer, mime);
+      return NextResponse.json({
+        ok: true,
+        kind,
+        isbns: result.isbns,
+        totalFound: result.isbns.length,
+        candidates: result.candidates,
+        notes: result.notes,
+        filename: file.name,
+        path: 'multimodal',
+      });
+    }
+
     const text = await fileToText(buffer, kind);
     const result = await aiExtractIsbns(text);
     return NextResponse.json({
@@ -87,12 +105,13 @@ export async function POST(req: Request) {
       candidates: result.candidates,
       notes: result.notes,
       filename: file.name,
+      path: 'text',
     });
   } catch (err) {
     void reportError(err, {
       tag: 'books.extract-isbns-ai',
       organizationId: ctx.organizationId,
-      extra: { filename: file.name, size: file.size },
+      extra: { filename: file.name, size: file.size, kind },
     });
     const classified = classifyAiError(err);
     return NextResponse.json(
@@ -106,13 +125,6 @@ async function fileToText(
   buffer: Buffer,
   kind: ReturnType<typeof detectFileKind>,
 ): Promise<string> {
-  if (kind === 'pdf') {
-    const mod = (await import('pdf-parse/lib/pdf-parse.js')) as unknown as {
-      default: (b: Buffer) => Promise<{ text: string }>;
-    };
-    const out = await mod.default(buffer);
-    return out.text ?? '';
-  }
   if (kind === 'docx') {
     const mod = await import('mammoth');
     const r = await mod.extractRawText({ buffer });
@@ -129,5 +141,6 @@ async function fileToText(
     }
     return chunks.join('\n');
   }
+  // csv / txt fall through here.
   return buffer.toString('utf8');
 }
