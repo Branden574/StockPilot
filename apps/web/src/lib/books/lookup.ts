@@ -17,7 +17,8 @@ export type LookupSource =
   | 'google-books'
   | 'open-library'
   | 'open-library-search'
-  | 'library-of-congress';
+  | 'library-of-congress'
+  | 'gemini';
 
 export interface BookMetadata {
   isbn: string;
@@ -235,6 +236,17 @@ export async function lookupIsbn(rawIsbn: string): Promise<BookMetadata | null> 
     .filter((r): r is PromiseFulfilledResult<BookMetadata | null> => r.status === 'fulfilled')
     .map((r) => r.value)
     .filter((v): v is BookMetadata => v !== null);
+
+  // 5th-source fallback: if all 4 free public APIs returned nothing,
+  // try Gemini. Slower (1-2s) and costs tokens, so it only runs as
+  // a last resort. The dynamic import keeps this path off the hot
+  // module graph so the public lookup endpoint doesn't pay for the
+  // Gemini SDK on every successful 4-source hit.
+  if (hits.length === 0) {
+    const { fetchGeminiBookMetadata } = await import('./lookup-gemini');
+    const aiHit = await fetchGeminiBookMetadata(isbn);
+    if (aiHit) hits.push(aiHit);
+  }
 
   if (hits.length === 0) return null;
 
