@@ -296,6 +296,10 @@ export function InventoryTable({
                         <img
                           src={item.image_url}
                           alt=""
+                          width={28}
+                          height={28}
+                          loading="lazy"
+                          decoding="async"
                           className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
                         />
                       ) : (

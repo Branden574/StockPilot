@@ -15,6 +15,7 @@ interface LabelItem {
 }
 
 type Template = 'small' | 'medium' | 'large';
+export type LabelFormat = 'barcode' | 'qr';
 
 const TEMPLATES: Record<
   Template,
@@ -32,11 +33,18 @@ interface Props {
   items: LabelItem[];
   copies: number;
   template: Template;
+  format?: LabelFormat;
 }
 
-export function LabelSheet({ items, copies: initialCopies, template: initialTemplate }: Props) {
+export function LabelSheet({
+  items,
+  copies: initialCopies,
+  template: initialTemplate,
+  format: initialFormat = 'barcode',
+}: Props) {
   const [copies, setCopies] = React.useState(initialCopies);
   const [template, setTemplate] = React.useState<Template>(initialTemplate);
+  const [format, setFormat] = React.useState<LabelFormat>(initialFormat);
 
   const expanded = React.useMemo(() => {
     const out: LabelItem[] = [];
@@ -77,6 +85,17 @@ export function LabelSheet({ items, copies: initialCopies, template: initialTemp
           </select>
         </div>
         <div className="space-y-1.5">
+          <Label className="text-muted-foreground text-[11px]">Format</Label>
+          <select
+            value={format}
+            onChange={(e) => setFormat(e.target.value as LabelFormat)}
+            className="border-input bg-background h-10 rounded-md border px-3 text-sm"
+          >
+            <option value="barcode">Barcode (Code 128)</option>
+            <option value="qr">QR code</option>
+          </select>
+        </div>
+        <div className="space-y-1.5">
           <Label className="text-muted-foreground text-[11px]">Copies per item</Label>
           <Input
             type="number"
@@ -105,10 +124,11 @@ export function LabelSheet({ items, copies: initialCopies, template: initialTemp
         >
           {expanded.map((it, idx) => (
             <LabelCell
-              key={`${it.id}-${idx}`}
+              key={`${it.id}-${idx}-${format}`}
               item={it}
               widthIn={tpl.widthIn}
               heightIn={tpl.heightIn}
+              format={format}
             />
           ))}
         </div>
@@ -156,21 +176,26 @@ function LabelCell({
   item,
   widthIn,
   heightIn,
+  format,
 }: {
   item: LabelItem;
   widthIn: number;
   heightIn: number;
+  format: LabelFormat;
 }) {
-  const svgRef = React.useRef<SVGSVGElement | null>(null);
+  const barcodeRef = React.useRef<SVGSVGElement | null>(null);
+  const [qrDataUrl, setQrDataUrl] = React.useState<string | null>(null);
 
+  // Barcode (Code-128) path.
   React.useEffect(() => {
+    if (format !== 'barcode') return;
     let cancelled = false;
     (async () => {
       const { default: JsBarcode } = await import('jsbarcode');
-      if (cancelled || !svgRef.current) return;
+      if (cancelled || !barcodeRef.current) return;
       const value = item.barcode?.trim() || item.sku;
       try {
-        JsBarcode(svgRef.current, value, {
+        JsBarcode(barcodeRef.current, value, {
           format: 'CODE128',
           displayValue: false,
           margin: 0,
@@ -184,7 +209,44 @@ function LabelCell({
     return () => {
       cancelled = true;
     };
-  }, [item.barcode, item.sku, heightIn]);
+  }, [format, item.barcode, item.sku, heightIn]);
+
+  // QR path. Encodes the public deep-link URL so a printed batch QR
+  // resolves to the same /p/items/[id] page when scanned. Render via
+  // PNG data URL inside an <img> — sharper than canvas at the small
+  // 1-inch print size and avoids innerHTML-style SVG injection.
+  React.useEffect(() => {
+    if (format !== 'qr') return;
+    let cancelled = false;
+    (async () => {
+      const { default: QRCode } = await import('qrcode');
+      const origin =
+        typeof window !== 'undefined' ? window.location.origin : '';
+      const url = `${origin}/p/items/${item.id}`;
+      try {
+        const dataUrl = await QRCode.toDataURL(url, {
+          margin: 1,
+          width: 600, // generous so print rasterizes crisply at 1in
+          errorCorrectionLevel: 'M',
+        });
+        if (!cancelled) setQrDataUrl(dataUrl);
+      } catch {
+        if (!cancelled) setQrDataUrl(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [format, item.id]);
+
+  const encodedHeight =
+    format === 'qr'
+      ? heightIn >= 2
+        ? '70%'
+        : '60%'
+      : heightIn >= 2
+        ? '50%'
+        : '55%';
 
   return (
     <div
@@ -217,11 +279,33 @@ function LabelCell({
       >
         {item.name}
       </div>
-      <svg
-        ref={svgRef}
-        style={{ width: '100%', height: heightIn >= 2 ? '50%' : '55%' }}
-        aria-hidden
-      />
+      {format === 'qr' ? (
+        <div
+          style={{
+            width: encodedHeight,
+            height: encodedHeight,
+            margin: '0 auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {qrDataUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={qrDataUrl}
+              alt=""
+              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+            />
+          ) : null}
+        </div>
+      ) : (
+        <svg
+          ref={barcodeRef}
+          style={{ width: '100%', height: encodedHeight }}
+          aria-hidden
+        />
+      )}
       <div
         style={{
           fontFamily: 'ui-monospace, Menlo, monospace',
