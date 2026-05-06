@@ -26,11 +26,20 @@ interface Props {
 }
 
 const WEEK_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// Explicit Tailwind palette tones with separate light/dark text
+// values so chips read cleanly in both themes. The semantic
+// --warning / --success / --destructive vars on this project map to
+// dark amber/green/red text — fine on light bg, but unreadable on
+// the dark-mode card surface.
 const STATUS_TONE: Record<CalendarEvent['status'], string> = {
-  scheduled: 'border-foreground/30 bg-foreground/5 text-foreground',
-  in_progress: 'border-warning/40 bg-warning/10 text-warning-foreground',
-  completed: 'border-success/40 bg-success/10 text-success line-through opacity-70',
-  cancelled: 'border-destructive/40 bg-destructive/10 text-destructive line-through opacity-60',
+  scheduled:
+    'border-sky-500/50 bg-sky-500/15 text-sky-700 dark:text-sky-200',
+  in_progress:
+    'border-amber-500/60 bg-amber-500/20 text-amber-800 dark:text-amber-200',
+  completed:
+    'border-emerald-500/50 bg-emerald-500/15 text-emerald-700 dark:text-emerald-200 line-through opacity-80',
+  cancelled:
+    'border-rose-500/50 bg-rose-500/15 text-rose-700 dark:text-rose-200 line-through opacity-70',
 };
 
 function formatHeader(year: number, month: number): string {
