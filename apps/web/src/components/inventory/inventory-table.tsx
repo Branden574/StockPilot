@@ -66,6 +66,10 @@ interface InventoryTableProps {
    * the Books tab; the default Items tab leaves the columns out.
    */
   showBookFields?: boolean;
+  /** 1-based current page. Default 1 — pagination UI hides if total ≤ pageSize. */
+  page?: number;
+  /** How many rows per page. Drives the page count math. */
+  pageSize?: number;
 }
 
 const VIEWS = ['All items', 'Low + critical', 'Out of stock'] as const;
@@ -115,6 +119,8 @@ export function InventoryTable({
   rowLinkPrefix = '/dashboard/inventory',
   basePath = '/dashboard/inventory',
   showBookFields = false,
+  page = 1,
+  pageSize = 50,
 }: InventoryTableProps) {
   const router = useRouter();
   const params = useSearchParams();
@@ -127,6 +133,17 @@ export function InventoryTable({
     if (v === 'Low + critical') next.set('stock', 'low');
     else if (v === 'Out of stock') next.set('stock', 'out');
     else next.delete('stock');
+    // Switching the view always reset to page 1 — staying on page 5
+    // of "All items" doesn't make sense if Out-of-stock has 1 page.
+    next.delete('page');
+    const qs = next.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  }
+
+  function hrefForPage(p: number): string {
+    const next = new URLSearchParams(params.toString());
+    if (p <= 1) next.delete('page');
+    else next.set('page', String(p));
     const qs = next.toString();
     return qs ? `${basePath}?${qs}` : basePath;
   }
@@ -136,6 +153,9 @@ export function InventoryTable({
       const next = new URLSearchParams(params.toString());
       if (q.trim()) next.set('q', q.trim());
       else next.delete('q');
+      // Search changes the result set — staying on page 5 isn't right
+      // if the new query has fewer pages.
+      next.delete('page');
       const qs = next.toString();
       router.replace(qs ? `${basePath}?${qs}` : basePath);
     }, 250);
@@ -415,11 +435,79 @@ export function InventoryTable({
         </table>
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Pagination — hides when everything fits on one page so the
+            single-screen empty/typical case stays clean. URL-driven so
+            paginated views are bookmarkable + shareable. */}
+        {total > pageSize ? (
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            buildHref={hrefForPage}
+          />
+        ) : (
+          <span />
+        )}
         <Button asChild>
           <Link href={`${basePath}/new`}>
             + New {showBookFields ? 'book' : 'item'}
           </Link>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function Pagination({
+  page,
+  pageSize,
+  total,
+  buildHref,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  buildHref: (page: number) => string;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const startRow = (safePage - 1) * pageSize + 1;
+  const endRow = Math.min(safePage * pageSize, total);
+  const prevDisabled = safePage <= 1;
+  const nextDisabled = safePage >= totalPages;
+  return (
+    <div className="text-muted-foreground flex items-center gap-3 text-[12px]">
+      <span>
+        Showing <span className="text-foreground font-medium">{startRow}</span>–
+        <span className="text-foreground font-medium">{endRow}</span> of{' '}
+        <span className="text-foreground font-medium">{total}</span>
+      </span>
+      <div className="flex items-center gap-1">
+        <Button asChild variant="outline" size="sm" disabled={prevDisabled}>
+          {prevDisabled ? (
+            <span aria-disabled className="pointer-events-none opacity-50">
+              ← Prev
+            </span>
+          ) : (
+            <Link href={buildHref(safePage - 1)} prefetch={false}>
+              ← Prev
+            </Link>
+          )}
+        </Button>
+        <span className="text-muted-foreground px-2 text-[11.5px]">
+          Page {safePage} of {totalPages}
+        </span>
+        <Button asChild variant="outline" size="sm" disabled={nextDisabled}>
+          {nextDisabled ? (
+            <span aria-disabled className="pointer-events-none opacity-50">
+              Next →
+            </span>
+          ) : (
+            <Link href={buildHref(safePage + 1)} prefetch={false}>
+              Next →
+            </Link>
+          )}
         </Button>
       </div>
     </div>

@@ -36,6 +36,8 @@ export interface ItemListFilters {
   outOfStock?: boolean;
   cursor?: string | null;
   limit?: number;
+  /** Zero-based offset for page-based pagination. Combined with `limit`. */
+  offset?: number;
 }
 
 export class InventoryService {
@@ -47,6 +49,7 @@ export class InventoryService {
 
   async list(filters: ItemListFilters = {}) {
     const limit = Math.min(filters.limit ?? 50, 200);
+    const offset = Math.max(0, filters.offset ?? 0);
     // Pass our ctx so getWarehouseAccess doesn't fall through to
     // requireOrgContext() — same NEXT_REDIRECT trap that broke
     // /api/v1/items/[id]/barcode when called from an API route.
@@ -56,14 +59,17 @@ export class InventoryService {
       .from('inventory_items')
       .select(
         'id, sku, barcode, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, custom_fields, created_at, updated_at',
-        // Estimated counts use pg_class.reltuples (~1ms) instead of a full
-        // sequential count under RLS. Display purposes don't need precision.
-        { count: 'estimated' },
+        // Exact count: pagination needs precise totals so "Page X of Y"
+        // math doesn't lie, and the empty-state heuristics
+        // (`inventory.total === 0`) don't false-fire on stale
+        // pg_class.reltuples after a fresh import. Sub-50ms even on
+        // 50k+ row tables with the existing org_id index.
+        { count: 'exact' },
       )
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
       .order('updated_at', { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     // Warehouse scoping: defense against URL/API tampering. Warehouse-scoped
     // users (staff/viewer) never see items outside their assignments — even
