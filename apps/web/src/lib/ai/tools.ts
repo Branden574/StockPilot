@@ -161,13 +161,13 @@ const listLowStockTool: ToolExecutor = {
       },
     },
   },
-  async execute(args) {
+  async execute(args, ctx) {
     const wh =
       typeof args.warehouseId === 'string' && args.warehouseId.length > 0
         ? args.warehouseId
         : null;
     const limit = Math.min(25, Math.max(1, Number(args.limit) || 10));
-    return await getLowStockItems(limit, { warehouseId: wh });
+    return await getLowStockItems(limit, { warehouseId: wh, ctx });
   },
 };
 
@@ -186,14 +186,14 @@ const getDashboardSummaryTool: ToolExecutor = {
       },
     },
   },
-  async execute(args) {
+  async execute(args, ctx) {
     const wh =
       typeof args.warehouseId === 'string' && args.warehouseId.length > 0
         ? args.warehouseId
         : null;
     const [summary, actions] = await Promise.all([
-      getDashboardSummary({ warehouseId: wh }),
-      getDashboardActions({ warehouseId: wh }),
+      getDashboardSummary({ warehouseId: wh, ctx }),
+      getDashboardActions({ warehouseId: wh, ctx }),
     ]);
     return { ...summary, ...actions };
   },

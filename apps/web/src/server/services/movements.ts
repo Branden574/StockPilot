@@ -117,9 +117,9 @@ export interface DashboardSummary {
  * scoped to that warehouse so manager-level filters honor on the dash.
  */
 export async function getDashboardSummary(
-  options: { warehouseId?: string | null } = {},
+  options: { warehouseId?: string | null; ctx?: ServiceContext } = {},
 ): Promise<DashboardSummary> {
-  const ctx = await withContext();
+  const ctx = options.ctx ?? (await withContext());
   if (!options.warehouseId) {
     const { data, error } = await ctx.supabase.rpc('get_dashboard_summary', {
       p_org_id: ctx.organizationId,
@@ -241,9 +241,9 @@ export interface DashboardActions {
  * each tiny — just `count: 'estimated'` on filtered rowsets.
  */
 export async function getDashboardActions(
-  options: { warehouseId?: string | null } = {},
+  options: { warehouseId?: string | null; ctx?: ServiceContext } = {},
 ): Promise<DashboardActions> {
-  const ctx = await withContext();
+  const ctx = options.ctx ?? (await withContext());
   let posQ = ctx.supabase
     .from('purchase_orders')
     .select('id', { count: 'estimated', head: true })
@@ -268,9 +268,9 @@ export async function getDashboardActions(
 
 export async function getLowStockItems(
   limit = 10,
-  options: { warehouseId?: string | null } = {},
+  options: { warehouseId?: string | null; ctx?: ServiceContext } = {},
 ) {
-  const ctx = await withContext();
+  const ctx = options.ctx ?? (await withContext());
   if (!options.warehouseId) {
     const { data, error } = await ctx.supabase.rpc('low_stock_items', {
       p_org_id: ctx.organizationId,
