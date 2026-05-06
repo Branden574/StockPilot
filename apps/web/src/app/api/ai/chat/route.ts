@@ -4,6 +4,13 @@ import { z } from 'zod';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { runChat, type ChatTurn } from '@/lib/ai/chat';
+import {
+  appendMessages,
+  createSession,
+  deriveTitle,
+  getSession,
+  listMessages,
+} from '@/lib/ai/sessions';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,18 +24,28 @@ const turnSchema = z.object({
 
 const bodySchema = z.object({
   message: z.string().min(1).max(2000),
+  /**
+   * If supplied, server loads prior messages from this session and
+   * persists the new turn into it. If omitted, server creates a fresh
+   * session and returns its id so the client can stick with it.
+   */
+  sessionId: z.string().uuid().optional(),
+  /**
+   * Legacy fallback only — used when the client is older than the
+   * persistence rollout and hasn't picked up sessionId yet. Server
+   * still creates a session on the fly so history is captured.
+   */
   history: z.array(turnSchema).max(40).optional(),
 });
 
 /**
- * Stateless chat endpoint. Client sends the full prior turn history +
- * new user message; we run the Gemini tool-call loop against the
- * caller's RLS-scoped Supabase client and return the final reply.
+ * Stateful chat endpoint. The conversation is persisted in
+ * ai_chat_sessions/ai_chat_messages so refreshing the page no longer
+ * wipes context — sessions are retained for 30 days.
  *
- * No streaming yet — first cut is request/response. Streaming with
- * tool calls adds protocol complexity (SSE + intermediate tool-result
- * events) and isn't required for usable latency on Flash (~2-4s
- * typical for a 1-tool answer).
+ * Server is the source of truth for history; the client only sends the
+ * new user message + a session pointer. This avoids drift bugs and
+ * means a stale tab can't poison the conversation.
  */
 export async function POST(req: Request) {
   const ctx = await withApiContext(req);
@@ -48,13 +65,52 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await runChat(
-      (payload.history ?? []) as ChatTurn[],
-      payload.message,
-      ctx,
-    );
+    let sessionId = payload.sessionId ?? null;
+    let history: ChatTurn[] = [];
+    let isNewSession = false;
+
+    if (sessionId) {
+      const session = await getSession(ctx, sessionId);
+      if (!session) {
+        // The id was unknown or expired — start a new session
+        // transparently rather than 404'ing the user mid-typing.
+        sessionId = null;
+      } else {
+        const messages = await listMessages(ctx, sessionId);
+        history = messages.map((m) => ({ role: m.role, content: m.content }));
+      }
+    }
+
+    if (!sessionId) {
+      // Title derived from the first user message — keeps the sessions
+      // sidebar useful without an extra round trip.
+      const session = await createSession(ctx, deriveTitle(payload.message));
+      sessionId = session.id;
+      isNewSession = true;
+      // Honor a client-supplied legacy history when starting fresh, so
+      // a long pre-rollout conversation isn't visually truncated.
+      if (payload.history && payload.history.length > 0) {
+        history = payload.history as ChatTurn[];
+      }
+    }
+
+    const result = await runChat(history, payload.message, ctx);
+
+    // Persist both turns AFTER the assistant produced a reply, so a
+    // failure mid-call doesn't strand a half-conversation in storage.
+    await appendMessages(ctx, sessionId, [
+      { role: 'user', content: payload.message },
+      {
+        role: 'assistant',
+        content: result.reply,
+        toolCalls: result.toolCallsUsed.map((t) => ({ name: t.name, ok: t.ok })),
+      },
+    ]);
+
     return NextResponse.json({
       ok: true,
+      sessionId,
+      isNewSession,
       reply: result.reply,
       toolCallsUsed: result.toolCallsUsed,
     });
