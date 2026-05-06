@@ -372,8 +372,9 @@ export function ChatPanel() {
               </div>
               <h2 className="text-lg font-medium">Ask your inventory anything</h2>
               <p className="text-muted-foreground mt-1.5 text-sm">
-                Read-only for now. Streamed responses, grounded by tool
-                calls into your real data — no hallucinated quantities.
+                Streamed responses, grounded by tool calls into your real
+                data — no hallucinated quantities. Can adjust stock when
+                you confirm.
               </p>
               <div className="mt-5 flex flex-wrap justify-center gap-2">
                 {SUGGESTIONS.map((s) => (

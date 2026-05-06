@@ -488,9 +488,11 @@ export class InventoryService {
     assertPermission(this.ctx, 'stock:adjust');
     // Verify the item is in a warehouse the user can write to before
     // delegating to the RPC. The RPC also enforces this server-side.
+    // Pass ctx so the helper doesn't fall back to requireOrgContext()
+    // (NEXT_REDIRECT trap when called from /api/* routes).
     const item = await this.get(input.itemId);
     const wh = (item as { warehouse_id?: string | null }).warehouse_id ?? null;
-    if (wh) await assertWarehouseAccess(wh, 'write');
+    if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
     const { data, error } = await this.ctx.supabase.rpc('adjust_stock', {
       p_item_id: input.itemId,
       p_quantity_change: input.quantityChange,
