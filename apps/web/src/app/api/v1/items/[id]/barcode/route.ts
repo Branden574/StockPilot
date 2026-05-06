@@ -38,15 +38,19 @@ export async function GET(
 
     let png: Buffer;
     if (type === 'qr') {
-      // QR encodes the deep-link URL to the item's detail page so a
-      // regular phone camera (no StockPilot app needed) can scan the
-      // sticker and land on the item. The mobile scanner detects this
-      // shape too — see apps/mobile/app/(tabs)/scan.tsx — and resolves
-      // it as a direct id lookup. Code 128 below stays as the bare
-      // value because linear barcodes can't reliably carry long URLs.
+      // QR encodes a PUBLIC, unauthenticated URL so anyone with a phone
+      // camera can scan the sticker and see basic item info — no
+      // StockPilot account required. The /p/items/[id] page strips
+      // quantities, costs, supplier, location, and internal notes
+      // before rendering (see server/services/public-items.ts). Team
+      // members signed in to the dashboard can still navigate to the
+      // full editable view from inside the app. The mobile scanner
+      // detects either URL shape — see apps/mobile/app/(tabs)/scan.tsx.
+      // Code 128 below stays as the bare value because linear barcodes
+      // can't reliably carry long URLs.
       const origin =
         process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '') ?? req.nextUrl.origin;
-      const itemUrl = `${origin}/dashboard/inventory/${id}`;
+      const itemUrl = `${origin}/p/items/${id}`;
       const mod = (await import('qrcode')) as unknown as {
         default?: { toBuffer: (text: string, opts: object) => Promise<Buffer> };
         toBuffer?: (text: string, opts: object) => Promise<Buffer>;

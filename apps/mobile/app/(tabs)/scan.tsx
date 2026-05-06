@@ -34,12 +34,15 @@ interface FoundItem {
 /**
  * Pulls the deep-link URL pattern out of a scanned QR/barcode value.
  * The /api/v1/items/[id]/barcode QR endpoint encodes
- *   <origin>/dashboard/inventory/<uuid>
- * (or /dashboard/books/<uuid>) so we look for either path.
+ *   <origin>/p/items/<uuid>          (current — public read-only page)
+ *   <origin>/dashboard/inventory/<uuid>  (legacy — pre-2026-05-06 stickers)
+ *   <origin>/dashboard/books/<uuid>      (legacy)
+ * so we accept any of the three for back-compat with already-printed
+ * labels.
  */
 function parseItemId(scanned: string): string | null {
   const match = scanned.match(
-    /\/dashboard\/(?:inventory|books)\/([0-9a-f-]{36})/i,
+    /\/(?:p\/items|dashboard\/(?:inventory|books))\/([0-9a-f-]{36})/i,
   );
   return match?.[1] ?? null;
 }
