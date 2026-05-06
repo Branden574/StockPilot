@@ -17,13 +17,22 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *     served. Archived/discontinued/deleted items 404 publicly.
  *
  * What's exposed:
- *     id, name, item_type, image_url, category_name (descriptive only),
- *     book metadata from custom_fields (author/publisher/date/grade)
+ *     id, name, item_type, image_url, quantity_on_hand, category_name
+ *     (descriptive only), book metadata from custom_fields
+ *     (author/publisher/date/grade).
+ *
+ *     quantity_on_hand is INTENTIONALLY public per product call —
+ *     warehouse staff scanning a label want immediate "is this in
+ *     stock?" feedback, and physical access to a labeled item
+ *     already implies presence in the building. Re-evaluate this if
+ *     the threat model ever changes (e.g. customer-visible labels
+ *     in a retail context where competitors could enumerate stock).
  *
  * What's NEVER exposed:
- *     quantities, costs, prices, supplier, location, internal notes,
- *     SKU, barcode, audit metadata, organization/warehouse ids,
- *     custom_fields keys other than the explicit allowlist below.
+ *     costs, prices, suppliers, locations, internal notes, SKU,
+ *     barcode, audit metadata, organization/warehouse ids,
+ *     reorder points, tracking type, custom_fields keys other than
+ *     the explicit allowlist below.
  */
 
 export const PUBLIC_ITEM_FIELDS = [
@@ -31,6 +40,7 @@ export const PUBLIC_ITEM_FIELDS = [
   'name',
   'item_type',
   'image_url',
+  'quantity_on_hand',
   'category_name',
   'custom_fields',
 ] as const;
@@ -42,6 +52,8 @@ export interface PublicItem {
   name: string;
   itemType: PublicItemType;
   imageUrl: string | null;
+  /** Defaults to 0 if column missing or non-numeric — never NaN/undefined. */
+  quantityOnHand: number;
   category: string | null;
   bookAuthor: string | null;
   bookPublisher: string | null;
@@ -76,11 +88,20 @@ export function toPublicItem(raw: Record<string, unknown>): PublicItem {
       ? (raw.custom_fields as Record<string, unknown>)
       : {};
 
+  const rawQty = raw.quantity_on_hand;
+  const qty =
+    typeof rawQty === 'number' && Number.isFinite(rawQty)
+      ? rawQty
+      : typeof rawQty === 'string' && Number.isFinite(Number(rawQty))
+        ? Number(rawQty)
+        : 0;
+
   return {
     id: String(raw.id ?? ''),
     name: typeof raw.name === 'string' ? raw.name : '',
     itemType,
     imageUrl: pickString(raw.image_url),
+    quantityOnHand: qty,
     category: pickString(raw.category_name),
     bookAuthor: pickString(customFields.author),
     bookPublisher: pickString(customFields.publisher),
@@ -100,7 +121,9 @@ export async function getPublicItem(itemId: string): Promise<PublicItem | null> 
   const admin = createAdminClient();
   const { data, error } = await admin
     .from('inventory_items')
-    .select('id, name, item_type, custom_fields, status, deleted_at, category:categories!category_id (name)')
+    .select(
+      'id, name, item_type, quantity_on_hand, custom_fields, status, deleted_at, category:categories!category_id (name)',
+    )
     .eq('id', itemId)
     .is('deleted_at', null)
     .eq('status', 'active')
@@ -137,6 +160,7 @@ export async function getPublicItem(itemId: string): Promise<PublicItem | null> 
     name: (data as { name: string }).name,
     item_type: (data as { item_type: string }).item_type,
     image_url: thumbnailUrl ?? null,
+    quantity_on_hand: (data as { quantity_on_hand?: number }).quantity_on_hand ?? 0,
     category_name: categoryName,
     custom_fields: customFields ?? null,
   });

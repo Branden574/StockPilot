@@ -1,6 +1,7 @@
 import { Sparkles } from 'lucide-react';
 import { notFound } from 'next/navigation';
 
+import { cn } from '@/lib/utils';
 import { getPublicItem } from '@/server/services/public-items';
 
 export const runtime = 'nodejs';
@@ -93,6 +94,36 @@ export default async function PublicItemPage({
           ) : null}
         </div>
 
+        {/* On-hand quantity — the main reason a warehouse staffer
+            scans a label. Color-coded so "out of stock" reads at a
+            glance: green = in stock, amber = 1, red = 0. */}
+        <div
+          className={cn(
+            'mt-5 flex items-baseline justify-between rounded-2xl border px-5 py-4',
+            item.quantityOnHand <= 0
+              ? 'border-destructive/40 bg-destructive/5 text-destructive'
+              : item.quantityOnHand === 1
+                ? 'border-warning/40 bg-warning/5 text-warning-foreground'
+                : 'border-success/40 bg-success/5',
+          )}
+        >
+          <div>
+            <div className="text-[10px] font-medium uppercase tracking-[0.12em] opacity-70">
+              On hand
+            </div>
+            <div className="font-display mt-0.5 text-[32px] font-medium tabular-nums leading-none tracking-[-0.02em]">
+              {item.quantityOnHand}
+            </div>
+          </div>
+          <div className="text-[11px] font-medium uppercase tracking-[0.08em]">
+            {item.quantityOnHand <= 0
+              ? 'Out of stock'
+              : item.quantityOnHand === 1
+                ? 'Last one'
+                : 'In stock'}
+          </div>
+        </div>
+
         {/* Book metadata */}
         {item.itemType === 'book' && (item.bookAuthor || item.bookPublisher || item.bookPublishedDate || item.bookGrade) ? (
           <dl className="border-border mt-6 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 rounded-2xl border p-4 text-sm">
@@ -133,7 +164,7 @@ export default async function PublicItemPage({
 
         {/* Footer note */}
         <p className="text-muted-foreground mt-8 text-[12px] leading-relaxed">
-          This is a public preview. Quantities, prices, suppliers, and
+          This is a public preview. Prices, suppliers, locations, and
           internal notes aren&apos;t shown. If you&apos;re part of the team,{' '}
           <a className="underline" href="/signin">
             sign in
