@@ -294,7 +294,11 @@ export function ChatPanel() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-160px)] gap-4">
+    // dvh handles mobile address bar resize cleanly. The 260px subtract
+    // budgets for: dashboard topbar (~64), page wrapper py-8 top (32),
+    // page header block (~140), bottom breathing room (~24). min-h
+    // keeps the panel usable on short viewports.
+    <div className="flex h-[calc(100dvh-260px)] min-h-[420px] gap-4">
       {/* Sessions sidebar */}
       <aside className="border-border bg-card hidden w-56 shrink-0 flex-col rounded-xl border p-2 md:flex">
         <Button
