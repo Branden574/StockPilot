@@ -395,6 +395,81 @@ export class BooksImportService {
 
     return result;
   }
+
+  /**
+   * Backfill rehosted covers for books that already exist in the DB
+   * but only have a third-party URL on custom_fields.thumbnail_url
+   * (no item_images row). Lets users repair the existing library
+   * after the rehost flow landed without re-importing.
+   *
+   * Goes book-by-book, best-effort: a single failed cover doesn't
+   * abort the run. Returns counts so the UI can surface "rehosted X
+   * of Y, skipped Z (already had a primary photo), failed F".
+   */
+  async backfillCovers(options: { limit?: number } = {}): Promise<{
+    rehosted: number;
+    alreadyHadPrimary: number;
+    noUrlOnRow: number;
+    failed: number;
+    scanned: number;
+  }> {
+    const limit = Math.min(options.limit ?? 200, 500);
+    const stats = {
+      rehosted: 0,
+      alreadyHadPrimary: 0,
+      noUrlOnRow: 0,
+      failed: 0,
+      scanned: 0,
+    };
+
+    // Pull books in this org with a thumbnail_url stashed on
+    // custom_fields. The .not('custom_fields->>thumbnail_url', 'is', null)
+    // filter narrows to rows that actually have a candidate cover —
+    // no point fetching covers for items the importer never tagged.
+    const { data: rows, error } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id, custom_fields')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('item_type', 'book')
+      .is('deleted_at', null)
+      .not('custom_fields->>thumbnail_url', 'is', null)
+      .limit(limit);
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    for (const row of (rows ?? []) as Array<{
+      id: string;
+      custom_fields: Record<string, unknown> | null;
+    }>) {
+      stats.scanned += 1;
+      const thumb =
+        row.custom_fields && typeof row.custom_fields === 'object'
+          ? (row.custom_fields.thumbnail_url as string | undefined)
+          : undefined;
+      if (!thumb || typeof thumb !== 'string' || thumb.length === 0) {
+        stats.noUrlOnRow += 1;
+        continue;
+      }
+
+      // Skip if a primary image already exists. Don't clobber a real
+      // user-uploaded photo with a stale URL.
+      const { data: existing } = await this.ctx.supabase
+        .from('item_images')
+        .select('id')
+        .eq('item_id', row.id)
+        .eq('is_primary', true)
+        .limit(1);
+      if (existing && existing.length > 0) {
+        stats.alreadyHadPrimary += 1;
+        continue;
+      }
+
+      const path = await rehostCover(this.ctx, row.id, thumb);
+      if (path) stats.rehosted += 1;
+      else stats.failed += 1;
+    }
+
+    return stats;
+  }
 }
 
 function pickPreviewMeta(meta: BookMetadata) {
