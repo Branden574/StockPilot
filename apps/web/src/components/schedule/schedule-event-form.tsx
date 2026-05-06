@@ -89,8 +89,13 @@ export function ScheduleEventForm({ warehouses, defaults, initialDate }: Props) 
   const [endsAtLocal, setEndsAtLocal] = React.useState(initialEnd);
   const [allDay, setAllDay] = React.useState(defaults?.allDay ?? false);
   const [locationText, setLocationText] = React.useState(defaults?.locationText ?? '');
+  // Warehouse is required: events are now warehouse-scoped at the
+  // RLS level (migration 0033). If the user doesn't pick one, the
+  // event would only be visible to org members with no warehouse
+  // restriction — a footgun. Default to the first warehouse the
+  // caller passed in.
   const [warehouseId, setWarehouseId] = React.useState<string>(
-    defaults?.warehouseId ?? '__none__',
+    defaults?.warehouseId ?? warehouses[0]?.id ?? '',
   );
   const [requesterName, setRequesterName] = React.useState(defaults?.requesterName ?? '');
   const [details, setDetails] = React.useState(defaults?.details ?? '');
@@ -102,6 +107,10 @@ export function ScheduleEventForm({ warehouses, defaults, initialDate }: Props) 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
+    if (!warehouseId) {
+      toast.error('Pick a warehouse — events are scoped to warehouse staff.');
+      return;
+    }
     setBusy(true);
 
     const payload = {
@@ -110,7 +119,7 @@ export function ScheduleEventForm({ warehouses, defaults, initialDate }: Props) 
       endsAt: endsAtLocal ? localInputToIso(endsAtLocal) : null,
       allDay,
       locationText: locationText.trim() || undefined,
-      warehouseId: warehouseId === '__none__' ? null : warehouseId,
+      warehouseId: warehouseId || null,
       requesterName: requesterName.trim() || undefined,
       details: details.trim() || undefined,
       status,
@@ -207,13 +216,14 @@ export function ScheduleEventForm({ warehouses, defaults, initialDate }: Props) 
           />
         </div>
         <div className="space-y-1.5">
-          <Label>Warehouse (optional)</Label>
+          <Label>
+            Warehouse <span className="text-destructive">*</span>
+          </Label>
           <Select value={warehouseId} onValueChange={setWarehouseId}>
             <SelectTrigger>
-              <SelectValue />
+              <SelectValue placeholder="Pick a warehouse" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__none__">None</SelectItem>
               {warehouses.map((w) => (
                 <SelectItem key={w.id} value={w.id}>
                   {w.name}
@@ -221,6 +231,9 @@ export function ScheduleEventForm({ warehouses, defaults, initialDate }: Props) 
               ))}
             </SelectContent>
           </Select>
+          <p className="text-muted-foreground text-[11px]">
+            Only staff assigned to this warehouse will see the event.
+          </p>
         </div>
       </div>
 
