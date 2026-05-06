@@ -2,6 +2,7 @@
 
 import {
   CheckCircle2,
+  FileUp,
   Loader2,
   Sparkles,
   Trash2,
@@ -69,6 +70,60 @@ export function BulkIsbnImport({
   const [resolved, setResolved] = React.useState<Resolved[]>([]);
   const [scanning, setScanning] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
+  const [extracting, setExtracting] = React.useState(false);
+  const [aiExtracting, setAiExtracting] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const aiFileInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  async function handleFileUpload(file: File, mode: 'regex' | 'ai') {
+    const setBusy = mode === 'ai' ? setAiExtracting : setExtracting;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const endpoint =
+        mode === 'ai' ? '/api/books/extract-isbns-ai' : '/api/books/extract-isbns';
+      const res = await fetch(endpoint, { method: 'POST', body: fd });
+      const json = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        isbns?: string[];
+        totalFound?: number;
+        kind?: string;
+        notes?: string;
+        message?: string;
+      };
+      if (!res.ok || !json.ok) {
+        toast.error(json.message ?? `Couldn't parse ${file.name} (${res.status}).`);
+        return;
+      }
+      const found = json.isbns ?? [];
+      if (found.length === 0) {
+        toast.warning(`No ISBNs found in ${file.name}.`);
+        return;
+      }
+      // Append to whatever the user already has, then dedupe at parse
+      // time when they click Look up. Newline-separated so it's easy
+      // for them to eyeball. Stack regex + AI passes — the parser
+      // dedupes on the way to lookup.
+      setRaw((prev) => {
+        const trimmed = prev.trim();
+        const sep = trimmed.length > 0 ? '\n' : '';
+        return `${trimmed}${sep}${found.join('\n')}`;
+      });
+      const label = mode === 'ai' ? 'AI extracted' : 'Extracted';
+      toast.success(
+        `${label} ${found.length} ISBN${found.length === 1 ? '' : 's'} from ${file.name}.`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Upload failed.');
+    } finally {
+      setBusy(false);
+      // Reset the input so the same file can be uploaded again if needed.
+      if (mode === 'ai') {
+        if (aiFileInputRef.current) aiFileInputRef.current.value = '';
+      } else if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
 
   const allowedCharterIds = React.useMemo(() => {
     const set = new Set<string>();
@@ -307,13 +362,74 @@ export function BulkIsbnImport({
         )}
 
         <div className="space-y-1.5">
-          <Label htmlFor="isbn-list">ISBNs</Label>
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor="isbn-list">ISBNs</Label>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.docx,.xlsx,.xls,.csv,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,text/plain"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleFileUpload(f, 'regex');
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={extracting || aiExtracting}
+                onClick={() => {
+                  if (fileInputRef.current) {
+                    fileInputRef.current.dataset.mode = 'regex';
+                    fileInputRef.current.click();
+                  }
+                }}
+                title="Pull ISBNs out of a PDF / Word / Excel / CSV / TXT file using regex (fast, free)."
+              >
+                {extracting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FileUp className="h-3.5 w-3.5" />
+                )}
+                Extract from file
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={extracting || aiExtracting}
+                onClick={() => {
+                  if (aiFileInputRef.current) aiFileInputRef.current.click();
+                }}
+                title="Use Gemini to find ISBNs and book references that the regex misses (slower, uses tokens)."
+              >
+                {aiExtracting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5" />
+                )}
+                Extract with AI
+              </Button>
+              <input
+                ref={aiFileInputRef}
+                type="file"
+                accept=".pdf,.docx,.xlsx,.xls,.csv,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,text/plain"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleFileUpload(f, 'ai');
+                }}
+              />
+            </div>
+          </div>
           <Textarea
             id="isbn-list"
             value={raw}
             onChange={(e) => setRaw(e.target.value)}
             rows={6}
-            placeholder="One ISBN per line, or comma-separated. ISBN-10 and ISBN-13 both work, with or without dashes."
+            placeholder="One ISBN per line, or comma-separated. ISBN-10 and ISBN-13 both work, with or without dashes. You can also upload a PDF, Word doc, Excel sheet, CSV, or TXT — extract pulls the ISBNs out for you."
             className="font-mono text-[12.5px]"
           />
           <p className="text-muted-foreground text-[11px]">
