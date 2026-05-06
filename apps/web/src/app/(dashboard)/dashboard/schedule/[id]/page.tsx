@@ -1,0 +1,143 @@
+import { ChevronLeft, MapPin, User2 } from 'lucide-react';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ServiceError } from '@/server/services/context';
+import { ScheduleService } from '@/server/services/schedule';
+
+const STATUS_LABEL: Record<string, string> = {
+  scheduled: 'Scheduled',
+  in_progress: 'In progress',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+};
+
+function formatRange(startsAt: string, endsAt: string | null, allDay: boolean) {
+  const start = new Date(startsAt);
+  const dateOpts: Intl.DateTimeFormatOptions = {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  };
+  const timeOpts: Intl.DateTimeFormatOptions = {
+    hour: 'numeric',
+    minute: '2-digit',
+  };
+  if (allDay) {
+    return `${start.toLocaleDateString(undefined, dateOpts)} · All day`;
+  }
+  if (!endsAt) {
+    return `${start.toLocaleDateString(undefined, dateOpts)} · ${start.toLocaleTimeString(undefined, timeOpts)}`;
+  }
+  const end = new Date(endsAt);
+  const sameDay =
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth() &&
+    start.getDate() === end.getDate();
+  if (sameDay) {
+    return `${start.toLocaleDateString(undefined, dateOpts)} · ${start.toLocaleTimeString(undefined, timeOpts)} – ${end.toLocaleTimeString(undefined, timeOpts)}`;
+  }
+  return `${start.toLocaleDateString(undefined, dateOpts)} ${start.toLocaleTimeString(undefined, timeOpts)} → ${end.toLocaleDateString(undefined, dateOpts)} ${end.toLocaleTimeString(undefined, timeOpts)}`;
+}
+
+export default async function ScheduleEventDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const svc = await ScheduleService.forCurrentUser();
+  let event;
+  try {
+    event = await svc.get(id);
+  } catch (e) {
+    if (e instanceof ServiceError && e.code === 'not_found') notFound();
+    throw e;
+  }
+
+  return (
+    <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
+      <div className="mb-6">
+        <Link
+          href="/dashboard/schedule"
+          className="text-muted-foreground hover:text-foreground inline-flex items-center text-sm"
+        >
+          <ChevronLeft className="mr-1 h-4 w-4" /> Back to calendar
+        </Link>
+      </div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{event.title}</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            {formatRange(event.startsAt, event.endsAt, event.allDay)}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="border-border text-muted-foreground inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px]">
+            {STATUS_LABEL[event.status] ?? event.status}
+          </span>
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/dashboard/schedule/${id}/edit`}>Edit</Link>
+          </Button>
+        </div>
+      </div>
+
+      <div className="mt-6 grid gap-3 sm:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <MapPin className="h-3.5 w-3.5" /> Location
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm">
+            {event.locationText ? (
+              <p>{event.locationText}</p>
+            ) : (
+              <p className="text-muted-foreground">No location set.</p>
+            )}
+            {event.warehouseName ? (
+              <p className="text-muted-foreground mt-1 text-[12px]">
+                Warehouse: {event.warehouseName}
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <User2 className="h-3.5 w-3.5" /> Requester
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm">
+            {event.requesterName ? (
+              <p>{event.requesterName}</p>
+            ) : (
+              <p className="text-muted-foreground">No requester recorded.</p>
+            )}
+            {event.createdByName ? (
+              <p className="text-muted-foreground mt-1 text-[12px]">
+                Created by {event.createdByName}
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="mt-3">
+        <CardHeader>
+          <CardTitle className="text-sm">Details</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {event.details ? (
+            <p className="whitespace-pre-wrap text-sm leading-relaxed">{event.details}</p>
+          ) : (
+            <p className="text-muted-foreground text-sm">No additional details.</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
