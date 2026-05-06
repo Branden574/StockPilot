@@ -5,6 +5,7 @@ import { SchemaType, type FunctionDeclaration } from '@google/generative-ai';
 import { lookupIsbn as lookupIsbnLib } from '@/lib/books/lookup';
 import type { ServiceContext } from '@/server/services/context';
 import { BooksImportService } from '@/server/services/books-import';
+import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
 import {
   getDashboardActions,
@@ -56,7 +57,7 @@ const searchInventoryTool: ToolExecutor = {
   declaration: {
     name: 'searchInventory',
     description:
-      'Search the inventory by free-text on name, SKU, or barcode. Optionally filter by status, low-stock, out-of-stock, item type, or a specific warehouse. Returns up to 25 matches.',
+      "Search the inventory. Filter by free-text (name/SKU/barcode), category UUID, status, low-stock, out-of-stock, item type, or warehouse. The result's `total` field is the TRUE count even when only 25 items are returned — use that for 'how many' questions. When the user names a category by label (e.g. \"Swag\", \"Books\"), call listCategories first to resolve the UUID, then re-query with categoryId.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {
@@ -64,6 +65,11 @@ const searchInventoryTool: ToolExecutor = {
           type: SchemaType.STRING,
           description:
             'Free-text query. Matches name, SKU, or barcode. Empty string = no text filter.',
+        },
+        categoryId: {
+          type: SchemaType.STRING,
+          description:
+            "UUID of a category. Empty = no category filter. Resolve labels via listCategories first.",
         },
         status: {
           type: SchemaType.STRING,
@@ -98,6 +104,10 @@ const searchInventoryTool: ToolExecutor = {
     const svc = new InventoryService(ctx);
     const result = await svc.list({
       q: (args.query as string) || undefined,
+      categoryId:
+        typeof args.categoryId === 'string' && args.categoryId.length > 0
+          ? args.categoryId
+          : null,
       status:
         args.status === 'archived' ||
         args.status === 'discontinued' ||
@@ -121,6 +131,46 @@ const searchInventoryTool: ToolExecutor = {
     return {
       total: result.total,
       items: result.items.slice(0, 25).map((i) => compactItem(i as Record<string, unknown>)),
+    };
+  },
+};
+
+const listCategoriesTool: ToolExecutor = {
+  declaration: {
+    name: 'listCategories',
+    description:
+      "List the workspace's item categories with their UUIDs. Use this to resolve a category name (e.g. \"Swag\", \"Fiction\") into the categoryId you'll pass to searchInventory. Returns name + id + an estimated item count per category.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {},
+    },
+  },
+  async execute(_args, ctx) {
+    const svc = new CategoriesService(ctx);
+    const cats = await svc.list();
+    if (cats.length === 0) return { categories: [] };
+
+    // Cheap counts via PostgREST head queries — one per category, but
+    // there are typically <30 of these, so the round trip cost is fine.
+    // Run in parallel.
+    const counts = await Promise.all(
+      cats.map(async (c) => {
+        const { count } = await ctx.supabase
+          .from('inventory_items')
+          .select('id', { count: 'estimated', head: true })
+          .eq('organization_id', ctx.organizationId)
+          .eq('category_id', (c as { id: string }).id)
+          .is('deleted_at', null);
+        return count ?? 0;
+      }),
+    );
+
+    return {
+      categories: cats.map((c, i) => ({
+        id: (c as { id: string }).id,
+        name: (c as { name: string }).name,
+        itemCount: counts[i] ?? 0,
+      })),
     };
   },
 };
@@ -489,6 +539,7 @@ const executeBulkBookImportTool: ToolExecutor = {
 
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
+  listCategories: listCategoriesTool,
   getItemDetails: getItemDetailsTool,
   listLowStock: listLowStockTool,
   getDashboardSummary: getDashboardSummaryTool,

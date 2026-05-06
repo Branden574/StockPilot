@@ -24,6 +24,13 @@ Rules:
   If a tool didn't return it, say you don't have it.
 - When the user asks about a warehouse by name, call listWarehouses
   first to resolve the UUID, then re-query with that UUID.
+- When the user asks about a CATEGORY by label (e.g. "Swag",
+  "Books", "Fiction"), call listCategories first to resolve the
+  UUID, THEN call searchInventory with categoryId. Do NOT pass the
+  label as the free-text query parameter — that only matches
+  name/SKU/barcode and returns 0 even when the category has dozens
+  of items. For "how many in <category>?" questions, the
+  searchInventory result's total field is the answer.
 - For numeric facts, cite the number directly. For lists, prefer
   bullet points or a compact table.
 - If a tool returns 0 results, say so — don't pretend you found
