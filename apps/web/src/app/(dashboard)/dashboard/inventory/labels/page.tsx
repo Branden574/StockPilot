@@ -1,6 +1,6 @@
 import Link from 'next/link';
 
-import { LabelSheet } from '@/components/inventory/label-sheet';
+import { LabelSheet, type LabelFormat } from '@/components/inventory/label-sheet';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
@@ -14,7 +14,12 @@ interface LabelItem {
 export default async function LabelsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ items?: string; copies?: string; template?: string }>;
+  searchParams: Promise<{
+    items?: string;
+    copies?: string;
+    template?: string;
+    format?: string;
+  }>;
 }) {
   const params = await searchParams;
   const ids = (params.items ?? '')
@@ -26,6 +31,7 @@ export default async function LabelsPage({
     params.template === 'large' || params.template === 'small'
       ? params.template
       : 'medium';
+  const format: LabelFormat = params.format === 'qr' ? 'qr' : 'barcode';
 
   const inventorySvc = await InventoryService.forCurrentUser();
   let items: LabelItem[] = [];
@@ -58,7 +64,7 @@ export default async function LabelsPage({
             : `${items.length} item${items.length === 1 ? '' : 's'} selected · ${copies} cop${copies === 1 ? 'y' : 'ies'} each = ${items.length * copies} label${items.length * copies === 1 ? '' : 's'}.`}
         </p>
       </div>
-      <LabelSheet items={items} copies={copies} template={template} />
+      <LabelSheet items={items} copies={copies} template={template} format={format} />
     </div>
   );
 }
