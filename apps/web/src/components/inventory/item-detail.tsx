@@ -25,9 +25,16 @@ interface ItemDetailProps {
   id: string;
   backHref: string;
   backLabel: string;
+  /**
+   * Where the "Edit" button links. Defaults to the items-tab edit route
+   * (/dashboard/inventory/[id]/edit). The Books tab passes a books-tab
+   * edit route so the book-specific form (ISBN, grade, rack, crate,
+   * author) is shown instead of the generic product form.
+   */
+  editHref?: string;
 }
 
-export async function ItemDetail({ id, backHref, backLabel }: ItemDetailProps) {
+export async function ItemDetail({ id, backHref, backLabel, editHref }: ItemDetailProps) {
   const [inventorySvc, activitySvc, imagesSvc, categoriesSvc, locationsSvc, suppliersSvc] =
     await Promise.all([
       InventoryService.forCurrentUser(),
@@ -93,7 +100,7 @@ export async function ItemDetail({ id, backHref, backLabel }: ItemDetailProps) {
         <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
           <div className="flex w-max gap-2 sm:flex-wrap">
             <Button asChild variant="outline" size="sm" className="sm:size-auto">
-              <Link href={`/dashboard/inventory/${id}/edit`}>Edit</Link>
+              <Link href={editHref ?? `/dashboard/inventory/${id}/edit`}>Edit</Link>
             </Button>
             <BarcodeDisplay
               itemId={id}

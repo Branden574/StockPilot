@@ -17,7 +17,22 @@ import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
 import { resolveTerminology } from '@stockpilot/core';
 
-export default async function EditItemPage({ params }: { params: Promise<{ id: string }> }) {
+/**
+ * Book edit form. Mirrors /dashboard/inventory/[id]/edit but tells
+ * ItemForm to render in book mode — the form then shows the
+ * book-specific fields (ISBN-as-barcode label, grade, rack number,
+ * rack row, crate color, crate number, author) instead of the
+ * generic product field set.
+ *
+ * Books are stored in the same `inventory_items` table as products,
+ * just with `item_type='book'`. The InventoryService lookup is
+ * identical between the two tabs — only the form variant differs.
+ */
+export default async function EditBookPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
   const { id } = await params;
   const ctx = await requireOrgContext();
   const supabase = await createClient();
@@ -77,12 +92,12 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
         <Link
-          href={`/dashboard/inventory/${id}`}
+          href={`/dashboard/books/${id}`}
           className="text-muted-foreground hover:text-foreground text-sm"
         >
-          ← Back to item
+          ← Back to book
         </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Edit item</h1>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Edit book</h1>
       </div>
       <Card>
         <CardHeader>
@@ -90,6 +105,10 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
         </CardHeader>
         <CardContent>
           <ItemForm
+            // itemType=book at the top level guarantees the form
+            // renders in book mode even if defaults.itemType is
+            // somehow stale or missing — belt-and-suspenders.
+            itemType="book"
             defaults={{
               id,
               name: item.name as string,
@@ -109,19 +128,11 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
               unitOfMeasure: item.unit_of_measure as string,
               binLocation: (item.bin_location as string | null) ?? '',
               trackingType:
-                ((item.tracking_type as 'none' | 'lot' | 'serial' | null | undefined) ?? 'none') as
-                  | 'none'
-                  | 'lot'
-                  | 'serial',
+                ((item.tracking_type as 'none' | 'lot' | 'serial' | null | undefined) ??
+                  'none') as 'none' | 'lot' | 'serial',
               status: item.status as 'active' | 'archived' | 'discontinued',
               customFields: (item.custom_fields as Record<string, unknown>) ?? {},
-              // Carry the row's actual item_type into the form so a
-              // book that lands on the inventory edit URL still shows
-              // the book-specific fields (ISBN label, grade, rack,
-              // crate, author). Bug fix 2026-05-06.
-              itemType:
-                ((item.item_type as 'product' | 'book' | 'asset' | 'consumable' | null | undefined) ??
-                  'product') as 'product' | 'book' | 'asset' | 'consumable',
+              itemType: 'book',
             }}
             categories={categories.map((c) => ({ id: c.id as string, name: c.name as string }))}
             locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
