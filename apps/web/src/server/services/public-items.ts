@@ -111,6 +111,50 @@ export function toPublicItem(raw: Record<string, unknown>): PublicItem {
 }
 
 /**
+ * Resolve the best available image URL for a public item view.
+ *
+ * Priority order:
+ *   1. The item's primary uploaded photo from the `item_images` table
+ *      (signed URL, 1h TTL — long enough to render after a scan, short
+ *      enough that link sharing past the session is bounded).
+ *   2. The first uploaded photo (any sort order) if no primary flag.
+ *   3. custom_fields.thumbnail_url — populated for books that came in
+ *      via the ISBN import pipeline (Google Books / OpenLibrary cover).
+ *   4. null — placeholder will render on the page.
+ *
+ * Uses the admin client so it works without an authenticated session.
+ */
+async function resolvePublicImageUrl(
+  admin: ReturnType<typeof createAdminClient>,
+  itemId: string,
+  customFields: Record<string, unknown> | null | undefined,
+): Promise<string | null> {
+  // 1 + 2: uploaded photo. Order so primary wins, then earliest sort.
+  const { data: imgRows } = await admin
+    .from('item_images')
+    .select('storage_path, is_primary, sort_order')
+    .eq('item_id', itemId)
+    .order('is_primary', { ascending: false })
+    .order('sort_order', { ascending: true })
+    .limit(1);
+  const imgRow = (imgRows ?? [])[0] as { storage_path?: string } | undefined;
+  if (imgRow?.storage_path) {
+    const { data: signed } = await admin.storage
+      .from('item-images')
+      .createSignedUrl(imgRow.storage_path, 60 * 60);
+    if (signed?.signedUrl) return signed.signedUrl;
+  }
+
+  // 3: book cover from the ISBN import pipeline.
+  if (customFields && typeof customFields === 'object') {
+    const thumbnail = customFields.thumbnail_url;
+    if (typeof thumbnail === 'string' && thumbnail.length > 0) return thumbnail;
+  }
+
+  return null;
+}
+
+/**
  * Loads one item by id from Supabase via the service-role client and
  * returns its public projection. Returns null when the row doesn't
  * exist, is soft-deleted, or isn't active. The caller (route handler)
@@ -141,25 +185,18 @@ export async function getPublicItem(itemId: string): Promise<PublicItem | null> 
     ? cat[0]?.name ?? null
     : cat?.name ?? null;
 
-  // We could also resolve a primary image here; left null for v1
-  // since the inventory list-thumbnails service is org-scoped and
-  // requires more wiring to call from public context. Items that
-  // surface their image via custom_fields.thumbnail_url (books) get
-  // it through that pathway already.
   const customFields = (data as Record<string, unknown>).custom_fields as
     | Record<string, unknown>
     | null
     | undefined;
-  const thumbnailUrl =
-    customFields && typeof customFields === 'object'
-      ? (customFields.thumbnail_url as string | undefined)
-      : undefined;
+
+  const imageUrl = await resolvePublicImageUrl(admin, itemId, customFields);
 
   return toPublicItem({
     id: (data as { id: string }).id,
     name: (data as { name: string }).name,
     item_type: (data as { item_type: string }).item_type,
-    image_url: thumbnailUrl ?? null,
+    image_url: imageUrl,
     quantity_on_hand: (data as { quantity_on_hand?: number }).quantity_on_hand ?? 0,
     category_name: categoryName,
     custom_fields: customFields ?? null,
