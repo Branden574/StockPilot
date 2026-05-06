@@ -151,12 +151,10 @@ delete from public.categories where organization_id = :org_id;
 -- Demo suppliers
 delete from public.suppliers where organization_id = :org_id;
 
--- Locations + bins (the legacy "Main Warehouse" + any drawer/shelf rows)
--- Skip this if you've set up real bin/shelf hierarchy you want to keep.
-delete from public.bins      where exists (
-  select 1 from public.locations l
-   where l.id = bins.location_id and l.organization_id = :org_id
-);
+-- Locations + bins. Both have organization_id directly — bins also
+-- references warehouse_id but for a wipe we just nuke by org.
+-- Skip these if you've set up real bin/location hierarchy to keep.
+delete from public.bins      where organization_id = :org_id;
 delete from public.locations where organization_id = :org_id;
 
 -- ---------------------------------------------------------------------------
