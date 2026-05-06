@@ -3186,5 +3186,929 @@ create index if not exists inventory_items_item_type_idx
   where deleted_at is null;
 
 -- ─────────────────────────────────────────────────────────────────────
+-- 0021_po_imports_bucket.sql
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 0021_po_imports_bucket.sql
+-- ============================================================================
+-- Creates the `po-imports` Supabase Storage bucket (private) and the four
+-- standard org-scoped RLS policies that mirror item-attachments.
+--
+-- Why: the PO upload flow calls supabase.storage.from('po-imports')
+-- .createSignedUploadUrl(...). Supabase Storage validates the would-be
+-- INSERT against storage.objects RLS at signing time. Without a bucket and
+-- without an INSERT policy granting the authenticated org member, signing
+-- fails with "new row violates row-level security policy" — which is what
+-- the user saw on /dashboard/purchase-orders/imports/new.
+--
+-- Path convention: {organization_id}/po-imports/{uuid}.{ext}
+-- (storage.foldername(name))[1] is therefore the org id.
+-- ============================================================================
+
+insert into storage.buckets (id, name, public)
+values ('po-imports', 'po-imports', false)
+on conflict (id) do nothing;
+
+drop policy if exists "po-imports authenticated read"   on storage.objects;
+drop policy if exists "po-imports manager write"        on storage.objects;
+drop policy if exists "po-imports manager update"       on storage.objects;
+drop policy if exists "po-imports manager delete"       on storage.objects;
+
+create policy "po-imports authenticated read"
+  on storage.objects for select to authenticated
+  using (
+    bucket_id = 'po-imports'
+    and public.is_org_member((storage.foldername(name))[1]::uuid)
+  );
+
+create policy "po-imports manager write"
+  on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'po-imports'
+    and public.has_org_role((storage.foldername(name))[1]::uuid, 'manager')
+  );
+
+create policy "po-imports manager update"
+  on storage.objects for update to authenticated
+  using (
+    bucket_id = 'po-imports'
+    and public.has_org_role((storage.foldername(name))[1]::uuid, 'manager')
+  )
+  with check (
+    bucket_id = 'po-imports'
+    and public.has_org_role((storage.foldername(name))[1]::uuid, 'manager')
+  );
+
+create policy "po-imports manager delete"
+  on storage.objects for delete to authenticated
+  using (
+    bucket_id = 'po-imports'
+    and public.has_org_role((storage.foldername(name))[1]::uuid, 'manager')
+  );
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 0022_receipt_search_path.sql
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 0022_receipt_search_path.sql
+-- ============================================================================
+-- Adds `extensions` to the search_path of post_receipt_v2 and reverse_receipt
+-- so they can find pgcrypto's digest() function.
+--
+-- Receiving stock against an imported PO failed with:
+--   ERROR: function digest(text, unknown) does not exist
+-- Cause: Supabase installs pgcrypto into the `extensions` schema by default,
+-- but both functions were created with `set search_path = public` — so the
+-- unqualified digest() call inside them couldn't resolve.
+--
+-- Fix: ALTER FUNCTION ... SET search_path = public, extensions for both.
+-- The function bodies don't change.
+-- ============================================================================
+
+alter function public.post_receipt_v2(uuid, uuid, jsonb, text, text, text)
+  set search_path = public, extensions;
+
+alter function public.reverse_receipt(uuid, text)
+  set search_path = public, extensions;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 0023_cycle_counts.sql
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 0023_cycle_counts.sql
+-- ============================================================================
+-- CYCLE COUNTS — periodic recount of physical stock against the system.
+-- A count session snapshots expected quantities for a set of items, the
+-- counter records actual qtys, and approving the session posts adjustments
+-- for every variance into stock_movements (movement_type='adjust') so
+-- inventory_items.quantity_on_hand matches what was counted.
+-- ============================================================================
+
+create table if not exists public.cycle_counts (
+  id              uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  warehouse_id    uuid references public.warehouses(id) on delete set null,
+  status          text not null default 'in_progress' check (status in (
+                    'in_progress','completed','canceled')),
+  notes           text,
+  started_by      uuid references public.user_profiles(id) on delete set null,
+  started_at      timestamptz not null default now(),
+  completed_by    uuid references public.user_profiles(id) on delete set null,
+  completed_at    timestamptz,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+create index if not exists cycle_counts_org_status_idx
+  on public.cycle_counts(organization_id, status, started_at desc);
+create trigger cycle_counts_updated_at
+  before update on public.cycle_counts
+  for each row execute function public.tg_set_updated_at();
+
+create table if not exists public.cycle_count_lines (
+  id                  uuid primary key default gen_random_uuid(),
+  cycle_count_id      uuid not null references public.cycle_counts(id) on delete cascade,
+  item_id             uuid not null references public.inventory_items(id) on delete cascade,
+  -- Snapshot of inventory_items.quantity_on_hand at the moment the count
+  -- session started. Doesn't change after that — drives variance math.
+  expected_quantity   numeric(14,4) not null,
+  -- Null until the counter records a number. variance only makes sense
+  -- once counted_quantity is set.
+  counted_quantity    numeric(14,4),
+  reason              text,
+  notes               text,
+  counted_by          uuid references public.user_profiles(id) on delete set null,
+  counted_at          timestamptz,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now(),
+  unique (cycle_count_id, item_id)
+);
+create index if not exists cycle_count_lines_cc_idx
+  on public.cycle_count_lines(cycle_count_id);
+create trigger cycle_count_lines_updated_at
+  before update on public.cycle_count_lines
+  for each row execute function public.tg_set_updated_at();
+
+-- ============================================================================
+-- RLS: managers+ can write, any org member can read.
+-- ============================================================================
+alter table public.cycle_counts        enable row level security;
+alter table public.cycle_count_lines   enable row level security;
+
+drop policy if exists cycle_counts_select on public.cycle_counts;
+create policy cycle_counts_select on public.cycle_counts
+  for select using (public.is_org_member(organization_id));
+
+drop policy if exists cycle_counts_insert on public.cycle_counts;
+create policy cycle_counts_insert on public.cycle_counts
+  for insert with check (public.has_org_role(organization_id, 'manager'));
+
+drop policy if exists cycle_counts_update on public.cycle_counts;
+create policy cycle_counts_update on public.cycle_counts
+  for update
+  using (public.has_org_role(organization_id, 'manager'))
+  with check (public.has_org_role(organization_id, 'manager'));
+
+drop policy if exists cycle_count_lines_select on public.cycle_count_lines;
+create policy cycle_count_lines_select on public.cycle_count_lines
+  for select using (
+    exists (
+      select 1 from public.cycle_counts cc
+      where cc.id = cycle_count_lines.cycle_count_id
+        and public.is_org_member(cc.organization_id)
+    )
+  );
+
+drop policy if exists cycle_count_lines_write on public.cycle_count_lines;
+create policy cycle_count_lines_write on public.cycle_count_lines
+  for all using (
+    exists (
+      select 1 from public.cycle_counts cc
+      where cc.id = cycle_count_lines.cycle_count_id
+        and public.has_org_role(cc.organization_id, 'manager')
+    )
+  ) with check (
+    exists (
+      select 1 from public.cycle_counts cc
+      where cc.id = cycle_count_lines.cycle_count_id
+        and public.has_org_role(cc.organization_id, 'manager')
+    )
+  );
+
+-- ============================================================================
+-- post_cycle_count: atomically applies counted_quantity to every line that
+-- has been counted (counted_quantity IS NOT NULL), inserts adjust-type
+-- stock_movements for the variance, sets quantity_on_hand to match the
+-- count, and flips the session to 'completed'.
+-- ============================================================================
+create or replace function public.post_cycle_count(p_cycle_count_id uuid)
+returns public.cycle_counts
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_cc      public.cycle_counts%rowtype;
+  v_line    record;
+  v_prev    numeric(14,4);
+  v_diff    numeric(14,4);
+begin
+  select * into v_cc from public.cycle_counts where id = p_cycle_count_id for update;
+  if not found then raise exception 'cycle_count_not_found' using errcode = 'P0002'; end if;
+  if v_cc.status <> 'in_progress' then
+    raise exception 'cycle_count_not_open' using errcode = '22023';
+  end if;
+  if not public.has_org_role(v_cc.organization_id, 'manager') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+
+  for v_line in
+    select * from public.cycle_count_lines
+    where cycle_count_id = p_cycle_count_id
+      and counted_quantity is not null
+  loop
+    -- Lock the item row, read prev qty, compute variance.
+    select quantity_on_hand into v_prev
+      from public.inventory_items
+      where id = v_line.item_id
+      for update;
+    if not found then continue; end if;
+
+    v_diff := v_line.counted_quantity - v_prev;
+    if v_diff = 0 then continue; end if;
+
+    insert into public.stock_movements(
+      organization_id, item_id, movement_type,
+      quantity_change, previous_quantity, new_quantity,
+      reason, notes, user_id
+    ) values (
+      v_cc.organization_id, v_line.item_id, 'adjust',
+      v_diff, v_prev, v_line.counted_quantity,
+      coalesce(v_line.reason, 'Cycle count adjustment'),
+      v_line.notes,
+      auth.uid()
+    );
+
+    update public.inventory_items
+      set quantity_on_hand = v_line.counted_quantity,
+          updated_by = auth.uid()
+      where id = v_line.item_id;
+  end loop;
+
+  update public.cycle_counts
+    set status = 'completed',
+        completed_at = now(),
+        completed_by = auth.uid()
+    where id = p_cycle_count_id
+    returning * into v_cc;
+
+  return v_cc;
+end;
+$$;
+
+grant execute on function public.post_cycle_count(uuid) to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 0024_realtime_inventory.sql
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 0024_realtime_inventory.sql
+-- Add inventory tables to the supabase_realtime publication so the web app
+-- can subscribe to postgres_changes and reflect updates without a manual
+-- refresh. RLS still applies to realtime subscriptions, so the broadcast
+-- only reaches users who can read the row.
+
+-- Tables that drive the dashboard's "what's happening right now" surface:
+-- inventory_items, stock_movements, purchase_orders. Adding more later is a
+-- one-liner per table.
+
+do $$
+begin
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    -- supabase_realtime is created by the Supabase platform on every project,
+    -- but guard against fresh local instances anyway.
+    create publication supabase_realtime;
+  end if;
+end$$;
+
+alter publication supabase_realtime add table public.inventory_items;
+alter publication supabase_realtime add table public.stock_movements;
+alter publication supabase_realtime add table public.purchase_orders;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 0025_notification_writers.sql
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 0025_notification_writers.sql
+-- Pipeline that fans state-change events into rows in public.notifications.
+-- This makes the "Notification history" tab on the dashboard come alive
+-- without any client-side polling. RLS already restricts each user to their
+-- own rows, so there's no extra access work here.
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Helper: who should receive an org-level notification.
+-- For now: every member with role in (owner, admin, manager). Future
+-- iterations can scope to warehouse assignments when we have a clean
+-- "alerting role" concept.
+-- ─────────────────────────────────────────────────────────────────────
+
+create or replace function public._notify_recipients(p_org uuid)
+returns table(user_id uuid)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select om.user_id
+  from public.organization_members om
+  where om.organization_id = p_org
+    and om.accepted_at is not null
+    and om.role in ('owner', 'admin', 'manager');
+$$;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Low-stock writer: fires after an inventory_items update if the row
+-- crossed below its reorder_point. Idempotent on the same crossing
+-- (won't re-spam if quantity dips/rises within the danger zone) — we
+-- only fire on the *crossing* edge.
+-- ─────────────────────────────────────────────────────────────────────
+
+create or replace function public._notify_low_stock()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  rec record;
+  link_url text;
+  notif_title text;
+  notif_body text;
+begin
+  -- Only act on the crossing edge: previously >= reorder, now < reorder.
+  if new.reorder_point is null or new.reorder_point <= 0 then
+    return new;
+  end if;
+  if old.quantity_on_hand >= new.reorder_point then
+    if new.quantity_on_hand < new.reorder_point then
+      link_url := '/dashboard/inventory/' || new.id::text;
+      if new.quantity_on_hand <= 0 then
+        notif_title := new.name || ' is out of stock';
+        notif_body := 'Quantity dropped to 0. Consider restocking.';
+      else
+        notif_title := new.name || ' is below reorder point';
+        notif_body := 'On hand ' || new.quantity_on_hand::text ||
+                      ' / reorder at ' || new.reorder_point::text || '.';
+      end if;
+      for rec in select user_id from public._notify_recipients(new.organization_id) loop
+        insert into public.notifications (
+          organization_id, user_id, type, title, body, link, metadata
+        ) values (
+          new.organization_id,
+          rec.user_id,
+          case when new.quantity_on_hand <= 0 then 'inventory.out_of_stock'
+               else 'inventory.low_stock' end,
+          notif_title,
+          notif_body,
+          link_url,
+          jsonb_build_object(
+            'item_id', new.id,
+            'sku', new.sku,
+            'quantity_on_hand', new.quantity_on_hand,
+            'reorder_point', new.reorder_point
+          )
+        );
+      end loop;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_inventory_items_low_stock on public.inventory_items;
+create trigger trg_inventory_items_low_stock
+  after update of quantity_on_hand, reorder_point on public.inventory_items
+  for each row execute function public._notify_low_stock();
+
+-- ─────────────────────────────────────────────────────────────────────
+-- PO status writer: fires when status changes. Sends a notification
+-- to the PO creator + the org's notification recipients.
+-- ─────────────────────────────────────────────────────────────────────
+
+create or replace function public._notify_po_status()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid;
+  link_url text;
+  notif_title text;
+  notif_body text;
+begin
+  if old.status is null or new.status is null then
+    return new;
+  end if;
+  if old.status = new.status then
+    return new;
+  end if;
+
+  link_url := '/dashboard/purchase-orders/' || new.id::text;
+  notif_title := 'PO ' || coalesce(new.po_number, new.id::text) ||
+                 ' is now ' || new.status;
+  notif_body := 'Status changed from ' || old.status || ' to ' || new.status || '.';
+
+  -- Recipients: creator (always) + every notify-eligible org member.
+  for uid in
+    select distinct u
+    from (
+      select new.created_by as u
+      union
+      select user_id from public._notify_recipients(new.organization_id)
+    ) s
+    where u is not null
+  loop
+    insert into public.notifications (
+      organization_id, user_id, type, title, body, link, metadata
+    ) values (
+      new.organization_id,
+      uid,
+      'purchase_order.status_changed',
+      notif_title,
+      notif_body,
+      link_url,
+      jsonb_build_object(
+        'po_id', new.id,
+        'po_number', new.po_number,
+        'from_status', old.status,
+        'to_status', new.status
+      )
+    );
+  end loop;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_purchase_orders_status on public.purchase_orders;
+create trigger trg_purchase_orders_status
+  after update of status on public.purchase_orders
+  for each row execute function public._notify_po_status();
+
+grant execute on function public._notify_recipients(uuid) to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 0026_avatar_logo_buckets.sql
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 0026_avatar_logo_buckets.sql
+-- ============================================================================
+-- Creates two public buckets:
+--   • org-logos     — bucket existed conceptually (RLS policies live in 0003)
+--                     but no row in storage.buckets. Adds it + delete policy.
+--   • user-avatars  — new. Path convention: {user_id}/{filename}. Public read
+--                     so we don't need signed URLs to render the topbar avatar.
+-- Both are public-read so a CDN can cache the image.
+-- ============================================================================
+
+insert into storage.buckets (id, name, public)
+values ('org-logos', 'org-logos', true)
+on conflict (id) do nothing;
+
+drop policy if exists "org-logos admin update" on storage.objects;
+drop policy if exists "org-logos admin delete" on storage.objects;
+
+create policy "org-logos admin update"
+  on storage.objects for update to authenticated
+  using (
+    bucket_id = 'org-logos'
+    and public.has_org_role((storage.foldername(name))[1]::uuid, 'admin')
+  )
+  with check (
+    bucket_id = 'org-logos'
+    and public.has_org_role((storage.foldername(name))[1]::uuid, 'admin')
+  );
+
+create policy "org-logos admin delete"
+  on storage.objects for delete to authenticated
+  using (
+    bucket_id = 'org-logos'
+    and public.has_org_role((storage.foldername(name))[1]::uuid, 'admin')
+  );
+
+-- ─────────────────────────────────────────────────────────────────────
+-- user-avatars — every user can manage their own avatar.
+-- Path convention: {user_id}/{filename}
+-- (storage.foldername(name))[1] is therefore the owning user's id.
+-- ─────────────────────────────────────────────────────────────────────
+insert into storage.buckets (id, name, public)
+values ('user-avatars', 'user-avatars', true)
+on conflict (id) do nothing;
+
+drop policy if exists "user-avatars public read" on storage.objects;
+drop policy if exists "user-avatars own write"   on storage.objects;
+drop policy if exists "user-avatars own update"  on storage.objects;
+drop policy if exists "user-avatars own delete"  on storage.objects;
+
+create policy "user-avatars public read"
+  on storage.objects for select to anon, authenticated
+  using (bucket_id = 'user-avatars');
+
+create policy "user-avatars own write"
+  on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'user-avatars'
+    and (storage.foldername(name))[1]::uuid = auth.uid()
+  );
+
+create policy "user-avatars own update"
+  on storage.objects for update to authenticated
+  using (
+    bucket_id = 'user-avatars'
+    and (storage.foldername(name))[1]::uuid = auth.uid()
+  )
+  with check (
+    bucket_id = 'user-avatars'
+    and (storage.foldername(name))[1]::uuid = auth.uid()
+  );
+
+create policy "user-avatars own delete"
+  on storage.objects for delete to authenticated
+  using (
+    bucket_id = 'user-avatars'
+    and (storage.foldername(name))[1]::uuid = auth.uid()
+  );
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 0027_mfa_recovery_codes.sql
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 0027_mfa_recovery_codes.sql
+-- ============================================================================
+-- Backup recovery codes for MFA. If a user loses their TOTP device, they can
+-- consume a one-time recovery code to unenroll their factors and sign back
+-- in. Codes are stored hashed (sha256 hex). Plaintext is returned exactly
+-- once at generation time and never retrievable again.
+-- ============================================================================
+
+create table if not exists public.mfa_recovery_codes (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  code_hash   text not null,
+  used_at     timestamptz,
+  created_at  timestamptz not null default now()
+);
+create index if not exists mfa_recovery_codes_user_idx
+  on public.mfa_recovery_codes(user_id);
+create index if not exists mfa_recovery_codes_unused_idx
+  on public.mfa_recovery_codes(user_id) where used_at is null;
+
+alter table public.mfa_recovery_codes enable row level security;
+
+drop policy if exists mfa_recovery_codes_own on public.mfa_recovery_codes;
+create policy mfa_recovery_codes_own on public.mfa_recovery_codes
+  for select using (user_id = auth.uid());
+
+-- ─────────────────────────────────────────────────────────────────────
+-- generate_mfa_recovery_codes(): wipes the caller's existing codes and
+-- generates 10 fresh ones. Returns the plaintexts so the UI can show
+-- them once. Codes are 4 groups of 4 base32-friendly chars, dashed.
+-- ─────────────────────────────────────────────────────────────────────
+
+create or replace function public.generate_mfa_recovery_codes()
+returns table(code text)
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  uid uuid := auth.uid();
+  i int;
+  raw_code text;
+  alphabet text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  group_a text;
+  group_b text;
+  group_c text;
+  group_d text;
+  pos int;
+  rnd_byte int;
+begin
+  if uid is null then
+    raise exception 'not_authenticated' using errcode = '42501';
+  end if;
+
+  delete from public.mfa_recovery_codes where user_id = uid;
+
+  for i in 1..10 loop
+    -- 16 chars from a 32-char alphabet → ~80 bits of entropy.
+    group_a := '';
+    group_b := '';
+    group_c := '';
+    group_d := '';
+    for pos in 1..4 loop
+      group_a := group_a || substring(alphabet
+        from (1 + (get_byte(extensions.gen_random_bytes(1), 0) % 32))::int for 1);
+      group_b := group_b || substring(alphabet
+        from (1 + (get_byte(extensions.gen_random_bytes(1), 0) % 32))::int for 1);
+      group_c := group_c || substring(alphabet
+        from (1 + (get_byte(extensions.gen_random_bytes(1), 0) % 32))::int for 1);
+      group_d := group_d || substring(alphabet
+        from (1 + (get_byte(extensions.gen_random_bytes(1), 0) % 32))::int for 1);
+    end loop;
+    raw_code := group_a || '-' || group_b || '-' || group_c || '-' || group_d;
+    insert into public.mfa_recovery_codes (user_id, code_hash)
+    values (uid, encode(extensions.digest(raw_code, 'sha256'), 'hex'));
+    code := raw_code;
+    return next;
+  end loop;
+  return;
+end;
+$$;
+
+grant execute on function public.generate_mfa_recovery_codes() to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- consume_mfa_recovery_code(p_code): canonicalizes the input (uppercase,
+-- preserves dashes) and tries to mark a matching unused code as used.
+-- Returns true on success, false if the code is wrong or already used.
+-- Does NOT do MFA unenrollment — the calling server action handles that
+-- with the admin client because RLS on auth.* requires it.
+-- ─────────────────────────────────────────────────────────────────────
+
+create or replace function public.consume_mfa_recovery_code(p_code text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  uid uuid := auth.uid();
+  hashed text;
+  matched_id uuid;
+begin
+  if uid is null then
+    raise exception 'not_authenticated' using errcode = '42501';
+  end if;
+  if p_code is null or length(trim(p_code)) = 0 then
+    return false;
+  end if;
+  hashed := encode(extensions.digest(upper(trim(p_code)), 'sha256'), 'hex');
+  update public.mfa_recovery_codes
+    set used_at = now()
+    where user_id = uid
+      and code_hash = hashed
+      and used_at is null
+    returning id into matched_id;
+  return matched_id is not null;
+end;
+$$;
+
+grant execute on function public.consume_mfa_recovery_code(text) to authenticated;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 0028_push_dispatch.sql
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 0028_push_dispatch.sql
+-- ============================================================================
+-- Push-notification dispatch. When a row is inserted into
+-- public.notifications, fan it out to every Expo push token registered for
+-- the recipient via pg_net.http_post → https://exp.host/--/api/v2/push/send.
+-- The HTTP call is fire-and-forget; failures don't block the trigger.
+--
+-- Why pg_net + Expo Push API directly:
+--   • Expo's push service handles APNs + FCM for us. No need for our own
+--     dispatcher process.
+--   • pg_net runs the POST asynchronously so the INSERT that fired the
+--     trigger isn't held up by network latency.
+-- ============================================================================
+
+-- pg_net ships pre-installed on Supabase; this is a no-op there but keeps
+-- self-hosted setups buildable. Functions live in the `net` schema.
+create extension if not exists pg_net;
+
+create or replace function public._dispatch_push_for_notification()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, net, extensions
+as $$
+declare
+  tok record;
+  payload jsonb;
+begin
+  -- Build one Expo push message per registered token. Drop tokens older
+  -- than 120 days as a courtesy: Expo invalidates them automatically and
+  -- they'll just bounce.
+  for tok in
+    select token
+      from public.push_tokens
+     where user_id = new.user_id
+       and last_used_at > now() - interval '120 days'
+  loop
+    payload := jsonb_build_object(
+      'to', tok.token,
+      'title', new.title,
+      'body', coalesce(new.body, ''),
+      'sound', 'default',
+      'priority', 'high',
+      'channelId', 'default',
+      'data', jsonb_build_object('link', new.link, 'type', new.type)
+    );
+
+    perform net.http_post(
+      url := 'https://exp.host/--/api/v2/push/send',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Accept', 'application/json',
+        'Accept-Encoding', 'gzip, deflate'
+      ),
+      body := payload,
+      timeout_milliseconds := 5000
+    );
+  end loop;
+  return new;
+exception
+  when others then
+    -- pg_net misconfigured? Don't break the insert.
+    raise warning '[push] dispatch failed for notification %: %', new.id, sqlerrm;
+    return new;
+end;
+$$;
+
+drop trigger if exists trg_notifications_dispatch_push on public.notifications;
+create trigger trg_notifications_dispatch_push
+  after insert on public.notifications
+  for each row execute function public._dispatch_push_for_notification();
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 0029_po_scan_extraction.sql
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 0029_po_scan_extraction.sql
+-- ============================================================================
+-- Adds the bits we need for phone-scanned POs:
+--   • po_imports.source_type now accepts 'scan' (image or photo of a printed PO)
+--   • po_import_lines.extraction_confidence numeric(4,3) — how confident the
+--     vision model was that it READ the line correctly off the image. This is
+--     separate from match_confidence (which is about internal-item matching
+--     after extraction). The review UI uses extraction_confidence to highlight
+--     low-confidence rows in yellow/red so the operator's eyes go straight
+--     to the few fields that need a tweak.
+-- ============================================================================
+
+-- Drop + re-add the source_type constraint so we can include 'scan'.
+alter table public.po_imports
+  drop constraint if exists po_imports_source_type_check;
+alter table public.po_imports
+  add constraint po_imports_source_type_check
+  check (source_type in ('pdf','csv','xlsx','manual','scan'));
+
+-- Per-line extraction confidence from the vision model. NULL for legacy
+-- imports (CSV / PDF parsed by deterministic parsers — those are 100%).
+alter table public.po_import_lines
+  add column if not exists extraction_confidence numeric(4,3);
+
+-- Per-import overall extraction confidence (for the header banner in the
+-- review UI). NULL for non-scan imports.
+alter table public.po_imports
+  add column if not exists extraction_confidence numeric(4,3),
+  add column if not exists extraction_model text;
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 0030_ai_chat_history.sql
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 0030_ai_chat_history.sql
+-- ============================================================================
+-- AI assistant chat history. Stores per-user chat sessions and their messages
+-- so refreshes don't wipe the conversation. Retention is 30 days — anything
+-- older is purged by `purge_ai_chat_history()` (called from a daily cron).
+--
+-- Scoping rules:
+--   • Each session is owned by exactly one (organization, user) pair.
+--   • RLS only lets a user see/modify their own sessions in their own org.
+--   • Messages inherit access via session_id → ai_chat_sessions.
+-- ============================================================================
+
+create table if not exists public.ai_chat_sessions (
+  id              uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  user_id         uuid not null references auth.users(id) on delete cascade,
+  title           text,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+create index if not exists ai_chat_sessions_user_idx
+  on public.ai_chat_sessions(user_id, organization_id, updated_at desc);
+create index if not exists ai_chat_sessions_purge_idx
+  on public.ai_chat_sessions(updated_at);
+
+create table if not exists public.ai_chat_messages (
+  id          uuid primary key default gen_random_uuid(),
+  session_id  uuid not null references public.ai_chat_sessions(id) on delete cascade,
+  role        text not null check (role in ('user', 'assistant')),
+  content     text not null,
+  tool_calls  jsonb,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists ai_chat_messages_session_idx
+  on public.ai_chat_messages(session_id, created_at);
+
+alter table public.ai_chat_sessions enable row level security;
+alter table public.ai_chat_messages enable row level security;
+
+drop policy if exists ai_chat_sessions_select on public.ai_chat_sessions;
+create policy ai_chat_sessions_select on public.ai_chat_sessions
+  for select to authenticated
+  using (user_id = auth.uid() and public.is_org_member(organization_id));
+
+drop policy if exists ai_chat_sessions_insert on public.ai_chat_sessions;
+create policy ai_chat_sessions_insert on public.ai_chat_sessions
+  for insert to authenticated
+  with check (user_id = auth.uid() and public.is_org_member(organization_id));
+
+drop policy if exists ai_chat_sessions_update on public.ai_chat_sessions;
+create policy ai_chat_sessions_update on public.ai_chat_sessions
+  for update to authenticated
+  using (user_id = auth.uid() and public.is_org_member(organization_id))
+  with check (user_id = auth.uid() and public.is_org_member(organization_id));
+
+drop policy if exists ai_chat_sessions_delete on public.ai_chat_sessions;
+create policy ai_chat_sessions_delete on public.ai_chat_sessions
+  for delete to authenticated
+  using (user_id = auth.uid() and public.is_org_member(organization_id));
+
+drop policy if exists ai_chat_messages_select on public.ai_chat_messages;
+create policy ai_chat_messages_select on public.ai_chat_messages
+  for select to authenticated
+  using (
+    exists (
+      select 1
+        from public.ai_chat_sessions s
+       where s.id = ai_chat_messages.session_id
+         and s.user_id = auth.uid()
+         and public.is_org_member(s.organization_id)
+    )
+  );
+
+drop policy if exists ai_chat_messages_insert on public.ai_chat_messages;
+create policy ai_chat_messages_insert on public.ai_chat_messages
+  for insert to authenticated
+  with check (
+    exists (
+      select 1
+        from public.ai_chat_sessions s
+       where s.id = ai_chat_messages.session_id
+         and s.user_id = auth.uid()
+         and public.is_org_member(s.organization_id)
+    )
+  );
+
+drop policy if exists ai_chat_messages_delete on public.ai_chat_messages;
+create policy ai_chat_messages_delete on public.ai_chat_messages
+  for delete to authenticated
+  using (
+    exists (
+      select 1
+        from public.ai_chat_sessions s
+       where s.id = ai_chat_messages.session_id
+         and s.user_id = auth.uid()
+         and public.is_org_member(s.organization_id)
+    )
+  );
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Touch the parent session's updated_at whenever a message is added.
+-- Lets the API list sessions ordered by recent activity without an
+-- extra query, and powers the 30-day TTL (we purge by updated_at so
+-- an active session doesn't get reaped mid-conversation).
+-- ─────────────────────────────────────────────────────────────────────
+
+create or replace function public._touch_ai_chat_session()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.ai_chat_sessions
+     set updated_at = now()
+   where id = new.session_id;
+  return new;
+end;
+$$;
+
+drop trigger if exists ai_chat_messages_touch_session on public.ai_chat_messages;
+create trigger ai_chat_messages_touch_session
+  after insert on public.ai_chat_messages
+  for each row execute function public._touch_ai_chat_session();
+
+-- ─────────────────────────────────────────────────────────────────────
+-- 30-day TTL purge. Deleting the session cascades to its messages.
+-- Safe to call from any scheduler (pg_cron, Supabase scheduled function,
+-- Vercel cron). No-op if there's nothing to clean up.
+-- ─────────────────────────────────────────────────────────────────────
+
+create or replace function public.purge_ai_chat_history()
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  deleted int;
+begin
+  delete from public.ai_chat_sessions
+   where updated_at < now() - interval '30 days';
+  get diagnostics deleted = row_count;
+  return deleted;
+end;
+$$;
+
+grant execute on function public.purge_ai_chat_history() to service_role;
+
+-- ─────────────────────────────────────────────────────────────────────
 -- DONE
 -- ─────────────────────────────────────────────────────────────────────
