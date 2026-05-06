@@ -31,24 +31,25 @@ export interface ScheduleEventRow {
   updatedAt: string;
 }
 
+// Embed only warehouse — that FK is unambiguous (warehouse_id →
+// warehouses.id). Creator name is resolved in a separate batched
+// query below; PostgREST can't reliably embed user_profiles via the
+// auth.users → user_profiles chain, and a failed embed produces the
+// dreaded "Something broke" page on the calendar.
 const SELECT_COLUMNS = `
   id, organization_id, title, starts_at, ends_at, all_day,
   location_text, warehouse_id, requester_name, details, status,
   created_by, updated_by, created_at, updated_at,
-  warehouse:warehouses!warehouse_id (name),
-  creator:user_profiles!created_by (full_name, email)
+  warehouse:warehouses!warehouse_id (name)
 `;
 
-function mapRow(raw: Record<string, unknown>): ScheduleEventRow {
+function mapRow(
+  raw: Record<string, unknown>,
+  creatorByUserId: Map<string, string> = new Map(),
+): ScheduleEventRow {
   const wh = raw.warehouse as { name?: string } | { name?: string }[] | null | undefined;
   const warehouseName = Array.isArray(wh) ? wh[0]?.name ?? null : wh?.name ?? null;
-  const cr = raw.creator as
-    | { full_name?: string | null; email?: string | null }
-    | { full_name?: string | null; email?: string | null }[]
-    | null
-    | undefined;
-  const creatorObj = Array.isArray(cr) ? cr[0] : cr;
-  const createdByName = creatorObj?.full_name?.trim() || creatorObj?.email || null;
+  const createdBy = raw.created_by as string;
   return {
     id: raw.id as string,
     organizationId: raw.organization_id as string,
@@ -62,11 +63,40 @@ function mapRow(raw: Record<string, unknown>): ScheduleEventRow {
     requesterName: (raw.requester_name as string | null) ?? null,
     details: (raw.details as string | null) ?? null,
     status: raw.status as ScheduleStatus,
-    createdBy: raw.created_by as string,
-    createdByName,
+    createdBy,
+    createdByName: creatorByUserId.get(createdBy) ?? null,
     createdAt: raw.created_at as string,
     updatedAt: raw.updated_at as string,
   };
+}
+
+/**
+ * Batched creator-name lookup. Takes the unique createdBy ids off a
+ * page of events and returns Map<userId, displayName>. Skipped (empty
+ * map returned) if user_profiles isn't readable for some reason —
+ * then mapRow leaves createdByName null, which the UI handles cleanly.
+ */
+async function loadCreatorNames(
+  ctx: ServiceContext,
+  rows: Array<{ created_by?: string | null }>,
+): Promise<Map<string, string>> {
+  const ids = [...new Set(rows.map((r) => r.created_by).filter((v): v is string => Boolean(v)))];
+  if (ids.length === 0) return new Map();
+  const { data, error } = await ctx.supabase
+    .from('user_profiles')
+    .select('user_id, full_name, email')
+    .in('user_id', ids);
+  if (error) return new Map();
+  const map = new Map<string, string>();
+  for (const row of (data ?? []) as Array<{
+    user_id: string;
+    full_name: string | null;
+    email: string | null;
+  }>) {
+    const display = row.full_name?.trim() || row.email || null;
+    if (display) map.set(row.user_id, display);
+  }
+  return map;
 }
 
 export class ScheduleService {
@@ -86,17 +116,13 @@ export class ScheduleService {
       .from('schedule_events')
       .select(SELECT_COLUMNS)
       .eq('organization_id', this.ctx.organizationId)
-      // The event must start before the range ends...
       .lt('starts_at', to.toISOString())
-      // ...AND end after the range starts (or be open-ended on/after
-      // the range start). PostgREST has no "ends_at IS NULL OR ends_at >= X"
-      // shorthand; do it via .or().
-      .or(
-        `ends_at.is.null,ends_at.gte.${from.toISOString()}`,
-      )
+      .or(`ends_at.is.null,ends_at.gte.${from.toISOString()}`)
       .order('starts_at', { ascending: true });
     if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []).map((r) => mapRow(r as Record<string, unknown>));
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    const creators = await loadCreatorNames(this.ctx, rows as Array<{ created_by?: string }>);
+    return rows.map((r) => mapRow(r, creators));
   }
 
   /** All upcoming events from now forward, capped — used for dashboards. */
@@ -110,7 +136,9 @@ export class ScheduleService {
       .order('starts_at', { ascending: true })
       .limit(Math.min(limit, 100));
     if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []).map((r) => mapRow(r as Record<string, unknown>));
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    const creators = await loadCreatorNames(this.ctx, rows as Array<{ created_by?: string }>);
+    return rows.map((r) => mapRow(r, creators));
   }
 
   async get(id: string): Promise<ScheduleEventRow> {
@@ -122,7 +150,8 @@ export class ScheduleService {
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Event not found');
-    return mapRow(data as Record<string, unknown>);
+    const creators = await loadCreatorNames(this.ctx, [data as { created_by?: string }]);
+    return mapRow(data as Record<string, unknown>, creators);
   }
 
   async create(input: CreateScheduleEventInput): Promise<ScheduleEventRow> {
@@ -145,7 +174,8 @@ export class ScheduleService {
       .select(SELECT_COLUMNS)
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
-    return mapRow(data as Record<string, unknown>);
+    const creators = await loadCreatorNames(this.ctx, [data as { created_by?: string }]);
+    return mapRow(data as Record<string, unknown>, creators);
   }
 
   async update(id: string, patch: UpdateScheduleEventInput): Promise<ScheduleEventRow> {
@@ -174,7 +204,8 @@ export class ScheduleService {
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Event not found');
-    return mapRow(data as Record<string, unknown>);
+    const creators = await loadCreatorNames(this.ctx, [data as { created_by?: string }]);
+    return mapRow(data as Record<string, unknown>, creators);
   }
 
   async delete(id: string): Promise<void> {
