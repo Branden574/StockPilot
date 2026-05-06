@@ -2,7 +2,9 @@ import 'server-only';
 
 import { SchemaType, type FunctionDeclaration } from '@google/generative-ai';
 
+import { lookupIsbn as lookupIsbnLib } from '@/lib/books/lookup';
 import type { ServiceContext } from '@/server/services/context';
+import { BooksImportService } from '@/server/services/books-import';
 import { InventoryService } from '@/server/services/inventory';
 import {
   getDashboardActions,
@@ -365,6 +367,126 @@ const listWarehousesTool: ToolExecutor = {
   },
 };
 
+const lookupIsbnTool: ToolExecutor = {
+  declaration: {
+    name: 'lookupIsbn',
+    description:
+      "Resolve a single ISBN-10 or ISBN-13 to title, authors, publisher, and year via Google Books, Open Library, and the Library of Congress in parallel. Read-only — does NOT add the book to inventory. Use this to verify an ISBN before importing or to answer 'what book is this?' questions.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        isbn: {
+          type: SchemaType.STRING,
+          description:
+            'ISBN-10 or ISBN-13, with or without dashes. Will be normalized server-side.',
+        },
+      },
+      required: ['isbn'],
+    },
+  },
+  async execute(args) {
+    const isbn = String(args.isbn ?? '');
+    if (!isbn) throw new Error('isbn is required');
+    const meta = await lookupIsbnLib(isbn);
+    if (!meta) {
+      return { found: false, isbn };
+    }
+    return {
+      found: true,
+      isbn: meta.isbn,
+      title: meta.title,
+      authors: meta.authors,
+      publisher: meta.publisher,
+      publishedDate: meta.publishedDate,
+      grade: meta.grade,
+      sources: meta.sources,
+    };
+  },
+};
+
+const previewBulkBookImportTool: ToolExecutor = {
+  declaration: {
+    name: 'previewBulkBookImport',
+    description:
+      "READ-ONLY preview of a bulk ISBN import. Resolves every ISBN, flags duplicates already in inventory (same barcode), flags ISBNs that appear twice in the input list, and reports lookup failures. ALWAYS call this first when a user wants to bulk-import books — show them the breakdown and the duplicate flags, then wait for explicit confirmation before calling executeBulkBookImport. Capped at 50 ISBNs per call; route larger batches to /dashboard/books/import.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        isbns: {
+          type: SchemaType.ARRAY,
+          description: 'Array of ISBNs (ISBN-10 or ISBN-13).',
+          items: { type: SchemaType.STRING },
+        },
+      },
+      required: ['isbns'],
+    },
+  },
+  async execute(args, ctx) {
+    const isbns = Array.isArray(args.isbns) ? args.isbns.map((v) => String(v)) : [];
+    if (isbns.length === 0) throw new Error('isbns must be a non-empty array');
+    const svc = new BooksImportService(ctx);
+    const preview = await svc.preview(isbns);
+    return preview;
+  },
+};
+
+const executeBulkBookImportTool: ToolExecutor = {
+  declaration: {
+    name: 'executeBulkBookImport',
+    description:
+      "WRITE TOOL — creates inventory_items (item_type=book) for each ISBN that resolved cleanly. Duplicates (in DB or list) are skipped automatically. NEVER call without first calling previewBulkBookImport AND receiving an explicit user confirmation that names the warehouse + charter + total they expect. After the call, restate the created/skipped/failed counts. Requires items:create permission; viewers cannot use it.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        isbns: {
+          type: SchemaType.ARRAY,
+          description: 'Array of ISBNs — the same list the user confirmed.',
+          items: { type: SchemaType.STRING },
+        },
+        warehouseId: {
+          type: SchemaType.STRING,
+          description:
+            "UUID of the warehouse to create the books in. Resolve via listWarehouses first if the user named it by label.",
+        },
+        charterId: {
+          type: SchemaType.STRING,
+          description:
+            "Optional UUID of a charter the warehouse services. Empty string = generic stock (any charter).",
+        },
+        defaultQuantity: {
+          type: SchemaType.NUMBER,
+          description:
+            'Per-book starting quantity. Defaults to 1 if not provided.',
+        },
+      },
+      required: ['isbns', 'warehouseId'],
+    },
+  },
+  async execute(args, ctx) {
+    if (ctx.role === 'viewer') {
+      throw new Error('viewer role cannot create books');
+    }
+    const isbns = Array.isArray(args.isbns) ? args.isbns.map((v) => String(v)) : [];
+    if (isbns.length === 0) throw new Error('isbns must be a non-empty array');
+    const warehouseId = String(args.warehouseId ?? '');
+    if (!warehouseId) throw new Error('warehouseId is required');
+    const charterId =
+      typeof args.charterId === 'string' && args.charterId.length > 0
+        ? args.charterId
+        : null;
+    const defaultQuantity = Number(args.defaultQuantity);
+
+    const svc = new BooksImportService(ctx);
+    const result = await svc.execute(isbns, {
+      warehouseId,
+      charterId,
+      defaultQuantity: Number.isFinite(defaultQuantity) ? defaultQuantity : 1,
+      skipDuplicates: true,
+    });
+    return result;
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
   getItemDetails: getItemDetailsTool,
@@ -374,6 +496,9 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   listSuppliers: listSuppliersTool,
   listWarehouses: listWarehousesTool,
   adjustStock: adjustStockTool,
+  lookupIsbn: lookupIsbnTool,
+  previewBulkBookImport: previewBulkBookImportTool,
+  executeBulkBookImport: executeBulkBookImportTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {

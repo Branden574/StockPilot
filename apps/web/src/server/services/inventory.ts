@@ -216,7 +216,9 @@ export class InventoryService {
     // Resolve warehouse: warehouse-scoped users (staff/viewer) get their
     // assignment forced regardless of input. Managers/admins must specify
     // one (we can't pick "any" silently — items must belong to a warehouse).
-    const forced = await forcedWarehouseId();
+    // Pass our ctx so the helpers don't fall back to requireOrgContext()
+    // (NEXT_REDIRECT trap when called from /api/* routes).
+    const forced = await forcedWarehouseId(this.ctx);
     const resolvedWarehouseId = forced ?? input.warehouseId ?? null;
     if (!resolvedWarehouseId) {
       throw new ServiceError(
@@ -226,7 +228,7 @@ export class InventoryService {
     }
     if (!forced) {
       // Manager/admin path: validate they have write access to the chosen warehouse.
-      await assertWarehouseAccess(resolvedWarehouseId, 'write');
+      await assertWarehouseAccess(resolvedWarehouseId, 'write', this.ctx);
     }
 
     // Resolve charter: null = generic stock; otherwise (warehouse, charter)
