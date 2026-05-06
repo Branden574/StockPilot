@@ -63,6 +63,7 @@ describe('toPublicItem', () => {
       name: 'The Alchemist',
       itemType: 'book',
       imageUrl: 'https://example.com/photo.jpg',
+      quantityOnHand: 47,
       category: 'Fiction',
       bookAuthor: 'Paulo Coelho',
       bookPublisher: 'HarperOne',
@@ -71,6 +72,10 @@ describe('toPublicItem', () => {
     });
   });
 
+  // Quantity is INTENTIONALLY exposed (per product decision: lending-
+  // library / warehouse scanners want "is it in stock?" feedback).
+  // Costs, prices, suppliers, locations, and internal notes remain
+  // hidden — that boundary is enforced by the it.each block below.
   it.each([
     ['organization_id'],
     ['warehouse_id'],
@@ -79,7 +84,6 @@ describe('toPublicItem', () => {
     ['sku'],
     ['barcode'],
     ['description'],
-    ['quantity_on_hand'],
     ['reorder_point'],
     ['reorder_quantity'],
     ['unit_cost'],
@@ -110,6 +114,7 @@ describe('toPublicItem', () => {
       name: 'Generic Product',
       item_type: 'product',
       image_url: null,
+      quantity_on_hand: 0,
       category_name: null,
       custom_fields: null,
     });
@@ -118,12 +123,31 @@ describe('toPublicItem', () => {
       name: 'Generic Product',
       itemType: 'product',
       imageUrl: null,
+      quantityOnHand: 0,
       category: null,
       bookAuthor: null,
       bookPublisher: null,
       bookPublishedDate: null,
       bookGrade: null,
     });
+  });
+
+  it('coerces non-numeric or missing quantity_on_hand to 0 (never NaN, never undefined)', () => {
+    expect(
+      toPublicItem({ id: 'i', name: 'X', item_type: 'product', quantity_on_hand: null })
+        .quantityOnHand,
+    ).toBe(0);
+    expect(
+      toPublicItem({ id: 'i', name: 'X', item_type: 'product' }).quantityOnHand,
+    ).toBe(0);
+    expect(
+      toPublicItem({ id: 'i', name: 'X', item_type: 'product', quantity_on_hand: 'oops' })
+        .quantityOnHand,
+    ).toBe(0);
+    expect(
+      toPublicItem({ id: 'i', name: 'X', item_type: 'product', quantity_on_hand: 12 })
+        .quantityOnHand,
+    ).toBe(12);
   });
 
   it('coerces an unknown item_type to product so the page never breaks on bad data', () => {
@@ -147,6 +171,7 @@ describe('toPublicItem', () => {
       'name',
       'item_type',
       'image_url',
+      'quantity_on_hand',
       'category_name',
       'custom_fields',
     ]);
