@@ -38,7 +38,11 @@ export class MovementsService {
    */
   async list(params: { itemId?: string; warehouseId?: string; limit?: number } = {}) {
     const limit = Math.min(params.limit ?? 100, 500);
-    const access = await getWarehouseAccess();
+    // Pass our own ctx so the helper doesn't fall back to
+    // requireOrgContext() — in API routes that path throws NEXT_REDIRECT
+    // and surfaces as a generic 500. Same trap fixed elsewhere in this
+    // service file's siblings (see InventoryService.list).
+    const access = await getWarehouseAccess(this.ctx);
 
     // Use `!inner` on the embed so we can filter parent rows by the item's
     // warehouse_id without a second round trip.

@@ -35,26 +35,40 @@ function retentionCutoffISO(): string {
 }
 
 export async function listSessions(ctx: ServiceContext): Promise<ChatSessionRow[]> {
+  // !inner forces an INNER JOIN against ai_chat_messages, so sessions
+  // with zero messages get filtered out at the DB layer. This keeps
+  // any leftover orphan rows (created before the lazy-create fix
+  // landed) from cluttering the sidebar — they'll auto-purge after
+  // 30 days via purge_ai_chat_history().
   const { data, error } = await ctx.supabase
     .from('ai_chat_sessions')
-    .select('id, title, created_at, updated_at')
+    .select('id, title, created_at, updated_at, ai_chat_messages!inner(id)')
     .eq('organization_id', ctx.organizationId)
     .eq('user_id', ctx.userId)
     .gte('updated_at', retentionCutoffISO())
     .order('updated_at', { ascending: false })
     .limit(50);
   if (error) throw new Error(error.message);
-  return ((data ?? []) as Array<{
+  // Dedupe — the inner join can return one row per matching message;
+  // we want one row per session.
+  const seen = new Set<string>();
+  const out: ChatSessionRow[] = [];
+  for (const r of ((data ?? []) as Array<{
     id: string;
     title: string | null;
     created_at: string;
     updated_at: string;
-  }>).map((r) => ({
-    id: r.id,
-    title: r.title,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-  }));
+  }>)) {
+    if (seen.has(r.id)) continue;
+    seen.add(r.id);
+    out.push({
+      id: r.id,
+      title: r.title,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    });
+  }
+  return out;
 }
 
 export async function createSession(
