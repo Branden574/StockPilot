@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { BackfillCoversButton } from '@/components/books/backfill-covers-button';
 import { BulkIsbnImport } from '@/components/books/bulk-isbn-import';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -50,14 +51,19 @@ export default async function BulkIsbnImportPage() {
         >
           ← Back to books
         </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-          Bulk ISBN import
-        </h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Paste up to 200 ISBNs, look them up across Google Books / Open
-          Library / Library of Congress in parallel, then create them as a
-          batch. Perfect for school-year donation drops.
-        </p>
+        <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Bulk ISBN import
+            </h1>
+            <p className="text-muted-foreground mt-1 text-sm">
+              Paste up to 200 ISBNs, look them up across Google Books / Open
+              Library / Library of Congress in parallel, then create them as
+              a batch. Perfect for school-year donation drops.
+            </p>
+          </div>
+          <BackfillCoversButton />
+        </div>
       </div>
       <BulkIsbnImport
         warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
