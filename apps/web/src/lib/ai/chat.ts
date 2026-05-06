@@ -47,26 +47,43 @@ export interface ChatTurn {
   content: string;
 }
 
-export interface ChatResult {
-  reply: string;
-  toolCallsUsed: Array<{ name: string; args: unknown; ok: boolean }>;
+export interface ToolCallRecord {
+  name: string;
+  args: unknown;
+  ok: boolean;
 }
 
 /**
- * Runs one chat turn. Accepts the full conversation history (so the
- * model has memory across turns) plus the new user message, and
- * returns the final assistant reply.
+ * Streaming events the chat loop yields. Server-side consumer (the
+ * /api/ai/chat route) forwards these as NDJSON to the client. Each
+ * event is a discrete unit so the UI can render incrementally:
  *
- * Internally loops: model emits text OR a functionCall. If a function
- * call, we execute it against the user's ServiceContext (RLS enforced),
- * feed the result back, ask again. Cap at MAX_TOOL_HOPS to bound cost
- * and latency.
+ *   - text  : a chunk of assistant text. Append to the live message.
+ *   - tool  : a tool call resolved (success or fail). Show a badge.
+ *
+ * The route emits its own `done` and `error` events at the boundary —
+ * the chat loop itself just yields text/tool and returns when the
+ * model produces a final answer.
  */
-export async function runChat(
+export type ChatStreamEvent =
+  | { type: 'text'; delta: string }
+  | { type: 'tool'; name: string; ok: boolean };
+
+/**
+ * Streams one chat turn. Yields text deltas as Gemini emits them and
+ * tool events as tools resolve. Same tool-call loop semantics as
+ * before — bounded by MAX_TOOL_HOPS — but every text chunk is
+ * surfaced as it arrives instead of buffered until the end.
+ *
+ * The async-iterator shape lets the route compose this with a
+ * ReadableStream cleanly: just `for await (const ev of streamChat(...))`
+ * and forward each event.
+ */
+export async function* streamChat(
   history: ChatTurn[],
   userMessage: string,
   ctx: ServiceContext,
-): Promise<ChatResult> {
+): AsyncGenerator<ChatStreamEvent, { reply: string; toolCallsUsed: ToolCallRecord[] }> {
   if (!env.GEMINI_API_KEY) {
     throw new Error(
       'GEMINI_API_KEY is not set. Get a free key at https://aistudio.google.com/app/apikey and add it to apps/web/.env.local + Vercel project env.',
@@ -79,43 +96,53 @@ export async function runChat(
     tools: [{ functionDeclarations: toolDeclarations() }],
   });
 
-  // Convert prior turns to Gemini Content shape.
   const contents: Content[] = history.map((t) => ({
     role: t.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: t.content }],
   }));
   contents.push({ role: 'user', parts: [{ text: userMessage }] });
 
-  const toolCallsUsed: ChatResult['toolCallsUsed'] = [];
+  const toolCallsUsed: ToolCallRecord[] = [];
+  let assembledReply = '';
 
   for (let hop = 0; hop < MAX_TOOL_HOPS; hop++) {
-    const result = await model.generateContent({ contents });
-    const cand = result.response.candidates?.[0];
-    const parts = cand?.content?.parts ?? [];
+    const result = await model.generateContentStream({ contents });
 
-    // Find any function calls in this response.
-    const toolCalls = parts.flatMap((p) =>
-      'functionCall' in p && p.functionCall ? [p.functionCall] : [],
-    );
+    // Buffers for this round only.
+    const roundParts: Part[] = [];
+    let roundText = '';
+    const roundToolCalls: Array<{ name: string; args: unknown }> = [];
 
-    if (toolCalls.length === 0) {
-      // Model produced final text. Concat all text parts and return.
-      const text = parts
-        .flatMap((p) => ('text' in p && typeof p.text === 'string' ? [p.text] : []))
-        .join('')
-        .trim();
-      return { reply: text, toolCallsUsed };
+    for await (const chunk of result.stream) {
+      const cand = chunk.candidates?.[0];
+      const parts = cand?.content?.parts ?? [];
+      for (const p of parts) {
+        roundParts.push(p as Part);
+        if ('text' in p && typeof p.text === 'string' && p.text.length > 0) {
+          roundText += p.text;
+          yield { type: 'text', delta: p.text };
+        } else if ('functionCall' in p && p.functionCall) {
+          roundToolCalls.push({ name: p.functionCall.name, args: p.functionCall.args });
+        }
+      }
     }
 
-    // Append the model's call(s) to the conversation so the next round
-    // sees the request, then execute each and append responses.
-    contents.push({ role: 'model', parts: parts as Part[] });
+    assembledReply += roundText;
+
+    if (roundToolCalls.length === 0) {
+      // Final text answer — done.
+      return { reply: assembledReply, toolCallsUsed };
+    }
+
+    // Append the model's parts so the next round sees the call(s).
+    contents.push({ role: 'model', parts: roundParts });
 
     const responseParts: Part[] = [];
-    for (const call of toolCalls) {
+    for (const call of roundToolCalls) {
       const tool = TOOL_CATALOG[call.name];
       if (!tool) {
         toolCallsUsed.push({ name: call.name, args: call.args, ok: false });
+        yield { type: 'tool', name: call.name, ok: false };
         responseParts.push({
           functionResponse: {
             name: call.name,
@@ -130,10 +157,10 @@ export async function runChat(
           ctx,
         );
         toolCallsUsed.push({ name: call.name, args: call.args, ok: true });
+        yield { type: 'tool', name: call.name, ok: true };
         responseParts.push({
           functionResponse: {
             name: call.name,
-            // Gemini expects the response wrapped as an object.
             response: { result: out },
           },
         });
@@ -145,6 +172,7 @@ export async function runChat(
           extra: { tool: call.name },
           organizationId: ctx.organizationId,
         });
+        yield { type: 'tool', name: call.name, ok: false };
         responseParts.push({
           functionResponse: {
             name: call.name,
@@ -156,10 +184,11 @@ export async function runChat(
     contents.push({ role: 'user', parts: responseParts });
   }
 
-  // Hit the hop cap without finalizing — return what we have.
-  return {
-    reply:
-      "I tried a few different lookups but couldn't pin down a clean answer. Try asking again with more specifics (e.g. an item name, SKU, or warehouse).",
-    toolCallsUsed,
-  };
+  // Hit the hop cap. Return what we have so the route can persist it.
+  if (!assembledReply) {
+    assembledReply =
+      "I tried a few different lookups but couldn't pin down a clean answer. Try asking again with more specifics (e.g. an item name, SKU, or warehouse).";
+    yield { type: 'text', delta: assembledReply };
+  }
+  return { reply: assembledReply, toolCallsUsed };
 }
