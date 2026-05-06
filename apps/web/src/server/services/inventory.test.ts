@@ -58,7 +58,9 @@ describe('InventoryService.list', () => {
     expect(chain).toContain('eq');
     expect(chain).toContain('is');
     expect(chain).toContain('order');
-    expect(chain).toContain('limit');
+    // Pagination uses .range(offset, offset + limit - 1) instead of
+    // .limit() so server-side cursoring works for ?page=N URLs.
+    expect(chain).toContain('range');
 
     // Find the eq() that locked status to 'active' and item_type to 'product'.
     const eqCalls = chain

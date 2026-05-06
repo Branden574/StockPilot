@@ -11,12 +11,21 @@ import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
+const PAGE_SIZE = 50;
+
 export default async function InventoryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: string; stock?: string; type?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    status?: string;
+    stock?: string;
+    type?: string;
+    page?: string;
+  }>;
 }) {
   const params = await searchParams;
+  const page = Math.max(1, Number(params.page) || 1);
   const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, imagesSvc, warehouseFilter] = await Promise.all([
     InventoryService.forCurrentUser(),
     CategoriesService.forCurrentUser(),
@@ -55,6 +64,8 @@ export default async function InventoryPage({
       outOfStock: params.stock === 'out',
       itemType,
       warehouseId: warehouseFilter,
+      limit: PAGE_SIZE,
+      offset: (page - 1) * PAGE_SIZE,
     }),
     categoriesSvc.list(),
     locationsSvc.list(),
@@ -160,6 +171,8 @@ export default async function InventoryPage({
               name: s.name as string,
             }))}
             initialQuery={params.q}
+            page={page}
+            pageSize={PAGE_SIZE}
           />
         )}
       </div>
