@@ -278,6 +278,79 @@ const listSuppliersTool: ToolExecutor = {
   },
 };
 
+const adjustStockTool: ToolExecutor = {
+  declaration: {
+    name: 'adjustStock',
+    description:
+      "WRITE TOOL — adjusts an item's quantity on hand. Use only AFTER the user has explicitly confirmed the item, the delta (positive to add stock, negative to remove), and a reason. Requires stock:adjust permission; staff/manager/admin roles can use it, viewers cannot. Always echo back item name + delta + reason in your reply so the user has a paper trail.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        itemId: {
+          type: SchemaType.STRING,
+          description:
+            "UUID of the item to adjust. Resolve via searchInventory or getItemDetails first if you only have a name.",
+        },
+        delta: {
+          type: SchemaType.NUMBER,
+          description:
+            "Quantity change. Positive adds stock (receipt, found inventory). Negative removes (shrinkage, damage, sold-off-system).",
+        },
+        reason: {
+          type: SchemaType.STRING,
+          description:
+            "Required short reason (e.g. 'shrinkage', 'cycle count correction', 'damaged in transit'). Stored on the movement row.",
+        },
+        movementType: {
+          type: SchemaType.STRING,
+          description:
+            "Optional movement classification. One of 'adjust' (default), 'shrinkage', 'damage', 'count'.",
+        },
+      },
+      required: ['itemId', 'delta', 'reason'],
+    },
+  },
+  async execute(args, ctx) {
+    const itemId = String(args.itemId ?? '');
+    const delta = Number(args.delta);
+    const reason = String(args.reason ?? '').trim();
+    const movementType =
+      typeof args.movementType === 'string' && args.movementType.length > 0
+        ? args.movementType
+        : 'adjust';
+    if (!itemId) throw new Error('itemId is required');
+    if (!Number.isFinite(delta) || delta === 0) {
+      throw new Error('delta must be a non-zero number');
+    }
+    if (!reason) throw new Error('reason is required');
+
+    // Role gate. The service-level assertPermission also enforces this,
+    // but we want a clear, AI-friendly error string before the model
+    // has invested any tokens chasing the call.
+    if (ctx.role === 'viewer') {
+      throw new Error('viewer role cannot adjust stock');
+    }
+
+    const svc = new InventoryService(ctx);
+    await svc.adjustStock({
+      itemId,
+      quantityChange: delta,
+      movementType: movementType as never,
+      reason,
+    });
+    // Re-fetch the item so the model can echo the new on-hand back.
+    const updated = (await svc.get(itemId)) as Record<string, unknown>;
+    return {
+      ok: true,
+      itemId,
+      newOnHand: updated.quantity_on_hand,
+      delta,
+      reason,
+      movementType,
+    };
+  },
+};
+
 const listWarehousesTool: ToolExecutor = {
   declaration: {
     name: 'listWarehouses',
@@ -300,6 +373,7 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   recentMovements: recentMovementsTool,
   listSuppliers: listSuppliersTool,
   listWarehouses: listWarehousesTool,
+  adjustStock: adjustStockTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {

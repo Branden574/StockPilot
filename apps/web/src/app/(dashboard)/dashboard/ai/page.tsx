@@ -21,8 +21,8 @@ export default async function AiPage() {
         </h1>
         <p className="text-muted-foreground mt-1 text-[13.5px]">
           Tool-call-grounded chat — every numeric answer comes from a real
-          query against your Supabase. The assistant is read-only; it can
-          look things up and explain them, but can't write anything yet.
+          query against your Supabase. Most tools are read-only; the
+          assistant can also adjust stock when you explicitly confirm.
         </p>
       </div>
       <ChatPanel />
