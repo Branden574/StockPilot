@@ -7,6 +7,65 @@ import { InventoryService } from './inventory';
 import { ServiceError, type ServiceContext } from './context';
 
 /**
+ * Download a cover image from a third-party URL and host it in our
+ * Supabase Storage bucket so the inventory list doesn't depend on
+ * archive.org / Google Books / etc. for image rendering. Open
+ * Library covers redirect to archive.org which often returns
+ * ERR_CONNECTION_RESET from many networks (corporate firewalls,
+ * Brave Shields, school Wi-Fi). Re-hosting eliminates that.
+ *
+ * Returns the storage path on success, null on any failure. Failures
+ * are non-fatal — the book row already exists with the original URL
+ * in custom_fields.thumbnail_url as a backup.
+ */
+async function rehostCover(
+  ctx: ServiceContext,
+  itemId: string,
+  coverUrl: string,
+): Promise<string | null> {
+  try {
+    // 8s budget. Some cover servers are slow; 8s lets the slow ones
+    // resolve without blocking the whole import.
+    const res = await fetch(coverUrl, {
+      signal: AbortSignal.timeout(8000),
+      // Some cover servers gate on user-agent — pretend to be a browser.
+      headers: { 'User-Agent': 'Mozilla/5.0 (StockPilot bulk-import)' },
+    });
+    if (!res.ok) return null;
+    const arr = await res.arrayBuffer();
+    if (arr.byteLength === 0 || arr.byteLength > 5 * 1024 * 1024) return null;
+    const contentType = res.headers.get('content-type') ?? 'image/jpeg';
+    const ext =
+      contentType.includes('png') ? 'png' :
+      contentType.includes('webp') ? 'webp' : 'jpg';
+    const path = `${ctx.organizationId}/${itemId}/cover.${ext}`;
+
+    const { error: upErr } = await ctx.supabase.storage
+      .from('item-images')
+      .upload(path, new Uint8Array(arr), {
+        contentType,
+        cacheControl: '604800', // 1 week — covers don't change
+        upsert: true,
+      });
+    if (upErr) return null;
+
+    const { error: insertErr } = await ctx.supabase.from('item_images').insert({
+      organization_id: ctx.organizationId,
+      item_id: itemId,
+      storage_path: path,
+      is_primary: true,
+      sort_order: 0,
+      alt: null,
+    });
+    if (insertErr) return null;
+    return path;
+  } catch {
+    // Network/abort/etc. — best-effort, swallow and move on.
+    return null;
+  }
+}
+
+/**
  * Bulk-ISBN import preview + execution. Designed to back the AI
  * tools (previewBulkBookImport / executeBulkBookImport) without
  * duplicating logic that already lives in the dashboard import
@@ -48,6 +107,10 @@ export interface BulkImportPreviewRow {
     publisher: string | null;
     publishedDate: string | null;
     grade: string | null;
+    /** Cover URL (Google Books / Open Library / LoC). Used by execute()
+     *  to download + re-host the cover in our own bucket so the
+     *  inventory list doesn't depend on a third party. */
+    thumbnailUrl: string | null;
   } | null;
   /** Existing item, populated when status === 'duplicate_in_db'. */
   existing: {
@@ -283,8 +346,13 @@ export class BooksImportService {
         if (row.metadata.publishedDate)
           customFields.published_date = row.metadata.publishedDate;
         if (row.metadata.grade) customFields.book_grade = row.metadata.grade;
+        // Keep the third-party URL in custom_fields as a backup; the
+        // primary surface for image rendering becomes the rehosted
+        // copy in our own item-images bucket (below).
+        if (row.metadata.thumbnailUrl)
+          customFields.thumbnail_url = row.metadata.thumbnailUrl;
 
-        await inv.create({
+        const created = (await inv.create({
           name: row.metadata.title,
           sku: generateSku(row.metadata.title),
           barcode: row.isbn,
@@ -300,7 +368,16 @@ export class BooksImportService {
           reorderPoint: 0,
           reorderQuantity: 0,
           trackingType: 'none',
-        });
+        })) as { id?: string } | null;
+
+        // Re-host the cover image in our bucket. Best-effort: if it
+        // fails (cover URL unreachable, storage quota, etc.) the book
+        // is still created, and the inventory list falls back to the
+        // custom_fields.thumbnail_url we just stashed.
+        if (created?.id && row.metadata.thumbnailUrl) {
+          await rehostCover(this.ctx, created.id, row.metadata.thumbnailUrl);
+        }
+
         result.created += 1;
       } catch (err) {
         if (err instanceof ServiceError && err.code === 'conflict') {
@@ -327,6 +404,7 @@ function pickPreviewMeta(meta: BookMetadata) {
     publisher: meta.publisher,
     publishedDate: meta.publishedDate,
     grade: meta.grade,
+    thumbnailUrl: meta.thumbnailUrl,
   };
 }
 

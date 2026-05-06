@@ -62,14 +62,24 @@ export default async function InventoryPage({
   ]);
 
   // Fetch primary images in batch (1 query + 1 createSignedUrls call,
-  // not N round trips). Returns Map<itemId, signedUrl>.
+  // not N round trips). Returns Map<itemId, signedUrl>. Falls back to
+  // a custom_fields.thumbnail_url stashed by the bulk-ISBN importer
+  // for books that came in before the cover-rehost flow landed.
   const imagesById = await imagesSvc.primaryImagesForItems(
     inventory.items.map((i) => i.id),
   );
-  const itemsWithImages = inventory.items.map((i) => ({
-    ...i,
-    image_url: imagesById.get(i.id) ?? null,
-  }));
+  const itemsWithImages = inventory.items.map((i) => {
+    const cf = (i as { custom_fields?: Record<string, unknown> | null })
+      .custom_fields;
+    const cfThumb =
+      cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
+        ? (cf.thumbnail_url as string)
+        : null;
+    return {
+      ...i,
+      image_url: imagesById.get(i.id) ?? cfThumb ?? null,
+    };
+  });
 
   const lookups = {
     categories: new Map(

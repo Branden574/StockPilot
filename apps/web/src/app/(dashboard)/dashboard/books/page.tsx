@@ -49,14 +49,24 @@ export default async function BooksPage({
   ]);
 
   // Batched primary-image fetch (1 select + 1 createSignedUrls) so each
-  // book row in the list can show its actual thumbnail.
+  // book row in the list can show its actual thumbnail. Fallback chain
+  // for each row: signed URL from item_images bucket → ISBN-import
+  // cover URL stashed in custom_fields.thumbnail_url → null.
   const imagesById = await imagesSvc.primaryImagesForItems(
     inventory.items.map((i) => i.id),
   );
-  const itemsWithImages = inventory.items.map((i) => ({
-    ...i,
-    image_url: imagesById.get(i.id) ?? null,
-  }));
+  const itemsWithImages = inventory.items.map((i) => {
+    const cf = (i as { custom_fields?: Record<string, unknown> | null })
+      .custom_fields;
+    const cfThumb =
+      cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
+        ? (cf.thumbnail_url as string)
+        : null;
+    return {
+      ...i,
+      image_url: imagesById.get(i.id) ?? cfThumb ?? null,
+    };
+  });
 
   const lookups = {
     categories: new Map(
