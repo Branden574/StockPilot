@@ -165,10 +165,49 @@ export function ChatPanel() {
     const trimmed = message.trim();
     if (!trimmed) return;
     if (busy) return;
-    const next: ChatTurn[] = [...turns, { role: 'user', content: trimmed }];
-    setTurns(next);
+    // Push the user turn AND a placeholder assistant turn — the
+    // placeholder is what we mutate as text deltas stream in. The
+    // index of the assistant turn in the array stays stable across
+    // re-renders because we always push to the end.
+    setTurns((cur) => [
+      ...cur,
+      { role: 'user', content: trimmed },
+      { role: 'assistant', content: '', toolCalls: [] },
+    ]);
     setInput('');
     setBusy(true);
+
+    const appendAssistantDelta = (delta: string) => {
+      setTurns((cur) => {
+        const last = cur[cur.length - 1];
+        if (!last || last.role !== 'assistant') return cur;
+        const updated: ChatTurn = { ...last, content: last.content + delta };
+        return [...cur.slice(0, -1), updated];
+      });
+    };
+
+    const pushAssistantTool = (name: string, ok: boolean) => {
+      setTurns((cur) => {
+        const last = cur[cur.length - 1];
+        if (!last || last.role !== 'assistant') return cur;
+        const updated: ChatTurn = {
+          ...last,
+          toolCalls: [...(last.toolCalls ?? []), { name, ok }],
+        };
+        return [...cur.slice(0, -1), updated];
+      });
+    };
+
+    const replaceAssistantWithError = (msg: string) => {
+      setTurns((cur) => {
+        const last = cur[cur.length - 1];
+        if (!last || last.role !== 'assistant') {
+          return [...cur, { role: 'assistant', content: msg }];
+        }
+        return [...cur.slice(0, -1), { ...last, content: msg, toolCalls: [] }];
+      });
+    };
+
     try {
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
@@ -178,36 +217,77 @@ export function ChatPanel() {
           sessionId: sessionId ?? undefined,
         }),
       });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || !json.ok) {
-        // Server returns a classified, user-safe message — show it
-        // verbatim instead of leaking SDK URLs / status text.
+
+      // Validation/auth errors come back as plain JSON 4xx (no stream).
+      if (!res.ok) {
+        const json = (await res.json().catch(() => ({}))) as { message?: string };
         const friendly =
-          (json.message as string | undefined) ??
-          "The AI assistant ran into a problem. Try again in a moment.";
+          json.message ?? "The AI assistant ran into a problem. Try again in a moment.";
         toast.error(friendly);
-        setTurns((cur) => [...cur, { role: 'assistant', content: friendly }]);
+        replaceAssistantWithError(friendly);
         return;
       }
-      const newSessionId = (json.sessionId as string | null) ?? null;
-      if (newSessionId && newSessionId !== sessionId) {
-        setSessionId(newSessionId);
-        if (typeof window !== 'undefined') {
-          window.localStorage.setItem(ACTIVE_SESSION_KEY, newSessionId);
+
+      if (!res.body) {
+        replaceAssistantWithError('No response stream from the assistant.');
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let streamErrored = false;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let event: {
+            type?: string;
+            delta?: string;
+            name?: string;
+            ok?: boolean;
+            sessionId?: string;
+            message?: string;
+          };
+          try {
+            event = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (event.type === 'text' && typeof event.delta === 'string') {
+            appendAssistantDelta(event.delta);
+          } else if (event.type === 'tool' && typeof event.name === 'string') {
+            pushAssistantTool(event.name, Boolean(event.ok));
+          } else if (event.type === 'done' && typeof event.sessionId === 'string') {
+            const newSessionId = event.sessionId;
+            if (newSessionId !== sessionId) {
+              setSessionId(newSessionId);
+              if (typeof window !== 'undefined') {
+                window.localStorage.setItem(ACTIVE_SESSION_KEY, newSessionId);
+              }
+            }
+          } else if (event.type === 'error') {
+            streamErrored = true;
+            const friendly =
+              event.message ??
+              "The AI assistant ran into a problem. Try again in a moment.";
+            toast.error(friendly);
+            replaceAssistantWithError(friendly);
+          }
         }
       }
-      const toolCalls = (json.toolCallsUsed as Array<{ name: string; ok: boolean }>) ?? [];
-      setTurns((cur) => [
-        ...cur,
-        {
-          role: 'assistant',
-          content: (json.reply as string) || '(no reply)',
-          toolCalls,
-        },
-      ]);
-      void refreshSessions();
+
+      if (!streamErrored) void refreshSessions();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Network error');
+      const msg = err instanceof Error ? err.message : 'Network error';
+      toast.error(msg);
+      replaceAssistantWithError(msg);
     } finally {
       setBusy(false);
     }
@@ -292,8 +372,8 @@ export function ChatPanel() {
               </div>
               <h2 className="text-lg font-medium">Ask your inventory anything</h2>
               <p className="text-muted-foreground mt-1.5 text-sm">
-                Read-only for now. Powered by Gemini 2.0 Flash with tool calls
-                into your real data — no hallucinated quantities.
+                Read-only for now. Streamed responses, grounded by tool
+                calls into your real data — no hallucinated quantities.
               </p>
               <div className="mt-5 flex flex-wrap justify-center gap-2">
                 {SUGGESTIONS.map((s) => (
@@ -327,7 +407,17 @@ export function ChatPanel() {
                         : 'bg-muted text-foreground rounded-bl-md',
                     )}
                   >
-                    <div className="whitespace-pre-wrap">{t.content}</div>
+                    {t.role === 'assistant' &&
+                    busy &&
+                    i === turns.length - 1 &&
+                    !t.content ? (
+                      <div className="text-muted-foreground inline-flex items-center gap-2">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        thinking…
+                      </div>
+                    ) : (
+                      <div className="whitespace-pre-wrap">{t.content}</div>
+                    )}
                     {t.toolCalls && t.toolCalls.length > 0 && (
                       <div className="text-muted-foreground mt-2 flex flex-wrap gap-1.5 text-[10.5px]">
                         {t.toolCalls.map((tc, j) => (
@@ -349,14 +439,6 @@ export function ChatPanel() {
                   </div>
                 </li>
               ))}
-              {busy && (
-                <li className="flex justify-start">
-                  <div className="bg-muted text-muted-foreground inline-flex items-center gap-2 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    thinking…
-                  </div>
-                </li>
-              )}
             </ul>
           )}
         </div>
