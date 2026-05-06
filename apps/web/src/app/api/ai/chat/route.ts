@@ -83,11 +83,6 @@ export async function POST(req: Request) {
     }
 
     if (!sessionId) {
-      // Title derived from the first user message — keeps the sessions
-      // sidebar useful without an extra round trip.
-      const session = await createSession(ctx, deriveTitle(payload.message));
-      sessionId = session.id;
-      isNewSession = true;
       // Honor a client-supplied legacy history when starting fresh, so
       // a long pre-rollout conversation isn't visually truncated.
       if (payload.history && payload.history.length > 0) {
@@ -97,8 +92,15 @@ export async function POST(req: Request) {
 
     const result = await runChat(history, payload.message, ctx);
 
-    // Persist both turns AFTER the assistant produced a reply, so a
-    // failure mid-call doesn't strand a half-conversation in storage.
+    // Lazy-create the session AFTER runChat succeeds. Earlier we created
+    // it up front, but if Gemini threw (e.g. credits depleted) the row
+    // got stranded with zero messages — orphans cluttered the sidebar.
+    if (!sessionId) {
+      const session = await createSession(ctx, deriveTitle(payload.message));
+      sessionId = session.id;
+      isNewSession = true;
+    }
+
     await appendMessages(ctx, sessionId, [
       { role: 'user', content: payload.message },
       {
