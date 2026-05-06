@@ -12,7 +12,7 @@ max_rows = 1000
 [db]
 port = 54322
 shadow_port = 54320
-major_version = 16
+major_version = 17
 
 [db.pooler]
 enabled = false
@@ -53,7 +53,6 @@ jwt_expiry = 3600
 # from the server action, which bypasses this flag because it uses the
 # service-role key path via the admin client.
 enable_signup = false
-enable_confirmations = true
 minimum_password_length = 8
 password_requirements = "lower_upper_letters_digits"
 

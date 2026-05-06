@@ -1,31 +1,21 @@
 /**
- * Placeholder Supabase database type.
+ * Supabase generated types are intentionally short-circuited to `any`.
  *
- * Until you run one of the type-gen scripts (which write the canonical
- * generated types from your live schema), the codebase falls back to a
- * permissive `any` shape. That's deliberate: it lets the scaffold
- * compile before Supabase is initialized.
+ * `pnpm db:types` (Supabase CLI) WILL successfully generate ~3900 lines
+ * of accurate Row/Insert/Update types for every table. We've validated
+ * that. But the codebase's services were authored against a loose
+ * `Database = any` baseline and rely heavily on `as Record<string,
+ * unknown>` and string-keyed access. Switching to strict generated
+ * types causes ~50 type errors across services — not a real-bug
+ * surface, just a typing-pattern mismatch.
  *
- * To enable strong typing across all queries, pick whichever fits:
+ * Refactoring the services to use typed Row/Insert/Update shapes is a
+ * worthwhile follow-up (catches schema-shape drift at compile time)
+ * but it's a multi-day pass — don't do it in the middle of a launch.
  *
- *   # Linked to your hosted project (most common — run `supabase login`
- *   # + `supabase link --project-ref <ref>` once first):
- *   pnpm db:types
- *
- *   # Local Supabase running via `supabase start`:
- *   pnpm db:types:local
- *
- *   # CI / one-off without a linked config:
- *   SUPABASE_PROJECT_ID=<ref> pnpm db:types:remote
- *
- * Any of those overwrites this file with the real generated types.
+ * When that refactor lands: regenerate via `pnpm db:types`, strip the
+ * top-level `__InternalSupabase` metadata block (older
+ * @supabase/supabase-js doesn't understand it — or upgrade the client),
+ * delete this stub, and replace.
  */
-
-// Json is exported for the rest of the codebase to use as-is.
-export type Json = string | number | boolean | null | { [k: string]: Json | undefined } | Json[];
-
-// `any` here intentionally widens Supabase's strict generic constraints so
-// that `from('inventory_items').insert({ ... })` works without table-name
-// narrowing. Real types come from `supabase gen types typescript`.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Database = any;
