@@ -9,7 +9,7 @@
  * https://nextjs.org/docs/app/guides/json-ld
  */
 export function MarketingJsonLd() {
-  const url = process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilot.app';
+  const url = process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com';
   const data = {
     '@context': 'https://schema.org',
     '@graph': [

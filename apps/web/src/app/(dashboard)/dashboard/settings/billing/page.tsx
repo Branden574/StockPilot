@@ -80,7 +80,7 @@ export default async function BillingSettingsPage() {
                   </p>
                   {p === 'enterprise' ? (
                     <a
-                      href="mailto:sales@stockpilot.app"
+                      href="mailto:sales@stockpilotusa.com"
                       className="mt-3 inline-flex items-center gap-1 text-sm text-primary hover:underline"
                     >
                       Contact sales <ExternalLink className="h-3 w-3" />
