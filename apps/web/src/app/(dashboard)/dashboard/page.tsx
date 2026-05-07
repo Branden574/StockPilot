@@ -145,6 +145,17 @@ export default async function DashboardHome() {
     val: b.count,
   }));
 
+  // dailyCounts[29] is the rolling 24h ending at request time; [28] is the
+  // 24h before that. Use the difference for a real delta on the
+  // "Movements today" card so it stops flat-lining at 6.
+  const movementsToday = metrics.dailyCounts.at(-1) ?? 0;
+  const movementsYesterday = metrics.dailyCounts.at(-2) ?? 0;
+  const movementsDelta = movementsToday - movementsYesterday;
+  const movementsDeltaLabel =
+    movementsDelta === 0 ? '—' : `${movementsDelta > 0 ? '+' : ''}${movementsDelta}`;
+  const movementsDeltaDirection: 'up' | 'down' | 'flat' =
+    movementsDelta > 0 ? 'up' : movementsDelta < 0 ? 'down' : 'flat';
+
   const today = TODAY_LABEL.format(new Date());
   const attentionCount = summary.lowStockCount + summary.outOfStockCount;
   const healthyCount = Math.max(summary.itemCount - attentionCount, 0);
@@ -302,10 +313,14 @@ export default async function DashboardHome() {
         />
         <StatCard
           label="Movements today"
-          value={formatNumber(recentMovements.length)}
-          delta={{ value: '—', direction: 'flat' }}
-          series={[12, 18, 9, 14, 22, 17, 19, 11, 15, 21, 16, 18, 20, 4]}
-          foot="across all locations"
+          value={formatNumber(movementsToday)}
+          delta={{ value: movementsDeltaLabel, direction: movementsDeltaDirection }}
+          series={metrics.dailyCounts.slice(-14)}
+          foot={
+            warehouseFilter
+              ? 'in selected warehouse · last 24h'
+              : 'across all locations · last 24h'
+          }
           icon={Activity}
         />
       </div>
