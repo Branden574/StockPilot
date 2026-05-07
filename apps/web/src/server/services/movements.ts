@@ -231,6 +231,163 @@ export async function getThirtyDayMetrics(
   return { dailyCounts, byType };
 }
 
+export interface DashboardHistory {
+  /** Daily active SKU count, length 30, oldest → newest. Derived from
+      inventory_items.created_at. Today (index 29) matches summary.itemCount. */
+  itemCountSeries: number[];
+  /** Daily approximate inventory value, length 30, oldest → newest.
+      Computed by walking 30d of stock_movements backward from today's
+      value using each item's current unit_cost. Approximate because
+      cost may have changed historically; cheap enough for a dashboard
+      tile. Today (index 29) matches summary.inventoryValue. */
+  inventoryValueSeries: number[];
+  /** Daily count of items where qty <= reorder_point (and reorder_point > 0),
+      length 30, oldest → newest. Reverse-walks movements to reconstruct
+      historical quantities. Today (index 29) matches summary.lowStockCount
+      + summary.outOfStockCount. */
+  lowOutSeries: number[];
+}
+
+/**
+ * Real 30-day history series for the dashboard StatCards. Replaces the
+ * hardcoded sparkline arrays and fake deltas that lived in
+ * apps/web/src/app/(dashboard)/dashboard/page.tsx. Pulls each org's
+ * active inventory items + 30 days of movements (two queries) and
+ * derives three series via reverse-walk.
+ *
+ * Approximation notes:
+ * - Items deleted in the last 30 days are excluded (we only know about
+ *   items still active today). Their historical contribution is lost.
+ * - unit_cost is treated as constant at today's value. If cost changed,
+ *   historical valuations are slightly off.
+ * - reorder_point is also treated as constant at today's value.
+ *
+ * For a finance-grade history we'd snapshot daily into a separate
+ * table; this is a pragmatic dashboard-quality approximation.
+ */
+export async function getDashboardHistory(
+  options: { warehouseId?: string | null; ctx?: ServiceContext } = {},
+): Promise<DashboardHistory> {
+  const ctx = options.ctx ?? (await withContext());
+  const dayMs = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const startMs = now - 30 * dayMs;
+
+  // 1. Active items in scope.
+  let itemsQ = ctx.supabase
+    .from('inventory_items')
+    .select('id, created_at, quantity_on_hand, unit_cost, reorder_point')
+    .eq('organization_id', ctx.organizationId)
+    .eq('status', 'active')
+    .is('deleted_at', null);
+  if (options.warehouseId) {
+    itemsQ = itemsQ.eq('warehouse_id', options.warehouseId);
+  }
+  const { data: itemsData, error: itemsErr } = await itemsQ;
+  if (itemsErr) throw new ServiceError('internal_error', itemsErr.message);
+
+  type ItemRow = {
+    id: string;
+    created_at: string;
+    quantity_on_hand: number | null;
+    unit_cost: number | null;
+    reorder_point: number | null;
+  };
+  const items = (itemsData ?? []) as ItemRow[];
+
+  // Mutable per-item state (reverse-walked through movements).
+  const qtyById = new Map<string, number>();
+  const costById = new Map<string, number>();
+  const reorderById = new Map<string, number>();
+  const createdAtTimes: number[] = [];
+  let valueToday = 0;
+  for (const r of items) {
+    const qty = Number(r.quantity_on_hand) || 0;
+    const cost = Number(r.unit_cost) || 0;
+    const reorder = Number(r.reorder_point) || 0;
+    qtyById.set(r.id, qty);
+    costById.set(r.id, cost);
+    reorderById.set(r.id, reorder);
+    createdAtTimes.push(new Date(r.created_at).getTime());
+    valueToday += qty * cost;
+  }
+
+  // 2. Movements in window, scoped by warehouse if requested.
+  let movQ = ctx.supabase
+    .from('stock_movements')
+    .select(
+      options.warehouseId
+        ? 'item_id, quantity_change, created_at, item:inventory_items!item_id!inner (warehouse_id)'
+        : 'item_id, quantity_change, created_at',
+    )
+    .eq('organization_id', ctx.organizationId)
+    .gte('created_at', new Date(startMs).toISOString());
+  if (options.warehouseId) {
+    movQ = movQ.eq('item.warehouse_id', options.warehouseId);
+  }
+  const { data: movData, error: movErr } = await movQ;
+  if (movErr) throw new ServiceError('internal_error', movErr.message);
+
+  // Bucket movements by day so we can replay them in reverse order.
+  type Move = { item_id: string; quantity_change: number };
+  const movesByDay: Move[][] = Array.from({ length: 30 }, () => []);
+  for (const r of (movData ?? []) as unknown as Array<{
+    item_id: string;
+    quantity_change: number;
+    created_at: string;
+  }>) {
+    const t = new Date(r.created_at).getTime();
+    const dayIdx = Math.min(29, Math.max(0, Math.floor((t - startMs) / dayMs)));
+    movesByDay[dayIdx]!.push({
+      item_id: r.item_id,
+      quantity_change: Number(r.quantity_change) || 0,
+    });
+  }
+
+  // 3. Reverse-walk: index 29 = today (current state), then undo each day's
+  //    movements to recover the previous day's end-of-day state.
+  const inventoryValueSeries = new Array<number>(30).fill(0);
+  const lowOutSeries = new Array<number>(30).fill(0);
+  let value = valueToday;
+
+  const countLowOut = () => {
+    let n = 0;
+    for (const [id, qty] of qtyById) {
+      const reorder = reorderById.get(id) ?? 0;
+      if (reorder > 0 && qty <= reorder) n++;
+      else if (qty <= 0) n++;
+    }
+    return n;
+  };
+
+  for (let d = 29; d >= 0; d--) {
+    inventoryValueSeries[d] = value;
+    lowOutSeries[d] = countLowOut();
+    // Undo this day's movements to step back to (d-1)'s end-of-day state.
+    const today = movesByDay[d] ?? [];
+    for (const m of today) {
+      const cost = costById.get(m.item_id);
+      if (cost === undefined) continue; // item no longer exists
+      value -= m.quantity_change * cost;
+      const prev = qtyById.get(m.item_id) ?? 0;
+      qtyById.set(m.item_id, prev - m.quantity_change);
+    }
+  }
+
+  // 4. Item-count series from created_at. itemCountSeries[d] = items where
+  //    created_at <= end of day d. Sort once, single forward sweep.
+  const sorted = [...createdAtTimes].sort((a, b) => a - b);
+  const itemCountSeries = new Array<number>(30).fill(0);
+  let cursor = 0;
+  for (let d = 0; d < 30; d++) {
+    const dayEnd = startMs + (d + 1) * dayMs;
+    while (cursor < sorted.length && sorted[cursor]! <= dayEnd) cursor++;
+    itemCountSeries[d] = cursor;
+  }
+
+  return { itemCountSeries, inventoryValueSeries, lowOutSeries };
+}
+
 export interface DashboardActions {
   /** Receivable POs (expected_inbound / ordered / partially_received). */
   openPoCount: number;
