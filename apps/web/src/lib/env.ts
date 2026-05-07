@@ -40,7 +40,7 @@ const serverSchema = z.object({
   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: optionalSecret.transform((s) => s.trim()),
 
   RESEND_API_KEY: optionalSecret.transform((s) => s.trim()),
-  RESEND_FROM_EMAIL: z.string().transform((s) => s.trim()).default('StockPilot <hello@stockpilot.app>'),
+  RESEND_FROM_EMAIL: z.string().transform((s) => s.trim()).default('StockPilot <hello@stockpilotusa.com>'),
 
   // Random shared secret. Vercel Cron sends `Authorization: Bearer <secret>`
   // to scheduled routes; we compare against this. Set the same value in
