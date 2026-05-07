@@ -24,6 +24,7 @@ import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
 import {
   getDashboardActions,
+  getDashboardHistory,
   getDashboardSummary,
   getLowStockItems,
   getThirtyDayMetrics,
@@ -49,16 +50,18 @@ export default async function DashboardHome() {
 
   // One PostgREST round trip per Promise.all branch; cache() de-dupes the
   // identity/context load across them.
-  const [ctx, summary, lowStock, recentMovements, metrics, actions] = await Promise.all([
-    requireOrgContext(),
-    getDashboardSummary({ warehouseId: warehouseFilter ?? undefined }),
-    getLowStockItems(5, { warehouseId: warehouseFilter ?? undefined }),
-    MovementsService.forCurrentUser().then((svc) =>
-      svc.list({ limit: 6, warehouseId: warehouseFilter ?? undefined }),
-    ),
-    getThirtyDayMetrics({ warehouseId: warehouseFilter ?? undefined }),
-    getDashboardActions({ warehouseId: warehouseFilter ?? undefined }),
-  ]);
+  const [ctx, summary, lowStock, recentMovements, metrics, actions, history] =
+    await Promise.all([
+      requireOrgContext(),
+      getDashboardSummary({ warehouseId: warehouseFilter ?? undefined }),
+      getLowStockItems(5, { warehouseId: warehouseFilter ?? undefined }),
+      MovementsService.forCurrentUser().then((svc) =>
+        svc.list({ limit: 6, warehouseId: warehouseFilter ?? undefined }),
+      ),
+      getThirtyDayMetrics({ warehouseId: warehouseFilter ?? undefined }),
+      getDashboardActions({ warehouseId: warehouseFilter ?? undefined }),
+      getDashboardHistory({ warehouseId: warehouseFilter ?? undefined }),
+    ]);
 
   // Get-started checklist signals — only fetched cheap heads for counts.
   // Also resolve the active warehouse name for the dashboard caption when
@@ -127,13 +130,17 @@ export default async function DashboardHome() {
   ];
   const checklistComplete = checklistSteps.every((s) => s.done);
 
-  // Build a synthetic 30-day inventory-value series until a real time-series
-  // RPC ships. Cheap, render-only.
-  const valueSeries = Array.from({ length: 30 }, (_, i) => {
-    const base = summary.inventoryValue || 1000;
-    const sin = Math.sin(i / 4) * base * 0.04;
-    return { value: Math.round(base + sin + (i / 30) * base * 0.06), label: `D-${30 - i}` };
-  });
+  // Real 30-day series for the StatCards. Replaces the synthetic sin-wave
+  // valueSeries and the hardcoded sparkline arrays that used to live here.
+  // Today (index 29) reconciles with `summary` so the tile value and the
+  // sparkline tip always agree.
+  const valueSeries = history.inventoryValueSeries.map((value, i) => ({
+    value,
+    label: `D-${30 - i}`,
+  }));
+  const itemCountSeries = history.itemCountSeries;
+  const inventoryValueSeries = history.inventoryValueSeries;
+  const lowOutSeries = history.lowOutSeries;
 
   // Real 30-day movement metrics — replaces the synthetic barValues +
   // breakdownRows that lived here. Both are bounded by stock_movements
@@ -155,6 +162,42 @@ export default async function DashboardHome() {
     movementsDelta === 0 ? '—' : `${movementsDelta > 0 ? '+' : ''}${movementsDelta}`;
   const movementsDeltaDirection: 'up' | 'down' | 'flat' =
     movementsDelta > 0 ? 'up' : movementsDelta < 0 ? 'down' : 'flat';
+
+  // Rolling 7-day movement total — used for the "Activity (7d)" status
+  // metric in the top strip. Replaces the old "Recent moves" tile that was
+  // hardwired to recentMovements.length and capped at 6.
+  const movements7d = metrics.dailyCounts.slice(-7).reduce((a, b) => a + b, 0);
+
+  // Compute delta + direction for a tile by comparing today (index 29) to
+  // 30 days ago (index 0). Returns a percentage label for value-y series
+  // (currency, big counts) and a raw delta label for low/out.
+  const deltaPct = (series: number[]): { label: string; direction: 'up' | 'down' | 'flat' } => {
+    const head = series[0] ?? 0;
+    const tail = series.at(-1) ?? 0;
+    if (head === 0 && tail === 0) return { label: '—', direction: 'flat' };
+    if (head === 0) return { label: 'new', direction: 'up' };
+    const pct = ((tail - head) / head) * 100;
+    if (Math.abs(pct) < 0.05) return { label: '—', direction: 'flat' };
+    const rounded = pct.toFixed(1);
+    return {
+      label: `${pct > 0 ? '+' : ''}${rounded}%`,
+      direction: pct > 0 ? 'up' : 'down',
+    };
+  };
+  const deltaRaw = (series: number[]): { label: string; direction: 'up' | 'down' | 'flat' } => {
+    const head = series[0] ?? 0;
+    const tail = series.at(-1) ?? 0;
+    const diff = tail - head;
+    if (diff === 0) return { label: '—', direction: 'flat' };
+    return {
+      label: `${diff > 0 ? '+' : ''}${diff}`,
+      // For low/out, MORE is bad — invert so up=red feels right.
+      direction: diff > 0 ? 'down' : 'up',
+    };
+  };
+  const inventoryValueDelta = deltaPct(inventoryValueSeries);
+  const itemCountDelta = deltaPct(itemCountSeries);
+  const lowOutDelta = deltaRaw(lowOutSeries);
 
   const today = TODAY_LABEL.format(new Date());
   const attentionCount = summary.lowStockCount + summary.outOfStockCount;
@@ -226,7 +269,7 @@ export default async function DashboardHome() {
               tone="danger"
             />
             <StatusMetric label="Avg value / SKU" value={formatCurrency(valuePerSku)} />
-            <StatusMetric label="Recent moves" value={formatNumber(recentMovements.length)} />
+            <StatusMetric label="Activity (7d)" value={formatNumber(movements7d)} />
           </div>
         </section>
 
@@ -290,24 +333,24 @@ export default async function DashboardHome() {
         <StatCard
           label="Inventory value"
           value={formatCurrency(summary.inventoryValue)}
-          delta={{ value: '+4.8%', direction: 'up' }}
-          series={valueSeries.slice(-14).map((d) => d.value)}
-          foot="vs. 30-day avg"
+          delta={{ value: inventoryValueDelta.label, direction: inventoryValueDelta.direction }}
+          series={inventoryValueSeries.slice(-14)}
+          foot="vs. 30 days ago"
           icon={DollarSign}
         />
         <StatCard
           label="Items on hand"
           value={formatNumber(summary.itemCount)}
-          delta={{ value: '+1.2%', direction: 'up' }}
-          series={[310, 312, 314, 318, 322, 319, 321, 326, 332, 330, 334, 338, 342, 344]}
+          delta={{ value: itemCountDelta.label, direction: itemCountDelta.direction }}
+          series={itemCountSeries.slice(-14)}
           foot={`${summary.itemCount} active SKUs`}
           icon={PackageCheck}
         />
         <StatCard
           label="Low / out of stock"
           value={formatNumber(summary.lowStockCount + summary.outOfStockCount)}
-          delta={{ value: `+${summary.lowStockCount}`, direction: 'down' }}
-          series={[3, 3, 4, 4, 4, 4, 5, 5, 5, 6, 6, 6, 6, 7]}
+          delta={{ value: lowOutDelta.label, direction: lowOutDelta.direction }}
+          series={lowOutSeries.slice(-14)}
           foot={`${summary.outOfStockCount} critical · ${summary.lowStockCount} below par`}
           icon={AlertTriangle}
         />
