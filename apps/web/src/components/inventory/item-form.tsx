@@ -149,6 +149,21 @@ export function ItemForm({
     },
   });
 
+  // Keep the read-only On-hand input in sync with server data after a
+  // stock adjustment. RHF only honors defaultValues at mount, so without
+  // this the displayed quantity stays stale until the user clicks Save
+  // and refreshes — even though router.refresh() re-fetched the server
+  // tree and `defaults.quantityOnHand` is already up to date.
+  // We only sync in edit mode (input is disabled there); in create mode
+  // the field is user-editable and we must not stomp on their typing.
+  React.useEffect(() => {
+    if (!isEdit) return;
+    const next = defaults?.quantityOnHand;
+    if (typeof next === 'number') {
+      setValue('quantityOnHand', next, { shouldDirty: false, shouldTouch: false });
+    }
+  }, [isEdit, defaults?.quantityOnHand, setValue]);
+
   const isBook = itemType === 'book' || (defaults?.itemType ?? itemType) === 'book';
   const cfDefault =
     (defaults?.customFields as Record<string, unknown> | undefined) ?? {};
