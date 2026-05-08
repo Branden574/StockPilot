@@ -1,4 +1,4 @@
-import { FileLock } from 'lucide-react';
+import { AlertTriangle, FileLock } from 'lucide-react';
 
 import { AuditFilters, AUDIT_CATEGORIES } from '@/components/admin/audit-filters';
 import { EmptyState } from '@/components/dashboard/empty-state';
@@ -11,6 +11,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { requireOrgContext } from '@/lib/auth/session';
+import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
 import { cn, formatRelative } from '@/lib/utils';
 
@@ -74,11 +75,16 @@ export default async function AuditLogPage({
   const categoryDef = AUDIT_CATEGORIES.find((c) => c.slug === activeCategory);
   const prefix = categoryDef?.prefix ?? null;
 
+  // Two-pass fetch: rows first, then a separate best-effort count.
+  // The previous combined `select('…', { count: 'estimated' })` made the
+  // rows query fail entirely whenever the count subquery hit a planner
+  // edge case on large tables — taking the whole admin page down with it.
+  // Splitting them means a count failure becomes a missing total, not
+  // a crashed page.
   let q = supabase
     .from('audit_logs')
     .select(
       'id, event, metadata, ip, user_agent, created_at, user:user_profiles!user_id (id, full_name, email)',
-      { count: 'estimated' },
     )
     .eq('organization_id', ctx.organizationId)
     .order('created_at', { ascending: false })
@@ -87,7 +93,60 @@ export default async function AuditLogPage({
   if (params.event) q = q.eq('event', params.event);
   if (prefix) q = q.like('event', `${prefix}%`);
 
-  const { data, count } = await q;
+  const { data, error } = await q;
+  if (error) {
+    void reportError(new Error(error.message), {
+      tag: 'audit.list',
+      level: 'error',
+      organizationId: ctx.organizationId,
+      extra: {
+        code: error.code ?? null,
+        details: error.details ?? null,
+        hint: error.hint ?? null,
+      },
+    });
+    return (
+      <div className="mx-auto w-full max-w-[1480px] px-8 pb-20 pt-7">
+        <div className="mb-6 border-b border-border pb-4">
+          <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
+            Admin
+          </p>
+          <h1 className="font-display text-[28px] font-medium tracking-[-0.025em]">Audit log</h1>
+        </div>
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-6">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="text-destructive mt-0.5 h-5 w-5" />
+            <div>
+              <h2 className="text-sm font-semibold">Audit log failed to load</h2>
+              <p className="text-muted-foreground mt-1 text-[13px]">
+                The query against{' '}
+                <code className="rounded bg-muted px-1 font-mono text-[11.5px]">audit_logs</code>{' '}
+                returned an error. The issue has been logged to the error reporter.
+              </p>
+              <pre className="bg-muted mt-3 overflow-x-auto rounded-md p-3 font-mono text-[11px] leading-tight">
+{(error.code ?? 'error') + ': ' + error.message}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Best-effort row count for the header — tolerates timeouts.
+  let count: number | null = null;
+  try {
+    let countQuery = supabase
+      .from('audit_logs')
+      .select('id', { count: 'estimated', head: true })
+      .eq('organization_id', ctx.organizationId);
+    if (params.event) countQuery = countQuery.eq('event', params.event);
+    if (prefix) countQuery = countQuery.like('event', `${prefix}%`);
+    const { count: c } = await countQuery;
+    count = c ?? null;
+  } catch {
+    count = null;
+  }
 
   const actorTrim = params.actor?.trim().toLowerCase() ?? '';
 
