@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Loader2,
   Minus,
   Plus,
   Trash2,
@@ -54,6 +55,7 @@ export function ImageLightbox({
   const [index, setIndex] = React.useState(startIndex);
   const [zoom, setZoom] = React.useState(1);
   const [pan, setPan] = React.useState({ x: 0, y: 0 });
+  const [loadedUrls, setLoadedUrls] = React.useState<Set<string>>(() => new Set());
 
   const dragRef = React.useRef<{
     startX: number;
@@ -116,6 +118,28 @@ export function ImageLightbox({
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [open, hasPrev, hasNext, goPrev, goNext]);
+
+  // Preload neighboring images so prev/next feels instant. Uses
+  // <link rel="preload" as="image"> so the browser warms its cache
+  // without inserting hidden <img> elements that affect layout.
+  React.useEffect(() => {
+    if (!open) return;
+    const neighbors: string[] = [];
+    if (index > 0 && images[index - 1]) neighbors.push(images[index - 1]!.url);
+    if (index < images.length - 1 && images[index + 1])
+      neighbors.push(images[index + 1]!.url);
+    const links = neighbors.map((url) => {
+      const link = document.createElement('link');
+      link.rel = 'preload';
+      link.as = 'image';
+      link.href = url;
+      document.head.appendChild(link);
+      return link;
+    });
+    return () => {
+      links.forEach((l) => l.remove());
+    };
+  }, [open, index, images]);
 
   if (!current) return null;
 
@@ -301,16 +325,34 @@ export function ImageLightbox({
             onTouchMove={onTouchMove}
             onTouchEnd={onTouchEnd}
           >
+            {!loadedUrls.has(current.url) && (
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0 grid place-items-center text-white/50"
+              >
+                <Loader2 className="h-8 w-8 animate-spin" />
+              </div>
+            )}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={current.url}
               alt=""
               draggable={false}
               loading="eager"
+              fetchPriority="high"
+              onLoad={() =>
+                setLoadedUrls((prev) => {
+                  if (prev.has(current.url)) return prev;
+                  const next = new Set(prev);
+                  next.add(current.url);
+                  return next;
+                })
+              }
               onClick={onImageClick}
               className={cn(
-                'absolute inset-0 m-auto max-h-full max-w-full select-none object-contain transition-[transform] duration-100',
+                'absolute inset-0 m-auto max-h-full max-w-full select-none object-contain transition-[transform,opacity] duration-100',
                 zoom === 1 ? 'cursor-zoom-in' : 'cursor-grab',
+                loadedUrls.has(current.url) ? 'opacity-100' : 'opacity-0',
               )}
               style={{
                 transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
