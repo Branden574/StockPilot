@@ -181,13 +181,21 @@ export async function ItemDetail({ id, backHref, backLabel, editHref }: ItemDeta
               );
               const color = getCrateColor(storage.crateColor);
               const cf = (item.custom_fields as Record<string, unknown> | null) ?? {};
-              const isbnRaw =
-                (typeof cf.isbn === 'string' && cf.isbn) ||
-                (typeof cf.isbn13 === 'string' && cf.isbn13) ||
-                (typeof cf.isbn10 === 'string' && cf.isbn10) ||
-                '';
-              const isbn = isbnRaw.trim();
               const isBook = item.item_type === 'book';
+              // For books, ISBN is stored in inventory_items.barcode — the
+              // edit form's "ISBN" label binds to the same field as
+              // "Barcode" for non-books, and bulk-ISBN import also writes
+              // the ISBN to `barcode` (services/books-import.ts:85).
+              // custom_fields.isbn / .isbn13 / .isbn10 are legacy fallbacks
+              // from older import paths.
+              const isbnRaw = isBook
+                ? ((item.barcode as string | null) ?? '') ||
+                  (typeof cf.isbn === 'string' && cf.isbn) ||
+                  (typeof cf.isbn13 === 'string' && cf.isbn13) ||
+                  (typeof cf.isbn10 === 'string' && cf.isbn10) ||
+                  ''
+                : '';
+              const isbn = isbnRaw.trim();
               const hasAny =
                 isBook ||
                 storage.grade ||

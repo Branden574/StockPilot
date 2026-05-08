@@ -157,7 +157,15 @@ export async function GET(request: Request) {
         charter: escapeForSpreadsheet(i.charter_id ? (chMap.get(i.charter_id) ?? '') : ''),
         tracking_type: i.tracking_type,
         author: escapeForSpreadsheet(str('author')),
-        isbn: escapeForSpreadsheet(str('isbn') || str('isbn13') || str('isbn10')),
+        // For books, ISBN is the barcode — the form labels the same column
+        // "ISBN" for books and "Barcode" otherwise, and bulk imports
+        // store the ISBN at inventory_items.barcode. The custom_fields
+        // keys are legacy fallbacks from older imports.
+        isbn: escapeForSpreadsheet(
+          i.item_type === 'book'
+            ? (i.barcode ?? '') || str('isbn') || str('isbn13') || str('isbn10')
+            : '',
+        ),
         grade: escapeForSpreadsheet(str('book_grade')),
         rack_number: escapeForSpreadsheet(str('book_rack_number')),
         rack_row: escapeForSpreadsheet(str('book_rack_row')),
