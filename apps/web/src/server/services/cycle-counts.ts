@@ -20,6 +20,8 @@ export interface CycleCountRow {
   started_at: string;
   completed_by: string | null;
   completed_at: string | null;
+  /** Manager-set assignee responsible for the count. Null = unassigned. */
+  assigned_to: string | null;
 }
 
 export interface CycleCountLineRow {
@@ -51,14 +53,66 @@ export class CycleCountsService {
     return new CycleCountsService(await withContext());
   }
 
-  async list(): Promise<CycleCountRow[]> {
-    const { data, error } = await this.ctx.supabase
+  async list(filters: { assignedTo?: string | null } = {}): Promise<CycleCountRow[]> {
+    let query = this.ctx.supabase
       .from('cycle_counts')
       .select('*')
       .eq('organization_id', this.ctx.organizationId)
       .order('started_at', { ascending: false });
+    if (filters.assignedTo === null) {
+      // Explicit unassigned filter — used by the "unassigned" view.
+      query = query.is('assigned_to', null);
+    } else if (typeof filters.assignedTo === 'string') {
+      query = query.eq('assigned_to', filters.assignedTo);
+    }
+    const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return (data ?? []) as CycleCountRow[];
+  }
+
+  /**
+   * Manager+ only — point a cycle count at a specific person on the team
+   * (or clear with null). The role gate is the new 'cycle_counts:assign'
+   * permission added in the same change set; staff and viewers will get a
+   * forbidden error and a clear toast on the client.
+   *
+   * The optional `expectedAssignee` arg does an optimistic-concurrency
+   * check: if someone else changed the assignee in the meantime, we
+   * surface a validation error so the caller knows their toolbar state
+   * was stale. Pass undefined to skip the check.
+   */
+  async assign(
+    id: string,
+    assignedTo: string | null,
+    expectedAssignee?: string | null,
+  ): Promise<CycleCountRow> {
+    assertPermission(this.ctx, 'cycle_counts:assign');
+
+    let query = this.ctx.supabase
+      .from('cycle_counts')
+      .update({ assigned_to: assignedTo })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (expectedAssignee === null) {
+      query = query.is('assigned_to', null);
+    } else if (typeof expectedAssignee === 'string') {
+      query = query.eq('assigned_to', expectedAssignee);
+    }
+    const { data, error } = await query.select('*').maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) {
+      throw new ServiceError(
+        'validation_error',
+        'Cycle count not found, or its assignee changed since you opened this page.',
+      );
+    }
+    await audit({
+      event: 'cycle_count.assigned',
+      entityType: 'cycle_count',
+      entityId: id,
+      after: { assigned_to: assignedTo },
+    });
+    return data as unknown as CycleCountRow;
   }
 
   async get(
