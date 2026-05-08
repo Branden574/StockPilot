@@ -79,13 +79,16 @@ export default async function AuditLogPage({
   // The previous combined `select('…', { count: 'estimated' })` made the
   // rows query fail entirely whenever the count subquery hit a planner
   // edge case on large tables — taking the whole admin page down with it.
-  // Splitting them means a count failure becomes a missing total, not
-  // a crashed page.
+  //
+  // We also moved off the `user:user_profiles!user_id (...)` embed because
+  // PostgREST can't reliably resolve user_profiles via the auth.users
+  // chain (same fix the schedule service applies — see schedule.ts).
+  // Failed embeds previously surfaced as a generic Server Components
+  // crash. Now we batch-load user_profiles separately and tolerate
+  // failures gracefully.
   let q = supabase
     .from('audit_logs')
-    .select(
-      'id, event, metadata, ip, user_agent, created_at, user:user_profiles!user_id (id, full_name, email)',
-    )
+    .select('id, event, metadata, ip, user_agent, created_at, user_id')
     .eq('organization_id', ctx.organizationId)
     .order('created_at', { ascending: false })
     .limit(PAGE_SIZE);
@@ -150,20 +153,49 @@ export default async function AuditLogPage({
 
   const actorTrim = params.actor?.trim().toLowerCase() ?? '';
 
-  const rows = (data ?? [])
-    .map((r) => {
-      const u = (r as { user?: unknown }).user;
-      const userObj = Array.isArray(u) ? u[0] : u;
-      return {
-        id: r.id as string,
-        event: r.event as string,
-        metadata: (r.metadata as Record<string, unknown> | null) ?? null,
-        ip: (r.ip as string | null) ?? null,
-        user_agent: (r.user_agent as string | null) ?? null,
-        created_at: r.created_at as string,
-        user: (userObj as AuditRow['user']) ?? null,
-      } satisfies AuditRow;
-    })
+  const rawRows = (data ?? []) as Array<{
+    id: string;
+    event: string;
+    metadata: Record<string, unknown> | null;
+    ip: string | null;
+    user_agent: string | null;
+    created_at: string;
+    user_id: string | null;
+  }>;
+
+  // Batch-load user_profiles for every distinct user_id on this page.
+  // Tolerates failure: if user_profiles can't be read, we just leave
+  // the actor column blank instead of crashing the page.
+  const userIds = [...new Set(rawRows.map((r) => r.user_id).filter((v): v is string => Boolean(v)))];
+  const usersById = new Map<string, { id: string; full_name: string | null; email: string | null }>();
+  if (userIds.length > 0) {
+    try {
+      const { data: profiles } = await supabase
+        .from('user_profiles')
+        .select('id, full_name, email')
+        .in('id', userIds);
+      for (const p of (profiles ?? []) as Array<{
+        id: string;
+        full_name: string | null;
+        email: string | null;
+      }>) {
+        usersById.set(p.id, p);
+      }
+    } catch {
+      // Leave the map empty; rows will render with a blank actor.
+    }
+  }
+
+  const rows = rawRows
+    .map((r) => ({
+      id: r.id,
+      event: r.event,
+      metadata: r.metadata ?? null,
+      ip: r.ip ?? null,
+      user_agent: r.user_agent ?? null,
+      created_at: r.created_at,
+      user: r.user_id ? usersById.get(r.user_id) ?? null : null,
+    }) satisfies AuditRow)
     .filter((row) => {
       if (!actorTrim) return true;
       const name = (row.user?.full_name ?? '').toLowerCase();
