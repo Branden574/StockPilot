@@ -7,6 +7,7 @@ const SECTIONS = [
   { href: '/dashboard/settings/organization', title: 'Organization', description: 'Name, labels for charters and warehouses.' },
   { href: '/dashboard/settings/security', title: 'Security', description: 'Two-factor authentication and org MFA policy.' },
   { href: '/dashboard/settings/profile', title: 'Profile', description: 'Your name and avatar.' },
+  { href: '/dashboard/settings/notifications', title: 'Notifications', description: 'Weekly digest email and preferences.' },
   { href: '/dashboard/settings/billing', title: 'Billing', description: 'Plan, invoices, payment method.' },
 ];
 
