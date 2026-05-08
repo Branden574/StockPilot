@@ -1,6 +1,7 @@
 'use client';
 
 import { Check, ChevronDown, Loader2 } from 'lucide-react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -119,8 +120,14 @@ export function OrgSwitcher({ orgs, activeId }: OrgSwitcherProps) {
               <span className="inline-block h-3.5 w-3.5" />
             )}
             {o.logoUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={o.logoUrl} alt="" className="h-4 w-4 shrink-0 rounded-[3px] object-cover" />
+              <Image
+                src={o.logoUrl}
+                alt=""
+                width={32}
+                height={32}
+                sizes="16px"
+                className="h-4 w-4 shrink-0 rounded-[3px] object-cover"
+              />
             ) : (
               <span className="bg-muted inline-block h-4 w-4 shrink-0 rounded-[3px]" />
             )}

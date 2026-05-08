@@ -141,7 +141,7 @@ async function resolvePublicImageUrl(
   if (imgRow?.storage_path) {
     const { data: signed } = await admin.storage
       .from('item-images')
-      .createSignedUrl(imgRow.storage_path, 60 * 60);
+      .createSignedUrl(imgRow.storage_path, 7 * 24 * 60 * 60); // 7 days
     if (signed?.signedUrl) return signed.signedUrl;
   }
 

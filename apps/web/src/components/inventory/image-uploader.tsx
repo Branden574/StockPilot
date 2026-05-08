@@ -1,6 +1,7 @@
 'use client';
 
 import { ImagePlus, Loader2, Maximize2, Trash2, Upload } from 'lucide-react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -123,11 +124,12 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
                 className="absolute inset-0 cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 aria-label="Open image full screen"
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
+                <Image
                   src={img.url}
                   alt=""
-                  className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                  fill
+                  sizes="(max-width: 640px) 33vw, (max-width: 1024px) 25vw, 200px"
+                  className="object-cover transition-transform duration-200 group-hover:scale-[1.02]"
                 />
                 <span
                   aria-hidden

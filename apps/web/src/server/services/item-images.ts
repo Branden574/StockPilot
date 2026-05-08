@@ -24,7 +24,7 @@ export class ItemImagesService {
     if (paths.length === 0) return new Map();
     const { data, error } = await this.ctx.supabase.storage
       .from('item-images')
-      .createSignedUrls(paths, 60 * 60); // 1 hour
+      .createSignedUrls(paths, 7 * 24 * 60 * 60); // 7 days — keeps browser + Vercel image cache warm
     if (error) throw new ServiceError('internal_error', error.message);
     const map = new Map<string, string>();
     for (const entry of data ?? []) {

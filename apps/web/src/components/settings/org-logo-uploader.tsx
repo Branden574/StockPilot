@@ -1,6 +1,7 @@
 'use client';
 
 import { Building2, Loader2, Trash2, Upload } from 'lucide-react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -88,8 +89,7 @@ export function OrgLogoUploader({
     <div className="flex items-center gap-4">
       <div className="border-border bg-muted relative grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-md border">
         {url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={url} alt="Logo" className="h-full w-full object-contain" />
+          <Image src={url} alt="Logo" fill sizes="64px" className="object-contain" />
         ) : (
           <Building2 className="text-muted-foreground h-6 w-6" />
         )}

@@ -1,6 +1,7 @@
 'use client';
 
 import { Loader2, Trash2, Upload } from 'lucide-react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -99,8 +100,7 @@ export function AvatarUploader({
     <div className="flex items-center gap-4">
       <div className="border-border bg-muted relative grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-full border">
         {url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={url} alt="Avatar" className="h-full w-full object-cover" />
+          <Image src={url} alt="Avatar" fill sizes="64px" className="object-cover" />
         ) : (
           <span className="text-lg font-semibold">{initials}</span>
         )}
