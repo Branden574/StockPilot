@@ -3,8 +3,10 @@ import {
   ArrowLeftRight,
   BarChart3,
   ChevronRight,
+  Clock,
   DollarSign,
   MinusCircle,
+  TrendingUp,
   Truck,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -48,6 +50,18 @@ const REPORTS: Report[] = [
     name: 'Supplier scorecard',
     desc: 'On-time rate · lead time · fill rate · spend · last 90 days',
     icon: Truck,
+  },
+  {
+    slug: 'velocity-class',
+    name: 'Velocity classes (ABC)',
+    desc: 'Items ranked A→D by dollars-out — focus stocking + spot dead stock',
+    icon: TrendingUp,
+  },
+  {
+    slug: 'dead-stock',
+    name: 'Dead stock',
+    desc: 'On-hand items with no out-movement, ranked by carrying value',
+    icon: Clock,
   },
 ];
 
