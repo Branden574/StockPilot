@@ -14,6 +14,40 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
 const PAGE_SIZE = 50;
 
+type SortParam =
+  | 'updated_desc'
+  | 'updated_asc'
+  | 'name_asc'
+  | 'name_desc'
+  | 'sku_asc'
+  | 'sku_desc'
+  | 'qty_desc'
+  | 'qty_asc'
+  | 'created_desc'
+  | 'created_asc';
+
+const VALID_SORTS = new Set<SortParam>([
+  'updated_desc',
+  'updated_asc',
+  'name_asc',
+  'name_desc',
+  'sku_asc',
+  'sku_desc',
+  'qty_desc',
+  'qty_asc',
+  'created_desc',
+  'created_asc',
+]);
+
+function parseSort(value: string | undefined): SortParam {
+  return value && VALID_SORTS.has(value as SortParam) ? (value as SortParam) : 'updated_desc';
+}
+
+function parseIdList(value: string | string[] | undefined): string[] {
+  if (!value) return [];
+  return Array.isArray(value) ? value.filter(Boolean) : [value];
+}
+
 export default async function BooksPage({
   searchParams,
 }: {
@@ -22,6 +56,9 @@ export default async function BooksPage({
     status?: string;
     stock?: string;
     page?: string;
+    sort?: string;
+    cat?: string | string[];
+    loc?: string | string[];
   }>;
 }) {
   const params = await searchParams;
@@ -43,6 +80,10 @@ export default async function BooksPage({
       ? params.status
       : 'active';
 
+  const sort = parseSort(params.sort);
+  const categoryIds = parseIdList(params.cat);
+  const locationIds = parseIdList(params.loc);
+
   const [inventory, categories, locations, suppliers] = await Promise.all([
     inventorySvc.list({
       q: params.q,
@@ -51,6 +92,9 @@ export default async function BooksPage({
       outOfStock: params.stock === 'out',
       warehouseId: warehouseFilter,
       itemType: 'book',
+      categoryIds,
+      locationIds,
+      sort,
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
     }),
@@ -152,6 +196,10 @@ export default async function BooksPage({
             categories={categories.map((c) => ({
               id: c.id as string,
               name: c.name as string,
+            }))}
+            locations={locations.map((l) => ({
+              id: l.id as string,
+              name: l.name as string,
             }))}
             suppliers={suppliers.map((s) => ({
               id: s.id as string,
