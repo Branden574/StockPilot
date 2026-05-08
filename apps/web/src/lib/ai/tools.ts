@@ -7,6 +7,10 @@ import { env } from '@/lib/env';
 import type { ServiceContext } from '@/server/services/context';
 import { BooksImportService } from '@/server/services/books-import';
 import { CategoriesService } from '@/server/services/categories';
+import {
+  getItemVelocity,
+  suggestReorderPoint as suggestReorderPointLib,
+} from '@/server/services/forecasting';
 import { InventoryService } from '@/server/services/inventory';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import {
@@ -739,6 +743,83 @@ const draftPosTool: ToolExecutor = {
   },
 };
 
+const predictRunoutTool: ToolExecutor = {
+  declaration: {
+    name: 'predictRunout',
+    description:
+      "READ-ONLY — predicts when an item will run out at its current outbound velocity. Use for 'when will X run out?' / 'how many days of stock left for Y?' / 'at this rate how long will the Mango Street books last?' Returns the item's units-out-per-day, days of stock remaining, and a projected runout date. Works on any item with at least one outbound stock movement in the last 90 days; items with zero out-movement return null for runout (they're not moving). Resolve item names via searchInventory first if you only have a name.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        itemId: {
+          type: SchemaType.STRING,
+          description: 'UUID of the inventory item.',
+        },
+        windowDays: {
+          type: SchemaType.NUMBER,
+          description:
+            'Lookback window for the velocity calc, in days (7-365). Default 90. Shorter windows react faster to recent demand changes; longer windows smooth out spikes.',
+        },
+      },
+      required: ['itemId'],
+    },
+  },
+  async execute(args, ctx) {
+    const itemId = String(args.itemId ?? '');
+    if (!itemId) throw new Error('itemId is required');
+    const windowDays = Math.min(
+      365,
+      Math.max(7, Number(args.windowDays) || 90),
+    );
+    return getItemVelocity(ctx.supabase, ctx.organizationId, itemId, windowDays);
+  },
+};
+
+const suggestReorderPointTool: ToolExecutor = {
+  declaration: {
+    name: 'suggestReorderPoint',
+    description:
+      "READ-ONLY — recommends a reorder_point and reorder_quantity for an item based on its actual outbound velocity, lead time, and a safety buffer. Use when the user asks 'what should the reorder point be for X?' or 'is my reorder point too high/low?' Returns suggested values, current values for comparison, and a plain-English rationale. Does NOT apply the change; if the user wants to apply, separately call adjustStock or use the inventory edit form. Items with no outbound movement get a zero suggestion (the model should explain why).",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        itemId: {
+          type: SchemaType.STRING,
+          description: 'UUID of the inventory item.',
+        },
+        leadTimeDays: {
+          type: SchemaType.NUMBER,
+          description:
+            'Days between placing a PO and receiving stock. Default 14. If the user mentions a specific supplier with known lead time, pass it explicitly.',
+        },
+        safetyMultiplier: {
+          type: SchemaType.NUMBER,
+          description:
+            "Buffer multiplier above lead-time demand. Default 1.5 (50% safety stock). Use 1.2 for stable/predictable demand, 2.0+ for spiky or critical-stock items.",
+        },
+        windowDays: {
+          type: SchemaType.NUMBER,
+          description:
+            'Lookback window for velocity (days). Default 90.',
+        },
+      },
+      required: ['itemId'],
+    },
+  },
+  async execute(args, ctx) {
+    const itemId = String(args.itemId ?? '');
+    if (!itemId) throw new Error('itemId is required');
+    return suggestReorderPointLib(ctx.supabase, ctx.organizationId, itemId, {
+      leadTimeDays:
+        typeof args.leadTimeDays === 'number' ? args.leadTimeDays : undefined,
+      safetyMultiplier:
+        typeof args.safetyMultiplier === 'number' ? args.safetyMultiplier : undefined,
+      windowDays:
+        typeof args.windowDays === 'number' ? args.windowDays : undefined,
+    });
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
   listCategories: listCategoriesTool,
@@ -754,6 +835,8 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   executeBulkBookImport: executeBulkBookImportTool,
   exportInventory: exportInventoryTool,
   draftPos: draftPosTool,
+  predictRunout: predictRunoutTool,
+  suggestReorderPoint: suggestReorderPointTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {
