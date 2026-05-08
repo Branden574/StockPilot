@@ -48,7 +48,8 @@ export type AuditEvent =
   | 'serial.duplicate_rejected'
   | 'cycle_count.started'
   | 'cycle_count.canceled'
-  | 'cycle_count.posted';
+  | 'cycle_count.posted'
+  | 'cycle_count.assigned';
 
 interface AuditPayload {
   event: AuditEvent;

@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2, Search, X } from 'lucide-react';
+import { Loader2, Search, UserCircle2, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -16,6 +16,13 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Table,
   TableBody,
   TableCell,
@@ -25,6 +32,7 @@ import {
 } from '@/components/ui/table';
 import { formatNumber } from '@/lib/utils';
 import {
+  assignCycleCountAction,
   cancelCycleCountAction,
   clearCycleCountLineAction,
   postCycleCountAction,
@@ -36,12 +44,33 @@ import type {
   CycleCountRow,
 } from '@/server/services/cycle-counts';
 
+interface Member {
+  id: string;
+  name: string;
+  email: string;
+}
+
 interface Props {
   header: CycleCountRow;
   lines: CycleCountLineWithItem[];
+  /** Whether the current user has cycle_counts:assign (manager / admin /
+      owner). When false, the AssigneePicker renders read-only. */
+  canAssign?: boolean;
+  /** Org members eligible for assignment. Only populated when
+      `canAssign` is true. */
+  members?: Member[];
+  /** Display name of the current assignee, resolved server-side so the
+      read-only badge has a name to show. */
+  assigneeName?: string | null;
 }
 
-export function CycleCountDetail({ header, lines }: Props) {
+export function CycleCountDetail({
+  header,
+  lines,
+  canAssign = false,
+  members = [],
+  assigneeName = null,
+}: Props) {
   const router = useRouter();
   const [search, setSearch] = React.useState('');
   const [busyLine, setBusyLine] = React.useState<string | null>(null);
@@ -163,6 +192,14 @@ export function CycleCountDetail({ header, lines }: Props) {
           </div>
         )}
       </div>
+
+      <AssigneePicker
+        cycleCountId={header.id}
+        currentAssignedTo={header.assigned_to}
+        currentAssigneeName={assigneeName}
+        canAssign={canAssign && open}
+        members={members}
+      />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Items in scope" value={formatNumber(lines.length)} />
@@ -441,4 +478,87 @@ function StatusBadge({ status }: { status: string }) {
   if (status === 'completed') return <Badge variant="success">Completed</Badge>;
   if (status === 'canceled') return <Badge variant="destructive">Canceled</Badge>;
   return <Badge variant="outline">{status}</Badge>;
+}
+
+const UNASSIGNED = '__unassigned__';
+
+/**
+ * Assignment row for the cycle count. Manager+ get a Select dropdown to
+ * pick a member (or unassign); staff/viewers see a read-only badge with
+ * the current assignee's name.
+ */
+function AssigneePicker({
+  cycleCountId,
+  currentAssignedTo,
+  currentAssigneeName,
+  canAssign,
+  members,
+}: {
+  cycleCountId: string;
+  currentAssignedTo: string | null;
+  currentAssigneeName: string | null;
+  canAssign: boolean;
+  members: Member[];
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = React.useState(false);
+
+  async function setAssignee(next: string) {
+    const nextId = next === UNASSIGNED ? null : next;
+    if (nextId === currentAssignedTo) return;
+    setBusy(true);
+    const res = await assignCycleCountAction({
+      id: cycleCountId,
+      assignedTo: nextId,
+      // Optimistic-concurrency: the page rendered with the current
+      // assignee, so pass it as expected. If a teammate changed it
+      // between page load and our click, we'll get a clean error.
+      expectedAssignee: currentAssignedTo,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success(
+      nextId ? 'Assigned' : 'Unassigned',
+    );
+    router.refresh();
+  }
+
+  // Read-only display for staff/viewers, or when the count is closed.
+  if (!canAssign) {
+    return (
+      <div className="border-border bg-card flex items-center gap-2 rounded-md border px-3 py-2 text-[12.5px]">
+        <UserCircle2 className="text-muted-foreground h-4 w-4" />
+        <span className="text-muted-foreground">Assigned to:</span>
+        <span className="font-medium">{currentAssigneeName ?? 'Unassigned'}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-border bg-card flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-[12.5px]">
+      <UserCircle2 className="text-muted-foreground h-4 w-4" />
+      <span className="text-muted-foreground">Assigned to:</span>
+      <Select
+        value={currentAssignedTo ?? UNASSIGNED}
+        onValueChange={setAssignee}
+        disabled={busy}
+      >
+        <SelectTrigger className="h-8 min-w-[200px] text-[12.5px]">
+          <SelectValue placeholder="Pick a member" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={UNASSIGNED}>Unassigned</SelectItem>
+          {members.map((m) => (
+            <SelectItem key={m.id} value={m.id}>
+              {m.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {busy && <Loader2 className="text-muted-foreground h-3 w-3 animate-spin" />}
+    </div>
+  );
 }

@@ -31,6 +31,10 @@ export const PERMISSIONS = [
   'activity_logs:read',
   'settings:read',
   'settings:manage',
+  // Cycle counts: most actions (start, record, post) gate on stock:adjust
+  // because they emit stock_movements. ASSIGN is a manager+-only call so
+  // a staff/viewer can't reroute work to someone else.
+  'cycle_counts:assign',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -64,6 +68,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'reports:export',
     'activity_logs:read',
     'settings:read',
+    'cycle_counts:assign',
   ],
   staff: [
     'organization:read',

@@ -109,3 +109,42 @@ export async function postCycleCountAction(id: string): Promise<ActionResult<voi
     return toResult(e);
   }
 }
+
+const assignSchema = z.object({
+  id: z.string().uuid(),
+  assignedTo: z.string().uuid().nullable(),
+  expectedAssignee: z.string().uuid().nullable().optional(),
+});
+
+/**
+ * Manager+ only — set or clear the assignee on a cycle count. Server-side
+ * permission gate is the new 'cycle_counts:assign' permission; staff /
+ * viewers will see "Permission denied" come back through ServiceError.
+ *
+ * `expectedAssignee` is an optional optimistic-concurrency guard — pass
+ * what the client thinks the current assignee is. If a teammate changed
+ * it in the meantime, the action returns a validation_error instead of
+ * silently overwriting their pick. Pass undefined to skip the check.
+ */
+export async function assignCycleCountAction(input: {
+  id: string;
+  assignedTo: string | null;
+  expectedAssignee?: string | null;
+}): Promise<ActionResult<{ id: string; assignedTo: string | null }>> {
+  const parsed = assignSchema.safeParse(input);
+  if (!parsed.success)
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  try {
+    const svc = await CycleCountsService.forCurrentUser();
+    const row = await svc.assign(
+      parsed.data.id,
+      parsed.data.assignedTo,
+      parsed.data.expectedAssignee,
+    );
+    revalidatePath('/dashboard/cycle-counts');
+    revalidatePath(`/dashboard/cycle-counts/${parsed.data.id}`);
+    return ok({ id: row.id, assignedTo: row.assigned_to });
+  } catch (e) {
+    return toResult(e);
+  }
+}

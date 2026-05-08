@@ -2,10 +2,14 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { CycleCountDetail } from '@/components/cycle-counts/cycle-count-detail';
+import { requireOrgContext } from '@/lib/auth/session';
+import { createClient } from '@/lib/supabase/server';
 import { ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatRelative } from '@/lib/utils';
+
+import { hasPermission } from '@stockpilot/core';
 
 export default async function CycleCountDetailPage({
   params,
@@ -13,9 +17,11 @@ export default async function CycleCountDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [ccSvc, warehousesSvc] = await Promise.all([
+  const [ccSvc, warehousesSvc, ctx, supabase] = await Promise.all([
     CycleCountsService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
+    requireOrgContext(),
+    createClient(),
   ]);
 
   let header, lines;
@@ -30,6 +36,58 @@ export default async function CycleCountDetailPage({
   const warehouseName = header.warehouse_id
     ? (warehouses.find((w) => w.id === header.warehouse_id)?.name ?? null)
     : null;
+
+  // Manager+ can change the assignee — staff / viewers see it read-only.
+  const canAssign = hasPermission(ctx.role, 'cycle_counts:assign');
+
+  // Member list for the assignee picker. Only fetched when the current
+  // user can actually assign (saves a round trip for staff/viewers).
+  let members: Array<{ id: string; name: string; email: string }> = [];
+  if (canAssign) {
+    const { data: rawMembers } = await supabase
+      .from('organization_members')
+      .select(
+        'user_id, user:user_profiles!user_id (id, full_name, email)',
+      )
+      .eq('organization_id', ctx.organizationId)
+      .not('accepted_at', 'is', null);
+    type MemberRow = {
+      user_id: string;
+      user:
+        | { id: string; full_name: string | null; email: string }
+        | { id: string; full_name: string | null; email: string }[]
+        | null;
+    };
+    members = ((rawMembers ?? []) as MemberRow[])
+      .map((row) => {
+        const u = Array.isArray(row.user) ? row.user[0] : row.user;
+        if (!u) return null;
+        return {
+          id: u.id,
+          name: u.full_name ?? u.email,
+          email: u.email,
+        };
+      })
+      .filter((m): m is { id: string; name: string; email: string } => Boolean(m))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // Resolve the current assignee's display name for the read-only badge
+  // shown to non-managers, since they don't get the member list.
+  let assigneeName: string | null = null;
+  if (header.assigned_to) {
+    if (canAssign) {
+      assigneeName = members.find((m) => m.id === header.assigned_to)?.name ?? null;
+    } else {
+      const { data: assignee } = await supabase
+        .from('user_profiles')
+        .select('full_name, email')
+        .eq('id', header.assigned_to)
+        .maybeSingle();
+      const a = assignee as { full_name: string | null; email: string } | null;
+      assigneeName = a?.full_name ?? a?.email ?? null;
+    }
+  }
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -49,7 +107,13 @@ export default async function CycleCountDetailPage({
         </p>
       </div>
 
-      <CycleCountDetail header={header} lines={lines} />
+      <CycleCountDetail
+        header={header}
+        lines={lines}
+        canAssign={canAssign}
+        members={members}
+        assigneeName={assigneeName}
+      />
     </div>
   );
 }
