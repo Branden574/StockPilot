@@ -171,13 +171,34 @@ export default async function DashboardHome() {
   // Compute delta + direction for a tile by comparing today (index 29) to
   // 30 days ago (index 0). Returns a percentage label for value-y series
   // (currency, big counts) and a raw delta label for low/out.
+  //
+  // When `head` is at or near zero (fresh org just loading inventory, or
+  // floating-point dust from the reverse-walk math), the percentage
+  // explodes to astronomical garbage. Treat that as "new" instead of
+  // dividing into a tiny denominator. The 1.0 threshold absorbs the
+  // common case of a near-zero starting value while still treating
+  // "1 unit → 100 units" as a real +9900% growth signal.
+  const NEAR_ZERO = 1.0;
+  // Cap the displayed percentage so even legitimate huge growths render
+  // as a readable token instead of a 17-digit number.
+  const MAX_DISPLAY_PCT = 999;
   const deltaPct = (series: number[]): { label: string; direction: 'up' | 'down' | 'flat' } => {
     const head = series[0] ?? 0;
     const tail = series.at(-1) ?? 0;
-    if (head === 0 && tail === 0) return { label: '—', direction: 'flat' };
-    if (head === 0) return { label: 'new', direction: 'up' };
+    if (Math.abs(head) < NEAR_ZERO && Math.abs(tail) < NEAR_ZERO) {
+      return { label: '—', direction: 'flat' };
+    }
+    if (Math.abs(head) < NEAR_ZERO) {
+      return { label: 'new', direction: 'up' };
+    }
     const pct = ((tail - head) / head) * 100;
     if (Math.abs(pct) < 0.05) return { label: '—', direction: 'flat' };
+    if (Math.abs(pct) > MAX_DISPLAY_PCT) {
+      return {
+        label: `${pct > 0 ? '+' : '−'}${MAX_DISPLAY_PCT}%+`,
+        direction: pct > 0 ? 'up' : 'down',
+      };
+    }
     const rounded = pct.toFixed(1);
     return {
       label: `${pct > 0 ? '+' : ''}${rounded}%`,
