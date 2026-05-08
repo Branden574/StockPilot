@@ -67,6 +67,29 @@ export function isDigestEmpty(p: DigestPayload): boolean {
   return p.lowStock.length === 0 && p.openPos.length === 0 && p.openCycleCounts.length === 0;
 }
 
+export interface DigestSectionOptIns {
+  lowStock: boolean;
+  openPos: boolean;
+  cycleCounts: boolean;
+}
+
+/**
+ * Returns a copy of the payload with disabled sections zeroed out, so the
+ * email template skips them. Cheaper than re-fetching with section-aware
+ * queries — fetch is O(items+POs+CCs) and each section's filter is just
+ * an array length 0 vs N.
+ */
+export function applySectionOptIns(
+  payload: DigestPayload,
+  optIns: DigestSectionOptIns,
+): DigestPayload {
+  return {
+    lowStock: optIns.lowStock ? payload.lowStock : [],
+    openPos: optIns.openPos ? payload.openPos : [],
+    openCycleCounts: optIns.cycleCounts ? payload.openCycleCounts : [],
+  };
+}
+
 async function getLowStock(
   supabase: SupabaseClient,
   orgId: string,

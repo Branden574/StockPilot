@@ -9,7 +9,11 @@ import {
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { getDigestData, isDigestEmpty } from '@/server/services/digest';
+import {
+  applySectionOptIns,
+  getDigestData,
+  isDigestEmpty,
+} from '@/server/services/digest';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,13 +46,18 @@ export async function GET(req: Request) {
   try {
     const admin = createAdminClient();
 
-    // Pull every opted-in user along with their org membership + name. One
-    // query — joins user_profiles → organization_members → organizations.
+    // Pull every opted-in user along with their org membership + per-
+    // section flags. One query — joins user_profiles → organization_members
+    // → organizations. Per-section flags are filtered AT RENDER TIME so
+    // each user's digest reflects only the sections they're subscribed to.
     const { data: recipients, error } = await admin
       .from('user_profiles')
       .select(
         `
         id, email,
+        digest_section_low_stock,
+        digest_section_open_pos,
+        digest_section_cycle_counts,
         organization_members!inner (
           organization_id,
           accepted_at,
@@ -63,6 +72,9 @@ export async function GET(req: Request) {
     type RecipientRow = {
       id: string;
       email: string;
+      digest_section_low_stock: boolean | null;
+      digest_section_open_pos: boolean | null;
+      digest_section_cycle_counts: boolean | null;
       organization_members: Array<{
         organization_id: string;
         accepted_at: string | null;
@@ -73,10 +85,25 @@ export async function GET(req: Request) {
       }>;
     };
 
+    interface RecipientLite {
+      email: string;
+      sections: { lowStock: boolean; openPos: boolean; cycleCounts: boolean };
+    }
+
     // Fan recipients out by org so each org's payload is computed once
     // even if multiple users in the same org are opted in.
-    const byOrg = new Map<string, { orgName: string; emails: string[] }>();
+    const byOrg = new Map<string, { orgName: string; recipients: RecipientLite[] }>();
     for (const row of (recipients ?? []) as RecipientRow[]) {
+      const sections = {
+        lowStock: row.digest_section_low_stock ?? true,
+        openPos: row.digest_section_open_pos ?? true,
+        cycleCounts: row.digest_section_cycle_counts ?? true,
+      };
+      // If every section is opted out, skip this user — they'd receive nothing.
+      if (!sections.lowStock && !sections.openPos && !sections.cycleCounts) {
+        skipped += 1;
+        continue;
+      }
       for (const m of row.organization_members ?? []) {
         if (!m.accepted_at) continue;
         const orgRow = Array.isArray(m.organizations)
@@ -85,9 +112,11 @@ export async function GET(req: Request) {
         if (!orgRow) continue;
         const existing = byOrg.get(orgRow.id) ?? {
           orgName: orgRow.name,
-          emails: [],
+          recipients: [],
         };
-        if (!existing.emails.includes(row.email)) existing.emails.push(row.email);
+        if (!existing.recipients.some((r) => r.email === row.email)) {
+          existing.recipients.push({ email: row.email, sections });
+        }
         byOrg.set(orgRow.id, existing);
       }
     }
@@ -98,16 +127,18 @@ export async function GET(req: Request) {
 
     for (const [orgId, group] of byOrg) {
       try {
-        const payload = await getDigestData(admin, orgId);
-        if (isDigestEmpty(payload)) {
-          // No "all clear" emails — empty digest = no send.
-          skipped += group.emails.length;
-          continue;
-        }
+        const fullPayload = await getDigestData(admin, orgId);
         const opts = { orgName: group.orgName, appUrl, settingsUrl };
-        const html = weeklyDigestHtml(payload, opts);
-        const text = weeklyDigestText(payload, opts);
-        for (const to of group.emails) {
+        for (const { email: to, sections } of group.recipients) {
+          // Each recipient sees only their opted-in sections; one or two
+          // could be all-empty even when the org's full payload isn't.
+          const payload = applySectionOptIns(fullPayload, sections);
+          if (isDigestEmpty(payload)) {
+            skipped += 1;
+            continue;
+          }
+          const html = weeklyDigestHtml(payload, opts);
+          const text = weeklyDigestText(payload, opts);
           const res = await sendEmail({ to, subject, html, text });
           if (res.ok) sent += 1;
           else {
@@ -120,7 +151,7 @@ export async function GET(req: Request) {
         }
       } catch (orgErr) {
         // One bad org shouldn't kill the whole run.
-        failed += group.emails.length;
+        failed += group.recipients.length;
         void reportError(orgErr, {
           tag: 'cron.weekly-digest.org',
           extra: { orgId },
