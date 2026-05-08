@@ -11,6 +11,7 @@ import {
   getItemVelocity,
   suggestReorderPoint as suggestReorderPointLib,
 } from '@/server/services/forecasting';
+import { BundlesService } from '@/server/services/bundles';
 import { InventoryService } from '@/server/services/inventory';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import {
@@ -939,6 +940,76 @@ ${hint ? `\nUser hint: ${hint}` : ''}`;
   },
 };
 
+const listBundlesTool: ToolExecutor = {
+  declaration: {
+    name: 'listBundles',
+    description:
+      "READ-ONLY — list this org's bundle templates (kits made of multiple items). Use when the user asks 'what bundles do we have?' / 'show me our reading kits' / 'do we have a school visit bundle?' Returns id, name, sku, component count, pre-assembled qty (if pre-assembly is enabled), active flag. Resolve a bundle UUID with this BEFORE calling previewBundleDistribution.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        search: {
+          type: SchemaType.STRING,
+          description: 'Optional name/SKU substring filter.',
+        },
+        includeInactive: {
+          type: SchemaType.BOOLEAN,
+          description: 'If true, include archived/inactive bundles. Default false.',
+        },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const svc = new BundlesService(ctx);
+    const search = typeof args.search === 'string' ? args.search : undefined;
+    const includeInactive = args.includeInactive === true;
+    const rows = await svc.list({ search, includeInactive });
+    return rows.map((b) => ({
+      id: b.id,
+      name: b.name,
+      sku: b.sku,
+      componentCount: b.componentCount,
+      preassemblyEnabled: b.preassemblyEnabled,
+      preassembledQty: b.preassembledQty,
+      isActive: b.isActive,
+      lastDistributedAt: b.lastDistributedAt,
+    }));
+  },
+};
+
+const previewBundleDistributionTool: ToolExecutor = {
+  declaration: {
+    name: 'previewBundleDistribution',
+    description:
+      "READ-ONLY — dry-run a bundle distribution. Tells you what stock would be drawn if you distributed N kits at a given warehouse, and whether any components would short. Use for 'if I give out 20 reading kits today, what would I draw?' / 'do we have enough stock for 50 school visit packs?'. Resolve bundle/warehouse UUIDs via listBundles + listWarehouses first. There is NO execute tool for distributions — direct the user to /dashboard/bundles/<id> to confirm and ship.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        bundleId: { type: SchemaType.STRING, description: 'UUID of the bundle.' },
+        quantity: {
+          type: SchemaType.NUMBER,
+          description: 'Number of kits to distribute (positive integer).',
+        },
+        warehouseId: {
+          type: SchemaType.STRING,
+          description: 'UUID of the source warehouse.',
+        },
+      },
+      required: ['bundleId', 'quantity', 'warehouseId'],
+    },
+  },
+  async execute(args, ctx) {
+    const svc = new BundlesService(ctx);
+    const bundleId = String(args.bundleId ?? '');
+    const quantity = Number(args.quantity ?? 0);
+    const warehouseId = String(args.warehouseId ?? '');
+    if (!bundleId || !warehouseId) throw new Error('bundleId and warehouseId are required');
+    if (!Number.isFinite(quantity) || quantity <= 0)
+      throw new Error('quantity must be positive');
+    return svc.preview(bundleId, quantity, warehouseId);
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
   listCategories: listCategoriesTool,
@@ -957,6 +1028,8 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   predictRunout: predictRunoutTool,
   suggestReorderPoint: suggestReorderPointTool,
   identifyFromPhoto: identifyFromPhotoTool,
+  listBundles: listBundlesTool,
+  previewBundleDistribution: previewBundleDistributionTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {

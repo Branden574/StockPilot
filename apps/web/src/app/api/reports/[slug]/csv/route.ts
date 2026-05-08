@@ -210,6 +210,48 @@ export async function GET(
       return csvResponse(slug, csv, `${days}d`);
     }
 
+    if (slug === 'bundle-activity') {
+      const days = parseDays(url.searchParams.get('days'));
+      const data = await svc.bundleActivity(days);
+      const csv = toCsv(
+        [
+          'Bundle',
+          'SKU',
+          'Runs',
+          'Kits out',
+          'Component value out',
+          'Top warehouse',
+          'Last run',
+        ],
+        data.rows.map((r) => ({
+          Bundle: r.bundleName,
+          SKU: r.bundleSku ?? '',
+          Runs: r.runs,
+          'Kits out': r.kitsOut,
+          'Component value out': r.componentValueOut.toFixed(2),
+          'Top warehouse': r.topWarehouseName ?? '',
+          'Last run': r.lastRunAt ?? '',
+        })),
+      );
+      return csvResponse(slug, csv, `${days}d`);
+    }
+
+    if (slug === 'bundle-shortages') {
+      const days = parseDays(url.searchParams.get('days'));
+      const data = await svc.bundleShortages(days);
+      const csv = toCsv(
+        ['SKU', 'Item', 'Shortage events', 'Units short', 'Last short at'],
+        data.rows.map((r) => ({
+          SKU: r.itemSku,
+          Item: r.itemName,
+          'Shortage events': r.events,
+          'Units short': r.unitsShort,
+          'Last short at': r.lastShortAt ?? '',
+        })),
+      );
+      return csvResponse(slug, csv, `${days}d`);
+    }
+
     if (slug === 'shrinkage') {
       const days = parseDays(url.searchParams.get('days'));
       const data = await svc.shrinkage(days);

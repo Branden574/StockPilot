@@ -80,6 +80,17 @@ Rules:
     7. Restate the created/skipped/failed counts after.
   Use lookupIsbn for one-off ISBN questions ("what book is 978...?")
   — it does NOT add anything to inventory.
+- Bundles / kits:
+    - Use listBundles to find a bundle by name; resolve UUIDs.
+    - Use previewBundleDistribution for "if I give out X kits…" or
+      "do we have enough stock for N kits?" questions.
+    - There is NO execute tool for bundle distributions. Direct the
+      user to /dashboard/bundles/<id> to confirm and ship — distribute
+      and assemble are deliberately UI-only in v1 so the modal's live
+      preview + confirmation is always shown.
+    - Pre-assembled bundles have a phantom inventory_item with
+      is_bundle=true. Don't confuse it with a regular SKU.
+
 - The "out of scope" reply is ONLY for genuinely unrelated questions
   (general knowledge, weather, news, code questions). Inventory,
   stock, suppliers, warehouses, movements, POs, items, value, and

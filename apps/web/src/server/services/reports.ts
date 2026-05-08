@@ -655,7 +655,8 @@ export class ReportsService {
         )
         .eq('organization_id', this.ctx.organizationId)
         .is('deleted_at', null)
-        .eq('status', 'active'),
+        .eq('status', 'active')
+        .or('is_bundle.is.null,is_bundle.eq.false'),
     ]);
     if (movementsRes.error)
       throw new ServiceError('internal_error', movementsRes.error.message);
@@ -764,7 +765,8 @@ export class ReportsService {
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
       .eq('status', 'active')
-      .gt('quantity_on_hand', 0);
+      .gt('quantity_on_hand', 0)
+      .or('is_bundle.is.null,is_bundle.eq.false');
     if (itemsErr) throw new ServiceError('internal_error', itemsErr.message);
 
     type ItemRow = {
@@ -837,4 +839,253 @@ export class ReportsService {
       itemCount: rows.length,
     };
   }
+
+  /**
+   * Bundle activity report — distributions over a date range, grouped
+   * by bundle. Highlights what kits are actually moving and at what
+   * cost (from the component side of the ledger).
+   */
+  async bundleActivity(days = 90): Promise<BundleActivityReport> {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: dists, error: distErr } = await this.ctx.supabase
+      .from('bundle_distributions')
+      .select(
+        `id, bundle_id, warehouse_id, quantity, distributed_at,
+         shortage_recorded,
+         bundle:bundles!bundle_id (name, sku),
+         warehouse:warehouses!warehouse_id (name)`,
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .gte('distributed_at', since)
+      .order('distributed_at', { ascending: false });
+    if (distErr) throw new ServiceError('internal_error', distErr.message);
+
+    type DistRow = {
+      id: string;
+      bundle_id: string;
+      warehouse_id: string;
+      quantity: number;
+      distributed_at: string;
+      shortage_recorded: boolean;
+      bundle: { name: string; sku: string | null } | { name: string; sku: string | null }[] | null;
+      warehouse: { name: string } | { name: string }[] | null;
+    };
+
+    const distList = (dists ?? []) as DistRow[];
+    const distIds = distList.map((d) => d.id);
+
+    // Pull every component-draw movement linked to these distributions
+    // so we can show the cost side of the ledger.
+    const valueByDist = new Map<string, number>();
+    if (distIds.length > 0) {
+      const { data: moves } = await this.ctx.supabase
+        .from('stock_movements')
+        .select(
+          `reference_id, quantity_change, item_id,
+           item:inventory_items!item_id (unit_cost)`,
+        )
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('reference_type', 'bundle')
+        .eq('movement_type', 'bundle_distribution')
+        .gte('created_at', since)
+        .lt('quantity_change', 0);
+      type MoveRow = {
+        reference_id: string;
+        quantity_change: number;
+        item_id: string;
+        item: { unit_cost: number } | { unit_cost: number }[] | null;
+      };
+      for (const m of (moves ?? []) as MoveRow[]) {
+        const itemField = Array.isArray(m.item) ? m.item[0] : m.item;
+        const cost = Number(itemField?.unit_cost ?? 0);
+        const value = Math.abs(Number(m.quantity_change) || 0) * cost;
+        // Reference IDs on bundle_distribution movements are the bundle id,
+        // not the distribution id. We aggregate by bundle below instead.
+        // (Kept for completeness; bundle aggregation is the canonical view.)
+        valueByDist.set(
+          m.reference_id,
+          (valueByDist.get(m.reference_id) ?? 0) + value,
+        );
+      }
+    }
+
+    const byBundle = new Map<
+      string,
+      {
+        bundleId: string;
+        bundleName: string;
+        bundleSku: string | null;
+        runs: number;
+        kitsOut: number;
+        componentValueOut: number;
+        warehouseRuns: Map<string, { name: string; runs: number }>;
+        lastRunAt: string | null;
+      }
+    >();
+
+    for (const d of distList) {
+      const bundleField = Array.isArray(d.bundle) ? d.bundle[0] : d.bundle;
+      const whField = Array.isArray(d.warehouse) ? d.warehouse[0] : d.warehouse;
+      const bid = d.bundle_id;
+      const acc = byBundle.get(bid) ?? {
+        bundleId: bid,
+        bundleName: bundleField?.name ?? 'Unknown bundle',
+        bundleSku: bundleField?.sku ?? null,
+        runs: 0,
+        kitsOut: 0,
+        componentValueOut: valueByDist.get(bid) ?? 0,
+        warehouseRuns: new Map<string, { name: string; runs: number }>(),
+        lastRunAt: null as string | null,
+      };
+      acc.runs += 1;
+      acc.kitsOut += Number(d.quantity) || 0;
+      const whAcc = acc.warehouseRuns.get(d.warehouse_id) ?? {
+        name: whField?.name ?? '—',
+        runs: 0,
+      };
+      whAcc.runs += 1;
+      acc.warehouseRuns.set(d.warehouse_id, whAcc);
+      if (!acc.lastRunAt || d.distributed_at > acc.lastRunAt) {
+        acc.lastRunAt = d.distributed_at;
+      }
+      byBundle.set(bid, acc);
+    }
+
+    const rows: BundleActivityRow[] = Array.from(byBundle.values())
+      .map((b) => {
+        let topWh: { name: string; runs: number } | null = null;
+        for (const v of b.warehouseRuns.values()) {
+          if (!topWh || v.runs > topWh.runs) topWh = v;
+        }
+        return {
+          bundleId: b.bundleId,
+          bundleName: b.bundleName,
+          bundleSku: b.bundleSku,
+          runs: b.runs,
+          kitsOut: b.kitsOut,
+          componentValueOut: b.componentValueOut,
+          topWarehouseName: topWh?.name ?? null,
+          lastRunAt: b.lastRunAt,
+        } satisfies BundleActivityRow;
+      })
+      .sort((a, b) => b.kitsOut - a.kitsOut);
+
+    return {
+      rangeDays: days,
+      rows,
+      totalRuns: rows.reduce((s, r) => s + r.runs, 0),
+      totalKits: rows.reduce((s, r) => s + r.kitsOut, 0),
+      totalValueOut: rows.reduce((s, r) => s + r.componentValueOut, 0),
+    };
+  }
+
+  /**
+   * Bundle shortages report — every component that ran short during a
+   * bundle distribution in the window, grouped by item. Surfaces the
+   * "we keep running out of X during distributions" pattern.
+   */
+  async bundleShortages(days = 90): Promise<BundleShortagesReport> {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: moves, error } = await this.ctx.supabase
+      .from('stock_movements')
+      .select(
+        `id, item_id, notes, created_at,
+         item:inventory_items!item_id (id, name, sku)`,
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('movement_type', 'bundle_shortage')
+      .gte('created_at', since)
+      .order('created_at', { ascending: false });
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    type MoveRow = {
+      id: string;
+      item_id: string;
+      notes: string | null;
+      created_at: string;
+      item: { id: string; name: string; sku: string } | { id: string; name: string; sku: string }[] | null;
+    };
+
+    const byItem = new Map<
+      string,
+      {
+        itemId: string;
+        itemName: string;
+        itemSku: string;
+        events: number;
+        unitsShort: number;
+        lastShortAt: string | null;
+      }
+    >();
+
+    for (const m of (moves ?? []) as MoveRow[]) {
+      const itemField = Array.isArray(m.item) ? m.item[0] : m.item;
+      // Notes encode "short N units during bundle distribution" — grab
+      // the leading number for the unitsShort count. Defensive: defaults
+      // to 0 if notes were trimmed/absent.
+      const num = m.notes ? Number(m.notes.match(/short\s+([\d.]+)/i)?.[1] ?? 0) : 0;
+      const acc = byItem.get(m.item_id) ?? {
+        itemId: m.item_id,
+        itemName: itemField?.name ?? 'Unknown item',
+        itemSku: itemField?.sku ?? '',
+        events: 0,
+        unitsShort: 0,
+        lastShortAt: null as string | null,
+      };
+      acc.events += 1;
+      acc.unitsShort += num;
+      if (!acc.lastShortAt || m.created_at > acc.lastShortAt) {
+        acc.lastShortAt = m.created_at;
+      }
+      byItem.set(m.item_id, acc);
+    }
+
+    const rows: BundleShortageRow[] = Array.from(byItem.values()).sort(
+      (a, b) => b.unitsShort - a.unitsShort,
+    );
+
+    return {
+      rangeDays: days,
+      rows,
+      totalEvents: rows.reduce((s, r) => s + r.events, 0),
+      totalUnitsShort: rows.reduce((s, r) => s + r.unitsShort, 0),
+    };
+  }
+}
+
+export interface BundleActivityRow {
+  bundleId: string;
+  bundleName: string;
+  bundleSku: string | null;
+  runs: number;
+  kitsOut: number;
+  componentValueOut: number;
+  topWarehouseName: string | null;
+  lastRunAt: string | null;
+}
+
+export interface BundleActivityReport {
+  rangeDays: number;
+  rows: BundleActivityRow[];
+  totalRuns: number;
+  totalKits: number;
+  totalValueOut: number;
+}
+
+export interface BundleShortageRow {
+  itemId: string;
+  itemName: string;
+  itemSku: string;
+  events: number;
+  unitsShort: number;
+  lastShortAt: string | null;
+}
+
+export interface BundleShortagesReport {
+  rangeDays: number;
+  rows: BundleShortageRow[];
+  totalEvents: number;
+  totalUnitsShort: number;
 }
