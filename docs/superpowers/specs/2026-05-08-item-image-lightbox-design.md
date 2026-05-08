@@ -45,6 +45,7 @@ Make item images viewable full-screen with zoom, navigation, and download, and m
 - `apps/web/src/components/inventory/image-lightbox.tsx`
   - Client component built on the existing `Dialog` primitive (`@radix-ui/react-dialog` is already in `package.json`).
   - Props:
+
     ```ts
     interface ImageLightboxProps {
       images: Array<{ id: string; url: string; isPrimary: boolean }>;
@@ -53,6 +54,7 @@ Make item images viewable full-screen with zoom, navigation, and download, and m
       onDelete: (imageId: string) => Promise<void> | void;
     }
     ```
+
   - Internal state: `currentIndex`, `zoom` (number, 1 / 2 / etc.), `pan` ({ x, y }), `isDragging`.
   - Keyboard handler attached to `document` while open: `ArrowLeft`, `ArrowRight`, `Escape`.
   - Wheel handler on the image container clamps `zoom` between 1 and 4.
@@ -77,6 +79,7 @@ Make item images viewable full-screen with zoom, navigation, and download, and m
 ## Testing
 
 Manual:
+
 - Item detail with 1 / 3 / 5+ images
 - Click each thumbnail → lightbox opens at the right index
 - Arrow keys + ESC navigate
@@ -89,6 +92,7 @@ Automated: not adding lightbox unit tests — UI-only, no logic worth pinning. T
 ## Out-of-scope follow-ups
 
 These are explicitly *not* part of this work but are reasonable next steps:
+
 - Set primary from inside the lightbox
 - Drag-to-reorder the grid
 - Editing image alt text
@@ -98,7 +102,7 @@ These are explicitly *not* part of this work but are reasonable next steps:
 ## Decision log
 
 | Decision | Why |
-|---|---|
+| --- | --- |
 | Build lightbox from scratch on Dialog primitive (no `yet-another-react-lightbox` etc.) | No new dep / lockfile churn; ~150 lines total; matches existing visual language |
 | Keep native `confirm()` for delete | Existing pattern; styled modal needs new dep |
 | Detail page only (not listings or edit form) | Smallest blast radius; explicit user choice |
