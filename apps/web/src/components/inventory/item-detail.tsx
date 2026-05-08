@@ -187,7 +187,9 @@ export async function ItemDetail({ id, backHref, backLabel, editHref }: ItemDeta
                 (typeof cf.isbn10 === 'string' && cf.isbn10) ||
                 '';
               const isbn = isbnRaw.trim();
+              const isBook = item.item_type === 'book';
               const hasAny =
+                isBook ||
                 storage.grade ||
                 storage.rackLabel ||
                 (color && storage.crateNumber) ||
@@ -195,9 +197,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref }: ItemDeta
               if (!hasAny) return null;
               return (
                 <>
-                  {isbn && (
+                  {isBook && (
                     <DetailRow icon={Hash} label="ISBN">
-                      <span className="font-mono tabular-nums">{isbn}</span>
+                      {isbn ? (
+                        <span className="font-mono tabular-nums">{isbn}</span>
+                      ) : (
+                        <span className="text-muted-foreground">Not set</span>
+                      )}
                     </DetailRow>
                   )}
                   {storage.grade && (
