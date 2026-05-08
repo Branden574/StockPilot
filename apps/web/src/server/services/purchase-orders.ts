@@ -168,4 +168,121 @@ export class PurchaseOrdersService {
     if (error) throw new ServiceError('internal_error', error.message);
   }
 
+  /**
+   * Bulk-creates draft POs from a list of inventory item IDs. Items are
+   * fetched, grouped by supplier_id, and one draft PO is created per
+   * supplier with line quantities pre-filled from each item's
+   * reorder_quantity (fallback: max(1, reorder_point - quantity_on_hand)).
+   *
+   * Items without a supplier_id are skipped. Per-supplier failures are
+   * collected so callers can report partial success — we do NOT roll
+   * back already-created drafts.
+   *
+   * Powers both the BulkActions toolbar button (via
+   * createDraftPosFromItemsAction) and the Gemini draftPos tool.
+   *
+   * Spec: docs/superpowers/specs/2026-05-08-draft-pos-from-low-stock-design.md
+   */
+  async createDraftsFromItems(itemIds: string[]): Promise<{
+    createdPoIds: string[];
+    skipped: number;
+    supplierFailures: Array<{ supplierId: string; supplierName: string; error: string }>;
+    supplierCount: number;
+  }> {
+    assertPermission(this.ctx, 'purchase_orders:manage');
+
+    const { data: rows, error: fetchErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .select(
+        'id, supplier_id, reorder_quantity, reorder_point, quantity_on_hand, unit_cost',
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', itemIds);
+    if (fetchErr) throw new ServiceError('internal_error', fetchErr.message);
+
+    type Row = {
+      id: string;
+      supplier_id: string | null;
+      reorder_quantity: number | null;
+      reorder_point: number | null;
+      quantity_on_hand: number | null;
+      unit_cost: number | null;
+    };
+    const items = (rows ?? []) as Row[];
+    const noSupplier = items.filter((r) => !r.supplier_id);
+    const withSupplier = items.filter((r) => !!r.supplier_id);
+    const skipped = noSupplier.length + (itemIds.length - items.length);
+
+    if (withSupplier.length === 0) {
+      throw new ServiceError(
+        'validation_error',
+        'No items had a supplier set. Assign suppliers and try again.',
+      );
+    }
+
+    const bySupplier = new Map<string, Row[]>();
+    for (const r of withSupplier) {
+      const key = r.supplier_id as string;
+      const list = bySupplier.get(key) ?? [];
+      list.push(r);
+      bySupplier.set(key, list);
+    }
+
+    const supplierIds = [...bySupplier.keys()];
+    const { data: suppliersData } = await this.ctx.supabase
+      .from('suppliers')
+      .select('id, name')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', supplierIds);
+    const supplierName = new Map<string, string>();
+    for (const s of (suppliersData ?? []) as Array<{ id: string; name: string }>) {
+      supplierName.set(s.id, s.name);
+    }
+
+    const createdPoIds: string[] = [];
+    const supplierFailures: Array<{
+      supplierId: string;
+      supplierName: string;
+      error: string;
+    }> = [];
+
+    for (const [supplierId, group] of bySupplier) {
+      const lines = group.map((r) => {
+        const reorderQty = Number(r.reorder_quantity ?? 0);
+        const reorderPoint = Number(r.reorder_point ?? 0);
+        const onHand = Number(r.quantity_on_hand ?? 0);
+        const qty =
+          reorderQty > 0 ? reorderQty : Math.max(1, reorderPoint - onHand);
+        return {
+          itemId: r.id,
+          quantityOrdered: qty,
+          unitCost: Number(r.unit_cost ?? 0),
+        };
+      });
+      try {
+        const po = await this.create({ supplierId, lines });
+        createdPoIds.push(po.id);
+      } catch (e) {
+        const msg =
+          e instanceof ServiceError
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : 'Unknown error';
+        supplierFailures.push({
+          supplierId,
+          supplierName: supplierName.get(supplierId) ?? 'Unknown supplier',
+          error: msg,
+        });
+      }
+    }
+
+    return {
+      createdPoIds,
+      skipped,
+      supplierFailures,
+      supplierCount: bySupplier.size,
+    };
+  }
+
 }
