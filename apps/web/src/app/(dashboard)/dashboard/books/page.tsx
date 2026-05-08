@@ -10,6 +10,7 @@ import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
+import { SavedViewsService } from '@/server/services/saved-views';
 import { SuppliersService } from '@/server/services/suppliers';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
@@ -64,12 +65,13 @@ export default async function BooksPage({
 }) {
   const params = await searchParams;
   const page = Math.max(1, Number(params.page) || 1);
-  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, imagesSvc, warehouseFilter] = await Promise.all([
+  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, imagesSvc, savedViewsSvc, warehouseFilter] = await Promise.all([
     InventoryService.forCurrentUser(),
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
     ItemImagesService.forCurrentUser(),
+    SavedViewsService.forCurrentUser(),
     getActiveWarehouseFilter(),
   ]);
 
@@ -85,7 +87,7 @@ export default async function BooksPage({
   const categoryIds = parseIdList(params.cat);
   const locationIds = parseIdList(params.loc);
 
-  const [inventory, categories, locations, suppliers] = await Promise.all([
+  const [inventory, categories, locations, suppliers, savedViews] = await Promise.all([
     inventorySvc.list({
       q: params.q,
       status: lifecycleStatus,
@@ -102,6 +104,7 @@ export default async function BooksPage({
     categoriesSvc.list(),
     locationsSvc.list(),
     suppliersSvc.list(),
+    savedViewsSvc.list('books'),
   ]);
 
   // Per-row 14-day trend series (qty + moves) for the sparkline column.
@@ -218,6 +221,9 @@ export default async function BooksPage({
             page={page}
             pageSize={PAGE_SIZE}
             trends={trends}
+            savedViews={savedViews}
+            savedViewScope="books"
+            activeWarehouseId={warehouseFilter}
           />
         )}
       </div>
