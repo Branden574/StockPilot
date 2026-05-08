@@ -119,3 +119,150 @@ export async function updatePoStatusAction(id: string, status: 'draft' | 'ordere
   }
 }
 
+interface DraftPosResultData {
+  /** IDs of the draft POs that were successfully created. */
+  createdPoIds: string[];
+  /** Selected items that had no supplier_id and were skipped. */
+  skipped: number;
+  /** Per-supplier failures (other suppliers' POs may still have been created). */
+  supplierFailures: Array<{ supplierId: string; supplierName: string; error: string }>;
+  /** How many distinct suppliers were attempted. */
+  supplierCount: number;
+}
+
+const MAX_DRAFT_POS_BATCH = 200;
+
+/**
+ * Bulk-creates draft purchase orders from a list of selected inventory item
+ * IDs (typically from the inventory or books table's BulkActions bar after
+ * the user filters to ?stock=low). Items are grouped by supplier_id, one
+ * draft PO is created per supplier, and line quantities are pre-filled from
+ * each item's reorder_quantity (fallback: max(1, reorder_point - on_hand)).
+ *
+ * Items without a supplier_id are skipped and reported back as `skipped`.
+ * Per-supplier failures are reported as `supplierFailures` so the caller
+ * can toast a partial-success message; we deliberately do NOT roll back
+ * already-created drafts.
+ *
+ * Spec: docs/superpowers/specs/2026-05-08-draft-pos-from-low-stock-design.md
+ */
+export async function createDraftPosFromItemsAction(
+  itemIds: string[],
+): Promise<ActionResult<DraftPosResultData>> {
+  if (!Array.isArray(itemIds) || itemIds.length === 0) {
+    return err('validation_error', 'Select at least one item.');
+  }
+  if (itemIds.length > MAX_DRAFT_POS_BATCH) {
+    return err(
+      'validation_error',
+      `Select ${MAX_DRAFT_POS_BATCH} items or fewer per batch.`,
+    );
+  }
+  try {
+    const ctx = await requireOrgContext();
+    const supabase = await createClient();
+
+    // Fetch only the columns the line builder needs; RLS scopes by
+    // org + warehouse access, so cross-org / unreadable items are
+    // silently dropped (treated the same as skipped).
+    const { data: rows, error: fetchErr } = await supabase
+      .from('inventory_items')
+      .select(
+        'id, supplier_id, reorder_quantity, reorder_point, quantity_on_hand, unit_cost',
+      )
+      .eq('organization_id', ctx.organizationId)
+      .in('id', itemIds);
+    if (fetchErr) throw new ServiceError('internal_error', fetchErr.message);
+
+    type Row = {
+      id: string;
+      supplier_id: string | null;
+      reorder_quantity: number | null;
+      reorder_point: number | null;
+      quantity_on_hand: number | null;
+      unit_cost: number | null;
+    };
+    const items = (rows ?? []) as Row[];
+
+    const noSupplier = items.filter((r) => !r.supplier_id);
+    const withSupplier = items.filter((r) => !!r.supplier_id);
+    const skipped = noSupplier.length + (itemIds.length - items.length);
+
+    if (withSupplier.length === 0) {
+      return err(
+        'validation_error',
+        'No items had a supplier set. Assign suppliers and try again.',
+      );
+    }
+
+    // Group by supplier_id.
+    const bySupplier = new Map<string, Row[]>();
+    for (const r of withSupplier) {
+      const key = r.supplier_id as string;
+      const list = bySupplier.get(key) ?? [];
+      list.push(r);
+      bySupplier.set(key, list);
+    }
+
+    // Resolve supplier names so failure messages name the offender.
+    const supplierIds = [...bySupplier.keys()];
+    const { data: suppliersData } = await supabase
+      .from('suppliers')
+      .select('id, name')
+      .eq('organization_id', ctx.organizationId)
+      .in('id', supplierIds);
+    const supplierName = new Map<string, string>();
+    for (const s of (suppliersData ?? []) as Array<{ id: string; name: string }>) {
+      supplierName.set(s.id, s.name);
+    }
+
+    const svc = await PurchaseOrdersService.forCurrentUser();
+    const createdPoIds: string[] = [];
+    const supplierFailures: DraftPosResultData['supplierFailures'] = [];
+
+    for (const [supplierId, group] of bySupplier) {
+      const lines = group.map((r) => {
+        const reorderQty = Number(r.reorder_quantity ?? 0);
+        const reorderPoint = Number(r.reorder_point ?? 0);
+        const onHand = Number(r.quantity_on_hand ?? 0);
+        const qty =
+          reorderQty > 0 ? reorderQty : Math.max(1, reorderPoint - onHand);
+        return {
+          itemId: r.id,
+          quantityOrdered: qty,
+          unitCost: Number(r.unit_cost ?? 0),
+        };
+      });
+      try {
+        const po = await svc.create({ supplierId, lines });
+        createdPoIds.push(po.id);
+      } catch (e) {
+        const msg =
+          e instanceof ServiceError
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : 'Unknown error';
+        supplierFailures.push({
+          supplierId,
+          supplierName: supplierName.get(supplierId) ?? 'Unknown supplier',
+          error: msg,
+        });
+      }
+    }
+
+    revalidatePath('/dashboard/purchase-orders');
+    revalidatePath('/dashboard/inventory');
+    revalidatePath('/dashboard/books');
+
+    return ok({
+      createdPoIds,
+      skipped,
+      supplierFailures,
+      supplierCount: bySupplier.size,
+    });
+  } catch (e) {
+    return toResult(e);
+  }
+}
+

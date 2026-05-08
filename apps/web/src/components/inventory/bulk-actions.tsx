@@ -1,6 +1,6 @@
 'use client';
 
-import { Archive, FolderTree, Loader2, Truck, Undo2, X } from 'lucide-react';
+import { Archive, ClipboardList, FolderTree, Loader2, Truck, Undo2, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -25,6 +25,7 @@ import {
   bulkUpdateInventoryAction,
   type BulkInventoryOp,
 } from '@/server/actions/inventory';
+import { createDraftPosFromItemsAction } from '@/server/actions/purchase-orders';
 
 export interface BulkActionsCategory {
   id: string;
@@ -67,6 +68,40 @@ export function BulkActions({
   const [supplierId, setSupplierId] = React.useState<string>('__none__');
 
   const count = selectedIds.length;
+  const [draftBusy, setDraftBusy] = React.useState(false);
+
+  async function createDraftPos() {
+    setDraftBusy(true);
+    const r = await createDraftPosFromItemsAction(selectedIds);
+    setDraftBusy(false);
+    if (!r.ok) {
+      toast.error(r.error.message);
+      return;
+    }
+    const { createdPoIds, skipped, supplierFailures, supplierCount } = r.data;
+    const created = createdPoIds.length;
+    if (created === 0) {
+      toast.error(
+        supplierFailures.length > 0
+          ? `Failed to create POs for ${supplierFailures.length} supplier${supplierFailures.length === 1 ? '' : 's'}.`
+          : 'No draft POs created.',
+      );
+      return;
+    }
+    const parts: string[] = [
+      `Created ${created} draft PO${created === 1 ? '' : 's'} across ${supplierCount} supplier${supplierCount === 1 ? '' : 's'}`,
+    ];
+    if (skipped > 0) {
+      parts.push(`${skipped} skipped (no supplier)`);
+    }
+    if (supplierFailures.length > 0) {
+      const names = supplierFailures.map((f) => f.supplierName).join(', ');
+      parts.push(`failed: ${names}`);
+    }
+    toast.success(parts.join(' · '));
+    onClear();
+    router.push('/dashboard/purchase-orders?status=draft');
+  }
 
   async function run(op: BulkInventoryOp) {
     setBusy(true);
@@ -121,6 +156,21 @@ export function BulkActions({
           className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
         >
           <Truck className="h-3 w-3" /> Set supplier
+        </button>
+
+        <span className="text-[var(--ed-ink-4)]">·</span>
+        <button
+          type="button"
+          onClick={createDraftPos}
+          disabled={draftBusy}
+          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground disabled:opacity-60"
+        >
+          {draftBusy ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <ClipboardList className="h-3 w-3" />
+          )}{' '}
+          Create draft POs
         </button>
 
         {hasArchivedSelection ? (
