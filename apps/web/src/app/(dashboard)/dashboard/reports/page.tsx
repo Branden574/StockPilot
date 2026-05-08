@@ -6,6 +6,8 @@ import {
   Clock,
   DollarSign,
   MinusCircle,
+  Package,
+  PackageX,
   TrendingUp,
   Truck,
 } from 'lucide-react';
@@ -62,6 +64,18 @@ const REPORTS: Report[] = [
     name: 'Dead stock',
     desc: 'On-hand items with no out-movement, ranked by carrying value',
     icon: Clock,
+  },
+  {
+    slug: 'bundle-activity',
+    name: 'Bundle activity',
+    desc: 'Distribution runs by bundle · kits out · component cost out',
+    icon: Package,
+  },
+  {
+    slug: 'bundle-shortages',
+    name: 'Bundle shortages',
+    desc: 'Components that ran short during distribution, grouped by item',
+    icon: PackageX,
   },
 ];
 

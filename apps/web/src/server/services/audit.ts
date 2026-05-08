@@ -49,7 +49,12 @@ export type AuditEvent =
   | 'cycle_count.started'
   | 'cycle_count.canceled'
   | 'cycle_count.posted'
-  | 'cycle_count.assigned';
+  | 'cycle_count.assigned'
+  | 'bundle.created'
+  | 'bundle.updated'
+  | 'bundle.archived'
+  | 'bundle.assembled'
+  | 'bundle.distributed';
 
 interface AuditPayload {
   event: AuditEvent;

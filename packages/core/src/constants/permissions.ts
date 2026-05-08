@@ -35,6 +35,11 @@ export const PERMISSIONS = [
   // because they emit stock_movements. ASSIGN is a manager+-only call so
   // a staff/viewer can't reroute work to someone else.
   'cycle_counts:assign',
+  // Bundles: managers+ define and pre-assemble kit templates; staff+ run
+  // distributions. Splitting the perms lets ops staff ship kits at events
+  // without giving them write access to the kit recipe itself.
+  'bundles:manage',
+  'bundles:distribute',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -69,6 +74,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'activity_logs:read',
     'settings:read',
     'cycle_counts:assign',
+    'bundles:manage',
+    'bundles:distribute',
   ],
   staff: [
     'organization:read',
@@ -83,6 +90,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'suppliers:read',
     'purchase_orders:read',
     'reports:read',
+    'bundles:distribute',
   ],
   viewer: [
     'organization:read',

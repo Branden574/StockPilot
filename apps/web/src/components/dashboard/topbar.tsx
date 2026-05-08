@@ -44,6 +44,7 @@ const PO_IMPORTS_LIST: Crumb = {
   href: '/dashboard/purchase-orders/imports',
 };
 const CYCLE_COUNTS_LIST: Crumb = { label: 'Cycle counts', href: '/dashboard/cycle-counts' };
+const BUNDLES_LIST: Crumb = { label: 'Bundles', href: '/dashboard/bundles' };
 const SCHEDULE_LIST: Crumb = { label: 'Schedule', href: '/dashboard/schedule' };
 const SETTINGS_LIST: Crumb = { label: 'Settings', href: '/dashboard/settings' };
 
@@ -91,6 +92,18 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
     [SECTION_INVENTORY, CYCLE_COUNTS_LIST, { label: 'Detail', href: null }],
   ],
   [/^\/dashboard\/cycle-counts$/, [SECTION_INVENTORY, { label: 'Cycle counts', href: null }]],
+
+  // Bundles
+  [/^\/dashboard\/bundles\/new$/, [SECTION_INVENTORY, BUNDLES_LIST, { label: 'New', href: null }]],
+  [
+    /^\/dashboard\/bundles\/[^/]+\/edit$/,
+    [SECTION_INVENTORY, BUNDLES_LIST, { label: 'Edit', href: null }],
+  ],
+  [
+    /^\/dashboard\/bundles\/[^/]+$/,
+    [SECTION_INVENTORY, BUNDLES_LIST, { label: 'Detail', href: null }],
+  ],
+  [/^\/dashboard\/bundles$/, [SECTION_INVENTORY, { label: 'Bundles', href: null }]],
 
   // Purchase orders. Imports patterns MUST precede the bare /[^/]+$
   // detail pattern, otherwise "imports" matches as if it were a PO id.
