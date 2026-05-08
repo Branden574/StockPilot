@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { CRATE_COLORS, CRATE_NUMBERS, GRADES } from '@/lib/book-storage';
+import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
 import { generateSku, cn } from '@/lib/utils';
 import { createItemAction, updateItemAction } from '@/server/actions/inventory';
 import { createImageUploadAction, recordImageAction } from '@/server/actions/item-images';
@@ -300,7 +300,9 @@ export function ItemForm({
               ? { book_rack_row: rackRow.trim().toUpperCase() }
               : {}),
             ...(crateColor ? { book_crate_color: crateColor } : {}),
-            ...(crateNumber ? { book_crate_number: crateNumber } : {}),
+            ...(crateNumber.trim()
+              ? { book_crate_number: crateNumber.trim() }
+              : {}),
             ...(grade ? { book_grade: grade } : {}),
           },
         }
@@ -594,22 +596,12 @@ export function ItemForm({
               </div>
               <div className="space-y-1.5">
                 <Label>Crate number</Label>
-                <Select
-                  value={crateNumber || '__none'}
-                  onValueChange={(v) => setCrateNumber(v === '__none' ? '' : v)}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="—" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none">—</SelectItem>
-                    {CRATE_NUMBERS.map((n) => (
-                      <SelectItem key={n} value={n}>
-                        {n}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Input
+                  placeholder="e.g. 12"
+                  inputMode="numeric"
+                  value={crateNumber}
+                  onChange={(e) => setCrateNumber(e.target.value)}
+                />
               </div>
             </div>
           </>
