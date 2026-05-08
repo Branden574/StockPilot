@@ -16,13 +16,25 @@ export default async function NotificationsSettingsPage() {
   const supabase = await createClient();
   const { data: profile } = await supabase
     .from('user_profiles')
-    .select('email_digest_optin')
+    .select(
+      'email_digest_optin, digest_section_low_stock, digest_section_open_pos, digest_section_cycle_counts',
+    )
     .eq('id', session.userId)
     .maybeSingle();
 
-  const optIn = Boolean(
-    (profile as { email_digest_optin?: boolean } | null)?.email_digest_optin ?? false,
-  );
+  const p = profile as {
+    email_digest_optin?: boolean;
+    digest_section_low_stock?: boolean;
+    digest_section_open_pos?: boolean;
+    digest_section_cycle_counts?: boolean;
+  } | null;
+
+  const optIn = Boolean(p?.email_digest_optin ?? false);
+  const sections = {
+    lowStock: p?.digest_section_low_stock ?? true,
+    openPos: p?.digest_section_open_pos ?? true,
+    cycleCounts: p?.digest_section_cycle_counts ?? true,
+  };
 
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
@@ -47,7 +59,7 @@ export default async function NotificationsSettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <DigestControls initialOptIn={optIn} />
+          <DigestControls initialOptIn={optIn} initialSections={sections} />
         </CardContent>
       </Card>
     </div>
