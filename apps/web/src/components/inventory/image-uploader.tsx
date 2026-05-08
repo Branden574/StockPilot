@@ -1,10 +1,11 @@
 'use client';
 
-import { ImagePlus, Loader2, Trash2, Upload } from 'lucide-react';
+import { ImagePlus, Loader2, Maximize2, Trash2, Upload } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { ImageLightbox } from '@/components/inventory/image-lightbox';
 import { Button } from '@/components/ui/button';
 import {
   createImageUploadAction,
@@ -33,6 +34,13 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   const [uploading, setUploading] = React.useState(false);
   const [dragOver, setDragOver] = React.useState(false);
   const [images, setImages] = React.useState<ImageRow[]>(initialImages);
+  const [lightboxIndex, setLightboxIndex] = React.useState<number | null>(null);
+
+  // Keep local state in sync if the server-passed list changes (e.g. after
+  // router.refresh() following an upload).
+  React.useEffect(() => {
+    setImages(initialImages);
+  }, [initialImages]);
 
   async function uploadFiles(files: FileList | File[]) {
     const list = Array.from(files);
@@ -86,12 +94,17 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
 
   async function deleteImage(image: ImageRow) {
     if (!confirm('Remove this image?')) return;
-    const res = await removeImageAction(image.id, itemId);
+    await deleteImageById(image.id);
+  }
+
+  // Variant used by the lightbox toolbar (already confirmed there).
+  async function deleteImageById(imageId: string) {
+    const res = await removeImageAction(imageId, itemId);
     if (!res.ok) {
       toast.error(res.error.message);
       return;
     }
-    setImages((arr) => arr.filter((i) => i.id !== image.id));
+    setImages((arr) => arr.filter((i) => i.id !== imageId));
     router.refresh();
   }
 
@@ -99,26 +112,59 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
     <div className="space-y-3">
       {images.length > 0 && (
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-          {images.map((img) => (
-            <div key={img.id} className="group relative aspect-square overflow-hidden rounded-lg border bg-muted">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={img.url} alt="" className="h-full w-full object-cover" />
+          {images.map((img, i) => (
+            <div
+              key={img.id}
+              className="group relative aspect-square overflow-hidden rounded-lg border bg-muted"
+            >
               <button
                 type="button"
-                onClick={() => deleteImage(img)}
-                className="absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                onClick={() => setLightboxIndex(i)}
+                className="absolute inset-0 cursor-zoom-in focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                aria-label="Open image full screen"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={img.url}
+                  alt=""
+                  className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                />
+                <span
+                  aria-hidden
+                  className="absolute inset-0 grid place-items-center bg-black/0 text-white/0 transition-colors group-hover:bg-black/20 group-hover:text-white/90"
+                >
+                  <Maximize2 className="h-5 w-5" />
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteImage(img);
+                }}
+                className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/65 text-white shadow-sm transition-colors hover:bg-red-500/85 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
                 aria-label="Remove image"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </button>
               {img.isPrimary && (
-                <span className="absolute left-1 top-1 rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary-foreground">
+                <span className="pointer-events-none absolute left-1.5 top-1.5 rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary-foreground">
                   Primary
                 </span>
               )}
             </div>
           ))}
         </div>
+      )}
+
+      {lightboxIndex !== null && images[lightboxIndex] && (
+        <ImageLightbox
+          images={images}
+          startIndex={lightboxIndex}
+          open
+          onClose={() => setLightboxIndex(null)}
+          onDelete={(id) => deleteImageById(id)}
+        />
       )}
 
       <label
