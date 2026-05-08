@@ -28,6 +28,65 @@ interface ImageUploaderProps {
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'image/avif'];
+const MAX_DIMENSION = 2048;
+const WEBP_QUALITY = 0.85;
+
+/**
+ * Resize + transcode an upload to WebP in the browser before it ever
+ * touches the network. Typical 2–10× reduction in bytes uploaded for
+ * phone-camera JPEGs (4-12 MB → ~300-1200 KB) and the stored object is
+ * already in a format next/image can serve directly.
+ *
+ * Falls back to the original file when:
+ *   - createImageBitmap is unavailable (very old browser)
+ *   - decoding fails (e.g. malformed file)
+ *   - the WebP output ends up larger than the source (rare but possible
+ *     for already-tiny images)
+ *
+ * Server-side validation still applies; this is just an optimization.
+ */
+async function compressImage(file: File): Promise<File> {
+  if (typeof window === 'undefined' || typeof createImageBitmap !== 'function') {
+    return file;
+  }
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return file;
+  }
+  try {
+    const { width, height } = bitmap;
+    let targetW = width;
+    let targetH = height;
+    if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+      if (width >= height) {
+        targetW = MAX_DIMENSION;
+        targetH = Math.round((height * MAX_DIMENSION) / width);
+      } else {
+        targetH = MAX_DIMENSION;
+        targetW = Math.round((width * MAX_DIMENSION) / height);
+      }
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return file;
+    ctx.drawImage(bitmap, 0, 0, targetW, targetH);
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((b) => resolve(b), 'image/webp', WEBP_QUALITY);
+    });
+    if (!blob || blob.size >= file.size) return file;
+    const baseName = file.name.replace(/\.[^.]+$/, '') || 'image';
+    return new File([blob], `${baseName}.webp`, {
+      type: 'image/webp',
+      lastModified: file.lastModified,
+    });
+  } finally {
+    bitmap.close();
+  }
+}
 
 export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   const router = useRouter();
@@ -48,16 +107,20 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
     if (list.length === 0) return;
     setUploading(true);
     try {
-      for (const file of list) {
-        if (!ACCEPT.includes(file.type)) {
-          toast.error(`${file.name}: unsupported type`);
+      for (const original of list) {
+        if (!ACCEPT.includes(original.type)) {
+          toast.error(`${original.name}: unsupported type`);
           continue;
         }
-        if (file.size > MAX_BYTES) {
-          toast.error(`${file.name}: max 10 MB`);
+        if (original.size > MAX_BYTES) {
+          toast.error(`${original.name}: max 10 MB`);
           continue;
         }
-        const ext = file.name.split('.').pop() ?? 'jpg';
+
+        // Compress + transcode to WebP in the browser before upload.
+        // Falls back to the original on any failure.
+        const file = await compressImage(original);
+        const ext = file.name.split('.').pop() ?? 'webp';
 
         const presign = await createImageUploadAction({ itemId, fileExt: ext });
         if (!presign.ok) {
@@ -71,7 +134,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           body: file,
         });
         if (!put.ok) {
-          toast.error(`Upload failed: ${file.name}`);
+          toast.error(`Upload failed: ${original.name}`);
           continue;
         }
 
@@ -192,7 +255,9 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           <ImagePlus className="h-5 w-5 text-muted-foreground" />
         )}
         <p className="text-sm font-medium">{uploading ? 'Uploading…' : 'Drop images, or click to browse'}</p>
-        <p className="text-xs text-muted-foreground">PNG, JPG, WebP, AVIF · up to 10 MB each</p>
+        <p className="text-xs text-muted-foreground">
+          PNG, JPG, WebP, AVIF · up to 10 MB each · optimized in browser before upload
+        </p>
         <input
           id="image-upload"
           ref={inputRef}
