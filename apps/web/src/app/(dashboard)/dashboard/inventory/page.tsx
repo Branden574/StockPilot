@@ -8,6 +8,7 @@ import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
+import { getItemTrends } from '@/server/services/movements';
 import { SuppliersService } from '@/server/services/suppliers';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
@@ -116,6 +117,13 @@ export default async function InventoryPage({
     suppliersSvc.list(),
   ]);
 
+  // Per-row 14-day trend series (qty + moves) for the sparkline column.
+  // One round trip via stock_movements; flat fallback for items with no
+  // movements in the window. See docs/superpowers/specs/2026-05-08-…
+  const trends = await getItemTrends(
+    inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+  );
+
   // Fetch primary images in batch (1 query + 1 createSignedUrls call,
   // not N round trips). Returns Map<itemId, signedUrl>. Falls back to
   // a custom_fields.thumbnail_url stashed by the bulk-ISBN importer
@@ -221,6 +229,7 @@ export default async function InventoryPage({
             initialQuery={params.q}
             page={page}
             pageSize={PAGE_SIZE}
+            trends={trends}
           />
         )}
       </div>

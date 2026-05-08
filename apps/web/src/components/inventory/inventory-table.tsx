@@ -75,7 +75,15 @@ interface InventoryTableProps {
   page?: number;
   /** How many rows per page. Drives the page count math. */
   pageSize?: number;
+  /** Per-item 14-day series (qty trend + move count) keyed by item id.
+      When omitted or a row is missing, the sparkline falls back to a
+      flat line at current quantity. Computed by getItemTrends in
+      services/movements.ts. */
+  trends?: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
 }
+
+type SparkMode = 'qty' | 'moves';
+const SPARK_MODE_KEY = 'stockpilot:inventory:sparkline-mode';
 
 const VIEWS = ['All items', 'Low + critical', 'Out of stock'] as const;
 type View = (typeof VIEWS)[number];
@@ -127,25 +135,20 @@ function deriveStatus(qty: number, reorder: number): 'ok' | 'warn' | 'crit' {
 }
 
 /**
- * Deterministic synthetic sparkline so empty/new items still render a
- * trend visual. Real movement-derived sparklines hook in once the
- * stock_movements aggregate RPC lands.
+ * Returns the 14-day series to plot for a row, given the active spark
+ * mode and the trends map from getItemTrends. Falls back to a flat
+ * line at current qty (or zero, for moves) when trends data is missing
+ * — e.g. parent forgot to pass `trends`, or the item had no movements.
  */
-function syntheticSeries(seed: string, base: number): number[] {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  const r = (n: number) => {
-    h = (h * 9301 + 49297 + n) % 233280;
-    return h / 233280;
-  };
-  const series: number[] = [];
-  let v = base * 0.85;
-  for (let i = 0; i < 14; i++) {
-    v = Math.max(0, v + (r(i) - 0.5) * Math.max(base, 5) * 0.18);
-    series.push(Math.round(v));
-  }
-  if (series.length > 0) series[series.length - 1] = base;
-  return series;
+function seriesForRow(
+  itemId: string,
+  currentQty: number,
+  mode: SparkMode,
+  trends: InventoryTableProps['trends'],
+): number[] {
+  const t = trends?.get(itemId);
+  if (t) return mode === 'qty' ? t.qtySeries : t.moveSeries;
+  return new Array<number>(14).fill(mode === 'qty' ? currentQty : 0);
 }
 
 export function InventoryTable({
@@ -161,7 +164,20 @@ export function InventoryTable({
   showBookFields = false,
   page = 1,
   pageSize = 50,
+  trends,
 }: InventoryTableProps) {
+  // Sparkline mode preference. localStorage-backed so it sticks across
+  // reloads + tabs but doesn't pollute URLs (it's a personal preference,
+  // not a query filter). Lazy initializer reads on first mount only.
+  const [sparkMode, setSparkMode] = React.useState<SparkMode>(() => {
+    if (typeof window === 'undefined') return 'qty';
+    const v = window.localStorage.getItem(SPARK_MODE_KEY);
+    return v === 'moves' ? 'moves' : 'qty';
+  });
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SPARK_MODE_KEY, sparkMode);
+  }, [sparkMode]);
   const router = useRouter();
   const params = useSearchParams();
   const [q, setQ] = React.useState(initialQuery);
@@ -389,7 +405,11 @@ export function InventoryTable({
                     align === 'right' ? 'text-right' : 'text-left',
                   )}
                 >
-                  {label}
+                  {label === '14-day' ? (
+                    <SparkModeToggle mode={sparkMode} onChange={setSparkMode} />
+                  ) : (
+                    label
+                  )}
                 </th>
               ))}
             </tr>
@@ -412,7 +432,12 @@ export function InventoryTable({
                 : null;
               const status = deriveStatus(item.quantity_on_hand, item.reorder_point);
               const par = Math.max(item.reorder_point * 4, item.quantity_on_hand * 1.5, 10);
-              const series = syntheticSeries(item.id, item.quantity_on_hand);
+              const series = seriesForRow(
+                item.id,
+                item.quantity_on_hand,
+                sparkMode,
+                trends,
+              );
               const isSelected = selected.has(item.id);
 
               return (
@@ -782,6 +807,56 @@ function MultiSelectFilter({
               </button>
             </div>
           )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function SparkModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: SparkMode;
+  onChange: (m: SparkMode) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const label = mode === 'qty' ? '14-day · qty' : '14-day · moves';
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="ml-auto inline-flex h-5 items-center gap-1 rounded-sm px-1 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)] hover:text-foreground"
+          aria-label={`Sparkline mode: ${mode === 'qty' ? 'quantity trend' : 'movement count'}`}
+        >
+          {label}
+          <ChevronDown className="h-3 w-3" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[200px] p-1">
+        <div className="flex flex-col">
+          {(
+            [
+              { value: 'qty', label: 'Quantity trend' },
+              { value: 'moves', label: 'Move count' },
+            ] as const
+          ).map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => {
+                onChange(opt.value);
+                setOpen(false);
+              }}
+              className={cn(
+                'rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-muted',
+                opt.value === mode && 'bg-muted font-medium',
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
       </PopoverContent>
     </Popover>

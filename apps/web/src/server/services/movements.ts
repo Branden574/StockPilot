@@ -388,6 +388,100 @@ export async function getDashboardHistory(
   return { itemCountSeries, inventoryValueSeries, lowOutSeries };
 }
 
+export interface ItemTrend {
+  /** Length 14, oldest → newest. End-of-day quantity for the item,
+      reverse-walked from the caller-supplied current quantity. */
+  qtySeries: number[];
+  /** Length 14, oldest → newest. Number of stock_movements rows that
+      hit the item on that day. */
+  moveSeries: number[];
+}
+
+/**
+ * Per-item 14-day trend series for the inventory + books list rows.
+ * Replaces the synthetic-noise sparklines that `inventory-table.tsx`
+ * was rendering before commit 247dc26.
+ *
+ * One PostgREST round trip — pulls every relevant movement in the
+ * window and buckets per-item, per-day in TS. Caller must pass the
+ * current `quantity_on_hand` for each item so we don't re-fetch
+ * the inventory_items rows the page already has.
+ *
+ * Items with no movements in the window get a flat qty line at their
+ * current quantity and a moves line of zeros.
+ */
+export async function getItemTrends(
+  items: Array<{ id: string; quantityOnHand: number }>,
+  options: { ctx?: ServiceContext } = {},
+): Promise<Map<string, ItemTrend>> {
+  const result = new Map<string, ItemTrend>();
+  if (items.length === 0) return result;
+  const ctx = options.ctx ?? (await withContext());
+  const dayMs = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const startMs = now - 14 * dayMs;
+
+  // Seed every requested item with a flat fallback so missing-data items
+  // still render (qty line at current value, moves at zero).
+  for (const it of items) {
+    result.set(it.id, {
+      qtySeries: new Array<number>(14).fill(it.quantityOnHand),
+      moveSeries: new Array<number>(14).fill(0),
+    });
+  }
+
+  const itemIds = items.map((i) => i.id);
+  const { data, error } = await ctx.supabase
+    .from('stock_movements')
+    .select('item_id, quantity_change, created_at')
+    .eq('organization_id', ctx.organizationId)
+    .in('item_id', itemIds)
+    .gte('created_at', new Date(startMs).toISOString());
+  if (error) throw new ServiceError('internal_error', error.message);
+
+  // Bucket movements per item per day.
+  type DayBucket = { change: number; count: number };
+  const buckets = new Map<string, DayBucket[]>();
+  for (const it of items) {
+    buckets.set(
+      it.id,
+      Array.from({ length: 14 }, () => ({ change: 0, count: 0 })),
+    );
+  }
+  for (const r of (data ?? []) as Array<{
+    item_id: string;
+    quantity_change: number;
+    created_at: string;
+  }>) {
+    const days = buckets.get(r.item_id);
+    if (!days) continue;
+    const t = new Date(r.created_at).getTime();
+    const dayIdx = Math.min(13, Math.max(0, Math.floor((t - startMs) / dayMs)));
+    const bucket = days[dayIdx]!;
+    bucket.change += Number(r.quantity_change) || 0;
+    bucket.count += 1;
+  }
+
+  // Reverse-walk to derive qty per day; copy counts directly.
+  for (const it of items) {
+    const days = buckets.get(it.id)!;
+    const qty = new Array<number>(14).fill(0);
+    const moves = new Array<number>(14).fill(0);
+    let running = it.quantityOnHand;
+    // d=13 is end of today: equals current qty AFTER today's movements.
+    // d=12 is end of yesterday: today's movements undone.
+    // qty[d-1] = qty[d] - changes_on_day_d
+    for (let d = 13; d >= 0; d--) {
+      qty[d] = running;
+      moves[d] = days[d]!.count;
+      running -= days[d]!.change;
+    }
+    result.set(it.id, { qtySeries: qty, moveSeries: moves });
+  }
+
+  return result;
+}
+
 export interface DashboardActions {
   /** Receivable POs (expected_inbound / ordered / partially_received). */
   openPoCount: number;
