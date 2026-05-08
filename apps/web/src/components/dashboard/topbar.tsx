@@ -36,6 +36,7 @@ interface Crumb {
 const SECTION_INVENTORY: Crumb = { label: 'Inventory', href: null };
 const SECTION_WORKSPACE: Crumb = { label: 'Workspace', href: null };
 const ITEMS_LIST: Crumb = { label: 'Items', href: '/dashboard/inventory' };
+const BOOKS_LIST: Crumb = { label: 'Books', href: '/dashboard/books' };
 const POS_LIST: Crumb = { label: 'Purchase orders', href: '/dashboard/purchase-orders' };
 const SETTINGS_LIST: Crumb = { label: 'Settings', href: '/dashboard/settings' };
 
@@ -55,6 +56,20 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
     [SECTION_INVENTORY, ITEMS_LIST, { label: 'Import', href: null }],
   ],
   [/^\/dashboard\/inventory$/, [SECTION_INVENTORY, { label: 'Items', href: null }]],
+  [/^\/dashboard\/books\/new$/, [SECTION_INVENTORY, BOOKS_LIST, { label: 'New', href: null }]],
+  [
+    /^\/dashboard\/books\/[^/]+\/edit$/,
+    [SECTION_INVENTORY, BOOKS_LIST, { label: 'Edit', href: null }],
+  ],
+  [
+    /^\/dashboard\/books\/[^/]+$/,
+    [SECTION_INVENTORY, BOOKS_LIST, { label: 'Detail', href: null }],
+  ],
+  [
+    /^\/dashboard\/books\/import$/,
+    [SECTION_INVENTORY, BOOKS_LIST, { label: 'Import', href: null }],
+  ],
+  [/^\/dashboard\/books$/, [SECTION_INVENTORY, { label: 'Books', href: null }]],
   [/^\/dashboard\/categories$/, [SECTION_INVENTORY, { label: 'Categories', href: null }]],
   [/^\/dashboard\/movements$/, [SECTION_INVENTORY, { label: 'Movements', href: null }]],
   [
