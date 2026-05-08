@@ -3,6 +3,7 @@ import 'server-only';
 import { SchemaType, type FunctionDeclaration } from '@google/generative-ai';
 
 import { lookupIsbn as lookupIsbnLib } from '@/lib/books/lookup';
+import { env } from '@/lib/env';
 import type { ServiceContext } from '@/server/services/context';
 import { BooksImportService } from '@/server/services/books-import';
 import { CategoriesService } from '@/server/services/categories';
@@ -537,6 +538,107 @@ const executeBulkBookImportTool: ToolExecutor = {
   },
 };
 
+const exportInventoryTool: ToolExecutor = {
+  declaration: {
+    name: 'exportInventory',
+    description:
+      "Generate a CSV download URL for a filtered inventory list. Use this whenever the user asks to export, download, save as a spreadsheet, dump the data, or generate a CSV. Supports the same filters as searchInventory. Returns { count, url } — present the URL as a markdown link in your reply (e.g. \"[Download N items as CSV](url)\").",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        query: {
+          type: SchemaType.STRING,
+          description: 'Free-text query (matches name, SKU, barcode). Empty = no text filter.',
+        },
+        categoryId: {
+          type: SchemaType.STRING,
+          description: 'UUID of a category. Empty = no category filter.',
+        },
+        status: {
+          type: SchemaType.STRING,
+          description: "One of 'active', 'archived', 'discontinued', 'all'. Default: 'active'.",
+        },
+        itemType: {
+          type: SchemaType.STRING,
+          description:
+            "Filter by item_type: 'product' | 'book' | 'asset' | 'consumable' | 'all'. Default 'all'.",
+        },
+        lowStock: {
+          type: SchemaType.BOOLEAN,
+          description: 'When true, only items at or below reorder_point. Default false.',
+        },
+        outOfStock: {
+          type: SchemaType.BOOLEAN,
+          description: 'When true, only items with on-hand <= 0. Default false.',
+        },
+        warehouseId: {
+          type: SchemaType.STRING,
+          description: 'UUID of a specific warehouse. Empty = no filter.',
+        },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const itemType =
+      args.itemType === 'product' ||
+      args.itemType === 'book' ||
+      args.itemType === 'asset' ||
+      args.itemType === 'consumable' ||
+      args.itemType === 'all'
+        ? args.itemType
+        : 'all';
+    const status =
+      args.status === 'archived' ||
+      args.status === 'discontinued' ||
+      args.status === 'all' ||
+      args.status === 'active'
+        ? args.status
+        : 'active';
+
+    // Cheap count probe — don't materialize all rows just to know how many.
+    const svc = new InventoryService(ctx);
+    const probe = await svc.list({
+      q: typeof args.query === 'string' && args.query.length > 0 ? args.query : undefined,
+      categoryId:
+        typeof args.categoryId === 'string' && args.categoryId.length > 0
+          ? args.categoryId
+          : null,
+      status,
+      itemType,
+      lowStock: Boolean(args.lowStock),
+      outOfStock: Boolean(args.outOfStock),
+      warehouseId:
+        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+          ? args.warehouseId
+          : null,
+      limit: 1,
+    });
+
+    const params = new URLSearchParams();
+    params.set('scope', 'filtered');
+    params.set('type', itemType);
+    params.set('status', status);
+    if (typeof args.query === 'string' && args.query.length > 0) {
+      params.set('q', args.query);
+    }
+    if (typeof args.categoryId === 'string' && args.categoryId.length > 0) {
+      params.append('cat', args.categoryId);
+    }
+    if (args.lowStock) params.set('stock', 'low');
+    else if (args.outOfStock) params.set('stock', 'out');
+    if (typeof args.warehouseId === 'string' && args.warehouseId.length > 0) {
+      // The list endpoint reads warehouseId from the cookie-backed
+      // getActiveWarehouseFilter, not a query param. AI tool can't set
+      // that cookie; surface the constraint to the model so it warns
+      // the user.
+    }
+
+    const base = (env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
+    const url = `${base}/api/inventory/export.csv?${params.toString()}`;
+    return { count: probe.total, url };
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
   listCategories: listCategoriesTool,
@@ -550,6 +652,7 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   lookupIsbn: lookupIsbnTool,
   previewBulkBookImport: previewBulkBookImportTool,
   executeBulkBookImport: executeBulkBookImportTool,
+  exportInventory: exportInventoryTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {
