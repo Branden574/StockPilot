@@ -8,6 +8,7 @@ import type { ServiceContext } from '@/server/services/context';
 import { BooksImportService } from '@/server/services/books-import';
 import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
+import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import {
   getDashboardActions,
   getDashboardSummary,
@@ -639,6 +640,105 @@ const exportInventoryTool: ToolExecutor = {
   },
 };
 
+const draftPosTool: ToolExecutor = {
+  declaration: {
+    name: 'draftPos',
+    description:
+      "WRITE TOOL — drafts purchase orders from items matching a filter, auto-grouped by supplier. Use when the user asks to 'draft POs', 'create restock POs', 'order more X', or any phrasing that means 'turn low/needed inventory into purchase orders.' Required confirmation flow: FIRST call searchInventory (or listLowStock) with the same filter to show the user a count + sample of items, then call draftPos only AFTER the user explicitly confirms. Items without supplier_id are skipped. Returns { createdPoIds, skipped, supplierFailures, supplierCount }; echo each new PO and any skips back to the user. Requires purchase_orders:manage permission — viewers cannot use it.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        query: {
+          type: SchemaType.STRING,
+          description: 'Free-text query. Empty = no text filter.',
+        },
+        categoryId: {
+          type: SchemaType.STRING,
+          description: 'UUID of a category. Empty = no category filter.',
+        },
+        itemType: {
+          type: SchemaType.STRING,
+          description:
+            "Filter by item_type: 'product' | 'book' | 'asset' | 'consumable' | 'all'. Default 'all'.",
+        },
+        lowStock: {
+          type: SchemaType.BOOLEAN,
+          description: 'When true, only items at or below reorder_point. Default true for restock workflows.',
+        },
+        outOfStock: {
+          type: SchemaType.BOOLEAN,
+          description: 'When true, only items with on-hand <= 0. Default false.',
+        },
+        warehouseId: {
+          type: SchemaType.STRING,
+          description: 'UUID of a specific warehouse. Empty = no warehouse filter.',
+        },
+        limit: {
+          type: SchemaType.NUMBER,
+          description:
+            'Max items to include in this batch of drafts (1-200). Default 50. Server-side hard cap is 200.',
+        },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    if (ctx.role === 'viewer') {
+      throw new Error('viewer role cannot create purchase orders');
+    }
+
+    const itemType =
+      args.itemType === 'product' ||
+      args.itemType === 'book' ||
+      args.itemType === 'asset' ||
+      args.itemType === 'consumable' ||
+      args.itemType === 'all'
+        ? args.itemType
+        : 'all';
+    const limit = Math.min(200, Math.max(1, Number(args.limit) || 50));
+
+    // Resolve item ids by running the same filter shape as searchInventory.
+    const inv = new InventoryService(ctx);
+    const list = await inv.list({
+      q: typeof args.query === 'string' && args.query.length > 0 ? args.query : undefined,
+      categoryId:
+        typeof args.categoryId === 'string' && args.categoryId.length > 0
+          ? args.categoryId
+          : null,
+      status: 'active',
+      itemType,
+      // Default lowStock=true for the restock workflow; pass false explicitly
+      // to draft from the full filtered set.
+      lowStock: args.lowStock === false ? false : Boolean(args.lowStock ?? true),
+      outOfStock: Boolean(args.outOfStock),
+      warehouseId:
+        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+          ? args.warehouseId
+          : null,
+      limit,
+    });
+
+    if (list.items.length === 0) {
+      return {
+        matched: 0,
+        createdPoIds: [],
+        skipped: 0,
+        supplierFailures: [],
+        supplierCount: 0,
+        message: 'No items matched that filter — nothing to draft.',
+      };
+    }
+
+    const itemIds = list.items.map((i) => i.id);
+    const poSvc = new PurchaseOrdersService(ctx);
+    const result = await poSvc.createDraftsFromItems(itemIds);
+
+    return {
+      matched: list.items.length,
+      ...result,
+    };
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
   listCategories: listCategoriesTool,
@@ -653,6 +753,7 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   previewBulkBookImport: previewBulkBookImportTool,
   executeBulkBookImport: executeBulkBookImportTool,
   exportInventory: exportInventoryTool,
+  draftPos: draftPosTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {
