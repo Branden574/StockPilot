@@ -12,6 +12,7 @@ import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
 import { SuppliersService } from '@/server/services/suppliers';
+import { requireOrgContext } from '@/lib/auth/session';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
 const PAGE_SIZE = 50;
@@ -65,7 +66,7 @@ export default async function BooksPage({
 }) {
   const params = await searchParams;
   const page = Math.max(1, Number(params.page) || 1);
-  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, imagesSvc, savedViewsSvc, warehouseFilter] = await Promise.all([
+  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, imagesSvc, savedViewsSvc, warehouseFilter, sessionCtx] = await Promise.all([
     InventoryService.forCurrentUser(),
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
@@ -73,6 +74,7 @@ export default async function BooksPage({
     ItemImagesService.forCurrentUser(),
     SavedViewsService.forCurrentUser(),
     getActiveWarehouseFilter(),
+    requireOrgContext(),
   ]);
 
   const lifecycleStatus =
@@ -224,6 +226,7 @@ export default async function BooksPage({
             savedViews={savedViews}
             savedViewScope="books"
             activeWarehouseId={warehouseFilter}
+            currentUserId={sessionCtx.userId}
           />
         )}
       </div>
