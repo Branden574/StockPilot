@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronDown, Search, X } from 'lucide-react';
+import { ChevronDown, Download, Search, X } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -348,6 +348,11 @@ export function InventoryTable({
             <X className="h-3 w-3" /> Clear
           </button>
         )}
+
+        <ExportMenu
+          params={params}
+          itemType={showBookFields ? 'book' : params.get('type') ?? 'product'}
+        />
 
         <p className="ml-auto font-mono text-[11px] tabular-nums text-[var(--ed-ink-3)]">
           {formatNumber(total)} SKUs · {formatCurrency(valueOnHand)} on hand
@@ -807,6 +812,64 @@ function MultiSelectFilter({
               </button>
             </div>
           )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: string }) {
+  const [open, setOpen] = React.useState(false);
+
+  // "Export filtered" carries every active param verbatim (q, sort, cat[],
+  // loc[], stock, status, etc.) plus scope=filtered.
+  const filteredParams = new URLSearchParams(params.toString());
+  filteredParams.set('scope', 'filtered');
+  // Drop the page param — exports aren't paginated.
+  filteredParams.delete('page');
+
+  // "Export all" only sends type + scope=all. Server ignores everything else.
+  const allParams = new URLSearchParams();
+  allParams.set('type', itemType);
+  allParams.set('scope', 'all');
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
+          aria-label="Export"
+        >
+          <Download className="h-3 w-3" />
+          <span className="font-medium">Export</span>
+          <ChevronDown className="h-3 w-3 text-[var(--ed-ink-4)]" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[220px] p-1">
+        <div className="flex flex-col">
+          <a
+            href={`/api/inventory/export.csv?${filteredParams.toString()}`}
+            download
+            onClick={() => setOpen(false)}
+            className="rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-muted"
+          >
+            <div className="font-medium">Export filtered</div>
+            <div className="text-[11px] text-[var(--ed-ink-4)]">
+              CSV of what's currently visible
+            </div>
+          </a>
+          <a
+            href={`/api/inventory/export.csv?${allParams.toString()}`}
+            download
+            onClick={() => setOpen(false)}
+            className="rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-muted"
+          >
+            <div className="font-medium">Export all</div>
+            <div className="text-[11px] text-[var(--ed-ink-4)]">
+              Full {itemType === 'book' ? 'books' : 'inventory'} dump
+            </div>
+          </a>
         </div>
       </PopoverContent>
     </Popover>
