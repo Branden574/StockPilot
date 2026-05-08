@@ -9,6 +9,7 @@ import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
+import { getItemTrends } from '@/server/services/movements';
 import { SuppliersService } from '@/server/services/suppliers';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
@@ -102,6 +103,11 @@ export default async function BooksPage({
     locationsSvc.list(),
     suppliersSvc.list(),
   ]);
+
+  // Per-row 14-day trend series (qty + moves) for the sparkline column.
+  const trends = await getItemTrends(
+    inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+  );
 
   // Batched primary-image fetch (1 select + 1 createSignedUrls) so each
   // book row in the list can show its actual thumbnail. Fallback chain
@@ -211,6 +217,7 @@ export default async function BooksPage({
             showBookFields
             page={page}
             pageSize={PAGE_SIZE}
+            trends={trends}
           />
         )}
       </div>
