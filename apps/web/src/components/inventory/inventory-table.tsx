@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronDown, Download, Search, X } from 'lucide-react';
+import { ChevronDown, Download, Loader2, Pin, Plus, Search, X } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -8,6 +8,12 @@ import * as React from 'react';
 
 import { BulkActions } from '@/components/inventory/bulk-actions';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
+import {
+  createSavedViewAction,
+  deleteSavedViewAction,
+  setActiveWarehouseAction,
+} from '@/server/actions/saved-views';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -80,6 +86,33 @@ interface InventoryTableProps {
       flat line at current quantity. Computed by getItemTrends in
       services/movements.ts. */
   trends?: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
+  /** User's saved views for this scope. Renders as chips alongside the
+      built-in All / Low / Out chips. Pass [] (or omit) for tabs that
+      haven't loaded any. */
+  savedViews?: SavedViewSummary[];
+  /** Which scope these views belong to ('inventory' or 'books'). The
+      tab page knows which it is; we forward that to the create/delete
+      server actions so they revalidate the right path. */
+  savedViewScope?: 'inventory' | 'books';
+  /** Currently active warehouse id (from cookie via the layout). Saved
+      views capture this alongside URL params so applying a view can
+      restore both axes. */
+  activeWarehouseId?: string | null;
+}
+
+interface SavedViewSummary {
+  id: string;
+  name: string;
+  state: {
+    q?: string;
+    status?: string;
+    stock?: string;
+    type?: string;
+    sort?: string;
+    cat?: string[];
+    loc?: string[];
+    warehouseId?: string | null;
+  };
 }
 
 type SparkMode = 'qty' | 'moves';
@@ -165,6 +198,9 @@ export function InventoryTable({
   page = 1,
   pageSize = 50,
   trends,
+  savedViews = [],
+  savedViewScope,
+  activeWarehouseId = null,
 }: InventoryTableProps) {
   // Sparkline mode preference. localStorage-backed so it sticks across
   // reloads + tabs but doesn't pollute URLs (it's a personal preference,
@@ -280,7 +316,7 @@ export function InventoryTable({
 
   return (
     <div className="space-y-4">
-      {/* Saved views */}
+      {/* Saved views — built-in chips first, then user-saved, then save button */}
       <div className="flex flex-wrap items-center gap-2">
         {VIEWS.map((v) => (
           <Link
@@ -297,12 +333,21 @@ export function InventoryTable({
             {v}
           </Link>
         ))}
-        <button
-          type="button"
-          className="inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-border px-2.5 text-[11.5px] text-[var(--ed-ink-3)] hover:border-[var(--ed-line-strong)]"
-        >
-          + Saved view
-        </button>
+        {savedViews.map((sv) => (
+          <SavedViewChip
+            key={sv.id}
+            view={sv}
+            isActive={isSavedViewActive(sv, params, activeWarehouseId)}
+            scope={savedViewScope ?? (showBookFields ? 'books' : 'inventory')}
+            basePath={basePath}
+          />
+        ))}
+        {savedViewScope && (
+          <SaveCurrentViewButton
+            scope={savedViewScope}
+            currentState={readCurrentState(params, activeWarehouseId)}
+          />
+        )}
       </div>
 
       {/* Toolbar */}
@@ -885,6 +930,244 @@ function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: s
               Full {itemType === 'book' ? 'books' : 'inventory'} dump
             </div>
           </a>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Saved views helpers + components.
+// Spec: docs/superpowers/specs/2026-05-08-saved-views-design.md
+// ---------------------------------------------------------------------------
+
+function readCurrentState(
+  params: URLSearchParams,
+  warehouseId: string | null,
+): SavedViewSummary['state'] {
+  const out: SavedViewSummary['state'] = {};
+  const q = params.get('q');
+  if (q) out.q = q;
+  const status = params.get('status');
+  if (status) out.status = status;
+  const stock = params.get('stock');
+  if (stock) out.stock = stock;
+  const type = params.get('type');
+  if (type) out.type = type;
+  const sort = params.get('sort');
+  if (sort) out.sort = sort;
+  const cat = params.getAll('cat').filter(Boolean);
+  if (cat.length > 0) out.cat = cat;
+  const loc = params.getAll('loc').filter(Boolean);
+  if (loc.length > 0) out.loc = loc;
+  if (warehouseId) out.warehouseId = warehouseId;
+  return out;
+}
+
+function isSavedViewActive(
+  view: SavedViewSummary,
+  params: URLSearchParams,
+  warehouseId: string | null,
+): boolean {
+  const cur = readCurrentState(params, warehouseId);
+  return JSON.stringify(normalize(cur)) === JSON.stringify(normalize(view.state));
+}
+
+// Order-independent comparison helpers for state shapes.
+function normalize(s: SavedViewSummary['state']) {
+  return {
+    q: s.q ?? '',
+    status: s.status ?? '',
+    stock: s.stock ?? '',
+    type: s.type ?? '',
+    sort: s.sort ?? '',
+    cat: [...(s.cat ?? [])].sort(),
+    loc: [...(s.loc ?? [])].sort(),
+    warehouseId: s.warehouseId ?? '',
+  };
+}
+
+function describeState(state: SavedViewSummary['state']): string {
+  const parts: string[] = [];
+  if (state.q) parts.push(`search "${state.q}"`);
+  if (state.stock === 'low') parts.push('low stock');
+  else if (state.stock === 'out') parts.push('out of stock');
+  if (state.status && state.status !== 'active') parts.push(state.status);
+  if (state.type && state.type !== 'product') parts.push(state.type);
+  if (state.cat?.length) parts.push(`${state.cat.length} categor${state.cat.length === 1 ? 'y' : 'ies'}`);
+  if (state.loc?.length) parts.push(`${state.loc.length} location${state.loc.length === 1 ? '' : 's'}`);
+  if (state.warehouseId) parts.push('warehouse');
+  if (state.sort) parts.push(`sorted ${state.sort.replace('_', ' ')}`);
+  return parts.length === 0 ? 'No filters set' : parts.join(' · ');
+}
+
+function SavedViewChip({
+  view,
+  isActive,
+  scope,
+  basePath,
+}: {
+  view: SavedViewSummary;
+  isActive: boolean;
+  scope: 'inventory' | 'books';
+  basePath: string;
+}) {
+  const router = useRouter();
+  const [deleting, setDeleting] = React.useState(false);
+
+  async function apply() {
+    // Update warehouse cookie first (server action) so the next render
+    // reflects it; then push the URL params, which triggers the
+    // server-component refetch with both axes correct.
+    await setActiveWarehouseAction(view.state.warehouseId ?? null);
+    const next = new URLSearchParams();
+    if (view.state.q) next.set('q', view.state.q);
+    if (view.state.status) next.set('status', view.state.status);
+    if (view.state.stock) next.set('stock', view.state.stock);
+    if (view.state.type) next.set('type', view.state.type);
+    if (view.state.sort) next.set('sort', view.state.sort);
+    for (const c of view.state.cat ?? []) next.append('cat', c);
+    for (const l of view.state.loc ?? []) next.append('loc', l);
+    const qs = next.toString();
+    router.replace(qs ? `${basePath}?${qs}` : basePath, { scroll: false });
+    router.refresh();
+  }
+
+  async function remove(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm(`Delete saved view "${view.name}"?`)) return;
+    setDeleting(true);
+    const res = await deleteSavedViewAction(view.id, scope);
+    setDeleting(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('View deleted');
+    router.refresh();
+  }
+
+  return (
+    <span
+      className={cn(
+        'group inline-flex h-6 items-center gap-1 rounded-full border pl-2 pr-1 text-[11.5px] transition-colors',
+        isActive
+          ? 'border-foreground bg-foreground text-background'
+          : 'border-border bg-background text-[var(--ed-ink-2)] hover:border-[var(--ed-line-strong)]',
+      )}
+    >
+      <button
+        type="button"
+        onClick={apply}
+        className="inline-flex items-center gap-1"
+        aria-label={`Apply view ${view.name}`}
+      >
+        <Pin className="h-3 w-3" />
+        <span className="max-w-[120px] truncate">{view.name}</span>
+      </button>
+      <button
+        type="button"
+        onClick={remove}
+        disabled={deleting}
+        aria-label={`Delete view ${view.name}`}
+        className={cn(
+          'ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity hover:bg-black/15 group-hover:opacity-100',
+          isActive && 'hover:bg-white/20',
+        )}
+      >
+        {deleting ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <X className="h-2.5 w-2.5" />}
+      </button>
+    </span>
+  );
+}
+
+function SaveCurrentViewButton({
+  scope,
+  currentState,
+}: {
+  scope: 'inventory' | 'books';
+  currentState: SavedViewSummary['state'];
+}) {
+  const router = useRouter();
+  const [open, setOpen] = React.useState(false);
+  const [name, setName] = React.useState('');
+  const [saving, setSaving] = React.useState(false);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    if (open) {
+      setTimeout(() => inputRef.current?.focus(), 50);
+    } else {
+      setName('');
+    }
+  }, [open]);
+
+  async function save() {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) return;
+    setSaving(true);
+    // currentState mirrors raw URL params with broad string types; the
+    // service runs sanitizeState() before persisting, so a wide cast is
+    // safe here (server is the boundary that narrows + validates).
+    const res = await createSavedViewAction({
+      scope,
+      name: trimmed,
+      state: currentState as Parameters<typeof createSavedViewAction>[0]['state'],
+    });
+    setSaving(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success(`View "${trimmed}" saved`);
+    setOpen(false);
+    router.refresh();
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-border px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)] hover:text-foreground"
+        >
+          <Plus className="h-3 w-3" /> Save view
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[280px] p-3">
+        <div className="space-y-3">
+          <div>
+            <label className="text-[11px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)]">
+              Name
+            </label>
+            <Input
+              ref={inputRef}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !saving) save();
+              }}
+              placeholder="Restock candidates"
+              maxLength={80}
+              className="mt-1 h-8 text-[12.5px]"
+            />
+          </div>
+          <div className="rounded-md border border-border bg-muted/30 px-2.5 py-2">
+            <div className="text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)]">
+              Saving
+            </div>
+            <div className="mt-0.5 text-[12px] text-[var(--ed-ink-2)]">
+              {describeState(currentState)}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={save} disabled={saving || name.trim().length === 0}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save'}
+            </Button>
+          </div>
         </div>
       </PopoverContent>
     </Popover>
