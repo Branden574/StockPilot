@@ -1,6 +1,6 @@
 'use client';
 
-import { Search } from 'lucide-react';
+import { ChevronDown, Search, X } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -10,6 +10,7 @@ import { BulkActions } from '@/components/inventory/bulk-actions';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
 import { getCrateColor, readBookStorage } from '@/lib/book-storage';
@@ -42,9 +43,12 @@ interface Lookups {
 interface InventoryTableProps {
   items: Item[];
   lookups: Lookups;
-  /** Lists used by the bulk actions bar. Pass from the page server fetch
-      so we don't have to re-query for the dialog. */
+  /** Lists used by the bulk actions bar AND the new filter dropdowns.
+      Passed from the page server fetch so the toolbar can render
+      checkbox lists without an extra round trip. */
   categories?: Array<{ id: string; name: string }>;
+  /** Locations available for the filter dropdown. */
+  locations?: Array<{ id: string; name: string }>;
   suppliers?: Array<{ id: string; name: string }>;
   total: number;
   initialQuery?: string;
@@ -82,6 +86,40 @@ function paramsToView(stock: string | null): View {
   return 'All items';
 }
 
+type SortKey =
+  | 'updated_desc'
+  | 'updated_asc'
+  | 'name_asc'
+  | 'name_desc'
+  | 'sku_asc'
+  | 'sku_desc'
+  | 'qty_desc'
+  | 'qty_asc'
+  | 'created_desc'
+  | 'created_asc';
+
+const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
+  { value: 'updated_desc', label: 'Last updated (newest)' },
+  { value: 'updated_asc', label: 'Last updated (oldest)' },
+  { value: 'name_asc', label: 'Name (A → Z)' },
+  { value: 'name_desc', label: 'Name (Z → A)' },
+  { value: 'sku_asc', label: 'SKU (A → Z)' },
+  { value: 'sku_desc', label: 'SKU (Z → A)' },
+  { value: 'qty_desc', label: 'On hand (high → low)' },
+  { value: 'qty_asc', label: 'On hand (low → high)' },
+  { value: 'created_desc', label: 'Created (newest)' },
+  { value: 'created_asc', label: 'Created (oldest)' },
+];
+
+function paramsToSort(value: string | null): SortKey {
+  const found = SORT_OPTIONS.find((o) => o.value === value);
+  return found?.value ?? 'updated_desc';
+}
+
+function paramsToIdSet(params: URLSearchParams, key: string): Set<string> {
+  return new Set(params.getAll(key).filter(Boolean));
+}
+
 function deriveStatus(qty: number, reorder: number): 'ok' | 'warn' | 'crit' {
   if (qty <= 0) return 'crit';
   if (reorder > 0 && qty <= reorder) return 'warn';
@@ -114,6 +152,7 @@ export function InventoryTable({
   items,
   lookups,
   categories = [],
+  locations = [],
   suppliers = [],
   total,
   initialQuery = '',
@@ -128,6 +167,16 @@ export function InventoryTable({
   const [q, setQ] = React.useState(initialQuery);
   const view = paramsToView(params.get('stock'));
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
+
+  const sort = paramsToSort(params.get('sort'));
+  const categoryIds = React.useMemo(
+    () => paramsToIdSet(new URLSearchParams(params.toString()), 'cat'),
+    [params],
+  );
+  const locationIds = React.useMemo(
+    () => paramsToIdSet(new URLSearchParams(params.toString()), 'loc'),
+    [params],
+  );
 
   function hrefForView(v: View): string {
     const next = new URLSearchParams(params.toString());
@@ -147,6 +196,41 @@ export function InventoryTable({
     else next.set('page', String(p));
     const qs = next.toString();
     return qs ? `${basePath}?${qs}` : basePath;
+  }
+
+  function navigateWith(mutator: (p: URLSearchParams) => void) {
+    const next = new URLSearchParams(params.toString());
+    mutator(next);
+    // Filter / sort changes always reset to page 1 — staying on page 5
+    // would be wrong if the new result set is shorter.
+    next.delete('page');
+    const qs = next.toString();
+    router.replace(qs ? `${basePath}?${qs}` : basePath, { scroll: false });
+  }
+
+  function setSort(key: SortKey) {
+    navigateWith((next) => {
+      if (key === 'updated_desc') next.delete('sort');
+      else next.set('sort', key);
+    });
+  }
+
+  function setMultiParam(key: 'cat' | 'loc', ids: Set<string>) {
+    navigateWith((next) => {
+      next.delete(key);
+      for (const id of ids) next.append(key, id);
+    });
+  }
+
+  const activeFilterCount = categoryIds.size + locationIds.size;
+  function clearAllFilters() {
+    navigateWith((next) => {
+      next.delete('cat');
+      next.delete('loc');
+      next.delete('sort');
+      next.delete('q');
+      setQ('');
+    });
   }
 
   React.useEffect(() => {
@@ -206,8 +290,8 @@ export function InventoryTable({
       </div>
 
       {/* Toolbar */}
-      <div className="flex items-center gap-2">
-        <div className="relative max-w-md flex-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[180px] max-w-md flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ed-ink-4)]" />
           <Input
             value={q}
@@ -217,6 +301,38 @@ export function InventoryTable({
             aria-label="Search items"
           />
         </div>
+
+        <SortMenu value={sort} onChange={setSort} />
+
+        {categories.length > 0 && (
+          <MultiSelectFilter
+            label="Category"
+            options={categories}
+            selected={categoryIds}
+            onChange={(ids) => setMultiParam('cat', ids)}
+          />
+        )}
+
+        {locations.length > 0 && (
+          <MultiSelectFilter
+            label="Location"
+            options={locations}
+            selected={locationIds}
+            onChange={(ids) => setMultiParam('loc', ids)}
+          />
+        )}
+
+        {(activeFilterCount > 0 || params.get('sort') || q.trim()) && (
+          <button
+            type="button"
+            onClick={clearAllFilters}
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-dashed border-border px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)] hover:text-foreground"
+            aria-label="Clear all filters"
+          >
+            <X className="h-3 w-3" /> Clear
+          </button>
+        )}
+
         <p className="ml-auto font-mono text-[11px] tabular-nums text-[var(--ed-ink-3)]">
           {formatNumber(total)} SKUs · {formatCurrency(valueOnHand)} on hand
         </p>
@@ -532,5 +648,142 @@ function Checkbox({ checked, onChange }: { checked: boolean; onChange: (c: boole
         />
       )}
     </button>
+  );
+}
+
+function SortMenu({ value, onChange }: { value: SortKey; onChange: (k: SortKey) => void }) {
+  const [open, setOpen] = React.useState(false);
+  const current = SORT_OPTIONS.find((o) => o.value === value) ?? SORT_OPTIONS[0]!;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
+          aria-label={`Sort by ${current.label}`}
+        >
+          <span className="text-[var(--ed-ink-4)]">Sort:</span>
+          <span className="font-medium">{current.label}</span>
+          <ChevronDown className="h-3 w-3 text-[var(--ed-ink-4)]" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[220px] p-1">
+        <div className="flex flex-col">
+          {SORT_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => {
+                onChange(opt.value);
+                setOpen(false);
+              }}
+              className={cn(
+                'rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-muted',
+                opt.value === value && 'bg-muted font-medium',
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function MultiSelectFilter({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: Array<{ id: string; name: string }>;
+  selected: Set<string>;
+  onChange: (ids: Set<string>) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [filter, setFilter] = React.useState('');
+  const visible = filter.trim()
+    ? options.filter((o) => o.name.toLowerCase().includes(filter.trim().toLowerCase()))
+    : options;
+  function toggle(id: string) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange(next);
+  }
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            'inline-flex h-8 items-center gap-1.5 rounded-md border bg-background px-2.5 text-[12px] transition-colors hover:border-[var(--ed-line-strong)]',
+            selected.size > 0
+              ? 'border-foreground text-foreground'
+              : 'border-border text-[var(--ed-ink-2)]',
+          )}
+          aria-label={`Filter by ${label}`}
+        >
+          <span>{label}</span>
+          {selected.size > 0 && (
+            <span className="grid h-4 min-w-4 place-items-center rounded-full bg-foreground px-1 font-mono text-[10px] tabular-nums text-background">
+              {selected.size}
+            </span>
+          )}
+          <ChevronDown className="h-3 w-3 text-[var(--ed-ink-4)]" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-[260px] p-2">
+        <div className="space-y-2">
+          {options.length > 8 && (
+            <Input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder={`Search ${label.toLowerCase()}…`}
+              className="h-7 text-[12px]"
+              aria-label={`Filter ${label} options`}
+            />
+          )}
+          <div className="max-h-[260px] overflow-y-auto">
+            {visible.length === 0 ? (
+              <p className="px-2 py-3 text-center text-[12px] text-[var(--ed-ink-4)]">
+                No matches.
+              </p>
+            ) : (
+              <ul className="flex flex-col">
+                {visible.map((opt) => {
+                  const isOn = selected.has(opt.id);
+                  return (
+                    <li key={opt.id}>
+                      <button
+                        type="button"
+                        onClick={() => toggle(opt.id)}
+                        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-muted"
+                      >
+                        <Checkbox checked={isOn} onChange={() => toggle(opt.id)} />
+                        <span className="truncate">{opt.name}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+          {selected.size > 0 && (
+            <div className="border-t border-border pt-2">
+              <button
+                type="button"
+                onClick={() => onChange(new Set())}
+                className="text-[11.5px] text-[var(--ed-ink-3)] underline-offset-2 hover:text-foreground hover:underline"
+              >
+                Clear {label.toLowerCase()}
+              </button>
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

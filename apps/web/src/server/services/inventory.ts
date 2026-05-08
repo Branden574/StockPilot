@@ -17,12 +17,31 @@ import type {
 
 import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 
+export type ItemListSort =
+  | 'updated_desc'
+  | 'updated_asc'
+  | 'name_asc'
+  | 'name_desc'
+  | 'sku_asc'
+  | 'sku_desc'
+  | 'qty_desc'
+  | 'qty_asc'
+  | 'created_desc'
+  | 'created_asc';
+
 export interface ItemListFilters {
   q?: string;
   status?: 'active' | 'archived' | 'discontinued' | 'all';
+  /** Legacy single-select. New callers should prefer categoryIds. */
   categoryId?: string | null;
+  /** Multi-select. When non-empty, takes precedence over categoryId. */
+  categoryIds?: string[];
+  /** Legacy single-select. New callers should prefer locationIds. */
   locationId?: string | null;
+  locationIds?: string[];
+  /** Legacy single-select. New callers should prefer supplierIds. */
   supplierId?: string | null;
+  supplierIds?: string[];
   /** Optional filter for managers/admins. Ignored for warehouse-scoped users (forced). */
   warehouseId?: string | null;
   /**
@@ -38,7 +57,22 @@ export interface ItemListFilters {
   limit?: number;
   /** Zero-based offset for page-based pagination. Combined with `limit`. */
   offset?: number;
+  /** Sort order. Defaults to 'updated_desc' to keep recently-edited rows on top. */
+  sort?: ItemListSort;
 }
+
+const SORT_MAP: Record<ItemListSort, { col: string; asc: boolean }> = {
+  updated_desc: { col: 'updated_at', asc: false },
+  updated_asc: { col: 'updated_at', asc: true },
+  name_asc: { col: 'name', asc: true },
+  name_desc: { col: 'name', asc: false },
+  sku_asc: { col: 'sku', asc: true },
+  sku_desc: { col: 'sku', asc: false },
+  qty_desc: { col: 'quantity_on_hand', asc: false },
+  qty_asc: { col: 'quantity_on_hand', asc: true },
+  created_desc: { col: 'created_at', asc: false },
+  created_asc: { col: 'created_at', asc: true },
+};
 
 export class InventoryService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -55,6 +89,9 @@ export class InventoryService {
     // /api/v1/items/[id]/barcode when called from an API route.
     const access = await getWarehouseAccess(this.ctx);
 
+    const sortKey = filters.sort ?? 'updated_desc';
+    const sort = SORT_MAP[sortKey] ?? SORT_MAP.updated_desc;
+
     let query = this.ctx.supabase
       .from('inventory_items')
       .select(
@@ -68,7 +105,10 @@ export class InventoryService {
       )
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
-      .order('updated_at', { ascending: false })
+      .order(sort.col, { ascending: sort.asc })
+      // Stable secondary sort so paginated rows don't shuffle when the
+      // primary key has duplicates (e.g. many items with qty_on_hand=0).
+      .order('id', { ascending: true })
       .range(offset, offset + limit - 1);
 
     // Warehouse scoping: defense against URL/API tampering. Warehouse-scoped
@@ -96,9 +136,24 @@ export class InventoryService {
         `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%`,
       );
     }
-    if (filters.categoryId) query = query.eq('category_id', filters.categoryId);
-    if (filters.locationId) query = query.eq('primary_location_id', filters.locationId);
-    if (filters.supplierId) query = query.eq('supplier_id', filters.supplierId);
+    // Multi-select takes precedence; fall back to legacy single-id when
+    // the array is empty/missing so AI tools and any prior caller keep
+    // working unchanged.
+    if (filters.categoryIds && filters.categoryIds.length > 0) {
+      query = query.in('category_id', filters.categoryIds);
+    } else if (filters.categoryId) {
+      query = query.eq('category_id', filters.categoryId);
+    }
+    if (filters.locationIds && filters.locationIds.length > 0) {
+      query = query.in('primary_location_id', filters.locationIds);
+    } else if (filters.locationId) {
+      query = query.eq('primary_location_id', filters.locationId);
+    }
+    if (filters.supplierIds && filters.supplierIds.length > 0) {
+      query = query.in('supplier_id', filters.supplierIds);
+    } else if (filters.supplierId) {
+      query = query.eq('supplier_id', filters.supplierId);
+    }
     if (filters.outOfStock) query = query.lte('quantity_on_hand', 0);
     // PostgREST can't express qty_on_hand <= reorder_point in a single
     // filter, so narrow to items that have a reorder_point set and do the
