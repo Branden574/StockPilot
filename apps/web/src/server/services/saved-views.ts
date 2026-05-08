@@ -30,6 +30,12 @@ export interface SavedView {
   state: SavedViewState;
   sortOrder: number;
   createdAt: string;
+  /** True when this view is shared with the whole org. Non-owners see
+   *  shared views as read-only chips (no share-toggle / delete). */
+  isShared: boolean;
+  /** Owner's user id — used by the client to decide whether to show
+   *  owner-only actions (toggle share, delete) on org-shared views. */
+  ownerId: string;
 }
 
 const VALID_STATUSES = new Set(['active', 'archived', 'discontinued', 'all']);
@@ -90,13 +96,21 @@ export class SavedViewsService {
     return new SavedViewsService(await withContext());
   }
 
+  /**
+   * Returns the user's own views PLUS any org-shared views in the same
+   * scope. RLS already enforces visibility; we just rely on it instead
+   * of filtering client-side. Owner-id is included so the UI can hide
+   * destructive actions on views the current user doesn't own.
+   */
   async list(scope: SavedViewScope): Promise<SavedView[]> {
     const { data, error } = await this.ctx.supabase
       .from('saved_views')
-      .select('id, name, scope, state, sort_order, created_at')
+      .select(
+        'id, name, scope, state, sort_order, created_at, is_shared, user_id',
+      )
       .eq('organization_id', this.ctx.organizationId)
-      .eq('user_id', this.ctx.userId)
       .eq('scope', scope)
+      .order('is_shared', { ascending: true }) // own first, shared after
       .order('sort_order', { ascending: true })
       .order('created_at', { ascending: true });
     if (error) throw new ServiceError('internal_error', error.message);
@@ -108,6 +122,8 @@ export class SavedViewsService {
         state: unknown;
         sort_order: number;
         created_at: string;
+        is_shared: boolean;
+        user_id: string;
       };
       return {
         id: r.id,
@@ -116,6 +132,8 @@ export class SavedViewsService {
         state: sanitizeState(r.state),
         sortOrder: r.sort_order,
         createdAt: r.created_at,
+        isShared: r.is_shared,
+        ownerId: r.user_id,
       };
     });
   }
@@ -124,6 +142,7 @@ export class SavedViewsService {
     scope: SavedViewScope;
     name: string;
     state: SavedViewState;
+    isShared?: boolean;
   }): Promise<SavedView> {
     const name = input.name.trim();
     if (name.length === 0 || name.length > 80) {
@@ -138,8 +157,11 @@ export class SavedViewsService {
         scope: input.scope,
         name,
         state: sanitized,
+        is_shared: input.isShared ?? false,
       })
-      .select('id, name, scope, state, sort_order, created_at')
+      .select(
+        'id, name, scope, state, sort_order, created_at, is_shared, user_id',
+      )
       .single();
     if (error) {
       // 23505 = unique_violation (user_id, org_id, scope, name)
@@ -158,6 +180,8 @@ export class SavedViewsService {
       state: unknown;
       sort_order: number;
       created_at: string;
+      is_shared: boolean;
+      user_id: string;
     };
     return {
       id: row.id,
@@ -166,7 +190,19 @@ export class SavedViewsService {
       state: sanitizeState(row.state),
       sortOrder: row.sort_order,
       createdAt: row.created_at,
+      isShared: row.is_shared,
+      ownerId: row.user_id,
     };
+  }
+
+  /** Owner-only: flip whether a view is shared with the org. */
+  async setSharing(id: string, isShared: boolean): Promise<void> {
+    const { error } = await this.ctx.supabase
+      .from('saved_views')
+      .update({ is_shared: isShared })
+      .eq('id', id)
+      .eq('user_id', this.ctx.userId);
+    if (error) throw new ServiceError('internal_error', error.message);
   }
 
   async remove(id: string): Promise<void> {

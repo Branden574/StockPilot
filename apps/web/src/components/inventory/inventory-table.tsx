@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronDown, Download, Loader2, Pin, Plus, Search, X } from 'lucide-react';
+import { ChevronDown, Download, Loader2, Pin, Plus, Search, Users, X } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -12,6 +12,7 @@ import {
   createSavedViewAction,
   deleteSavedViewAction,
   setActiveWarehouseAction,
+  toggleSavedViewShareAction,
 } from '@/server/actions/saved-views';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -98,6 +99,9 @@ interface InventoryTableProps {
       views capture this alongside URL params so applying a view can
       restore both axes. */
   activeWarehouseId?: string | null;
+  /** Current user id — used to decide whether to show owner-only
+      actions (share toggle, delete) on org-shared saved views. */
+  currentUserId?: string | null;
 }
 
 interface SavedViewSummary {
@@ -113,6 +117,12 @@ interface SavedViewSummary {
     loc?: string[];
     warehouseId?: string | null;
   };
+  /** True when shared with the whole org. Non-owner viewers see a
+      read-only chip with a small Users icon. */
+  isShared?: boolean;
+  /** Owner's user id. Only the owner sees the delete + share-toggle
+      controls on the chip; everyone else gets a click-to-apply chip. */
+  ownerId?: string;
 }
 
 type SparkMode = 'qty' | 'moves';
@@ -201,6 +211,7 @@ export function InventoryTable({
   savedViews = [],
   savedViewScope,
   activeWarehouseId = null,
+  currentUserId = null,
 }: InventoryTableProps) {
   // Sparkline mode preference. localStorage-backed so it sticks across
   // reloads + tabs but doesn't pollute URLs (it's a personal preference,
@@ -340,6 +351,7 @@ export function InventoryTable({
             isActive={isSavedViewActive(sv, params, activeWarehouseId)}
             scope={savedViewScope ?? (showBookFields ? 'books' : 'inventory')}
             basePath={basePath}
+            isOwner={!!currentUserId && sv.ownerId === currentUserId}
           />
         ))}
         {savedViewScope && (
@@ -1006,19 +1018,19 @@ function SavedViewChip({
   isActive,
   scope,
   basePath,
+  isOwner,
 }: {
   view: SavedViewSummary;
   isActive: boolean;
   scope: 'inventory' | 'books';
   basePath: string;
+  isOwner: boolean;
 }) {
   const router = useRouter();
   const [deleting, setDeleting] = React.useState(false);
+  const [sharing, setSharing] = React.useState(false);
 
   async function apply() {
-    // Update warehouse cookie first (server action) so the next render
-    // reflects it; then push the URL params, which triggers the
-    // server-component refetch with both axes correct.
     await setActiveWarehouseAction(view.state.warehouseId ?? null);
     const next = new URLSearchParams();
     if (view.state.q) next.set('q', view.state.q);
@@ -1047,6 +1059,20 @@ function SavedViewChip({
     router.refresh();
   }
 
+  async function toggleShare(e: React.MouseEvent) {
+    e.stopPropagation();
+    const next = !view.isShared;
+    setSharing(true);
+    const res = await toggleSavedViewShareAction(view.id, next, scope);
+    setSharing(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success(next ? 'Shared with the team' : 'Made private');
+    router.refresh();
+  }
+
   return (
     <span
       className={cn(
@@ -1055,6 +1081,7 @@ function SavedViewChip({
           ? 'border-foreground bg-foreground text-background'
           : 'border-border bg-background text-[var(--ed-ink-2)] hover:border-[var(--ed-line-strong)]',
       )}
+      title={view.isShared ? `Shared by ${isOwner ? 'you' : 'a teammate'}` : undefined}
     >
       <button
         type="button"
@@ -1062,21 +1089,43 @@ function SavedViewChip({
         className="inline-flex items-center gap-1"
         aria-label={`Apply view ${view.name}`}
       >
-        <Pin className="h-3 w-3" />
+        {view.isShared ? <Users className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
         <span className="max-w-[120px] truncate">{view.name}</span>
       </button>
-      <button
-        type="button"
-        onClick={remove}
-        disabled={deleting}
-        aria-label={`Delete view ${view.name}`}
-        className={cn(
-          'ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity hover:bg-black/15 group-hover:opacity-100',
-          isActive && 'hover:bg-white/20',
-        )}
-      >
-        {deleting ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <X className="h-2.5 w-2.5" />}
-      </button>
+      {isOwner && (
+        <button
+          type="button"
+          onClick={toggleShare}
+          disabled={sharing}
+          aria-label={view.isShared ? `Make view ${view.name} private` : `Share view ${view.name} with team`}
+          className={cn(
+            'ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity hover:bg-black/15 group-hover:opacity-100',
+            isActive && 'hover:bg-white/20',
+          )}
+        >
+          {sharing ? (
+            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          ) : view.isShared ? (
+            <Users className="h-2.5 w-2.5" />
+          ) : (
+            <Users className="h-2.5 w-2.5 opacity-50" />
+          )}
+        </button>
+      )}
+      {isOwner && (
+        <button
+          type="button"
+          onClick={remove}
+          disabled={deleting}
+          aria-label={`Delete view ${view.name}`}
+          className={cn(
+            'ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity hover:bg-black/15 group-hover:opacity-100',
+            isActive && 'hover:bg-white/20',
+          )}
+        >
+          {deleting ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <X className="h-2.5 w-2.5" />}
+        </button>
+      )}
     </span>
   );
 }
@@ -1091,6 +1140,7 @@ function SaveCurrentViewButton({
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState('');
+  const [shareWithTeam, setShareWithTeam] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -1099,6 +1149,7 @@ function SaveCurrentViewButton({
       setTimeout(() => inputRef.current?.focus(), 50);
     } else {
       setName('');
+      setShareWithTeam(false);
     }
   }, [open]);
 
@@ -1106,20 +1157,20 @@ function SaveCurrentViewButton({
     const trimmed = name.trim();
     if (trimmed.length === 0) return;
     setSaving(true);
-    // currentState mirrors raw URL params with broad string types; the
-    // service runs sanitizeState() before persisting, so a wide cast is
-    // safe here (server is the boundary that narrows + validates).
     const res = await createSavedViewAction({
       scope,
       name: trimmed,
       state: currentState as Parameters<typeof createSavedViewAction>[0]['state'],
+      isShared: shareWithTeam,
     });
     setSaving(false);
     if (!res.ok) {
       toast.error(res.error.message);
       return;
     }
-    toast.success(`View "${trimmed}" saved`);
+    toast.success(
+      shareWithTeam ? `View "${trimmed}" saved and shared` : `View "${trimmed}" saved`,
+    );
     setOpen(false);
     router.refresh();
   }
@@ -1160,6 +1211,21 @@ function SaveCurrentViewButton({
               {describeState(currentState)}
             </div>
           </div>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={shareWithTeam}
+              onChange={(e) => setShareWithTeam(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 rounded border-border text-primary focus:ring-primary"
+            />
+            <div className="flex-1">
+              <div className="text-[12px] font-medium">Share with team</div>
+              <div className="text-[11px] text-[var(--ed-ink-3)]">
+                Everyone in your org will see this view. Only you can edit or
+                delete it.
+              </div>
+            </div>
+          </label>
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={saving}>
               Cancel

@@ -15,6 +15,7 @@ export async function createSavedViewAction(input: {
   scope: SavedViewScope;
   name: string;
   state: SavedViewState;
+  isShared?: boolean;
 }) {
   try {
     const svc = await SavedViewsService.forCurrentUser();
@@ -45,6 +46,33 @@ export async function deleteSavedViewAction(id: string, scope: SavedViewScope) {
     return {
       ok: false as const,
       error: { code: 'internal_error', message: 'Failed to delete view.' },
+    };
+  }
+}
+
+/**
+ * Owner-only: flip a saved view's is_shared flag. Non-owners can't see
+ * the toggle UI; the action also delegates to a service method that
+ * scopes the update by user_id, so an attempted call from a non-owner
+ * silently no-ops at the DB level.
+ */
+export async function toggleSavedViewShareAction(
+  id: string,
+  isShared: boolean,
+  scope: SavedViewScope,
+) {
+  try {
+    const svc = await SavedViewsService.forCurrentUser();
+    await svc.setSharing(id, isShared);
+    revalidatePath(scope === 'inventory' ? '/dashboard/inventory' : '/dashboard/books');
+    return { ok: true as const, data: { id, isShared } };
+  } catch (e) {
+    if (e instanceof ServiceError) {
+      return { ok: false as const, error: { code: e.code, message: e.message } };
+    }
+    return {
+      ok: false as const,
+      error: { code: 'internal_error', message: 'Failed to update sharing.' },
     };
   }
 }
