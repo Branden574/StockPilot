@@ -1,6 +1,7 @@
 'use client';
 
 import { Search } from 'lucide-react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
@@ -312,14 +313,12 @@ export function InventoryTable({
                   <td className="py-2.5 pr-3">
                     <div className="flex items-center gap-2.5">
                       {item.image_url ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
+                        <Image
                           src={item.image_url}
                           alt=""
-                          width={28}
-                          height={28}
-                          loading="lazy"
-                          decoding="async"
+                          width={56}
+                          height={56}
+                          sizes="28px"
                           className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
                         />
                       ) : (
