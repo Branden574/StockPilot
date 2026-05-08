@@ -182,51 +182,66 @@ export async function* streamChat(
     // Append the model's parts so the next round sees the call(s).
     contents.push({ role: 'model', parts: roundParts });
 
-    const responseParts: Part[] = [];
-    for (const call of roundToolCalls) {
-      const tool = TOOL_CATALOG[call.name];
-      if (!tool) {
-        toolCallsUsed.push({ name: call.name, args: call.args, ok: false });
-        yield { type: 'tool', name: call.name, ok: false };
-        responseParts.push({
-          functionResponse: {
-            name: call.name,
-            response: { error: `Unknown tool: ${call.name}` },
-          },
-        });
-        continue;
-      }
-      try {
-        const out = await tool.execute(
-          (call.args as Record<string, unknown>) ?? {},
-          ctx,
-        );
-        toolCallsUsed.push({ name: call.name, args: call.args, ok: true });
-        yield { type: 'tool', name: call.name, ok: true };
-        responseParts.push({
-          functionResponse: {
-            name: call.name,
-            response: { result: out },
-          },
-        });
-      } catch (err) {
-        toolCallsUsed.push({ name: call.name, args: call.args, ok: false });
-        const message = err instanceof Error ? err.message : String(err);
-        void reportError(err, {
-          tag: 'ai.tool',
-          extra: { tool: call.name },
-          organizationId: ctx.organizationId,
-        });
-        yield { type: 'tool', name: call.name, ok: false };
-        responseParts.push({
-          functionResponse: {
-            name: call.name,
-            response: { error: message },
-          },
-        });
-      }
+    // Run all tool calls in this round IN PARALLEL — Gemini frequently
+    // emits multiple calls in a single round (e.g. listCategories +
+    // listWarehouses + searchInventory). Sequential awaits made the
+    // round take sum-of-tool-times; parallel makes it max-of-tool-times.
+    // Order of responseParts must still match roundToolCalls so Gemini
+    // correlates each functionResponse to its call.
+    const settled = await Promise.all(
+      roundToolCalls.map(async (call): Promise<Part> => {
+        const tool = TOOL_CATALOG[call.name];
+        if (!tool) {
+          return {
+            functionResponse: {
+              name: call.name,
+              response: { error: `Unknown tool: ${call.name}` },
+            },
+          };
+        }
+        try {
+          const out = await tool.execute(
+            (call.args as Record<string, unknown>) ?? {},
+            ctx,
+          );
+          return {
+            functionResponse: {
+              name: call.name,
+              response: { result: out },
+            },
+          };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          void reportError(err, {
+            tag: 'ai.tool',
+            extra: { tool: call.name },
+            organizationId: ctx.organizationId,
+          });
+          return {
+            functionResponse: {
+              name: call.name,
+              response: { error: message },
+            },
+          };
+        }
+      }),
+    );
+
+    // Emit tool events + bookkeeping in original order (so the UI's
+    // tool-badge timeline matches what Gemini saw).
+    for (let i = 0; i < settled.length; i++) {
+      const call = roundToolCalls[i]!;
+      const part = settled[i]!;
+      const responseObj =
+        'functionResponse' in part
+          ? (part.functionResponse?.response as Record<string, unknown> | undefined)
+          : undefined;
+      const ok = Boolean(responseObj && !('error' in responseObj));
+      toolCallsUsed.push({ name: call.name, args: call.args, ok });
+      yield { type: 'tool', name: call.name, ok };
     }
-    contents.push({ role: 'user', parts: responseParts });
+
+    contents.push({ role: 'user', parts: settled });
   }
 
   // Hit the hop cap. Return what we have so the route can persist it.
