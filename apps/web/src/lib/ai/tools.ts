@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { SchemaType, type FunctionDeclaration } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType, type FunctionDeclaration } from '@google/generative-ai';
 
 import { lookupIsbn as lookupIsbnLib } from '@/lib/books/lookup';
 import { env } from '@/lib/env';
@@ -820,6 +820,125 @@ const suggestReorderPointTool: ToolExecutor = {
   },
 };
 
+const VISION_MODEL = env.GEMINI_MODEL;
+const VISION_FETCH_TIMEOUT_MS = 12_000;
+const VISION_MAX_BYTES = 6 * 1024 * 1024; // ~6 MB
+
+const identifyFromPhotoTool: ToolExecutor = {
+  declaration: {
+    name: 'identifyFromPhoto',
+    description:
+      "READ-ONLY — given a publicly-fetchable image URL of a book cover (or a similar product), uses Gemini Vision to identify it. Returns structured metadata: title, author, isbn (if visible), publisher, edition, plus a confidence label. Use when the user has photographed a book and asks 'what is this?' / 'add this' / 'identify this cover.' For books that come back with an ISBN, follow up with lookupIsbn for canonical metadata, then optionally previewBulkBookImport. The URL must be HTTP(S) and the image must be ≤ 6 MB. Does NOT add anything to inventory.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        imageUrl: {
+          type: SchemaType.STRING,
+          description:
+            'Public HTTP(S) URL of the image to identify. Signed Supabase Storage URLs work; arbitrary external URLs work too as long as the server can fetch them.',
+        },
+        hint: {
+          type: SchemaType.STRING,
+          description:
+            "Optional free-text hint to disambiguate. E.g. 'this is a children's picture book' or 'looks like a Spanish-language edition.' Helps the model when the cover is unusual.",
+        },
+      },
+      required: ['imageUrl'],
+    },
+  },
+  async execute(args) {
+    if (!env.GEMINI_API_KEY) {
+      throw new Error('GEMINI_API_KEY not configured');
+    }
+    const url = String(args.imageUrl ?? '');
+    if (!/^https?:\/\//i.test(url)) {
+      throw new Error('imageUrl must be an http or https URL');
+    }
+    const hint = typeof args.hint === 'string' ? args.hint.slice(0, 500) : '';
+
+    // Fetch the image with a hard timeout + size cap so a malicious or
+    // huge URL can't tie up a function instance.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), VISION_FETCH_TIMEOUT_MS);
+    let bytes: ArrayBuffer;
+    let mimeType: string;
+    try {
+      const res = await fetch(url, { signal: ac.signal });
+      if (!res.ok) {
+        throw new Error(`fetch failed: ${res.status} ${res.statusText}`);
+      }
+      mimeType = res.headers.get('content-type')?.split(';')[0]?.trim() ?? 'image/jpeg';
+      if (!mimeType.startsWith('image/')) {
+        throw new Error(`URL did not return an image (content-type: ${mimeType})`);
+      }
+      bytes = await res.arrayBuffer();
+      if (bytes.byteLength > VISION_MAX_BYTES) {
+        throw new Error(
+          `image too large (${bytes.byteLength} bytes; max ${VISION_MAX_BYTES})`,
+        );
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const base64 = Buffer.from(bytes).toString('base64');
+    const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
+    const visionModel = genAI.getGenerativeModel({
+      model: VISION_MODEL,
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: SchemaType.OBJECT,
+          properties: {
+            title: { type: SchemaType.STRING },
+            author: { type: SchemaType.STRING },
+            isbn: { type: SchemaType.STRING },
+            publisher: { type: SchemaType.STRING },
+            edition: { type: SchemaType.STRING },
+            language: { type: SchemaType.STRING },
+            confidence: {
+              type: SchemaType.STRING,
+              description: "One of 'high', 'medium', 'low'.",
+            },
+            notes: {
+              type: SchemaType.STRING,
+              description: 'Anything the model wants to flag — partial cover, blur, wrong angle, etc.',
+            },
+          },
+          required: ['title', 'confidence'],
+        },
+      },
+    });
+
+    const prompt = `You are identifying the book or product in this image.
+Return only the requested JSON. If a field isn't clearly visible or
+inferable, omit it (do not guess). For ISBN, only fill it if you can
+read the actual digits on the cover or back — never derive it from
+the title. Confidence rubric:
+  - "high": title + author are unambiguous from the image
+  - "medium": title clear but author or edition uncertain
+  - "low": you're inferring from a partial or blurry view
+${hint ? `\nUser hint: ${hint}` : ''}`;
+
+    const result = await visionModel.generateContent([
+      { text: prompt },
+      { inlineData: { data: base64, mimeType } },
+    ]);
+
+    const raw = result.response.text();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // Vision occasionally wraps JSON in code fences despite the
+      // schema. Strip them and retry.
+      const cleaned = raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
+      parsed = JSON.parse(cleaned);
+    }
+    return parsed;
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
   listCategories: listCategoriesTool,
@@ -837,6 +956,7 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   draftPos: draftPosTool,
   predictRunout: predictRunoutTool,
   suggestReorderPoint: suggestReorderPointTool,
+  identifyFromPhoto: identifyFromPhotoTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {
