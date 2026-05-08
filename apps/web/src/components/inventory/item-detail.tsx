@@ -1,4 +1,4 @@
-import { Box, Boxes, DollarSign, GraduationCap, History, MapPin, Printer, Tag, Truck } from 'lucide-react';
+import { Box, Boxes, DollarSign, GraduationCap, Hash, History, MapPin, Printer, Tag, Truck } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
@@ -180,13 +180,26 @@ export async function ItemDetail({ id, backHref, backLabel, editHref }: ItemDeta
                 item.custom_fields as Record<string, unknown> | null,
               );
               const color = getCrateColor(storage.crateColor);
+              const cf = (item.custom_fields as Record<string, unknown> | null) ?? {};
+              const isbnRaw =
+                (typeof cf.isbn === 'string' && cf.isbn) ||
+                (typeof cf.isbn13 === 'string' && cf.isbn13) ||
+                (typeof cf.isbn10 === 'string' && cf.isbn10) ||
+                '';
+              const isbn = isbnRaw.trim();
               const hasAny =
                 storage.grade ||
                 storage.rackLabel ||
-                (color && storage.crateNumber);
+                (color && storage.crateNumber) ||
+                isbn;
               if (!hasAny) return null;
               return (
                 <>
+                  {isbn && (
+                    <DetailRow icon={Hash} label="ISBN">
+                      <span className="font-mono tabular-nums">{isbn}</span>
+                    </DetailRow>
+                  )}
                   {storage.grade && (
                     <DetailRow icon={GraduationCap} label="Grade">
                       <span>{formatGrade(storage.grade)}</span>
