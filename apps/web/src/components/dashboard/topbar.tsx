@@ -49,7 +49,12 @@ const SETTINGS_LIST: Crumb = { label: 'Settings', href: '/dashboard/settings' };
 
 const CRUMBS: Array<[RegExp, Crumb[]]> = [
   [/^\/dashboard$/, [{ label: 'Overview', href: null }]],
+  // /import must precede /[^/]+ so it isn't caught by the detail catch-all
   [/^\/dashboard\/inventory\/new$/, [SECTION_INVENTORY, ITEMS_LIST, { label: 'New', href: null }]],
+  [
+    /^\/dashboard\/inventory\/import$/,
+    [SECTION_INVENTORY, ITEMS_LIST, { label: 'Import', href: null }],
+  ],
   [
     /^\/dashboard\/inventory\/[^/]+\/edit$/,
     [SECTION_INVENTORY, ITEMS_LIST, { label: 'Edit', href: null }],
@@ -58,12 +63,12 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
     /^\/dashboard\/inventory\/[^/]+$/,
     [SECTION_INVENTORY, ITEMS_LIST, { label: 'Detail', href: null }],
   ],
-  [
-    /^\/dashboard\/inventory\/import$/,
-    [SECTION_INVENTORY, ITEMS_LIST, { label: 'Import', href: null }],
-  ],
   [/^\/dashboard\/inventory$/, [SECTION_INVENTORY, { label: 'Items', href: null }]],
   [/^\/dashboard\/books\/new$/, [SECTION_INVENTORY, BOOKS_LIST, { label: 'New', href: null }]],
+  [
+    /^\/dashboard\/books\/import$/,
+    [SECTION_INVENTORY, BOOKS_LIST, { label: 'Import', href: null }],
+  ],
   [
     /^\/dashboard\/books\/[^/]+\/edit$/,
     [SECTION_INVENTORY, BOOKS_LIST, { label: 'Edit', href: null }],
@@ -71,10 +76,6 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   [
     /^\/dashboard\/books\/[^/]+$/,
     [SECTION_INVENTORY, BOOKS_LIST, { label: 'Detail', href: null }],
-  ],
-  [
-    /^\/dashboard\/books\/import$/,
-    [SECTION_INVENTORY, BOOKS_LIST, { label: 'Import', href: null }],
   ],
   [/^\/dashboard\/books$/, [SECTION_INVENTORY, { label: 'Books', href: null }]],
   [/^\/dashboard\/categories$/, [SECTION_INVENTORY, { label: 'Categories', href: null }]],
