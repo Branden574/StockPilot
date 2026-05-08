@@ -372,6 +372,21 @@ export function InventoryTable({
         />
       )}
 
+      {/* Top pagination — mirrors the bottom one so users on long lists
+          don't have to scroll to the bottom to flip pages. Same component,
+          same URL state, same buildHref. Hides on single-page lists for
+          the same reason the bottom one does. */}
+      {total > pageSize && (
+        <div className="flex items-center justify-end">
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            buildHref={hrefForPage}
+          />
+        </div>
+      )}
+
       {/* Table */}
       <div className="overflow-x-auto rounded-[10px] border border-border bg-card">
         <table className="w-full min-w-[720px] text-[12.5px]">
