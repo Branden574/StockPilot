@@ -93,6 +93,55 @@ export interface SupplierScorecardRow {
   lastReceivedAt: string | null;
 }
 
+export interface VelocityClassRow {
+  itemId: string;
+  sku: string;
+  name: string;
+  warehouseName: string | null;
+  categoryName: string | null;
+  quantityOnHand: number;
+  unitCost: number;
+  /** Total units leaving this item (movements with quantity_change < 0) in window. */
+  unitsOut: number;
+  /** unitsOut × unit_cost — the metric ABC ranks by. */
+  valueOut: number;
+  /** Most recent out-movement in window. Null = no movements. */
+  lastOutAt: string | null;
+  /** A = top 80% of value, B = next 15%, C = bottom 5%, D = no movement (dead). */
+  velocityClass: 'A' | 'B' | 'C' | 'D';
+}
+
+export interface VelocityClassReport {
+  rangeDays: number;
+  rows: VelocityClassRow[];
+  summary: { A: number; B: number; C: number; D: number };
+  totalValueOut: number;
+}
+
+export interface DeadStockRow {
+  itemId: string;
+  sku: string;
+  name: string;
+  warehouseName: string | null;
+  categoryName: string | null;
+  quantityOnHand: number;
+  unitCost: number;
+  /** Carrying cost: qty × unit_cost. The dollars sitting on the shelf. */
+  carryingValue: number;
+  /** Days since the item was created in the system. */
+  ageDays: number;
+  /** Days the item has been stagnant in the dead-stock window — capped
+   *  to the window length since older history isn't queried. */
+  stagnantDays: number;
+}
+
+export interface DeadStockReport {
+  rangeDays: number;
+  rows: DeadStockRow[];
+  totalCarryingValue: number;
+  itemCount: number;
+}
+
 export interface SupplierScorecardReport {
   rangeDays: number;
   rows: SupplierScorecardRow[];
@@ -572,6 +621,220 @@ export class ReportsService {
       totalPos: rows.reduce((s, r) => s + r.totalPos, 0),
       totalSpend: rows.reduce((s, r) => s + r.totalSpend, 0),
       totalOpenValue: rows.reduce((s, r) => s + r.openValue, 0),
+    };
+  }
+
+  /**
+   * ABC velocity classification — ranks items by total dollars-out
+   * (sales + transfers + adjustments-down) over the last `days` days
+   * and partitions them into A/B/C buckets:
+   *   A = top 80% of total value moved (typically ~20% of items)
+   *   B = next 15%
+   *   C = bottom 5%
+   * Items with no out-movement in the window are tagged 'D' (dead).
+   *
+   * Used to focus stocking effort on what's actually selling and to
+   * surface inventory you're carrying for nothing.
+   */
+  async velocityClass(days = 90): Promise<VelocityClassReport> {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const [movementsRes, itemsRes] = await Promise.all([
+      this.ctx.supabase
+        .from('stock_movements')
+        .select('item_id, quantity_change, movement_type, created_at')
+        .eq('organization_id', this.ctx.organizationId)
+        .gte('created_at', since)
+        .lt('quantity_change', 0), // out-movements only (negative)
+      this.ctx.supabase
+        .from('inventory_items')
+        .select(
+          `id, sku, name, quantity_on_hand, unit_cost,
+           warehouse:warehouses!warehouse_id (name),
+           category:categories!category_id (name)`,
+        )
+        .eq('organization_id', this.ctx.organizationId)
+        .is('deleted_at', null)
+        .eq('status', 'active'),
+    ]);
+    if (movementsRes.error)
+      throw new ServiceError('internal_error', movementsRes.error.message);
+    if (itemsRes.error)
+      throw new ServiceError('internal_error', itemsRes.error.message);
+
+    type ItemRow = {
+      id: string;
+      sku: string;
+      name: string;
+      quantity_on_hand: number;
+      unit_cost: number;
+      warehouse: { name: string } | { name: string }[] | null;
+      category: { name: string } | { name: string }[] | null;
+    };
+    type MoveRow = {
+      item_id: string;
+      quantity_change: number;
+      movement_type: string;
+      created_at: string;
+    };
+
+    // Aggregate units-out and last-out per item.
+    const unitsOutById = new Map<string, number>();
+    const lastOutById = new Map<string, string>();
+    for (const m of (movementsRes.data ?? []) as MoveRow[]) {
+      const prev = unitsOutById.get(m.item_id) ?? 0;
+      unitsOutById.set(m.item_id, prev + Math.abs(Number(m.quantity_change) || 0));
+      const prevDate = lastOutById.get(m.item_id);
+      if (!prevDate || m.created_at > prevDate) {
+        lastOutById.set(m.item_id, m.created_at);
+      }
+    }
+
+    const rawRows = ((itemsRes.data ?? []) as ItemRow[]).map((r) => {
+      const wh = Array.isArray(r.warehouse) ? r.warehouse[0] : r.warehouse;
+      const cat = Array.isArray(r.category) ? r.category[0] : r.category;
+      const unitsOut = unitsOutById.get(r.id) ?? 0;
+      const cost = Number(r.unit_cost) || 0;
+      return {
+        itemId: r.id,
+        sku: r.sku,
+        name: r.name,
+        warehouseName: wh?.name ?? null,
+        categoryName: cat?.name ?? null,
+        quantityOnHand: Number(r.quantity_on_hand) || 0,
+        unitCost: cost,
+        unitsOut,
+        valueOut: unitsOut * cost,
+        lastOutAt: lastOutById.get(r.id) ?? null,
+      };
+    });
+
+    // Sort by valueOut descending so A items come first.
+    rawRows.sort((a, b) => b.valueOut - a.valueOut);
+
+    const totalValue = rawRows.reduce((s, r) => s + r.valueOut, 0);
+    let runningValue = 0;
+
+    const rows: VelocityClassRow[] = rawRows.map((r) => {
+      let velocityClass: 'A' | 'B' | 'C' | 'D';
+      if (r.valueOut === 0) {
+        velocityClass = 'D';
+      } else {
+        runningValue += r.valueOut;
+        const pct = totalValue > 0 ? runningValue / totalValue : 0;
+        if (pct <= 0.8) velocityClass = 'A';
+        else if (pct <= 0.95) velocityClass = 'B';
+        else velocityClass = 'C';
+      }
+      return { ...r, velocityClass };
+    });
+
+    const summary = {
+      A: rows.filter((r) => r.velocityClass === 'A').length,
+      B: rows.filter((r) => r.velocityClass === 'B').length,
+      C: rows.filter((r) => r.velocityClass === 'C').length,
+      D: rows.filter((r) => r.velocityClass === 'D').length,
+    };
+
+    return {
+      rangeDays: days,
+      rows,
+      summary,
+      totalValueOut: totalValue,
+    };
+  }
+
+  /**
+   * Dead-stock report — items that haven't moved out in `days` days,
+   * ranked by carrying cost (qty × unit_cost). The biggest dollar
+   * targets to clear, donate, or write down. Mirrors what NetSuite +
+   * Cin7 expose as "stale inventory" / "dead stock."
+   */
+  async deadStock(days = 90): Promise<DeadStockReport> {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    // First pass: every item with on-hand > 0 in the org.
+    const { data: items, error: itemsErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .select(
+        `id, sku, name, quantity_on_hand, unit_cost, created_at,
+         warehouse:warehouses!warehouse_id (name),
+         category:categories!category_id (name)`,
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .is('deleted_at', null)
+      .eq('status', 'active')
+      .gt('quantity_on_hand', 0);
+    if (itemsErr) throw new ServiceError('internal_error', itemsErr.message);
+
+    type ItemRow = {
+      id: string;
+      sku: string;
+      name: string;
+      quantity_on_hand: number;
+      unit_cost: number;
+      created_at: string;
+      warehouse: { name: string } | { name: string }[] | null;
+      category: { name: string } | { name: string }[] | null;
+    };
+
+    const itemList = (items ?? []) as ItemRow[];
+    const itemIds = itemList.map((i) => i.id);
+
+    // Most-recent out-movement per item in the window.
+    const recentOut = new Map<string, string>();
+    if (itemIds.length > 0) {
+      const { data: moves } = await this.ctx.supabase
+        .from('stock_movements')
+        .select('item_id, created_at')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('item_id', itemIds)
+        .gte('created_at', since)
+        .lt('quantity_change', 0)
+        .order('created_at', { ascending: false });
+      for (const m of (moves ?? []) as Array<{ item_id: string; created_at: string }>) {
+        if (!recentOut.has(m.item_id)) recentOut.set(m.item_id, m.created_at);
+      }
+    }
+
+    const now = Date.now();
+    const sinceMs = new Date(since).getTime();
+
+    const rows: DeadStockRow[] = itemList
+      .filter((r) => !recentOut.has(r.id))
+      .map((r) => {
+        const wh = Array.isArray(r.warehouse) ? r.warehouse[0] : r.warehouse;
+        const cat = Array.isArray(r.category) ? r.category[0] : r.category;
+        const qty = Number(r.quantity_on_hand) || 0;
+        const cost = Number(r.unit_cost) || 0;
+        const createdMs = new Date(r.created_at).getTime();
+        const ageDays = Math.floor((now - createdMs) / (24 * 60 * 60 * 1000));
+        // Days since last out — but we only know if it's older than the
+        // window. Capped to "≥ days" to be honest about what we measured.
+        const stagnantDays = Math.max(
+          days,
+          Math.floor((now - sinceMs) / (24 * 60 * 60 * 1000)),
+        );
+        return {
+          itemId: r.id,
+          sku: r.sku,
+          name: r.name,
+          warehouseName: wh?.name ?? null,
+          categoryName: cat?.name ?? null,
+          quantityOnHand: qty,
+          unitCost: cost,
+          carryingValue: qty * cost,
+          ageDays,
+          stagnantDays,
+        };
+      })
+      .sort((a, b) => b.carryingValue - a.carryingValue);
+
+    return {
+      rangeDays: days,
+      rows,
+      totalCarryingValue: rows.reduce((s, r) => s + r.carryingValue, 0),
+      itemCount: rows.length,
     };
   }
 }

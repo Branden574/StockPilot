@@ -148,6 +148,68 @@ export async function GET(
       return csvResponse(slug, csv, `${days}d`);
     }
 
+    if (slug === 'velocity-class') {
+      const days = parseDays(url.searchParams.get('days'));
+      const data = await svc.velocityClass(days);
+      const csv = toCsv(
+        [
+          'Class',
+          'SKU',
+          'Name',
+          'Warehouse',
+          'Category',
+          'On hand',
+          'Unit cost',
+          'Units out',
+          'Value out',
+          'Last out',
+        ],
+        data.rows.map((r) => ({
+          Class: r.velocityClass,
+          SKU: r.sku,
+          Name: r.name,
+          Warehouse: r.warehouseName ?? '',
+          Category: r.categoryName ?? '',
+          'On hand': r.quantityOnHand,
+          'Unit cost': r.unitCost.toFixed(4),
+          'Units out': r.unitsOut,
+          'Value out': r.valueOut.toFixed(2),
+          'Last out': r.lastOutAt ?? '',
+        })),
+      );
+      return csvResponse(slug, csv, `${days}d`);
+    }
+
+    if (slug === 'dead-stock') {
+      const days = parseDays(url.searchParams.get('days'));
+      const data = await svc.deadStock(days);
+      const csv = toCsv(
+        [
+          'SKU',
+          'Name',
+          'Warehouse',
+          'Category',
+          'On hand',
+          'Unit cost',
+          'Carrying value',
+          'Age (days)',
+          'Stagnant (days)',
+        ],
+        data.rows.map((r) => ({
+          SKU: r.sku,
+          Name: r.name,
+          Warehouse: r.warehouseName ?? '',
+          Category: r.categoryName ?? '',
+          'On hand': r.quantityOnHand,
+          'Unit cost': r.unitCost.toFixed(4),
+          'Carrying value': r.carryingValue.toFixed(2),
+          'Age (days)': r.ageDays,
+          'Stagnant (days)': `≥${r.stagnantDays}`,
+        })),
+      );
+      return csvResponse(slug, csv, `${days}d`);
+    }
+
     if (slug === 'shrinkage') {
       const days = parseDays(url.searchParams.get('days'));
       const data = await svc.shrinkage(days);
