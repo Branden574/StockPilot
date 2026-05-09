@@ -191,11 +191,17 @@ export function ItemForm({
   const [lookingUp, setLookingUp] = React.useState(false);
 
   async function handleIsbnDetected(isbn: string) {
-    // The scan succeeded — surface the ISBN immediately and keep it
+    // The scan succeeded — surface the value immediately and keep it
     // populated whether or not the metadata lookup finds anything.
     // Educational/textbook publishers (HMH, Pearson, McGraw-Hill, etc.)
     // often aren't in Google Books or Open Library, so a miss is common.
     setValue('barcode', isbn, { shouldDirty: true });
+    // Non-book items just want the barcode populated. Skip the books
+    // lookup so we don't toast "ISBN not found" for a regular UPC.
+    if (!isBook) {
+      toast.success(`Barcode ${isbn} captured`);
+      return;
+    }
     setLookingUp(true);
     try {
       const res = await fetch(`/api/books/lookup?isbn=${encodeURIComponent(isbn)}`);
@@ -442,27 +448,26 @@ export function ItemForm({
             label={isBook ? 'ISBN' : 'Barcode'}
             error={errors.barcode?.message}
           >
-            {isBook ? (
-              <div className="flex gap-2">
-                <Input placeholder="978-…" {...register('barcode')} />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setScannerOpen(true)}
-                  disabled={lookingUp}
-                >
-                  {lookingUp ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <ScanLine className="h-3.5 w-3.5" />
-                  )}
-                  Scan
-                </Button>
-              </div>
-            ) : (
-              <Input placeholder="Scan or type" {...register('barcode')} />
-            )}
+            <div className="flex gap-2">
+              <Input
+                placeholder={isBook ? '978-…' : 'Scan or type'}
+                {...register('barcode')}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setScannerOpen(true)}
+                disabled={lookingUp}
+              >
+                {lookingUp ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ScanLine className="h-3.5 w-3.5" />
+                )}
+                Scan
+              </Button>
+            </div>
           </Field>
         </div>
         {isBook && (
@@ -790,13 +795,11 @@ export function ItemForm({
           )}
         </Button>
       </div>
-      {isBook && (
-        <IsbnScanner
-          open={scannerOpen}
-          onOpenChange={setScannerOpen}
-          onDetected={handleIsbnDetected}
-        />
-      )}
+      <IsbnScanner
+        open={scannerOpen}
+        onOpenChange={setScannerOpen}
+        onDetected={handleIsbnDetected}
+      />
     </form>
   );
 }
