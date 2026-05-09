@@ -45,6 +45,11 @@ export const PERMISSIONS = [
   // change status / mark delivered / regenerate the public token.
   'orders:request',
   'orders:approve',
+  // Schedule events: manager+ creates/edits/deletes calendar entries.
+  // Viewers can still read the calendar (RLS allows org members) but
+  // can't mutate it. Without this gate, a viewer could call the
+  // server actions directly and silently change anyone's events.
+  'schedule:manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -83,6 +88,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'bundles:distribute',
     'orders:request',
     'orders:approve',
+    'schedule:manage',
   ],
   staff: [
     'organization:read',
