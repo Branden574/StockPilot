@@ -89,15 +89,19 @@ export function usePushNotifications(user: User | null) {
     tapSubscription = Notifications.addNotificationResponseReceivedListener((res) => {
       const link = (res.notification.request.content.data as { link?: string })?.link;
       if (link && typeof link === 'string') {
-        // Web links route to mobile-specific screens via deep links;
-        // bare schemes pass through.
+        // Internal /dashboard/... paths are translated to native
+        // stockpilot:// deep links. Anything else is only opened if
+        // it's an explicit https:// or stockpilot:// URL — this
+        // blocks `javascript:`, `intent:`, `data:`, and other unsafe
+        // schemes that would otherwise be opened verbatim by
+        // Linking.openURL if the push payload were ever poisoned.
         if (link.startsWith('/dashboard/inventory/')) {
           const id = link.split('/').pop();
           if (id) Linking.openURL(`stockpilot://item/${id}`).catch(() => {});
         } else if (link.startsWith('/dashboard/purchase-orders/')) {
           const id = link.split('/').pop();
           if (id) Linking.openURL(`stockpilot://po/${id}`).catch(() => {});
-        } else if (!link.startsWith('/')) {
+        } else if (link.startsWith('https://') || link.startsWith('stockpilot://')) {
           Linking.openURL(link).catch(() => {});
         }
       }

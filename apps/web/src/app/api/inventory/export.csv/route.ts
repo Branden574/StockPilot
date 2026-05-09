@@ -33,22 +33,9 @@ const VALID_SORTS = new Set<ItemListSort>([
 const VALID_STATUS = new Set(['active', 'archived', 'discontinued', 'all']);
 const VALID_TYPES = new Set(['product', 'book', 'asset', 'consumable', 'all']);
 
-/**
- * Defensive Excel-formula-injection guard. Cells that begin with =, +, -,
- * or @ are interpreted as formulas by spreadsheet software; prefixing
- * with a single quote makes Excel/Sheets render them as plain text.
- * Applied after toCsv's quoting handles commas/quotes/newlines.
- */
-function escapeForSpreadsheet(value: unknown): string {
-  if (value == null) return '';
-  const s = String(value);
-  if (s.length === 0) return s;
-  const first = s[0]!;
-  if (first === '=' || first === '+' || first === '-' || first === '@') {
-    return `'${s}`;
-  }
-  return s;
-}
+// CSV formula-injection escaping happens inside toCsv() now. Every
+// string cell across every CSV export gets the guard automatically;
+// callers no longer need to remember.
 
 const HEADERS = [
   'name',
@@ -139,9 +126,9 @@ export async function GET(request: Request) {
         return v == null ? '' : String(v);
       };
       return {
-        name: escapeForSpreadsheet(i.name),
-        sku: escapeForSpreadsheet(i.sku),
-        barcode: escapeForSpreadsheet(i.barcode ?? ''),
+        name: i.name,
+        sku: i.sku,
+        barcode: i.barcode ?? '',
         item_type: i.item_type,
         status: i.status,
         quantity_on_hand: i.quantity_on_hand,
@@ -149,29 +136,26 @@ export async function GET(request: Request) {
         reorder_quantity: (i as unknown as { reorder_quantity?: number }).reorder_quantity ?? 0,
         unit_cost: i.unit_cost,
         retail_price: i.retail_price,
-        category: escapeForSpreadsheet(i.category_id ? (catMap.get(i.category_id) ?? '') : ''),
-        primary_location: escapeForSpreadsheet(
-          i.primary_location_id ? (locMap.get(i.primary_location_id) ?? '') : '',
-        ),
-        supplier: escapeForSpreadsheet(i.supplier_id ? (supMap.get(i.supplier_id) ?? '') : ''),
-        warehouse: escapeForSpreadsheet(i.warehouse_id ? (whMap.get(i.warehouse_id) ?? '') : ''),
-        charter: escapeForSpreadsheet(i.charter_id ? (chMap.get(i.charter_id) ?? '') : ''),
+        category: i.category_id ? (catMap.get(i.category_id) ?? '') : '',
+        primary_location: i.primary_location_id ? (locMap.get(i.primary_location_id) ?? '') : '',
+        supplier: i.supplier_id ? (supMap.get(i.supplier_id) ?? '') : '',
+        warehouse: i.warehouse_id ? (whMap.get(i.warehouse_id) ?? '') : '',
+        charter: i.charter_id ? (chMap.get(i.charter_id) ?? '') : '',
         tracking_type: i.tracking_type,
-        author: escapeForSpreadsheet(str('author')),
+        author: str('author'),
         // For books, ISBN is the barcode — the form labels the same column
         // "ISBN" for books and "Barcode" otherwise, and bulk imports
         // store the ISBN at inventory_items.barcode. The custom_fields
         // keys are legacy fallbacks from older imports.
-        isbn: escapeForSpreadsheet(
+        isbn:
           i.item_type === 'book'
             ? (i.barcode ?? '') || str('isbn') || str('isbn13') || str('isbn10')
             : '',
-        ),
-        grade: escapeForSpreadsheet(str('book_grade')),
-        rack_number: escapeForSpreadsheet(str('book_rack_number')),
-        rack_row: escapeForSpreadsheet(str('book_rack_row')),
-        crate_color: escapeForSpreadsheet(str('book_crate_color')),
-        crate_number: escapeForSpreadsheet(str('book_crate_number')),
+        grade: str('book_grade'),
+        rack_number: str('book_rack_number'),
+        rack_row: str('book_rack_row'),
+        crate_color: str('book_crate_color'),
+        crate_number: str('book_crate_number'),
         created_at: i.created_at,
         updated_at: i.updated_at,
       };

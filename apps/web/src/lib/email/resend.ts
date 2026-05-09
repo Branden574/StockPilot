@@ -22,8 +22,12 @@ interface SendResult {
  */
 export async function sendEmail({ to, subject, html, text }: SendEmailInput): Promise<SendResult> {
   if (!env.RESEND_API_KEY) {
+    // Dry-run logging on staging / dev. Don't log the body — the
+    // body contains recipient PII (full name, request lines, denial
+    // reasons) and any log drain configured on the deployment would
+    // otherwise capture it. The `to` and `subject` are sufficient for
+    // dev observability.
     console.info('[email] (dry-run, no RESEND_API_KEY) →', { to, subject });
-    console.info('[email] Body:\n', text ?? html);
     return { ok: true, id: 'dryrun' };
   }
 

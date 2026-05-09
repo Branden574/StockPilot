@@ -91,7 +91,12 @@ export function NotificationsList({ notifications }: NotificationsListProps) {
                 )}
               />
               <div className="min-w-0 flex-1">
-                {n.link ? (
+                {/* Defense-in-depth: notifications.link is server-written
+                    today (writer triggers + service code), but if a
+                    poisoned row ever gets in we don't want
+                    `javascript:alert(...)` to render as a clickable
+                    link. Restrict to internal relative paths. */}
+                {n.link && n.link.startsWith('/') && !n.link.startsWith('//') ? (
                   <Link href={n.link} className="block hover:underline">
                     <p className="text-sm font-medium">{n.title}</p>
                   </Link>

@@ -78,14 +78,47 @@ export function csvFilename(slug: string, suffix?: string): string {
   return `${safe}-${stamp}${tail}.csv`;
 }
 
+/**
+ * Spreadsheet-formula-injection guard. Cells starting with =, +, -, @,
+ * tab, or carriage return are interpreted as formulas by Excel /
+ * LibreOffice / Google Sheets; prefixing with a single quote makes
+ * the spreadsheet treat them as plain text. Applied automatically by
+ * toCsv() to every string cell so callers don't need to remember.
+ *
+ * The tab/carriage-return additions cover OWASP CSV-injection
+ * variants where a leading whitespace + formula char still triggers
+ * formula evaluation in some spreadsheet versions.
+ */
+export function escapeForSpreadsheet(value: unknown): string {
+  if (value == null) return '';
+  const s = String(value);
+  if (s.length === 0) return s;
+  const first = s[0]!;
+  if (
+    first === '=' ||
+    first === '+' ||
+    first === '-' ||
+    first === '@' ||
+    first === '\t' ||
+    first === '\r'
+  ) {
+    return `'${s}`;
+  }
+  return s;
+}
+
 export function toCsv(header: string[], rows: Array<Record<string, string | number | null | undefined>>): string {
   const escape = (v: unknown) => {
-    if (v == null) return '';
-    const s = String(v);
-    if (s.includes('"') || s.includes(',') || s.includes('\n')) {
-      return `"${s.replace(/"/g, '""')}"`;
+    // Step 1: defuse spreadsheet-formula injection. Numbers passed as
+    // numbers (not strings) are unaffected; only string-shaped cells
+    // ever start with =/+/-/@/\t/\r.
+    const safe = escapeForSpreadsheet(v);
+    if (safe.length === 0) return '';
+    // Step 2: standard CSV quoting for commas/quotes/newlines.
+    if (safe.includes('"') || safe.includes(',') || safe.includes('\n')) {
+      return `"${safe.replace(/"/g, '""')}"`;
     }
-    return s;
+    return safe;
   };
   const lines = [header.join(',')];
   for (const row of rows) {
