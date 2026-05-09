@@ -1,55 +1,79 @@
 import 'server-only';
 
+import { createAdminClient } from '@/lib/supabase/admin';
+
 /**
- * Tiny in-memory rate limit helper. Per-process — meaning each Vercel
- * serverless instance keeps its own counter. That's fine for v1: we want
- * cheap protection against accidental spamming and trivial scripted
- * abuse on the public order-request form, not enterprise-grade DoS
- * defense. Real attackers will hit cold instances and effectively get
- * the per-window limit per region; that's still orders of magnitude
- * below Resend's per-day caps so the email pipeline stays safe.
+ * Persistent rate-limit helper backed by the Supabase
+ * `rate_limit_buckets` table + the SECURITY DEFINER
+ * `increment_rate_limit()` RPC (migration 0048). Replaces the previous
+ * in-memory Map which:
+ *   • didn't survive Vercel cold starts (every fresh instance got a
+ *     clean counter — bypassable by hitting cold instances)
+ *   • wasn't shared across Vercel regions
+ *   • leaked memory unbounded over a warm instance's lifetime
  *
- * v1.1 follow-up: move to a Supabase-backed `rate_limit_buckets` table
- * with atomic upsert (org_id, key, count, window_started_at) so the
- * counter survives cold starts and is shared across regions.
+ * The RPC handles atomic check-and-increment with row locks, so two
+ * simultaneous calls with the same key serialize correctly. Returns
+ * `{ allowed, count, resetAt }` matching the previous shape.
+ *
+ * Uses the admin client so callers (including the public, unauth POST
+ * endpoint) don't need RLS access. The RPC enforces no auth on its
+ * own; the gate is "you can call it" which we accept on every code
+ * path.
+ *
+ * Failure mode: if the RPC throws (DB unreachable, table missing
+ * during a deploy gap), we fail OPEN — return allowed=true with a
+ * placeholder reset. Failing closed would soft-DoS the public order
+ * form during a transient DB blip; we'd rather log + allow than
+ * stonewall legitimate users.
  */
 
-interface Bucket {
-  /** Number of requests counted in the current window. */
+interface RateLimitResult {
+  allowed: boolean;
   count: number;
-  /** Epoch ms when the current window expires and resets. */
   resetAt: number;
 }
 
-const buckets = new Map<string, Bucket>();
-
-export function checkRateLimit(
+export async function checkRateLimit(
   key: string,
   limit: number,
   windowMs: number,
-): { allowed: boolean; resetAt: number } {
-  const now = Date.now();
-  const existing = buckets.get(key);
-
-  if (!existing || existing.resetAt <= now) {
-    const resetAt = now + windowMs;
-    buckets.set(key, { count: 1, resetAt });
-    return { allowed: true, resetAt };
+): Promise<RateLimitResult> {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin.rpc('increment_rate_limit', {
+      p_key: key,
+      p_limit: limit,
+      p_window_ms: windowMs,
+    });
+    if (error || !data) {
+      // DB error path: fail open. The RPC is a security DEFINER
+      // function so an error is unusual; a missing-function error
+      // during a migration window is the most likely cause. Allow
+      // the request rather than locking everyone out.
+      console.warn('[rate-limit] RPC failed, allowing request', error?.message);
+      return { allowed: true, count: 0, resetAt: Date.now() + windowMs };
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      return { allowed: true, count: 0, resetAt: Date.now() + windowMs };
+    }
+    return {
+      allowed: Boolean(row.allowed),
+      count: Number(row.count) || 0,
+      resetAt: row.reset_at ? new Date(row.reset_at).getTime() : Date.now() + windowMs,
+    };
+  } catch (e) {
+    console.warn('[rate-limit] threw, allowing request', e);
+    return { allowed: true, count: 0, resetAt: Date.now() + windowMs };
   }
-
-  if (existing.count >= limit) {
-    return { allowed: false, resetAt: existing.resetAt };
-  }
-
-  existing.count += 1;
-  return { allowed: true, resetAt: existing.resetAt };
 }
 
 /**
- * Test-only helper — clears the in-memory map. NEVER call this from
- * application code; rate-limit reset must come from the window expiring
- * naturally, not from a privileged caller.
+ * Test-only — clears all buckets from the table. Tests should reset
+ * to a known state between runs.
  */
-export function __resetRateLimitsForTests(): void {
-  buckets.clear();
+export async function __resetRateLimitsForTests(): Promise<void> {
+  const admin = createAdminClient();
+  await admin.from('rate_limit_buckets').delete().gt('count', -1);
 }

@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||
     'unknown';
-  const limit = checkRateLimit(`public-order-request:${ip}`, RATE_LIMIT_PER_HOUR, ONE_HOUR_MS);
+  const limit = await checkRateLimit(`public-order-request:${ip}`, RATE_LIMIT_PER_HOUR, ONE_HOUR_MS);
   if (!limit.allowed) {
     const retryAfter = Math.max(1, Math.ceil((limit.resetAt - Date.now()) / 1000));
     return NextResponse.json(

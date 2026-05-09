@@ -42,7 +42,7 @@ export async function POST(req: Request) {
   // 5 files * 8 MB each * multi-second vision runs. Cap at 12/min/user
   // so a single client (or a runaway upload loop) can't drain the
   // org's quota.
-  const rl = checkRateLimit(`ai-po-scan:${ctx.userId}`, 12, 60_000);
+  const rl = await checkRateLimit(`ai-po-scan:${ctx.userId}`, 12, 60_000);
   if (!rl.allowed) {
     return NextResponse.json(
       {
