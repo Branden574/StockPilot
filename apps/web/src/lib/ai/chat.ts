@@ -108,6 +108,19 @@ Rules:
       preview + confirmation is always shown.
     - Pre-assembled bundles have a phantom inventory_item with
       is_bundle=true. Don't confuse it with a regular SKU.
+- Order requests / queue:
+    - Use listOrderRequests for "what orders are waiting", "show me
+      pending requests", "what did Maria order", "any orders for
+      sequoia elementary".
+    - Use getOrderRequestSummary for "anything overdue", "how many
+      pending", "summary of orders".
+    - For "what's waiting", filter listOrderRequests with
+      status='pending_approval'.
+    - To find a specific external requester's history, filter
+      listOrderRequests with requesterEmail='someone@example.com'
+      (exact match against the public-link submission email).
+    - There is NO execute tool for order writes. Direct the user to
+      /dashboard/orders/<id> to approve / deny / change status.
 
 - The "out of scope" reply is ONLY for genuinely unrelated questions
   (general knowledge, weather, news, code questions). Inventory,

@@ -50,9 +50,12 @@ export default async function MovementsPage({
             Every quantity change, audited. The ledger is append-only.
           </p>
         </div>
-        <p className="text-muted-foreground text-xs tabular-nums">
-          Page {page} · {PAGE_SIZE} per page
-        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-muted-foreground text-xs tabular-nums">
+            Page {page} · {PAGE_SIZE} per page
+          </p>
+          <Pager page={page} hasNext={hasNext} />
+        </div>
       </div>
 
       {visible.length === 0 ? (
@@ -126,25 +129,33 @@ export default async function MovementsPage({
       )}
 
       <div className="mt-4 flex items-center justify-between">
-        <Button asChild variant="outline" disabled={page <= 1}>
-          <Link
-            href={page <= 1 ? '#' : `/dashboard/movements?page=${page - 1}`}
-            aria-disabled={page <= 1}
-            className={page <= 1 ? 'pointer-events-none opacity-50' : ''}
-          >
-            ← Newer
-          </Link>
-        </Button>
-        <Button asChild variant="outline" disabled={!hasNext}>
-          <Link
-            href={hasNext ? `/dashboard/movements?page=${page + 1}` : '#'}
-            aria-disabled={!hasNext}
-            className={!hasNext ? 'pointer-events-none opacity-50' : ''}
-          >
-            Older →
-          </Link>
-        </Button>
+        <Pager page={page} hasNext={hasNext} />
       </div>
+    </div>
+  );
+}
+
+function Pager({ page, hasNext }: { page: number; hasNext: boolean }) {
+  return (
+    <div className="flex items-center gap-2">
+      <Button asChild variant="outline" size="sm" disabled={page <= 1}>
+        <Link
+          href={page <= 1 ? '#' : `/dashboard/movements?page=${page - 1}`}
+          aria-disabled={page <= 1}
+          className={page <= 1 ? 'pointer-events-none opacity-50' : ''}
+        >
+          ← Newer
+        </Link>
+      </Button>
+      <Button asChild variant="outline" size="sm" disabled={!hasNext}>
+        <Link
+          href={hasNext ? `/dashboard/movements?page=${page + 1}` : '#'}
+          aria-disabled={!hasNext}
+          className={!hasNext ? 'pointer-events-none opacity-50' : ''}
+        >
+          Older →
+        </Link>
+      </Button>
     </div>
   );
 }

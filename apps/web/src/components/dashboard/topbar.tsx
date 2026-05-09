@@ -48,6 +48,7 @@ const PO_IMPORTS_LIST: Crumb = {
 };
 const CYCLE_COUNTS_LIST: Crumb = { label: 'Cycle counts', href: '/dashboard/cycle-counts' };
 const BUNDLES_LIST: Crumb = { label: 'Bundles', href: '/dashboard/bundles' };
+const ORDERS_LIST: Crumb = { label: 'Orders', href: '/dashboard/orders' };
 const SCHEDULE_LIST: Crumb = { label: 'Schedule', href: '/dashboard/schedule' };
 const SETTINGS_LIST: Crumb = { label: 'Settings', href: '/dashboard/settings' };
 
@@ -108,6 +109,23 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   ],
   [/^\/dashboard\/bundles$/, [SECTION_INVENTORY, { label: 'Bundles', href: null }]],
 
+  // Orders (order requests). The /new and /[id]/print patterns MUST come
+  // before the bare /[^/]+$ detail catch-all.
+  [/^\/dashboard\/orders\/new$/, [SECTION_INVENTORY, ORDERS_LIST, { label: 'New', href: null }]],
+  [
+    /^\/dashboard\/orders\/[^/]+\/print$/,
+    [SECTION_INVENTORY, ORDERS_LIST, { label: 'Print', href: null }],
+  ],
+  [
+    /^\/dashboard\/orders\/[^/]+\/edit$/,
+    [SECTION_INVENTORY, ORDERS_LIST, { label: 'Edit', href: null }],
+  ],
+  [
+    /^\/dashboard\/orders\/[^/]+$/,
+    [SECTION_INVENTORY, ORDERS_LIST, { label: 'Detail', href: null }],
+  ],
+  [/^\/dashboard\/orders$/, [SECTION_INVENTORY, { label: 'Orders', href: null }]],
+
   // Purchase orders. Imports patterns MUST precede the bare /[^/]+$
   // detail pattern, otherwise "imports" matches as if it were a PO id.
   [
@@ -156,6 +174,10 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   [
     /^\/dashboard\/settings\/billing$/,
     [SECTION_WORKSPACE, SETTINGS_LIST, { label: 'Billing', href: null }],
+  ],
+  [
+    /^\/dashboard\/settings\/public-requests$/,
+    [SECTION_WORKSPACE, SETTINGS_LIST, { label: 'Public requests', href: null }],
   ],
   [/^\/dashboard\/settings$/, [SECTION_WORKSPACE, { label: 'Settings', href: null }]],
 

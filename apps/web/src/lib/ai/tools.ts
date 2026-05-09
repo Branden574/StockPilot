@@ -13,6 +13,7 @@ import {
 } from '@/server/services/forecasting';
 import { BundlesService } from '@/server/services/bundles';
 import { InventoryService } from '@/server/services/inventory';
+import { OrderRequestsService } from '@/server/services/order-requests';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import {
   getDashboardActions,
@@ -1199,6 +1200,175 @@ const previewBundleDistributionTool: ToolExecutor = {
   },
 };
 
+const listOrderRequestsTool: ToolExecutor = {
+  declaration: {
+    name: 'listOrderRequests',
+    description:
+      "READ-ONLY — list order requests in the workspace queue. Use for 'what orders are waiting', 'show me pending requests', 'what did Maria order', 'any orders from sequoia elementary'. Filter by status (pending_approval | approved | packaging | ready_for_delivery | delivered | denied | cancelled) and/or by an external requester's email (matches order_requests.requester_email exactly — public-link submissions only). Returns total + a compact row per request with requesterDisplay (name + org for externals, full_name/email for internal users), warehouseName, lineCount, totalQuantity, and key timestamps. There is NO execute tool for order writes — direct the user to /dashboard/orders/<id> to approve / deny / change status.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        status: {
+          type: SchemaType.STRING,
+          description:
+            "Optional status filter. One of 'pending_approval', 'approved', 'packaging', 'ready_for_delivery', 'delivered', 'denied', 'cancelled'. Empty = all statuses.",
+        },
+        requesterEmail: {
+          type: SchemaType.STRING,
+          description:
+            'Optional exact-match filter on requester_email (public-link external requesters). Empty = no filter.',
+        },
+        limit: {
+          type: SchemaType.NUMBER,
+          description: 'Max rows (1-50). Default 25.',
+        },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const allowedStatuses = new Set([
+      'pending_approval',
+      'approved',
+      'packaging',
+      'ready_for_delivery',
+      'delivered',
+      'denied',
+      'cancelled',
+    ]);
+    const status =
+      typeof args.status === 'string' && allowedStatuses.has(args.status)
+        ? (args.status as
+            | 'pending_approval'
+            | 'approved'
+            | 'packaging'
+            | 'ready_for_delivery'
+            | 'delivered'
+            | 'denied'
+            | 'cancelled')
+        : undefined;
+    const requesterEmail =
+      typeof args.requesterEmail === 'string' && args.requesterEmail.length > 0
+        ? args.requesterEmail
+        : null;
+    const limit = Math.min(50, Math.max(1, Number(args.limit) || 25));
+
+    const svc = new OrderRequestsService(ctx);
+    const rows = await svc.list({
+      status,
+      limit,
+      ...(requesterEmail ? { requesterEmail } : {}),
+    });
+
+    // Batched lookup of internal-user display names (full_name/email).
+    const userIds = Array.from(
+      new Set(
+        rows
+          .filter((r) => r.requesterUserId)
+          .map((r) => r.requesterUserId as string),
+      ),
+    );
+    const userMap = new Map<string, { fullName: string | null; email: string | null }>();
+    if (userIds.length > 0) {
+      const { data: profiles } = await ctx.supabase
+        .from('user_profiles')
+        .select('id, full_name, email')
+        .in('id', userIds);
+      for (const p of (profiles ?? []) as Array<{
+        id: string;
+        full_name: string | null;
+        email: string | null;
+      }>) {
+        userMap.set(p.id, { fullName: p.full_name, email: p.email });
+      }
+    }
+
+    return {
+      total: rows.length,
+      requests: rows.map((r) => {
+        let requesterDisplay: string;
+        if (r.requesterUserId) {
+          const u = userMap.get(r.requesterUserId);
+          requesterDisplay = u?.fullName || u?.email || '(team member)';
+        } else {
+          requesterDisplay = `${r.requesterName ?? 'External requester'}${r.requesterOrgLabel ? ' · ' + r.requesterOrgLabel : ''}`;
+        }
+        return {
+          id: r.id,
+          status: r.status,
+          requesterDisplay,
+          warehouseName: r.warehouseName,
+          lineCount: r.lineCount,
+          totalQuantity: r.totalQuantity,
+          createdAt: r.createdAt,
+          approvedAt: r.approvedAt,
+          deliveredAt: r.deliveredAt,
+        };
+      }),
+    };
+  },
+};
+
+const getOrderRequestSummaryTool: ToolExecutor = {
+  declaration: {
+    name: 'getOrderRequestSummary',
+    description:
+      "READ-ONLY — overall order-request stats. Returns pendingCount, overdueCount (pending_approval older than 3 days), and a byStatus breakdown { pending_approval, approved, packaging, ready_for_delivery, delivered_today }. Use for 'anything overdue', 'how many pending', 'summary of orders'. There is NO execute tool for order writes — direct the user to /dashboard/orders/<id> to approve / deny / change status.",
+    parameters: { type: SchemaType.OBJECT, properties: {} },
+  },
+  async execute(_args, ctx) {
+    const now = new Date();
+    const threeDaysAgoIso = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const startOfTodayIso = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+    ).toISOString();
+
+    const baseCount = (status: string) =>
+      ctx.supabase
+        .from('order_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', ctx.organizationId)
+        .eq('status', status);
+
+    const [
+      pendingRes,
+      approvedRes,
+      packagingRes,
+      readyRes,
+      overdueRes,
+      deliveredTodayRes,
+    ] = await Promise.all([
+      baseCount('pending_approval'),
+      baseCount('approved'),
+      baseCount('packaging'),
+      baseCount('ready_for_delivery'),
+      ctx.supabase
+        .from('order_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', ctx.organizationId)
+        .eq('status', 'pending_approval')
+        .lt('created_at', threeDaysAgoIso),
+      ctx.supabase
+        .from('order_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', ctx.organizationId)
+        .eq('status', 'delivered')
+        .gte('delivered_at', startOfTodayIso),
+    ]);
+
+    return {
+      pendingCount: pendingRes.count ?? 0,
+      overdueCount: overdueRes.count ?? 0,
+      byStatus: {
+        pending_approval: pendingRes.count ?? 0,
+        approved: approvedRes.count ?? 0,
+        packaging: packagingRes.count ?? 0,
+        ready_for_delivery: readyRes.count ?? 0,
+        delivered_today: deliveredTodayRes.count ?? 0,
+      },
+    };
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
   listCategories: listCategoriesTool,
@@ -1221,6 +1391,8 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   identifyFromPhoto: identifyFromPhotoTool,
   listBundles: listBundlesTool,
   previewBundleDistribution: previewBundleDistributionTool,
+  listOrderRequests: listOrderRequestsTool,
+  getOrderRequestSummary: getOrderRequestSummaryTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {
