@@ -122,6 +122,7 @@ export class OrderRequestsService {
   async list(filters: {
     status?: OrderRequestStatus | OrderRequestStatus[];
     requesterUserId?: string;
+    requesterEmail?: string;
     warehouseId?: string;
     limit?: number;
     offset?: number;
@@ -143,6 +144,7 @@ export class OrderRequestsService {
       q = q.in('status', arr);
     }
     if (filters.requesterUserId) q = q.eq('requester_user_id', filters.requesterUserId);
+    if (filters.requesterEmail) q = q.eq('requester_email', filters.requesterEmail);
     if (filters.warehouseId) q = q.eq('warehouse_id', filters.warehouseId);
 
     const limit = Math.min(filters.limit ?? 50, 200);

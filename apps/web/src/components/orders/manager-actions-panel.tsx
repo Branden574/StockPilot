@@ -1,0 +1,228 @@
+'use client';
+
+import { Check, CheckCircle2, Loader2, PackageCheck, PackageOpen, Save, Truck, X } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import * as React from 'react';
+import { toast } from 'sonner';
+
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  approveOrderRequestAction,
+  denyOrderRequestAction,
+  markOrderRequestDeliveredAction,
+  setOrderInternalNotesAction,
+  setOrderRequestStatusAction,
+} from '@/server/actions/order-requests';
+
+import type { OrderRequestStatus } from '@/server/services/order-requests';
+
+interface Props {
+  orderId: string;
+  status: OrderRequestStatus;
+  internalNotes: string | null;
+}
+
+type BusyKey =
+  | 'approve'
+  | 'deny'
+  | 'packaging'
+  | 'ready_for_delivery'
+  | 'delivered'
+  | 'notes'
+  | null;
+
+export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
+  const router = useRouter();
+  const [busy, setBusy] = React.useState<BusyKey>(null);
+  const [notes, setNotes] = React.useState(internalNotes ?? '');
+  const initialNotes = React.useRef(internalNotes ?? '');
+
+  async function approve() {
+    setBusy('approve');
+    const res = await approveOrderRequestAction({ id: orderId });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Approved. Stock has been reserved.');
+    router.refresh();
+  }
+
+  async function deny() {
+    const reason = window.prompt('Reason for denial?')?.trim();
+    if (!reason) return;
+    setBusy('deny');
+    const res = await denyOrderRequestAction({ id: orderId, reason });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Request denied.');
+    router.refresh();
+  }
+
+  async function moveTo(next: 'packaging' | 'ready_for_delivery') {
+    setBusy(next);
+    const res = await setOrderRequestStatusAction({ id: orderId, status: next });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success(next === 'packaging' ? 'Marked packaging.' : 'Marked ready for delivery.');
+    router.refresh();
+  }
+
+  async function deliver() {
+    if (
+      !window.confirm(
+        'Mark delivered? This deducts stock from inventory and releases reservations.',
+      )
+    ) {
+      return;
+    }
+    setBusy('delivered');
+    const res = await markOrderRequestDeliveredAction(orderId);
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Delivered. Inventory updated.');
+    router.refresh();
+  }
+
+  async function saveNotes() {
+    setBusy('notes');
+    const res = await setOrderInternalNotesAction({
+      id: orderId,
+      notes: notes.trim() ? notes : null,
+    });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    initialNotes.current = notes;
+    toast.success('Internal notes saved.');
+    router.refresh();
+  }
+
+  const dirty = notes !== initialNotes.current;
+
+  return (
+    <section className="bg-card rounded-xl border">
+      <div className="border-border border-b px-4 py-3">
+        <h2 className="text-sm font-medium">Manager actions</h2>
+        <p className="text-muted-foreground mt-0.5 text-[11.5px]">
+          Move this request through the fulfillment pipeline.
+        </p>
+      </div>
+
+      <div className="space-y-3 p-4">
+        <div className="flex flex-wrap gap-2">
+          {status === 'pending_approval' && (
+            <>
+              <Button variant="gradient" onClick={approve} disabled={busy !== null}>
+                {busy === 'approve' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Check className="h-3.5 w-3.5" />
+                )}
+                Approve
+              </Button>
+              <Button variant="destructive" onClick={deny} disabled={busy !== null}>
+                {busy === 'deny' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <X className="h-3.5 w-3.5" />
+                )}
+                Deny
+              </Button>
+            </>
+          )}
+
+          {status === 'approved' && (
+            <Button variant="gradient" onClick={() => moveTo('packaging')} disabled={busy !== null}>
+              {busy === 'packaging' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <PackageOpen className="h-3.5 w-3.5" />
+              )}
+              Mark packaging
+            </Button>
+          )}
+
+          {status === 'packaging' && (
+            <Button
+              variant="gradient"
+              onClick={() => moveTo('ready_for_delivery')}
+              disabled={busy !== null}
+            >
+              {busy === 'ready_for_delivery' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <PackageCheck className="h-3.5 w-3.5" />
+              )}
+              Mark ready
+            </Button>
+          )}
+
+          {(status === 'approved' ||
+            status === 'packaging' ||
+            status === 'ready_for_delivery') && (
+            <Button variant="outline" onClick={deliver} disabled={busy !== null}>
+              {busy === 'delivered' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Truck className="h-3.5 w-3.5" />
+              )}
+              Mark delivered
+            </Button>
+          )}
+
+          {(status === 'delivered' || status === 'denied' || status === 'cancelled') && (
+            <div className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              No further actions — this request is in a terminal state.
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-1.5 pt-2">
+          <Label htmlFor="internal-notes" className="text-xs">
+            Internal notes
+          </Label>
+          <Textarea
+            id="internal-notes"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={3}
+            maxLength={2000}
+            placeholder="Notes only managers can see"
+            disabled={busy === 'notes'}
+          />
+          <div className="flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={saveNotes}
+              disabled={!dirty || busy !== null}
+            >
+              {busy === 'notes' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="h-3.5 w-3.5" />
+              )}
+              Save notes
+            </Button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
