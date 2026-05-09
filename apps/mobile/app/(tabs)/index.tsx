@@ -1,5 +1,14 @@
+import { useRouter } from 'expo-router';
 import * as React from 'react';
-import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/lib/auth-context';
@@ -14,6 +23,7 @@ interface Summary {
 }
 
 export default function Home() {
+  const router = useRouter();
   const { user } = useAuth();
   const [summary, setSummary] = React.useState<Summary | null>(null);
   const [orgName, setOrgName] = React.useState<string>('Your workspace');
@@ -99,6 +109,20 @@ export default function Home() {
                 Tap the scan tab to use your camera. Stock changes log to the same ledger as the web app.
               </Text>
             </View>
+
+            <Pressable
+              style={styles.linkCta}
+              onPress={() => router.push('/bundles')}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.linkCtaTitle}>Bundles</Text>
+                <Text style={styles.linkCtaBody}>
+                  Distribute kits, scan against pre-assembled stock, or queue
+                  distribution for offline use.
+                </Text>
+              </View>
+              <Text style={styles.linkCtaChev}>›</Text>
+            </Pressable>
           </>
         )}
       </ScrollView>
@@ -151,4 +175,17 @@ const styles = StyleSheet.create({
   },
   ctaTitle: { color: theme.text, fontSize: 16, fontWeight: '600' },
   ctaBody: { color: theme.textMuted, fontSize: 13, marginTop: space.xs, lineHeight: 18 },
+  linkCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: space.md,
+    backgroundColor: theme.card,
+    borderRadius: radius.lg,
+    padding: space.lg,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  linkCtaTitle: { color: theme.text, fontSize: 16, fontWeight: '600' },
+  linkCtaBody: { color: theme.textMuted, fontSize: 13, marginTop: space.xs, lineHeight: 18 },
+  linkCtaChev: { color: theme.textMuted, fontSize: 22, marginLeft: space.sm },
 });
