@@ -47,6 +47,8 @@ function RootGate() {
         name="cycle-count/scan/[id]"
         options={{ presentation: 'fullScreenModal' }}
       />
+      <Stack.Screen name="bundles/index" options={{ presentation: 'card' }} />
+      <Stack.Screen name="bundles/[id]" options={{ presentation: 'card' }} />
     </Stack>
   );
 }
