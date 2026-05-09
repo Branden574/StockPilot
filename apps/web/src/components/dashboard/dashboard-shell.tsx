@@ -15,6 +15,8 @@ interface DashboardShellProps {
   email: string;
   fullName: string | null;
   avatarUrl: string | null;
+  userId: string;
+  initialUnreadNotifications: number;
   organizationId: string;
   organizationName: string;
   organizationLogoUrl?: string | null;
@@ -34,6 +36,8 @@ export function DashboardShell({
   email,
   fullName,
   avatarUrl,
+  userId,
+  initialUnreadNotifications,
   organizationId,
   organizationName,
   organizationLogoUrl,
@@ -118,6 +122,8 @@ export function DashboardShell({
           fullName={fullName}
           avatarUrl={avatarUrl}
           organizationName={organizationName}
+          userId={userId}
+          initialUnreadNotifications={initialUnreadNotifications}
           onToggleSidebar={() => setMobileNavOpen(true)}
           warehouseFilter={warehouseFilter}
         />
