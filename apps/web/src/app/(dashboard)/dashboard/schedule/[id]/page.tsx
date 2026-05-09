@@ -1,12 +1,16 @@
-import { ChevronLeft, MapPin, User2 } from 'lucide-react';
+import { ChevronLeft, MapPin, Package, User2 } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { ScheduleStatusActions } from '@/components/schedule/schedule-status-actions';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 import { ScheduleService } from '@/server/services/schedule';
+import { WarehousesService } from '@/server/services/warehouses';
+import { formatNumber } from '@/lib/utils';
 
 const STATUS_LABEL: Record<string, string> = {
   scheduled: 'Scheduled',
@@ -57,6 +61,34 @@ export default async function ScheduleEventDetailPage({
   } catch (e) {
     if (e instanceof ServiceError && e.code === 'not_found') notFound();
     throw e;
+  }
+
+  // If a bundle is linked, surface its name + the destination warehouse
+  // name in a side card. Two extra cheap reads; bail silently on either
+  // if RLS or a stale id slips through.
+  let linkedBundle: { id: string; name: string; sku: string | null } | null = null;
+  let bundleWarehouseName: string | null = null;
+  if (event.bundleId) {
+    try {
+      const bundlesSvc = await BundlesService.forCurrentUser();
+      const detail = await bundlesSvc.get(event.bundleId);
+      linkedBundle = {
+        id: detail.bundle.id,
+        name: detail.bundle.name,
+        sku: detail.bundle.sku,
+      };
+    } catch {
+      /* ignore */
+    }
+  }
+  if (event.bundleWarehouseId) {
+    try {
+      const whSvc = await WarehousesService.forCurrentUser();
+      const all = await whSvc.list();
+      bundleWarehouseName = all.find((w) => w.id === event.bundleWarehouseId)?.name ?? null;
+    } catch {
+      /* ignore */
+    }
   }
 
   return (
@@ -127,6 +159,45 @@ export default async function ScheduleEventDetailPage({
           </CardContent>
         </Card>
       </div>
+
+      {event.bundleId && (
+        <Card className="mt-3">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Package className="h-3.5 w-3.5" /> Linked bundle
+              {event.bundleDistributed ? (
+                <Badge variant="success">Distributed</Badge>
+              ) : (
+                <Badge variant="outline">Pending</Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href={`/dashboard/bundles/${event.bundleId}`}
+                className="font-medium hover:underline"
+              >
+                {linkedBundle?.name ?? 'Unknown bundle'}
+              </Link>
+              {linkedBundle?.sku ? (
+                <span className="text-muted-foreground font-mono text-[11px]">
+                  {linkedBundle.sku}
+                </span>
+              ) : null}
+            </div>
+            <p className="text-muted-foreground text-[12px]">
+              {event.bundleQuantity != null ? formatNumber(event.bundleQuantity) : '—'}{' '}
+              kit{event.bundleQuantity === 1 ? '' : 's'} will be distributed from{' '}
+              {bundleWarehouseName ?? 'a warehouse'} when this event is marked
+              complete.
+              {event.bundleDistributed
+                ? ' This event already triggered a distribution — re-completing won\'t re-fire.'
+                : ''}
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="mt-3">
         <CardHeader>

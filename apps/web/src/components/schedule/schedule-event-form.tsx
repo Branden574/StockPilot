@@ -33,10 +33,15 @@ interface Defaults {
   requesterName?: string | null;
   details?: string | null;
   status?: 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
+  bundleId?: string | null;
+  bundleQuantity?: number | null;
+  bundleWarehouseId?: string | null;
+  bundleAlreadyDistributed?: boolean;
 }
 
 interface Props {
   warehouses: Array<{ id: string; name: string }>;
+  bundles: Array<{ id: string; name: string; sku: string | null }>;
   defaults?: Defaults;
   /** When set, the date input is pre-filled. Format: YYYY-MM-DD. */
   initialDate?: string | null;
@@ -65,7 +70,7 @@ const STATUS_OPTIONS: Array<{ value: Defaults['status']; label: string }> = [
   { value: 'cancelled', label: 'Cancelled' },
 ];
 
-export function ScheduleEventForm({ warehouses, defaults, initialDate }: Props) {
+export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }: Props) {
   const router = useRouter();
   const isEdit = Boolean(defaults?.id);
 
@@ -102,7 +107,15 @@ export function ScheduleEventForm({ warehouses, defaults, initialDate }: Props) 
   const [status, setStatus] = React.useState<
     'scheduled' | 'in_progress' | 'completed' | 'cancelled'
   >(defaults?.status ?? 'scheduled');
+  const [bundleId, setBundleId] = React.useState<string>(defaults?.bundleId ?? '');
+  const [bundleQuantity, setBundleQuantity] = React.useState<string>(
+    defaults?.bundleQuantity ? String(defaults.bundleQuantity) : '',
+  );
+  const [bundleWarehouseId, setBundleWarehouseId] = React.useState<string>(
+    defaults?.bundleWarehouseId ?? '',
+  );
   const [busy, setBusy] = React.useState(false);
+  const bundleLocked = Boolean(defaults?.bundleAlreadyDistributed);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -112,6 +125,15 @@ export function ScheduleEventForm({ warehouses, defaults, initialDate }: Props) 
       return;
     }
     setBusy(true);
+
+    // Validate bundle linkage: if any of the 3 are set, all must be.
+    const wantsBundle = Boolean(bundleId);
+    const qty = Number(bundleQuantity);
+    if (wantsBundle && (!bundleWarehouseId || !Number.isFinite(qty) || qty <= 0)) {
+      toast.error('Bundle linkage needs quantity + warehouse together.');
+      setBusy(false);
+      return;
+    }
 
     const payload = {
       title: title.trim(),
@@ -123,6 +145,9 @@ export function ScheduleEventForm({ warehouses, defaults, initialDate }: Props) 
       requesterName: requesterName.trim() || undefined,
       details: details.trim() || undefined,
       status,
+      bundleId: wantsBundle ? bundleId : null,
+      bundleQuantity: wantsBundle ? qty : null,
+      bundleWarehouseId: wantsBundle ? bundleWarehouseId : null,
     };
 
     try {
@@ -262,6 +287,81 @@ export function ScheduleEventForm({ warehouses, defaults, initialDate }: Props) 
               {STATUS_OPTIONS.map((s) => (
                 <SelectItem key={s.value} value={s.value as string}>
                   {s.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div className="border-border space-y-3 rounded-lg border bg-card/50 p-4">
+        <div>
+          <Label className="text-sm font-medium">Linked bundle (optional)</Label>
+          <p className="text-muted-foreground mt-0.5 text-[11.5px]">
+            When this event is marked complete, the bundle is automatically
+            distributed at the selected warehouse. Leave blank to skip.
+          </p>
+        </div>
+
+        {bundleLocked && (
+          <p className="text-warning rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[11.5px]">
+            This event already triggered a distribution. Editing the bundle
+            here won't re-distribute or undo the original — adjust on the
+            bundle page if needed.
+          </p>
+        )}
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label>Bundle</Label>
+            <Select
+              value={bundleId || '__none'}
+              onValueChange={(v) => setBundleId(v === '__none' ? '' : v)}
+              disabled={bundleLocked}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="None" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">None</SelectItem>
+                {bundles.map((b) => (
+                  <SelectItem key={b.id} value={b.id}>
+                    {b.name}
+                    {b.sku ? ` (${b.sku})` : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Quantity</Label>
+            <Input
+              type="number"
+              min={1}
+              step="any"
+              value={bundleQuantity}
+              onChange={(e) => setBundleQuantity(e.target.value)}
+              placeholder="0"
+              disabled={bundleLocked || !bundleId}
+            />
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Distribute from warehouse</Label>
+          <Select
+            value={bundleWarehouseId || '__none'}
+            onValueChange={(v) => setBundleWarehouseId(v === '__none' ? '' : v)}
+            disabled={bundleLocked || !bundleId}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Pick a warehouse" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none">—</SelectItem>
+              {warehouses.map((w) => (
+                <SelectItem key={w.id} value={w.id}>
+                  {w.name}
                 </SelectItem>
               ))}
             </SelectContent>
