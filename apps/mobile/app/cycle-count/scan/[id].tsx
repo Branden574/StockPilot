@@ -1,0 +1,309 @@
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import * as React from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { useAuth } from '@/lib/auth-context';
+import {
+  getCycleCountLines,
+  getItemById,
+  findItemByCode,
+  type CachedCycleCountLine,
+  type CachedItem,
+} from '@/lib/db-reads';
+import { enqueue } from '@/lib/queue';
+import { syncNow } from '@/lib/sync';
+import { radius, space, theme } from '@/lib/theme';
+
+interface SheetState {
+  line: CachedCycleCountLine;
+  item: CachedItem | null;
+  qty: string;
+}
+
+/**
+ * Scan-to-count flow. Opens the camera; each scan resolves an item
+ * (against the local SQLite cache, so it works offline), looks up the
+ * matching cycle_count_line, and pops a sheet pre-filled with
+ * `expected`. Confirm enqueues a record_count action that the sync
+ * worker drains when online.
+ *
+ * Burst-mode toggle: re-scanning the same barcode within 2 seconds
+ * skips the sheet and increments counted-qty by 1. Useful when
+ * counting a stack of identical books.
+ */
+export default function CycleCountScanScreen() {
+  const router = useRouter();
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const { user } = useAuth();
+  const [permission, requestPermission] = useCameraPermissions();
+
+  const [lines, setLines] = React.useState<CachedCycleCountLine[]>([]);
+  const [busy, setBusy] = React.useState(false);
+  const [sheet, setSheet] = React.useState<SheetState | null>(null);
+  const [burstMode, setBurstMode] = React.useState(false);
+  const [lastScan, setLastScan] = React.useState<{ code: string; at: number } | null>(null);
+  const [scanned, setScanned] = React.useState<Map<string, number>>(new Map());
+
+  React.useEffect(() => {
+    if (!user || !id) return;
+    void loadLines();
+  }, [user, id]);
+
+  async function loadLines() {
+    if (!id) return;
+    const rows = await getCycleCountLines(id);
+    setLines(rows);
+    // Seed scanned-counts map with what's already counted on the server.
+    const seed = new Map<string, number>();
+    for (const l of rows) if (l.counted != null) seed.set(l.id, l.counted);
+    setScanned(seed);
+  }
+
+  async function recordCount(line: CachedCycleCountLine, qty: number) {
+    setBusy(true);
+    await enqueue('record_count', {
+      cycleCountId: id,
+      lineId: line.id,
+      countedQuantity: qty,
+    });
+    setScanned((m) => new Map(m).set(line.id, qty));
+    void syncNow();
+    setBusy(false);
+  }
+
+  async function onBarcode({ data }: { data: string }) {
+    const code = data.trim();
+    if (!code || busy) return;
+
+    // De-dupe rapid double-fires from the same code.
+    const now = Date.now();
+    if (lastScan && lastScan.code === code && now - lastScan.at < 600) return;
+    setLastScan({ code, at: now });
+
+    const item = await findItemByCode(code);
+    if (!item) {
+      Alert.alert('Not in cache', `${code} isn't in this device's inventory cache yet. Pull-to-refresh on the home tab.`);
+      return;
+    }
+    const line = lines.find((l) => l.itemId === item.id);
+    if (!line) {
+      Alert.alert(
+        'Not in this count',
+        `${item.name} isn't in this cycle count's scope.`,
+      );
+      return;
+    }
+
+    if (burstMode) {
+      // Burst mode: increment by 1, no sheet.
+      const current = scanned.get(line.id) ?? line.counted ?? 0;
+      const next = current + 1;
+      await recordCount(line, next);
+      return;
+    }
+
+    setSheet({ line, item, qty: String(line.expected) });
+  }
+
+  async function confirmSheet() {
+    if (!sheet) return;
+    const num = Number(sheet.qty);
+    if (!Number.isFinite(num) || num < 0) {
+      Alert.alert('Invalid count', 'Enter a non-negative number.');
+      return;
+    }
+    await recordCount(sheet.line, num);
+    setSheet(null);
+  }
+
+  if (!permission) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={theme.primary} />
+      </View>
+    );
+  }
+  if (!permission.granted) {
+    return (
+      <SafeAreaView style={styles.root} edges={['top']}>
+        <View style={styles.center}>
+          <Text style={styles.permTitle}>Camera access needed</Text>
+          <Text style={styles.permBody}>
+            Scan-to-count uses the camera to read item barcodes.
+          </Text>
+          <Pressable style={styles.cta} onPress={requestPermission}>
+            <Text style={styles.ctaLabel}>Grant access</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const total = lines.length;
+  const counted = lines.filter(
+    (l) => scanned.has(l.id) || l.counted != null,
+  ).length;
+
+  return (
+    <View style={styles.root}>
+      <Stack.Screen options={{ headerShown: false }} />
+      {!sheet ? (
+        <CameraView
+          style={StyleSheet.absoluteFill}
+          facing="back"
+          barcodeScannerSettings={{
+            barcodeTypes: ['qr', 'ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'code93', 'codabar', 'pdf417'],
+          }}
+          onBarcodeScanned={onBarcode}
+        />
+      ) : null}
+
+      <SafeAreaView style={StyleSheet.absoluteFill} edges={['top', 'bottom']} pointerEvents="box-none">
+        <View style={styles.topBar} pointerEvents="auto">
+          <Pressable style={styles.closeBtn} onPress={() => router.back()}>
+            <Text style={styles.closeText}>Done</Text>
+          </Pressable>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerLabel}>Counting</Text>
+            <Text style={styles.headerSub}>
+              {counted} of {total} done
+            </Text>
+          </View>
+          <Pressable
+            style={[styles.burstBtn, burstMode && styles.burstBtnOn]}
+            onPress={() => setBurstMode((v) => !v)}
+          >
+            <Text style={[styles.burstLabel, burstMode && styles.burstLabelOn]}>
+              {burstMode ? 'Burst' : 'Burst off'}
+            </Text>
+          </Pressable>
+        </View>
+
+        {!sheet && (
+          <View style={styles.frameWrap} pointerEvents="none">
+            <View style={styles.frame} />
+            <Text style={styles.hint}>
+              {burstMode
+                ? 'Burst mode — scan to add 1 to count'
+                : 'Scan a barcode to record the line'}
+            </Text>
+          </View>
+        )}
+
+        {sheet && (
+          <View style={styles.sheet}>
+            <Text style={styles.sheetSku}>{sheet.item?.sku ?? sheet.line.itemId.slice(0, 8)}</Text>
+            <Text style={styles.sheetName} numberOfLines={2}>
+              {sheet.item?.name ?? 'Unknown item'}
+            </Text>
+            <View style={styles.row}>
+              <View style={styles.kv}>
+                <Text style={styles.kvLabel}>Expected</Text>
+                <Text style={styles.kvValue}>{sheet.line.expected}</Text>
+              </View>
+              <View style={[styles.kv, { flex: 1 }]}>
+                <Text style={styles.kvLabel}>Counted</Text>
+                <TextInput
+                  style={styles.qtyInput}
+                  keyboardType="numeric"
+                  value={sheet.qty}
+                  onChangeText={(v) => setSheet({ ...sheet, qty: v })}
+                  selectTextOnFocus
+                />
+              </View>
+            </View>
+            <View style={styles.actions}>
+              <Pressable style={[styles.btn, styles.btnGhost]} onPress={() => setSheet(null)} disabled={busy}>
+                <Text style={styles.btnGhostLabel}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.btn, styles.btnPrimary, busy && { opacity: 0.5 }]}
+                onPress={confirmSheet}
+                disabled={busy}
+              >
+                <Text style={styles.btnPrimaryLabel}>{busy ? 'Saving…' : 'Save'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+      </SafeAreaView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#000' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: space.xl, backgroundColor: theme.bg },
+  topBar: {
+    flexDirection: 'row',
+    gap: space.md,
+    padding: space.md,
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  closeBtn: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: radius.sm, backgroundColor: 'rgba(255,255,255,0.12)' },
+  closeText: { color: '#fff', fontWeight: '600', fontSize: 13 },
+  headerLabel: { color: '#fff', fontSize: 12, opacity: 0.7 },
+  headerSub: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  burstBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: radius.sm,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  burstBtnOn: { backgroundColor: theme.primary },
+  burstLabel: { color: '#fff', fontWeight: '700', fontSize: 12 },
+  burstLabelOn: { color: '#fff' },
+  frameWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  frame: { width: 260, height: 260, borderWidth: 2, borderColor: theme.primary, borderRadius: radius.xl },
+  hint: { color: '#fff', marginTop: space.lg, fontSize: 13, fontWeight: '500' },
+  sheet: {
+    position: 'absolute',
+    bottom: 30,
+    left: space.lg,
+    right: space.lg,
+    padding: space.lg,
+    borderRadius: radius.xl,
+    backgroundColor: theme.card,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  sheetSku: { color: theme.textMuted, fontFamily: 'Menlo', fontSize: 11 },
+  sheetName: { color: theme.text, fontSize: 17, fontWeight: '700', marginTop: 2 },
+  row: { flexDirection: 'row', gap: space.md, marginTop: space.md },
+  kv: { flex: 1 },
+  kvLabel: { color: theme.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },
+  kvValue: { color: theme.text, fontSize: 22, fontWeight: '700', marginTop: 2 },
+  qtyInput: {
+    backgroundColor: theme.bgElevated,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: theme.border,
+    color: theme.text,
+    fontSize: 22,
+    fontWeight: '700',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginTop: 2,
+  },
+  actions: { flexDirection: 'row', gap: space.md, marginTop: space.lg },
+  btn: { flex: 1, paddingVertical: 14, borderRadius: radius.md, alignItems: 'center' },
+  btnGhost: { backgroundColor: theme.bgElevated, borderWidth: 1, borderColor: theme.border },
+  btnGhostLabel: { color: theme.text, fontWeight: '600', fontSize: 14 },
+  btnPrimary: { backgroundColor: theme.primary },
+  btnPrimaryLabel: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  permTitle: { color: theme.text, fontSize: 20, fontWeight: '700' },
+  permBody: { color: theme.textMuted, fontSize: 14, textAlign: 'center', marginTop: space.sm },
+  cta: { backgroundColor: theme.primary, paddingHorizontal: space.lg, paddingVertical: 12, borderRadius: radius.md, marginTop: space.lg },
+  ctaLabel: { color: '#fff', fontWeight: '600' },
+});
