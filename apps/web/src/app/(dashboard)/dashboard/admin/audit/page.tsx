@@ -1,6 +1,7 @@
 import { AlertTriangle, FileLock } from 'lucide-react';
 
-import { AuditFilters, AUDIT_CATEGORIES } from '@/components/admin/audit-filters';
+import { AuditFilters } from '@/components/admin/audit-filters';
+import { AUDIT_CATEGORIES } from '@/components/admin/audit-categories';
 import { EmptyState } from '@/components/dashboard/empty-state';
 import {
   Table,

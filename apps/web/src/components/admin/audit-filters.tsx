@@ -7,15 +7,7 @@ import * as React from 'react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
-const CATEGORIES: Array<{ slug: string; label: string; prefix: string | null }> = [
-  { slug: 'all', label: 'All events', prefix: null },
-  { slug: 'stock', label: 'Stock', prefix: 'stock.' },
-  { slug: 'inventory', label: 'Inventory', prefix: 'inventory.' },
-  { slug: 'po', label: 'Purchase orders', prefix: 'po_import.' },
-  { slug: 'cycle', label: 'Cycle counts', prefix: 'cycle_count.' },
-  { slug: 'user', label: 'Team', prefix: 'user.' },
-  { slug: 'warehouse', label: 'Warehouse', prefix: 'warehouse' },
-];
+import { AUDIT_CATEGORIES as CATEGORIES } from './audit-categories';
 
 interface AuditFiltersProps {
   /** Currently selected category prefix from the URL. */
@@ -106,4 +98,3 @@ export function AuditFilters({ activeCategory, initialActor = '' }: AuditFilters
   );
 }
 
-export const AUDIT_CATEGORIES = CATEGORIES;
