@@ -4,6 +4,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { ServiceError } from '@/server/services/context';
 import { ReportsService } from '@/server/services/reports';
 import { csvFilename, toCsv } from '@/lib/csv';
+import { reportError } from '@/lib/error-reporter';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -274,11 +275,9 @@ export async function GET(
     return NextResponse.json({ error: 'Unknown report' }, { status: 404 });
   } catch (e) {
     if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.message }, { status: 500 });
+      return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
     }
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'Internal error' },
-      { status: 500 },
-    );
+    void reportError(e, { tag: 'reports.csv' });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 }

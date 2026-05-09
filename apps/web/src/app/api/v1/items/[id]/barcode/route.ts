@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
@@ -120,14 +121,16 @@ export async function GET(
     });
   } catch (e) {
     if (e instanceof ServiceError) {
+      // ServiceError messages are user-facing strings ("Item not found",
+      // "Permission denied") that we control — safe to return.
       return new NextResponse(e.message, { status: e.code === 'not_found' ? 404 : 403 });
     }
-    console.error('barcode route error', e);
-    // Surface the real error to the caller. The Label dialog only
-    // renders for authenticated dashboard users, so leaking the
-    // message back is fine and makes the broken-image bug actually
-    // diagnosable.
-    const msg = e instanceof Error ? `${e.name}: ${e.message}` : 'Unknown error';
-    return new NextResponse(msg, { status: 500 });
+    // Don't echo raw error messages — they can include stack-frame
+    // file paths and Postgres internals. Send the real error to the
+    // error reporter for investigation; the client gets a generic
+    // string. The endpoint serves a PNG by content-type so the broken
+    // image will be visible in the Label dialog without further info.
+    void reportError(e, { tag: 'items.barcode' });
+    return new NextResponse('barcode_render_failed', { status: 500 });
   }
 }

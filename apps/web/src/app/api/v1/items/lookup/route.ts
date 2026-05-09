@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,7 +39,11 @@ export async function GET(req: NextRequest) {
     .maybeSingle();
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    void reportError(new Error(error.message), {
+      tag: 'items.lookup',
+      organizationId: ctx.organizationId,
+    });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
   if (!data) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });

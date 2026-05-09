@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { csvFilename, toCsv } from '@/lib/csv';
+import { reportError } from '@/lib/error-reporter';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
@@ -195,12 +196,14 @@ export async function GET(request: Request) {
       },
     });
   } catch (e) {
+    // ServiceError carries user-facing strings the service author
+    // controls — those are fine to surface. Anything else gets
+    // funneled into the error reporter; the client only sees a
+    // stable slug so DB internals don't leak.
     if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.message }, { status: 500 });
+      return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
     }
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'Internal error' },
-      { status: 500 },
-    );
+    void reportError(e, { tag: 'inventory.export-csv' });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 }

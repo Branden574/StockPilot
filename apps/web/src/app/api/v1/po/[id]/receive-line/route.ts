@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { ReceivingService } from '@/server/services/receiving';
 import { ServiceError } from '@/server/services/context';
 
@@ -66,7 +67,13 @@ export async function POST(
     .eq('organization_id', ctx.organizationId)
     .eq('id', poId)
     .maybeSingle();
-  if (poErr) return NextResponse.json({ error: poErr.message }, { status: 500 });
+  if (poErr) {
+    void reportError(new Error(poErr.message), {
+      tag: 'po.receive-line.lookup_po',
+      organizationId: ctx.organizationId,
+    });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  }
   if (!po) return NextResponse.json({ error: 'po_not_found' }, { status: 404 });
   if (po.status === 'received' || po.status === 'cancelled') {
     return NextResponse.json(
@@ -82,7 +89,13 @@ export async function POST(
     .eq('purchase_order_id', poId)
     .eq('item_id', itemId)
     .maybeSingle();
-  if (lErr) return NextResponse.json({ error: lErr.message }, { status: 500 });
+  if (lErr) {
+    void reportError(new Error(lErr.message), {
+      tag: 'po.receive-line.lookup_line',
+      organizationId: ctx.organizationId,
+    });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  }
   if (!line) {
     return NextResponse.json(
       { error: 'not_on_po', code: 'not_on_po' },
@@ -162,10 +175,11 @@ export async function POST(
               : 500;
       return NextResponse.json({ error: e.code, message: e.message }, { status });
     }
-    return NextResponse.json(
-      { error: 'internal_error', message: e instanceof Error ? e.message : 'unknown' },
-      { status: 500 },
-    );
+    void reportError(e, {
+      tag: 'po.receive-line.unhandled',
+      organizationId: ctx.organizationId,
+    });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 }
 

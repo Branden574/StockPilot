@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,7 +55,11 @@ export async function POST(req: NextRequest) {
       { onConflict: 'token' },
     );
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    void reportError(new Error(error.message), {
+      tag: 'push.register',
+      organizationId: ctx.organizationId,
+    });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
   return NextResponse.json({ ok: true });
 }
@@ -79,7 +84,11 @@ export async function DELETE(req: NextRequest) {
     .eq('user_id', ctx.userId)
     .eq('token', token);
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    void reportError(new Error(error.message), {
+      tag: 'push.deregister',
+      organizationId: ctx.organizationId,
+    });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
   return NextResponse.json({ ok: true });
 }
