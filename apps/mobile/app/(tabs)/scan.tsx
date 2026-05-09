@@ -1,4 +1,5 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -12,6 +13,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AddBookCard, type IsbnLookupResult } from '@/components/AddBookCard';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
@@ -45,6 +48,17 @@ function parseItemId(scanned: string): string | null {
     /\/(?:p\/items|dashboard\/(?:inventory|books))\/([0-9a-f-]{36})/i,
   );
   return match?.[1] ?? null;
+}
+
+/** ISBN-10 (with optional 'X' check digit) or ISBN-13. */
+function looksLikeIsbn(raw: string): boolean {
+  const cleaned = raw.replace(/[^0-9X]/gi, '');
+  return cleaned.length === 10 || cleaned.length === 13;
+}
+
+/** Lightweight uuid for storage path uniqueness. */
+function cryptoRandom(): string {
+  return 'xxxxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16));
 }
 
 function formatCurrency(n: number): string {
@@ -82,6 +96,7 @@ export default function Scan() {
   const [scanning, setScanning] = React.useState(true);
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const [item, setItem] = React.useState<FoundItem | null>(null);
+  const [addBook, setAddBook] = React.useState<IsbnLookupResult | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [lastCode, setLastCode] = React.useState<string | null>(null);
 
@@ -181,7 +196,25 @@ export default function Scan() {
       : await loadItemByValue(data);
 
     if (!found) {
-      Alert.alert('Not found', `No item matches ${data}.`, [{ text: 'OK', onPress: reset }]);
+      // Not in inventory yet. If the code looks like an ISBN, try the
+      // book-lookup pipeline and offer one-tap add. Otherwise just
+      // show the standard not-found alert.
+      if (looksLikeIsbn(data)) {
+        try {
+          const res = await api<IsbnLookupResult>(
+            `/api/v1/books/isbn-lookup?isbn=${encodeURIComponent(data)}`,
+          );
+          setAddBook(res);
+        } catch (e) {
+          Alert.alert(
+            'ISBN lookup failed',
+            e instanceof Error ? e.message : 'Network error',
+            [{ text: 'OK', onPress: reset }],
+          );
+        }
+      } else {
+        Alert.alert('Not found', `No item matches ${data}.`, [{ text: 'OK', onPress: reset }]);
+      }
       setBusy(false);
       return;
     }
@@ -191,6 +224,7 @@ export default function Scan() {
 
   function reset() {
     setItem(null);
+    setAddBook(null);
     setLastCode(null);
     setScanning(true);
   }
@@ -212,6 +246,65 @@ export default function Scan() {
       return;
     }
     setItem({ ...item, quantity_on_hand: item.quantity_on_hand + delta });
+  }
+
+  /**
+   * Open the camera, capture a photo, upload to the item-images bucket,
+   * and register a new item_images row. Replaces the displayed thumb so
+   * the user sees their capture immediately.
+   */
+  async function capturePhoto() {
+    if (!item || !orgId) return;
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Camera access needed', 'Allow camera to take photos.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      quality: 0.7,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    });
+    if (result.canceled || !result.assets[0]) return;
+
+    setBusy(true);
+    try {
+      const asset = result.assets[0];
+      const ext = (asset.uri.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'jpg').toLowerCase();
+      const path = `${orgId}/items/${item.id}/${cryptoRandom()}.${ext}`;
+
+      const blob = await (await fetch(asset.uri)).blob();
+      const { error: upErr } = await supabase.storage
+        .from('item-images')
+        .upload(path, blob, { contentType: blob.type || `image/${ext}` });
+      if (upErr) throw new Error(upErr.message);
+
+      const { data: existing } = await supabase
+        .from('item_images')
+        .select('id')
+        .eq('organization_id', orgId)
+        .eq('item_id', item.id)
+        .limit(1);
+      const isFirst = !existing || existing.length === 0;
+
+      const { error: insErr } = await supabase.from('item_images').insert({
+        organization_id: orgId,
+        item_id: item.id,
+        storage_path: path,
+        is_primary: isFirst,
+      });
+      if (insErr) throw new Error(insErr.message);
+
+      const { data: signed } = await supabase.storage
+        .from('item-images')
+        .createSignedUrl(path, 60 * 60);
+      if (signed?.signedUrl) {
+        setItem({ ...item, image_url: signed.signedUrl });
+      }
+    } catch (e) {
+      Alert.alert('Upload failed', e instanceof Error ? e.message : 'Unknown error');
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!permission) return <CenterMessage>Loading camera permission…</CenterMessage>;
@@ -349,14 +442,45 @@ export default function Scan() {
               <ActionBtn label="+25" onPress={() => adjust(25)} disabled={busy} />
             </View>
 
-            <Pressable style={styles.dismiss} onPress={reset}>
-              <Text style={styles.dismissLabel}>Scan another</Text>
-            </Pressable>
+            <View style={styles.secondaryActions}>
+              <Pressable
+                style={styles.photoBtn}
+                onPress={capturePhoto}
+                disabled={busy}
+              >
+                <Text style={styles.photoBtnLabel}>📷  Take photo</Text>
+              </Pressable>
+              <Pressable style={styles.dismiss} onPress={reset}>
+                <Text style={styles.dismissLabel}>Scan another</Text>
+              </Pressable>
+            </View>
           </ScrollView>
         </View>
       )}
 
-      {busy && !item && <ActivityIndicator style={styles.spinner} color={theme.primary} size="large" />}
+      {addBook && (
+        <View style={styles.addBookWrap}>
+          <ScrollView contentContainerStyle={{ paddingBottom: space.lg }}>
+            <AddBookCard
+              user={user}
+              result={addBook}
+              onCancel={reset}
+              onCreated={(id) => {
+                setAddBook(null);
+                void (async () => {
+                  const found = await loadItemById(id);
+                  if (found) setItem(found);
+                  else reset();
+                })();
+              }}
+            />
+          </ScrollView>
+        </View>
+      )}
+
+      {busy && !item && !addBook && (
+        <ActivityIndicator style={styles.spinner} color={theme.primary} size="large" />
+      )}
     </SafeAreaView>
   );
 }
@@ -474,7 +598,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   actionLabel: { color: theme.text, fontWeight: '700', fontSize: 14 },
-  dismiss: { marginTop: space.md, alignItems: 'center', paddingVertical: 8 },
+  secondaryActions: {
+    flexDirection: 'row',
+    gap: space.sm,
+    marginTop: space.md,
+    alignItems: 'center',
+  },
+  photoBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    backgroundColor: theme.bgElevated,
+    borderWidth: 1,
+    borderColor: theme.border,
+    alignItems: 'center',
+  },
+  photoBtnLabel: { color: theme.text, fontWeight: '600', fontSize: 13 },
+  dismiss: { flex: 1, alignItems: 'center', paddingVertical: 10 },
   dismissLabel: { color: theme.primary, fontSize: 13, fontWeight: '600' },
   permission: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: space.xl, backgroundColor: theme.bg },
   permTitle: { color: theme.text, fontSize: 20, fontWeight: '700' },
@@ -482,4 +622,11 @@ const styles = StyleSheet.create({
   cta: { backgroundColor: theme.primary, paddingHorizontal: space.lg, paddingVertical: 12, borderRadius: radius.md, marginTop: space.lg },
   ctaLabel: { color: '#fff', fontWeight: '600' },
   spinner: { position: 'absolute', top: '50%', left: '50%' },
+  addBookWrap: {
+    position: 'absolute',
+    top: 60,
+    left: space.lg,
+    right: space.lg,
+    bottom: 80,
+  },
 });
