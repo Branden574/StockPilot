@@ -4,7 +4,6 @@
     "strict": true,
     "moduleResolution": "Bundler",
     "jsx": "react-native",
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     }
