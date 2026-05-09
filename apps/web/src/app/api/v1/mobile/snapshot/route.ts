@@ -2,6 +2,25 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { reportError } from '@/lib/error-reporter';
+
+/**
+ * Funnels every supabase error in this route through reportError() and
+ * returns an opaque slug to the client. The previous shape leaked
+ * Postgres error text (including table/column/RLS-policy names) into
+ * the mobile app, which would surface in error reports + crashlytics.
+ */
+function dbError(
+  ctx: { organizationId: string },
+  tag: string,
+  err: { message?: string },
+) {
+  void reportError(new Error(err.message ?? 'unknown'), {
+    tag: `mobile.snapshot.${tag}`,
+    organizationId: ctx.organizationId,
+  });
+  return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+}
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -56,7 +75,7 @@ export async function GET(req: NextRequest) {
     whQ.in('id', access.readableIds);
   }
   const { data: warehouses, error: whErr } = await whQ;
-  if (whErr) return NextResponse.json({ error: whErr.message }, { status: 500 });
+  if (whErr) return dbError(ctx, 'warehouses', whErr);
 
   // ── Items ───────────────────────────────────────────────────────
   let itemQ = ctx.supabase
@@ -76,7 +95,7 @@ export async function GET(req: NextRequest) {
   }
   if (since) itemQ = itemQ.gte('updated_at', since);
   const { data: items, error: itemErr } = await itemQ;
-  if (itemErr) return NextResponse.json({ error: itemErr.message }, { status: 500 });
+  if (itemErr) return dbError(ctx, 'items', itemErr);
 
   // ── Open POs (and their lines) ──────────────────────────────────
   let poQ = ctx.supabase
@@ -96,7 +115,7 @@ export async function GET(req: NextRequest) {
   }
   if (since) poQ = poQ.gte('updated_at', since);
   const { data: pos, error: poErr } = await poQ;
-  if (poErr) return NextResponse.json({ error: poErr.message }, { status: 500 });
+  if (poErr) return dbError(ctx, 'pos', poErr);
 
   // ── Open cycle counts (and their lines) ─────────────────────────
   let ccQ = ctx.supabase
@@ -117,7 +136,7 @@ export async function GET(req: NextRequest) {
     );
   }
   const { data: counts, error: ccErr } = await ccQ;
-  if (ccErr) return NextResponse.json({ error: ccErr.message }, { status: 500 });
+  if (ccErr) return dbError(ctx, 'cycle_counts', ccErr);
 
   // ── Bundles ─────────────────────────────────────────────────────
   let bQ = ctx.supabase
@@ -133,7 +152,7 @@ export async function GET(req: NextRequest) {
     .order('name', { ascending: true });
   if (since) bQ = bQ.gte('updated_at', since);
   const { data: bundles, error: bErr } = await bQ;
-  if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
+  if (bErr) return dbError(ctx, 'bundles', bErr);
 
   return NextResponse.json({
     serverTime,
