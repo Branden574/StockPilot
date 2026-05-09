@@ -4,6 +4,7 @@ import * as React from 'react';
 
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { usePushNotifications } from '@/lib/use-push-notifications';
+import { useSync } from '@/lib/use-sync';
 
 export default function RootLayout() {
   return (
@@ -22,6 +23,9 @@ function RootGate() {
   // Register an Expo push token + persist to push_tokens whenever the
   // signed-in user changes. No-op for nullable session.
   usePushNotifications(session?.user ?? null);
+  // Pull mobile snapshot + drain the offline action queue on app open
+  // and every 60s while foregrounded. Also no-op for nullable session.
+  useSync(session?.user ?? null);
 
   React.useEffect(() => {
     if (loading) return;

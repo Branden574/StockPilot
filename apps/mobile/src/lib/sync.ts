@@ -1,0 +1,298 @@
+import * as Network from 'expo-network';
+
+import { api } from './api';
+import { getDb, getMeta, setMeta } from './db';
+import { listPending, markFailed, markOk, markSending } from './queue';
+
+/**
+ * Two-direction sync engine.
+ *
+ *   Pull: hit /api/v1/mobile/snapshot?since=… → upsert into local SQLite.
+ *         Tracked via meta('last_synced_at').
+ *
+ *   Push: drain pending_actions in age order, hit each kind's matching
+ *         endpoint with the idempotency_key from the row. On 2xx, delete
+ *         the row. On 4xx (client error — bad payload), mark failed; the
+ *         user can retry from a queue UI. On 5xx / network failure, leave
+ *         pending so the next tick retries.
+ */
+
+interface SnapshotResponse {
+  serverTime: string;
+  warehouses: Array<{ id: string; name: string }>;
+  items: Array<{
+    id: string;
+    sku: string;
+    name: string;
+    barcode: string | null;
+    quantityOnHand: number;
+    unitCost: number;
+    warehouseId: string | null;
+    itemType: string | null;
+  }>;
+  openPOs: Array<{
+    id: string;
+    poNumber: string | null;
+    status: string;
+    expectedAt: string | null;
+    warehouseId: string | null;
+    lines: Array<{
+      id: string;
+      itemId: string;
+      qtyOrdered: number;
+      qtyReceived: number;
+      unitCost: number;
+    }>;
+  }>;
+  openCycleCounts: Array<{
+    id: string;
+    status: string;
+    warehouseId: string | null;
+    startedAt: string;
+    assignedTo: string | null;
+    notes: string | null;
+    lines: Array<{
+      id: string;
+      itemId: string;
+      expected: number;
+      counted: number | null;
+    }>;
+  }>;
+  bundles: Array<{
+    id: string;
+    name: string;
+    sku: string | null;
+    preassemblyEnabled: boolean;
+    phantomItemId: string | null;
+    phantomQty: number;
+    phantomWarehouseId: string | null;
+    components: Array<{ itemId: string; quantity: number; isOptional: boolean }>;
+  }>;
+}
+
+export async function isOnline(): Promise<boolean> {
+  try {
+    const state = await Network.getNetworkStateAsync();
+    return Boolean(state.isConnected && state.isInternetReachable !== false);
+  } catch {
+    return true; // Assume online if the API fails — better to attempt than skip.
+  }
+}
+
+export async function pullSnapshot(): Promise<{ items: number; pos: number; counts: number; bundles: number } | null> {
+  if (!(await isOnline())) return null;
+
+  const since = await getMeta('last_synced_at');
+  const path = since
+    ? `/api/v1/mobile/snapshot?since=${encodeURIComponent(since)}`
+    : '/api/v1/mobile/snapshot';
+
+  let snap: SnapshotResponse;
+  try {
+    snap = await api<SnapshotResponse>(path);
+  } catch (e) {
+    console.warn('[sync] snapshot pull failed', e);
+    return null;
+  }
+
+  const db = await getDb();
+  const now = Date.now();
+
+  await db.withTransactionAsync(async () => {
+    // Warehouses (full replace for simplicity — small set)
+    if (snap.warehouses.length > 0) {
+      await db.runAsync('delete from warehouses');
+      for (const w of snap.warehouses) {
+        await db.runAsync(
+          'insert into warehouses (id, name) values (?, ?)',
+          [w.id, w.name],
+        );
+      }
+    }
+
+    // Items (upsert on id)
+    for (const i of snap.items) {
+      await db.runAsync(
+        `insert or replace into items
+         (id, sku, name, barcode, quantity_on_hand, unit_cost,
+          warehouse_id, item_type, last_synced_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          i.id,
+          i.sku,
+          i.name,
+          i.barcode ?? null,
+          i.quantityOnHand,
+          i.unitCost,
+          i.warehouseId,
+          i.itemType,
+          now,
+        ],
+      );
+    }
+
+    // POs + lines (replace on PO id)
+    for (const p of snap.openPOs) {
+      await db.runAsync(
+        `insert or replace into purchase_orders
+         (id, po_number, status, warehouse_id, expected_at, last_synced_at)
+         values (?, ?, ?, ?, ?, ?)`,
+        [p.id, p.poNumber, p.status, p.warehouseId, p.expectedAt, now],
+      );
+      await db.runAsync('delete from po_lines where po_id = ?', [p.id]);
+      for (const l of p.lines) {
+        await db.runAsync(
+          `insert into po_lines
+           (id, po_id, item_id, qty_ordered, qty_received, unit_cost)
+           values (?, ?, ?, ?, ?, ?)`,
+          [l.id, p.id, l.itemId, l.qtyOrdered, l.qtyReceived, l.unitCost],
+        );
+      }
+    }
+
+    // Cycle counts + lines (replace on count id)
+    for (const c of snap.openCycleCounts) {
+      await db.runAsync(
+        `insert or replace into cycle_counts
+         (id, status, warehouse_id, started_at, assigned_to, notes, last_synced_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+        [c.id, c.status, c.warehouseId, c.startedAt, c.assignedTo, c.notes, now],
+      );
+      await db.runAsync('delete from cycle_count_lines where count_id = ?', [c.id]);
+      for (const l of c.lines) {
+        await db.runAsync(
+          `insert into cycle_count_lines (id, count_id, item_id, expected, counted)
+           values (?, ?, ?, ?, ?)`,
+          [l.id, c.id, l.itemId, l.expected, l.counted],
+        );
+      }
+    }
+
+    // Bundles + components (replace on bundle id)
+    for (const b of snap.bundles) {
+      await db.runAsync(
+        `insert or replace into bundles
+         (id, name, sku, preassembly_enabled, phantom_item_id,
+          phantom_qty, phantom_warehouse_id, last_synced_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          b.id,
+          b.name,
+          b.sku,
+          b.preassemblyEnabled ? 1 : 0,
+          b.phantomItemId,
+          b.phantomQty,
+          b.phantomWarehouseId,
+          now,
+        ],
+      );
+      await db.runAsync('delete from bundle_components where bundle_id = ?', [b.id]);
+      for (const comp of b.components) {
+        await db.runAsync(
+          `insert into bundle_components
+           (bundle_id, item_id, quantity, is_optional)
+           values (?, ?, ?, ?)`,
+          [b.id, comp.itemId, comp.quantity, comp.isOptional ? 1 : 0],
+        );
+      }
+    }
+  });
+
+  await setMeta('last_synced_at', snap.serverTime);
+
+  return {
+    items: snap.items.length,
+    pos: snap.openPOs.length,
+    counts: snap.openCycleCounts.length,
+    bundles: snap.bundles.length,
+  };
+}
+
+export async function drainQueue(): Promise<{ ok: number; failed: number }> {
+  if (!(await isOnline())) return { ok: 0, failed: 0 };
+
+  const pending = await listPending();
+  let ok = 0;
+  let failed = 0;
+
+  for (const action of pending) {
+    await markSending(action.id);
+    try {
+      await sendOne(action.kind, action.idempotencyKey, action.payload);
+      await markOk(action.id);
+      ok += 1;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // 4xx errors (bad payload, validation) — don't retry; mark failed
+      // so the user can review. 5xx / network errors — retry next tick
+      // by leaving the row in 'failed' too (the worker re-reads
+      // 'pending' or 'failed').
+      await markFailed(action.id, msg);
+      failed += 1;
+    }
+  }
+  return { ok, failed };
+}
+
+async function sendOne(
+  kind: string,
+  idempotencyKey: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  switch (kind) {
+    case 'receive_po_line': {
+      const poId = String(payload.poId ?? '');
+      if (!poId) throw new Error('receive_po_line: missing poId');
+      await api(`/api/v1/po/${poId}/receive-line`, {
+        method: 'POST',
+        body: { ...payload, idempotencyKey },
+      });
+      return;
+    }
+    case 'record_count': {
+      const countId = String(payload.cycleCountId ?? '');
+      const lineId = String(payload.lineId ?? '');
+      if (!countId || !lineId) throw new Error('record_count: missing ids');
+      await api(`/api/v1/cycle-counts/${countId}/lines/${lineId}/record`, {
+        method: 'POST',
+        body: payload,
+      });
+      return;
+    }
+    case 'distribute_bundle': {
+      const bundleId = String(payload.bundleId ?? '');
+      if (!bundleId) throw new Error('distribute_bundle: missing bundleId');
+      await api(`/api/v1/bundles/${bundleId}/distribute`, {
+        method: 'POST',
+        body: payload,
+      });
+      return;
+    }
+    case 'adjust_stock': {
+      // Reuses the existing adjust_stock RPC via a thin server route;
+      // in the meantime the mobile scan tab still hits supabase.rpc()
+      // directly when online, so this branch only fires for offline-
+      // queued adjusts.
+      throw new Error('adjust_stock queueing not yet wired — adjust online for now');
+    }
+    case 'create_book':
+    case 'upload_image': {
+      throw new Error(`${kind} queueing not yet wired`);
+    }
+    default:
+      throw new Error(`unknown action kind: ${kind}`);
+  }
+}
+
+/**
+ * Run pull then push. Called on app open + foreground + a 60s timer.
+ * Catches all errors so a failed sync never crashes the app shell.
+ */
+export async function syncNow(): Promise<void> {
+  try {
+    await pullSnapshot();
+    await drainQueue();
+  } catch (e) {
+    console.warn('[sync] syncNow failed', e);
+  }
+}

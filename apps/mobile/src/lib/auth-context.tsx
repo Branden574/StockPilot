@@ -1,6 +1,7 @@
 import type { Session, User } from '@supabase/supabase-js';
 import * as React from 'react';
 
+import { wipeForSignOut } from './db';
 import { supabase } from './supabase';
 
 interface AuthState {
@@ -47,6 +48,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut: AuthState['signOut'] = async () => {
     await supabase.auth.signOut();
+    // Wipe the local cache + queued actions so the next user doesn't
+    // see the previous one's data. Best-effort.
+    try {
+      await wipeForSignOut();
+    } catch (err) {
+      console.warn('[auth] wipe-on-signout failed', err);
+    }
   };
 
   return (
