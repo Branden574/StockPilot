@@ -32,11 +32,19 @@ export const maxDuration = 60;
  * Spec: docs/superpowers/specs/2026-05-08-weekly-email-digest-design.md
  */
 export async function GET(req: Request) {
-  if (env.CRON_SECRET) {
-    const auth = req.headers.get('authorization') ?? '';
-    if (auth !== `Bearer ${env.CRON_SECRET}`) {
-      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-    }
+  // Fail-closed when CRON_SECRET is unset/empty. Without this guard,
+  // an unauthenticated GET could trigger an org-wide email blast via
+  // Resend on the org's account. See cron/purge-ai-chat-history for
+  // the matching pattern.
+  if (!env.CRON_SECRET) {
+    return NextResponse.json(
+      { error: 'cron_secret_not_configured' },
+      { status: 503 },
+    );
+  }
+  const auth = req.headers.get('authorization') ?? '';
+  if (auth !== `Bearer ${env.CRON_SECRET}`) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
   let sent = 0;

@@ -7,7 +7,12 @@ export default function robots(): MetadataRoute.Robots {
       {
         userAgent: '*',
         allow: '/',
-        disallow: ['/dashboard/', '/onboarding', '/auth/', '/api/'],
+        // /r/ is the public order-request landing page. Each org's
+        // token is in the URL, so search-engine indexing would put
+        // the token in the public Google cache and make it
+        // enumerable. Same logic for /p/items/[id] — these are
+        // legitimately public but we'd rather not be indexable.
+        disallow: ['/dashboard/', '/onboarding', '/auth/', '/api/', '/r/', '/p/'],
       },
     ],
     sitemap: `${base}/sitemap.xml`,
