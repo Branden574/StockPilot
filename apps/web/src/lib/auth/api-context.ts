@@ -7,6 +7,46 @@ import { createClient } from '@/lib/supabase/server';
 import type { ServiceContext } from '@/server/services/context';
 
 import type { Role, Database } from '@stockpilot/core';
+import { isAdminRole } from '@stockpilot/core';
+
+/**
+ * Mirror of resolveMfaState() in context.ts but parameterized over an
+ * arbitrary Supabase client (cookie-bound or bearer-bound). Both auth
+ * paths in withApiContext need the same MFA gate the cookie path
+ * gets via withContext().
+ */
+async function resolveApiMfaState(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  organizationId: string,
+  role: Role,
+): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean }> {
+  let mfaRequired = false;
+  let mfaSatisfied = false;
+  try {
+    const { data: org } = await supabase
+      .from('organizations')
+      .select('mfa_policy')
+      .eq('id', organizationId)
+      .maybeSingle();
+    const policy =
+      (org?.mfa_policy as 'optional' | 'admins_required' | 'all_required' | undefined) ??
+      'optional';
+    mfaRequired =
+      policy === 'all_required' ||
+      (policy === 'admins_required' && isAdminRole(role));
+    if (mfaRequired) {
+      const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+      mfaSatisfied = data?.currentLevel === 'aal2';
+    } else {
+      mfaSatisfied = true;
+    }
+  } catch {
+    mfaRequired = false;
+    mfaSatisfied = true;
+  }
+  return { mfaRequired, mfaSatisfied };
+}
 
 /**
  * Builds a ServiceContext for use inside an API route handler. Two paths:
@@ -53,11 +93,18 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       .limit(1)
       .maybeSingle();
     if (!member) return null;
+    const mfa = await resolveApiMfaState(
+      supabase,
+      member.organization_id as string,
+      member.role as Role,
+    );
     return {
       organizationId: member.organization_id as string,
       userId: userRes.user.id,
       role: member.role as Role,
       supabase,
+      mfaRequired: mfa.mfaRequired,
+      mfaSatisfied: mfa.mfaSatisfied,
     };
   }
 
@@ -77,10 +124,17 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     .maybeSingle();
   if (!member) return null;
 
+  const mfa = await resolveApiMfaState(
+    supabase,
+    member.organization_id as string,
+    member.role as Role,
+  );
   return {
     organizationId: member.organization_id as string,
     userId: user.id,
     role: member.role as Role,
     supabase,
+    mfaRequired: mfa.mfaRequired,
+    mfaSatisfied: mfa.mfaSatisfied,
   };
 }
