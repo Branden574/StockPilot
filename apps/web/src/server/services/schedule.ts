@@ -1,6 +1,7 @@
 import 'server-only';
 
 import {
+  assertPermission,
   ServiceError,
   withContext,
   type ServiceContext,
@@ -203,6 +204,7 @@ export class ScheduleService {
   }
 
   async create(input: CreateScheduleEventInput): Promise<ScheduleEventRow> {
+    assertPermission(this.ctx, 'schedule:manage');
     const { data, error } = await this.ctx.supabase
       .from('schedule_events')
       .insert({
@@ -230,6 +232,7 @@ export class ScheduleService {
   }
 
   async update(id: string, patch: UpdateScheduleEventInput): Promise<ScheduleEventRow> {
+    assertPermission(this.ctx, 'schedule:manage');
     const updates: Record<string, unknown> = {
       updated_by: this.ctx.userId,
     };
@@ -328,6 +331,7 @@ export class ScheduleService {
   }
 
   async delete(id: string): Promise<void> {
+    assertPermission(this.ctx, 'schedule:manage');
     const { error } = await this.ctx.supabase
       .from('schedule_events')
       .delete()
