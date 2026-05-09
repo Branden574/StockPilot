@@ -320,4 +320,56 @@
       opacity: 0;
     }
   }
+
+  /* ─── Brand mark animation (Stencil Frame · Mark D) ─────────────────
+     The carved S inside the mask draws itself in, holds, then erases
+     on a 3.6s loop. The waypoint pip fades in as the path completes.
+     Used by the favicon, splash, and in-app loaders. */
+  .sp-mark-spath {
+    stroke-dasharray: 230;
+    stroke-dashoffset: 230;
+    animation: sp-mark-draw 3.6s cubic-bezier(0.7, 0.05, 0.3, 1) infinite;
+  }
+  .sp-mark-pip {
+    opacity: 0;
+    animation: sp-mark-pip 3.6s linear infinite;
+  }
+  @keyframes sp-mark-draw {
+    0% {
+      stroke-dashoffset: 230;
+    }
+    45% {
+      stroke-dashoffset: 0;
+    }
+    80% {
+      stroke-dashoffset: 0;
+    }
+    100% {
+      stroke-dashoffset: -230;
+    }
+  }
+  @keyframes sp-mark-pip {
+    0%,
+    42% {
+      opacity: 0;
+    }
+    50%,
+    78% {
+      opacity: 1;
+    }
+    88%,
+    100% {
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sp-mark-spath {
+      animation: none;
+      stroke-dashoffset: 0;
+    }
+    .sp-mark-pip {
+      animation: none;
+      opacity: 1;
+    }
+  }
 }

@@ -78,15 +78,16 @@ export const metadata: Metadata = {
       'max-snippet': -1,
     },
   },
-  icons: {
-    icon: '/favicon.ico',
-  },
+  // Favicons & touch icons are produced by Next.js's file-based icon
+  // convention: see app/icon.svg (animated brand mark) and
+  // app/apple-icon.tsx (static 180x180 PNG). No `icons` field is
+  // needed here — declaring it would override the file convention.
 };
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
-    { media: '(prefers-color-scheme: dark)', color: '#0a0f1f' },
+    { media: '(prefers-color-scheme: light)', color: '#f6f4ef' },
+    { media: '(prefers-color-scheme: dark)', color: '#0c0c0e' },
   ],
   width: 'device-width',
   initialScale: 1,
