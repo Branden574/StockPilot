@@ -1,10 +1,11 @@
 'use client';
 
-import { Bell, BookOpen, Search, SlidersHorizontal } from 'lucide-react';
+import { BookOpen, Search, SlidersHorizontal } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import * as React from 'react';
 
+import { NotificationBell } from '@/components/dashboard/notification-bell';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { WarehouseFilterPicker } from '@/components/dashboard/warehouse-filter-picker';
 import { cn } from '@/lib/utils';
@@ -16,6 +17,8 @@ interface TopbarProps {
   fullName: string | null;
   avatarUrl: string | null;
   organizationName: string;
+  userId: string;
+  initialUnreadNotifications: number;
   onToggleSidebar?: () => void;
   /** Pass-through filter UI props — only rendered when warehouses is non-empty. */
   warehouseFilter?: {
@@ -189,6 +192,8 @@ export function Topbar({
   fullName,
   avatarUrl,
   organizationName,
+  userId,
+  initialUnreadNotifications,
   onToggleSidebar,
   warehouseFilter,
 }: TopbarProps) {
@@ -262,17 +267,7 @@ export function Topbar({
         </span>
       </button>
 
-      <Link
-        href="/dashboard/notifications"
-        className="hover:bg-muted hover:text-foreground relative grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors"
-        aria-label="Notifications"
-      >
-        <Bell className="h-3.5 w-3.5" />
-        <span
-          aria-hidden
-          className="outline-background absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[hsl(var(--destructive))] outline outline-[1.5px]"
-        />
-      </Link>
+      <NotificationBell userId={userId} initialUnread={initialUnreadNotifications} />
 
       <button
         type="button"

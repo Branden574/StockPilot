@@ -16,7 +16,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const ctx = await requireOrgContext();
   const supabase = await createClient();
 
-  const [access, activeWarehouseId, orgRow, factorsRes, membershipsRes] = await Promise.all([
+  const [access, activeWarehouseId, orgRow, factorsRes, membershipsRes, unreadRes] = await Promise.all([
     getWarehouseAccess(),
     getActiveWarehouseFilter(),
     supabase
@@ -30,7 +30,14 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       .select('role, organizations:organization_id (id, name, logo_url)')
       .eq('user_id', ctx.userId)
       .not('accepted_at', 'is', null),
+    supabase
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', ctx.userId)
+      .eq('organization_id', ctx.organizationId)
+      .is('read_at', null),
   ]);
+  const initialUnreadNotifications = unreadRes.count ?? 0;
 
   const memberships = (membershipsRes.data ?? [])
     .map((row) => {
@@ -107,6 +114,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         email={ctx.email}
         fullName={ctx.fullName}
         avatarUrl={ctx.avatarUrl}
+        userId={ctx.userId}
+        initialUnreadNotifications={initialUnreadNotifications}
         organizationId={ctx.organizationId}
         organizationName={ctx.organizationName}
         organizationLogoUrl={(orgRow.data?.logo_url as string | null) ?? null}
