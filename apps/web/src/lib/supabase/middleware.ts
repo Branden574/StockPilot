@@ -104,6 +104,23 @@ export async function updateSession(request: NextRequest) {
     requestHeaders.delete(SESSION_HEADER_USER_EMAIL);
   }
 
+  // ── Per-request CSP nonce (plumbing only — not yet enforcing) ─────
+  // Generate a per-request nonce and forward it via x-nonce so server
+  // components / `next/script` can read it. This is the prep work for
+  // a future strict-dynamic CSP (Next.js auto-tags its bootstrap
+  // scripts with the nonce when the CSP response header contains
+  // 'nonce-XYZ' — see https://nextjs.org/docs/app/guides/content-security-policy).
+  //
+  // The PREVIOUS attempt to enable 'strict-dynamic' broke the
+  // dashboard because it lived in next.config.ts (build-time, no
+  // per-request nonce). Even now that the nonce IS per-request, we
+  // ship the pipeline first WITHOUT changing CSP enforcement, so we
+  // can verify in browser devtools that Next is auto-tagging its
+  // scripts before we tighten. The active CSP still comes from
+  // next.config.ts and still relies on 'unsafe-inline'.
+  const nonce = btoa(crypto.randomUUID()).replace(/=/g, '');
+  requestHeaders.set('x-nonce', nonce);
+
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   // Apply any token-refresh cookies onto the final response.
   pendingCookies.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
