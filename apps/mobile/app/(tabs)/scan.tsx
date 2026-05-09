@@ -94,6 +94,7 @@ export default function Scan() {
   const { user } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = React.useState(true);
+  const [mode, setMode] = React.useState<'lookup' | 'cover'>('lookup');
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const [item, setItem] = React.useState<FoundItem | null>(null);
   const [addBook, setAddBook] = React.useState<IsbnLookupResult | null>(null);
@@ -249,6 +250,100 @@ export default function Scan() {
   }
 
   /**
+   * Cover-ID flow. Opens the camera, captures a cover photo, uploads it
+   * to /api/v1/ai/identify-from-photo (Gemini Vision), and seeds
+   * AddBookCard with whatever Vision returned. The user always
+   * confirms before anything is added to inventory — Vision can be
+   * confidently wrong on weird editions.
+   */
+  async function captureCoverId() {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Camera access needed', 'Allow camera to capture a cover.');
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      quality: 0.8,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+
+    setBusy(true);
+    try {
+      // Read the image and ship it as base64 — multipart from RN to
+      // Next.js can be flaky across runtimes; JSON-base64 just works.
+      const ext = (asset.uri.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'jpg').toLowerCase();
+      const blob = await (await fetch(asset.uri)).blob();
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('failed to read image'));
+        reader.onload = () => {
+          const dataUrl = String(reader.result ?? '');
+          const comma = dataUrl.indexOf(',');
+          resolve(comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl);
+        };
+        reader.readAsDataURL(blob);
+      });
+
+      const vision = await api<{
+        title?: string;
+        author?: string;
+        isbn?: string;
+        publisher?: string;
+        confidence?: string;
+        notes?: string;
+      }>('/api/v1/ai/identify-from-photo', {
+        method: 'POST',
+        body: {
+          imageBase64: base64,
+          mimeType: blob.type || `image/${ext}`,
+        },
+      });
+
+      // If Vision pulled an ISBN, prefer the official lookup pipeline —
+      // it's more reliable than Vision's title-only guess and surfaces
+      // an existingItem flag if the book is already in inventory.
+      if (vision.isbn && /^[0-9X]{10,13}$/i.test(vision.isbn.replace(/[^0-9X]/gi, ''))) {
+        try {
+          const lookup = await api<IsbnLookupResult>(
+            `/api/v1/books/isbn-lookup?isbn=${encodeURIComponent(vision.isbn)}`,
+          );
+          // If lookup resolved metadata, use that; otherwise fall back to
+          // Vision's data so the user still gets a one-tap add card.
+          if (lookup.existingItem || lookup.metadata) {
+            setAddBook(lookup);
+            return;
+          }
+        } catch {
+          /* ignore — fall back to Vision result below */
+        }
+      }
+
+      // Synthesize an IsbnLookupResult from Vision's payload so
+      // AddBookCard can render it the same way.
+      setAddBook({
+        isbn: (vision.isbn ?? '').replace(/[^0-9X]/gi, '') || 'unknown',
+        existingItem: null,
+        metadata: vision.title
+          ? {
+              title: vision.title,
+              authors: vision.author ? [vision.author] : null,
+              publisher: vision.publisher ?? null,
+              description: null,
+              coverUrl: asset.uri,
+              grade: null,
+            }
+          : null,
+      });
+    } catch (e) {
+      Alert.alert('Cover ID failed', e instanceof Error ? e.message : 'Unknown error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
    * Open the camera, capture a photo, upload to the item-images bucket,
    * and register a new item_images row. Replaces the displayed thumb so
    * the user sees their capture immediately.
@@ -332,7 +427,7 @@ export default function Scan() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {scanning && !item ? (
+      {scanning && !item && !addBook && mode === 'lookup' ? (
         <CameraView
           style={StyleSheet.absoluteFill}
           facing="back"
@@ -344,8 +439,51 @@ export default function Scan() {
       ) : null}
 
       <View style={styles.overlay} pointerEvents="box-none">
-        <View style={styles.frame} />
-        <Text style={styles.hint}>{scanning && !item ? 'Point at a barcode or QR code' : ''}</Text>
+        {!item && !addBook && (
+          <View style={styles.modeChips} pointerEvents="auto">
+            <Pressable
+              onPress={() => setMode('lookup')}
+              style={[styles.modeChip, mode === 'lookup' && styles.modeChipOn]}
+            >
+              <Text style={[styles.modeLabel, mode === 'lookup' && styles.modeLabelOn]}>
+                Scan
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setMode('cover')}
+              style={[styles.modeChip, mode === 'cover' && styles.modeChipOn]}
+            >
+              <Text style={[styles.modeLabel, mode === 'cover' && styles.modeLabelOn]}>
+                Cover ID
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
+        {mode === 'lookup' ? (
+          <>
+            <View style={styles.frame} />
+            <Text style={styles.hint}>
+              {scanning && !item ? 'Point at a barcode or QR code' : ''}
+            </Text>
+          </>
+        ) : !item && !addBook ? (
+          <View style={styles.coverCta} pointerEvents="auto">
+            <Text style={styles.coverHint}>
+              Snap a clear photo of the front cover. Vision will read the
+              title and author.
+            </Text>
+            <Pressable
+              onPress={captureCoverId}
+              style={styles.coverShutter}
+              disabled={busy}
+            >
+              <Text style={styles.coverShutterLabel}>
+                {busy ? 'Identifying…' : '📷  Capture cover'}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
       {item && (
@@ -629,4 +767,49 @@ const styles = StyleSheet.create({
     right: space.lg,
     bottom: 80,
   },
+  modeChips: {
+    position: 'absolute',
+    top: 16,
+    flexDirection: 'row',
+    gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 999,
+    padding: 4,
+  },
+  modeChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+  },
+  modeChipOn: { backgroundColor: theme.primary },
+  modeLabel: { color: '#fff', fontSize: 12, fontWeight: '600', opacity: 0.7 },
+  modeLabelOn: { color: '#fff', opacity: 1 },
+  coverCta: {
+    position: 'absolute',
+    bottom: 120,
+    left: space.lg,
+    right: space.lg,
+    padding: space.lg,
+    borderRadius: radius.xl,
+    backgroundColor: theme.card,
+    borderWidth: 1,
+    borderColor: theme.border,
+    alignItems: 'center',
+  },
+  coverHint: {
+    color: theme.textMuted,
+    fontSize: 13,
+    textAlign: 'center',
+    marginBottom: space.md,
+    lineHeight: 18,
+  },
+  coverShutter: {
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    backgroundColor: theme.primary,
+    borderRadius: radius.md,
+    width: '100%',
+    alignItems: 'center',
+  },
+  coverShutterLabel: { color: '#fff', fontSize: 15, fontWeight: '700' },
 });
