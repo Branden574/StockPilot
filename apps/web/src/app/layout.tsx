@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Inter, Inter_Tight, Instrument_Serif, JetBrains_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 
+import { AnimatedFavicon } from '@/components/brand/animated-favicon';
 import { Toaster } from '@/components/ui/sonner';
 import { QueryProvider } from '@/lib/query/provider';
 import { ThemeProvider } from '@/components/theme/theme-provider';
@@ -107,6 +108,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <Toaster />
           </QueryProvider>
         </ThemeProvider>
+        {/* Cross-browser animated favicon — Chromium ignores SVG
+            keyframes in favicons, so this swaps PNG frames at ~12fps.
+            Mounts after hydration; static SVG remains the fallback. */}
+        <AnimatedFavicon />
       </body>
     </html>
   );
