@@ -54,7 +54,14 @@ export type AuditEvent =
   | 'bundle.updated'
   | 'bundle.archived'
   | 'bundle.assembled'
-  | 'bundle.distributed';
+  | 'bundle.distributed'
+  | 'order_request.created'
+  | 'order_request.approved'
+  | 'order_request.denied'
+  | 'order_request.status_changed'
+  | 'order_request.cancelled'
+  | 'order_request.delivered'
+  | 'order_request.public_link_rotated';
 
 interface AuditPayload {
   event: AuditEvent;

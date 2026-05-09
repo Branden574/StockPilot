@@ -40,6 +40,11 @@ export const PERMISSIONS = [
   // without giving them write access to the kit recipe itself.
   'bundles:manage',
   'bundles:distribute',
+  // Order requests: viewer+ can SUBMIT a request (the explicit fix that
+  // unlocks read-only users for ordering). Manager+ can approve / deny /
+  // change status / mark delivered / regenerate the public token.
+  'orders:request',
+  'orders:approve',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -76,6 +81,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'cycle_counts:assign',
     'bundles:manage',
     'bundles:distribute',
+    'orders:request',
+    'orders:approve',
   ],
   staff: [
     'organization:read',
@@ -91,6 +98,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'purchase_orders:read',
     'reports:read',
     'bundles:distribute',
+    'orders:request',
   ],
   viewer: [
     'organization:read',
@@ -101,6 +109,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'suppliers:read',
     'purchase_orders:read',
     'reports:read',
+    'orders:request',
   ],
 };
 
