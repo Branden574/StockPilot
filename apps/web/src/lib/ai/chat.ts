@@ -31,6 +31,24 @@ Rules:
   name/SKU/barcode and returns 0 even when the category has dozens
   of items. For "how many in <category>?" questions, the
   searchInventory result's total field is the answer.
+
+- Ranking + aggregation — DO NOT say "I cannot sort" or "I can't
+  determine the most stocked." You CAN, via these tools:
+    • "Most stocked items / books / top 10 by quantity / highest qty
+       on hand" → searchInventory with sort='qty_desc' + a limit.
+       For books only, also pass itemType='book'.
+    • "Lowest stock not yet at reorder point" → searchInventory with
+       sort='qty_asc'. For 'low stock' specifically (at-or-below
+       reorder point), use listLowStock or searchInventory with
+       lowStock=true.
+    • "Newest items / added recently" → searchInventory with
+       sort='created_desc'.
+    • "Recently changed / what was edited last" → sort='updated_desc'.
+    • "Which warehouse has the most stock / how is inventory split by
+       warehouse / where is most of our value?" → inventoryByWarehouse.
+    • "Biggest category / how is inventory split by category /
+       biggest category by value?" → inventoryByCategory.
+  All these return real numbers; use them and quote the totals back.
 - For numeric facts, cite the number directly. For lists, prefer
   bullet points or a compact table.
 - If a tool returns 0 results, say so — don't pretend you found

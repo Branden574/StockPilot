@@ -64,7 +64,7 @@ const searchInventoryTool: ToolExecutor = {
   declaration: {
     name: 'searchInventory',
     description:
-      "Search the inventory. Filter by free-text (name/SKU/barcode), category UUID, status, low-stock, out-of-stock, item type, or warehouse. The result's `total` field is the TRUE count even when only 25 items are returned — use that for 'how many' questions. When the user names a category by label (e.g. \"Swag\", \"Books\"), call listCategories first to resolve the UUID, then re-query with categoryId.",
+      "Search + RANK the inventory. Filter by free-text (name/SKU/barcode), category UUID, status, low-stock, out-of-stock, item type, or warehouse. The result's `total` field is the TRUE count even when only 25 items are returned — use that for 'how many' questions. When the user names a category by label (e.g. \"Swag\", \"Books\"), call listCategories first to resolve the UUID, then re-query with categoryId. Use `sort` to rank: 'qty_desc' = most-stocked first (perfect for 'most stocked items' / 'top 10 by quantity'), 'qty_asc' = lowest first, 'name_asc' = alphabetical, 'updated_desc' = recently changed, 'created_desc' = newest first.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {
@@ -99,6 +99,11 @@ const searchInventoryTool: ToolExecutor = {
           type: SchemaType.STRING,
           description: 'UUID of a specific warehouse. Empty = no filter.',
         },
+        sort: {
+          type: SchemaType.STRING,
+          description:
+            "Sort order. One of: 'qty_desc' (most stocked first), 'qty_asc' (least stocked first), 'name_asc', 'name_desc', 'sku_asc', 'sku_desc', 'updated_desc' (recently changed first), 'updated_asc', 'created_desc' (newest first), 'created_asc'. Default: 'updated_desc'. ALWAYS use 'qty_desc' for 'most stocked' / 'highest quantity' questions; 'qty_asc' for 'lowest stock' (when not specifically asking about reorder-point).",
+        },
         limit: {
           type: SchemaType.NUMBER,
           description: 'Max rows to return (1-25). Default 10.',
@@ -109,6 +114,32 @@ const searchInventoryTool: ToolExecutor = {
   },
   async execute(args, ctx) {
     const svc = new InventoryService(ctx);
+    const allowedSorts = new Set([
+      'qty_desc',
+      'qty_asc',
+      'name_asc',
+      'name_desc',
+      'sku_asc',
+      'sku_desc',
+      'updated_desc',
+      'updated_asc',
+      'created_desc',
+      'created_asc',
+    ]);
+    const sort =
+      typeof args.sort === 'string' && allowedSorts.has(args.sort)
+        ? (args.sort as
+            | 'qty_desc'
+            | 'qty_asc'
+            | 'name_asc'
+            | 'name_desc'
+            | 'sku_asc'
+            | 'sku_desc'
+            | 'updated_desc'
+            | 'updated_asc'
+            | 'created_desc'
+            | 'created_asc')
+        : 'updated_desc';
     const result = await svc.list({
       q: (args.query as string) || undefined,
       categoryId:
@@ -133,10 +164,12 @@ const searchInventoryTool: ToolExecutor = {
       lowStock: Boolean(args.lowStock),
       outOfStock: Boolean(args.outOfStock),
       warehouseId: typeof args.warehouseId === 'string' && args.warehouseId.length > 0 ? args.warehouseId : null,
+      sort,
       limit: Math.min(25, Math.max(1, Number(args.limit) || 10)),
     });
     return {
       total: result.total,
+      sortedBy: sort,
       items: result.items.slice(0, 25).map((i) => compactItem(i as Record<string, unknown>)),
     };
   },
@@ -255,6 +288,162 @@ const getDashboardSummaryTool: ToolExecutor = {
       getDashboardActions({ warehouseId: wh, ctx }),
     ]);
     return { ...summary, ...actions };
+  },
+};
+
+const inventoryByWarehouseTool: ToolExecutor = {
+  declaration: {
+    name: 'inventoryByWarehouse',
+    description:
+      "READ-ONLY — break inventory totals down by warehouse. Returns one row per warehouse with itemCount, totalUnits, totalValue. Use for 'which warehouse has the most stock?' / 'how is inventory split?' / 'where is most of our value?'. Includes an 'unassigned' bucket for items with no warehouse set.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        itemType: {
+          type: SchemaType.STRING,
+          description:
+            "Optional filter. One of 'product', 'book', 'asset', 'consumable', 'all'. Default 'all'.",
+        },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const itemType =
+      args.itemType === 'product' ||
+      args.itemType === 'book' ||
+      args.itemType === 'asset' ||
+      args.itemType === 'consumable'
+        ? args.itemType
+        : null;
+
+    let q = ctx.supabase
+      .from('inventory_items')
+      .select('warehouse_id, quantity_on_hand, unit_cost')
+      .eq('organization_id', ctx.organizationId)
+      .is('deleted_at', null)
+      .eq('status', 'active');
+    if (itemType) q = q.eq('item_type', itemType);
+    const { data: items, error } = await q;
+    if (error) throw new Error(error.message);
+
+    const { data: warehouses } = await ctx.supabase
+      .from('warehouses')
+      .select('id, name')
+      .eq('organization_id', ctx.organizationId);
+    const nameById = new Map<string, string>();
+    for (const w of (warehouses ?? []) as Array<{ id: string; name: string }>) {
+      nameById.set(w.id, w.name);
+    }
+
+    type Bucket = {
+      warehouseId: string | null;
+      warehouseName: string;
+      itemCount: number;
+      totalUnits: number;
+      totalValue: number;
+    };
+    const byWh = new Map<string | null, Bucket>();
+    for (const i of (items ?? []) as Array<{
+      warehouse_id: string | null;
+      quantity_on_hand: number;
+      unit_cost: number;
+    }>) {
+      const key = i.warehouse_id;
+      const acc =
+        byWh.get(key) ??
+        ({
+          warehouseId: key,
+          warehouseName: key ? (nameById.get(key) ?? '(deleted)') : '(unassigned)',
+          itemCount: 0,
+          totalUnits: 0,
+          totalValue: 0,
+        } as Bucket);
+      acc.itemCount += 1;
+      const qty = Number(i.quantity_on_hand) || 0;
+      const cost = Number(i.unit_cost) || 0;
+      acc.totalUnits += qty;
+      acc.totalValue += qty * cost;
+      byWh.set(key, acc);
+    }
+    const rows = Array.from(byWh.values()).sort((a, b) => b.totalValue - a.totalValue);
+    return {
+      filter: { itemType: itemType ?? 'all' },
+      rows,
+      totals: {
+        itemCount: rows.reduce((s, r) => s + r.itemCount, 0),
+        totalUnits: rows.reduce((s, r) => s + r.totalUnits, 0),
+        totalValue: rows.reduce((s, r) => s + r.totalValue, 0),
+      },
+    };
+  },
+};
+
+const inventoryByCategoryTool: ToolExecutor = {
+  declaration: {
+    name: 'inventoryByCategory',
+    description:
+      "READ-ONLY — break inventory totals down by category. Returns one row per category with itemCount, totalUnits, totalValue. Use for 'biggest category by value' / 'what type of inventory do we have most of' / 'how is inventory split by category'. Includes an 'uncategorized' bucket.",
+    parameters: { type: SchemaType.OBJECT, properties: {} },
+  },
+  async execute(_args, ctx) {
+    const [{ data: items, error }, { data: cats }] = await Promise.all([
+      ctx.supabase
+        .from('inventory_items')
+        .select('category_id, quantity_on_hand, unit_cost')
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .eq('status', 'active'),
+      ctx.supabase
+        .from('categories')
+        .select('id, name')
+        .eq('organization_id', ctx.organizationId),
+    ]);
+    if (error) throw new Error(error.message);
+
+    const nameById = new Map<string, string>();
+    for (const c of (cats ?? []) as Array<{ id: string; name: string }>) {
+      nameById.set(c.id, c.name);
+    }
+
+    type Bucket = {
+      categoryId: string | null;
+      categoryName: string;
+      itemCount: number;
+      totalUnits: number;
+      totalValue: number;
+    };
+    const byCat = new Map<string | null, Bucket>();
+    for (const i of (items ?? []) as Array<{
+      category_id: string | null;
+      quantity_on_hand: number;
+      unit_cost: number;
+    }>) {
+      const key = i.category_id;
+      const acc =
+        byCat.get(key) ??
+        ({
+          categoryId: key,
+          categoryName: key ? (nameById.get(key) ?? '(deleted)') : '(uncategorized)',
+          itemCount: 0,
+          totalUnits: 0,
+          totalValue: 0,
+        } as Bucket);
+      acc.itemCount += 1;
+      const qty = Number(i.quantity_on_hand) || 0;
+      const cost = Number(i.unit_cost) || 0;
+      acc.totalUnits += qty;
+      acc.totalValue += qty * cost;
+      byCat.set(key, acc);
+    }
+    const rows = Array.from(byCat.values()).sort((a, b) => b.totalValue - a.totalValue);
+    return {
+      rows,
+      totals: {
+        itemCount: rows.reduce((s, r) => s + r.itemCount, 0),
+        totalUnits: rows.reduce((s, r) => s + r.totalUnits, 0),
+        totalValue: rows.reduce((s, r) => s + r.totalValue, 0),
+      },
+    };
   },
 };
 
@@ -1016,6 +1205,8 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   getItemDetails: getItemDetailsTool,
   listLowStock: listLowStockTool,
   getDashboardSummary: getDashboardSummaryTool,
+  inventoryByWarehouse: inventoryByWarehouseTool,
+  inventoryByCategory: inventoryByCategoryTool,
   recentMovements: recentMovementsTool,
   listSuppliers: listSuppliersTool,
   listWarehouses: listWarehousesTool,
