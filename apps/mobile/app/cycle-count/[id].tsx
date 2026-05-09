@@ -185,10 +185,22 @@ export default function CycleCountDetail() {
         <Pressable onPress={() => router.back()} style={styles.backBtn}>
           <Text style={styles.backText}>← Back</Text>
         </Pressable>
-        <Text style={styles.title}>Cycle count</Text>
-        <Text style={styles.subtitle}>
-          {header?.warehouseName ?? '—'} · {countedCount}/{lines.length} counted
-        </Text>
+        <View style={styles.headerRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.title}>Cycle count</Text>
+            <Text style={styles.subtitle}>
+              {header?.warehouseName ?? '—'} · {countedCount}/{lines.length} counted
+            </Text>
+          </View>
+          {header && (
+            <Pressable
+              onPress={() => router.push(`/cycle-count/scan/${header.id}`)}
+              style={styles.scanBtn}
+            >
+              <Text style={styles.scanBtnLabel}>Scan to count</Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
       {loading ? (
@@ -301,8 +313,16 @@ const styles = StyleSheet.create({
   },
   backBtn: { paddingVertical: space.xs },
   backText: { color: theme.primary, fontSize: 14 },
-  title: { color: theme.text, fontSize: 22, fontWeight: '700', marginTop: 4 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: 4 },
+  title: { color: theme.text, fontSize: 22, fontWeight: '700' },
   subtitle: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
+  scanBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: radius.md,
+    backgroundColor: theme.primary,
+  },
+  scanBtnLabel: { color: '#fff', fontSize: 13, fontWeight: '700' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   card: {
     flexDirection: 'row',
