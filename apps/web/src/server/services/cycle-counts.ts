@@ -58,7 +58,11 @@ export class CycleCountsService {
       .from('cycle_counts')
       .select('*')
       .eq('organization_id', this.ctx.organizationId)
-      .order('started_at', { ascending: false });
+      .order('started_at', { ascending: false })
+      // 200 rows is multiple years of monthly counts for a typical
+      // org. Pagination + cursor can come later if any org actually
+      // crosses this; the cap exists to bound memory + payload size.
+      .limit(200);
     if (filters.assignedTo === null) {
       // Explicit unassigned filter — used by the "unassigned" view.
       query = query.is('assigned_to', null);

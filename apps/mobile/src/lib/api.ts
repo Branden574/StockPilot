@@ -2,10 +2,32 @@ import Constants from 'expo-constants';
 
 import { supabase } from './supabase';
 
-const API_URL =
-  (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl ??
-  process.env.EXPO_PUBLIC_API_URL ??
-  'http://localhost:3000';
+/**
+ * Resolve the API base URL once at module load. We deliberately fall
+ * through three sources and ONLY accept localhost in dev (`__DEV__`):
+ *   1. Expo runtime config `extra.apiUrl` (set in app.config.ts at
+ *      build time)
+ *   2. EXPO_PUBLIC_API_URL inlined into the bundle
+ *   3. localhost — only when `__DEV__` is true
+ *
+ * Without the dev-only gate, a release build that forgot the env var
+ * would ship with `http://localhost:3000` baked in and try to talk
+ * to the developer's machine. Better to crash loudly at startup than
+ * to silently fail every API call (or worse, to actually reach a
+ * local dev server on the user's network).
+ */
+function resolveApiUrl(): string {
+  const fromExtra = (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl;
+  const fromEnv = process.env.EXPO_PUBLIC_API_URL;
+  const candidate = fromExtra || fromEnv;
+  if (candidate && candidate.length > 0) return candidate;
+  if (__DEV__) return 'http://localhost:3000';
+  throw new Error(
+    'EXPO_PUBLIC_API_URL is not set in this build. Refusing to fall back to localhost in production. Re-build with the env var or set apiUrl in app.config.ts → extra.',
+  );
+}
+
+const API_URL = resolveApiUrl();
 
 interface ApiOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';

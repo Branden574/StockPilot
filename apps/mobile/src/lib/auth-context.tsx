@@ -47,7 +47,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut: AuthState['signOut'] = async () => {
-    await supabase.auth.signOut();
+    // Global scope revokes every refresh token for the user — kills
+    // sessions on the web tabs + any other devices. Mirrors the
+    // server action's behavior in apps/web/src/server/actions/auth.ts.
+    await supabase.auth.signOut({ scope: 'global' });
     // Wipe the local cache + queued actions so the next user doesn't
     // see the previous one's data. Best-effort.
     try {
