@@ -18,11 +18,20 @@ export const dynamic = 'force-dynamic';
  * traffic.
  */
 export async function GET(req: Request) {
-  if (env.CRON_SECRET) {
-    const auth = req.headers.get('authorization') ?? '';
-    if (auth !== `Bearer ${env.CRON_SECRET}`) {
-      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-    }
+  // Fail-closed: an empty/unset CRON_SECRET in the env must NOT skip
+  // the auth check. The previous `if (env.CRON_SECRET) { ... }` made
+  // misconfigured staging/dev deployments serve this route to any
+  // unauthenticated GET, which is an admin-client surface (drops chat
+  // history org-wide). Reject hard whenever the secret is absent.
+  if (!env.CRON_SECRET) {
+    return NextResponse.json(
+      { error: 'cron_secret_not_configured' },
+      { status: 503 },
+    );
+  }
+  const auth = req.headers.get('authorization') ?? '';
+  if (auth !== `Bearer ${env.CRON_SECRET}`) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
   try {
