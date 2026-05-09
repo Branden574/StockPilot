@@ -108,15 +108,8 @@ async function fileToText(buffer: Buffer, kind: SupportedFileKind): Promise<stri
       return result.value ?? '';
     }
     case 'xlsx': {
-      const xlsx = await import('xlsx');
-      const wb = xlsx.read(buffer, { type: 'buffer' });
-      const chunks: string[] = [];
-      for (const name of wb.SheetNames) {
-        const sheet = wb.Sheets[name];
-        if (!sheet) continue;
-        chunks.push(xlsx.utils.sheet_to_csv(sheet));
-      }
-      return chunks.join('\n');
+      const { xlsxBufferToCsv } = await import('@/lib/xlsx-to-csv');
+      return xlsxBufferToCsv(buffer);
     }
     case 'csv':
     case 'txt':
