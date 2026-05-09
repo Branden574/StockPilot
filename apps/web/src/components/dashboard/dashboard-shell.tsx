@@ -50,24 +50,40 @@ export function DashboardShell({
     setMounted(true);
   }, []);
 
-  // Lock the body to exact viewport height while the dashboard shell is
-  // mounted. Without this, anything Next.js or Vercel injects after the
-  // shell (Toaster portal, Vercel preview toolbar, devtools indicator)
-  // pushes the body past 100vh — the body itself becomes scrollable past
-  // <main>'s scroll, producing a second scrollbar and a "void" below
-  // short pages. We restore the original classes on navigation away so
-  // marketing pages (long scrolly content) keep their natural scroll.
+  // Pin the body to exactly viewport-height-without-overflow. We used to
+  // do this with `overflow-hidden + h-dvh`, but on iOS Safari that
+  // broke keyboard-dismiss flow: the inner <main> stayed scrolled to
+  // wherever the keyboard had pushed it, and the user couldn't scroll
+  // back up because the body itself was locked. Switching to
+  // `position: fixed; inset: 0` achieves the same "no body scroll past
+  // viewport" guarantee — Toaster/devtools-indicator portals are all
+  // `position: fixed` themselves so they don't push body height — while
+  // letting iOS naturally re-flow the inner scroll container when the
+  // keyboard hides.
+  //
+  // Restored on unmount so the marketing site (long scrollable pages)
+  // gets its natural scroll back when the user navigates away.
   React.useEffect(() => {
     const body = document.body;
     const html = document.documentElement;
-    const prevBody = body.className;
-    const prevHtml = html.className;
-    body.classList.remove('min-h-dvh');
-    body.classList.add('h-dvh', 'overflow-hidden');
-    html.classList.add('h-dvh', 'overflow-hidden');
+    const prev = {
+      bodyClass: body.className,
+      htmlClass: html.className,
+      bodyStyle: body.getAttribute('style') ?? '',
+      htmlStyle: html.getAttribute('style') ?? '',
+    };
+    body.classList.remove('min-h-dvh', 'min-h-screen');
+    body.style.position = 'fixed';
+    body.style.inset = '0';
+    body.style.overflow = 'hidden';
+    html.style.height = '100%';
     return () => {
-      body.className = prevBody;
-      html.className = prevHtml;
+      body.className = prev.bodyClass;
+      html.className = prev.htmlClass;
+      if (prev.bodyStyle) body.setAttribute('style', prev.bodyStyle);
+      else body.removeAttribute('style');
+      if (prev.htmlStyle) html.setAttribute('style', prev.htmlStyle);
+      else html.removeAttribute('style');
     };
   }, []);
 
