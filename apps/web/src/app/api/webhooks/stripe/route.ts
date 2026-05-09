@@ -29,23 +29,43 @@ export async function POST(req: NextRequest) {
     return new NextResponse('Invalid signature', { status: 400 });
   }
 
-  // Idempotency: short-circuit if we've seen this event before.
+  // Idempotency: claim the event with an INSERT ... ON CONFLICT.
+  // Previous shape (SELECT-then-INSERT) had a TOCTOU window where
+  // two concurrent deliveries of the same event_id could both pass
+  // the existence check, both insert (only one wins on the unique
+  // constraint), and both run the handler. The atomic claim closes
+  // that — only the first delivery sees `inserted=true`; others
+  // short-circuit. Stripe only retries minutes apart, so the
+  // window is narrow, but the fix is one line so we take it.
   const admin = createAdminClient();
-  const { data: existing } = await admin
+  const { data: claimRows } = await admin
     .from('billing_events')
-    .select('id, processed_at')
-    .eq('stripe_event_id', event.id)
-    .maybeSingle();
-  if (existing?.processed_at) {
-    return NextResponse.json({ received: true, idempotent: true });
-  }
-
-  if (!existing) {
-    await admin.from('billing_events').insert({
-      stripe_event_id: event.id,
-      type: event.type,
-      payload: event as unknown as Record<string, unknown>,
-    });
+    .upsert(
+      {
+        stripe_event_id: event.id,
+        type: event.type,
+        payload: event as unknown as Record<string, unknown>,
+      },
+      { onConflict: 'stripe_event_id', ignoreDuplicates: true },
+    )
+    .select('id, processed_at');
+  const claimed = (claimRows ?? [])[0];
+  if (!claimed) {
+    // ignoreDuplicates returns no row when the event_id was already
+    // present. Look up its processed_at to decide if we should
+    // short-circuit (already done) or, in the rare case the prior
+    // worker crashed mid-handler, let this delivery re-run.
+    const { data: existing } = await admin
+      .from('billing_events')
+      .select('processed_at')
+      .eq('stripe_event_id', event.id)
+      .maybeSingle();
+    if (existing?.processed_at) {
+      return NextResponse.json({ received: true, idempotent: true });
+    }
+    // Existing row but never marked processed — fall through and
+    // run the handler. The processed_at update below makes the
+    // re-run idempotent the next time around.
   }
 
   try {

@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { requireSession } from '@/lib/auth/session';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { ServiceError } from '@/server/services/context';
@@ -71,6 +72,21 @@ export async function consumeMfaRecoveryCodeAction(input: {
 }): Promise<ActionResult<{ unenrolled: number }>> {
   try {
     const session = await requireSession();
+
+    // Rate-limit the recovery-code consume path. Without this an
+    // attacker (legitimate AAL1 session) could brute-force-style spam
+    // codes to enumerate consumed-vs-not, or burn the user's codes
+    // to force a re-enrollment lockout. 5 attempts / 15 minutes is
+    // generous for a real user who made a typo and tight enough that
+    // brute force is impractical against the 80-bit code space.
+    const rl = await checkRateLimit(`mfa-recovery:${session.userId}`, 5, 15 * 60_000);
+    if (!rl.allowed) {
+      return err(
+        'validation_error',
+        'Too many recovery-code attempts. Wait a few minutes and try again.',
+      );
+    }
+
     const supabase = await createClient();
 
     const { data: ok_, error } = await supabase.rpc('consume_mfa_recovery_code', {

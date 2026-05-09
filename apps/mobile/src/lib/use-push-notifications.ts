@@ -85,24 +85,39 @@ export function usePushNotifications(user: User | null) {
       }
     })();
 
+    // Hosts we'll trust as targets of an https:// deep link in a push
+    // payload. An open-allowlist for any https:// URL would let a
+    // poisoned notifications row redirect users to phishing pages.
+    // Hard-pin to the known production hosts; localhost is allowed
+    // only in dev so engineers testing locally still get clicks.
+    const ALLOWED_HTTPS_HOSTS = ['stockpilotusa.com', 'www.stockpilotusa.com'];
+
     // Tap handler: open the deep link if one was supplied.
     tapSubscription = Notifications.addNotificationResponseReceivedListener((res) => {
       const link = (res.notification.request.content.data as { link?: string })?.link;
       if (link && typeof link === 'string') {
         // Internal /dashboard/... paths are translated to native
-        // stockpilot:// deep links. Anything else is only opened if
-        // it's an explicit https:// or stockpilot:// URL — this
-        // blocks `javascript:`, `intent:`, `data:`, and other unsafe
-        // schemes that would otherwise be opened verbatim by
-        // Linking.openURL if the push payload were ever poisoned.
+        // stockpilot:// deep links.
         if (link.startsWith('/dashboard/inventory/')) {
           const id = link.split('/').pop();
           if (id) Linking.openURL(`stockpilot://item/${id}`).catch(() => {});
         } else if (link.startsWith('/dashboard/purchase-orders/')) {
           const id = link.split('/').pop();
           if (id) Linking.openURL(`stockpilot://po/${id}`).catch(() => {});
-        } else if (link.startsWith('https://') || link.startsWith('stockpilot://')) {
+        } else if (link.startsWith('stockpilot://')) {
           Linking.openURL(link).catch(() => {});
+        } else if (link.startsWith('https://')) {
+          // Only follow https:// URLs that point at our known hosts.
+          // Stops a poisoned `notifications.link` row from sending
+          // a phone user to attacker.com via the in-app browser.
+          try {
+            const u = new URL(link);
+            if (ALLOWED_HTTPS_HOSTS.includes(u.hostname.toLowerCase())) {
+              Linking.openURL(link).catch(() => {});
+            }
+          } catch {
+            // Malformed URL — drop silently.
+          }
         }
       }
     });
