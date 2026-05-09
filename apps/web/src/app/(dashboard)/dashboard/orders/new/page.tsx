@@ -95,13 +95,16 @@ async function loadOrderableItems(
 
   // Active items in the chosen warehouse — keep the column set tight
   // since this list can be a few hundred rows for the order form.
+  // Bundle phantom rows (is_bundle=true) are excluded so they don't
+  // pollute the orderable list.
   const { data: itemsData } = await supabase
     .from('inventory_items')
-    .select('id, name, sku, quantity_on_hand, warehouse_id')
+    .select('id, name, sku, quantity_on_hand, warehouse_id, item_type, is_bundle')
     .eq('organization_id', organizationId)
     .eq('warehouse_id', warehouseId)
     .eq('status', 'active')
     .is('deleted_at', null)
+    .or('is_bundle.is.null,is_bundle.eq.false')
     .order('name', { ascending: true })
     .limit(500);
 
@@ -111,6 +114,7 @@ async function loadOrderableItems(
     sku: string;
     quantity_on_hand: number;
     warehouse_id: string;
+    item_type: string | null;
   }>;
   if (items.length === 0) return [];
 
@@ -140,5 +144,6 @@ async function loadOrderableItems(
     warehouseId: it.warehouse_id,
     quantityOnHand: Number(it.quantity_on_hand) || 0,
     reservedQuantity: reservedByItem.get(it.id) ?? 0,
+    itemType: it.item_type ?? null,
   }));
 }

@@ -26,7 +26,10 @@ export interface OrderItemOption {
   warehouseId: string;
   quantityOnHand: number;
   reservedQuantity: number;
+  itemType: string | null;
 }
+
+type TypeFilter = 'all' | 'book' | 'product';
 
 interface CartLine {
   itemId: string;
@@ -49,6 +52,7 @@ export function OrderRequestForm({ warehouses, warehouseId, items }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [search, setSearch] = React.useState('');
+  const [typeFilter, setTypeFilter] = React.useState<TypeFilter>('all');
   const [cart, setCart] = React.useState<Map<string, CartLine>>(new Map());
   const [notes, setNotes] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
@@ -63,12 +67,27 @@ export function OrderRequestForm({ warehouses, warehouseId, items }: Props) {
 
   const filtered = React.useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
-      (it) =>
-        it.name.toLowerCase().includes(q) || it.sku.toLowerCase().includes(q),
-    );
-  }, [items, search]);
+    return items.filter((it) => {
+      if (typeFilter === 'book' && it.itemType !== 'book') return false;
+      // 'product' bucket = anything that isn't a book. Keeps the chip
+      // simple for orgs that don't use the asset/consumable types.
+      if (typeFilter === 'product' && it.itemType === 'book') return false;
+      if (!q) return true;
+      return (
+        it.name.toLowerCase().includes(q) || it.sku.toLowerCase().includes(q)
+      );
+    });
+  }, [items, search, typeFilter]);
+
+  const counts = React.useMemo(() => {
+    let books = 0;
+    let products = 0;
+    for (const it of items) {
+      if (it.itemType === 'book') books += 1;
+      else products += 1;
+    }
+    return { all: items.length, book: books, product: products };
+  }, [items]);
 
   function availableToPromise(item: OrderItemOption): number {
     return Math.max(0, item.quantityOnHand - item.reservedQuantity);
@@ -191,13 +210,35 @@ export function OrderRequestForm({ warehouses, warehouseId, items }: Props) {
         </section>
 
         <section className="bg-card rounded-xl border">
-          <div className="border-border border-b px-4 py-3">
-            <h2 className="text-sm font-medium">
-              Items ({formatNumber(filtered.length)})
-            </h2>
-            <p className="text-muted-foreground mt-0.5 text-[11.5px]">
-              Available-to-promise = on hand minus active reservations.
-            </p>
+          <div className="border-border flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+            <div>
+              <h2 className="text-sm font-medium">
+                Items ({formatNumber(filtered.length)})
+              </h2>
+              <p className="text-muted-foreground mt-0.5 text-[11.5px]">
+                Available-to-promise = on hand minus active reservations.
+              </p>
+            </div>
+            <div className="border-border bg-background flex items-center gap-1 rounded-md border p-0.5 text-xs">
+              <FilterChip
+                active={typeFilter === 'all'}
+                onClick={() => setTypeFilter('all')}
+              >
+                All ({formatNumber(counts.all)})
+              </FilterChip>
+              <FilterChip
+                active={typeFilter === 'book'}
+                onClick={() => setTypeFilter('book')}
+              >
+                Books ({formatNumber(counts.book)})
+              </FilterChip>
+              <FilterChip
+                active={typeFilter === 'product'}
+                onClick={() => setTypeFilter('product')}
+              >
+                Items ({formatNumber(counts.product)})
+              </FilterChip>
+            </div>
           </div>
           <div className="max-h-[520px] divide-y overflow-y-auto">
             {filtered.length === 0 ? (
@@ -358,5 +399,30 @@ export function OrderRequestForm({ warehouses, warehouseId, items }: Props) {
         </div>
       </aside>
     </div>
+  );
+}
+
+function FilterChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        'rounded-sm px-2.5 py-1 text-xs font-medium transition-colors ' +
+        (active
+          ? 'bg-foreground text-background'
+          : 'text-muted-foreground hover:bg-muted')
+      }
+    >
+      {children}
+    </button>
   );
 }
