@@ -66,6 +66,9 @@ importers:
       expo-linking:
         specifier: ~7.0.0
         version: 7.0.5(expo@53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0)
+      expo-network:
+        specifier: ~7.0.0
+        version: 7.0.5(expo@53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0))(react@19.0.0)
       expo-notifications:
         specifier: ~0.29.0
         version: 0.29.14(expo@53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0)
@@ -75,6 +78,9 @@ importers:
       expo-secure-store:
         specifier: ~14.0.0
         version: 14.0.1(expo@53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0))
+      expo-sqlite:
+        specifier: ~15.0.0
+        version: 15.0.6(expo@53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0)
       expo-status-bar:
         specifier: ~2.0.0
         version: 2.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0)
@@ -4212,6 +4218,12 @@ packages:
   expo-modules-core@2.5.0:
     resolution: {integrity: sha512-aIbQxZE2vdCKsolQUl6Q9Farlf8tjh/ROR4hfN1qT7QBGPl1XrJGnaOKkcgYaGrlzCPg/7IBe0Np67GzKMZKKQ==}
 
+  expo-network@7.0.5:
+    resolution: {integrity: sha512-5dlowKAimhIDN1/lBRnN6SSH6c07f12R3QrfLf3b3GEr6D+EijH2wE537mmwPh1p+254LAkm0Z5ZEXxbwII4sA==}
+    peerDependencies:
+      expo: '*'
+      react: '*'
+
   expo-notifications@0.29.14:
     resolution: {integrity: sha512-AVduNx9mKOgcAqBfrXS1OHC9VAQZrDQLbVbcorMjPDGXW7m0Q5Q+BG6FYM/saVviF2eO8fhQRsTT40yYv5/bhQ==}
     peerDependencies:
@@ -4242,6 +4254,13 @@ packages:
     resolution: {integrity: sha512-QUS+j4+UG4jRQalgnpmTvvrFnMVLqPiUZRzYPnG3+JrZ5kwVW2w6YS3WWerPoR7C6g3y/a2htRxRSylsDs+TaQ==}
     peerDependencies:
       expo: '*'
+
+  expo-sqlite@15.0.6:
+    resolution: {integrity: sha512-3cW8n6Lxj9P3JhbHQhLhPXBl/UAYZgKbbs19XbtaVM81LKiaUR6W1VLIaxGcv0vRVWfmEdGCbv12gF888szOig==}
+    peerDependencies:
+      expo: '*'
+      react: '*'
+      react-native: '*'
 
   expo-status-bar@2.0.1:
     resolution: {integrity: sha512-AkIPX7jWHRPp83UBZ1iXtVvyr0g+DgBVvIXTtlmPtmUsm8Vq9Bb5IGj86PW8osuFlgoTVAg7HI/+Ok7yEYwiRg==}
@@ -11448,8 +11467,8 @@ snapshots:
       '@next/eslint-plugin-next': 16.2.4
       eslint: 9.39.4(jiti@2.6.1)
       eslint-import-resolver-node: 0.3.10
-      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.4(jiti@2.6.1))
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4(jiti@2.6.1))
+      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1))
       eslint-plugin-jsx-a11y: 6.10.2(eslint@9.39.4(jiti@2.6.1))
       eslint-plugin-react: 7.37.5(eslint@9.39.4(jiti@2.6.1))
       eslint-plugin-react-hooks: 7.1.1(eslint@9.39.4(jiti@2.6.1))
@@ -11471,7 +11490,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.4(jiti@2.6.1)):
+  eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1)):
     dependencies:
       '@nolyfill/is-core-module': 1.0.39
       debug: 4.4.3
@@ -11482,22 +11501,22 @@ snapshots:
       tinyglobby: 0.2.16
       unrs-resolver: 1.11.1
     optionalDependencies:
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4(jiti@2.6.1))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1))
     transitivePeerDependencies:
       - supports-color
 
-  eslint-module-utils@2.12.1(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4(jiti@2.6.1)):
+  eslint-module-utils@2.12.1(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1)):
     dependencies:
       debug: 3.2.7
     optionalDependencies:
       '@typescript-eslint/parser': 8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3)
       eslint: 9.39.4(jiti@2.6.1)
       eslint-import-resolver-node: 0.3.10
-      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0)(eslint@9.39.4(jiti@2.6.1))
+      eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1))
     transitivePeerDependencies:
       - supports-color
 
-  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4(jiti@2.6.1)):
+  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1)):
     dependencies:
       '@rtsao/scc': 1.1.0
       array-includes: 3.1.9
@@ -11508,7 +11527,7 @@ snapshots:
       doctrine: 2.1.0
       eslint: 9.39.4(jiti@2.6.1)
       eslint-import-resolver-node: 0.3.10
-      eslint-module-utils: 2.12.1(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4(jiti@2.6.1))
+      eslint-module-utils: 2.12.1(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint-import-resolver-node@0.3.10)(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.59.2(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1)))(eslint@9.39.4(jiti@2.6.1))
       hasown: 2.0.3
       is-core-module: 2.16.1
       is-glob: 4.0.3
@@ -11781,6 +11800,11 @@ snapshots:
     dependencies:
       invariant: 2.2.4
 
+  expo-network@7.0.5(expo@53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0))(react@19.0.0):
+    dependencies:
+      expo: 53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0)
+      react: 19.0.0
+
   expo-notifications@0.29.14(expo@53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0):
     dependencies:
       '@expo/image-utils': 0.6.5
@@ -11828,6 +11852,12 @@ snapshots:
   expo-secure-store@14.0.1(expo@53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0)):
     dependencies:
       expo: 53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0)
+
+  expo-sqlite@15.0.6(expo@53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0):
+    dependencies:
+      expo: 53.0.27(@babel/core@7.29.0)(@expo/metro-runtime@4.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)))(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0)
+      react: 19.0.0
+      react-native: 0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0)
 
   expo-status-bar@2.0.1(react-native@0.76.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@19.0.14)(react@19.0.0))(react@19.0.0):
     dependencies:
