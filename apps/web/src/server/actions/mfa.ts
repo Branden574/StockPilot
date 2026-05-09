@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { audit } from '@/server/services/audit';
 import { ServiceError } from '@/server/services/context';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
+import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -48,8 +49,11 @@ export async function enrollFactorAction(): Promise<
     });
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    // Don't console.error raw exception — Supabase auth errors can
+    // include factor IDs and challenge tokens. Funnel through the
+    // error reporter (which scrubs) and return a generic error.
+    void reportError(e, { tag: 'mfa.action' });
+    return err('internal_error', 'MFA action failed');
   }
 }
 
@@ -98,8 +102,11 @@ export async function verifyEnrollmentAction(input: {
     return ok(undefined);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    // Don't console.error raw exception — Supabase auth errors can
+    // include factor IDs and challenge tokens. Funnel through the
+    // error reporter (which scrubs) and return a generic error.
+    void reportError(e, { tag: 'mfa.action' });
+    return err('internal_error', 'MFA action failed');
   }
 }
 
@@ -147,8 +154,11 @@ export async function unenrollFactorAction(input: {
     return ok(undefined);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    // Don't console.error raw exception — Supabase auth errors can
+    // include factor IDs and challenge tokens. Funnel through the
+    // error reporter (which scrubs) and return a generic error.
+    void reportError(e, { tag: 'mfa.action' });
+    return err('internal_error', 'MFA action failed');
   }
 }
 
@@ -186,8 +196,11 @@ export async function challengeFactorAction(input: {
     return ok(undefined);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    // Don't console.error raw exception — Supabase auth errors can
+    // include factor IDs and challenge tokens. Funnel through the
+    // error reporter (which scrubs) and return a generic error.
+    void reportError(e, { tag: 'mfa.action' });
+    return err('internal_error', 'MFA action failed');
   }
 }
 
@@ -227,7 +240,10 @@ export async function setOrgMfaPolicyAction(input: {
     return ok(undefined);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    // Don't console.error raw exception — Supabase auth errors can
+    // include factor IDs and challenge tokens. Funnel through the
+    // error reporter (which scrubs) and return a generic error.
+    void reportError(e, { tag: 'mfa.action' });
+    return err('internal_error', 'MFA action failed');
   }
 }
