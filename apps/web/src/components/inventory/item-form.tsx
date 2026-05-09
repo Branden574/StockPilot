@@ -799,6 +799,7 @@ export function ItemForm({
         open={scannerOpen}
         onOpenChange={setScannerOpen}
         onDetected={handleIsbnDetected}
+        mode={isBook ? 'isbn' : 'barcode'}
       />
     </form>
   );

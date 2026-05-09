@@ -62,9 +62,9 @@ export function DashboardShell({
     const html = document.documentElement;
     const prevBody = body.className;
     const prevHtml = html.className;
-    body.classList.remove('min-h-screen');
-    body.classList.add('h-screen', 'overflow-hidden');
-    html.classList.add('h-screen', 'overflow-hidden');
+    body.classList.remove('min-h-dvh');
+    body.classList.add('h-dvh', 'overflow-hidden');
+    html.classList.add('h-dvh', 'overflow-hidden');
     return () => {
       body.className = prevBody;
       html.className = prevHtml;
@@ -72,7 +72,7 @@ export function DashboardShell({
   }, []);
 
   return (
-    <div className="bg-background flex h-screen overflow-hidden">
+    <div className="bg-background flex h-dvh overflow-hidden">
       {/*
         Skip link: hidden until keyboard-focused. Lets keyboard / screen-
         reader users jump past the sidebar + topbar straight into the
