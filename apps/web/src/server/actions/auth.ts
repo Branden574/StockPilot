@@ -72,7 +72,12 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
 
 export async function signOutAction(): Promise<void> {
   const supabase = await createClient();
-  await supabase.auth.signOut();
+  // scope: 'global' revokes ALL refresh tokens for the user across
+  // every device + tab. Default ('local') only kills the calling
+  // tab's token, leaving other browser tabs and the mobile app
+  // alive until natural expiry (~1h). For an internal enterprise
+  // tool, "Sign out" should mean "log me out everywhere."
+  await supabase.auth.signOut({ scope: 'global' });
   const cookieStore = await cookies();
   cookieStore.delete(REMEMBER_SESSION_COOKIE);
   redirect('/');

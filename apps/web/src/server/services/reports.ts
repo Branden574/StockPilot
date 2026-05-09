@@ -249,6 +249,11 @@ export class ReportsService {
    */
   async movementSummary(days = 30): Promise<MovementSummary> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    // 50k row cap. A high-volume org with millions of movements in a
+    // 90-day window would otherwise pull the whole result set into
+    // Node memory and aggregate in JS. The summary is approximate
+    // anyway (top movers, type breakdown) — a 50k sample is plenty
+    // for ranking and totals at the rounding levels we display.
     const { data, error } = await this.ctx.supabase
       .from('stock_movements')
       .select(
@@ -257,7 +262,8 @@ export class ReportsService {
       )
       .eq('organization_id', this.ctx.organizationId)
       .gte('created_at', since)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(50_000);
     if (error) throw new ServiceError('internal_error', error.message);
 
     const byType = new Map<string, { count: number; totalQty: number }>();
@@ -393,6 +399,7 @@ export class ReportsService {
    */
   async shrinkage(days = 30): Promise<ShrinkageReport> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    // 50k cap — see movementSummary() for the rationale.
     const { data, error } = await this.ctx.supabase
       .from('stock_movements')
       .select(
@@ -403,7 +410,8 @@ export class ReportsService {
       .eq('movement_type', 'adjust')
       .lt('quantity_change', 0)
       .gte('created_at', since)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(50_000);
     if (error) throw new ServiceError('internal_error', error.message);
 
     const rows: ShrinkageRow[] = [];
@@ -473,7 +481,8 @@ export class ReportsService {
       .eq('organization_id', this.ctx.organizationId)
       .not('supplier_id', 'is', null)
       .gte('created_at', since)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(50_000);
     if (posErr) throw new ServiceError('internal_error', posErr.message);
 
     const poList = (pos ?? []) as Array<{
@@ -645,7 +654,8 @@ export class ReportsService {
         .select('item_id, quantity_change, movement_type, created_at')
         .eq('organization_id', this.ctx.organizationId)
         .gte('created_at', since)
-        .lt('quantity_change', 0), // out-movements only (negative)
+        .lt('quantity_change', 0)
+        .limit(100_000), // out-movements only (negative); cap for memory safety
       this.ctx.supabase
         .from('inventory_items')
         .select(
@@ -656,7 +666,8 @@ export class ReportsService {
         .eq('organization_id', this.ctx.organizationId)
         .is('deleted_at', null)
         .eq('status', 'active')
-        .or('is_bundle.is.null,is_bundle.eq.false'),
+        .or('is_bundle.is.null,is_bundle.eq.false')
+        .limit(50_000),
     ]);
     if (movementsRes.error)
       throw new ServiceError('internal_error', movementsRes.error.message);
@@ -793,7 +804,8 @@ export class ReportsService {
         .in('item_id', itemIds)
         .gte('created_at', since)
         .lt('quantity_change', 0)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(100_000);
       for (const m of (moves ?? []) as Array<{ item_id: string; created_at: string }>) {
         if (!recentOut.has(m.item_id)) recentOut.set(m.item_id, m.created_at);
       }
@@ -889,7 +901,8 @@ export class ReportsService {
         .eq('reference_type', 'bundle')
         .eq('movement_type', 'bundle_distribution')
         .gte('created_at', since)
-        .lt('quantity_change', 0);
+        .lt('quantity_change', 0)
+        .limit(50_000);
       type MoveRow = {
         reference_id: string;
         quantity_change: number;

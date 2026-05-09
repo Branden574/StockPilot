@@ -64,7 +64,16 @@ export type UpdateItemInput = z.infer<typeof updateItemSchema>;
 
 export const adjustStockSchema = z.object({
   itemId: uuidSchema,
-  quantityChange: z.coerce.number(),
+  // Caps deliberately wide enough for realistic restocks (a pallet of
+  // 50,000 books from a vendor) but tight enough that an attacker
+  // can't pass Number.MAX_SAFE_INTEGER and either overflow the
+  // numeric(14,4) column or push quantity_on_hand into nonsense
+  // territory that downstream reports/aggregations choke on.
+  quantityChange: z.coerce
+    .number()
+    .finite()
+    .min(-1_000_000)
+    .max(1_000_000),
   movementType: movementTypeSchema.default('adjust'),
   locationId: uuidSchema.nullable().optional(),
   reason: z.string().max(500).optional(),
