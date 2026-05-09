@@ -15,7 +15,7 @@ interface OrgLogoUploaderProps {
   initialUrl: string | null;
 }
 
-const ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'image/avif', 'image/svg+xml'];
+const ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'image/avif'];
 const MAX_BYTES = 5 * 1024 * 1024;
 
 export function OrgLogoUploader({
@@ -35,7 +35,7 @@ export function OrgLogoUploader({
 
   async function upload(file: File) {
     if (!ACCEPT.includes(file.type)) {
-      toast.error('Use PNG, JPG, WEBP, AVIF, or SVG');
+      toast.error('Use PNG, JPG, WEBP, or AVIF');
       return;
     }
     if (file.size > MAX_BYTES) {
