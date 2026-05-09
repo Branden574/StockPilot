@@ -37,61 +37,76 @@ export function AnimatedFavicon() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Resolve the link element we'll update; create one if absent.
-    let link = document.querySelector<HTMLLinkElement>('link[rel~="icon"][data-animated="1"]');
-    if (!link) {
-      link = document.createElement('link');
-      link.rel = 'icon';
-      link.dataset.animated = '1';
-      document.head.appendChild(link);
-    }
+    // Take ownership of the favicon. Next.js's app/icon.svg file
+    // convention auto-injects `<link rel="icon" href="/icon?...">`,
+    // plus there may be a manifest-supplied icon link. Browsers
+    // usually render the first match they see, so appending our own
+    // link without removing the others is invisible.
+    //
+    // Strip every existing `link[rel*=icon]` EXCEPT apple-touch-icon
+    // (iOS home-screen still wants the static PNG). Then create a
+    // single controlled link we'll update every frame.
+    document
+      .querySelectorAll<HTMLLinkElement>('link[rel*="icon" i]')
+      .forEach((el) => {
+        const rel = el.getAttribute('rel')?.toLowerCase() ?? '';
+        if (rel.includes('apple-touch-icon')) return;
+        el.parentNode?.removeChild(el);
+      });
+    const link = document.createElement('link');
+    link.rel = 'icon';
+    link.type = 'image/png';
+    link.dataset.animated = '1';
+    document.head.appendChild(link);
 
-    // Path is the same S the SVG draws: an open zigzag from upper-
-    // right to lower-left. Coordinates scaled from 100x100 to SIZE.
-    const scale = SIZE / 100;
+    // Coordinates mirror apps/web/src/app/icon.svg (viewBox 0 0 100 100):
+    //   Frame:  x=12 y=12 w=76 h=76 rx=16
+    //   S-path: M 32 78  Q 72 78 72 66  Q 72 54 54 54  Q 32 54 32 42  Q 32 24 72 24
+    //           (stroke-width 11, total length ≈ 230 units)
+    //   Pip:    cx=72 cy=24 r=6
+    // Scale every literal by SIZE/100 so the layout is identical.
+    const s = SIZE / 100;
     const drawFrame = (progress: number) => {
-      // progress: 0 = empty, 0.5 = fully drawn, 1 = fully erased
       const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
       const fill = dark ? '#f6f4ef' : '#0c0c0e';
-      const ink = dark ? '#0c0c0e' : '#f6f4ef';
 
       ctx.clearRect(0, 0, SIZE, SIZE);
 
-      // Rounded-square frame
-      const r = 10 * scale;
-      const x = 6 * scale;
-      const y = 6 * scale;
-      const w = 52 * scale;
-      const h = 52 * scale;
+      // Step 1: rounded-square frame, fully filled.
+      const fx = 12 * s;
+      const fy = 12 * s;
+      const fw = 76 * s;
+      const fh = 76 * s;
+      const fr = 16 * s;
       ctx.fillStyle = fill;
       ctx.beginPath();
-      ctx.moveTo(x + r, y);
-      ctx.lineTo(x + w - r, y);
-      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-      ctx.lineTo(x + w, y + h - r);
-      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-      ctx.lineTo(x + r, y + h);
-      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-      ctx.lineTo(x, y + r);
-      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.moveTo(fx + fr, fy);
+      ctx.lineTo(fx + fw - fr, fy);
+      ctx.quadraticCurveTo(fx + fw, fy, fx + fw, fy + fr);
+      ctx.lineTo(fx + fw, fy + fh - fr);
+      ctx.quadraticCurveTo(fx + fw, fy + fh, fx + fw - fr, fy + fh);
+      ctx.lineTo(fx + fr, fy + fh);
+      ctx.quadraticCurveTo(fx, fy + fh, fx, fy + fh - fr);
+      ctx.lineTo(fx, fy + fr);
+      ctx.quadraticCurveTo(fx, fy, fx + fr, fy);
       ctx.closePath();
       ctx.fill();
 
-      // S-stroke path. We draw the path with destination-out so it
-      // CARVES the frame instead of stamping ink — matches the SVG
-      // mask approach.
+      // Step 2: CARVE the S out of the frame (destination-out matches
+      // the SVG's mask=url(#m) trick — the carved path becomes the
+      // negative space, and the frame fill shows through where the
+      // carve isn't yet drawn).
       ctx.save();
       ctx.globalCompositeOperation = 'destination-out';
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      ctx.lineWidth = 7 * scale;
+      ctx.lineWidth = 11 * s;
 
-      // Total path length (approx via dasharray in the SVG): 230 in
-      // 100-unit space → scale.
-      const totalLen = 230 * scale;
-      // First half: draw forward. Second half: erase forward.
-      // CSS keyframes: 0% offset=230, 45% offset=0, 80% offset=0,
-      // 100% offset=-230.
+      const totalLen = 230 * s;
+      // Three-phase animation matching the SVG @keyframes:
+      //   0%–45%: stroke draws in (offset 230 → 0)
+      //   45%–80%: held drawn (offset 0)
+      //   80%–100%: stroke erases (offset 0 → -230)
       let offset: number;
       if (progress < 0.45) {
         offset = totalLen - (progress / 0.45) * totalLen;
@@ -104,30 +119,33 @@ export function AnimatedFavicon() {
       ctx.lineDashOffset = offset;
 
       ctx.beginPath();
-      ctx.moveTo(20 * scale, 50 * scale);
-      ctx.quadraticCurveTo(46 * scale, 50 * scale, 46 * scale, 42 * scale);
-      ctx.quadraticCurveTo(46 * scale, 34 * scale, 34 * scale, 34 * scale);
-      ctx.quadraticCurveTo(20 * scale, 34 * scale, 20 * scale, 26 * scale);
-      ctx.quadraticCurveTo(20 * scale, 14 * scale, 46 * scale, 14 * scale);
-      ctx.strokeStyle = ink;
+      ctx.moveTo(32 * s, 78 * s);
+      ctx.quadraticCurveTo(72 * s, 78 * s, 72 * s, 66 * s);
+      ctx.quadraticCurveTo(72 * s, 54 * s, 54 * s, 54 * s);
+      ctx.quadraticCurveTo(32 * s, 54 * s, 32 * s, 42 * s);
+      ctx.quadraticCurveTo(32 * s, 24 * s, 72 * s, 24 * s);
       ctx.stroke();
       ctx.restore();
 
-      // Pip dot at the upper-right terminal — fades in mid-cycle
+      // Step 3: pip dot at the upper-right terminal — fades in mid-
+      // cycle as the stroke nears that endpoint.
       const pipAlpha =
-        progress < 0.42 ? 0 : progress < 0.5 ? (progress - 0.42) / 0.08 :
-        progress < 0.78 ? 1 : progress < 0.88 ? 1 - (progress - 0.78) / 0.1 : 0;
+        progress < 0.42 ? 0
+        : progress < 0.5 ? (progress - 0.42) / 0.08
+        : progress < 0.78 ? 1
+        : progress < 0.88 ? 1 - (progress - 0.78) / 0.1
+        : 0;
       if (pipAlpha > 0.01) {
         ctx.save();
         ctx.globalCompositeOperation = 'destination-out';
         ctx.globalAlpha = pipAlpha;
         ctx.beginPath();
-        ctx.arc(46 * scale, 14 * scale, 4 * scale, 0, Math.PI * 2);
+        ctx.arc(72 * s, 24 * s, 6 * s, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }
 
-      link!.href = canvas.toDataURL('image/png');
+      link.href = canvas.toDataURL('image/png');
     };
 
     if (reduce) {
