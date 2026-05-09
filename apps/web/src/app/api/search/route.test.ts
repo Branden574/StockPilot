@@ -27,6 +27,8 @@ function buildCtx(client: unknown) {
     userId: 'u-1',
     role: 'admin' as const,
     supabase: client as never,
+    mfaRequired: false,
+    mfaSatisfied: true,
   };
 }
 

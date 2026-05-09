@@ -209,12 +209,18 @@ export function makeServiceContext(
     organizationId: string;
     userId: string;
     role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
+    mfaRequired: boolean;
+    mfaSatisfied: boolean;
   }> = {},
 ) {
   return {
     organizationId: overrides.organizationId ?? 'org-test',
     userId: overrides.userId ?? 'user-test',
     role: overrides.role ?? 'admin',
+    // Default to MFA-not-required so existing tests don't have to opt
+    // out. Tests covering the MFA gate explicitly set the flags.
+    mfaRequired: overrides.mfaRequired ?? false,
+    mfaSatisfied: overrides.mfaSatisfied ?? true,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     supabase: supabase as any,
   };

@@ -34,6 +34,8 @@ function buildCtx() {
     userId: 'u-1',
     role: 'admin' as const,
     supabase: stub.client as never,
+    mfaRequired: false,
+    mfaSatisfied: true,
   };
 }
 
