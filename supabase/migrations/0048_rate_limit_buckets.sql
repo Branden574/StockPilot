@@ -52,10 +52,14 @@ declare
   v_window_ends   timestamptz;
 begin
   -- Opportunistic cleanup: drop a handful of expired rows on every
-  -- call so the table stays bounded without a separate cron.
+  -- call so the table stays bounded without a separate cron. Postgres
+  -- DELETE doesn't accept LIMIT directly — emulate via ctid subquery.
   delete from public.rate_limit_buckets
-   where expires_at < v_now - interval '1 minute'
-   limit 50;
+   where ctid in (
+     select ctid from public.rate_limit_buckets
+      where expires_at < v_now - interval '1 minute'
+      limit 50
+   );
 
   select * into v_row
     from public.rate_limit_buckets
