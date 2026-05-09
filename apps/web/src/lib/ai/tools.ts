@@ -4,6 +4,7 @@ import { GoogleGenerativeAI, SchemaType, type FunctionDeclaration } from '@googl
 
 import { lookupIsbn as lookupIsbnLib } from '@/lib/books/lookup';
 import { env } from '@/lib/env';
+import { assertSafeFetchUrl, SsrfBlockedError } from '@/lib/ssrf-guard';
 import type { ServiceContext } from '@/server/services/context';
 import { BooksImportService } from '@/server/services/books-import';
 import { CategoriesService } from '@/server/services/categories';
@@ -1044,6 +1045,20 @@ const identifyFromPhotoTool: ToolExecutor = {
     const url = String(args.imageUrl ?? '');
     if (!/^https?:\/\//i.test(url)) {
       throw new Error('imageUrl must be an http or https URL');
+    }
+    // SSRF guard: reject URLs whose host resolves to RFC-1918, AWS IMDS
+    // (169.254.169.254), or any other internal range. Without this an
+    // authenticated user can use the AI vision tool as an internal
+    // probe, since the response body is read into Gemini's context
+    // (and a sufficiently-imaged content-type would fly through the
+    // image/* check below).
+    try {
+      await assertSafeFetchUrl(url);
+    } catch (e) {
+      if (e instanceof SsrfBlockedError) {
+        throw new Error(`imageUrl rejected: ${e.reason}`);
+      }
+      throw e;
     }
     const hint = typeof args.hint === 'string' ? args.hint.slice(0, 500) : '';
 

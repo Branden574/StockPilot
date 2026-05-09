@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { streamChat, type ChatTurn, type ToolCallRecord } from '@/lib/ai/chat';
 import { classifyAiError } from '@/lib/ai/errors';
 import {
@@ -46,6 +47,22 @@ const bodySchema = z.object({
 export async function POST(req: Request) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  // Per-user rate limit on the AI chat — protects the org's Gemini
+  // quota from a single misbehaving user (or an attacker with a
+  // hijacked session) burning through the daily budget. 60 turns/min
+  // is well above any human chat cadence.
+  const rl = checkRateLimit(`ai-chat:${ctx.userId}`, 60, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      {
+        error: 'rate_limited',
+        message: 'Too many AI chat requests. Slow down for a moment.',
+        retryAt: rl.resetAt,
+      },
+      { status: 429 },
+    );
+  }
 
   let payload: z.infer<typeof bodySchema>;
   try {

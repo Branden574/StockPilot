@@ -1,10 +1,26 @@
 import 'server-only';
 
 import { lookupIsbn, normalizeIsbn, type BookMetadata } from '@/lib/books/lookup';
+import { assertSafeFetchUrl, SsrfBlockedError } from '@/lib/ssrf-guard';
 import { generateSku } from '@/lib/utils';
 
 import { InventoryService } from './inventory';
 import { ServiceError, type ServiceContext } from './context';
+
+// Hosts the book-lookup pipeline ever returns thumbnails from. Anything
+// else gets rejected by rehostCover() — a poisoned upstream API
+// response with a thumbnail URL pointing at an internal service can't
+// turn into an SSRF probe via the bulk-import flow.
+const COVER_HOST_ALLOWLIST = [
+  'books.google.com',
+  'books.googleusercontent.com',
+  'covers.openlibrary.org',
+  'archive.org',
+  'ia801600.us.archive.org',
+  'ia803000.us.archive.org',
+  'www.loc.gov',
+  'tile.loc.gov',
+];
 
 /**
  * Download a cover image from a third-party URL and host it in our
@@ -24,6 +40,18 @@ async function rehostCover(
   coverUrl: string,
 ): Promise<string | null> {
   try {
+    // SSRF guard: the upstream book lookup APIs return raw thumbnail
+    // URLs. If any of them were ever compromised or returned an
+    // attacker-controlled URL pointing at a private IP, fetching it
+    // here would let the attacker probe internal infra (and on Vercel
+    // potentially hit IMDS for credentials). Allowlist the four real
+    // cover-image hosts we know about; reject everything else.
+    try {
+      await assertSafeFetchUrl(coverUrl, { hostAllowlist: COVER_HOST_ALLOWLIST });
+    } catch (e) {
+      if (e instanceof SsrfBlockedError) return null;
+      throw e;
+    }
     // 8s budget. Some cover servers are slow; 8s lets the slow ones
     // resolve without blocking the whole import.
     const res = await fetch(coverUrl, {

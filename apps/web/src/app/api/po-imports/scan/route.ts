@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { PoImportsService } from '@/server/services/po-imports';
 import { ServiceError } from '@/server/services/context';
 
@@ -36,6 +37,22 @@ const MAX_FILES = 5;
 export async function POST(req: Request) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  // PO scan extraction is the heaviest Gemini call in the app — up to
+  // 5 files * 8 MB each * multi-second vision runs. Cap at 12/min/user
+  // so a single client (or a runaway upload loop) can't drain the
+  // org's quota.
+  const rl = checkRateLimit(`ai-po-scan:${ctx.userId}`, 12, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      {
+        error: 'rate_limited',
+        message: 'Too many PO scans in a short window. Try again in a minute.',
+        retryAt: rl.resetAt,
+      },
+      { status: 429 },
+    );
+  }
 
   let form: FormData;
   try {

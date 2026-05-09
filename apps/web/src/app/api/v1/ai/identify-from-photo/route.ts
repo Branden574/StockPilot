@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { env } from '@/lib/env';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,10 +22,25 @@ export async function POST(req: NextRequest) {
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
-  if (!env.GEMINI_API_KEY) {
+  // 30 cover-IDs per minute per user is way over the realistic mobile
+  // capture cadence; a tighter cap is fine here because Vision calls
+  // are heavier (image upload + multi-second model latency).
+  const rl = checkRateLimit(`ai-vision:${ctx.userId}`, 30, 60_000);
+  if (!rl.allowed) {
     return NextResponse.json(
-      { error: 'GEMINI_API_KEY not configured' },
-      { status: 500 },
+      {
+        error: 'rate_limited',
+        retryAt: rl.resetAt,
+      },
+      { status: 429 },
+    );
+  }
+  if (!env.GEMINI_API_KEY) {
+    // Don't leak the env var name. The mobile client just needs to
+    // know the feature isn't ready and to retry-or-give-up.
+    return NextResponse.json(
+      { error: 'feature_unavailable' },
+      { status: 503 },
     );
   }
 
