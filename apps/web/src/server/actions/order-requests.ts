@@ -13,20 +13,34 @@ function toResult<T>(error: unknown): ActionResult<T> {
   return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
 }
 
-const createSchema = z.object({
-  warehouseId: z.string().uuid(),
-  notes: z.string().max(2000).nullable().optional(),
-  lines: z
-    .array(
-      z.object({
-        itemId: z.string().uuid(),
-        quantity: z.coerce.number().positive().max(1_000_000),
-        notes: z.string().max(500).nullable().optional(),
-      }),
-    )
-    .min(1)
-    .max(100),
-});
+// Per-line cap matches the public endpoint so a viewer can't drain an
+// entire SKU's reservations in a single submit. Total-qty refine adds
+// a second guard against split-across-many-lines abuse.
+const MAX_QTY_PER_LINE = 10_000;
+const MAX_TOTAL_QTY = 10_000;
+
+const createSchema = z
+  .object({
+    warehouseId: z.string().uuid(),
+    notes: z.string().max(2000).nullable().optional(),
+    lines: z
+      .array(
+        z.object({
+          itemId: z.string().uuid(),
+          quantity: z.coerce.number().positive().max(MAX_QTY_PER_LINE),
+          notes: z.string().max(500).nullable().optional(),
+        }),
+      )
+      .min(1)
+      .max(100),
+  })
+  .refine(
+    (v) => v.lines.reduce((s, l) => s + l.quantity, 0) <= MAX_TOTAL_QTY,
+    {
+      message: `Total quantity across all lines cannot exceed ${MAX_TOTAL_QTY.toLocaleString()}.`,
+      path: ['lines'],
+    },
+  );
 
 export async function createOrderRequestAction(
   input: z.input<typeof createSchema>,

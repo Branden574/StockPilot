@@ -91,13 +91,25 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
 ${greeting}
 
 ${bodyParagraphPlain(kind)}
-${request.denied_reason ? '\nReason: ' + request.denied_reason : ''}
+${request.denied_reason ? '\nReason: ' + sanitizePlainText(request.denied_reason) : ''}
 
 View request: ${link}
 
 Request ID: ${request.id}`;
 
   await sendEmail({ to: recipientEmail, subject, html, text });
+}
+
+/**
+ * Strip CR/LF from user-controlled text before pasting into the
+ * plain-text email body. The HTML body already calls escapeHtml(); this
+ * is the matching guard for the text/plain part. Without it, a denial
+ * reason containing `\r\nX-Injected: foo` could in theory smuggle a
+ * header into the MIME message that Resend builds. Trailing whitespace
+ * is also collapsed so the email reads cleanly.
+ */
+function sanitizePlainText(s: string): string {
+  return s.replace(/[\r\n]+/g, ' ').trim();
 }
 
 function bodyParagraph(kind: OrderRequestEmailKind): string {

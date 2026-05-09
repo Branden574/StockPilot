@@ -212,6 +212,14 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     id: header.id,
-    trackUrl: `/r/track?id=${header.id}&email=${encodeURIComponent(body.requesterEmail)}`,
+    // Include `t=` so the URL is self-contained — the GET track route
+    // requires the token to scope the lookup. The browser-side form
+    // used to append it client-side; folding it in here means any API
+    // consumer (and any server-rendered email template) can use the
+    // returned URL verbatim.
+    trackUrl:
+      `/r/track?id=${header.id}` +
+      `&email=${encodeURIComponent(body.requesterEmail)}` +
+      `&t=${encodeURIComponent(body.token)}`,
   });
 }
