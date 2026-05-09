@@ -7,10 +7,23 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Inventory you'll actually enjoy using.",
     start_url: '/dashboard',
     display: 'standalone',
-    background_color: '#0a0f1f',
-    theme_color: '#0a0f1f',
+    // Brand palette — Mark D · Stencil Frame (paper / ink).
+    background_color: '#f6f4ef',
+    theme_color: '#0c0c0e',
     orientation: 'portrait-primary',
-    // Branded PNG icons can be added later under public/icon.png + icon-maskable.png.
-    icons: [],
+    icons: [
+      {
+        src: '/icon.svg',
+        sizes: 'any',
+        type: 'image/svg+xml',
+        purpose: 'any',
+      },
+      {
+        src: '/apple-icon',
+        sizes: '180x180',
+        type: 'image/png',
+        purpose: 'maskable',
+      },
+    ],
   };
 }
