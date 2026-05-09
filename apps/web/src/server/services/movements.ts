@@ -36,8 +36,16 @@ export class MovementsService {
    * existing FK in a single PostgREST round trip — eliminates the separate
    * IN(...) lookup that the dashboard + movements pages used to do.
    */
-  async list(params: { itemId?: string; warehouseId?: string; limit?: number } = {}) {
-    const limit = Math.min(params.limit ?? 100, 500);
+  async list(
+    params: {
+      itemId?: string;
+      warehouseId?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ) {
+    const limit = Math.min(params.limit ?? 50, 200);
+    const offset = Math.max(0, params.offset ?? 0);
     // Pass our own ctx so the helper doesn't fall back to
     // requireOrgContext() — in API routes that path throws NEXT_REDIRECT
     // and surfaces as a generic 500. Same trap fixed elsewhere in this
@@ -64,7 +72,7 @@ export class MovementsService {
       )
       .eq('organization_id', this.ctx.organizationId)
       .order('created_at', { ascending: false })
-      .limit(limit);
+      .range(offset, offset + limit - 1);
 
     if (!access.hasAllAccess) {
       if (access.readableIds.length === 0) return [];
