@@ -1,8 +1,9 @@
-import { Send } from 'lucide-react';
+import { Plus, Send } from 'lucide-react';
 import Link from 'next/link';
 
 import { EmptyState } from '@/components/dashboard/empty-state';
 import { ShipmentStatusBadge } from '@/components/shipments/shipment-status-badge';
+import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -29,6 +30,11 @@ export default async function ShipmentsPage() {
             signature flow.
           </p>
         </div>
+        <Button asChild variant="gradient">
+          <Link href="/dashboard/shipments/new">
+            <Plus className="h-4 w-4" /> New shipment
+          </Link>
+        </Button>
       </div>
 
       <div className="mt-8">
