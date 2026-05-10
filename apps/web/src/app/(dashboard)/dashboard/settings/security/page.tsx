@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { ChangePasswordForm } from '@/components/settings/change-password-form';
 import { MfaEnrollment } from '@/components/settings/mfa-enrollment';
 import { MfaPolicyEditor } from '@/components/settings/mfa-policy-editor';
 import { MfaRecoveryCodes } from '@/components/settings/mfa-recovery-codes';
@@ -68,6 +69,18 @@ export default async function SecuritySettingsPage({
             </p>
           </div>
         )}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Change password</CardTitle>
+            <CardDescription>
+              Update the password you use to sign in. You&apos;ll need your current password.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ChangePasswordForm />
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Authenticator app</CardTitle>
