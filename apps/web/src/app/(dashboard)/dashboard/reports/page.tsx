@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Clock,
   DollarSign,
+  Download,
   MinusCircle,
   Package,
   PackageX,
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
+import { Button } from '@/components/ui/button';
 import { requireOrgContext } from '@/lib/auth/session';
 
 interface Report {
@@ -84,13 +86,22 @@ export default async function ReportsPage() {
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="border-border mb-6 flex items-end justify-between gap-6 border-b pb-4">
+      <div className="border-border mb-6 flex flex-wrap items-end justify-between gap-3 border-b pb-4 sm:gap-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Reports</h1>
           <p className="text-muted-foreground mt-1 text-sm">
             {REPORTS.length} pre-baked reports — every one is exportable to CSV.
           </p>
         </div>
+        <Button asChild variant="outline">
+          <a
+            href="/api/reports/inventory-snapshot/pdf"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Download className="h-4 w-4" /> Download PDF snapshot
+          </a>
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

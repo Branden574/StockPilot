@@ -62,7 +62,8 @@ export type AuditEvent =
   | 'order_request.status_changed'
   | 'order_request.cancelled'
   | 'order_request.delivered'
-  | 'order_request.public_link_rotated';
+  | 'order_request.public_link_rotated'
+  | 'pdf.exported';
 
 interface AuditPayload {
   event: AuditEvent;

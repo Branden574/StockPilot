@@ -1,7 +1,9 @@
+import { Download } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { CycleCountDetail } from '@/components/cycle-counts/cycle-count-detail';
+import { Button } from '@/components/ui/button';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { ServiceError } from '@/server/services/context';
@@ -98,13 +100,26 @@ export default async function CycleCountDetailPage({
         >
           ← Back to cycle counts
         </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-          Cycle count · {formatRelative(header.started_at)}
-        </h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          {warehouseName ?? 'All warehouses'}
-          {header.notes ? ` · ${header.notes}` : ''}
-        </p>
+        <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Cycle count · {formatRelative(header.started_at)}
+            </h1>
+            <p className="text-muted-foreground mt-1 text-sm">
+              {warehouseName ?? 'All warehouses'}
+              {header.notes ? ` · ${header.notes}` : ''}
+            </p>
+          </div>
+          <Button asChild variant="outline">
+            <a
+              href={`/api/cycle-counts/${id}/pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <Download className="h-4 w-4" /> Download PDF
+            </a>
+          </Button>
+        </div>
       </div>
 
       <CycleCountDetail
