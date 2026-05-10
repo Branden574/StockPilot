@@ -116,6 +116,42 @@ export function assertPermission(ctx: ServiceContext, permission: Permission) {
 }
 
 /**
+ * Re-queries the user's current role for (userId, organizationId) and
+ * throws `forbidden` if it no longer matches what `ctx` was built with.
+ *
+ * Why this exists: `withContext()` is wrapped in React.cache, so role is
+ * pinned for the lifetime of a single request. RLS enforces the *current*
+ * role on every underlying query, so a stale `ctx.role` only matters for
+ * application-layer branches that don't ride RLS — most importantly the
+ * privilege checks in member management and billing. If an owner demotes
+ * an admin mid-request, the in-flight admin call would still see
+ * `role=admin` in the cached context and would pass `assertPermission`,
+ * even though their NEW role no longer should.
+ *
+ * Call this at the top of any high-risk admin Server Action *after*
+ * `assertPermission`. Cheap (one round-trip) and it kills the demote-mid-
+ * request escalation window.
+ */
+export async function assertRoleUnchanged(ctx: ServiceContext): Promise<void> {
+  const { data, error } = await ctx.supabase
+    .from('organization_members')
+    .select('role')
+    .eq('user_id', ctx.userId)
+    .eq('organization_id', ctx.organizationId)
+    .not('accepted_at', 'is', null)
+    .maybeSingle();
+  if (error || !data) {
+    throw new ServiceError('forbidden', 'Membership no longer active.');
+  }
+  if ((data as { role: Role }).role !== ctx.role) {
+    throw new ServiceError(
+      'forbidden',
+      'Your role changed during this request. Please reload and try again.',
+    );
+  }
+}
+
+/**
  * Looks up the org's current plan and asserts that the relevant resource
  * count is below its plan limit. Throws a `plan_limit_exceeded` ServiceError
  * with a friendly message that the UI can surface as an upgrade nudge.

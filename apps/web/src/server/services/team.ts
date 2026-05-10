@@ -10,7 +10,13 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { type Role } from '@stockpilot/core';
 
 import { audit } from './audit';
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import {
+  assertPermission,
+  assertRoleUnchanged,
+  ServiceError,
+  withContext,
+  type ServiceContext,
+} from './context';
 
 export class TeamService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -245,6 +251,7 @@ export class TeamService {
 
   async updateMemberRole(memberId: string, role: Role) {
     assertPermission(this.ctx, 'members:update_role');
+    await assertRoleUnchanged(this.ctx);
     if (role === 'owner') {
       throw new ServiceError('forbidden', 'Use transferOwnership to assign owner');
     }
@@ -284,6 +291,7 @@ export class TeamService {
 
   async removeMember(memberId: string) {
     assertPermission(this.ctx, 'members:remove');
+    await assertRoleUnchanged(this.ctx);
     const { data: target } = await this.ctx.supabase
       .from('organization_members')
       .select('role, user_id')

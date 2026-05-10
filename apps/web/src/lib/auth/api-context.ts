@@ -49,6 +49,64 @@ async function resolveApiMfaState(
 }
 
 /**
+ * Resolves the active membership for a bearer-authenticated user.
+ *
+ *   1. If the request carries `X-Organization-Id`, use that — but only
+ *      after verifying the user actually belongs to it. A bad header
+ *      returns null (caller 401s) rather than silently falling back,
+ *      so a mobile client can't end up scoped to the wrong org if its
+ *      requested org was deleted/revoked.
+ *   2. Otherwise honor `user_profiles.default_organization_id` (parity
+ *      with the cookie path's loadSessionAndContext).
+ *   3. Last resort: any active membership.
+ */
+async function pickActiveMembership(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  userId: string,
+  requestedOrgId: string | null,
+): Promise<{ organization_id: string; role: Role } | null> {
+  if (requestedOrgId) {
+    const { data } = await supabase
+      .from('organization_members')
+      .select('organization_id, role')
+      .eq('user_id', userId)
+      .eq('organization_id', requestedOrgId)
+      .not('accepted_at', 'is', null)
+      .maybeSingle();
+    return (data as { organization_id: string; role: Role } | null) ?? null;
+  }
+
+  const { data: profile } = await supabase
+    .from('user_profiles')
+    .select('default_organization_id')
+    .eq('id', userId)
+    .maybeSingle();
+  const defaultOrgId =
+    (profile as { default_organization_id: string | null } | null)?.default_organization_id ??
+    null;
+  if (defaultOrgId) {
+    const { data } = await supabase
+      .from('organization_members')
+      .select('organization_id, role')
+      .eq('user_id', userId)
+      .eq('organization_id', defaultOrgId)
+      .not('accepted_at', 'is', null)
+      .maybeSingle();
+    if (data) return data as { organization_id: string; role: Role };
+  }
+
+  const { data } = await supabase
+    .from('organization_members')
+    .select('organization_id, role')
+    .eq('user_id', userId)
+    .not('accepted_at', 'is', null)
+    .limit(1)
+    .maybeSingle();
+  return (data as { organization_id: string; role: Role } | null) ?? null;
+}
+
+/**
  * Builds a ServiceContext for use inside an API route handler. Two paths:
  *
  *   1. Cookie-based (web fetches from the dashboard) — uses the SSR
@@ -85,13 +143,8 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
         auth: { persistSession: false, autoRefreshToken: false },
       },
     );
-    const { data: member } = await supabase
-      .from('organization_members')
-      .select('organization_id, role')
-      .eq('user_id', userRes.user.id)
-      .not('accepted_at', 'is', null)
-      .limit(1)
-      .maybeSingle();
+    const requestedOrgId = req?.headers.get('x-organization-id') ?? null;
+    const member = await pickActiveMembership(supabase, userRes.user.id, requestedOrgId);
     if (!member) return null;
     const mfa = await resolveApiMfaState(
       supabase,
