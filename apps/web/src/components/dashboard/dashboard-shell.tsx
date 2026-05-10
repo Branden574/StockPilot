@@ -3,6 +3,7 @@
 import * as React from 'react';
 
 import { CommandPalette } from '@/components/dashboard/command-palette';
+import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -169,6 +170,7 @@ export function DashboardShell({
 
       <VersionNotifier />
       <CommandPalette />
+      <KeyboardShortcutsProvider />
     </div>
   );
 }
