@@ -8,6 +8,7 @@ import {
   LayoutGrid,
   Loader2,
   Package,
+  Plus,
   Receipt,
   Search,
   Settings,
@@ -26,9 +27,10 @@ interface SearchResult {
   items: Array<{ id: string; name: string; sku: string; quantity: number }>;
   purchaseOrders: Array<{ id: string; poNumber: string; status: string }>;
   suppliers: Array<{ id: string; name: string }>;
+  warehouses: Array<{ id: string; name: string }>;
 }
 
-interface NavCommand {
+interface PaletteCommand {
   id: string;
   label: string;
   href: string;
@@ -36,7 +38,7 @@ interface NavCommand {
   keywords?: string;
 }
 
-const NAV_COMMANDS: NavCommand[] = [
+const NAV_COMMANDS: PaletteCommand[] = [
   { id: 'nav-dashboard', label: 'Overview', href: '/dashboard', Icon: Home, keywords: 'home dashboard' },
   { id: 'nav-inventory', label: 'Inventory items', href: '/dashboard/inventory', Icon: Boxes, keywords: 'items stock' },
   { id: 'nav-books', label: 'Books', href: '/dashboard/books', Icon: Package, keywords: 'textbooks isbn' },
@@ -51,6 +53,16 @@ const NAV_COMMANDS: NavCommand[] = [
   { id: 'nav-settings', label: 'Settings', href: '/dashboard/settings', Icon: Settings },
 ];
 
+// Action commands — direct shortcuts to "create new" flows. Only includes
+// destinations backed by a real /new route; supplier and team creation
+// happen via dialogs on the list page, so they live under "Jump to" and
+// the user picks the affordance there.
+const ACTION_COMMANDS: PaletteCommand[] = [
+  { id: 'act-new-item', label: 'New item', href: '/dashboard/inventory/new', Icon: Plus, keywords: 'create add sku product' },
+  { id: 'act-new-po', label: 'New purchase order', href: '/dashboard/purchase-orders/new', Icon: Plus, keywords: 'create add po order' },
+  { id: 'act-new-cycle-count', label: 'New cycle count', href: '/dashboard/cycle-counts/new', Icon: Plus, keywords: 'create add count audit' },
+];
+
 export function CommandPalette() {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
@@ -60,6 +72,7 @@ export function CommandPalette() {
     items: [],
     purchaseOrders: [],
     suppliers: [],
+    warehouses: [],
   });
 
   // ⌘K / Ctrl+K toggle. Skip when an input/textarea is focused so users
@@ -88,7 +101,7 @@ export function CommandPalette() {
   React.useEffect(() => {
     const trimmed = value.trim();
     if (trimmed.length < 2) {
-      setResults({ items: [], purchaseOrders: [], suppliers: [] });
+      setResults({ items: [], purchaseOrders: [], suppliers: [], warehouses: [] });
       setLoading(false);
       return;
     }
@@ -101,14 +114,14 @@ export function CommandPalette() {
           cache: 'no-store',
         });
         if (!res.ok) {
-          setResults({ items: [], purchaseOrders: [], suppliers: [] });
+          setResults({ items: [], purchaseOrders: [], suppliers: [], warehouses: [] });
           return;
         }
         const data = (await res.json()) as SearchResult;
         setResults(data);
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {
-          setResults({ items: [], purchaseOrders: [], suppliers: [] });
+          setResults({ items: [], purchaseOrders: [], suppliers: [], warehouses: [] });
         }
       } finally {
         setLoading(false);
@@ -130,7 +143,8 @@ export function CommandPalette() {
     value.trim().length >= 2 &&
     (results.items.length > 0 ||
       results.purchaseOrders.length > 0 ||
-      results.suppliers.length > 0);
+      results.suppliers.length > 0 ||
+      results.warehouses.length > 0);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -218,6 +232,36 @@ export function CommandPalette() {
                 ))}
               </Command.Group>
             )}
+
+            {showSearchHits && results.warehouses.length > 0 && (
+              <Command.Group heading="Warehouses" className={GROUP}>
+                {results.warehouses.map((w) => (
+                  <Command.Item
+                    key={`wh-${w.id}`}
+                    value={`warehouse ${w.name}`}
+                    onSelect={() => go(`/dashboard/admin/warehouses`)}
+                    className={ROW}
+                  >
+                    <Warehouse className="text-muted-foreground h-3.5 w-3.5" />
+                    <span className="flex-1 truncate">{w.name}</span>
+                  </Command.Item>
+                ))}
+              </Command.Group>
+            )}
+
+            <Command.Group heading="Quick actions" className={GROUP}>
+              {ACTION_COMMANDS.map((c) => (
+                <Command.Item
+                  key={c.id}
+                  value={`${c.label} ${c.keywords ?? ''}`}
+                  onSelect={() => go(c.href)}
+                  className={ROW}
+                >
+                  <c.Icon className="text-muted-foreground h-3.5 w-3.5" />
+                  <span className="flex-1 truncate">{c.label}</span>
+                </Command.Item>
+              ))}
+            </Command.Group>
 
             <Command.Group heading="Jump to" className={GROUP}>
               {NAV_COMMANDS.map((c) => (

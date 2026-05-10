@@ -59,7 +59,18 @@ export async function GET(req: Request) {
     .order('name', { ascending: true })
     .limit(5);
 
-  const [items, pos, suppliers] = await Promise.all([itemsQ, poQ, supQ]);
+  // Warehouses: name match. RLS gives the user the warehouses they can read,
+  // so no extra access filter needed here.
+  const whQ = ctx.supabase
+    .from('warehouses')
+    .select('id, name')
+    .eq('organization_id', ctx.organizationId)
+    .neq('status', 'archived')
+    .ilike('name', like)
+    .order('name', { ascending: true })
+    .limit(5);
+
+  const [items, pos, suppliers, warehouses] = await Promise.all([itemsQ, poQ, supQ, whQ]);
 
   return NextResponse.json({
     items: (items.data ?? []).map((i) => ({
@@ -76,6 +87,10 @@ export async function GET(req: Request) {
     suppliers: (suppliers.data ?? []).map((s) => ({
       id: s.id as string,
       name: s.name as string,
+    })),
+    warehouses: (warehouses.data ?? []).map((w) => ({
+      id: w.id as string,
+      name: w.name as string,
     })),
   });
 }
