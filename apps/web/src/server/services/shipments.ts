@@ -22,8 +22,10 @@ export interface ShipmentSummary {
   shipDate: string;
   sourceWarehouseId: string;
   sourceWarehouseName: string | null;
-  destinationWarehouseId: string;
-  destinationWarehouseName: string | null;
+  /** Receiving CHARTER (not a warehouse). */
+  destinationCharterId: string;
+  destinationCharterName: string | null;
+  destinationCharterCode: string | null;
   orderRequestId: string | null;
   attentionToName: string | null;
   createdAt: string;
@@ -61,6 +63,12 @@ export interface ShipmentWarehouseInfo {
   } | null;
 }
 
+export interface ShipmentCharterInfo {
+  id: string;
+  name: string;
+  code: string | null;
+}
+
 export interface ShipmentDetail {
   id: string;
   organizationId: string;
@@ -70,7 +78,7 @@ export interface ShipmentDetail {
   attentionToName: string | null;
   notes: string | null;
   sourceWarehouseId: string;
-  destinationWarehouseId: string;
+  destinationCharterId: string;
   orderRequestId: string | null;
   signatureImageUrl: string | null;
   signedByName: string | null;
@@ -81,13 +89,15 @@ export interface ShipmentDetail {
   createdAt: string;
   updatedAt: string;
   source: ShipmentWarehouseInfo | null;
-  destination: ShipmentWarehouseInfo | null;
+  destination: ShipmentCharterInfo | null;
   lines: ShipmentLineRow[];
 }
 
 interface CreateFromOrderRequestInput {
   orderRequestId: string;
   sourceWarehouseId: string;
+  /** Receiving charter — picked by warehouse staff at slip-generation time. */
+  destinationCharterId: string;
   attentionToName?: string | null;
   notes?: string | null;
   ccEmails?: string[];
@@ -95,7 +105,8 @@ interface CreateFromOrderRequestInput {
 
 interface ManualCreateInput {
   sourceWarehouseId: string;
-  destinationWarehouseId: string;
+  /** Receiving charter (not a warehouse). */
+  destinationCharterId: string;
   attentionToName?: string | null;
   notes?: string | null;
   ccEmails?: string[];
@@ -109,6 +120,11 @@ const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
  * a signature_token + expires_at populated at create time, but Phase 2A doesn't
  * surface them anywhere. The public /s/[token] route, signature pad component,
  * and Resend integration land in Phase 2B.
+ *
+ * Phase 2A/B → 2C destination pivot: shipments now point at a CHARTER, not a
+ * warehouse. A warehouse SHIPS, a charter RECEIVES. The destination dropdown
+ * is filtered by `warehouse_charters` (the junction table that tracks which
+ * charters each warehouse services).
  */
 export class ShipmentsService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -119,24 +135,24 @@ export class ShipmentsService {
 
   async list(filters: {
     status?: ShipmentStatus;
-    destinationWarehouseId?: string;
+    destinationCharterId?: string;
   } = {}): Promise<ShipmentSummary[]> {
     let query = this.ctx.supabase
       .from('shipments')
       .select(
         `id, work_order_number, status, ship_date, source_warehouse_id,
-         destination_warehouse_id, order_request_id, attention_to_name,
+         destination_charter_id, order_request_id, attention_to_name,
          created_at, updated_at,
          source:warehouses!source_warehouse_id (name),
-         destination:warehouses!destination_warehouse_id (name)`,
+         destination:charters!destination_charter_id (name, code)`,
       )
       .eq('organization_id', this.ctx.organizationId)
       .order('ship_date', { ascending: false })
       .order('created_at', { ascending: false });
 
     if (filters.status) query = query.eq('status', filters.status);
-    if (filters.destinationWarehouseId) {
-      query = query.eq('destination_warehouse_id', filters.destinationWarehouseId);
+    if (filters.destinationCharterId) {
+      query = query.eq('destination_charter_id', filters.destinationCharterId);
     }
 
     const { data, error } = await query;
@@ -145,9 +161,12 @@ export class ShipmentsService {
     return (data ?? []).map((row) => {
       const r = row as Record<string, unknown>;
       const src = r.source as { name?: string } | { name?: string }[] | null;
-      const dst = r.destination as { name?: string } | { name?: string }[] | null;
+      const dst = r.destination as
+        | { name?: string; code?: string | null }
+        | { name?: string; code?: string | null }[]
+        | null;
       const srcName = Array.isArray(src) ? (src[0]?.name ?? null) : (src?.name ?? null);
-      const dstName = Array.isArray(dst) ? (dst[0]?.name ?? null) : (dst?.name ?? null);
+      const dstObj = Array.isArray(dst) ? (dst[0] ?? null) : dst;
       return {
         id: r.id as string,
         workOrderNumber: r.work_order_number as string,
@@ -155,8 +174,9 @@ export class ShipmentsService {
         shipDate: r.ship_date as string,
         sourceWarehouseId: r.source_warehouse_id as string,
         sourceWarehouseName: srcName,
-        destinationWarehouseId: r.destination_warehouse_id as string,
-        destinationWarehouseName: dstName,
+        destinationCharterId: r.destination_charter_id as string,
+        destinationCharterName: dstObj?.name ?? null,
+        destinationCharterCode: dstObj?.code ?? null,
         orderRequestId: (r.order_request_id as string | null) ?? null,
         attentionToName: (r.attention_to_name as string | null) ?? null,
         createdAt: r.created_at as string,
@@ -204,10 +224,10 @@ export class ShipmentsService {
     });
 
     const sourceId = h.source_warehouse_id as string;
-    const destId = h.destination_warehouse_id as string;
+    const destCharterId = h.destination_charter_id as string;
     const [source, destination] = await Promise.all([
       this.loadWarehouseInfo(sourceId),
-      this.loadWarehouseInfo(destId),
+      this.loadCharterInfo(destCharterId),
     ]);
 
     return {
@@ -219,7 +239,7 @@ export class ShipmentsService {
       attentionToName: (h.attention_to_name as string | null) ?? null,
       notes: (h.notes as string | null) ?? null,
       sourceWarehouseId: sourceId,
-      destinationWarehouseId: destId,
+      destinationCharterId: destCharterId,
       orderRequestId: (h.order_request_id as string | null) ?? null,
       signatureImageUrl: (h.signature_image_url as string | null) ?? null,
       signedByName: (h.signed_by_name as string | null) ?? null,
@@ -280,10 +300,18 @@ export class ShipmentsService {
       );
     }
 
-    const destinationWarehouseId = detail.request.warehouse_id;
+    // Validate the (source warehouse, destination charter) pair against
+    // the warehouse_charters junction. The order_request's warehouse_id
+    // is informational and unrelated to which charter receives — the
+    // packing-slip operator picks the charter at this step.
+    await this.assertWarehouseServicesCharter(
+      input.sourceWarehouseId,
+      input.destinationCharterId,
+    );
+
     const id = await this.insertShipmentWithLines({
       sourceWarehouseId: input.sourceWarehouseId,
-      destinationWarehouseId,
+      destinationCharterId: input.destinationCharterId,
       orderRequestId: input.orderRequestId,
       attentionToName: input.attentionToName ?? null,
       notes: input.notes ?? null,
@@ -321,9 +349,14 @@ export class ShipmentsService {
       );
     }
 
+    await this.assertWarehouseServicesCharter(
+      input.sourceWarehouseId,
+      input.destinationCharterId,
+    );
+
     const id = await this.insertShipmentWithLines({
       sourceWarehouseId: input.sourceWarehouseId,
-      destinationWarehouseId: input.destinationWarehouseId,
+      destinationCharterId: input.destinationCharterId,
       orderRequestId: null,
       attentionToName: input.attentionToName ?? null,
       notes: input.notes ?? null,
@@ -455,36 +488,61 @@ export class ShipmentsService {
 
   // ── Private helpers ────────────────────────────────────────────────
 
+  /**
+   * Guard rail: refuse to create a shipment when the destination charter
+   * isn't in `warehouse_charters` for the source warehouse. Surfaces a
+   * friendly validation error instead of letting the FK / RLS bite later.
+   */
+  private async assertWarehouseServicesCharter(
+    warehouseId: string,
+    charterId: string,
+  ): Promise<void> {
+    const { data, error } = await this.ctx.supabase
+      .from('warehouse_charters')
+      .select('charter_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('charter_id', charterId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) {
+      throw new ServiceError(
+        'validation_error',
+        'Selected charter is not serviced by this warehouse.',
+      );
+    }
+  }
+
   private async insertShipmentWithLines(args: {
     sourceWarehouseId: string;
-    destinationWarehouseId: string;
+    destinationCharterId: string;
     orderRequestId: string | null;
     attentionToName: string | null;
     notes: string | null;
     ccEmails: string[];
     lines: Array<{ itemId: string; qtyShipped: number; qtyBackOrdered: number }>;
   }): Promise<string> {
-    // Look up the destination warehouse code for the WO# template. We need
+    // Look up the destination charter code for the WO# template. We need
     // a code; if the row is missing or the code is empty, throw rather
     // than silently mint a degenerate WO# like "ISR--MMDDYYYY".
-    const { data: destWh, error: whErr } = await this.ctx.supabase
-      .from('warehouses')
+    const { data: destCharter, error: chErr } = await this.ctx.supabase
+      .from('charters')
       .select('id, code')
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', args.destinationWarehouseId)
+      .eq('id', args.destinationCharterId)
       .maybeSingle();
-    if (whErr) throw new ServiceError('internal_error', whErr.message);
-    if (!destWh) {
-      throw new ServiceError('not_found', 'Destination warehouse not found.');
+    if (chErr) throw new ServiceError('internal_error', chErr.message);
+    if (!destCharter) {
+      throw new ServiceError('not_found', 'Destination charter not found.');
     }
-    const rawCode = (destWh.code as string | null) ?? '';
+    const rawCode = (destCharter.code as string | null) ?? '';
     const code = rawCode
       .toUpperCase()
       .replace(/[^A-Z0-9-]/g, '');
     if (!code) {
       throw new ServiceError(
         'validation_error',
-        'Destination warehouse has no usable code for the work order number.',
+        'Destination charter has no usable code for the work order number.',
       );
     }
 
@@ -508,7 +566,7 @@ export class ShipmentsService {
         .insert({
           organization_id: this.ctx.organizationId,
           source_warehouse_id: args.sourceWarehouseId,
-          destination_warehouse_id: args.destinationWarehouseId,
+          destination_charter_id: args.destinationCharterId,
           order_request_id: args.orderRequestId,
           work_order_number: wo,
           ship_date: shipDate,
@@ -612,6 +670,25 @@ export class ShipmentsService {
             role,
           }
         : null,
+    };
+  }
+
+  private async loadCharterInfo(
+    charterId: string,
+  ): Promise<ShipmentCharterInfo | null> {
+    const { data, error } = await this.ctx.supabase
+      .from('charters')
+      .select('id, name, code')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', charterId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) return null;
+    const r = data as Record<string, unknown>;
+    return {
+      id: r.id as string,
+      name: (r.name as string) ?? '',
+      code: (r.code as string | null) ?? null,
     };
   }
 }

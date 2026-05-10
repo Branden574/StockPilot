@@ -54,7 +54,7 @@ interface ShipmentSignedEmailParams {
   orgName: string;
   workOrderNumber: string;
   sourceWarehouseName: string;
-  destinationWarehouseName: string;
+  destinationCharterName: string;
   signedByName: string;
   signedAt: Date;
   itemCount: number;
@@ -83,7 +83,7 @@ export function shipmentSignedHtml(params: ShipmentSignedEmailParams): string {
     orgName,
     workOrderNumber,
     sourceWarehouseName,
-    destinationWarehouseName,
+    destinationCharterName,
     signedByName,
     signedAt,
     itemCount,
@@ -106,7 +106,7 @@ export function shipmentSignedHtml(params: ShipmentSignedEmailParams): string {
       <tbody>
         <tr><td style="padding:6px 12px 6px 0;color:#71717a;width:140px;">Work order</td><td style="padding:6px 0;color:#18181b;font-family:monospace;">${escapeHtml(workOrderNumber)}</td></tr>
         <tr><td style="padding:6px 12px 6px 0;color:#71717a;">From</td><td style="padding:6px 0;color:#18181b;">${escapeHtml(sourceWarehouseName)}</td></tr>
-        <tr><td style="padding:6px 12px 6px 0;color:#71717a;">To</td><td style="padding:6px 0;color:#18181b;">${escapeHtml(destinationWarehouseName)}</td></tr>
+        <tr><td style="padding:6px 12px 6px 0;color:#71717a;">To</td><td style="padding:6px 0;color:#18181b;">${escapeHtml(destinationCharterName)}</td></tr>
         <tr><td style="padding:6px 12px 6px 0;color:#71717a;">Signed</td><td style="padding:6px 0;color:#18181b;">${escapeHtml(dateLabel)}</td></tr>
         <tr><td style="padding:6px 12px 6px 0;color:#71717a;">Items</td><td style="padding:6px 0;color:#18181b;">${itemCount}</td></tr>
       </tbody>
@@ -130,7 +130,7 @@ export function shipmentSignedText(params: ShipmentSignedEmailParams): string {
     orgName,
     workOrderNumber,
     sourceWarehouseName,
-    destinationWarehouseName,
+    destinationCharterName,
     signedByName,
     signedAt,
     itemCount,
@@ -145,7 +145,7 @@ export function shipmentSignedText(params: ShipmentSignedEmailParams): string {
     '',
     `Work order : ${workOrderNumber}`,
     `From       : ${sourceWarehouseName}`,
-    `To         : ${destinationWarehouseName}`,
+    `To         : ${destinationCharterName}`,
     `Signed     : ${dateLabel}`,
     `Items      : ${itemCount}`,
     '',

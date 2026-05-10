@@ -33,6 +33,7 @@ export async function createShipmentFromOrderRequestAction(
     const result = await svc.createFromOrderRequest({
       orderRequestId: parsed.data.orderRequestId,
       sourceWarehouseId: parsed.data.sourceWarehouseId,
+      destinationCharterId: parsed.data.destinationCharterId,
       attentionToName: parsed.data.attentionToName ?? null,
       notes: parsed.data.notes ?? null,
       ccEmails: parsed.data.ccEmails ?? [],
@@ -56,7 +57,7 @@ export async function manualCreateShipmentAction(
     const svc = await ShipmentsService.forCurrentUser();
     const result = await svc.manualCreate({
       sourceWarehouseId: parsed.data.sourceWarehouseId,
-      destinationWarehouseId: parsed.data.destinationWarehouseId,
+      destinationCharterId: parsed.data.destinationCharterId,
       attentionToName: parsed.data.attentionToName ?? null,
       notes: parsed.data.notes ?? null,
       ccEmails: parsed.data.ccEmails ?? [],

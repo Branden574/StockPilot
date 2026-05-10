@@ -24,6 +24,17 @@ export interface ShipmentPdfWarehouse {
   contactEmail: string | null;
 }
 
+/**
+ * Destination is a CHARTER (the receiving site/school), not a warehouse.
+ * Charters have no address field in the schema, so the destination block
+ * shows only name + code + attention. That matches the L4L word-template
+ * style: "Ship To: CVW-MANCHESTER" is a charter code, not an address.
+ */
+export interface ShipmentPdfCharter {
+  name: string;
+  code: string | null;
+}
+
 export interface ShipmentPdfManagerBlock {
   fullName: string | null;
   role: string | null;
@@ -57,7 +68,8 @@ interface ShipmentPdfProps {
   org: ShipmentPdfOrg;
   shipment: ShipmentPdfHeader;
   source: ShipmentPdfWarehouse;
-  destination: ShipmentPdfWarehouse;
+  /** Receiving charter — name + code, no address. */
+  destination: ShipmentPdfCharter;
   lines: ShipmentPdfLine[];
   manager: ShipmentPdfManagerBlock | null;
   /**
@@ -130,7 +142,19 @@ export function ShipmentPdf({
         <View style={[pdfStyles.section, pdfStyles.twoCol]}>
           <View style={pdfStyles.col}>
             <Text style={pdfStyles.sectionTitle}>Ship to</Text>
+            {/*
+             * Destination is a charter (the receiving school/site). We use
+             * the charter name as the headline because operations staff
+             * recognize names faster than codes, and the code is shown
+             * directly underneath. Mirrors the L4L Word-template style
+             * while staying readable when no short code is set.
+             */}
             <Text style={pdfStyles.bold}>{destination.name}</Text>
+            {destination.code ? (
+              <Text style={pdfStyles.muted}>
+                Charter code: {destination.code}
+              </Text>
+            ) : null}
             <Text style={pdfStyles.muted}>WO# {shipment.workOrderNumber}</Text>
             <Text style={pdfStyles.muted}>
               Date: {formatDateForPdf(shipment.shipDate)}
