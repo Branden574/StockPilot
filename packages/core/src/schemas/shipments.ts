@@ -44,3 +44,41 @@ export const manualCreateShipmentSchema = z.object({
   lines: z.array(lineInputSchema).min(1, 'Add at least one line item'),
 });
 export type ManualCreateShipmentInput = z.infer<typeof manualCreateShipmentSchema>;
+
+/**
+ * Phase 2B — public signature submission.
+ *
+ * The signature token is a 48-character hex string (24 bytes — see
+ * ShipmentsService.insertShipmentWithLines). We accept 32..96 hex chars to
+ * leave room for a future change to the token width without breaking the
+ * schema. The signatureDataUrl must look like a PNG data URL; we cap it
+ * at ~1MB (1.3M chars after base64 inflation) so a malicious caller can't
+ * post a multi-MB blob.
+ */
+export const submitShipmentSignatureSchema = z.object({
+  token: z
+    .string()
+    .min(32)
+    .max(96)
+    .regex(/^[a-f0-9]+$/i, 'Invalid signature token'),
+  signatureDataUrl: z
+    .string()
+    .min(64, 'Signature is empty')
+    .max(1_400_000, 'Signature image is too large')
+    .regex(/^data:image\/png;base64,[A-Za-z0-9+/=]+$/, 'Signature must be a PNG image'),
+  signedByName: z
+    .string()
+    .trim()
+    .min(1, 'Please type your name')
+    .max(120, 'Name is too long'),
+  email: emailSchema,
+  notes: z
+    .string()
+    .max(2000)
+    .optional()
+    .nullable()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : null)),
+});
+export type SubmitShipmentSignatureInput = z.infer<
+  typeof submitShipmentSignatureSchema
+>;
