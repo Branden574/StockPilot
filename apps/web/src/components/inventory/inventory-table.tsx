@@ -57,6 +57,9 @@ interface InventoryTableProps {
   /** Locations available for the filter dropdown. */
   locations?: Array<{ id: string; name: string }>;
   suppliers?: Array<{ id: string; name: string }>;
+  /** Org tag list — forwarded to BulkActions for the Add/Remove tags
+      dialogs. Defaults to [] so older callers don't crash. */
+  tags?: Array<{ id: string; name: string; color: string | null }>;
   total: number;
   initialQuery?: string;
   /**
@@ -200,6 +203,7 @@ export function InventoryTable({
   categories = [],
   locations = [],
   suppliers = [],
+  tags = [],
   total,
   initialQuery = '',
   rowLinkPrefix = '/dashboard/inventory',
@@ -423,6 +427,7 @@ export function InventoryTable({
           categories={categories}
           suppliers={suppliers}
           locations={locations}
+          tags={tags}
           onClear={() => setSelected(new Set())}
           hasArchivedSelection={items.some(
             (i) => selected.has(i.id) && i.status === 'archived',

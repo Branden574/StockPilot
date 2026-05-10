@@ -7,3 +7,4 @@ export * from './receipts';
 export * from './uom-conversions';
 export * from './schedule';
 export * from './shipments';
+export * from './tags';

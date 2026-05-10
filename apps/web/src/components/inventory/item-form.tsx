@@ -24,6 +24,7 @@ import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
 import { generateSku, cn } from '@/lib/utils';
 import { createItemAction, updateItemAction } from '@/server/actions/inventory';
 import { createImageUploadAction, recordImageAction } from '@/server/actions/item-images';
+import { setItemTagsAction } from '@/server/actions/tags';
 
 import { createItemSchema, type CreateItemInput } from '@stockpilot/core';
 
@@ -44,6 +45,10 @@ interface ItemFormProps {
   categories: Array<{ id: string; name: string }>;
   locations: Array<{ id: string; name: string }>;
   suppliers: Array<{ id: string; name: string }>;
+  /** Every tag in the org. Empty array hides the Tags pill row entirely. */
+  tags?: Array<{ id: string; name: string; color: string | null }>;
+  /** Tag ids currently applied to the item being edited. Ignored on create. */
+  initialTagIds?: string[];
   /** All warehouses the current user can write to. */
   warehouses: Array<{ id: string; name: string }>;
   /** Every (warehouse_id, charter_id) pair in the org. Used to filter charter options. */
@@ -68,6 +73,8 @@ export function ItemForm({
   categories,
   locations,
   suppliers,
+  tags = [],
+  initialTagIds = [],
   warehouses,
   warehouseCharters,
   charters,
@@ -189,6 +196,33 @@ export function ItemForm({
   );
   const [scannerOpen, setScannerOpen] = React.useState(false);
   const [lookingUp, setLookingUp] = React.useState(false);
+
+  // Tag selection — independent of RHF because tags don't live on the
+  // inventory_items row; they're persisted to item_tags via a separate
+  // server action after the item save resolves.
+  const [selectedTagIds, setSelectedTagIds] = React.useState<Set<string>>(
+    () => new Set(initialTagIds),
+  );
+  const initialTagIdsKey = React.useMemo(
+    () => [...initialTagIds].sort().join(','),
+    [initialTagIds],
+  );
+  // Re-seed when the parent edit page revalidates and ships a new
+  // initialTagIds prop (e.g. the user edits tags elsewhere and comes
+  // back). Stable initialTagIds reference on the same value won't
+  // re-trigger thanks to the join-string memo.
+  React.useEffect(() => {
+    setSelectedTagIds(new Set(initialTagIds));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTagIdsKey]);
+  function toggleTag(id: string) {
+    setSelectedTagIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   async function handleIsbnDetected(isbn: string) {
     // The scan succeeded — surface the value immediately and keep it
@@ -333,6 +367,22 @@ export function ItemForm({
     if (!res.ok) {
       toast.error(res.error.message);
       return;
+    }
+
+    // Persist the tag selection to item_tags. Done after the item
+    // save resolves so we have a guaranteed item id (creates only get
+    // one back from the action). A failure here is non-fatal — the
+    // item itself was already saved, so we surface a toast and let
+    // the user retry from the tags row instead of rolling back the
+    // whole submit.
+    const itemId = res.data.id;
+    const initialKey = [...initialTagIds].sort().join(',');
+    const selectedKey = [...selectedTagIds].sort().join(',');
+    if (tags.length > 0 && (!isEdit || initialKey !== selectedKey)) {
+      const tagRes = await setItemTagsAction(itemId, [...selectedTagIds]);
+      if (!tagRes.ok) {
+        toast.warning(`Item saved, but updating tags failed: ${tagRes.error.message}`);
+      }
     }
 
     // Photo uploads are only staged in the create flow; edit flow uses the
@@ -773,6 +823,46 @@ export function ItemForm({
           </p>
         )}
       </Section>
+
+      {tags.length > 0 && (
+        <Section title="Tags">
+          <p className="text-xs text-muted-foreground">
+            Click any tag to apply or remove it. Tags stack on top of category
+            and show up in inventory filters and the bulk actions toolbar.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {tags.map((t) => {
+              const on = selectedTagIds.has(t.id);
+              const swatch = t.color ?? '#94a3b8';
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => toggleTag(t.id)}
+                  aria-pressed={on}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors',
+                    on
+                      ? 'border-transparent text-white shadow-sm'
+                      : 'border-border bg-background text-[var(--ed-ink-2)] hover:border-[var(--ed-line-strong)]',
+                  )}
+                  style={on ? { backgroundColor: swatch } : undefined}
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      'h-2 w-2 rounded-full',
+                      on ? 'bg-white/80' : '',
+                    )}
+                    style={!on ? { backgroundColor: swatch } : undefined}
+                  />
+                  {t.name}
+                </button>
+              );
+            })}
+          </div>
+        </Section>
+      )}
 
       <div className="flex justify-end gap-2">
         {onDone && (

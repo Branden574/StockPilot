@@ -9,6 +9,7 @@ import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
+import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
@@ -22,6 +23,7 @@ export default async function NewItemPage() {
     categoriesSvc,
     locationsSvc,
     suppliersSvc,
+    tagsSvc,
     warehousesSvc,
     chartersSvc,
     whChartersSvc,
@@ -31,6 +33,7 @@ export default async function NewItemPage() {
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
+    TagsService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
     ChartersService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
@@ -42,11 +45,12 @@ export default async function NewItemPage() {
       .maybeSingle(),
   ]);
 
-  const [categories, locations, suppliers, warehouses, charters, warehouseCharters] =
+  const [categories, locations, suppliers, tags, warehouses, charters, warehouseCharters] =
     await Promise.all([
       categoriesSvc.list(),
       locationsSvc.list(),
       suppliersSvc.list(),
+      tagsSvc.list(),
       warehousesSvc.list(),
       chartersSvc.list(),
       whChartersSvc.listPairs(),
@@ -82,6 +86,7 @@ export default async function NewItemPage() {
             categories={categories.map((c) => ({ id: c.id as string, name: c.name as string }))}
             locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
+            tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
             warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
             charters={charters.map((c) => ({ id: c.id, name: c.name }))}
             warehouseCharters={warehouseCharters}

@@ -12,7 +12,7 @@ vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard/inventory',
 }));
 
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 
 vi.mock('@/server/actions/inventory', () => ({
   bulkUpdateInventoryAction: vi.fn(async () => ({
@@ -21,11 +21,19 @@ vi.mock('@/server/actions/inventory', () => ({
   })),
 }));
 
+vi.mock('@/server/actions/purchase-orders', () => ({
+  createDraftPosFromItemsAction: vi.fn(),
+}));
+
 const categories = [
   { id: 'c1', name: 'Books' },
   { id: 'c2', name: 'Electronics' },
 ];
 const suppliers = [{ id: 's1', name: 'Acme' }];
+const tags = [
+  { id: 't1', name: 'Fragile', color: '#f97316' },
+  { id: 't2', name: 'Heavy', color: null },
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -39,6 +47,7 @@ describe('BulkActions', () => {
         categories={categories}
         suppliers={suppliers}
         locations={[]}
+        tags={[]}
         onClear={() => {}}
       />,
     );
@@ -54,6 +63,7 @@ describe('BulkActions', () => {
         categories={categories}
         suppliers={suppliers}
         locations={[]}
+        tags={[]}
         onClear={() => {}}
       />,
     );
@@ -68,6 +78,7 @@ describe('BulkActions', () => {
         categories={categories}
         suppliers={suppliers}
         locations={[]}
+        tags={[]}
         onClear={() => {}}
         hasArchivedSelection
       />,
@@ -84,6 +95,7 @@ describe('BulkActions', () => {
         categories={categories}
         suppliers={suppliers}
         locations={[]}
+        tags={[]}
         onClear={() => {}}
       />,
     );
@@ -100,6 +112,7 @@ describe('BulkActions', () => {
         categories={categories}
         suppliers={suppliers}
         locations={[]}
+        tags={[]}
         onClear={() => {}}
       />,
     );
@@ -118,6 +131,7 @@ describe('BulkActions', () => {
         categories={categories}
         suppliers={suppliers}
         locations={[]}
+        tags={[]}
         onClear={onClear}
       />,
     );
@@ -140,12 +154,58 @@ describe('BulkActions', () => {
         categories={categories}
         suppliers={suppliers}
         locations={[]}
+        tags={[]}
         onClear={() => {}}
       />,
     );
     await user.click(screen.getByRole('button', { name: /Set category/i }));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(screen.getByText('Set category on 1 item')).toBeInTheDocument();
+  });
+
+  it('Add tags dialog renders the provided tags and dispatches the bulk add op', async () => {
+    const user = userEvent.setup();
+    render(
+      <BulkActions
+        selectedIds={['a', 'b']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={tags}
+        onClear={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /^Add tags$/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Add tags on 2 items')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: /Fragile/i }));
+    await user.click(within(dialog).getByRole('button', { name: /^Apply$/i }));
+    expect(bulkUpdateInventoryAction).toHaveBeenCalledWith({
+      ids: ['a', 'b'],
+      op: { kind: 'add_tags', tagIds: ['t1'] },
+    });
+  });
+
+  it('Remove tags dialog dispatches the bulk remove op', async () => {
+    const user = userEvent.setup();
+    render(
+      <BulkActions
+        selectedIds={['a']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={tags}
+        onClear={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /^Remove tags$/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: /Heavy/i }));
+    await user.click(within(dialog).getByRole('button', { name: /^Apply$/i }));
+    expect(bulkUpdateInventoryAction).toHaveBeenCalledWith({
+      ids: ['a'],
+      op: { kind: 'remove_tags', tagIds: ['t2'] },
+    });
   });
 
   it('Clear button calls onClear', async () => {
@@ -157,6 +217,7 @@ describe('BulkActions', () => {
         categories={categories}
         suppliers={suppliers}
         locations={[]}
+        tags={[]}
         onClear={onClear}
       />,
     );
