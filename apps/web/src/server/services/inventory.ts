@@ -472,6 +472,7 @@ export class InventoryService {
       | { kind: 'unarchive' }
       | { kind: 'set_category'; categoryId: string | null }
       | { kind: 'set_supplier'; supplierId: string | null }
+      | { kind: 'set_location'; locationId: string | null }
       | { kind: 'set_status'; status: 'active' | 'archived' | 'discontinued' };
   }): Promise<{ ok: number; skipped: number }> {
     assertPermission(this.ctx, 'items:update');
@@ -521,6 +522,9 @@ export class InventoryService {
         break;
       case 'set_supplier':
         update.supplier_id = input.op.supplierId;
+        break;
+      case 'set_location':
+        update.primary_location_id = input.op.locationId;
         break;
     }
 

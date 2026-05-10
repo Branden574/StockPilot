@@ -38,6 +38,7 @@ describe('BulkActions', () => {
         selectedIds={['a', 'b', 'c']}
         categories={categories}
         suppliers={suppliers}
+        locations={[]}
         onClear={() => {}}
       />,
     );
@@ -52,6 +53,7 @@ describe('BulkActions', () => {
         selectedIds={['a']}
         categories={categories}
         suppliers={suppliers}
+        locations={[]}
         onClear={() => {}}
       />,
     );
@@ -65,6 +67,7 @@ describe('BulkActions', () => {
         selectedIds={['a']}
         categories={categories}
         suppliers={suppliers}
+        locations={[]}
         onClear={() => {}}
         hasArchivedSelection
       />,
@@ -80,6 +83,7 @@ describe('BulkActions', () => {
         selectedIds={['a', 'b']}
         categories={categories}
         suppliers={suppliers}
+        locations={[]}
         onClear={() => {}}
       />,
     );
@@ -95,6 +99,7 @@ describe('BulkActions', () => {
         selectedIds={['a']}
         categories={categories}
         suppliers={suppliers}
+        locations={[]}
         onClear={() => {}}
       />,
     );
@@ -112,6 +117,7 @@ describe('BulkActions', () => {
         selectedIds={['a', 'b']}
         categories={categories}
         suppliers={suppliers}
+        locations={[]}
         onClear={onClear}
       />,
     );
@@ -133,6 +139,7 @@ describe('BulkActions', () => {
         selectedIds={['a']}
         categories={categories}
         suppliers={suppliers}
+        locations={[]}
         onClear={() => {}}
       />,
     );
@@ -149,6 +156,7 @@ describe('BulkActions', () => {
         selectedIds={['a']}
         categories={categories}
         suppliers={suppliers}
+        locations={[]}
         onClear={onClear}
       />,
     );

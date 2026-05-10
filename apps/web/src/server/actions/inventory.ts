@@ -91,6 +91,7 @@ export type BulkInventoryOp =
   | { kind: 'unarchive' }
   | { kind: 'set_category'; categoryId: string | null }
   | { kind: 'set_supplier'; supplierId: string | null }
+  | { kind: 'set_location'; locationId: string | null }
   | { kind: 'set_status'; status: 'active' | 'archived' | 'discontinued' };
 
 export async function bulkUpdateInventoryAction(input: {
