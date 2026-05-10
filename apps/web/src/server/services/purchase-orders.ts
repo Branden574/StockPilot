@@ -41,6 +41,41 @@ export class PurchaseOrdersService {
     return new PurchaseOrdersService(await withContext());
   }
 
+  /**
+   * Cheap count of receivable POs whose `expected_at` is in the past — used
+   * by the dashboard "needs attention" hero to surface inbound deliveries
+   * that are late. Warehouse-scoped via the destination location's
+   * warehouse, matching the same access rules as `list()`. Returns 0 when
+   * the user has zero readable warehouses.
+   */
+  async overdueCount(params: { warehouseId?: string } = {}): Promise<number> {
+    const access = await getWarehouseAccess(this.ctx);
+    const needsScope = !access.hasAllAccess || !!params.warehouseId;
+    if (!access.hasAllAccess && access.readableIds.length === 0) return 0;
+
+    const destEmbed = needsScope
+      ? 'destination:locations!destination_location_id!inner (warehouse_id)'
+      : 'destination:locations!destination_location_id (warehouse_id)';
+
+    let query = this.ctx.supabase
+      .from('purchase_orders')
+      .select(`id, ${destEmbed}`, { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId)
+      .in('status', ['expected_inbound', 'ordered', 'partially_received'])
+      .not('expected_at', 'is', null)
+      .lt('expected_at', new Date().toISOString());
+
+    if (!access.hasAllAccess) {
+      query = query.in('destination.warehouse_id', access.readableIds);
+    } else if (params.warehouseId) {
+      query = query.eq('destination.warehouse_id', params.warehouseId);
+    }
+
+    const { count, error } = await query;
+    if (error) throw new ServiceError('internal_error', error.message);
+    return count ?? 0;
+  }
+
   async list(params: { warehouseId?: string } = {}) {
     const access = await getWarehouseAccess();
 
