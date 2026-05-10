@@ -104,11 +104,11 @@ export function ItemForm({
     const accepted: StagedImage[] = [];
     for (const file of list) {
       if (!IMAGE_ACCEPT.includes(file.type)) {
-        toast.error(`${file.name}: unsupported type`);
+        toast.error(`"${file.name}" isn't a supported image type. Use PNG, JPG, WEBP, or AVIF.`);
         continue;
       }
       if (file.size > IMAGE_MAX_BYTES) {
-        toast.error(`${file.name}: max 10 MB`);
+        toast.error(`"${file.name}" is over 10 MB. Pick a smaller image.`);
         continue;
       }
       accepted.push({ file, previewUrl: URL.createObjectURL(file) });
@@ -235,7 +235,7 @@ export function ItemForm({
     // Non-book items just want the barcode populated. Skip the books
     // lookup so we don't toast "ISBN not found" for a regular UPC.
     if (!isBook) {
-      toast.success(`Barcode ${isbn} captured`);
+      toast.success(`Barcode ${isbn} captured.`);
       return;
     }
     setLookingUp(true);
@@ -261,9 +261,9 @@ export function ItemForm({
       // Only prefill grade when the user hasn't already set one — avoid
       // clobbering a manual choice if they re-scan an ISBN.
       if (data.grade && !grade) setGrade(data.grade);
-      toast.success('Book details filled from ISBN');
+      toast.success('Book details filled in from ISBN lookup.');
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Lookup failed');
+      toast.error(e instanceof Error ? e.message : "Couldn't look up this ISBN. Check your network and try again.");
     } finally {
       setLookingUp(false);
     }
@@ -383,7 +383,7 @@ export function ItemForm({
     if (tags.length > 0 && (!isEdit || initialKey !== selectedKey)) {
       const tagRes = await setItemTagsAction(itemId, [...selectedTagIds]);
       if (!tagRes.ok) {
-        toast.warning(`Item saved, but updating tags failed: ${tagRes.error.message}`);
+        toast.warning(`Item saved, but tags couldn't be updated: ${tagRes.error.message}`);
       }
     }
 
@@ -392,12 +392,12 @@ export function ItemForm({
     if (!isEdit && staged.length > 0) {
       const { uploaded, failed } = await uploadStagedImages(res.data.id);
       if (failed > 0) {
-        toast.warning(`Item created. Uploaded ${uploaded}/${staged.length} photos — ${failed} failed.`);
+        toast.warning(`Item created. ${uploaded} of ${staged.length} photos uploaded — ${failed} failed.`);
       } else {
-        toast.success(`Item and ${uploaded} photo${uploaded === 1 ? '' : 's'} created`);
+        toast.success(`Item created with ${uploaded} photo${uploaded === 1 ? '' : 's'}.`);
       }
     } else {
-      toast.success(isEdit ? 'Item updated' : 'Item created');
+      toast.success(isEdit ? 'Item updated.' : 'Item created.');
     }
 
     onDone?.();

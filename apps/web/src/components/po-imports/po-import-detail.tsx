@@ -89,7 +89,7 @@ export function PoImportDetail({
     setBusy(false);
     if (!r.ok) toast.error(r.error.message);
     else {
-      toast.success('Re-parsed');
+      toast.success('Import re-parsed.');
       router.refresh();
     }
   }
@@ -106,7 +106,7 @@ export function PoImportDetail({
   }
   function openCreateItems(lineIds: string[]) {
     if (!vendorId) {
-      toast.error('Pick a vendor first — new items get tagged with it');
+      toast.error('Pick a vendor first. New items get tagged with it.');
       return;
     }
     const set = new Set(lineIds);
@@ -118,7 +118,7 @@ export function PoImportDetail({
 
   function openConfirm() {
     if (!vendorId || !warehouseId) {
-      toast.error('Pick a vendor and warehouse before approving');
+      toast.error('Pick a vendor and a warehouse before approving.');
       return;
     }
     if (preview.summary.unmappedCount > 0) {
@@ -148,7 +148,7 @@ export function PoImportDetail({
       return;
     }
     setConfirmOpen(false);
-    toast.success('Import approved — expected inbound PO created');
+    toast.success('Import approved. Expected inbound PO created.');
     router.push(`/dashboard/purchase-orders/${r.data.poId}`);
   }
 
@@ -519,7 +519,7 @@ export function PoImportDetail({
             parts.push(
               `${counts.mapped} vendor mapping${counts.mapped === 1 ? '' : 's'}`,
             );
-          toast.success(parts.length > 0 ? parts.join(' · ') : 'Done');
+          toast.success(parts.length > 0 ? `${parts.join(' · ')}.` : 'Lines processed.');
           router.refresh();
         }}
       />

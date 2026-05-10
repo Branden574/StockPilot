@@ -134,7 +134,7 @@ function CharterTableRow({ row, onEdit }: { row: CharterRow; onEdit: () => void 
       return;
     }
     setArchiveOpen(false);
-    toast.success('Archived');
+    toast.success(`"${row.name}" archived.`);
     router.refresh();
   }
 
@@ -217,7 +217,7 @@ function CharterDialog({
       toast.error(res.error.message);
       return;
     }
-    toast.success(editing ? `${termSingular} updated` : `${termSingular} created`);
+    toast.success(editing ? `${termSingular} updated.` : `${termSingular} created.`);
     onOpenChange(false);
     router.refresh();
   });

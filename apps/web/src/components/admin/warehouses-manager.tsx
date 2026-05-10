@@ -171,7 +171,7 @@ function WarehouseTableRow({ row, onEdit }: { row: WarehouseRow; onEdit: () => v
       return;
     }
     setArchiveOpen(false);
-    toast.success('Archived');
+    toast.success(`"${row.name}" archived.`);
     router.refresh();
   }
 
@@ -312,7 +312,7 @@ function WarehouseDialog({
       toast.error(res.error.message);
       return;
     }
-    toast.success(editing ? `${termSingular} updated` : `${termSingular} created`);
+    toast.success(editing ? `${termSingular} updated.` : `${termSingular} created.`);
     onOpenChange(false);
     router.refresh();
   });

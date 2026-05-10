@@ -32,7 +32,7 @@ export function ChangePasswordForm() {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Password updated');
+    toast.success('Password updated.');
     reset({ currentPassword: '', newPassword: '', confirmPassword: '' });
   });
 

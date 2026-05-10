@@ -132,7 +132,7 @@ export function CreateItemsModal({
       (l) => decisions[l.id]?.mode === 'create' && !(names[l.id] ?? '').trim(),
     );
     if (blank) {
-      toast.error(`Line ${blank.line_number} needs a name`);
+      toast.error(`Line ${blank.line_number} needs a name before creating items.`);
       return;
     }
     // Validate: lines in 'use_existing' need an itemId.
@@ -141,7 +141,7 @@ export function CreateItemsModal({
       return d?.mode === 'use_existing' && !d.itemId;
     });
     if (unmappedLink) {
-      toast.error(`Line ${unmappedLink.line_number} marked use-existing but no item picked`);
+      toast.error(`Line ${unmappedLink.line_number} is set to use existing, but no item was picked.`);
       return;
     }
     setBusy(true);

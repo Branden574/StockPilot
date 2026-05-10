@@ -66,7 +66,7 @@ export function BinsManager({
 
   async function add() {
     if (!warehouseId || !code.trim() || !name.trim()) {
-      toast.error('Warehouse, code, and name are required');
+      toast.error('Warehouse, code, and name are required to create a bin.');
       return;
     }
     setBusy(true);
@@ -85,7 +85,7 @@ export function BinsManager({
     setCode('');
     setName('');
     setIsDefault(false);
-    toast.success('Bin saved');
+    toast.success(`Bin "${name.trim()}" created.`);
     router.refresh();
   }
   async function confirmArchive() {

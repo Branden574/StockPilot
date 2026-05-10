@@ -20,7 +20,7 @@ export function PoActions({ poId, status }: { poId: string; status: string }) {
       toast.error(res.error.message);
       return;
     }
-    toast.success(`Marked as ${next}`);
+    toast.success(`Purchase order marked as ${next}.`);
     router.refresh();
   }
 

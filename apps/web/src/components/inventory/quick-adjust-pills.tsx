@@ -52,7 +52,7 @@ export function QuickAdjustPills({ itemId, currentQuantity, canAdjust }: QuickAd
       toast.error(res.error.message);
       return;
     }
-    toast.success(delta > 0 ? '+1 on hand' : '-1 on hand');
+    toast.success(delta > 0 ? 'Stock increased by 1.' : 'Stock decreased by 1.');
     router.refresh();
   }
 

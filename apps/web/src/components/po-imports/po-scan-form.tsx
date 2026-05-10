@@ -29,11 +29,11 @@ export function PoScanForm() {
     const next: File[] = [...files];
     for (const f of incoming) {
       if (next.length >= MAX_FILES) {
-        toast.error(`Limit is ${MAX_FILES} files per scan.`);
+        toast.error(`Limit is ${MAX_FILES} files per scan. Remove some and try again.`);
         break;
       }
       if (f.size > MAX_BYTES) {
-        toast.error(`${f.name} is over 8 MB.`);
+        toast.error(`"${f.name}" is over 8 MB. Pick a smaller file.`);
         continue;
       }
       next.push(f);
@@ -47,7 +47,7 @@ export function PoScanForm() {
 
   async function submit() {
     if (files.length === 0) {
-      toast.error('Pick at least one photo or PDF.');
+      toast.error('Pick at least one photo or PDF to scan.');
       return;
     }
     setBusy(true);
@@ -60,21 +60,21 @@ export function PoScanForm() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) {
-        toast.error(json.message || `Scan failed (${res.status})`);
+        toast.error(json.message || `Couldn't scan the upload (${res.status}). Try again or use a clearer photo.`);
         return;
       }
       if (json.duplicateOf) {
-        toast.success('Already scanned earlier — opening existing import.');
+        toast.success('Already scanned earlier. Opening the existing import.');
       } else if (json.lowConfidenceLines > 0) {
         toast.success(
-          `Extracted. ${json.lowConfidenceLines} line${json.lowConfidenceLines === 1 ? '' : 's'} need a quick review.`,
+          `Scan extracted. ${json.lowConfidenceLines} line${json.lowConfidenceLines === 1 ? '' : 's'} need a quick review.`,
         );
       } else {
-        toast.success('Extracted cleanly — ready to approve.');
+        toast.success('Scan extracted cleanly. Ready to approve.');
       }
       router.push(`/dashboard/purchase-orders/imports/${json.id}`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Network error');
+      toast.error(e instanceof Error ? e.message : "Couldn't reach the scan service. Check your network and try again.");
     } finally {
       setBusy(false);
     }

@@ -68,7 +68,7 @@ export function SuppliersManager({ initial }: { initial: SupplierRow[] }) {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Supplier archived');
+    toast.success(`"${archiveTarget.name}" archived.`);
     setArchiveTarget(null);
     router.refresh();
   }
@@ -214,7 +214,7 @@ function SupplierDialog({
       toast.error(res.error.message);
       return;
     }
-    toast.success(editing ? 'Supplier updated' : 'Supplier created');
+    toast.success(editing ? 'Supplier updated.' : 'Supplier created.');
     onOpenChange(false);
     router.refresh();
   });

@@ -36,12 +36,12 @@ export function BackfillCoversButton() {
       if (alreadyHadPrimary > 0) parts.push(`${alreadyHadPrimary} already had a photo`);
       if (failed > 0) parts.push(`${failed} failed`);
       if (parts.length === 0) {
-        toast.info(`Scanned ${scanned} books — nothing to backfill.`);
+        toast.info(`Scanned ${scanned} books. Nothing to backfill.`);
       } else {
-        toast.success(`Scanned ${scanned}: ${parts.join(' · ')}`);
+        toast.success(`Scanned ${scanned} books: ${parts.join(' · ')}.`);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Backfill failed.');
+      toast.error(err instanceof Error ? err.message : "Couldn't backfill covers. Try again in a moment.");
     } finally {
       setBusy(false);
     }

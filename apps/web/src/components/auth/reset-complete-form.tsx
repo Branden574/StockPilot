@@ -34,7 +34,7 @@ export function ResetCompleteForm() {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Password updated');
+    toast.success('Password updated.');
     router.replace(res.data.next);
     router.refresh();
   });

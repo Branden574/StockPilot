@@ -25,7 +25,7 @@ export function OrgNameEditor({ current }: { current: string }) {
       toast.error(r.error.message);
       return;
     }
-    toast.success('Organization name updated');
+    toast.success('Organization name updated.');
     router.refresh();
   }
 

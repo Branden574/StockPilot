@@ -1067,7 +1067,7 @@ function SavedViewChip({
       return;
     }
     setDeleteOpen(false);
-    toast.success('View deleted');
+    toast.success(`Saved view "${view.name}" deleted.`);
     router.refresh();
   }
 
@@ -1081,7 +1081,7 @@ function SavedViewChip({
       toast.error(res.error.message);
       return;
     }
-    toast.success(next ? 'Shared with the team' : 'Made private');
+    toast.success(next ? `View "${view.name}" shared with the team.` : `View "${view.name}" set to private.`);
     router.refresh();
   }
 
@@ -1194,7 +1194,7 @@ function SaveCurrentViewButton({
       return;
     }
     toast.success(
-      shareWithTeam ? `View "${trimmed}" saved and shared` : `View "${trimmed}" saved`,
+      shareWithTeam ? `View "${trimmed}" saved and shared with the team.` : `View "${trimmed}" saved.`,
     );
     setOpen(false);
     router.refresh();

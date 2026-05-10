@@ -112,7 +112,7 @@ function ReceiptCard({
 
   async function reverse() {
     if (reason.trim().length < 3) {
-      toast.error('Provide a reason (3+ characters) for the reversal');
+      toast.error('Enter a reason (3+ characters) for the reversal.');
       return;
     }
     setBusy(true);
@@ -122,7 +122,7 @@ function ReceiptCard({
       toast.error(r.error.message);
       return;
     }
-    toast.success('Receipt reversed');
+    toast.success('Receipt reversed.');
     setReverseOpen(false);
     router.refresh();
   }

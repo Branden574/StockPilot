@@ -38,7 +38,7 @@ export function PoTermsEditor({ current }: PoTermsEditorProps) {
       toast.error(r.error.message);
       return;
     }
-    toast.success('Purchase order terms updated');
+    toast.success('Purchase order terms updated.');
     router.refresh();
   }
 

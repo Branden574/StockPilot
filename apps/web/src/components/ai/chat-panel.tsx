@@ -138,7 +138,7 @@ export function ChatPanel() {
         window.localStorage.setItem(ACTIVE_SESSION_KEY, id);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not load session');
+      toast.error(err instanceof Error ? err.message : "Couldn't load that chat session. Try again or pick a different one.");
     }
   }
 
@@ -155,13 +155,13 @@ export function ChatPanel() {
     try {
       const res = await fetch(`/api/ai/sessions/${id}`, { method: 'DELETE' });
       if (!res.ok) {
-        toast.error('Could not delete chat');
+        toast.error("Couldn't delete this chat. Try again in a moment.");
         return;
       }
       setSessions((cur) => cur.filter((s) => s.id !== id));
       if (id === sessionId) startNewChat();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Delete failed');
+      toast.error(err instanceof Error ? err.message : "Couldn't delete this chat. Try again in a moment.");
     }
   }
 
@@ -188,12 +188,12 @@ export function ChatPanel() {
         message?: string;
       };
       if (!res.ok || !json.ok) {
-        toast.error(json.message ?? `Couldn't read ${file.name} (${res.status}).`);
+        toast.error(json.message ?? `Couldn't read "${file.name}" (${res.status}). Try a different file.`);
         return;
       }
       const isbns = json.isbns ?? [];
       if (isbns.length === 0) {
-        toast.warning(`No ISBNs found in ${file.name}.`);
+        toast.warning(`No ISBNs found in "${file.name}".`);
         return;
       }
       const synthetic = [
@@ -210,7 +210,7 @@ export function ChatPanel() {
       setUploading(false);
       await send(synthetic);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Upload failed.');
+      toast.error(err instanceof Error ? err.message : "Couldn't upload the file. Check your network and try again.");
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -341,7 +341,7 @@ export function ChatPanel() {
 
       if (!streamErrored) void refreshSessions();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Network error';
+      const msg = err instanceof Error ? err.message : "Couldn't reach the assistant. Check your network and try again.";
       toast.error(msg);
       replaceAssistantWithError(msg);
     } finally {

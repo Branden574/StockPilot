@@ -33,7 +33,7 @@ export function PoSetDestination({ poId, warehouses }: Props) {
 
   async function save() {
     if (!warehouseId) {
-      toast.error('Pick a warehouse first');
+      toast.error('Pick a destination warehouse first.');
       return;
     }
     setBusy(true);
@@ -43,7 +43,7 @@ export function PoSetDestination({ poId, warehouses }: Props) {
       toast.error(r.error.message);
       return;
     }
-    toast.success('Destination set — Receive button is now available');
+    toast.success('Destination set. The Receive button is now available.');
     router.refresh();
   }
 

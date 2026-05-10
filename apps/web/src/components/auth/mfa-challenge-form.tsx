@@ -37,7 +37,7 @@ export function MfaChallengeForm({ factorId }: MfaChallengeFormProps) {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (code.length !== 6) {
-      toast.error('Enter the 6-digit code from your authenticator');
+      toast.error('Enter the 6-digit code from your authenticator app.');
       return;
     }
     setPending(true);
@@ -55,7 +55,7 @@ export function MfaChallengeForm({ factorId }: MfaChallengeFormProps) {
   async function recover(e: React.FormEvent) {
     e.preventDefault();
     if (!recoveryCode.trim()) {
-      toast.error('Enter a recovery code');
+      toast.error('Enter a recovery code.');
       return;
     }
     setRecoveryPending(true);
@@ -66,7 +66,7 @@ export function MfaChallengeForm({ factorId }: MfaChallengeFormProps) {
       return;
     }
     toast.success(
-      `Recovery successful — ${res.data.unenrolled} factor${res.data.unenrolled === 1 ? '' : 's'} removed. Re-enroll a new device on the next page.`,
+      `Recovery code accepted. ${res.data.unenrolled} factor${res.data.unenrolled === 1 ? '' : 's'} removed — re-enroll a new device on the next page.`,
     );
     setRecoveryOpen(false);
     router.replace('/dashboard/settings/security');

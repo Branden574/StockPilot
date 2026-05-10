@@ -26,11 +26,11 @@ export function InviteSignupForm({ token, email }: InviteSignupFormProps) {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (password.length < 8) {
-      toast.error('Password must be at least 8 characters');
+      toast.error('Password must be at least 8 characters.');
       return;
     }
     if (password !== confirm) {
-      toast.error('Passwords do not match');
+      toast.error('Passwords do not match.');
       return;
     }
     setSubmitting(true);
@@ -44,7 +44,7 @@ export function InviteSignupForm({ token, email }: InviteSignupFormProps) {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Welcome aboard');
+    toast.success('Account created. Welcome aboard.');
     router.replace('/dashboard');
     router.refresh();
   }

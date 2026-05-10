@@ -84,7 +84,7 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
   function addComponent(item: ItemSearchResult) {
     setComponents((cur) => {
       if (cur.some((c) => c.itemId === item.id)) {
-        toast.info(`${item.name} is already a component.`);
+        toast.info(`"${item.name}" is already a component.`);
         return cur;
       }
       return [
@@ -113,11 +113,11 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!name.trim()) {
-      toast.error('Bundle needs a name.');
+      toast.error('Enter a bundle name.');
       return;
     }
     if (components.length === 0) {
-      toast.error('Add at least one component.');
+      toast.error('Add at least one component to the bundle.');
       return;
     }
     setSubmitting(true);
@@ -139,7 +139,7 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
           toast.error(res.error.message);
           return;
         }
-        toast.success('Bundle saved.');
+        toast.success('Bundle updated.');
         router.push(`/dashboard/bundles/${initial.id}`);
         router.refresh();
       } else {

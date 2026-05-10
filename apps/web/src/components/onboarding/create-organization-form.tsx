@@ -48,7 +48,7 @@ export function CreateOrganizationForm() {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Workspace created');
+    toast.success('Workspace created.');
     router.replace('/dashboard');
     router.refresh();
   });

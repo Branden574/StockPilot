@@ -41,7 +41,7 @@ export function SignUpForm() {
       setEmailSent(true);
       return;
     }
-    toast.success('Account created');
+    toast.success('Account created.');
     router.replace('/onboarding');
     router.refresh();
   });

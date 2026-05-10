@@ -112,11 +112,11 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
     try {
       for (const original of list) {
         if (!ACCEPT.includes(original.type)) {
-          toast.error(`${original.name}: unsupported type`);
+          toast.error(`"${original.name}" isn't a supported image type. Use PNG, JPG, WEBP, or AVIF.`);
           continue;
         }
         if (original.size > MAX_BYTES) {
-          toast.error(`${original.name}: max 10 MB`);
+          toast.error(`"${original.name}" is over 10 MB. Pick a smaller image.`);
           continue;
         }
 
@@ -137,7 +137,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           body: file,
         });
         if (!put.ok) {
-          toast.error(`Upload failed: ${original.name}`);
+          toast.error(`Couldn't upload "${original.name}". Check your network and try again.`);
           continue;
         }
 
@@ -152,7 +152,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           continue;
         }
       }
-      toast.success('Uploaded');
+      toast.success('Photos uploaded.');
       router.refresh();
     } finally {
       setUploading(false);

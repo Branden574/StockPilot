@@ -105,11 +105,11 @@ export function GeneratePackingSlipDialog({
 
   async function submit() {
     if (!sourceWarehouseId) {
-      toast.error('Pick a source warehouse');
+      toast.error('Pick a source warehouse for the packing slip.');
       return;
     }
     if (!destinationCharterId) {
-      toast.error('Pick a destination charter');
+      toast.error('Pick a destination charter for the packing slip.');
       return;
     }
     const ccList = ccEmails
@@ -130,7 +130,7 @@ export function GeneratePackingSlipDialog({
       toast.error(res.error.message);
       return;
     }
-    toast.success('Packing slip created');
+    toast.success('Packing slip created.');
     setOpen(false);
     router.push(`/dashboard/shipments/${res.data.id}`);
   }

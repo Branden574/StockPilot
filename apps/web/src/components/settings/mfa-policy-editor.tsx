@@ -47,7 +47,7 @@ export function MfaPolicyEditor({ current }: { current: Policy }) {
       toast.error(res.error.message);
       return;
     }
-    toast.success('MFA policy updated');
+    toast.success('MFA policy updated.');
     router.refresh();
   }
 

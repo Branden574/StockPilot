@@ -63,7 +63,7 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
       toast.error(res.error.message);
       return;
     }
-    toast.success('Authenticator enabled');
+    toast.success('Authenticator enabled.');
     setEnrollment(null);
     setCode('');
     setStep('idle');
@@ -87,7 +87,7 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
       return;
     }
     setDisableTarget(null);
-    toast.success('Authenticator disabled');
+    toast.success('Authenticator disabled.');
     router.refresh();
   }
 

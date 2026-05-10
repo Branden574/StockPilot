@@ -65,12 +65,12 @@ export function SignatureForm({ token, defaultEmail, onSigned }: SignatureFormPr
   const onSubmit = handleSubmit(async (values) => {
     const pad = padRef.current;
     if (!pad || pad.isEmpty()) {
-      toast.error('Please sign before submitting.');
+      toast.error('Sign the box before submitting.');
       return;
     }
     const signatureDataUrl = pad.toDataURL();
     if (!signatureDataUrl || !signatureDataUrl.startsWith('data:image/png')) {
-      toast.error('Could not capture signature. Please try again.');
+      toast.error("Couldn't capture the signature. Clear the box and sign again.");
       return;
     }
     const res = await submitShipmentSignatureAction({

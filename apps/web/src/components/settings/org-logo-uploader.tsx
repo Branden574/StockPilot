@@ -35,11 +35,11 @@ export function OrgLogoUploader({
 
   async function upload(file: File) {
     if (!ACCEPT.includes(file.type)) {
-      toast.error('Use PNG, JPG, WEBP, or AVIF');
+      toast.error("That file type isn't supported. Use PNG, JPG, WEBP, or AVIF.");
       return;
     }
     if (file.size > MAX_BYTES) {
-      toast.error('Max 5 MB');
+      toast.error('Image is over 5 MB. Pick a smaller file.');
       return;
     }
     setBusy(true);
@@ -62,7 +62,7 @@ export function OrgLogoUploader({
         return;
       }
       setUrl(cacheBust);
-      toast.success('Logo updated');
+      toast.success('Organization logo updated.');
       router.refresh();
     } finally {
       setBusy(false);
@@ -78,7 +78,7 @@ export function OrgLogoUploader({
         return;
       }
       setUrl(null);
-      toast.success('Logo removed');
+      toast.success('Organization logo removed.');
       router.refresh();
     } finally {
       setBusy(false);

@@ -30,7 +30,7 @@ export function ResetForm() {
   const onSubmit = handleSubmit(async (values) => {
     await requestPasswordResetAction(values);
     setSubmitted(true);
-    toast.success('If an account exists, we sent a reset link.');
+    toast.success('Reset link sent. Check your inbox.');
   });
 
   if (submitted) {

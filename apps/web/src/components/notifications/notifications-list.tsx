@@ -52,7 +52,7 @@ export function NotificationsList({ notifications }: NotificationsListProps) {
     const res = await markAllNotificationsReadAction();
     if (!res.ok) toast.error(res.error.message);
     else {
-      toast.success('All notifications marked as read');
+      toast.success('All notifications marked as read.');
       router.refresh();
     }
   }
