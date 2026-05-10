@@ -3,10 +3,34 @@ import { StatusBar } from 'expo-status-bar';
 import * as React from 'react';
 
 import { AuthProvider, useAuth } from '@/lib/auth-context';
+import { cycleCountSync } from '@/lib/cycle-count-sync';
+import { initDb } from '@/lib/db';
 import { usePushNotifications } from '@/lib/use-push-notifications';
 import { useSync } from '@/lib/use-sync';
 
 export default function RootLayout() {
+  // Initialise SQLite + cycle-count sync engine once at app start so any
+  // screen that calls getDb() / useSyncStatus() can assume both are
+  // ready. Idempotent — initDb() short-circuits if the DB is already
+  // open.
+  React.useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        await initDb();
+      } catch (e) {
+        console.warn('[init] db init failed', e);
+      }
+      if (!cancelled) {
+        cycleCountSync.start();
+      }
+    })();
+    return () => {
+      cancelled = true;
+      cycleCountSync.stop();
+    };
+  }, []);
+
   return (
     <AuthProvider>
       <StatusBar style="light" />

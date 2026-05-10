@@ -25,6 +25,7 @@ export interface PendingActionRow {
   payload: Record<string, unknown>;
   createdAt: number;
   attempts: number;
+  lastAttemptAt: number | null;
   lastError: string | null;
   status: 'pending' | 'sending' | 'ok' | 'failed';
 }
@@ -62,6 +63,7 @@ export async function listPending(): Promise<PendingActionRow[]> {
     payload_json: string;
     created_at: number;
     attempts: number;
+    last_attempt_at: number | null;
     last_error: string | null;
     status: string;
   }>(`select * from pending_actions where status in ('pending','failed')
@@ -78,6 +80,7 @@ export async function listAll(limit = 100): Promise<PendingActionRow[]> {
     payload_json: string;
     created_at: number;
     attempts: number;
+    last_attempt_at: number | null;
     last_error: string | null;
     status: string;
   }>(`select * from pending_actions order by created_at desc limit ?`, [limit]);
@@ -95,9 +98,12 @@ export async function pendingCount(): Promise<number> {
 export async function markSending(id: number): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    `update pending_actions set status = 'sending', attempts = attempts + 1
-     where id = ?`,
-    [id],
+    `update pending_actions
+        set status = 'sending',
+            attempts = attempts + 1,
+            last_attempt_at = ?
+      where id = ?`,
+    [Date.now(), id],
   );
 }
 
@@ -111,8 +117,12 @@ export async function markOk(id: number): Promise<void> {
 export async function markFailed(id: number, error: string): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    `update pending_actions set status = 'failed', last_error = ? where id = ?`,
-    [error.slice(0, 1000), id],
+    `update pending_actions
+        set status = 'failed',
+            last_error = ?,
+            last_attempt_at = ?
+      where id = ?`,
+    [error.slice(0, 1000), Date.now(), id],
   );
 }
 
@@ -132,6 +142,7 @@ function rowFromDb(r: {
   payload_json: string;
   created_at: number;
   attempts: number;
+  last_attempt_at: number | null;
   last_error: string | null;
   status: string;
 }): PendingActionRow {
@@ -142,6 +153,7 @@ function rowFromDb(r: {
     payload: safeParse(r.payload_json),
     createdAt: r.created_at,
     attempts: r.attempts,
+    lastAttemptAt: r.last_attempt_at,
     lastError: r.last_error,
     status: r.status as PendingActionRow['status'],
   };
