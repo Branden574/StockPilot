@@ -105,7 +105,7 @@ export function PoUploadForm() {
           accept={ACCEPT.join(',')}
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
         />
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           Max 25 MB. Inventory will not be updated by this upload — receiving
           posts the actual stock change in a separate step.
         </p>

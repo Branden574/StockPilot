@@ -143,7 +143,10 @@ export function VendorMappingsManager({
             />
           </div>
           <div className="space-y-1.5">
-            <Label>Vendor description (optional)</Label>
+            <Label>
+              Vendor description
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Input
               placeholder="Duracell Coppertop AA, 24/Pack"
               value={vendorDescription}
@@ -152,13 +155,13 @@ export function VendorMappingsManager({
           </div>
         </div>
         <div className="mt-3 flex justify-end">
-          <Button onClick={add} disabled={busy}>
+          <Button onClick={add} disabled={busy} variant="gradient">
             {busy ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Plus className="h-4 w-4" />
             )}
-            Save
+            Save mapping
           </Button>
         </div>
       </div>

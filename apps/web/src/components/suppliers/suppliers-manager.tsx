@@ -180,6 +180,8 @@ function SupplierDialog({
     reset,
     formState: { isSubmitting, errors },
   } = useForm<FormValues>({
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: { name: '', contactName: '', email: '', phone: '', website: '', notes: '' },
   });
 
@@ -227,30 +229,45 @@ function SupplierDialog({
           <div className="space-y-1.5">
             <Label htmlFor="name">Name</Label>
             <Input id="name" placeholder="Acme Supplies Co" {...register('name', { required: true })} />
-            {errors.name && <p className="text-xs text-destructive">Name is required</p>}
+            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="contactName">Contact name</Label>
+              <Label htmlFor="contactName">
+                Contact name
+                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              </Label>
               <Input id="contactName" {...register('contactName')} />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="phone">Phone</Label>
+              <Label htmlFor="phone">
+                Phone
+                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              </Label>
               <Input id="phone" {...register('phone')} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">
+                Email
+                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              </Label>
               <Input id="email" type="email" {...register('email')} />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="website">Website</Label>
+              <Label htmlFor="website">
+                Website
+                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              </Label>
               <Input id="website" placeholder="https://" {...register('website')} />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="notes">Notes</Label>
+            <Label htmlFor="notes">
+              Notes
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Textarea id="notes" rows={3} {...register('notes')} />
           </div>
           <DialogFooter>
@@ -258,7 +275,13 @@ function SupplierDialog({
               Cancel
             </Button>
             <Button type="submit" variant="gradient" disabled={isSubmitting}>
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : editing ? 'Save' : 'Create'}
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : editing ? (
+                'Save changes'
+              ) : (
+                'Create supplier'
+              )}
             </Button>
           </DialogFooter>
         </form>

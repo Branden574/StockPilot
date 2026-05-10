@@ -26,6 +26,8 @@ export function SignUpForm() {
     formState: { errors, isSubmitting },
   } = useForm<SignUpInput>({
     resolver: zodResolver(signUpSchema),
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: { email: '', password: '', fullName: '' },
   });
 

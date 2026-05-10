@@ -27,6 +27,8 @@ export function SignInForm() {
     formState: { errors, isSubmitting },
   } = useForm<SignInInput>({
     resolver: zodResolver(signInSchema),
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: { email: '', password: '', rememberMe: true },
   });
 

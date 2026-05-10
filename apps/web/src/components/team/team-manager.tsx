@@ -385,6 +385,8 @@ function InviteDialog({
     reset,
     formState: { isSubmitting, errors },
   } = useForm<InviteFormValues>({
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: { email: '', role: 'staff', charterId: '', warehouseId: '', message: '' },
   });
 
@@ -475,7 +477,7 @@ function InviteDialog({
               placeholder="teammate@company.com"
               {...register('email', { required: true })}
             />
-            {errors.email && <p className="text-xs text-destructive">Email is required</p>}
+            {errors.email && <p className="text-xs text-destructive">Email is required.</p>}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -504,7 +506,9 @@ function InviteDialog({
             <div className="space-y-1.5">
               <Label>
                 {warehouseSingular}
-                {warehouseRequired && <span className="ml-1 text-destructive">*</span>}
+                {!warehouseRequired && (
+                  <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                )}
               </Label>
               <Select
                 value={warehouseId || NONE_VALUE}
@@ -538,7 +542,10 @@ function InviteDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label>{charterSingular} (optional)</Label>
+            <Label>
+              {charterSingular}
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Select
               value={charterId || NONE_VALUE}
               onValueChange={(v: string) =>
@@ -582,7 +589,10 @@ function InviteDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="invite-message">Message (optional)</Label>
+            <Label htmlFor="invite-message">
+              Message
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Input
               id="invite-message"
               placeholder="Welcome to the team — see you Monday"

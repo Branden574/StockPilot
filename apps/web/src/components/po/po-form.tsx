@@ -96,7 +96,10 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
-          <Label>Supplier</Label>
+          <Label>
+            Supplier
+            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+          </Label>
           <Select value={supplierId || '__none'} onValueChange={(v: string) => setSupplierId(v === '__none' ? '' : v)}>
             <SelectTrigger>
               <SelectValue placeholder="No supplier" />
@@ -112,7 +115,10 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
           </Select>
         </div>
         <div className="space-y-1.5">
-          <Label>Destination location</Label>
+          <Label>
+            Destination location
+            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+          </Label>
           <Select value={locationId || '__none'} onValueChange={(v: string) => setLocationId(v === '__none' ? '' : v)}>
             <SelectTrigger>
               <SelectValue placeholder="None" />
@@ -131,7 +137,10 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
 
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
-          <Label>Expected delivery</Label>
+          <Label>
+            Expected delivery
+            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+          </Label>
           <Input type="date" value={expectedAt} onChange={(e) => setExpectedAt(e.target.value)} />
         </div>
       </div>
@@ -222,7 +231,10 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
       </div>
 
       <div className="space-y-1.5">
-        <Label>Notes</Label>
+        <Label>
+          Notes
+          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+        </Label>
         <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
       </div>
 

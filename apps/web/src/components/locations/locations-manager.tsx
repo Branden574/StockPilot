@@ -184,6 +184,8 @@ function LocationDialog({
     reset,
     formState: { isSubmitting, errors },
   } = useForm<FormValues>({
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: { name: '', type: '', notes: '' },
   });
 
@@ -229,10 +231,13 @@ function LocationDialog({
           <div className="space-y-1.5">
             <Label htmlFor="name">Name</Label>
             <Input id="name" placeholder="Main warehouse" {...register('name', { required: true })} />
-            {errors.name && <p className="text-xs text-destructive">Name is required</p>}
+            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
           </div>
           <div className="space-y-1.5">
-            <Label>Type</Label>
+            <Label>
+              Type
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Select value={watch('type')} onValueChange={(v: string) => setValue('type', v)}>
               <SelectTrigger>
                 <SelectValue placeholder="Choose a type" />
@@ -247,7 +252,10 @@ function LocationDialog({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="notes">Notes</Label>
+            <Label htmlFor="notes">
+              Notes
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Textarea id="notes" rows={3} {...register('notes')} />
           </div>
           <DialogFooter>
@@ -255,7 +263,13 @@ function LocationDialog({
               Cancel
             </Button>
             <Button type="submit" variant="gradient" disabled={isSubmitting}>
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : editing ? 'Save' : 'Create'}
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : editing ? (
+                'Save changes'
+              ) : (
+                'Create location'
+              )}
             </Button>
           </DialogFooter>
         </form>

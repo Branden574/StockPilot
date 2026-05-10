@@ -198,7 +198,10 @@ export function PublicOrderForm({
             />
           </div>
           <div>
-            <Label htmlFor="por-org">School or organization (optional)</Label>
+            <Label htmlFor="por-org">
+              School or organization
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Input
               id="por-org"
               value={orgLabel}
@@ -325,7 +328,10 @@ export function PublicOrderForm({
 
       {/* Notes */}
       <section className="space-y-2">
-        <Label htmlFor="por-notes">Notes (optional)</Label>
+        <Label htmlFor="por-notes">
+          Notes
+          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+        </Label>
         <Textarea
           id="por-notes"
           value={notes}
@@ -345,8 +351,8 @@ export function PublicOrderForm({
               {lineCount} {lineCount === 1 ? 'title' : 'titles'} · {totalQty} books
             </span>
           </div>
-          <Button type="submit" disabled={submitting || lineCount === 0}>
-            {submitting ? 'Submitting…' : 'Submit request'}
+          <Button type="submit" disabled={submitting || lineCount === 0} variant="gradient">
+            {submitting ? 'Sending…' : 'Send request'}
           </Button>
         </div>
       </div>

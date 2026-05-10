@@ -115,6 +115,8 @@ export function NewShipmentForm({
     handleSubmit,
     formState: { errors },
   } = useForm<FormValues>({
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: { attentionToName: '', notes: '', ccEmails: '' },
   });
 
@@ -296,7 +298,10 @@ export function NewShipmentForm({
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="attention">Attention to (optional)</Label>
+        <Label htmlFor="attention">
+          Attention to
+          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+        </Label>
         <Input
           id="attention"
           maxLength={200}
@@ -306,7 +311,10 @@ export function NewShipmentForm({
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="notes">Notes (optional)</Label>
+        <Label htmlFor="notes">
+          Notes
+          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+        </Label>
         <Textarea
           id="notes"
           rows={3}
@@ -317,17 +325,21 @@ export function NewShipmentForm({
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="cc">CC emails (optional)</Label>
+        <Label htmlFor="cc">
+          CC emails
+          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+        </Label>
         <Input
           id="cc"
           placeholder="principal@school.org, ops@charter.org"
           {...register('ccEmails')}
         />
-        <p className="text-muted-foreground text-[11px]">
-          Comma-separated. Used by the Phase 2B signed-PDF email.
-        </p>
-        {errors.ccEmails && (
-          <p className="text-destructive text-xs">{errors.ccEmails.message}</p>
+        {errors.ccEmails ? (
+          <p className="text-xs text-destructive">{errors.ccEmails.message}</p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Comma-separated. Used by the Phase 2B signed-PDF email.
+          </p>
         )}
       </div>
 

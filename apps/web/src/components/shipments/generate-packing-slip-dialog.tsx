@@ -211,7 +211,10 @@ export function GeneratePackingSlipDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="attention">Attention to (optional)</Label>
+            <Label htmlFor="attention">
+              Attention to
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Input
               id="attention"
               value={attentionToName}
@@ -222,7 +225,10 @@ export function GeneratePackingSlipDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="notes">Notes (optional)</Label>
+            <Label htmlFor="notes">
+              Notes
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Textarea
               id="notes"
               rows={3}
@@ -234,14 +240,17 @@ export function GeneratePackingSlipDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="cc">CC emails (optional)</Label>
+            <Label htmlFor="cc">
+              CC emails
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Input
               id="cc"
               value={ccEmails}
               onChange={(e) => setCcEmails(e.target.value)}
               placeholder="principal@school.org, ops@charter.org"
             />
-            <p className="text-muted-foreground text-[11px]">
+            <p className="text-xs text-muted-foreground">
               Comma-separated. Used by the Phase 2B signed-PDF email.
             </p>
           </div>
@@ -255,8 +264,8 @@ export function GeneratePackingSlipDialog({
           >
             Cancel
           </Button>
-          <Button onClick={submit} disabled={submitting || disabled || !canSubmit}>
-            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create'}
+          <Button onClick={submit} disabled={submitting || disabled || !canSubmit} variant="gradient">
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create packing slip'}
           </Button>
         </DialogFooter>
       </DialogContent>

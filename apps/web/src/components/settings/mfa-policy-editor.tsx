@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { setOrgMfaPolicyAction } from '@/server/actions/mfa';
 
@@ -78,25 +79,25 @@ export function MfaPolicyEditor({ current }: { current: Policy }) {
           </label>
         ))}
       </div>
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={save}
-          disabled={!dirty || pending}
-          className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-        >
-          {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save policy'}
-        </button>
+      <div className="flex items-center justify-end gap-2">
         {dirty && (
-          <button
+          <Button
             type="button"
+            variant="outline"
             onClick={() => setPolicy(current)}
             disabled={pending}
-            className="text-sm text-muted-foreground hover:text-foreground"
           >
             Discard
-          </button>
+          </Button>
         )}
+        <Button
+          type="button"
+          variant="gradient"
+          onClick={save}
+          disabled={!dirty || pending}
+        >
+          {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save policy'}
+        </Button>
       </div>
     </div>
   );
