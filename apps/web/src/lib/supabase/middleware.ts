@@ -64,10 +64,18 @@ export async function updateSession(request: NextRequest) {
   // /signin/mfa is intentionally reachable WHILE signed in at AAL1 — that's
   // the whole point of the challenge page. Treating it as a generic auth
   // route caused a redirect loop with the dashboard layout's MFA gate.
+  //
+  // /reset/complete is similarly reachable while signed in — Supabase's
+  // password recovery flow exchanges the magic-link code for a real
+  // session before the user lands on the form, so updateUser({ password })
+  // can authenticate as them. Bouncing them to /dashboard before they
+  // pick a new password breaks the whole reset flow.
   const isAuthRoute =
     AUTH_ROUTES.some((p) => pathname.startsWith(p)) &&
     pathname !== '/signin/mfa' &&
-    !pathname.startsWith('/signin/mfa/');
+    !pathname.startsWith('/signin/mfa/') &&
+    pathname !== '/reset/complete' &&
+    !pathname.startsWith('/reset/complete/');
 
   if (isProtected && !user) {
     const url = request.nextUrl.clone();
