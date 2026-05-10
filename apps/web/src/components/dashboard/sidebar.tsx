@@ -104,58 +104,90 @@ export function Sidebar({
       />
 
       {/* Nav */}
-      <nav className="scrollbar-thin flex-1 overflow-y-auto px-2 py-2.5">
-        {sections.map((section, idx) => (
-          <div key={idx} className="px-1.5 pb-1 pt-2.5">
-            {section.label && (
-              <div className="px-2 pb-1.5 text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
-                {section.label}
-              </div>
-            )}
-            {section.items.map((item) => {
-              const active =
-                pathname === item.href ||
-                (pathname.startsWith(item.href) && item.href !== '/dashboard');
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  prefetch
-                  onFocus={() => warmRoute(item.href)}
-                  onPointerEnter={() => warmRoute(item.href)}
-                  onPointerDown={() => warmRoute(item.href)}
-                  onClick={onNavigate}
-                  className={cn(
-                    'flex min-h-8 items-center gap-2.5 rounded-[6px] px-2.5 py-1.5 text-[13px] transition-colors',
-                    active
-                      ? 'bg-card text-foreground border border-[var(--ed-line-strong)] shadow-[0_1px_0_rgba(14,15,13,0.05),_0_8px_22px_rgba(14,15,13,0.05)]'
-                      : 'hover:bg-card hover:text-foreground border border-transparent text-[var(--ed-ink-2)]',
-                  )}
-                >
-                  <item.icon
+      <nav className="scrollbar-thin flex-1 overflow-y-auto px-2 py-3">
+        {sections.map((section, idx) => {
+          // Active route logic:
+          //   - root `/dashboard` highlights only on an exact match (so child
+          //     dashboard routes don't all light up "Overview").
+          //   - every other entry highlights when the current pathname is the
+          //     entry itself OR a deeper sub-route (e.g.
+          //     `/dashboard/inventory/abc-123` highlights "Items").
+          const isFirstSection = idx === 0;
+          return (
+            <div
+              key={idx}
+              className={cn(
+                'px-1.5',
+                // Tighter top padding for the first section; bigger top
+                // breathing room for every subsequent section, plus a 1px
+                // hairline divider above the section heading.
+                isFirstSection
+                  ? 'pb-1 pt-1'
+                  : 'border-border mt-3 border-t pb-1 pt-3',
+              )}
+            >
+              {section.label && (
+                <div className="text-muted-foreground px-2 pb-2 pt-0.5 text-[10.5px] font-semibold uppercase tracking-[0.12em]">
+                  {section.label}
+                </div>
+              )}
+              {section.items.map((item) => {
+                const active =
+                  item.href === '/dashboard'
+                    ? pathname === '/dashboard'
+                    : pathname === item.href ||
+                      pathname.startsWith(`${item.href}/`);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    prefetch
+                    onFocus={() => warmRoute(item.href)}
+                    onPointerEnter={() => warmRoute(item.href)}
+                    onPointerDown={() => warmRoute(item.href)}
+                    onClick={onNavigate}
+                    aria-current={active ? 'page' : undefined}
                     className={cn(
-                      'h-4 w-4 shrink-0',
-                      active ? 'text-foreground' : 'text-[var(--ed-ink-3)]',
+                      // The 3px left padding offset (px-[11px] vs px-2.5) reserves
+                      // room for the 2px active-edge accent so non-active rows
+                      // line up visually with active ones.
+                      'relative flex min-h-8 items-center gap-2.5 rounded-[6px] py-1.5 pl-[11px] pr-2.5 text-[13px] transition-colors',
+                      active
+                        ? 'bg-card text-foreground border border-[var(--ed-line-strong)] shadow-[0_1px_0_rgba(14,15,13,0.05),_0_8px_22px_rgba(14,15,13,0.05)]'
+                        : 'hover:bg-card hover:text-foreground border border-transparent text-[var(--ed-ink-2)]',
                     )}
-                  />
-                  <span className="flex-1">{item.label}</span>
-                  {item.badge != null && (
-                    <span
+                  >
+                    {active && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute left-0 top-1/2 h-5 w-[2px] -translate-y-1/2 rounded-r-full bg-[hsl(var(--accent))]"
+                      />
+                    )}
+                    <item.icon
                       className={cn(
-                        'shrink-0 rounded-[3px] border px-1.5 py-px font-mono text-[10.5px]',
-                        item.alert
-                          ? 'border-transparent bg-[hsl(var(--destructive)/0.16)] text-[hsl(var(--destructive))]'
-                          : 'border-border bg-muted text-[var(--ed-ink-3)]',
+                        'h-4 w-4 shrink-0',
+                        active ? 'text-foreground' : 'text-[var(--ed-ink-3)]',
                       )}
-                    >
-                      {item.badge}
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-          </div>
-        ))}
+                    />
+                    <span className="flex-1">{item.label}</span>
+                    {item.badge != null && (
+                      <span
+                        className={cn(
+                          'shrink-0 rounded-[3px] border px-1.5 py-px font-mono text-[10.5px]',
+                          item.alert
+                            ? 'border-transparent bg-[hsl(var(--destructive)/0.16)] text-[hsl(var(--destructive))]'
+                            : 'border-border bg-muted text-[var(--ed-ink-3)]',
+                        )}
+                      >
+                        {item.badge}
+                      </span>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          );
+        })}
       </nav>
 
       {/* User foot */}

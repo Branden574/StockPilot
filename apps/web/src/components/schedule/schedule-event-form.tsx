@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -115,6 +116,7 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
     defaults?.bundleWarehouseId ?? '',
   );
   const [busy, setBusy] = React.useState(false);
+  const [deleteOpen, setDeleteOpen] = React.useState(false);
   const bundleLocked = Boolean(defaults?.bundleAlreadyDistributed);
 
   async function onSubmit(e: React.FormEvent) {
@@ -166,9 +168,13 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
     }
   }
 
-  async function onDelete() {
+  function onDelete() {
     if (!defaults?.id) return;
-    if (!confirm('Delete this event? This can’t be undone.')) return;
+    setDeleteOpen(true);
+  }
+
+  async function confirmDelete() {
+    if (!defaults?.id) return;
     setBusy(true);
     try {
       const res = await deleteScheduleEventAction(defaults.id);
@@ -176,6 +182,7 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
         toast.error(res.error.message);
         return;
       }
+      setDeleteOpen(false);
       toast.success('Event deleted');
       router.push('/dashboard/schedule');
       router.refresh();
@@ -399,6 +406,16 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
           {isEdit ? 'Save changes' : 'Create event'}
         </Button>
       </div>
+
+      <DestructiveConfirm
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title="Delete this event?"
+        description="The event is removed from the schedule and from any teammates' calendars. Linked bundle quantities (if not already distributed) are released. This cannot be undone."
+        confirmLabel="Delete event"
+        pending={busy}
+        onConfirm={confirmDelete}
+      />
     </form>
   );
 }

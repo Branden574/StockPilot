@@ -6,8 +6,9 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
   DialogContent,
@@ -51,6 +52,8 @@ export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
   const router = useRouter();
   const [editing, setEditing] = React.useState<TagManagerRow | null>(null);
   const [open, setOpen] = React.useState(false);
+  const [deleteTarget, setDeleteTarget] = React.useState<TagManagerRow | null>(null);
+  const [deleteBusy, setDeleteBusy] = React.useState(false);
 
   function openNew() {
     setEditing(null);
@@ -59,6 +62,20 @@ export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
   function openEdit(row: TagManagerRow) {
     setEditing(row);
     setOpen(true);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    const res = await deleteTagAction(deleteTarget.id);
+    setDeleteBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Tag deleted');
+    setDeleteTarget(null);
+    router.refresh();
   }
 
   return (
@@ -73,12 +90,7 @@ export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
         <EmptyState
           icon={TagsIcon}
           title="No tags yet"
-          description="Tags add a flexible label layer on top of categories. Apply many tags per item; use them in bulk actions."
-          action={
-            <Button variant="gradient" onClick={openNew}>
-              Add your first tag
-            </Button>
-          }
+          description="Tags add a flexible label layer on top of categories. Apply many tags per item and pull them into bulk actions. Use the New tag button above to add one."
         />
       ) : (
         <div className="overflow-hidden rounded-xl border bg-card">
@@ -115,23 +127,7 @@ export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
                   variant="ghost"
                   size="icon"
                   className="opacity-0 transition-opacity group-hover:opacity-100"
-                  onClick={async () => {
-                    if (
-                      !confirm(
-                        tag.usage_count > 0
-                          ? `Delete "${tag.name}"? It's currently applied to ${tag.usage_count} item${tag.usage_count === 1 ? '' : 's'} — those links will be removed.`
-                          : `Delete "${tag.name}"?`,
-                      )
-                    )
-                      return;
-                    const res = await deleteTagAction(tag.id);
-                    if (!res.ok) {
-                      toast.error(res.error.message);
-                      return;
-                    }
-                    toast.success('Tag deleted');
-                    router.refresh();
-                  }}
+                  onClick={() => setDeleteTarget(tag)}
                   aria-label={`Delete ${tag.name}`}
                 >
                   <Trash2 className="h-4 w-4 text-muted-foreground" />
@@ -143,6 +139,22 @@ export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
       )}
 
       <TagDialog open={open} onOpenChange={setOpen} editing={editing} />
+
+      <DestructiveConfirm
+        open={deleteTarget !== null}
+        onOpenChange={(v) => {
+          if (!v) setDeleteTarget(null);
+        }}
+        title={deleteTarget ? `Delete "${deleteTarget.name}"?` : 'Delete tag?'}
+        description={
+          deleteTarget && deleteTarget.usage_count > 0
+            ? `This tag is currently applied to ${deleteTarget.usage_count} item${deleteTarget.usage_count === 1 ? '' : 's'} — those links will be removed. The items themselves stay intact.`
+            : 'This tag will be removed from your workspace.'
+        }
+        confirmLabel="Delete"
+        pending={deleteBusy}
+        onConfirm={confirmDelete}
+      />
     </>
   );
 }

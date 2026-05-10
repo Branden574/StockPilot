@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import { formatRelative, cn } from '@/lib/utils';
 import {
   markAllNotificationsReadAction,
@@ -31,15 +32,11 @@ export function NotificationsList({ notifications }: NotificationsListProps) {
 
   if (notifications.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed bg-card/40 px-6 py-16 text-center">
-        <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl bg-muted text-muted-foreground">
-          <Bell className="h-5 w-5" />
-        </div>
-        <h3 className="mt-4 text-base font-semibold">All caught up</h3>
-        <p className="mt-1 text-sm text-muted-foreground">
-          You'll see low-stock alerts, team activity, and PO updates here.
-        </p>
-      </div>
+      <EmptyState
+        icon={Bell}
+        title="All caught up"
+        description="Low-stock alerts, team activity, and PO updates show up here as they happen."
+      />
     );
   }
 

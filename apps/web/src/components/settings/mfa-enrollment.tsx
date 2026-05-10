@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -35,6 +36,7 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
   } | null>(null);
   const [code, setCode] = React.useState('');
   const [pending, setPending] = React.useState(false);
+  const [disableTarget, setDisableTarget] = React.useState<string | null>(null);
 
   async function startEnroll() {
     setPending(true);
@@ -75,20 +77,16 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
     }
   }
 
-  async function disableFactor(factorId: string) {
-    if (
-      !confirm(
-        'Disable your authenticator? You will only need your password to sign in until you re-enroll.',
-      )
-    )
-      return;
+  async function confirmDisable() {
+    if (!disableTarget) return;
     setPending(true);
-    const res = await unenrollFactorAction({ factorId });
+    const res = await unenrollFactorAction({ factorId: disableTarget });
     setPending(false);
     if (!res.ok) {
       toast.error(res.error.message);
       return;
     }
+    setDisableTarget(null);
     toast.success('Authenticator disabled');
     router.refresh();
   }
@@ -120,7 +118,7 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => disableFactor(f.id)}
+                  onClick={() => setDisableTarget(f.id)}
                   disabled={pending}
                 >
                   <ShieldOff className="mr-1 h-3.5 w-3.5" /> Disable
@@ -135,6 +133,17 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
             lower the policy first.
           </p>
         )}
+        <DestructiveConfirm
+          open={disableTarget !== null}
+          onOpenChange={(v) => {
+            if (!v) setDisableTarget(null);
+          }}
+          title="Disable two-factor authentication?"
+          description="You'll only need your password to sign in until you re-enroll. We strongly recommend keeping an authenticator app on your account."
+          confirmLabel="Disable"
+          pending={pending}
+          onConfirm={confirmDisable}
+        />
       </div>
     );
   }

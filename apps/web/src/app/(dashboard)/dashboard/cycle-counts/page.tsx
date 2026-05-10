@@ -1,7 +1,7 @@
 import { ClipboardCheck } from 'lucide-react';
 import Link from 'next/link';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -47,12 +47,8 @@ export default async function CycleCountsPage() {
           <EmptyState
             icon={ClipboardCheck}
             title="No cycle counts yet"
-            description="Start a count to snapshot expected quantities, then enter the actuals as you walk the warehouse. The system handles the variance posting."
-            action={
-              <Button asChild variant="gradient">
-                <Link href="/dashboard/cycle-counts/new">Start your first count</Link>
-              </Button>
-            }
+            description="Start a count to snapshot expected quantities, then enter actuals as you walk the warehouse. We post the variance adjustments for you."
+            cta={{ label: 'Start your first count', href: '/dashboard/cycle-counts/new' }}
           />
         ) : (
           <div className="bg-card overflow-x-auto rounded-xl border">

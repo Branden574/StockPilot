@@ -2,7 +2,7 @@ import { Boxes, Mail, Phone, Plus, Send, User as UserIcon, Warehouse as Warehous
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { StatCard } from '@/components/dashboard/stat-card';
 import { ShipmentStatusBadge } from '@/components/shipments/shipment-status-badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -297,8 +297,10 @@ export default async function WarehouseDetailPage({
           <div className="p-4">
             <EmptyState
               icon={WarehouseIcon}
-              title="No charters yet"
-              description="Assign charters to this warehouse from Admin → Warehouses."
+              title="No charters assigned"
+              description="Link charters to this warehouse so the team knows who it serves."
+              size="sm"
+              cta={{ label: 'Manage warehouses', href: '/dashboard/admin/warehouses' }}
             />
           </div>
         ) : (
@@ -334,6 +336,8 @@ export default async function WarehouseDetailPage({
               icon={Send}
               title="No shipments yet"
               description="When you ship from this warehouse, the most recent ten show up here."
+              size="sm"
+              cta={{ label: 'New shipment from here', href: `/dashboard/shipments/new?source=${warehouse.id}` }}
             />
           </div>
         ) : (

@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { archiveBundleAction } from '@/server/actions/bundles';
 
 export function ArchiveBundleButton({
@@ -17,11 +18,9 @@ export function ArchiveBundleButton({
 }) {
   const router = useRouter();
   const [busy, setBusy] = React.useState(false);
+  const [open, setOpen] = React.useState(false);
 
-  async function archive() {
-    if (!window.confirm(`Archive "${bundleName}"? Distributions stay readable.`)) {
-      return;
-    }
+  async function confirmArchive() {
     setBusy(true);
     const res = await archiveBundleAction(bundleId);
     setBusy(false);
@@ -29,18 +28,30 @@ export function ArchiveBundleButton({
       toast.error(res.error.message);
       return;
     }
+    setOpen(false);
     toast.success(`Archived ${bundleName}.`);
     router.refresh();
   }
 
   return (
-    <Button variant="ghost" onClick={archive} disabled={busy}>
-      {busy ? (
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-      ) : (
-        <Archive className="h-3.5 w-3.5" />
-      )}
-      Archive
-    </Button>
+    <>
+      <Button variant="ghost" onClick={() => setOpen(true)} disabled={busy}>
+        {busy ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Archive className="h-3.5 w-3.5" />
+        )}
+        Archive
+      </Button>
+      <DestructiveConfirm
+        open={open}
+        onOpenChange={setOpen}
+        title={`Archive "${bundleName}"?`}
+        description="The bundle is hidden from the active list. Existing distributions stay readable and on the audit trail. You can restore the bundle later from the archived view."
+        confirmLabel="Archive"
+        pending={busy}
+        onConfirm={confirmArchive}
+      />
+    </>
   );
 }

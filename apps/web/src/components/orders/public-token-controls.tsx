@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -45,6 +46,7 @@ export function PublicTokenControls({
 
   const [warehouseState, setWarehouseState] = React.useState<WarehouseRow[]>(warehouses);
   const [togglingWarehouseId, setTogglingWarehouseId] = React.useState<string | null>(null);
+  const [rotateOpen, setRotateOpen] = React.useState(false);
 
   const publicUrl = token ? `${appUrl.replace(/\/$/, '')}/r/${token}` : null;
 
@@ -60,11 +62,7 @@ export function PublicTokenControls({
     }
   }
 
-  async function rotate() {
-    const message = token
-      ? 'Regenerate the public link? The current link will stop working.'
-      : 'Generate a public request link?';
-    if (!window.confirm(message)) return;
+  async function performRotate() {
     setRotating(true);
     const res = await rotatePublicRequestTokenAction();
     setRotating(false);
@@ -73,8 +71,19 @@ export function PublicTokenControls({
       return;
     }
     setToken(res.data.token);
+    setRotateOpen(false);
     toast.success('Public link rotated.');
     router.refresh();
+  }
+
+  function onRotateClick() {
+    // Generating the first link isn't destructive; only regenerating an
+    // existing link is — the old URL stops working.
+    if (token) {
+      setRotateOpen(true);
+    } else {
+      void performRotate();
+    }
   }
 
   // Debounced auto-save for blurb. Saves 800ms after typing stops.
@@ -144,7 +153,7 @@ export function PublicTokenControls({
         )}
 
         <div>
-          <Button type="button" variant="outline" onClick={rotate} disabled={rotating}>
+          <Button type="button" variant="outline" onClick={onRotateClick} disabled={rotating}>
             {rotating ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
@@ -154,6 +163,16 @@ export function PublicTokenControls({
           </Button>
         </div>
       </section>
+
+      <DestructiveConfirm
+        open={rotateOpen}
+        onOpenChange={setRotateOpen}
+        title="Regenerate the public link?"
+        description="The current public URL stops working immediately. Anyone using the old link (bookmarks, emails, printed flyers) will see a 404. A fresh link is generated and copied here for you to share."
+        confirmLabel="Regenerate link"
+        pending={rotating}
+        onConfirm={performRotate}
+      />
 
       <section className="bg-card space-y-2 rounded-xl border p-4">
         <div>

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import * as React from 'react';
 
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { cn } from '@/lib/utils';
 
 interface LightboxImage {
@@ -56,6 +57,8 @@ export function ImageLightbox({
   const [zoom, setZoom] = React.useState(1);
   const [pan, setPan] = React.useState({ x: 0, y: 0 });
   const [loadedUrls, setLoadedUrls] = React.useState<Set<string>>(() => new Set());
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [deleteBusy, setDeleteBusy] = React.useState(false);
 
   const dragRef = React.useRef<{
     startX: number;
@@ -218,9 +221,18 @@ export function ImageLightbox({
     }
   };
 
-  const handleDelete = async () => {
-    if (!confirm('Remove this image?')) return;
-    await onDelete(current.id);
+  const handleDelete = () => {
+    setConfirmOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    setDeleteBusy(true);
+    try {
+      await onDelete(current.id);
+    } finally {
+      setDeleteBusy(false);
+      setConfirmOpen(false);
+    }
     // Parent will pass a new images array on next render; the index-fix
     // effect above keeps us on a valid slide (or closes if empty).
   };
@@ -234,6 +246,7 @@ export function ImageLightbox({
   })();
 
   return (
+    <>
     <DialogPrimitive.Root open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
@@ -391,6 +404,16 @@ export function ImageLightbox({
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
+    <DestructiveConfirm
+      open={confirmOpen}
+      onOpenChange={setConfirmOpen}
+      title="Remove this image?"
+      description="The image is removed from this item and deleted from storage. This cannot be undone — re-upload the photo if you need it back."
+      confirmLabel="Remove"
+      pending={deleteBusy}
+      onConfirm={confirmDelete}
+    />
+    </>
   );
 }
 

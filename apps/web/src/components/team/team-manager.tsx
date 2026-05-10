@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { RoleBadge } from '@/components/team/role-badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
   DialogContent,
@@ -168,6 +169,8 @@ export function TeamManager({
 
 function MemberRow({ member, currentUserRole }: { member: Member; currentUserRole: Role }) {
   const router = useRouter();
+  const [removeOpen, setRemoveOpen] = React.useState(false);
+  const [removeBusy, setRemoveBusy] = React.useState(false);
   const initials = (member.fullName || member.email)
     .split(/\s+/)
     .map((s) => s[0])
@@ -176,6 +179,7 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
     .join('');
 
   const canManage = (currentUserRole === 'owner' || currentUserRole === 'admin') && member.role !== 'owner';
+  const displayName = member.fullName ?? member.email;
 
   async function changeRole(role: Role) {
     const res = await updateMemberRoleAction({ memberId: member.id, role });
@@ -186,14 +190,17 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
     }
   }
 
-  async function remove() {
-    if (!confirm(`Remove ${member.fullName ?? member.email} from this workspace?`)) return;
+  async function confirmRemove() {
+    setRemoveBusy(true);
     const res = await removeMemberAction(member.id);
-    if (!res.ok) toast.error(res.error.message);
-    else {
-      toast.success('Member removed');
-      router.refresh();
+    setRemoveBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
     }
+    setRemoveOpen(false);
+    toast.success('Member removed');
+    router.refresh();
   }
 
   return (
@@ -239,12 +246,24 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
                 </DropdownMenuItem>
               ))}
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={remove} className="text-destructive">
+              <DropdownMenuItem
+                onClick={() => setRemoveOpen(true)}
+                className="text-destructive"
+              >
                 <Trash2 className="mr-2 h-4 w-4" /> Remove
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         )}
+        <DestructiveConfirm
+          open={removeOpen}
+          onOpenChange={setRemoveOpen}
+          title="Remove member?"
+          description={`${displayName} will lose access to this workspace immediately. Their activity history stays on the record. You can re-invite them anytime.`}
+          confirmLabel="Remove"
+          pending={removeBusy}
+          onConfirm={confirmRemove}
+        />
       </TableCell>
     </TableRow>
   );
@@ -254,6 +273,8 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
   const router = useRouter();
 
   const [resending, setResending] = React.useState(false);
+  const [revokeOpen, setRevokeOpen] = React.useState(false);
+  const [revokeBusy, setRevokeBusy] = React.useState(false);
 
   async function copyLink() {
     await navigator.clipboard.writeText(invite.acceptUrl);
@@ -274,14 +295,17 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
     router.refresh();
   }
 
-  async function revoke() {
-    if (!confirm(`Revoke invite for ${invite.email}?`)) return;
+  async function confirmRevoke() {
+    setRevokeBusy(true);
     const res = await revokeInviteAction(invite.id);
-    if (!res.ok) toast.error(res.error.message);
-    else {
-      toast.success('Invite revoked');
-      router.refresh();
+    setRevokeBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
     }
+    setRevokeOpen(false);
+    toast.success('Invite revoked');
+    router.refresh();
   }
 
   return (
@@ -308,9 +332,18 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
         <Button variant="outline" size="sm" onClick={copyLink}>
           <Copy className="h-3.5 w-3.5" /> Copy link
         </Button>
-        <Button variant="ghost" size="icon" onClick={revoke}>
+        <Button variant="ghost" size="icon" onClick={() => setRevokeOpen(true)}>
           <Trash2 className="h-4 w-4 text-muted-foreground" />
         </Button>
+        <DestructiveConfirm
+          open={revokeOpen}
+          onOpenChange={setRevokeOpen}
+          title="Revoke invite?"
+          description={`The pending invite for ${invite.email} will be cancelled. The accept link will stop working immediately. You can send a fresh invite anytime.`}
+          confirmLabel="Revoke invite"
+          pending={revokeBusy}
+          onConfirm={confirmRevoke}
+        />
       </TableCell>
     </TableRow>
   );

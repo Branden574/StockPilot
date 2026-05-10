@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 
 import { ImageLightbox } from '@/components/inventory/image-lightbox';
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   createImageUploadAction,
   recordImageAction,
@@ -95,6 +96,8 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   const [dragOver, setDragOver] = React.useState(false);
   const [images, setImages] = React.useState<ImageRow[]>(initialImages);
   const [lightboxIndex, setLightboxIndex] = React.useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = React.useState<ImageRow | null>(null);
+  const [deleteBusy, setDeleteBusy] = React.useState(false);
 
   // Keep local state in sync if the server-passed list changes (e.g. after
   // router.refresh() following an upload).
@@ -156,11 +159,6 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
     }
   }
 
-  async function deleteImage(image: ImageRow) {
-    if (!confirm('Remove this image?')) return;
-    await deleteImageById(image.id);
-  }
-
   // Variant used by the lightbox toolbar (already confirmed there).
   async function deleteImageById(imageId: string) {
     const res = await removeImageAction(imageId, itemId);
@@ -170,6 +168,17 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
     }
     setImages((arr) => arr.filter((i) => i.id !== imageId));
     router.refresh();
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    try {
+      await deleteImageById(deleteTarget.id);
+    } finally {
+      setDeleteBusy(false);
+      setDeleteTarget(null);
+    }
   }
 
   return (
@@ -205,7 +214,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  deleteImage(img);
+                  setDeleteTarget(img);
                 }}
                 className="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/65 text-white shadow-sm transition-colors hover:bg-red-500/85 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
                 aria-label="Remove image"
@@ -274,6 +283,18 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           <Upload className="h-3.5 w-3.5" /> Choose files
         </Button>
       </label>
+
+      <DestructiveConfirm
+        open={deleteTarget !== null}
+        onOpenChange={(v) => {
+          if (!v) setDeleteTarget(null);
+        }}
+        title="Remove this image?"
+        description="The image is removed from this item and deleted from storage. This cannot be undone — re-upload the photo if you need it back."
+        confirmLabel="Remove"
+        pending={deleteBusy}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

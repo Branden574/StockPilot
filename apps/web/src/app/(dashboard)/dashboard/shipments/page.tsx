@@ -1,7 +1,7 @@
 import { Plus, Send } from 'lucide-react';
 import Link from 'next/link';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { ShipmentStatusBadge } from '@/components/shipments/shipment-status-badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -42,7 +42,8 @@ export default async function ShipmentsPage() {
           <EmptyState
             icon={Send}
             title="No shipments yet"
-            description="When you generate a packing slip from an order request, it shows up here."
+            description="Generate a packing slip from an order request and it'll show up here, ready to print, deliver, and collect a signature on."
+            cta={{ label: 'New shipment', href: '/dashboard/shipments/new' }}
           />
         ) : (
           <div className="bg-card overflow-x-auto rounded-xl border">

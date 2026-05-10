@@ -1,7 +1,7 @@
 import { ClipboardList } from 'lucide-react';
 import Link from 'next/link';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -49,12 +49,8 @@ export default async function PurchaseOrdersPage() {
           <EmptyState
             icon={ClipboardList}
             title="No purchase orders yet"
-            description="Draft a PO with line items, send it to a supplier, then receive against it."
-            action={
-              <Button asChild variant="gradient">
-                <Link href="/dashboard/purchase-orders/new">Create your first PO</Link>
-              </Button>
-            }
+            description="Draft a PO with line items, send it to a supplier, then receive against it to bump stock automatically."
+            cta={{ label: 'Create your first PO', href: '/dashboard/purchase-orders/new' }}
           />
         ) : (
           <div className="bg-card overflow-x-auto rounded-xl border">

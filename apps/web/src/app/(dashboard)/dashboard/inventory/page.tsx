@@ -1,7 +1,7 @@
 import { Boxes } from 'lucide-react';
 import Link from 'next/link';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
 import { Button } from '@/components/ui/button';
 import { CategoriesService } from '@/server/services/categories';
@@ -189,33 +189,21 @@ export default async function InventoryPage({
             icon={Boxes}
             title="No items yet"
             description="Add your first item to start tracking stock, locations, and movements."
-            action={
-              <Button asChild variant="gradient">
-                <Link href="/dashboard/inventory/new">Add your first item</Link>
-              </Button>
-            }
+            cta={{ label: 'Add your first item', href: '/dashboard/inventory/new' }}
           />
         ) : inventory.total === 0 && params.stock === 'low' ? (
           <EmptyState
             icon={Boxes}
             title="No low-stock items"
             description="Nothing is at or below its reorder point right now. Nice."
-            action={
-              <Button asChild variant="outline">
-                <Link href="/dashboard/inventory">Show all items</Link>
-              </Button>
-            }
+            cta={{ label: 'Show all items', href: '/dashboard/inventory' }}
           />
         ) : inventory.total === 0 && params.stock === 'out' ? (
           <EmptyState
             icon={Boxes}
             title="Nothing is out of stock"
-            description="No active items have a quantity of zero."
-            action={
-              <Button asChild variant="outline">
-                <Link href="/dashboard/inventory">Show all items</Link>
-              </Button>
-            }
+            description="No active items have a quantity of zero. Clear the filter to see all items."
+            cta={{ label: 'Show all items', href: '/dashboard/inventory' }}
           />
         ) : (
           <InventoryTable

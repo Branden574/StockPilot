@@ -107,7 +107,7 @@ export function DashboardShell({
       </a>
 
       <Sidebar
-        className="hidden lg:flex"
+        className="hidden md:flex"
         organizationId={organizationId}
         organizationName={organizationName}
         organizationLogoUrl={organizationLogoUrl ?? null}

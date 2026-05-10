@@ -2,7 +2,7 @@ import { BookOpen } from 'lucide-react';
 import Link from 'next/link';
 
 import { BackfillCoversButton } from '@/components/books/backfill-covers-button';
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
 import { Button } from '@/components/ui/button';
 import { CategoriesService } from '@/server/services/categories';
@@ -174,33 +174,21 @@ export default async function BooksPage({
             icon={BookOpen}
             title="No books yet"
             description="Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items."
-            action={
-              <Button asChild variant="gradient">
-                <Link href="/dashboard/books/new">Add your first book</Link>
-              </Button>
-            }
+            cta={{ label: 'Add your first book', href: '/dashboard/books/new' }}
           />
         ) : inventory.total === 0 && params.stock === 'low' ? (
           <EmptyState
             icon={BookOpen}
             title="No low-stock books"
-            description="No books are at or below their reorder point right now."
-            action={
-              <Button asChild variant="outline">
-                <Link href="/dashboard/books">Show all books</Link>
-              </Button>
-            }
+            description="No books are at or below their reorder point right now. Clear the filter to see all books."
+            cta={{ label: 'Show all books', href: '/dashboard/books' }}
           />
         ) : inventory.total === 0 && params.stock === 'out' ? (
           <EmptyState
             icon={BookOpen}
             title="No out-of-stock books"
-            description="No books are currently at zero quantity."
-            action={
-              <Button asChild variant="outline">
-                <Link href="/dashboard/books">Show all books</Link>
-              </Button>
-            }
+            description="Nothing is at zero quantity right now. Clear the filter to see all books."
+            cta={{ label: 'Show all books', href: '/dashboard/books' }}
           />
         ) : (
           <InventoryTable
