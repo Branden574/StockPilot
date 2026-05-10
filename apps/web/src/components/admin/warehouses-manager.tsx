@@ -1,6 +1,7 @@
 'use client';
 
 import { Loader2, Plus, Trash2, Warehouse } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
@@ -185,7 +186,14 @@ function WarehouseTableRow({ row, onEdit }: { row: WarehouseRow; onEdit: () => v
 
   return (
     <TableRow>
-      <TableCell className="font-medium">{row.name}</TableCell>
+      <TableCell className="font-medium">
+        <Link
+          href={`/dashboard/warehouses/${row.id}`}
+          className="hover:underline"
+        >
+          {row.name}
+        </Link>
+      </TableCell>
       <TableCell className="font-mono text-xs text-muted-foreground">{row.code}</TableCell>
       <TableCell className="text-sm text-muted-foreground">
         {row.charters.length === 0 ? (

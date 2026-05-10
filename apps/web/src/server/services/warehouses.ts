@@ -51,6 +51,42 @@ export interface WarehouseRow {
   updated_at: string;
 }
 
+export interface WarehouseAddress {
+  line1?: string | null;
+  line2?: string | null;
+  city?: string | null;
+  region?: string | null;
+  postalCode?: string | null;
+  country?: string | null;
+}
+
+/**
+ * Detail row returned by `get(id)`. Includes the manager profile (resolved
+ * via the `manager_user_id` FK) for the per-warehouse detail page.
+ */
+export interface WarehouseDetail {
+  id: string;
+  organization_id: string;
+  charter_id: string | null;
+  name: string;
+  code: string;
+  address: WarehouseAddress | null;
+  contact_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  manager_user_id: string | null;
+  manager: {
+    id: string;
+    full_name: string | null;
+    email: string | null;
+    avatar_url: string | null;
+  } | null;
+  status: 'active' | 'inactive' | 'archived';
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export class WarehousesService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -120,6 +156,58 @@ export class WarehousesService {
         updated_at: r.updated_at as string,
       };
     });
+  }
+
+  /**
+   * Loads a single warehouse by id along with the manager profile (joined via
+   * manager_user_id → user_profiles). RLS gates whether the row is returned at
+   * all; if the user can't see it we throw `not_found` so callers can map to
+   * a 404 without leaking existence.
+   */
+  async get(id: string): Promise<WarehouseDetail> {
+    const { data, error } = await this.ctx.supabase
+      .from('warehouses')
+      .select(
+        `id, organization_id, charter_id, name, code, address,
+         contact_name, contact_email, contact_phone, manager_user_id,
+         status, notes, created_at, updated_at,
+         manager:user_profiles!manager_user_id (id, full_name, email, avatar_url)`,
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('not_found', 'Warehouse not found');
+    const r = data as Record<string, unknown>;
+    const mgField = r.manager as
+      | { id: string; full_name: string | null; email: string | null; avatar_url: string | null }
+      | { id: string; full_name: string | null; email: string | null; avatar_url: string | null }[]
+      | null;
+    const mg = Array.isArray(mgField) ? (mgField[0] ?? null) : (mgField ?? null);
+    return {
+      id: r.id as string,
+      organization_id: r.organization_id as string,
+      charter_id: (r.charter_id as string | null) ?? null,
+      name: r.name as string,
+      code: r.code as string,
+      address: (r.address as WarehouseAddress | null) ?? null,
+      contact_name: (r.contact_name as string | null) ?? null,
+      contact_email: (r.contact_email as string | null) ?? null,
+      contact_phone: (r.contact_phone as string | null) ?? null,
+      manager_user_id: (r.manager_user_id as string | null) ?? null,
+      manager: mg
+        ? {
+            id: mg.id,
+            full_name: mg.full_name ?? null,
+            email: mg.email ?? null,
+            avatar_url: mg.avatar_url ?? null,
+          }
+        : null,
+      status: r.status as 'active' | 'inactive' | 'archived',
+      notes: (r.notes as string | null) ?? null,
+      created_at: r.created_at as string,
+      updated_at: r.updated_at as string,
+    };
   }
 
   async create(input: CreateWarehouseInput) {
