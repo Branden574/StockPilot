@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
+import { GeneratePackingSlipDialog } from '@/components/shipments/generate-packing-slip-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -17,10 +18,12 @@ import {
 } from '@/components/ui/table';
 import { hasPermission } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import {
   OrderRequestsService,
   type OrderRequestRow,
 } from '@/server/services/order-requests';
+import { WarehousesService } from '@/server/services/warehouses';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
 const TIMELINE_FIELDS: Array<{
@@ -55,6 +58,31 @@ export default async function OrderDetailPage({
   const { request, lines, reservations, warehouseName, requesterDisplay } = detail;
   const isOwnRequest =
     request.requester_user_id !== null && request.requester_user_id === ctx.userId;
+
+  // Phase 2A — packing slip generation. Manager+ only, and only while the
+  // request still has unfulfilled lines that could ship.
+  const canPack =
+    canApprove &&
+    ['approved', 'packaging', 'ready_for_delivery'].includes(request.status);
+  const remainingToShip = lines.reduce(
+    (s, l) =>
+      s +
+      Math.max(
+        0,
+        (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
+      ),
+    0,
+  );
+  let writableSourceWarehouses: Array<{ id: string; name: string }> = [];
+  if (canPack && remainingToShip > 0) {
+    const access = await getWarehouseAccess();
+    const allWarehouses = await (await WarehousesService.forCurrentUser()).list();
+    writableSourceWarehouses = (
+      access.hasAllAccess
+        ? allWarehouses
+        : allWarehouses.filter((w) => access.writableIds.includes(w.id))
+    ).map((w) => ({ id: w.id, name: w.name }));
+  }
   const totalQty = lines.reduce(
     (s, l) => s + (Number(l.quantity_requested) || 0),
     0,
@@ -96,6 +124,12 @@ export default async function OrderDetailPage({
                 Print pick list
               </Link>
             </Button>
+            {canPack && remainingToShip > 0 && (
+              <GeneratePackingSlipDialog
+                orderRequestId={id}
+                sourceWarehouses={writableSourceWarehouses}
+              />
+            )}
             {(canApprove || isOwnRequest) && (
               <CancelOrderButton orderId={id} status={request.status} />
             )}
