@@ -1111,8 +1111,8 @@ function SavedViewChip({
           disabled={sharing}
           aria-label={view.isShared ? `Make view ${view.name} private` : `Share view ${view.name} with team`}
           className={cn(
-            'ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity hover:bg-black/15 group-hover:opacity-100',
-            isActive && 'hover:bg-white/20',
+            'ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity hover:bg-foreground/15 group-hover:opacity-100',
+            isActive && 'hover:bg-background/20',
           )}
         >
           {sharing ? (
@@ -1131,8 +1131,8 @@ function SavedViewChip({
           disabled={deleting}
           aria-label={`Delete view ${view.name}`}
           className={cn(
-            'ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity hover:bg-black/15 group-hover:opacity-100',
-            isActive && 'hover:bg-white/20',
+            'ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity hover:bg-foreground/15 group-hover:opacity-100',
+            isActive && 'hover:bg-background/20',
           )}
         >
           {deleting ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <X className="h-2.5 w-2.5" />}
