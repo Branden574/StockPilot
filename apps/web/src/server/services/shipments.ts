@@ -351,6 +351,66 @@ export class ShipmentsService {
         `Only draft shipments can be marked shipped (this one is ${detail.status}).`,
       );
     }
+
+    // ── Stock deduction design ────────────────────────────────────────
+    //
+    // Marking a shipment "shipped" must remove the shipped quantities
+    // from the source warehouse's on-hand stock. Phase 2A's slip is a
+    // one-warehouse outbound document — the destination is just a name
+    // on paper, not a tracked inventory location — so the right primitive
+    // is `adjust_stock` with a NEGATIVE quantity_change and movement_type
+    // 'transfer' (we audit the org-level movement as a transfer between
+    // warehouses, even though only the source side decrements). We do
+    // NOT call `transfer_stock`, which operates on item_stock_levels
+    // (per-bin levels within ONE warehouse) and would refuse if the
+    // destination bin were the same as source.
+    //
+    // Sequencing vs transaction: there's no app-level transaction primitive
+    // exposed here. The codebase pattern (see InventoryService.adjustStock,
+    // ReceivingService.postReceipt) is to call adjust_stock once per line
+    // — each call is itself transactional inside Postgres (it row-locks the
+    // item, updates qty, and inserts the stock_movements row in one txn).
+    // We sequence: deduct ALL lines FIRST, then flip status. If any
+    // deduction fails (e.g. insufficient_stock), we throw before the status
+    // flip, leaving the shipment as `draft`. Earlier successful deductions
+    // are NOT rolled back — same partial-rollback caveat as the existing
+    // `insertShipmentWithLines` line-insert path. The status check at the
+    // top is the de-facto idempotency gate; once status is `shipped` this
+    // method refuses, so a retry can't double-deduct.
+    // ──────────────────────────────────────────────────────────────────
+    const linesToDeduct = detail.lines.filter((l) => l.qtyShipped > 0);
+    let totalQtyShipped = 0;
+    for (const line of linesToDeduct) {
+      const change = -Number(line.qtyShipped);
+      const { error: rpcErr } = await this.ctx.supabase.rpc('adjust_stock', {
+        p_item_id: line.itemId,
+        p_quantity_change: change,
+        p_movement_type: 'transfer',
+        p_location_id: null,
+        p_reason: `Shipment ${detail.workOrderNumber}`,
+        p_notes: null,
+      });
+      if (rpcErr) {
+        if (rpcErr.message.includes('insufficient_stock')) {
+          throw new ServiceError(
+            'validation_error',
+            `Insufficient stock to ship ${line.qtyShipped} of item ${line.item?.sku ?? line.itemId}.`,
+          );
+        }
+        if (rpcErr.message.includes('forbidden')) {
+          throw new ServiceError(
+            'forbidden',
+            'You do not have permission to adjust stock for these items.',
+          );
+        }
+        throw new ServiceError(
+          'internal_error',
+          `Stock deduction failed for line ${line.itemId}: ${rpcErr.message}`,
+        );
+      }
+      totalQtyShipped += line.qtyShipped;
+    }
+
     const { error } = await this.ctx.supabase
       .from('shipments')
       .update({ status: 'shipped' satisfies ShipmentStatus })
@@ -363,6 +423,10 @@ export class ShipmentsService {
       entityType: 'shipment',
       entityId: id,
       warehouseId: detail.sourceWarehouseId,
+      extra: {
+        linesShipped: linesToDeduct.length,
+        totalQtyShipped,
+      },
     });
   }
 
