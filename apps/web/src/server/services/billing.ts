@@ -7,7 +7,13 @@ import { getPriceId, type BillingInterval } from '@/lib/stripe/plans';
 
 import { type PlanId } from '@stockpilot/core';
 
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import {
+  assertPermission,
+  assertRoleUnchanged,
+  ServiceError,
+  withContext,
+  type ServiceContext,
+} from './context';
 
 export class BillingService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -28,6 +34,7 @@ export class BillingService {
 
   async createCheckoutSession(plan: Exclude<PlanId, 'free' | 'enterprise'>, interval: BillingInterval) {
     assertPermission(this.ctx, 'billing:manage');
+    await assertRoleUnchanged(this.ctx);
 
     const priceId = getPriceId(plan, interval);
     if (!priceId) {
@@ -74,6 +81,7 @@ export class BillingService {
 
   async createPortalSession() {
     assertPermission(this.ctx, 'billing:manage');
+    await assertRoleUnchanged(this.ctx);
     const stripe = getStripe();
     const org = await this.getOrgBilling();
     if (!org.stripe_customer_id) {
