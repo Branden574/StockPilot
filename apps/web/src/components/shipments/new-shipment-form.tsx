@@ -6,6 +6,7 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { ItemThumb } from '@/components/items/item-thumb';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -716,52 +717,6 @@ function ItemBrowsePane({
           Showing {items.length} of {total ?? '…'} items
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * Renders a 40×40 thumbnail when the item has a primary image, falling
- * back to the brand-styled Package icon otherwise. We swap to the icon
- * on `onError` too, since signed URLs can race expiry or the underlying
- * file can have been deleted between the API response and the <img>
- * fetch — better a placeholder than a broken-image glyph.
- */
-function ItemThumb({
-  imageUrl,
-  alt,
-  itemId,
-}: {
-  imageUrl: string | null;
-  alt: string;
-  itemId: string;
-}) {
-  // We track failures per-itemId so swapping back/forth in pagination
-  // doesn't accidentally re-try a known-broken URL each time.
-  const [failed, setFailed] = React.useState(false);
-  // Reset the failed flag if the URL actually changes (e.g. a new
-  // signed URL after a re-fetch). The id is included so the same image
-  // for the same item with a refreshed signature resets the state.
-  React.useEffect(() => {
-    setFailed(false);
-  }, [imageUrl, itemId]);
-
-  if (imageUrl && !failed) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={imageUrl}
-        alt={alt}
-        loading="lazy"
-        decoding="async"
-        onError={() => setFailed(true)}
-        className="bg-muted h-10 w-10 flex-shrink-0 rounded-md object-cover"
-      />
-    );
-  }
-  return (
-    <div className="bg-muted text-muted-foreground/70 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md">
-      <Package className="h-4 w-4" />
     </div>
   );
 }

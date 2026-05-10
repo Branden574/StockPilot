@@ -2,6 +2,7 @@ import { Download } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { ItemThumb } from '@/components/items/item-thumb';
 import { ShipmentActions } from '@/components/shipments/shipment-actions';
 import { ShipmentStatusBadge } from '@/components/shipments/shipment-status-badge';
 import { Button } from '@/components/ui/button';
@@ -96,6 +97,7 @@ export default async function ShipmentDetailPage({
             <TableHeader>
               <TableRow>
                 <TableHead className="w-10">#</TableHead>
+                <TableHead className="w-14">Image</TableHead>
                 <TableHead>Description</TableHead>
                 <TableHead>ISBN</TableHead>
                 <TableHead className="text-right">Qty shipped</TableHead>
@@ -106,7 +108,7 @@ export default async function ShipmentDetailPage({
               {detail.lines.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={5}
+                    colSpan={6}
                     className="text-muted-foreground py-6 text-center text-sm"
                   >
                     No lines on this shipment.
@@ -119,6 +121,14 @@ export default async function ShipmentDetailPage({
                   <TableRow key={l.id}>
                     <TableCell className="text-muted-foreground tabular-nums">
                       {idx + 1}
+                    </TableCell>
+                    <TableCell>
+                      <ItemThumb
+                        imageUrl={l.imageUrl}
+                        alt={l.item?.name ?? 'Item'}
+                        size="md"
+                        itemId={l.itemId}
+                      />
                     </TableCell>
                     <TableCell>
                       {l.item ? (

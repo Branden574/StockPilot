@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { ItemImagesService } from '@/server/services/item-images';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -72,12 +73,24 @@ export async function GET(req: Request) {
 
   const [items, pos, suppliers, warehouses] = await Promise.all([itemsQ, poQ, supQ, whQ]);
 
+  // Batch-fetch primary thumbnails for the matched items (one
+  // `item_images IN (...)` + one createSignedUrls call). Skipped when
+  // there are zero matches so we don't emit no-op DB traffic.
+  const itemRows = items.data ?? [];
+  const imageMap =
+    itemRows.length > 0
+      ? await new ItemImagesService(ctx).primaryImagesForItems(
+          itemRows.map((i) => i.id as string),
+        )
+      : new Map<string, string>();
+
   return NextResponse.json({
-    items: (items.data ?? []).map((i) => ({
+    items: itemRows.map((i) => ({
       id: i.id as string,
       name: i.name as string,
       sku: i.sku as string,
       quantity: i.quantity_on_hand as number,
+      imageUrl: imageMap.get(i.id as string) ?? null,
     })),
     purchaseOrders: (pos.data ?? []).map((p) => ({
       id: p.id as string,

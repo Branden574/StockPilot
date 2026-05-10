@@ -21,11 +21,18 @@ import {
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import { ItemThumb } from '@/components/items/item-thumb';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
 interface SearchResult {
-  items: Array<{ id: string; name: string; sku: string; quantity: number }>;
+  items: Array<{
+    id: string;
+    name: string;
+    sku: string;
+    quantity: number;
+    imageUrl: string | null;
+  }>;
   purchaseOrders: Array<{ id: string; poNumber: string; status: string }>;
   suppliers: Array<{ id: string; name: string }>;
   warehouses: Array<{ id: string; name: string }>;
@@ -187,7 +194,12 @@ export function CommandPalette() {
                     onSelect={() => go(`/dashboard/inventory/${i.id}`)}
                     className={ROW}
                   >
-                    <Boxes className="text-muted-foreground h-3.5 w-3.5" />
+                    <ItemThumb
+                      imageUrl={i.imageUrl}
+                      alt={i.name}
+                      size="sm"
+                      itemId={i.id}
+                    />
                     <span className="flex-1 truncate">{i.name}</span>
                     <span className="text-muted-foreground font-mono text-[11px]">
                       {i.sku}

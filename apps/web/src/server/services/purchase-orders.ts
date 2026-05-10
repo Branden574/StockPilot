@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { ItemImagesService } from './item-images';
 
 const lineInputSchema = z.object({
   itemId: z.string().uuid(),
@@ -94,7 +95,38 @@ export class PurchaseOrdersService {
       .select('id, item_id, quantity_ordered, quantity_received, unit_cost, line_total')
       .eq('purchase_order_id', id);
 
-    return { po, lines: lines ?? [] };
+    // Keep the raw row shape (callers downstream — detail page, PDF
+    // route — read snake_case fields off these lines), and tack
+    // `imageUrl` on as an extra. Casting to the explicit row shape so
+    // TypeScript doesn't collapse the union when we spread.
+    type RawLine = {
+      id: string;
+      item_id: string | null;
+      quantity_ordered: number;
+      quantity_received: number;
+      unit_cost: number;
+      line_total: number;
+    };
+    const rawLines = (lines ?? []) as RawLine[];
+
+    // Batch-fetch primary thumbnails for the line items so the detail
+    // page can render real photos. Single `item_images IN (...)` +
+    // one `createSignedUrls` call. Skipped when there are no lines.
+    const lineItemIds = rawLines
+      .map((l) => l.item_id)
+      .filter((id): id is string => Boolean(id));
+    const imageMap =
+      lineItemIds.length > 0
+        ? await new ItemImagesService(this.ctx).primaryImagesForItems(lineItemIds)
+        : new Map<string, string>();
+
+    const linesWithImages: Array<RawLine & { imageUrl: string | null }> =
+      rawLines.map((l) => ({
+        ...l,
+        imageUrl: l.item_id ? (imageMap.get(l.item_id) ?? null) : null,
+      }));
+
+    return { po, lines: linesWithImages };
   }
 
   async create(input: CreatePoInput) {
