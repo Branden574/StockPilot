@@ -794,13 +794,27 @@ function ShipmentLinesPane({
         </div>
       ) : (
         <div className="max-h-[420px] overflow-y-auto">
-          <table className="w-full text-sm">
+          {/*
+           * Back-ordered (B.O.) qty is intentionally NOT exposed here.
+           * Back-orders only make sense when a shipment is fulfilling a
+           * pre-existing request and you couldn't ship everything asked
+           * for — i.e., the order-request → shipment flow. On a manual
+           * slip the user IS deciding the qty, so there's no "shortage"
+           * to capture. The data model still defaults qty_back_ordered
+           * to 0, and the printed PDF still has a B.O. column when it's
+           * relevant.
+           */}
+          <table className="w-full table-fixed text-sm">
+            <colgroup>
+              <col />
+              <col className="w-[88px]" />
+              <col className="w-[56px]" />
+            </colgroup>
             <thead className="bg-muted/50 text-muted-foreground text-[11px] uppercase tracking-wider">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Item</th>
                 <th className="px-3 py-2 text-right font-medium">Qty</th>
-                <th className="px-3 py-2 text-right font-medium">B.O.</th>
-                <th className="w-10"></th>
+                <th className="px-3 py-2 text-center font-medium sr-only">Remove</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -808,7 +822,7 @@ function ShipmentLinesPane({
                 const item = itemCache.get(line.itemId);
                 return (
                   <tr key={`${line.itemId}-${idx}`}>
-                    <td className="px-3 py-2">
+                    <td className="px-3 py-2 align-middle">
                       <div className="font-mono text-[11px] text-muted-foreground">
                         {item?.sku ?? '—'}
                       </div>
@@ -816,7 +830,7 @@ function ShipmentLinesPane({
                         {item?.name ?? 'Unknown item'}
                       </div>
                     </td>
-                    <td className="px-3 py-2">
+                    <td className="px-3 py-2 align-middle">
                       <Input
                         type="number"
                         min="0"
@@ -827,38 +841,20 @@ function ShipmentLinesPane({
                             qtyShipped: Math.max(0, Number(e.target.value) || 0),
                           })
                         }
-                        className="w-20 text-right tabular-nums"
+                        className="w-full text-right tabular-nums"
                         aria-label={`Qty shipped for ${item?.name ?? 'item'}`}
                       />
                     </td>
-                    <td className="px-3 py-2">
-                      <Input
-                        type="number"
-                        min="0"
-                        step="1"
-                        value={line.qtyBackOrdered}
-                        onChange={(e) =>
-                          onUpdate(idx, {
-                            qtyBackOrdered: Math.max(
-                              0,
-                              Number(e.target.value) || 0,
-                            ),
-                          })
-                        }
-                        className="w-20 text-right tabular-nums"
-                        aria-label={`Back-ordered qty for ${item?.name ?? 'item'}`}
-                      />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <Button
+                    <td className="px-2 py-2 text-center align-middle">
+                      <button
                         type="button"
-                        variant="ghost"
-                        size="icon"
                         onClick={() => onRemove(idx)}
                         aria-label={`Remove ${item?.name ?? 'item'}`}
+                        className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive inline-flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors"
+                        title="Remove from shipment"
                       >
                         <Trash2 className="h-4 w-4" />
-                      </Button>
+                      </button>
                     </td>
                   </tr>
                 );
