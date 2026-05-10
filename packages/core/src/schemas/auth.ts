@@ -32,6 +32,22 @@ export const completePasswordResetSchema = z
   });
 export type CompletePasswordResetInput = z.infer<typeof completePasswordResetSchema>;
 
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Enter your current password'),
+    newPassword: passwordSchema,
+    confirmPassword: z.string(),
+  })
+  .refine((v) => v.newPassword === v.confirmPassword, {
+    message: 'Passwords do not match',
+    path: ['confirmPassword'],
+  })
+  .refine((v) => v.currentPassword !== v.newPassword, {
+    message: 'New password must be different from current',
+    path: ['newPassword'],
+  });
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+
 export const updateProfileSchema = z.object({
   fullName: z.string().min(1).max(120).trim().optional(),
   avatarUrl: z.string().url().nullable().optional(),

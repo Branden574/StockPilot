@@ -14,6 +14,7 @@ export type AuditEvent =
   | 'user.warehouse.changed'
   | 'user.deactivated'
   | 'user.reactivated'
+  | 'user.password.changed'
   | 'inventory.item.created'
   | 'inventory.item.updated'
   | 'inventory.item.archived'

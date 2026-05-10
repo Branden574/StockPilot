@@ -4,16 +4,19 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { env } from '@/lib/env';
+import { audit } from '@/server/services/audit';
 import { createClient } from '@/lib/supabase/server';
 import { REMEMBER_SESSION_COOKIE, rememberPreferenceOptions } from '@/lib/supabase/session-cookies';
 
 import {
+  changePasswordSchema,
   completePasswordResetSchema,
   err,
   ok,
   requestPasswordResetSchema,
   signInSchema,
   type ActionResult,
+  type ChangePasswordInput,
   type CompletePasswordResetInput,
   type RequestPasswordResetInput,
   type SignInInput,
@@ -108,4 +111,50 @@ export async function completePasswordResetAction(
   const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
   if (error) return err('internal_error', error.message);
   return ok({ next: '/dashboard' });
+}
+
+/**
+ * Change the signed-in user's password. Requires re-authentication with the
+ * current password before applying the new one — Supabase's updateUser does
+ * not validate the existing credential on its own, so we re-check it via
+ * signInWithPassword. On the SSR client this validates the credential
+ * against the current session without disrupting it.
+ */
+export async function changePasswordAction(
+  input: ChangePasswordInput,
+): Promise<ActionResult<{ ok: true }>> {
+  const parsed = changePasswordSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user || !user.email) {
+    return err('unauthenticated', 'Sign in required');
+  }
+
+  const { error: signInError } = await supabase.auth.signInWithPassword({
+    email: user.email,
+    password: parsed.data.currentPassword,
+  });
+  if (signInError) {
+    return err('forbidden', 'Current password is incorrect');
+  }
+
+  const { error: updateError } = await supabase.auth.updateUser({
+    password: parsed.data.newPassword,
+  });
+  if (updateError) return err('internal_error', updateError.message);
+
+  await audit({
+    event: 'user.password.changed',
+    entityType: 'user',
+    entityId: user.id,
+  });
+
+  return ok({ ok: true });
 }
