@@ -63,6 +63,12 @@ export type AuditEvent =
   | 'order_request.cancelled'
   | 'order_request.delivered'
   | 'order_request.public_link_rotated'
+  | 'shipment.created'
+  | 'shipment.shipped'
+  | 'shipment.cancelled'
+  | 'shipment.delivered'
+  | 'shipment.signed'
+  | 'shipment.email_sent'
   | 'pdf.exported';
 
 interface AuditPayload {
