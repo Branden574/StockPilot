@@ -43,11 +43,11 @@ export function AvatarUploader({
 
   async function upload(file: File) {
     if (!ACCEPT.includes(file.type)) {
-      toast.error('Use PNG, JPG, WEBP, or AVIF');
+      toast.error("That file type isn't supported. Use PNG, JPG, WEBP, or AVIF.");
       return;
     }
     if (file.size > MAX_BYTES) {
-      toast.error('Max 5 MB');
+      toast.error('Image is over 5 MB. Pick a smaller file.');
       return;
     }
     setBusy(true);
@@ -71,7 +71,7 @@ export function AvatarUploader({
         return;
       }
       setUrl(cacheBust);
-      toast.success('Avatar updated');
+      toast.success('Avatar updated.');
       router.refresh();
     } finally {
       setBusy(false);
@@ -87,7 +87,7 @@ export function AvatarUploader({
         return;
       }
       setUrl(null);
-      toast.success('Avatar removed');
+      toast.success('Avatar removed.');
       router.refresh();
     } finally {
       setBusy(false);

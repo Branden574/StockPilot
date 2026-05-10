@@ -66,7 +66,7 @@ export function DigestControls({ initialOptIn, initialSections }: DigestControls
       toast.error(res.error.message);
       return;
     }
-    toast.success(next ? 'Subscribed to weekly digest' : 'Unsubscribed from weekly digest');
+    toast.success(next ? 'Subscribed to the weekly digest.' : 'Unsubscribed from the weekly digest.');
     router.refresh();
   }
 
@@ -91,7 +91,7 @@ export function DigestControls({ initialOptIn, initialSections }: DigestControls
       toast.error(res.error.message);
       return;
     }
-    toast.success(`Preview sent to ${res.data.sentTo}`);
+    toast.success(`Digest preview sent to "${res.data.sentTo}".`);
   }
 
   return (

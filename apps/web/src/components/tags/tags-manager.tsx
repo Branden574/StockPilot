@@ -73,7 +73,7 @@ export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Tag deleted');
+    toast.success(`"${deleteTarget.name}" deleted.`);
     setDeleteTarget(null);
     router.refresh();
   }
@@ -203,7 +203,7 @@ function TagDialog({
       toast.error(res.error.message);
       return;
     }
-    toast.success(editing ? 'Tag updated' : 'Tag created');
+    toast.success(editing ? 'Tag updated.' : 'Tag created.');
     onOpenChange(false);
     router.refresh();
   });

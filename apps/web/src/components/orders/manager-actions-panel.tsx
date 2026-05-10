@@ -49,7 +49,7 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Approved. Stock has been reserved.');
+    toast.success('Request approved. Stock reserved.');
     router.refresh();
   }
 
@@ -75,7 +75,7 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
       toast.error(res.error.message);
       return;
     }
-    toast.success(next === 'packaging' ? 'Marked packaging.' : 'Marked ready for delivery.');
+    toast.success(next === 'packaging' ? 'Marked as packaging.' : 'Marked as ready for delivery.');
     router.refresh();
   }
 
@@ -88,7 +88,7 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
       return;
     }
     setDeliverOpen(false);
-    toast.success('Delivered. Inventory updated.');
+    toast.success('Marked as delivered. Inventory updated.');
     router.refresh();
   }
 

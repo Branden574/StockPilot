@@ -62,11 +62,11 @@ export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }
 
   async function submit() {
     if (qtyNum <= 0) {
-      toast.error('Enter a positive quantity');
+      toast.error('Enter a positive quantity to adjust by.');
       return;
     }
     if (newQty < 0) {
-      toast.error('Adjustment would make stock negative');
+      toast.error("That adjustment would push stock below zero. Pick a smaller quantity.");
       return;
     }
     setSubmitting(true);
@@ -82,7 +82,7 @@ export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }
       toast.error(res.error.message);
       return;
     }
-    toast.success(`Adjusted to ${newQty}`);
+    toast.success(`Stock adjusted to ${newQty}.`);
     setOpen(false);
     setQuantity('1');
     setReason('');

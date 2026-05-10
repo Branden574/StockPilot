@@ -33,7 +33,7 @@ export function ShipmentActions({
       toast.error(res.error.message);
       return;
     }
-    toast.success('Marked as shipped');
+    toast.success('Shipment marked as shipped.');
     router.refresh();
   }
 
@@ -46,7 +46,7 @@ export function ShipmentActions({
       return;
     }
     setCancelOpen(false);
-    toast.success('Shipment cancelled');
+    toast.success('Shipment cancelled.');
     router.refresh();
   }
 

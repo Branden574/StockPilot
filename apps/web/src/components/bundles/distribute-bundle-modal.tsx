@@ -111,11 +111,11 @@ export function DistributeBundleModal({
   async function submit() {
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0) {
-      toast.error('Quantity must be positive.');
+      toast.error('Enter a positive quantity.');
       return;
     }
     if (!warehouseId) {
-      toast.error('Pick a warehouse.');
+      toast.error('Pick a warehouse to distribute from.');
       return;
     }
     const allowShortage = preview?.hasShortage ?? false;

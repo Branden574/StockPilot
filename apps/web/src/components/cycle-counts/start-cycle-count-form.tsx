@@ -41,7 +41,7 @@ export function StartCycleCountForm({
       return;
     }
     toast.success(
-      `Snapshot taken for ${r.data.lineCount} item${r.data.lineCount === 1 ? '' : 's'}`,
+      `Cycle count started. Snapshot covers ${r.data.lineCount} item${r.data.lineCount === 1 ? '' : 's'}.`,
     );
     router.push(`/dashboard/cycle-counts/${r.data.id}`);
   }

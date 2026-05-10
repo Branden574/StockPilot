@@ -89,7 +89,7 @@ export function LocationsManager({ initial }: { initial: LocationRow[] }) {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Location archived');
+    toast.success(`"${archiveTarget.name}" archived.`);
     setArchiveTarget(null);
     router.refresh();
   }
@@ -213,7 +213,7 @@ function LocationDialog({
       toast.error(res.error.message);
       return;
     }
-    toast.success(editing ? 'Location updated' : 'Location created');
+    toast.success(editing ? 'Location updated.' : 'Location created.');
     onOpenChange(false);
     router.refresh();
   });

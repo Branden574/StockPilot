@@ -236,13 +236,13 @@ export function IsbnScanner({
     const cleaned = manualIsbn.trim();
     if (isIsbn) {
       if (!looksLikeIsbn(cleaned)) {
-        toast.error('That doesn’t look like a valid ISBN');
+        toast.error("That doesn't look like a valid ISBN. Check the digits and try again.");
         return;
       }
       onDetected(cleaned.replace(/[^0-9Xx]/g, ''));
     } else {
       if (!looksLikeBarcode(cleaned)) {
-        toast.error('That doesn’t look like a valid barcode');
+        toast.error("That doesn't look like a valid barcode. Check the digits and try again.");
         return;
       }
       onDetected(cleaned);

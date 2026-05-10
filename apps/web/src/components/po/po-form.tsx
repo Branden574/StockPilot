@@ -68,11 +68,11 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
 
   async function submit() {
     if (lines.length === 0) {
-      toast.error('Add at least one line item');
+      toast.error('Add at least one line item to the purchase order.');
       return;
     }
     if (lines.some((l) => !l.itemId || l.quantityOrdered <= 0)) {
-      toast.error('Every line needs an item and a positive quantity');
+      toast.error('Every line needs an item and a positive quantity.');
       return;
     }
     setSubmitting(true);
@@ -88,7 +88,7 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Purchase order created');
+    toast.success('Purchase order created.');
     router.push(`/dashboard/purchase-orders/${res.data.id}`);
   }
 

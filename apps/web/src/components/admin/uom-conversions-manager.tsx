@@ -74,17 +74,17 @@ export function UomConversionsManager({
 
   async function add() {
     if (!itemId) {
-      toast.error('Pick an item');
+      toast.error('Pick an item to add a conversion for.');
       return;
     }
     const num = Number(numerator);
     const den = Number(denominator);
     if (!Number.isInteger(num) || num <= 0) {
-      toast.error('Numerator must be a positive integer');
+      toast.error('Numerator must be a positive whole number.');
       return;
     }
     if (!Number.isInteger(den) || den <= 0) {
-      toast.error('Denominator must be a positive integer');
+      toast.error('Denominator must be a positive whole number.');
       return;
     }
     setBusy(true);
@@ -102,7 +102,7 @@ export function UomConversionsManager({
       return;
     }
     toast.success(
-      `${num}/${den} ${fromUom.toUpperCase()} → ${toUom.toUpperCase()} saved`,
+      `Conversion saved: ${num}/${den} ${fromUom.toUpperCase()} → ${toUom.toUpperCase()}.`,
     );
     router.refresh();
   }

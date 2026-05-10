@@ -28,7 +28,7 @@ export function ProfileNameEditor({ current }: { current: string }) {
       toast.error(r.error.message);
       return;
     }
-    toast.success('Profile updated');
+    toast.success('Profile name updated.');
     router.refresh();
   }
 

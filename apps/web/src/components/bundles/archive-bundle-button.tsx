@@ -29,7 +29,7 @@ export function ArchiveBundleButton({
       return;
     }
     setOpen(false);
-    toast.success(`Archived ${bundleName}.`);
+    toast.success(`"${bundleName}" archived.`);
     router.refresh();
   }
 

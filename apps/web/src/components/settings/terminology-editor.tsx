@@ -39,7 +39,7 @@ export function TerminologyEditor({ current, defaults }: TerminologyEditorProps)
       toast.error(res.error.message);
       return;
     }
-    toast.success('Labels updated');
+    toast.success('Labels updated.');
     reset(values);
     router.refresh();
   });

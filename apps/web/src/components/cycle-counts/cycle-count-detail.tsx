@@ -117,7 +117,7 @@ export function CycleCountDetail({
   async function saveCount(line: CycleCountLineWithItem, raw: string) {
     const value = Number(raw);
     if (!Number.isFinite(value) || value < 0) {
-      toast.error('Enter a non-negative number');
+      toast.error('Enter a non-negative number.');
       return;
     }
     setBusyLine(line.id);
@@ -154,7 +154,7 @@ export function CycleCountDetail({
       return;
     }
     setCancelOpen(false);
-    toast.success('Count canceled');
+    toast.success('Cycle count cancelled.');
     router.refresh();
   }
 
@@ -169,8 +169,8 @@ export function CycleCountDetail({
     setConfirmOpen(false);
     toast.success(
       variances.length === 0
-        ? 'Count completed — no adjustments needed'
-        : `Posted ${variances.length} adjustment${variances.length === 1 ? '' : 's'}`,
+        ? 'Cycle count posted. No adjustments needed.'
+        : `Cycle count posted. ${variances.length} adjustment${variances.length === 1 ? '' : 's'} applied.`,
     );
     router.refresh();
   }
@@ -543,7 +543,7 @@ function AssigneePicker({
       return;
     }
     toast.success(
-      nextId ? 'Assigned' : 'Unassigned',
+      nextId ? 'Cycle count assigned.' : 'Cycle count unassigned.',
     );
     router.refresh();
   }

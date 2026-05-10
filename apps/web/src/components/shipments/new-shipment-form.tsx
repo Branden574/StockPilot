@@ -185,19 +185,19 @@ export function NewShipmentForm({
 
   const onSubmit = handleSubmit(async (values) => {
     if (!sourceWarehouseId) {
-      toast.error('Pick a source warehouse');
+      toast.error('Pick a source warehouse for the shipment.');
       return;
     }
     if (!destinationCharterId) {
-      toast.error('Pick a destination charter');
+      toast.error('Pick a destination charter for the shipment.');
       return;
     }
     if (lines.length === 0) {
-      toast.error('Add at least one line item');
+      toast.error('Add at least one line item to the shipment.');
       return;
     }
     if (lines.some((l) => l.qtyShipped <= 0 && l.qtyBackOrdered <= 0)) {
-      toast.error('Every line needs a non-zero shipped or back-ordered qty');
+      toast.error('Every line needs a shipped or back-ordered quantity above zero.');
       return;
     }
 
@@ -227,7 +227,7 @@ export function NewShipmentForm({
       toast.error(res.error.message);
       return;
     }
-    toast.success('Shipment draft created');
+    toast.success('Shipment draft created.');
     router.push(`/dashboard/shipments/${res.data.id}`);
   });
 

@@ -66,7 +66,7 @@ export function CategoriesManager({ initial }: { initial: CategoryRow[] }) {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Category archived');
+    toast.success(`"${archiveTarget.name}" archived.`);
     setArchiveTarget(null);
     router.refresh();
   }
@@ -183,7 +183,7 @@ function CategoryDialog({
       toast.error(res.error.message);
       return;
     }
-    toast.success(editing ? 'Category updated' : 'Category created');
+    toast.success(editing ? 'Category updated.' : 'Category created.');
     onOpenChange(false);
     router.refresh();
   });

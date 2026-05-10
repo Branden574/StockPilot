@@ -34,7 +34,7 @@ export function WarehouseFilterPicker({
     startTransition(async () => {
       const res = await setWarehouseFilterAction(id);
       if (!res.ok) {
-        toast.error('Could not change filter');
+        toast.error("Couldn't change the warehouse filter. Try again.");
         return;
       }
       router.refresh();

@@ -93,12 +93,12 @@ export function BulkIsbnImport({
         message?: string;
       };
       if (!res.ok || !json.ok) {
-        toast.error(json.message ?? `Couldn't parse ${file.name} (${res.status}).`);
+        toast.error(json.message ?? `Couldn't parse "${file.name}" (${res.status}). Try a different file.`);
         return;
       }
       const found = json.isbns ?? [];
       if (found.length === 0) {
-        toast.warning(`No ISBNs found in ${file.name}.`);
+        toast.warning(`No ISBNs found in "${file.name}".`);
         return;
       }
       // Append to whatever the user already has, then dedupe at parse
@@ -112,10 +112,10 @@ export function BulkIsbnImport({
       });
       const label = mode === 'ai' ? 'AI extracted' : 'Extracted';
       toast.success(
-        `${label} ${found.length} ISBN${found.length === 1 ? '' : 's'} from ${file.name}.`,
+        `${label} ${found.length} ISBN${found.length === 1 ? '' : 's'} from "${file.name}".`,
       );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Upload failed.');
+      toast.error(err instanceof Error ? err.message : "Couldn't upload the file. Check your network and try again.");
     } finally {
       setBusy(false);
       // Reset the input so the same file can be uploaded again if needed.
@@ -190,11 +190,11 @@ export function BulkIsbnImport({
   async function runLookups() {
     const isbns = parseIsbns();
     if (isbns.length === 0) {
-      toast.error('Paste at least one valid ISBN-10 or ISBN-13.');
+      toast.error('Paste at least one valid ISBN-10 or ISBN-13 to look up.');
       return;
     }
     if (isbns.length > 200) {
-      toast.error('Limit is 200 ISBNs per batch — split into smaller groups.');
+      toast.error('Limit is 200 ISBNs per batch. Split your list into smaller groups.');
       return;
     }
     const qty = Math.max(0, Number.parseInt(defaultQty, 10) || 0);
@@ -254,11 +254,11 @@ export function BulkIsbnImport({
   async function importAll() {
     const ready = resolved.filter((r) => r.status === 'ready' && r.title);
     if (ready.length === 0) {
-      toast.error('Nothing to import — run the lookup first.');
+      toast.error('Nothing to import yet. Run the lookup first.');
       return;
     }
     if (!warehouseId) {
-      toast.error(`Pick a ${warehouseLabel.toLowerCase()} before importing.`);
+      toast.error(`Pick a ${warehouseLabel.toLowerCase()} before importing books.`);
       return;
     }
     setSubmitting(true);
@@ -288,7 +288,7 @@ export function BulkIsbnImport({
     const { created, skipped, errors } = r.data;
     if (errors.length > 0) {
       toast.error(
-        `Created ${created}, skipped ${skipped}, ${errors.length} failed. Open the page to retry.`,
+        `Created ${created}, skipped ${skipped}, ${errors.length} failed. Open the books page to retry the failures.`,
       );
     } else if (skipped > 0) {
       toast.success(

@@ -123,7 +123,7 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
     e.preventDefault();
     if (busy) return;
     if (!warehouseId) {
-      toast.error('Pick a warehouse — events are scoped to warehouse staff.');
+      toast.error('Pick a warehouse. Events are scoped to warehouse staff.');
       return;
     }
     setBusy(true);
@@ -132,7 +132,7 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
     const wantsBundle = Boolean(bundleId);
     const qty = Number(bundleQuantity);
     if (wantsBundle && (!bundleWarehouseId || !Number.isFinite(qty) || qty <= 0)) {
-      toast.error('Bundle linkage needs quantity + warehouse together.');
+      toast.error('Bundle linkage needs a quantity and a warehouse together.');
       setBusy(false);
       return;
     }
@@ -160,7 +160,7 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
         toast.error(res.error.message);
         return;
       }
-      toast.success(isEdit ? 'Event updated' : 'Event created');
+      toast.success(isEdit ? 'Event updated.' : 'Event created.');
       router.push(`/dashboard/schedule/${res.data.id}`);
       router.refresh();
     } finally {
@@ -183,7 +183,7 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
         return;
       }
       setDeleteOpen(false);
-      toast.success('Event deleted');
+      toast.success('Event deleted.');
       router.push('/dashboard/schedule');
       router.refresh();
     } finally {

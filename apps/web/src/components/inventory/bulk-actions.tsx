@@ -127,8 +127,8 @@ export function BulkActions({
     if (created === 0) {
       toast.error(
         supplierFailures.length > 0
-          ? `Failed to create POs for ${supplierFailures.length} supplier${supplierFailures.length === 1 ? '' : 's'}.`
-          : 'No draft POs created.',
+          ? `Couldn't create draft POs for ${supplierFailures.length} supplier${supplierFailures.length === 1 ? '' : 's'}. Try again or pick different items.`
+          : "No draft POs were created. Check that the selected items have a default supplier set.",
       );
       return;
     }
@@ -142,7 +142,7 @@ export function BulkActions({
       const names = supplierFailures.map((f) => f.supplierName).join(', ');
       parts.push(`failed: ${names}`);
     }
-    toast.success(parts.join(' · '));
+    toast.success(`${parts.join(' · ')}.`);
     onClear();
     router.push('/dashboard/purchase-orders?status=draft');
   }

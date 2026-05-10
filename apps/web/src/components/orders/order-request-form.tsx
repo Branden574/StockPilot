@@ -99,12 +99,12 @@ export function OrderRequestForm({ warehouses, warehouseId, items }: Props) {
       const existing = next.get(item.id);
       const available = availableToPromise(item);
       if (available <= 0) {
-        toast.info(`${item.name} has no available stock.`);
+        toast.info(`"${item.name}" has no available stock right now.`);
         return prev;
       }
       const nextQty = (existing?.quantity ?? 0) + 1;
       if (nextQty > available) {
-        toast.info(`Only ${formatNumber(available)} available.`);
+        toast.info(`Only ${formatNumber(available)} available to request.`);
         return prev;
       }
       next.set(item.id, {
@@ -146,11 +146,11 @@ export function OrderRequestForm({ warehouses, warehouseId, items }: Props) {
 
   async function submit() {
     if (!warehouseId) {
-      toast.error('Pick a warehouse.');
+      toast.error('Pick a warehouse to order from.');
       return;
     }
     if (cartLines.length === 0) {
-      toast.error('Add at least one item to your request.');
+      toast.error('Add at least one item to your request before submitting.');
       return;
     }
     setSubmitting(true);

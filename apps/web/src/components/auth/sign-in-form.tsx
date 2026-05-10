@@ -48,7 +48,7 @@ export function SignInForm() {
       router.refresh();
       return;
     }
-    toast.success('Welcome back');
+    toast.success('Signed in.');
     router.replace(redirect);
     router.refresh();
   });

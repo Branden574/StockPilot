@@ -108,14 +108,14 @@ export function PoReceiveDialog({
       .map((l) => ({ line: l, entry: entries[l.id] ?? blankEntry(0) }))
       .filter(({ entry }) => entry.received > 0);
     if (submittable.length === 0) {
-      toast.error('Enter at least one received quantity');
+      toast.error('Enter at least one received quantity to post the receipt.');
       return;
     }
 
     // Per-line validation
     for (const { line, entry } of submittable) {
       if (entry.accepted + entry.rejected > entry.received + 0.0001) {
-        toast.error(`Line "${line.name}": accepted + rejected can't exceed received`);
+        toast.error(`Line "${line.name}": accepted + rejected can't exceed received.`);
         return;
       }
 
@@ -187,7 +187,7 @@ export function PoReceiveDialog({
       toast.error(res.error.message);
       return;
     }
-    toast.success(`Receipt ${res.data.receiptNumber} posted against ${poNumber}`);
+    toast.success(`Receipt ${res.data.receiptNumber} posted against ${poNumber}.`);
     setOpen(false);
     router.refresh();
   }

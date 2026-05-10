@@ -65,11 +65,11 @@ export function CsvImport() {
       const { header, rows } = parseCsv(text);
       const objects = rowsToObjects<Record<string, string>>(header, rows);
       if (objects.length === 0) {
-        toast.error('CSV is empty');
+        toast.error('The CSV file is empty. Add at least one row and try again.');
         return;
       }
       if (!header.includes('name')) {
-        toast.error('CSV must include a "name" column');
+        toast.error('CSV must include a "name" column. Add it and re-upload.');
         return;
       }
       setParsed({ header, rows: objects });
@@ -86,7 +86,7 @@ export function CsvImport() {
     setImporting(false);
     setSummary(res);
     if (res.ok) {
-      toast.success(`Imported ${res.data.created} of ${res.data.total} rows`);
+      toast.success(`Imported ${res.data.created} of ${res.data.total} rows.`);
       router.refresh();
     } else {
       toast.error(res.error.message);

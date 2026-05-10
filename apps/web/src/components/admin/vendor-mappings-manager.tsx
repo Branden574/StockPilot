@@ -59,7 +59,7 @@ export function VendorMappingsManager({
 
   async function add() {
     if (!vendorId || !itemId || !vendorItemNumber.trim()) {
-      toast.error('Vendor, item, and vendor item number are required');
+      toast.error('Vendor, item, and vendor item number are all required.');
       return;
     }
     setBusy(true);
@@ -76,7 +76,7 @@ export function VendorMappingsManager({
     }
     setVendorItemNumber('');
     setVendorDescription('');
-    toast.success('Mapping saved');
+    toast.success('Vendor mapping saved.');
     router.refresh();
   }
   function remove(id: string) {

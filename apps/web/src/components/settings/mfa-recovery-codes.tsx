@@ -40,7 +40,7 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
   async function copyAll() {
     if (!codes) return;
     await navigator.clipboard.writeText(codes.join('\n'));
-    toast.success('Codes copied to clipboard');
+    toast.success('Recovery codes copied to clipboard.');
   }
 
   function download() {

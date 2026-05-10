@@ -25,15 +25,15 @@ export function PoUploadForm() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!file) {
-      toast.error('Pick a PDF or CSV first');
+      toast.error('Pick a PDF or CSV file to upload.');
       return;
     }
     if (file.size > MAX_BYTES) {
-      toast.error('File is too large (25 MB max)');
+      toast.error('File is over the 25 MB limit. Pick a smaller file.');
       return;
     }
     if (!ACCEPT.includes(file.type)) {
-      toast.error('Only PDF or CSV is supported');
+      toast.error('Only PDF or CSV uploads are supported.');
       return;
     }
     setSubmitting(true);
@@ -55,7 +55,7 @@ export function PoUploadForm() {
         body: file,
       });
       if (!put.ok) {
-        toast.error('Upload failed');
+        toast.error("Couldn't upload the file. Check your network and try again.");
         return;
       }
 

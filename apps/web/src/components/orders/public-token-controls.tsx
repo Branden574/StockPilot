@@ -55,10 +55,10 @@ export function PublicTokenControls({
     try {
       await navigator.clipboard.writeText(publicUrl);
       setCopied(true);
-      toast.success('Link copied.');
+      toast.success('Public link copied to clipboard.');
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      toast.error('Could not copy link.');
+      toast.error("Couldn't copy the link. Copy it manually from the field above.");
     }
   }
 
@@ -72,7 +72,7 @@ export function PublicTokenControls({
     }
     setToken(res.data.token);
     setRotateOpen(false);
-    toast.success('Public link rotated.');
+    toast.success('Public link regenerated. The old link no longer works.');
     router.refresh();
   }
 
@@ -119,7 +119,7 @@ export function PublicTokenControls({
     setWarehouseState((cur) =>
       cur.map((w) => (w.id === warehouseId ? { ...w, isPublicOrderable: on } : w)),
     );
-    toast.success(on ? 'Warehouse opened to public.' : 'Warehouse closed to public.');
+    toast.success(on ? 'Warehouse opened to public orders.' : 'Warehouse closed to public orders.');
     router.refresh();
   }
 

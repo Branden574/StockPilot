@@ -185,7 +185,7 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
     const res = await updateMemberRoleAction({ memberId: member.id, role });
     if (!res.ok) toast.error(res.error.message);
     else {
-      toast.success('Role updated');
+      toast.success('Role updated.');
       router.refresh();
     }
   }
@@ -199,7 +199,7 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
       return;
     }
     setRemoveOpen(false);
-    toast.success('Member removed');
+    toast.success(`"${displayName}" removed from the workspace.`);
     router.refresh();
   }
 
@@ -278,7 +278,7 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
 
   async function copyLink() {
     await navigator.clipboard.writeText(invite.acceptUrl);
-    toast.success('Invite link copied');
+    toast.success('Invite link copied to clipboard.');
   }
 
   async function resend() {
@@ -289,7 +289,7 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
       toast.error(res.error.message);
       return;
     }
-    toast.success(`Invite resent to ${invite.email}`, {
+    toast.success(`Invite resent to "${invite.email}".`, {
       description: 'Same link as before. Expiry refreshed to 7 days.',
     });
     router.refresh();
@@ -304,7 +304,7 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
       return;
     }
     setRevokeOpen(false);
-    toast.success('Invite revoked');
+    toast.success('Invite revoked.');
     router.refresh();
   }
 
@@ -437,7 +437,7 @@ function InviteDialog({
   const onSubmit = handleSubmit(async (values) => {
     if (warehouseRequired && !values.warehouseId) {
       toast.error(
-        `Please pick a ${warehouseSingular.toLowerCase()} for this role — they'll be locked to it.`,
+        `Pick a ${warehouseSingular.toLowerCase()} for this role. The member will be locked to it.`,
       );
       return;
     }
@@ -452,7 +452,7 @@ function InviteDialog({
       toast.error(res.error.message);
       return;
     }
-    toast.success(`Invite sent to ${values.email}`, {
+    toast.success(`Invite sent to "${values.email}".`, {
       description: "Copy the link from the pending invites table if email isn't configured.",
     });
     onOpenChange(false);

@@ -101,7 +101,7 @@ export function PublicOrderForm({
     e.preventDefault();
     if (submitting) return;
     if (!name.trim() || !email.trim()) {
-      toast.error('Please add your name and email.');
+      toast.error('Add your name and email before submitting.');
       return;
     }
     if (lineCount === 0) {
@@ -140,7 +140,7 @@ export function PublicOrderForm({
       const ok = json as { id: string; trackUrl: string };
       setSubmitted({ id: ok.id, email: email.trim(), trackUrl: ok.trackUrl });
     } catch {
-      toast.error('Network error — please try again.');
+      toast.error("Couldn't reach the server. Check your network and try again.");
     } finally {
       setSubmitting(false);
     }

@@ -56,7 +56,7 @@ export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
           variant="gradient"
           size="sm"
           disabled={busy !== null}
-          onClick={() => flip('in_progress', 'Started')}
+          onClick={() => flip('in_progress', 'Event started.')}
         >
           {busy === 'in_progress' ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -70,7 +70,7 @@ export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
           variant="outline"
           size="sm"
           disabled={busy !== null}
-          onClick={() => flip('cancelled', 'Cancelled')}
+          onClick={() => flip('cancelled', 'Event cancelled.')}
         >
           {busy === 'cancelled' ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -91,7 +91,7 @@ export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
           variant="gradient"
           size="sm"
           disabled={busy !== null}
-          onClick={() => flip('completed', 'Marked complete')}
+          onClick={() => flip('completed', 'Event marked complete.')}
         >
           {busy === 'completed' ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -105,7 +105,7 @@ export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
           variant="outline"
           size="sm"
           disabled={busy !== null}
-          onClick={() => flip('cancelled', 'Cancelled')}
+          onClick={() => flip('cancelled', 'Event cancelled.')}
         >
           {busy === 'cancelled' ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -125,7 +125,7 @@ export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
       variant="outline"
       size="sm"
       disabled={busy !== null}
-      onClick={() => flip('scheduled', 'Reopened')}
+      onClick={() => flip('scheduled', 'Event reopened.')}
     >
       {busy === 'scheduled' ? (
         <Loader2 className="h-3.5 w-3.5 animate-spin" />

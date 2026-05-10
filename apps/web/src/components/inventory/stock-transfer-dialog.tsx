@@ -70,19 +70,19 @@ export function StockTransferDialog({
 
   async function submit() {
     if (!fromLocation || !toLocation) {
-      toast.error('Pick a source and destination location');
+      toast.error('Pick both a source and a destination location.');
       return;
     }
     if (fromLocation === toLocation) {
-      toast.error('Source and destination must differ');
+      toast.error('Source and destination must be different locations.');
       return;
     }
     if (qtyNum <= 0) {
-      toast.error('Enter a positive quantity');
+      toast.error('Enter a positive quantity to transfer.');
       return;
     }
     if (qtyNum > currentQuantity) {
-      toast.error('Cannot transfer more than current stock');
+      toast.error("Can't transfer more than the current on-hand stock.");
       return;
     }
     setSubmitting(true);
@@ -98,7 +98,7 @@ export function StockTransferDialog({
       toast.error(res.error.message);
       return;
     }
-    toast.success(`Transferred ${qtyNum} ${qtyNum === 1 ? 'unit' : 'units'}`);
+    toast.success(`Transferred ${qtyNum} ${qtyNum === 1 ? 'unit' : 'units'}.`);
     setOpen(false);
     setQuantity('1');
     setNotes('');

@@ -20,7 +20,7 @@ export function AcceptInviteButton({ token }: { token: string }) {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Welcome to the team');
+    toast.success('Invite accepted. Welcome to the team.');
     router.replace('/dashboard');
     router.refresh();
   }
