@@ -21,6 +21,7 @@ export const updateOrganizationSchema = z.object({
   size: z.string().max(32).nullable().optional(),
   timezone: z.string().min(1).max(64).optional(),
   currency: z.string().length(3).optional(),
+  poTerms: z.string().max(2000).nullable().optional(),
 });
 export type UpdateOrganizationInput = z.infer<typeof updateOrganizationSchema>;
 
