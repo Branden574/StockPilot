@@ -99,15 +99,16 @@ export async function GET(
       };
     }
 
-    // Org branding — name + logo. Best-effort; if the row is missing we
-    // still render with placeholders rather than blowing up.
+    // Org branding — name + logo + PO terms. Best-effort; if the row is
+    // missing we still render with placeholders rather than blowing up.
     const { data: org } = await ctx.supabase
       .from('organizations')
-      .select('name, logo_url')
+      .select('name, logo_url, po_terms')
       .eq('id', ctx.organizationId)
       .maybeSingle();
     const orgName = ((org as { name?: string | null })?.name ?? 'StockPilot') || 'StockPilot';
     const orgLogoUrl = ((org as { logo_url?: string | null })?.logo_url ?? null) || null;
+    const orgPoTerms = ((org as { po_terms?: string | null })?.po_terms ?? null) || null;
 
     const stream = await renderToStream(
       <PurchaseOrderPdf
@@ -121,7 +122,7 @@ export async function GET(
           total: Number((po as { total?: number }).total) || 0,
         }}
         lines={lineRows}
-        org={{ name: orgName, logoUrl: orgLogoUrl }}
+        org={{ name: orgName, logoUrl: orgLogoUrl, poTerms: orgPoTerms }}
         supplier={supplier}
         destination={destination}
       />,

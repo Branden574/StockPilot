@@ -193,6 +193,84 @@ export const pdfStyles = StyleSheet.create({
   mono: { fontFamily: 'Courier' },
   small: { fontSize: 8 },
   bold: { fontFamily: 'Helvetica-Bold' },
+
+  // PO terms block (rendered above the signature lines, only when org
+  // has a non-empty po_terms string).
+  termsWrap: {
+    marginTop: 22,
+    paddingTop: 10,
+    borderTopWidth: 0.5,
+    borderTopColor: PDF_COLORS.line,
+    borderTopStyle: 'solid',
+  },
+  termsHeading: {
+    fontFamily: 'Helvetica-Bold',
+    fontSize: 10,
+    color: PDF_COLORS.ink,
+    marginBottom: 4,
+  },
+  termsBody: {
+    fontSize: 9,
+    color: PDF_COLORS.ink3,
+    lineHeight: 1.45,
+  },
+
+  // PO signature block (two side-by-side columns, rendered below either
+  // the terms block or the totals box).
+  signatureWrap: {
+    marginTop: 26,
+    flexDirection: 'row',
+    gap: 32,
+  },
+  signatureCol: {
+    flex: 1,
+  },
+  signatureCaption: {
+    fontFamily: 'Helvetica-Bold',
+    fontSize: 9,
+    letterSpacing: 0.6,
+    color: PDF_COLORS.ink3,
+    textTransform: 'uppercase',
+    marginBottom: 22, // leaves room for a hand-signed pen stroke
+  },
+  signatureLine: {
+    width: 180,
+    borderBottomWidth: 0.7,
+    borderBottomColor: PDF_COLORS.ink2,
+    borderBottomStyle: 'solid',
+  },
+  signatureMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    width: 180,
+  },
+  signatureMeta: {
+    fontSize: 8,
+    color: PDF_COLORS.ink3,
+  },
+
+  // DRAFT watermark — rendered first in the page tree so it sits
+  // beneath later siblings. `transform: rotate(...)` is supported in
+  // @react-pdf/render 4.5.x. Letter page is 612x792pt; we span the
+  // full width and rely on `textAlign: center` to keep the word over
+  // the page midline.
+  watermarkWrap: {
+    position: 'absolute',
+    top: '40%',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    transform: 'rotate(-30deg)',
+  },
+  watermarkText: {
+    fontFamily: 'Helvetica-Bold',
+    fontSize: 96,
+    color: PDF_COLORS.ink,
+    opacity: 0.1,
+    textAlign: 'center',
+    letterSpacing: 4,
+  },
 });
 
 /**

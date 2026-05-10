@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 
 import { OrgLogoUploader } from '@/components/settings/org-logo-uploader';
 import { OrgNameEditor } from '@/components/settings/org-name-editor';
+import { PoTermsEditor } from '@/components/settings/po-terms-editor';
 import { TerminologyEditor } from '@/components/settings/terminology-editor';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -19,7 +20,7 @@ export default async function OrganizationSettingsPage() {
   const supabase = await createClient();
   const { data } = await supabase
     .from('organizations')
-    .select('terminology, name, logo_url')
+    .select('terminology, name, logo_url, po_terms')
     .eq('id', ctx.organizationId)
     .maybeSingle();
 
@@ -83,6 +84,21 @@ export default async function OrganizationSettingsPage() {
           </CardHeader>
           <CardContent>
             <TerminologyEditor current={current} defaults={DEFAULT_TERMINOLOGY} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Purchase order terms</CardTitle>
+            <CardDescription>
+              Free-form text printed at the bottom of every PO PDF you send
+              to suppliers. Leave blank to omit the section entirely.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <PoTermsEditor
+              current={(data?.po_terms as string | null) ?? null}
+            />
           </CardContent>
         </Card>
       </div>

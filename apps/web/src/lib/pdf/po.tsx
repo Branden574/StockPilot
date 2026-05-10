@@ -29,6 +29,11 @@ export interface PoPdfHeader {
 export interface PoPdfOrg {
   name: string;
   logoUrl: string | null;
+  /**
+   * Optional free-form terms string printed at the bottom of the PDF.
+   * Sourced from organizations.po_terms. Null/empty = no terms block.
+   */
+  poTerms?: string | null;
 }
 
 export interface PoPdfSupplier {
@@ -73,10 +78,26 @@ export function PurchaseOrderPdf({
   const subtotal = Number(po.subtotal) || 0;
   const total = Number(po.total) || 0;
   const adjustments = total - subtotal; // tax + shipping rolled together; only shown when >0
+  const isDraft = (po.status ?? '').toLowerCase() === 'draft';
+  const terms = (org.poTerms ?? '').trim();
+  const hasTerms = terms.length > 0;
 
   return (
     <Document title={`Purchase Order ${po.poNumber}`}>
       <Page size="LETTER" style={pdfStyles.page}>
+        {/*
+         * Watermark renders FIRST so it sits beneath every later sibling in
+         * the page tree (siblings paint in order in @react-pdf). It's an
+         * absolutely positioned overlay so it doesn't take up flow space.
+         * 96pt + 10% opacity, rotated -30deg via the `transform` style —
+         * confirmed supported by @react-pdf/render 4.5.x.
+         */}
+        {isDraft ? (
+          <View style={pdfStyles.watermarkWrap} fixed>
+            <Text style={pdfStyles.watermarkText}>DRAFT</Text>
+          </View>
+        ) : null}
+
         <BrandedHeader
           orgName={org.name}
           orgLogoUrl={org.logoUrl}
@@ -204,6 +225,45 @@ export function PurchaseOrderPdf({
             <View style={pdfStyles.totalsRowFinal}>
               <Text>Total</Text>
               <Text>{formatCurrencyForPdf(total)}</Text>
+            </View>
+          </View>
+        </View>
+
+        {hasTerms ? (
+          <View style={pdfStyles.termsWrap} wrap={false}>
+            <Text style={pdfStyles.termsHeading}>Terms & conditions</Text>
+            {/*
+             * pre-wrap preserves user-entered line breaks while still
+             * letting @react-pdf wrap long paragraphs at the column edge.
+             */}
+            <Text style={pdfStyles.termsBody}>{terms}</Text>
+          </View>
+        ) : null}
+
+        {/*
+         * Signature block — two side-by-side lines. Sits below the terms
+         * (when present) or below the totals box. wrap={false} keeps the
+         * two columns on the same page.
+         */}
+        <View style={pdfStyles.signatureWrap} wrap={false}>
+          <View style={pdfStyles.signatureCol}>
+            <Text style={pdfStyles.signatureCaption}>
+              Authorized by (StockPilot)
+            </Text>
+            <View style={pdfStyles.signatureLine} />
+            <View style={pdfStyles.signatureMetaRow}>
+              <Text style={pdfStyles.signatureMeta}>Name: ____________________</Text>
+              <Text style={pdfStyles.signatureMeta}>Date: __________</Text>
+            </View>
+          </View>
+          <View style={pdfStyles.signatureCol}>
+            <Text style={pdfStyles.signatureCaption}>
+              Accepted by (Supplier)
+            </Text>
+            <View style={pdfStyles.signatureLine} />
+            <View style={pdfStyles.signatureMetaRow}>
+              <Text style={pdfStyles.signatureMeta}>Name: ____________________</Text>
+              <Text style={pdfStyles.signatureMeta}>Date: __________</Text>
             </View>
           </View>
         </View>

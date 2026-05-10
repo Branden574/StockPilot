@@ -152,6 +152,72 @@ export async function updateTerminologyAction(
   }
 }
 
+const poTermsSchema = z.object({
+  // Empty string is allowed — we coerce it to null so the PDF skips the
+  // terms block. 2000 chars matches the zod schema in @stockpilot/core.
+  poTerms: z.string().max(2000).nullable(),
+});
+
+export type UpdatePoTermsInput = z.infer<typeof poTermsSchema>;
+
+export async function updateOrgPoTermsAction(
+  input: UpdatePoTermsInput,
+): Promise<ActionResult<void>> {
+  const parsed = poTermsSchema.safeParse(input);
+  if (!parsed.success) {
+    return err(
+      'validation_error',
+      parsed.error.issues[0]?.message ?? 'Invalid PO terms',
+    );
+  }
+  try {
+    const ctx = await requireOrgContext();
+    if (ctx.role !== 'owner' && ctx.role !== 'admin') {
+      return err('forbidden', 'Only owners and admins can edit PO terms.');
+    }
+    const supabase = await createClient();
+    const { data: prev } = await supabase
+      .from('organizations')
+      .select('po_terms')
+      .eq('id', ctx.organizationId)
+      .maybeSingle();
+
+    // Trim + collapse-empty so a textarea full of whitespace clears the
+    // terms block rather than rendering a hollow heading on every PO.
+    const next =
+      parsed.data.poTerms === null
+        ? null
+        : parsed.data.poTerms.trim().length === 0
+          ? null
+          : parsed.data.poTerms;
+
+    if (((prev as { po_terms?: string | null } | null)?.po_terms ?? null) === next) {
+      return ok(undefined);
+    }
+
+    const { error } = await supabase
+      .from('organizations')
+      .update({ po_terms: next })
+      .eq('id', ctx.organizationId);
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    await audit({
+      event: 'warehouse.updated',
+      entityType: 'organization',
+      entityId: ctx.organizationId,
+      before: { po_terms: (prev as { po_terms?: string | null } | null)?.po_terms ?? null },
+      after: { po_terms: next },
+    });
+
+    revalidatePath('/dashboard/settings/organization');
+    return ok(undefined);
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    console.error(e);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
 const renameSchema = z.object({ name: z.string().min(1).max(80).trim() });
 
 export async function renameOrganizationAction(input: {
