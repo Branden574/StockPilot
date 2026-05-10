@@ -12,6 +12,7 @@ import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
+import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
@@ -27,6 +28,7 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
     categoriesSvc,
     locationsSvc,
     suppliersSvc,
+    tagsSvc,
     warehousesSvc,
     chartersSvc,
     whChartersSvc,
@@ -37,6 +39,7 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
+    TagsService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
     ChartersService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
@@ -56,11 +59,13 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
     throw e;
   }
 
-  const [categories, locations, suppliers, warehouses, charters, warehouseCharters] =
+  const [categories, locations, suppliers, tags, itemTags, warehouses, charters, warehouseCharters] =
     await Promise.all([
       categoriesSvc.list(),
       locationsSvc.list(),
       suppliersSvc.list(),
+      tagsSvc.list(),
+      tagsSvc.listForItem(id),
       warehousesSvc.list(),
       chartersSvc.list(),
       whChartersSvc.listPairs(),
@@ -126,6 +131,8 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
             categories={categories.map((c) => ({ id: c.id as string, name: c.name as string }))}
             locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
+            tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
+            initialTagIds={itemTags.map((t) => t.id)}
             warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
             charters={charters.map((c) => ({ id: c.id, name: c.name }))}
             warehouseCharters={warehouseCharters}

@@ -69,7 +69,12 @@ export type AuditEvent =
   | 'shipment.delivered'
   | 'shipment.signed'
   | 'shipment.email_sent'
-  | 'pdf.exported';
+  | 'pdf.exported'
+  | 'tag.created'
+  | 'tag.updated'
+  | 'tag.deleted'
+  | 'tag.applied'
+  | 'tag.removed';
 
 interface AuditPayload {
   event: AuditEvent;

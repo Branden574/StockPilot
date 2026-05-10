@@ -1,6 +1,16 @@
 'use client';
 
-import { Archive, ClipboardList, FolderTree, Loader2, MapPin, Truck, Undo2, X } from 'lucide-react';
+import {
+  Archive,
+  ClipboardList,
+  FolderTree,
+  Loader2,
+  MapPin,
+  Tags as TagsIcon,
+  Truck,
+  Undo2,
+  X,
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -42,11 +52,22 @@ export interface BulkActionsLocation {
   name: string;
 }
 
+export interface BulkActionsTag {
+  id: string;
+  name: string;
+  color: string | null;
+}
+
 interface BulkActionsProps {
   selectedIds: string[];
   categories: BulkActionsCategory[];
   suppliers: BulkActionsSupplier[];
   locations: BulkActionsLocation[];
+  /** Org tag list — drives the Add tags / Remove tags dialogs. Optional
+      for callers that haven't loaded tags yet (defaults to []). When the
+      list is empty both tag entries are still shown but the dialog
+      surfaces an empty-state hint pointing at /dashboard/tags. */
+  tags?: BulkActionsTag[];
   onClear: () => void;
   /** Whether any of the selected rows is currently archived. Drives the
       "Restore" vs "Archive" affordance. */
@@ -59,6 +80,8 @@ type ActiveDialog =
   | { kind: 'set_category' }
   | { kind: 'set_supplier' }
   | { kind: 'set_location' }
+  | { kind: 'add_tags' }
+  | { kind: 'remove_tags' }
   | null;
 
 export function BulkActions({
@@ -66,6 +89,7 @@ export function BulkActions({
   categories,
   suppliers,
   locations,
+  tags = [],
   onClear,
   hasArchivedSelection,
 }: BulkActionsProps) {
@@ -75,6 +99,16 @@ export function BulkActions({
   const [categoryId, setCategoryId] = React.useState<string>('__none__');
   const [supplierId, setSupplierId] = React.useState<string>('__none__');
   const [locationId, setLocationId] = React.useState<string>('__none__');
+  // Tag selections are independent per dialog so opening Add → cancel →
+  // Remove doesn't carry the previous picks over. Both reset on dialog
+  // close.
+  const [addTagIds, setAddTagIds] = React.useState<Set<string>>(new Set());
+  const [removeTagIds, setRemoveTagIds] = React.useState<Set<string>>(new Set());
+
+  React.useEffect(() => {
+    if (dialog?.kind !== 'add_tags') setAddTagIds(new Set());
+    if (dialog?.kind !== 'remove_tags') setRemoveTagIds(new Set());
+  }, [dialog]);
 
   const count = selectedIds.length;
   const [draftBusy, setDraftBusy] = React.useState(false);
@@ -165,6 +199,24 @@ export function BulkActions({
           className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
         >
           <Truck className="h-3 w-3" /> Set supplier
+        </button>
+
+        <span className="text-[var(--ed-ink-4)]">·</span>
+        <button
+          type="button"
+          onClick={() => setDialog({ kind: 'add_tags' })}
+          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
+        >
+          <TagsIcon className="h-3 w-3" /> Add tags
+        </button>
+
+        <span className="text-[var(--ed-ink-4)]">·</span>
+        <button
+          type="button"
+          onClick={() => setDialog({ kind: 'remove_tags' })}
+          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
+        >
+          <TagsIcon className="h-3 w-3" /> Remove tags
         </button>
 
         <span className="text-[var(--ed-ink-4)]">·</span>
@@ -386,6 +438,36 @@ export function BulkActions({
         </DialogContent>
       </Dialog>
 
+      {/* Add tags */}
+      <TagsDialog
+        kind="add"
+        open={dialog?.kind === 'add_tags'}
+        onClose={() => setDialog(null)}
+        tags={tags}
+        selected={addTagIds}
+        onChange={setAddTagIds}
+        count={count}
+        busy={busy}
+        onApply={() =>
+          run({ kind: 'add_tags', tagIds: [...addTagIds] })
+        }
+      />
+
+      {/* Remove tags */}
+      <TagsDialog
+        kind="remove"
+        open={dialog?.kind === 'remove_tags'}
+        onClose={() => setDialog(null)}
+        tags={tags}
+        selected={removeTagIds}
+        onChange={setRemoveTagIds}
+        count={count}
+        busy={busy}
+        onApply={() =>
+          run({ kind: 'remove_tags', tagIds: [...removeTagIds] })
+        }
+      />
+
       {/* Set supplier */}
       <Dialog
         open={dialog?.kind === 'set_supplier'}
@@ -434,5 +516,100 @@ export function BulkActions({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function TagsDialog({
+  kind,
+  open,
+  onClose,
+  tags,
+  selected,
+  onChange,
+  count,
+  busy,
+  onApply,
+}: {
+  kind: 'add' | 'remove';
+  open: boolean;
+  onClose: () => void;
+  tags: BulkActionsTag[];
+  selected: Set<string>;
+  onChange: (next: Set<string>) => void;
+  count: number;
+  busy: boolean;
+  onApply: () => void;
+}) {
+  const isAdd = kind === 'add';
+  const title = isAdd ? 'Add tags' : 'Remove tags';
+  const desc = isAdd
+    ? `Pick one or more tags to apply to ${count} item${count === 1 ? '' : 's'}. Tags already on a row are left alone.`
+    : `Pick one or more tags to remove from ${count} item${count === 1 ? '' : 's'}. Items without those tags are unaffected.`;
+
+  function toggle(id: string) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange(next);
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => (v ? null : onClose())}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {title} on {count} item{count === 1 ? '' : 's'}
+          </DialogTitle>
+          <DialogDescription>{desc}</DialogDescription>
+        </DialogHeader>
+        {tags.length === 0 ? (
+          <p className="rounded-md border border-dashed bg-muted/30 px-3 py-3 text-[12.5px] text-muted-foreground">
+            No tags exist yet — create some on the{' '}
+            <a className="underline" href="/dashboard/tags">
+              Tags page
+            </a>
+            .
+          </p>
+        ) : (
+          <div className="-mx-1 max-h-[260px] overflow-y-auto px-1">
+            <div className="flex flex-wrap gap-1.5">
+              {tags.map((t) => {
+                const on = selected.has(t.id);
+                const swatch = t.color ?? '#94a3b8';
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => toggle(t.id)}
+                    aria-pressed={on}
+                    className={
+                      on
+                        ? 'inline-flex items-center gap-1.5 rounded-full border border-transparent px-2.5 py-1 text-[12px] text-white shadow-sm transition-colors'
+                        : 'inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1 text-[12px] text-foreground transition-colors hover:bg-muted'
+                    }
+                    style={on ? { backgroundColor: swatch } : undefined}
+                  >
+                    <span
+                      aria-hidden
+                      className="h-2 w-2 rounded-full"
+                      style={{ backgroundColor: on ? 'rgba(255,255,255,0.85)' : swatch }}
+                    />
+                    {t.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={onApply} disabled={busy || selected.size === 0}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Apply'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

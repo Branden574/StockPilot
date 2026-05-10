@@ -12,6 +12,7 @@ import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
 import { SuppliersService } from '@/server/services/suppliers';
+import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
@@ -66,11 +67,12 @@ export default async function BooksPage({
 }) {
   const params = await searchParams;
   const page = Math.max(1, Number(params.page) || 1);
-  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, imagesSvc, savedViewsSvc, warehouseFilter, sessionCtx] = await Promise.all([
+  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, imagesSvc, savedViewsSvc, warehouseFilter, sessionCtx] = await Promise.all([
     InventoryService.forCurrentUser(),
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
+    TagsService.forCurrentUser(),
     ItemImagesService.forCurrentUser(),
     SavedViewsService.forCurrentUser(),
     getActiveWarehouseFilter(),
@@ -89,7 +91,7 @@ export default async function BooksPage({
   const categoryIds = parseIdList(params.cat);
   const locationIds = parseIdList(params.loc);
 
-  const [inventory, categories, locations, suppliers, savedViews] = await Promise.all([
+  const [inventory, categories, locations, suppliers, tags, savedViews] = await Promise.all([
     inventorySvc.list({
       q: params.q,
       status: lifecycleStatus,
@@ -106,6 +108,7 @@ export default async function BooksPage({
     categoriesSvc.list(),
     locationsSvc.list(),
     suppliersSvc.list(),
+    tagsSvc.list(),
     savedViewsSvc.list('books'),
   ]);
 
@@ -216,6 +219,7 @@ export default async function BooksPage({
               id: s.id as string,
               name: s.name as string,
             }))}
+            tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
             initialQuery={params.q}
             rowLinkPrefix="/dashboard/books"
             basePath="/dashboard/books"

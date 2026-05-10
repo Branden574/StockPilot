@@ -16,6 +16,7 @@ import type {
 } from '@stockpilot/core';
 
 import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
+import { TagsService } from './tags';
 
 export type ItemListSort =
   | 'updated_desc'
@@ -473,7 +474,9 @@ export class InventoryService {
       | { kind: 'set_category'; categoryId: string | null }
       | { kind: 'set_supplier'; supplierId: string | null }
       | { kind: 'set_location'; locationId: string | null }
-      | { kind: 'set_status'; status: 'active' | 'archived' | 'discontinued' };
+      | { kind: 'set_status'; status: 'active' | 'archived' | 'discontinued' }
+      | { kind: 'add_tags'; tagIds: string[] }
+      | { kind: 'remove_tags'; tagIds: string[] };
   }): Promise<{ ok: number; skipped: number }> {
     assertPermission(this.ctx, 'items:update');
     if (input.ids.length === 0) return { ok: 0, skipped: 0 };
@@ -505,6 +508,19 @@ export class InventoryService {
       }
     }
     if (allowedIds.length === 0) return { ok: 0, skipped };
+
+    // Tag ops bypass the inventory_items row update — they only touch
+    // the item_tags junction. Delegate to TagsService so the audit
+    // events + tag-id validation stay in one place.
+    if (input.op.kind === 'add_tags' || input.op.kind === 'remove_tags') {
+      const tags = new TagsService(this.ctx);
+      if (input.op.kind === 'add_tags') {
+        await tags.bulkAddToItems(allowedIds, input.op.tagIds);
+      } else {
+        await tags.bulkRemoveFromItems(allowedIds, input.op.tagIds);
+      }
+      return { ok: allowedIds.length, skipped };
+    }
 
     const update: Record<string, unknown> = { updated_by: this.ctx.userId };
     switch (input.op.kind) {
