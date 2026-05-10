@@ -2,6 +2,7 @@ import { Download } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { ItemThumb } from '@/components/items/item-thumb';
 import { PoReceiveDialog } from '@/components/po/po-receive-dialog';
 import { PoSetDestination } from '@/components/po/po-set-destination';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
@@ -87,6 +88,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
     const item = itemsById.get(l.item_id as string);
     return {
       id: l.id as string,
+      itemId: l.item_id as string,
       name: item?.name ?? 'Unknown item',
       sku: item?.sku ?? '',
       quantityOrdered: l.quantity_ordered as number,
@@ -94,6 +96,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
       unitCost: l.unit_cost as number,
       lineTotal: l.line_total as number,
       trackingType: (item?.tracking_type ?? 'none') as 'none' | 'lot' | 'serial',
+      imageUrl: (l.imageUrl as string | null | undefined) ?? null,
     };
   });
 
@@ -160,6 +163,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-12">Image</TableHead>
                   <TableHead>Item</TableHead>
                   <TableHead className="text-right">Ordered</TableHead>
                   <TableHead className="text-right">Received</TableHead>
@@ -170,6 +174,14 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
               <TableBody>
                 {lineRows.map((l) => (
                   <TableRow key={l.id}>
+                    <TableCell>
+                      <ItemThumb
+                        imageUrl={l.imageUrl}
+                        alt={l.name}
+                        size="sm"
+                        itemId={l.itemId}
+                      />
+                    </TableCell>
                     <TableCell>
                       <p className="font-medium">{l.name}</p>
                       <p className="text-muted-foreground font-mono text-xs">{l.sku}</p>

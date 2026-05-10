@@ -11,6 +11,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { ItemImagesService } from './item-images';
 import { OrderRequestsService } from './order-requests';
 
 export type ShipmentStatus = 'draft' | 'shipped' | 'delivered' | 'cancelled';
@@ -44,6 +45,14 @@ export interface ShipmentLineRow {
     sku: string;
     barcode: string | null;
   } | null;
+  /**
+   * Signed URL for the item's primary image (~7 day expiry, supplied by
+   * `ItemImagesService.primaryImagesForItems`). Null when the item has
+   * no images uploaded yet, or when the linked item row has been deleted.
+   * Used by the shipment detail line table — the printed PDF stays
+   * text-only.
+   */
+  imageUrl: string | null;
 }
 
 export interface ShipmentWarehouseInfo {
@@ -222,7 +231,7 @@ export class ShipmentsService {
       .order('line_order', { ascending: true });
     if (lErr) throw new ServiceError('internal_error', lErr.message);
 
-    const lines: ShipmentLineRow[] = (lineRows ?? []).map((row) => {
+    const linesPreImages: Array<Omit<ShipmentLineRow, 'imageUrl'>> = (lineRows ?? []).map((row) => {
       const r = row as Record<string, unknown>;
       const itemField = r.item as
         | { id: string; name: string; sku: string; barcode: string | null }
@@ -238,6 +247,23 @@ export class ShipmentsService {
         item,
       };
     });
+
+    // Batch-fetch primary thumbnails for the line items so the detail
+    // page can render real photos. Uses a single `item_images IN (...)`
+    // + one `createSignedUrls` call. Skipped when there are no lines so
+    // we don't emit no-op DB traffic.
+    const lineItemIds = linesPreImages
+      .map((l) => l.itemId)
+      .filter((id): id is string => Boolean(id));
+    const imageMap =
+      lineItemIds.length > 0
+        ? await new ItemImagesService(this.ctx).primaryImagesForItems(lineItemIds)
+        : new Map<string, string>();
+
+    const lines: ShipmentLineRow[] = linesPreImages.map((l) => ({
+      ...l,
+      imageUrl: imageMap.get(l.itemId) ?? null,
+    }));
 
     const sourceId = h.source_warehouse_id as string;
     const destCharterId = h.destination_charter_id as string;
