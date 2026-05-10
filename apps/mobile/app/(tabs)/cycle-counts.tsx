@@ -1,3 +1,4 @@
+import * as Network from 'expo-network';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as React from 'react';
 import {
@@ -12,6 +13,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/lib/auth-context';
+import {
+  dirtyLineCounts,
+  listCachedCycleCounts,
+  type CachedCycleCountHeader,
+} from '@/lib/cycle-count-cache';
+import { useSyncStatus } from '@/lib/cycle-count-sync';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
 
@@ -22,15 +29,19 @@ interface OpenCount {
   startedBy: string | null;
   totalLines: number;
   countedLines: number;
+  source: 'server' | 'cache';
 }
 
 export default function CycleCounts() {
   const router = useRouter();
   const { user } = useAuth();
+  const sync = useSyncStatus();
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const [counts, setCounts] = React.useState<OpenCount[]>([]);
+  const [pendingByCount, setPendingByCount] = React.useState<Map<string, number>>(new Map());
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [offline, setOffline] = React.useState(false);
 
   React.useEffect(() => {
     if (!user) return;
@@ -45,7 +56,35 @@ export default function CycleCounts() {
   }, [user]);
 
   const load = React.useCallback(async () => {
-    if (!orgId) return;
+    let online = true;
+    try {
+      const ns = await Network.getNetworkStateAsync();
+      online = Boolean(ns.isConnected && ns.isInternetReachable !== false);
+    } catch {
+      online = true;
+    }
+    setOffline(!online);
+
+    // Always start by reading the cached headers — they show
+    // immediately even if the network call hangs / fails.
+    const cached = await listCachedCycleCounts();
+    const cachedView: OpenCount[] = cached.map((c: CachedCycleCountHeader) => ({
+      id: c.id,
+      warehouseName: c.warehouseName,
+      startedAt: c.startedAt,
+      startedBy: null,
+      totalLines: 0,
+      countedLines: 0,
+      source: 'cache',
+    }));
+    setCounts(cachedView);
+
+    if (!online || !orgId) {
+      const dirty = await dirtyLineCounts();
+      setPendingByCount(dirty);
+      return;
+    }
+
     const { data, error } = await supabase
       .from('cycle_counts')
       .select(
@@ -57,12 +96,15 @@ export default function CycleCounts() {
       .eq('organization_id', orgId)
       .eq('status', 'in_progress')
       .order('started_at', { ascending: false });
-    if (error) {
+
+    if (error || !data) {
       console.warn('cycle_counts list', error);
-      setCounts([]);
+      const dirty = await dirtyLineCounts();
+      setPendingByCount(dirty);
       return;
     }
-    const flat: OpenCount[] = (data ?? []).map((row) => {
+
+    const flat: OpenCount[] = data.map((row) => {
       const r = row as Record<string, unknown>;
       const wh = r.warehouse as { name: string } | { name: string }[] | null;
       const whName = Array.isArray(wh) ? wh[0]?.name ?? null : wh?.name ?? null;
@@ -80,9 +122,13 @@ export default function CycleCounts() {
         startedBy: starter,
         totalLines: lines.length,
         countedLines: lines.filter((l) => l.counted_quantity !== null).length,
+        source: 'server' as const,
       };
     });
     setCounts(flat);
+
+    const dirty = await dirtyLineCounts();
+    setPendingByCount(dirty);
   }, [orgId]);
 
   useFocusEffect(
@@ -98,6 +144,14 @@ export default function CycleCounts() {
       };
     }, [load]),
   );
+
+  // Refresh dirty-counts whenever the global sync engine signals progress.
+  React.useEffect(() => {
+    void (async () => {
+      const dirty = await dirtyLineCounts();
+      setPendingByCount(dirty);
+    })();
+  }, [sync.pendingCount, sync.status]);
 
   async function refresh() {
     setRefreshing(true);
@@ -117,6 +171,14 @@ export default function CycleCounts() {
           {counts.length} in progress
         </Text>
       </View>
+      {offline && (
+        <View style={styles.offlineBanner}>
+          <View style={styles.offlineDot} />
+          <Text style={styles.offlineText}>
+            Offline — showing cached counts
+          </Text>
+        </View>
+      )}
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={theme.primary} />
@@ -143,28 +205,46 @@ export default function CycleCounts() {
               </Text>
             </View>
           }
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => open(item)}
-              style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={styles.lead}>
-                  {item.warehouseName ?? 'No warehouse'}
-                </Text>
-                <Text style={styles.meta}>
-                  {item.startedBy ?? 'Unknown'} ·{' '}
-                  {new Date(item.startedAt).toLocaleDateString()}
-                </Text>
-              </View>
-              <View style={styles.progressBox}>
-                <Text style={styles.progressNum}>
-                  {item.countedLines}/{item.totalLines}
-                </Text>
-                <Text style={styles.progressLabel}>counted</Text>
-              </View>
-            </Pressable>
-          )}
+          renderItem={({ item }) => {
+            const pending = pendingByCount.get(item.id) ?? 0;
+            return (
+              <Pressable
+                onPress={() => open(item)}
+                style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.lead}>
+                    {item.warehouseName ?? 'No warehouse'}
+                  </Text>
+                  <Text style={styles.meta}>
+                    {item.startedBy ?? 'Unknown'}
+                    {item.startedAt
+                      ? ` · ${new Date(item.startedAt).toLocaleDateString()}`
+                      : ''}
+                  </Text>
+                  {pending > 0 && (
+                    <View style={styles.pendingPill}>
+                      <Text style={styles.pendingPillText}>
+                        {pending} pending sync
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                {item.source === 'server' ? (
+                  <View style={styles.progressBox}>
+                    <Text style={styles.progressNum}>
+                      {item.countedLines}/{item.totalLines}
+                    </Text>
+                    <Text style={styles.progressLabel}>counted</Text>
+                  </View>
+                ) : (
+                  <View style={styles.progressBox}>
+                    <Text style={styles.cachedTag}>cached</Text>
+                  </View>
+                )}
+              </Pressable>
+            );
+          }}
         />
       )}
     </SafeAreaView>
@@ -181,6 +261,18 @@ const styles = StyleSheet.create({
   },
   title: { color: theme.text, fontSize: 24, fontWeight: '700' },
   subtitle: { color: theme.textMuted, fontSize: 13, marginTop: 2 },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    backgroundColor: 'rgba(148, 163, 184, 0.12)',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.border,
+  },
+  offlineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: theme.textMuted },
+  offlineText: { color: theme.textMuted, fontSize: 12, fontWeight: '600' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   row: {
     flexDirection: 'row',
@@ -201,6 +293,22 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   progressLabel: { color: theme.textMuted, fontSize: 11, marginTop: 1 },
+  cachedTag: {
+    color: theme.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  pendingPill: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    borderRadius: radius.sm,
+  },
+  pendingPillText: { color: theme.warning, fontSize: 11, fontWeight: '700' },
   empty: { padding: space.xl, alignItems: 'center' },
   emptyTitle: { color: theme.text, fontSize: 16, fontWeight: '600' },
   emptyText: {

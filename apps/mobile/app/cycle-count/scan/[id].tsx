@@ -12,34 +12,33 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { useAuth } from '@/lib/auth-context';
 import {
-  getCycleCountLines,
-  getItemById,
-  findItemByCode,
+  getCycleCount,
+  updateLocalLine,
   type CachedCycleCountLine,
-  type CachedItem,
-} from '@/lib/db-reads';
-import { enqueue } from '@/lib/queue';
-import { syncNow } from '@/lib/sync';
+} from '@/lib/cycle-count-cache';
+import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { radius, space, theme } from '@/lib/theme';
 
 interface SheetState {
   line: CachedCycleCountLine;
-  item: CachedItem | null;
   qty: string;
 }
 
 /**
- * Scan-to-count flow. Opens the camera; each scan resolves an item
- * (against the local SQLite cache, so it works offline), looks up the
- * matching cycle_count_line, and pops a sheet pre-filled with
- * `expected`. Confirm enqueues a record_count action that the sync
- * worker drains when online.
+ * Scan-to-count flow. Opens the camera; each scan resolves an item by
+ * matching its barcode/sku against the *cached cycle count's* line set
+ * — purely local, no Supabase round-trip — so this works offline.
  *
- * Burst-mode toggle: re-scanning the same barcode within 2 seconds
- * skips the sheet and increments counted-qty by 1. Useful when
- * counting a stack of identical books.
+ * Each confirm calls `updateLocalLine` which writes to SQLite and
+ * enqueues an outbox row. The sync engine drains the outbox when
+ * online.
+ *
+ * Burst-mode toggle: re-scanning the same barcode within 600ms is
+ * de-duped; in burst mode subsequent scans of the same item just
+ * increment counted by 1.
  */
 export default function CycleCountScanScreen() {
   const router = useRouter();
@@ -52,7 +51,7 @@ export default function CycleCountScanScreen() {
   const [sheet, setSheet] = React.useState<SheetState | null>(null);
   const [burstMode, setBurstMode] = React.useState(false);
   const [lastScan, setLastScan] = React.useState<{ code: string; at: number } | null>(null);
-  const [scanned, setScanned] = React.useState<Map<string, number>>(new Map());
+  const [scannedMap, setScannedMap] = React.useState<Map<string, number>>(new Map());
 
   React.useEffect(() => {
     if (!user || !id) return;
@@ -61,24 +60,47 @@ export default function CycleCountScanScreen() {
 
   async function loadLines() {
     if (!id) return;
-    const rows = await getCycleCountLines(id);
-    setLines(rows);
-    // Seed scanned-counts map with what's already counted on the server.
+    const snap = await getCycleCount(id);
+    if (!snap) {
+      // Detail screen handles the offline-uncached state; if we land
+      // here without a cache there's nothing to scan against.
+      Alert.alert(
+        'No cached lines',
+        'Open this cycle count from the list once while online so it can be cached for offline scanning.',
+        [{ text: 'OK', onPress: () => router.back() }],
+      );
+      return;
+    }
+    setLines(snap.lines);
+    // Seed the per-line counted map from cache so the header tally
+    // reflects already-counted lines.
     const seed = new Map<string, number>();
-    for (const l of rows) if (l.counted != null) seed.set(l.id, l.counted);
-    setScanned(seed);
+    for (const l of snap.lines) if (l.counted != null) seed.set(l.id, l.counted);
+    setScannedMap(seed);
   }
 
   async function recordCount(line: CachedCycleCountLine, qty: number) {
+    if (!Number.isFinite(qty) || qty < 0) return;
     setBusy(true);
-    await enqueue('record_count', {
-      cycleCountId: id,
-      lineId: line.id,
-      countedQuantity: qty,
-    });
-    setScanned((m) => new Map(m).set(line.id, qty));
-    void syncNow();
+    await updateLocalLine(line.id, qty);
+    setScannedMap((m) => new Map(m).set(line.id, qty));
+    setLines((curr) =>
+      curr.map((l) =>
+        l.id === line.id ? { ...l, counted: qty, localDirty: true } : l,
+      ),
+    );
+    await cycleCountSync.refreshPendingCount();
+    void cycleCountSync.forceSync();
     setBusy(false);
+  }
+
+  function findLineByCode(code: string): CachedCycleCountLine | null {
+    const norm = code.trim();
+    if (!norm) return null;
+    const byBarcode = lines.find((l) => l.itemBarcode && l.itemBarcode === norm);
+    if (byBarcode) return byBarcode;
+    const bySku = lines.find((l) => l.itemSku === norm);
+    return bySku ?? null;
   }
 
   async function onBarcode({ data }: { data: string }) {
@@ -90,29 +112,23 @@ export default function CycleCountScanScreen() {
     if (lastScan && lastScan.code === code && now - lastScan.at < 600) return;
     setLastScan({ code, at: now });
 
-    const item = await findItemByCode(code);
-    if (!item) {
-      Alert.alert('Not in cache', `${code} isn't in this device's inventory cache yet. Pull-to-refresh on the home tab.`);
-      return;
-    }
-    const line = lines.find((l) => l.itemId === item.id);
+    const line = findLineByCode(code);
     if (!line) {
       Alert.alert(
         'Not in this count',
-        `${item.name} isn't in this cycle count's scope.`,
+        `No item with barcode/SKU "${code}" in this cycle count's scope.`,
       );
       return;
     }
 
     if (burstMode) {
-      // Burst mode: increment by 1, no sheet.
-      const current = scanned.get(line.id) ?? line.counted ?? 0;
+      const current = scannedMap.get(line.id) ?? line.counted ?? 0;
       const next = current + 1;
       await recordCount(line, next);
       return;
     }
 
-    setSheet({ line, item, qty: String(line.expected) });
+    setSheet({ line, qty: String(line.expected) });
   }
 
   async function confirmSheet() {
@@ -151,7 +167,7 @@ export default function CycleCountScanScreen() {
 
   const total = lines.length;
   const counted = lines.filter(
-    (l) => scanned.has(l.id) || l.counted != null,
+    (l) => scannedMap.has(l.id) || l.counted != null,
   ).length;
 
   return (
@@ -179,6 +195,7 @@ export default function CycleCountScanScreen() {
               {counted} of {total} done
             </Text>
           </View>
+          <SyncStatusBadge />
           <Pressable
             style={[styles.burstBtn, burstMode && styles.burstBtnOn]}
             onPress={() => setBurstMode((v) => !v)}
@@ -202,9 +219,9 @@ export default function CycleCountScanScreen() {
 
         {sheet && (
           <View style={styles.sheet}>
-            <Text style={styles.sheetSku}>{sheet.item?.sku ?? sheet.line.itemId.slice(0, 8)}</Text>
+            <Text style={styles.sheetSku}>{sheet.line.itemSku || sheet.line.itemId.slice(0, 8)}</Text>
             <Text style={styles.sheetName} numberOfLines={2}>
-              {sheet.item?.name ?? 'Unknown item'}
+              {sheet.line.itemName}
             </Text>
             <View style={styles.row}>
               <View style={styles.kv}>
@@ -246,7 +263,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: space.xl, backgroundColor: theme.bg },
   topBar: {
     flexDirection: 'row',
-    gap: space.md,
+    gap: space.sm,
     padding: space.md,
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.55)',

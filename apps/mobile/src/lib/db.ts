@@ -10,10 +10,16 @@ import * as SQLite from 'expo-sqlite';
  * Schema versioning: bumping SCHEMA_VERSION wipes the local DB and
  * re-pulls. Acceptable because the local DB is a cache, not a source
  * of truth.
+ *
+ * v2 (offline cycle counting): cycle_counts gains organization_id,
+ * warehouse_name, posted_at, cached_at. cycle_count_lines gains
+ * item_name, item_sku, item_barcode, updated_at, local_dirty.
+ * Indexed on count_id and on dirty rows so the sync engine can find
+ * pending edits in O(log n) without scanning every line.
  */
 
 const DB_NAME = 'stockpilot.db';
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
@@ -22,6 +28,15 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
   _db = await SQLite.openDatabaseAsync(DB_NAME);
   await ensureSchema(_db);
   return _db;
+}
+
+/**
+ * Idempotent app-startup hook — wires DB open + migrations into the
+ * root layout effect so any screen that runs `getDb()` after this
+ * resolves can assume the schema exists.
+ */
+export async function initDb(): Promise<void> {
+  await getDb();
 }
 
 async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
@@ -94,23 +109,33 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
 
       create table cycle_counts (
         id text primary key,
+        organization_id text,
         status text,
         warehouse_id text,
+        warehouse_name text,
         started_at text,
+        posted_at text,
         assigned_to text,
         notes text,
-        last_synced_at integer not null
+        last_synced_at integer not null,
+        cached_at integer
       );
 
       create table cycle_count_lines (
         id text primary key,
         count_id text not null,
         item_id text not null,
+        item_name text,
+        item_sku text,
+        item_barcode text,
         expected real not null default 0,
-        counted real
+        counted real,
+        updated_at text,
+        local_dirty integer not null default 0
       );
       create index cycle_count_lines_count_idx on cycle_count_lines(count_id);
       create index cycle_count_lines_item_idx on cycle_count_lines(item_id);
+      create index cycle_count_lines_dirty_idx on cycle_count_lines(local_dirty);
 
       create table bundles (
         id text primary key,
@@ -138,10 +163,12 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
         payload_json text not null,
         created_at integer not null,
         attempts integer not null default 0,
+        last_attempt_at integer,
         last_error text,
         status text not null default 'pending'
       );
       create index pending_actions_status_idx on pending_actions(status);
+      create index pending_actions_kind_idx on pending_actions(kind);
     `);
 
     await db.runAsync(

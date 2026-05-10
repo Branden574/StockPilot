@@ -216,6 +216,11 @@ export async function drainQueue(): Promise<{ ok: number; failed: number }> {
   let failed = 0;
 
   for (const action of pending) {
+    // record_count rows are owned by the cycle-count sync engine
+    // (cycle-count-sync.ts). Skipping them here prevents the two
+    // workers from racing to push the same edit to Supabase twice.
+    if (action.kind === 'record_count') continue;
+
     await markSending(action.id);
     try {
       await sendOne(action.kind, action.idempotencyKey, action.payload);
