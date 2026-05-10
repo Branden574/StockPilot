@@ -136,6 +136,16 @@ export class ShipmentsService {
   async list(filters: {
     status?: ShipmentStatus;
     destinationCharterId?: string;
+    /**
+     * Filter to shipments that originate from this warehouse. Used by the
+     * per-warehouse detail page to show "recent shipments from here".
+     */
+    sourceWarehouseId?: string;
+    /**
+     * Cap the number of returned rows. Defaults to no cap; the per-warehouse
+     * detail page passes `limit: 10` for the recent-shipments panel.
+     */
+    limit?: number;
   } = {}): Promise<ShipmentSummary[]> {
     let query = this.ctx.supabase
       .from('shipments')
@@ -153,6 +163,12 @@ export class ShipmentsService {
     if (filters.status) query = query.eq('status', filters.status);
     if (filters.destinationCharterId) {
       query = query.eq('destination_charter_id', filters.destinationCharterId);
+    }
+    if (filters.sourceWarehouseId) {
+      query = query.eq('source_warehouse_id', filters.sourceWarehouseId);
+    }
+    if (typeof filters.limit === 'number' && filters.limit > 0) {
+      query = query.limit(filters.limit);
     }
 
     const { data, error } = await query;

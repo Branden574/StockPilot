@@ -241,7 +241,7 @@ export function CommandPalette() {
                   <Command.Item
                     key={`wh-${w.id}`}
                     value={`warehouse ${w.name}`}
-                    onSelect={() => go(`/dashboard/admin/warehouses`)}
+                    onSelect={() => go(`/dashboard/warehouses/${w.id}`)}
                     className={ROW}
                   >
                     <Warehouse className="text-muted-foreground h-3.5 w-3.5" />
