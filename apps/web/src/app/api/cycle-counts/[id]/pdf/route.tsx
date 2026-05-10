@@ -1,0 +1,117 @@
+import { NextResponse, type NextRequest } from 'next/server';
+import { renderToStream } from '@react-pdf/renderer';
+
+import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
+import { CycleCountSheetPdf, type CycleCountPdfLine } from '@/lib/pdf/cycle-count';
+import { audit } from '@/server/services/audit';
+import { ServiceError } from '@/server/services/context';
+import { CycleCountsService } from '@/server/services/cycle-counts';
+import { WarehousesService } from '@/server/services/warehouses';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+  try {
+    const ctx = await withApiContext();
+    if (!ctx) {
+      return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+    }
+
+    const ccSvc = new CycleCountsService(ctx);
+    const warehousesSvc = new WarehousesService(ctx);
+
+    const { header, lines } = await ccSvc.get(id);
+
+    let warehouseName: string | null = null;
+    if (header.warehouse_id) {
+      const warehouses = await warehousesSvc.list();
+      warehouseName = warehouses.find((w) => w.id === header.warehouse_id)?.name ?? null;
+    }
+
+    // Pull bin / primary-location labels for each item in one shot so the
+    // counter knows where to physically look. Items can be missing a
+    // bin_location, so render '—' in that slot. inventory_items already
+    // belongs to the same org via RLS.
+    const itemIds = lines
+      .map((l) => l.item_id)
+      .filter((v): v is string => Boolean(v));
+    const binByItem = new Map<string, string | null>();
+    if (itemIds.length > 0) {
+      const { data } = await ctx.supabase
+        .from('inventory_items')
+        .select('id, bin_location, primary_location_id, locations:locations!primary_location_id (name)')
+        .eq('organization_id', ctx.organizationId)
+        .in('id', itemIds);
+      for (const row of (data ?? []) as Array<{
+        id: string;
+        bin_location: string | null;
+        locations: { name: string } | { name: string }[] | null;
+      }>) {
+        const locField = row.locations;
+        const loc = Array.isArray(locField) ? locField[0] : locField;
+        const label = row.bin_location || loc?.name || null;
+        binByItem.set(row.id, label);
+      }
+    }
+
+    const lineRows: CycleCountPdfLine[] = lines.map((l) => ({
+      sku: l.item?.sku ?? '',
+      name: l.item?.name ?? 'Unknown item',
+      unitOfMeasure: l.item?.unit_of_measure ?? '',
+      location: binByItem.get(l.item_id) ?? null,
+      expectedQuantity: Number(l.expected_quantity) || 0,
+    }));
+
+    const { data: org } = await ctx.supabase
+      .from('organizations')
+      .select('name, logo_url')
+      .eq('id', ctx.organizationId)
+      .maybeSingle();
+    const orgName = ((org as { name?: string | null })?.name ?? 'StockPilot') || 'StockPilot';
+    const orgLogoUrl = ((org as { logo_url?: string | null })?.logo_url ?? null) || null;
+
+    const stream = await renderToStream(
+      <CycleCountSheetPdf
+        cycle={{
+          id: header.id,
+          warehouseName,
+          notes: header.notes ?? null,
+          startedAt: header.started_at ?? null,
+          status: header.status,
+        }}
+        lines={lineRows}
+        org={{ name: orgName, logoUrl: orgLogoUrl }}
+      />,
+    );
+
+    void audit({
+      event: 'pdf.exported',
+      entityType: 'cycle_count',
+      entityId: id,
+      extra: { format: 'pdf' },
+    });
+
+    const filename = `cycle-count-${id.slice(0, 8)}.pdf`;
+    return new NextResponse(stream as unknown as ReadableStream<Uint8Array>, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `inline; filename="${filename}"`,
+        'Cache-Control': 'no-store',
+      },
+    });
+  } catch (e) {
+    if (e instanceof ServiceError) {
+      const status = e.code === 'not_found' ? 404 : e.code === 'forbidden' ? 403 : 500;
+      return NextResponse.json({ error: e.code, message: e.message }, { status });
+    }
+    void reportError(e, { tag: 'pdf.cycle_count' });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  }
+}

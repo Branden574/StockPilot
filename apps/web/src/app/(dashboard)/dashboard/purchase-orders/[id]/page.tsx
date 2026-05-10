@@ -1,3 +1,4 @@
+import { Download } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
@@ -6,6 +7,7 @@ import { PoSetDestination } from '@/components/po/po-set-destination';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
 import { PoActions } from '@/components/po/po-actions';
 import { ReceiptHistory } from '@/components/po/receipt-history';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
@@ -119,6 +121,11 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline">
+            <a href={`/api/purchase-orders/${id}/pdf`} target="_blank" rel="noopener noreferrer">
+              <Download className="h-4 w-4" /> Download PDF
+            </a>
+          </Button>
           <PoActions poId={id} status={status} />
           {canReceive && warehouseId && (
             <PoReceiveDialog

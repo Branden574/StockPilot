@@ -1,0 +1,227 @@
+import { Document, Page, Text, View } from '@react-pdf/renderer';
+
+import { BrandedHeader } from './branding';
+import {
+  PDF_COLORS,
+  formatCurrencyForPdf,
+  formatDateForPdf,
+  pdfStyles,
+} from './styles';
+
+export interface PoPdfLine {
+  sku: string;
+  name: string;
+  quantityOrdered: number;
+  unitCost: number;
+  lineTotal: number;
+}
+
+export interface PoPdfHeader {
+  poNumber: string;
+  status: string;
+  notes: string | null;
+  expectedAt: string | null;
+  createdAt: string | null;
+  subtotal: number;
+  total: number;
+}
+
+export interface PoPdfOrg {
+  name: string;
+  logoUrl: string | null;
+}
+
+export interface PoPdfSupplier {
+  name: string;
+  contactName: string | null;
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+}
+
+export interface PoPdfDestination {
+  warehouseName: string | null;
+  locationName: string | null;
+}
+
+interface PurchaseOrderPdfProps {
+  po: PoPdfHeader;
+  lines: PoPdfLine[];
+  org: PoPdfOrg;
+  supplier: PoPdfSupplier | null;
+  destination: PoPdfDestination | null;
+}
+
+// Fixed-width column layout for the PO line table. Sum to ~100 so flex
+// widths translate cleanly to the available row.
+const PO_COLS = {
+  num: 5,
+  sku: 18,
+  name: 39,
+  qty: 10,
+  unit: 14,
+  total: 14,
+} as const;
+
+export function PurchaseOrderPdf({
+  po,
+  lines,
+  org,
+  supplier,
+  destination,
+}: PurchaseOrderPdfProps) {
+  const subtotal = Number(po.subtotal) || 0;
+  const total = Number(po.total) || 0;
+  const adjustments = total - subtotal; // tax + shipping rolled together; only shown when >0
+
+  return (
+    <Document title={`Purchase Order ${po.poNumber}`}>
+      <Page size="LETTER" style={pdfStyles.page}>
+        <BrandedHeader
+          orgName={org.name}
+          orgLogoUrl={org.logoUrl}
+          title={`Purchase Order #${po.poNumber}`}
+          subtitle={po.createdAt ? `Created ${formatDateForPdf(po.createdAt)}` : undefined}
+          documentDate={new Date()}
+        />
+
+        <View style={[pdfStyles.section, pdfStyles.twoCol]}>
+          <View style={pdfStyles.col}>
+            <Text style={pdfStyles.sectionTitle}>Bill to</Text>
+            <Text style={pdfStyles.bold}>{org.name}</Text>
+            {destination?.warehouseName ? (
+              <Text style={pdfStyles.muted}>
+                Ship to: {destination.warehouseName}
+                {destination.locationName ? ` · ${destination.locationName}` : ''}
+              </Text>
+            ) : null}
+          </View>
+          <View style={pdfStyles.col}>
+            <Text style={pdfStyles.sectionTitle}>Supplier</Text>
+            {supplier ? (
+              <>
+                <Text style={pdfStyles.bold}>{supplier.name}</Text>
+                {supplier.contactName ? (
+                  <Text style={pdfStyles.muted}>{supplier.contactName}</Text>
+                ) : null}
+                {supplier.email ? (
+                  <Text style={pdfStyles.muted}>{supplier.email}</Text>
+                ) : null}
+                {supplier.phone ? (
+                  <Text style={pdfStyles.muted}>{supplier.phone}</Text>
+                ) : null}
+                {supplier.website ? (
+                  <Text style={pdfStyles.muted}>{supplier.website}</Text>
+                ) : null}
+              </>
+            ) : (
+              <Text style={pdfStyles.muted}>No supplier assigned</Text>
+            )}
+          </View>
+        </View>
+
+        <View style={[pdfStyles.section, pdfStyles.twoCol]}>
+          <View style={pdfStyles.col}>
+            <Text style={pdfStyles.sectionTitle}>Status</Text>
+            <Text>{po.status}</Text>
+          </View>
+          <View style={pdfStyles.col}>
+            <Text style={pdfStyles.sectionTitle}>Expected delivery</Text>
+            <Text>{formatDateForPdf(po.expectedAt)}</Text>
+          </View>
+        </View>
+
+        {po.notes ? (
+          <View style={pdfStyles.section}>
+            <Text style={pdfStyles.sectionTitle}>Notes</Text>
+            <Text style={pdfStyles.muted}>{po.notes}</Text>
+          </View>
+        ) : null}
+
+        <View style={pdfStyles.section}>
+          <Text style={pdfStyles.sectionTitle}>Line items</Text>
+          <View style={pdfStyles.table}>
+            <View style={pdfStyles.tHeadRow} fixed>
+              <Text style={[pdfStyles.tHeadCell, { flex: PO_COLS.num }]}>#</Text>
+              <Text style={[pdfStyles.tHeadCell, { flex: PO_COLS.sku }]}>SKU</Text>
+              <Text style={[pdfStyles.tHeadCell, { flex: PO_COLS.name }]}>Description</Text>
+              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>Qty</Text>
+              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
+                Unit cost
+              </Text>
+              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.total }]}>
+                Line total
+              </Text>
+            </View>
+            {lines.length === 0 ? (
+              <View style={pdfStyles.tRow}>
+                <Text style={[pdfStyles.tCell, pdfStyles.muted, { flex: 1 }]}>
+                  No line items.
+                </Text>
+              </View>
+            ) : (
+              lines.map((l, i) => (
+                <View
+                  // eslint-disable-next-line react/no-array-index-key
+                  key={`${l.sku}-${i}`}
+                  style={pdfStyles.tRow}
+                  wrap={false}
+                >
+                  <Text style={[pdfStyles.tCell, pdfStyles.muted, { flex: PO_COLS.num }]}>
+                    {i + 1}
+                  </Text>
+                  <Text style={[pdfStyles.tCell, pdfStyles.tCellMono, { flex: PO_COLS.sku }]}>
+                    {l.sku || '—'}
+                  </Text>
+                  <Text style={[pdfStyles.tCell, { flex: PO_COLS.name }]}>{l.name}</Text>
+                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>
+                    {l.quantityOrdered}
+                  </Text>
+                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
+                    {formatCurrencyForPdf(l.unitCost)}
+                  </Text>
+                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.total }]}>
+                    {formatCurrencyForPdf(l.lineTotal)}
+                  </Text>
+                </View>
+              ))
+            )}
+          </View>
+        </View>
+
+        <View style={pdfStyles.totalsWrap} wrap={false}>
+          <View style={pdfStyles.totalsBox}>
+            <View style={pdfStyles.totalsRow}>
+              <Text style={pdfStyles.totalsLabel}>Subtotal</Text>
+              <Text style={pdfStyles.totalsValue}>{formatCurrencyForPdf(subtotal)}</Text>
+            </View>
+            {adjustments > 0 ? (
+              <View style={pdfStyles.totalsRow}>
+                <Text style={pdfStyles.totalsLabel}>Tax & shipping</Text>
+                <Text style={pdfStyles.totalsValue}>{formatCurrencyForPdf(adjustments)}</Text>
+              </View>
+            ) : null}
+            <View style={pdfStyles.totalsRowFinal}>
+              <Text>Total</Text>
+              <Text>{formatCurrencyForPdf(total)}</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={pdfStyles.footer} fixed>
+          <Text>{org.name} · Generated by StockPilot</Text>
+          <Text
+            style={pdfStyles.pageNumber}
+            render={({ pageNumber, totalPages }) =>
+              `Page ${pageNumber} of ${totalPages}`
+            }
+          />
+        </View>
+
+        {/* Belt-and-suspenders: keep the linter quiet about PDF_COLORS being
+            "imported but not used" if the totals colorway is later dropped. */}
+        {PDF_COLORS ? null : null}
+      </Page>
+    </Document>
+  );
+}
