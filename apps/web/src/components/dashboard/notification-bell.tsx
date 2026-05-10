@@ -113,7 +113,7 @@ export function NotificationBell({ userId, initialUnread }: Props) {
       {showBadge && (
         <span
           aria-hidden
-          className="outline-background bg-destructive absolute -right-0.5 -top-0.5 grid min-h-[14px] min-w-[14px] place-items-center rounded-full px-1 text-[9.5px] font-bold leading-none text-white outline outline-[1.5px]"
+          className="outline-background bg-destructive text-destructive-foreground absolute -right-0.5 -top-0.5 grid min-h-[14px] min-w-[14px] place-items-center rounded-full px-1 text-[9.5px] font-bold leading-none outline outline-[1.5px]"
         >
           {label}
         </span>

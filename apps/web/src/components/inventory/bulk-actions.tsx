@@ -171,7 +171,7 @@ export function BulkActions({
 
   return (
     <>
-      <div className="border-foreground/20 bg-card flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 text-[12.5px]">
+      <div className="border-border bg-card flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 text-[12.5px]">
         <span className="font-mono tabular-nums text-[var(--ed-ink-2)]">
           {count} selected
         </span>
