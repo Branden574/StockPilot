@@ -32,12 +32,27 @@ interface SourceWarehouseOption {
   name: string;
 }
 
+interface CharterOption {
+  id: string;
+  name: string;
+  code: string | null;
+}
+
+interface WarehouseCharterPair {
+  warehouse_id: string;
+  charter_id: string;
+}
+
 export function GeneratePackingSlipDialog({
   orderRequestId,
   sourceWarehouses,
+  charters,
+  warehouseCharterPairs,
 }: {
   orderRequestId: string;
   sourceWarehouses: SourceWarehouseOption[];
+  charters: CharterOption[];
+  warehouseCharterPairs: WarehouseCharterPair[];
 }) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
@@ -45,6 +60,8 @@ export function GeneratePackingSlipDialog({
   const [sourceWarehouseId, setSourceWarehouseId] = React.useState<string>(
     () => sourceWarehouses[0]?.id ?? '',
   );
+  const [destinationCharterId, setDestinationCharterId] =
+    React.useState<string>('');
   const [attentionToName, setAttentionToName] = React.useState('');
   const [notes, setNotes] = React.useState('');
   const [ccEmails, setCcEmails] = React.useState('');
@@ -52,14 +69,47 @@ export function GeneratePackingSlipDialog({
   React.useEffect(() => {
     if (!open) return;
     setSourceWarehouseId(sourceWarehouses[0]?.id ?? '');
+    setDestinationCharterId('');
     setAttentionToName('');
     setNotes('');
     setCcEmails('');
   }, [open, sourceWarehouses]);
 
+  // Filter charters by selected source via the warehouse_charters junction.
+  const chartersByWarehouse = React.useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const p of warehouseCharterPairs) {
+      const set = m.get(p.warehouse_id) ?? new Set<string>();
+      set.add(p.charter_id);
+      m.set(p.warehouse_id, set);
+    }
+    return m;
+  }, [warehouseCharterPairs]);
+
+  const filteredCharters = React.useMemo(() => {
+    if (!sourceWarehouseId) return [] as CharterOption[];
+    const allowed = chartersByWarehouse.get(sourceWarehouseId);
+    if (!allowed || allowed.size === 0) return [];
+    return charters.filter((c) => allowed.has(c.id));
+  }, [charters, chartersByWarehouse, sourceWarehouseId]);
+
+  // Reset destination when source changes if previous charter isn't serviced.
+  React.useEffect(() => {
+    if (
+      destinationCharterId &&
+      !filteredCharters.some((c) => c.id === destinationCharterId)
+    ) {
+      setDestinationCharterId('');
+    }
+  }, [filteredCharters, destinationCharterId]);
+
   async function submit() {
     if (!sourceWarehouseId) {
       toast.error('Pick a source warehouse');
+      return;
+    }
+    if (!destinationCharterId) {
+      toast.error('Pick a destination charter');
       return;
     }
     const ccList = ccEmails
@@ -70,6 +120,7 @@ export function GeneratePackingSlipDialog({
     const res = await createShipmentFromOrderRequestAction({
       orderRequestId,
       sourceWarehouseId,
+      destinationCharterId,
       attentionToName: attentionToName.trim() ? attentionToName.trim() : null,
       notes: notes.trim() ? notes.trim() : null,
       ccEmails: ccList.length > 0 ? ccList : undefined,
@@ -85,6 +136,7 @@ export function GeneratePackingSlipDialog({
   }
 
   const disabled = sourceWarehouses.length === 0;
+  const canSubmit = !!sourceWarehouseId && !!destinationCharterId;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -98,8 +150,8 @@ export function GeneratePackingSlipDialog({
         <DialogHeader>
           <DialogTitle>Generate packing slip</DialogTitle>
           <DialogDescription>
-            Create a draft shipment from this order request. The signed PDF
-            workflow ships in Phase 2B; for now this prints a paper slip.
+            Create a draft shipment from this order request. Pick the source
+            warehouse and the receiving charter, then continue.
           </DialogDescription>
         </DialogHeader>
 
@@ -125,6 +177,35 @@ export function GeneratePackingSlipDialog({
               <p className="text-muted-foreground text-xs">
                 You don&apos;t have write access to any warehouse — can&apos;t
                 generate a packing slip.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="dest-charter">Shipping to (charter)</Label>
+            <Select
+              value={destinationCharterId}
+              onValueChange={(v) => setDestinationCharterId(v)}
+              disabled={!sourceWarehouseId || filteredCharters.length === 0}
+            >
+              <SelectTrigger id="dest-charter">
+                <SelectValue placeholder="Select a destination charter" />
+              </SelectTrigger>
+              <SelectContent>
+                {filteredCharters.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                    {c.code ? (
+                      <span className="text-muted-foreground text-xs"> ({c.code})</span>
+                    ) : null}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {sourceWarehouseId && filteredCharters.length === 0 && (
+              <p className="text-muted-foreground text-xs">
+                This warehouse doesn&apos;t service any charters yet. Add
+                charter assignments in Admin → Warehouses.
               </p>
             )}
           </div>
@@ -174,7 +255,7 @@ export function GeneratePackingSlipDialog({
           >
             Cancel
           </Button>
-          <Button onClick={submit} disabled={submitting || disabled}>
+          <Button onClick={submit} disabled={submitting || disabled || !canSubmit}>
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create'}
           </Button>
         </DialogFooter>

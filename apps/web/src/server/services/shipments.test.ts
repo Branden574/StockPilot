@@ -33,16 +33,19 @@ import { ShipmentsService } from './shipments';
 import { ServiceError } from './context';
 import { audit } from './audit';
 
+// Phase 2C destination pivot — shipments now point at a charter, not a
+// warehouse. The header row carries `destination_charter_id`; the get()
+// path loads charter info, not warehouse info, for the destination.
 const SHIPMENT_HEADER = {
   id: 'ship-1',
   organization_id: 'org-test',
-  work_order_number: 'ISR-WHA-05102026',
+  work_order_number: 'ISR-CHARTERA-05102026',
   status: 'draft' as const,
   ship_date: '2026-05-10',
   attention_to_name: null,
   notes: null,
   source_warehouse_id: 'wh-a',
-  destination_warehouse_id: 'wh-b',
+  destination_charter_id: 'ch-a',
   order_request_id: null,
   signature_image_url: null,
   signed_by_name: null,
@@ -85,6 +88,12 @@ const WAREHOUSE_ROW = {
   manager: null,
 };
 
+const CHARTER_ROW = {
+  id: 'ch-a',
+  name: 'Charter A',
+  code: 'CHARTERA',
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -92,10 +101,11 @@ beforeEach(() => {
 describe('ShipmentsService.markShipped', () => {
   it('deducts stock for every line via adjust_stock then flips status to shipped', async () => {
     const stub = makeSupabaseStub({
-      // get() loads header + lines + two warehouses
+      // get() loads header + lines + source warehouse + destination charter
       'shipments.select.maybeSingle': { data: SHIPMENT_HEADER, error: null },
       'shipment_lines.select': { data: SHIPMENT_LINES, error: null },
       'warehouses.select.maybeSingle': { data: WAREHOUSE_ROW, error: null },
+      'charters.select.maybeSingle': { data: CHARTER_ROW, error: null },
       'organization_members.select.maybeSingle': { data: null, error: null },
       // status flip
       'shipments.update': { data: null, error: null },
@@ -115,7 +125,7 @@ describe('ShipmentsService.markShipped', () => {
         p_quantity_change: -5,
         p_movement_type: 'transfer',
         p_location_id: null,
-        p_reason: 'Shipment ISR-WHA-05102026',
+        p_reason: 'Shipment ISR-CHARTERA-05102026',
         p_notes: null,
       },
     });
@@ -141,6 +151,7 @@ describe('ShipmentsService.markShipped', () => {
       'shipments.select.maybeSingle': { data: SHIPMENT_HEADER, error: null },
       'shipment_lines.select': { data: SHIPMENT_LINES, error: null },
       'warehouses.select.maybeSingle': { data: WAREHOUSE_ROW, error: null },
+      'charters.select.maybeSingle': { data: CHARTER_ROW, error: null },
       'organization_members.select.maybeSingle': { data: null, error: null },
       'rpc:adjust_stock': {
         data: null,
@@ -162,6 +173,7 @@ describe('ShipmentsService.markShipped', () => {
       'shipments.select.maybeSingle': { data: shipped, error: null },
       'shipment_lines.select': { data: SHIPMENT_LINES, error: null },
       'warehouses.select.maybeSingle': { data: WAREHOUSE_ROW, error: null },
+      'charters.select.maybeSingle': { data: CHARTER_ROW, error: null },
       'organization_members.select.maybeSingle': { data: null, error: null },
     });
     const svc = new ShipmentsService(makeServiceContext(stub.client));
@@ -184,6 +196,7 @@ describe('ShipmentsService.markShipped', () => {
       'shipments.select.maybeSingle': { data: SHIPMENT_HEADER, error: null },
       'shipment_lines.select': { data: linesWithZero, error: null },
       'warehouses.select.maybeSingle': { data: WAREHOUSE_ROW, error: null },
+      'charters.select.maybeSingle': { data: CHARTER_ROW, error: null },
       'organization_members.select.maybeSingle': { data: null, error: null },
       'shipments.update': { data: null, error: null },
       'rpc:adjust_stock': { data: {}, error: null },
@@ -203,5 +216,29 @@ describe('ShipmentsService.markShipped', () => {
         extra: { linesShipped: 1, totalQtyShipped: 3 },
       }),
     );
+  });
+});
+
+describe('ShipmentsService.manualCreate', () => {
+  it('rejects when the destination charter is not serviced by the source warehouse', async () => {
+    // warehouse_charters lookup returns null → not serviced.
+    const stub = makeSupabaseStub({
+      'warehouse_charters.select.maybeSingle': { data: null, error: null },
+    });
+    const svc = new ShipmentsService(makeServiceContext(stub.client));
+
+    await expect(
+      svc.manualCreate({
+        sourceWarehouseId: 'wh-a',
+        destinationCharterId: 'ch-not-serviced',
+        lines: [{ itemId: 'item-1', qtyShipped: 1 }],
+      }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Selected charter is not serviced by this warehouse.',
+    });
+
+    // We must NOT have proceeded to insert anything.
+    expect(stub.fromCalls).not.toContain('shipments');
   });
 });

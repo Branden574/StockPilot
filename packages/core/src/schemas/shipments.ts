@@ -27,6 +27,10 @@ const lineInputSchema = z.object({
 export const createShipmentFromOrderRequestSchema = z.object({
   orderRequestId: uuidSchema,
   sourceWarehouseId: uuidSchema,
+  // Destination is now a CHARTER (the receiving site/school), not a
+  // warehouse. The source warehouse ships TO the charter; the charter
+  // must be in `warehouse_charters` for the chosen source.
+  destinationCharterId: uuidSchema,
   attentionToName: trimmedNullable,
   notes: z.string().max(2000).optional().nullable().transform((v) => v ?? null),
   ccEmails: ccEmailsSchema,
@@ -37,7 +41,8 @@ export type CreateShipmentFromOrderRequestInput = z.infer<
 
 export const manualCreateShipmentSchema = z.object({
   sourceWarehouseId: uuidSchema,
-  destinationWarehouseId: uuidSchema,
+  // Destination is a CHARTER (see note on createShipmentFromOrderRequest).
+  destinationCharterId: uuidSchema,
   attentionToName: trimmedNullable,
   notes: z.string().max(2000).optional().nullable().transform((v) => v ?? null),
   ccEmails: ccEmailsSchema,

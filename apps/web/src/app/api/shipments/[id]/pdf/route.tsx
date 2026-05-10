@@ -42,7 +42,8 @@ export async function GET(
     }));
 
     const sourceAddrLines = addressJsonToLines(detail.source?.address ?? null);
-    const destAddrLines = addressJsonToLines(detail.destination?.address ?? null);
+    // Destination is a charter — no address field in the schema, so no
+    // destination address lines to compute.
 
     const { data: org } = await ctx.supabase
       .from('organizations')
@@ -100,9 +101,7 @@ export async function GET(
         }}
         destination={{
           name: detail.destination?.name ?? '',
-          addressLines: destAddrLines,
-          contactPhone: detail.destination?.contactPhone ?? null,
-          contactEmail: detail.destination?.contactEmail ?? null,
+          code: detail.destination?.code ?? null,
         }}
         lines={lineRows}
         manager={

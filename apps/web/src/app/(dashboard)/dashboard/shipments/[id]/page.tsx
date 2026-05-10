@@ -34,7 +34,7 @@ export default async function ShipmentDetailPage({
   }
 
   const sourceAddrLines = addressJsonToLines(detail.source?.address ?? null);
-  const destAddrLines = addressJsonToLines(detail.destination?.address ?? null);
+  // Destination is a charter — no address field, so no destination address.
   const totalShipped = detail.lines.reduce((s, l) => s + l.qtyShipped, 0);
   const totalBackOrdered = detail.lines.reduce(
     (s, l) => s + l.qtyBackOrdered,
@@ -159,17 +159,16 @@ export default async function ShipmentDetailPage({
               Ship to
             </h2>
             <p className="font-medium">{detail.destination?.name ?? '—'}</p>
+            {detail.destination?.code ? (
+              <p className="text-muted-foreground mt-0.5 font-mono text-[11px]">
+                {detail.destination.code}
+              </p>
+            ) : null}
             {detail.attentionToName && (
-              <p className="text-muted-foreground mt-1 text-xs">
+              <p className="text-muted-foreground mt-2 text-xs">
                 Attention: {detail.attentionToName}
               </p>
             )}
-            <div className="text-muted-foreground mt-2 space-y-0.5 text-xs">
-              {destAddrLines.map((l, i) => (
-                // eslint-disable-next-line react/no-array-index-key
-                <p key={`d-${i}`}>{l}</p>
-              ))}
-            </div>
           </section>
 
           <section className="bg-card rounded-xl border p-4">

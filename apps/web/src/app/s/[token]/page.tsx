@@ -38,12 +38,18 @@ interface ShipmentRow {
   signature_email_to: string | null;
   signature_token_expires_at: string | null;
   source_warehouse_id: string;
-  destination_warehouse_id: string;
+  destination_charter_id: string;
 }
 
 interface WarehouseRow {
   id: string;
   name: string;
+}
+
+interface CharterRow {
+  id: string;
+  name: string;
+  code: string | null;
 }
 
 interface LineRow {
@@ -109,7 +115,7 @@ export default async function ShipmentSignaturePage({
     .select(
       'id, organization_id, work_order_number, status, ship_date, ' +
         'attention_to_name, signed_by_name, signed_at, signature_email_to, ' +
-        'signature_token_expires_at, source_warehouse_id, destination_warehouse_id',
+        'signature_token_expires_at, source_warehouse_id, destination_charter_id',
     )
     .eq('signature_token', token)
     .maybeSingle();
@@ -153,9 +159,9 @@ export default async function ShipmentSignaturePage({
       .eq('id', shipment.source_warehouse_id)
       .maybeSingle(),
     admin
-      .from('warehouses')
-      .select('id, name')
-      .eq('id', shipment.destination_warehouse_id)
+      .from('charters')
+      .select('id, name, code')
+      .eq('id', shipment.destination_charter_id)
       .maybeSingle(),
     admin
       .from('shipment_lines')
@@ -171,7 +177,7 @@ export default async function ShipmentSignaturePage({
       .maybeSingle(),
   ]);
   const source = srcRes.data as WarehouseRow | null;
-  const destination = dstRes.data as WarehouseRow | null;
+  const destination = dstRes.data as CharterRow | null;
   const lines = (linesRes.data ?? []) as LineRow[];
   const org =
     (orgRes.data as { name: string | null; logo_url: string | null } | null) ??

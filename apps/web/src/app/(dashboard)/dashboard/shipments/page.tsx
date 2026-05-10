@@ -75,7 +75,18 @@ export default async function ShipmentsPage() {
                       {s.sourceWarehouseName ?? '—'}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm">
-                      {s.destinationWarehouseName ?? '—'}
+                      {s.destinationCharterName ? (
+                        <span className="flex items-center gap-1.5">
+                          <span>{s.destinationCharterName}</span>
+                          {s.destinationCharterCode ? (
+                            <span className="text-muted-foreground/70 font-mono text-[11px]">
+                              {s.destinationCharterCode}
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
                     </TableCell>
                     <TableCell>
                       <ShipmentStatusBadge status={s.status} />

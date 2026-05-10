@@ -61,7 +61,7 @@ export async function submitShipmentSignatureAction(
     .select(
       'id, organization_id, work_order_number, status, ship_date, ' +
         'attention_to_name, notes, source_warehouse_id, ' +
-        'destination_warehouse_id, signature_token_expires_at, ' +
+        'destination_charter_id, signature_token_expires_at, ' +
         'signature_email_cc, signature_token',
     )
     .eq('signature_token', token)
@@ -82,7 +82,7 @@ export async function submitShipmentSignatureAction(
     attention_to_name: string | null;
     notes: string | null;
     source_warehouse_id: string;
-    destination_warehouse_id: string;
+    destination_charter_id: string;
     signature_token_expires_at: string | null;
     signature_email_cc: string[] | null;
     signature_token: string;
@@ -149,9 +149,9 @@ export async function submitShipmentSignatureAction(
       .eq('id', shipment.source_warehouse_id)
       .maybeSingle(),
     admin
-      .from('warehouses')
-      .select('id, name, address, contact_phone, contact_email')
-      .eq('id', shipment.destination_warehouse_id)
+      .from('charters')
+      .select('id, name, code')
+      .eq('id', shipment.destination_charter_id)
       .maybeSingle(),
     admin
       .from('organizations')
@@ -196,9 +196,7 @@ export async function submitShipmentSignatureAction(
     | {
         id: string;
         name: string;
-        address: Record<string, unknown> | null;
-        contact_phone: string | null;
-        contact_email: string | null;
+        code: string | null;
       }
     | null;
   const orgRow = orgRes.data as
@@ -206,7 +204,7 @@ export async function submitShipmentSignatureAction(
     | null;
 
   const sourceAddrLines = addressJsonToLines(src?.address ?? null);
-  const destAddrLines = addressJsonToLines(dst?.address ?? null);
+  // Destination is a charter — no address field in the schema.
   const sourceManager = src
     ? Array.isArray(src.manager)
       ? src.manager[0] ?? null
@@ -238,9 +236,7 @@ export async function submitShipmentSignatureAction(
         }}
         destination={{
           name: dst?.name ?? '',
-          addressLines: destAddrLines,
-          contactPhone: dst?.contact_phone ?? null,
-          contactEmail: dst?.contact_email ?? null,
+          code: dst?.code ?? null,
         }}
         lines={lineRows}
         manager={
@@ -290,7 +286,7 @@ export async function submitShipmentSignatureAction(
       orgName,
       workOrderNumber: shipment.work_order_number,
       sourceWarehouseName: src?.name ?? '',
-      destinationWarehouseName: dst?.name ?? '',
+      destinationCharterName: dst?.name ?? '',
       signedByName,
       signedAt,
       itemCount: lineRows.length,
