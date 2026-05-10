@@ -1,9 +1,11 @@
+import { ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 
 import { ChangePasswordForm } from '@/components/settings/change-password-form';
 import { MfaEnrollment } from '@/components/settings/mfa-enrollment';
 import { MfaPolicyEditor } from '@/components/settings/mfa-policy-editor';
 import { MfaRecoveryCodes } from '@/components/settings/mfa-recovery-codes';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getMfaRecoveryCodeStatus } from '@/server/actions/mfa-recovery';
@@ -21,7 +23,7 @@ export default async function SecuritySettingsPage({
   const ctx = await requireOrgContext();
   const supabase = await createClient();
 
-  const [factorsRes, orgRow, recoveryStatus] = await Promise.all([
+  const [factorsRes, orgRow, recoveryStatus, aalRes] = await Promise.all([
     supabase.auth.mfa.listFactors(),
     supabase
       .from('organizations')
@@ -29,6 +31,7 @@ export default async function SecuritySettingsPage({
       .eq('id', ctx.organizationId)
       .maybeSingle(),
     getMfaRecoveryCodeStatus(),
+    supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
   ]);
 
   const verifiedFactors = (factorsRes.data?.all ?? [])
@@ -43,6 +46,14 @@ export default async function SecuritySettingsPage({
   const isAdmin = ctx.role === 'owner' || ctx.role === 'admin';
   const policyRequired =
     policy === 'all_required' || (policy === 'admins_required' && isAdmin);
+
+  // Supabase requires AAL2 to update the password when MFA is enabled.
+  // If the user has verified factors but their current session is AAL1
+  // (e.g. signed in before enrolling, or session loaded from a remember-me
+  // cookie that didn't go through the MFA challenge), don't show the form
+  // — show a step-up CTA pointing at /signin/mfa instead.
+  const passwordChangeBlockedByMfa =
+    verifiedFactors.length > 0 && aalRes.data?.currentLevel !== 'aal2';
 
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
@@ -77,7 +88,28 @@ export default async function SecuritySettingsPage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ChangePasswordForm />
+            {passwordChangeBlockedByMfa ? (
+              <div className="border-border bg-muted/40 flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <ShieldCheck className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" />
+                  <div className="text-sm">
+                    <p className="font-medium">Verify it&apos;s you first</p>
+                    <p className="text-muted-foreground mt-0.5 text-xs">
+                      Two-factor is on but this session hasn&apos;t completed
+                      the MFA challenge. Step up with your authenticator code,
+                      then come back here.
+                    </p>
+                  </div>
+                </div>
+                <Button asChild size="sm">
+                  <Link href="/signin/mfa?redirect=/dashboard/settings/security">
+                    Verify with code
+                  </Link>
+                </Button>
+              </div>
+            ) : (
+              <ChangePasswordForm />
+            )}
           </CardContent>
         </Card>
 
