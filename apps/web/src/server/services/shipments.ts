@@ -2,7 +2,7 @@ import 'server-only';
 
 import { randomBytes } from 'node:crypto';
 
-import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { audit } from './audit';
 import {
@@ -140,6 +140,38 @@ export class ShipmentsService {
 
   static async forCurrentUser() {
     return new ShipmentsService(await withContext());
+  }
+
+  /**
+   * Cheap count of shipments that have been marked shipped but have not
+   * been signed for and are now more than `staleDays` old (default 7).
+   * Used by the dashboard "needs attention" hero so warehouse staff can
+   * chase down outstanding paper signatures. Warehouse-scoped via the
+   * source_warehouse_id, matching the rest of the shipments surface.
+   */
+  async awaitingSignatureCount(
+    options: { staleDays?: number } = {},
+  ): Promise<number> {
+    const access = await getWarehouseAccess(this.ctx);
+    if (!access.hasAllAccess && access.readableIds.length === 0) return 0;
+    const staleDays = options.staleDays ?? 7;
+    const cutoffIso = new Date(
+      Date.now() - staleDays * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    let q = this.ctx.supabase
+      .from('shipments')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('status', 'shipped')
+      .is('signed_at', null)
+      .lt('ship_date', cutoffIso);
+    if (!access.hasAllAccess) {
+      q = q.in('source_warehouse_id', access.readableIds);
+    }
+    const { count, error } = await q;
+    if (error) throw new ServiceError('internal_error', error.message);
+    return count ?? 0;
   }
 
   async list(filters: {

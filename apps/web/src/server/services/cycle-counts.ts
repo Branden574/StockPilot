@@ -53,6 +53,24 @@ export class CycleCountsService {
     return new CycleCountsService(await withContext());
   }
 
+  /**
+   * Cheap count of cycle counts currently in progress, optionally scoped to
+   * a single warehouse. Used by the dashboard "needs attention" hero so the
+   * caller doesn't have to inline a head-count query. No role gate — every
+   * member who can see the dashboard can see how many counts are open.
+   */
+  async inProgressCount(options: { warehouseId?: string | null } = {}): Promise<number> {
+    let q = this.ctx.supabase
+      .from('cycle_counts')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('status', 'in_progress');
+    if (options.warehouseId) q = q.eq('warehouse_id', options.warehouseId);
+    const { count, error } = await q;
+    if (error) throw new ServiceError('internal_error', error.message);
+    return count ?? 0;
+  }
+
   async list(filters: { assignedTo?: string | null } = {}): Promise<CycleCountRow[]> {
     let query = this.ctx.supabase
       .from('cycle_counts')

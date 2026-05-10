@@ -3,12 +3,14 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Boxes,
+  CheckCircle2,
   ChevronRight,
   ClipboardCheck,
   ClipboardList,
   DollarSign,
   Download,
   PackageCheck,
+  PenLine,
   Plus,
   type LucideIcon,
   Zap,
@@ -22,6 +24,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { Button } from '@/components/ui/button';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
+import { isManagerOrAbove } from '@stockpilot/core';
 import {
   getDashboardActions,
   getDashboardHistory,
@@ -30,17 +33,69 @@ import {
   getThirtyDayMetrics,
   MovementsService,
 } from '@/server/services/movements';
+import { CycleCountsService } from '@/server/services/cycle-counts';
+import { OrderRequestsService } from '@/server/services/order-requests';
+import { PurchaseOrdersService } from '@/server/services/purchase-orders';
+import { ShipmentsService } from '@/server/services/shipments';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 
-const TODAY_LABEL = new Intl.DateTimeFormat('en-US', {
-  weekday: 'long',
-  month: 'long',
-  day: 'numeric',
-});
+/**
+ * Returns the morning/afternoon/evening greeting word + the long-form
+ * date string ("Sunday, May 10") in the org's timezone. Falls back to
+ * the runtime's tz only if Intl rejects the supplied zone (typo / unset).
+ *
+ * Hours: morning 5–11, afternoon 12–17, evening 18–4. Computed from a
+ * single `hour` formatter so DST handoffs do the right thing.
+ */
+function buildGreeting(timezone: string | null): { word: string; dateLabel: string } {
+  const tz = timezone || 'UTC';
+  const safeFormat = (opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat => {
+    try {
+      return new Intl.DateTimeFormat('en-US', { ...opts, timeZone: tz });
+    } catch {
+      return new Intl.DateTimeFormat('en-US', opts);
+    }
+  };
+  const now = new Date();
+  const hour = Number(safeFormat({ hour: 'numeric', hour12: false }).format(now));
+  const word =
+    hour >= 5 && hour <= 11
+      ? 'morning'
+      : hour >= 12 && hour <= 17
+        ? 'afternoon'
+        : 'evening';
+  const dateLabel = safeFormat({
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  }).format(now);
+  return { word, dateLabel };
+}
+
+// Note: the long-form date is now built per-request inside buildGreeting()
+// so it can use the org's saved timezone. There's no longer a module-level
+// formatter — every dashboard render needs the tz before formatting.
+
+interface AttentionItem {
+  id: string;
+  icon: LucideIcon;
+  title: string;
+  detail: string;
+  href: string;
+  /**
+   * Priority rank — lower wins. Encodes the spec order: low-stock,
+   * overdue POs, pending approvals, in-progress cycle counts, unsigned
+   * shipments. When multiple categories have non-zero counts the list
+   * sorts by this rank, so the lead row is always the most urgent
+   * surface (stockouts first, paperwork last).
+   */
+  rank: number;
+  tone: 'danger' | 'warn' | 'neutral';
+}
 
 export default async function DashboardHome() {
   // Resolve the topbar warehouse filter once and pass it into every
@@ -48,45 +103,77 @@ export default async function DashboardHome() {
   // command counts all narrow to the same scope.
   const warehouseFilter = await getActiveWarehouseFilter();
 
-  // One PostgREST round trip per Promise.all branch; cache() de-dupes the
-  // identity/context load across them.
-  const [ctx, summary, lowStock, recentMovements, metrics, actions, history] =
-    await Promise.all([
-      requireOrgContext(),
-      getDashboardSummary({ warehouseId: warehouseFilter ?? undefined }),
-      getLowStockItems(5, { warehouseId: warehouseFilter ?? undefined }),
-      MovementsService.forCurrentUser().then((svc) =>
-        svc.list({ limit: 6, warehouseId: warehouseFilter ?? undefined }),
-      ),
-      getThirtyDayMetrics({ warehouseId: warehouseFilter ?? undefined }),
-      getDashboardActions({ warehouseId: warehouseFilter ?? undefined }),
-      getDashboardHistory({ warehouseId: warehouseFilter ?? undefined }),
-    ]);
+  // Resolve org context first so downstream service builders share the same
+  // React.cache()'d auth load. Then dispatch every dashboard data fetch in
+  // parallel — one round trip per branch.
+  const ctx = await requireOrgContext();
+  const isManagerPlus = isManagerOrAbove(ctx.role);
 
-  // Get-started checklist signals — only fetched cheap heads for counts.
-  // Also resolve the active warehouse name for the dashboard caption when
-  // a filter is set (one extra cheap select).
-  const supabase = await createClient();
-  const [whCountRes, teamCountRes, factorsRes, activeWhNameRes] = await Promise.all([
-    supabase
-      .from('warehouses')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', ctx.organizationId)
-      .neq('status', 'archived'),
-    supabase
-      .from('organization_members')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', ctx.organizationId)
-      .not('accepted_at', 'is', null),
-    supabase.auth.mfa.listFactors(),
-    warehouseFilter
-      ? supabase
-          .from('warehouses')
-          .select('name')
-          .eq('id', warehouseFilter)
-          .maybeSingle()
-      : Promise.resolve({ data: null }),
+  const [
+    summary,
+    lowStock,
+    recentMovements,
+    metrics,
+    actions,
+    history,
+    poOverdueCount,
+    cycleInProgress,
+    pendingApprovals,
+    awaitingSignature,
+  ] = await Promise.all([
+    getDashboardSummary({ warehouseId: warehouseFilter ?? undefined }),
+    getLowStockItems(5, { warehouseId: warehouseFilter ?? undefined }),
+    MovementsService.forCurrentUser().then((svc) =>
+      svc.list({ limit: 6, warehouseId: warehouseFilter ?? undefined }),
+    ),
+    getThirtyDayMetrics({ warehouseId: warehouseFilter ?? undefined }),
+    getDashboardActions({ warehouseId: warehouseFilter ?? undefined }),
+    getDashboardHistory({ warehouseId: warehouseFilter ?? undefined }),
+    PurchaseOrdersService.forCurrentUser().then((svc) =>
+      svc.overdueCount({ warehouseId: warehouseFilter ?? undefined }),
+    ),
+    CycleCountsService.forCurrentUser().then((svc) =>
+      svc.inProgressCount({ warehouseId: warehouseFilter ?? undefined }),
+    ),
+    // Manager+ are the only roles allowed to approve order requests; for
+    // everyone else this hero row would point at a page they can't act on,
+    // so we skip the query entirely instead of rendering a dead link.
+    isManagerPlus
+      ? OrderRequestsService.forCurrentUser().then((svc) => svc.pendingCount())
+      : Promise.resolve(0),
+    ShipmentsService.forCurrentUser().then((svc) => svc.awaitingSignatureCount()),
   ]);
+
+  // Get-started checklist signals + the org's timezone for the greeting.
+  // The timezone column has lived on organizations since the init migration;
+  // we default to UTC if it ever comes back null (shouldn't, but cheap).
+  const supabase = await createClient();
+  const [whCountRes, teamCountRes, factorsRes, activeWhNameRes, orgRes] =
+    await Promise.all([
+      supabase
+        .from('warehouses')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', ctx.organizationId)
+        .neq('status', 'archived'),
+      supabase
+        .from('organization_members')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', ctx.organizationId)
+        .not('accepted_at', 'is', null),
+      supabase.auth.mfa.listFactors(),
+      warehouseFilter
+        ? supabase
+            .from('warehouses')
+            .select('name')
+            .eq('id', warehouseFilter)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+      supabase
+        .from('organizations')
+        .select('timezone')
+        .eq('id', ctx.organizationId)
+        .maybeSingle(),
+    ]);
   const activeWarehouseName = (activeWhNameRes.data?.name as string | undefined) ?? null;
   const warehouseCount = whCountRes.count ?? 0;
   const teamCount = teamCountRes.count ?? 0;
@@ -220,13 +307,89 @@ export default async function DashboardHome() {
   const itemCountDelta = deltaPct(itemCountSeries);
   const lowOutDelta = deltaRaw(lowOutSeries);
 
-  const today = TODAY_LABEL.format(new Date());
-  const attentionCount = summary.lowStockCount + summary.outOfStockCount;
-  const healthyCount = Math.max(summary.itemCount - attentionCount, 0);
+  // Greeting + journalistic date header. Time-of-day greeting respects the
+  // org's saved timezone (see organizations.timezone, default 'UTC') so a
+  // late-night warehouse in Tokyo doesn't say "good morning" because the
+  // Vercel pod woke up in Virginia at 9am ET.
+  const orgTimezone = (orgRes.data?.timezone as string | null | undefined) ?? null;
+  const { word: greetingWord, dateLabel: today } = buildGreeting(orgTimezone);
+  const firstName = ctx.fullName?.split(' ')[0]?.trim() || 'there';
+
+  const attentionStockCount = summary.lowStockCount + summary.outOfStockCount;
+  const healthyCount = Math.max(summary.itemCount - attentionStockCount, 0);
   const healthRate =
     summary.itemCount > 0 ? Math.round((healthyCount / summary.itemCount) * 100) : 100;
   const valuePerSku = summary.itemCount > 0 ? summary.inventoryValue / summary.itemCount : 0;
-  const firstName = ctx.fullName?.split(' ')[0];
+
+  // Hero "needs attention" list — five categories, fixed priority order.
+  // Each surfaced only when its count is > 0. Rank ascending = most urgent
+  // first (stock runs out before paperwork goes stale). When ALL categories
+  // are zero we render the "all clear" card instead of a misleading list.
+  const attentionItems: AttentionItem[] = [];
+  if (attentionStockCount > 0) {
+    attentionItems.push({
+      id: 'low-stock',
+      icon: AlertTriangle,
+      title: `${attentionStockCount} item${attentionStockCount === 1 ? '' : 's'} at or below reorder point`,
+      detail:
+        summary.outOfStockCount > 0
+          ? `${summary.outOfStockCount} critical · ${summary.lowStockCount} below par. Draft POs before they hit zero.`
+          : 'Inventory below the reorder line. Draft POs before it hits zero.',
+      href: '/dashboard/inventory?stock=low&type=all',
+      rank: 1,
+      tone: summary.outOfStockCount > 0 ? 'danger' : 'warn',
+    });
+  }
+  if (poOverdueCount > 0) {
+    attentionItems.push({
+      id: 'po-overdue',
+      icon: ClipboardList,
+      title: `${poOverdueCount} overdue purchase order${poOverdueCount === 1 ? '' : 's'}`,
+      detail: 'Expected receipt date has passed. Chase your suppliers or update the ETA.',
+      href: '/dashboard/purchase-orders?status=overdue',
+      rank: 2,
+      tone: 'warn',
+    });
+  }
+  if (isManagerPlus && pendingApprovals > 0) {
+    attentionItems.push({
+      id: 'order-approvals',
+      icon: ClipboardCheck,
+      title: `${pendingApprovals} order request${pendingApprovals === 1 ? '' : 's'} awaiting your approval`,
+      detail: 'Requests are blocked until a manager moves them forward.',
+      href: '/dashboard/orders?status=pending_approval',
+      rank: 3,
+      tone: 'warn',
+    });
+  }
+  if (cycleInProgress > 0) {
+    attentionItems.push({
+      id: 'cycle-counts',
+      icon: ClipboardCheck,
+      title: `${cycleInProgress} cycle count${cycleInProgress === 1 ? '' : 's'} in progress`,
+      detail: 'Lines are still open. Post counts to reconcile, or cancel if abandoned.',
+      href: '/dashboard/cycle-counts',
+      rank: 4,
+      tone: 'neutral',
+    });
+  }
+  if (awaitingSignature > 0) {
+    attentionItems.push({
+      id: 'shipments-signature',
+      icon: PenLine,
+      title: `${awaitingSignature} shipment${awaitingSignature === 1 ? '' : 's'} waiting for signature`,
+      detail: 'Shipped more than 7 days ago and still unsigned. Confirm delivery on paper or in the portal.',
+      href: '/dashboard/shipments?status=shipped',
+      rank: 5,
+      tone: 'neutral',
+    });
+  }
+  attentionItems.sort((a, b) => a.rank - b.rank);
+  const attentionItemCount = attentionItems.length;
+  const briefingSentence =
+    attentionItemCount === 0
+      ? 'Everything looks healthy.'
+      : `${attentionItemCount} thing${attentionItemCount === 1 ? '' : 's'} need${attentionItemCount === 1 ? 's' : ''} attention today.`;
 
   return (
     <div className="mx-auto w-full max-w-[1760px] px-5 pb-20 pt-6 sm:px-7 2xl:px-9">
@@ -235,119 +398,134 @@ export default async function DashboardHome() {
           <GetStartedChecklist steps={checklistSteps} />
         </div>
       )}
-      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <section className="border-border border-b pb-4">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
-                {today}
-                {activeWarehouseName && (
-                  <>
-                    {' · '}
-                    <span className="text-foreground">
-                      filtered to {activeWarehouseName}
-                    </span>
-                  </>
-                )}
-              </p>
-              <h1 className="font-display text-[32px] font-medium leading-tight tracking-[-0.025em]">
-                {firstName ? `Good morning, ${firstName}.` : 'Welcome back.'}
-              </h1>
-              <p className="mt-1 text-[13.5px] text-[var(--ed-ink-3)]">
-                {attentionCount > 0
-                  ? `${attentionCount} item${attentionCount === 1 ? '' : 's'} need operator review${activeWarehouseName ? ` at ${activeWarehouseName}` : ' before the next run'}.`
-                  : `Stock posture is clean${activeWarehouseName ? ` at ${activeWarehouseName}` : ' across the workspace'}.`}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/dashboard/reports">
-                  <Download className="h-3 w-3" /> Export
-                </Link>
-              </Button>
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/dashboard/inventory/new">
-                  <Plus className="h-3 w-3" /> New item
-                </Link>
-              </Button>
-              <Button size="sm" asChild>
-                <Link href="/dashboard/purchase-orders/new">
-                  <Zap className="h-3 w-3" /> Receive stock
-                </Link>
-              </Button>
-            </div>
+      {/* ──────────────── Morning briefing — greeting + hero attention ─────────
+       *
+       * The hero section is the LEAD. Everything below it (stat row, charts,
+       * activity feed) is context. The greeting + briefing sentence answer
+       * "who is at the keyboard and what should they look at first"; the
+       * attention list answers "where should they click right now".
+       */}
+      <section className="mb-6">
+        <div className="flex flex-col gap-4 pb-5 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
+              {today}
+              {activeWarehouseName && (
+                <>
+                  {' · '}
+                  <span className="text-foreground">
+                    filtered to {activeWarehouseName}
+                  </span>
+                </>
+              )}
+            </p>
+            <h1 className="font-display text-[34px] font-medium leading-tight tracking-[-0.025em]">
+              Good {greetingWord}, {firstName}.
+            </h1>
+            <p className="mt-1.5 text-[14px] text-[var(--ed-ink-3)]">{briefingSentence}</p>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/dashboard/reports">
+                <Download className="h-3 w-3" /> Export
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/dashboard/inventory/new">
+                <Plus className="h-3 w-3" /> New item
+              </Link>
+            </Button>
+            <Button size="sm" asChild>
+              <Link href="/dashboard/purchase-orders/new">
+                <Zap className="h-3 w-3" /> Receive stock
+              </Link>
+            </Button>
+          </div>
+        </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
-            <StatusMetric
-              label="Health"
-              value={`${healthRate}%`}
-              tone={attentionCount > 0 ? 'warn' : 'good'}
-            />
-            <StatusMetric
-              label="Critical"
-              value={formatNumber(summary.outOfStockCount)}
-              tone="danger"
-            />
-            <StatusMetric label="Avg value / SKU" value={formatCurrency(valuePerSku)} />
-            <StatusMetric label="Activity (7d)" value={formatNumber(movements7d)} />
-          </div>
-        </section>
+        <NeedsAttentionHero items={attentionItems} />
+      </section>
 
-        <aside className="bg-card rounded-lg border border-[var(--ed-line-strong)] p-4 shadow-[0_14px_44px_rgba(14,15,13,0.06)]">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="font-display text-[14px] font-medium tracking-[-0.01em]">
-                Shift command
-              </div>
-              <p className="mt-0.5 text-[12px] text-[var(--ed-ink-3)]">
-                Fast paths for the next inventory action.
-              </p>
-            </div>
-            <span className="border-border bg-background inline-flex h-6 items-center gap-1.5 rounded-full border px-2 text-[11px] text-[var(--ed-ink-3)]">
-              <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]" />
-              Live
-            </span>
-          </div>
-
-          <div className="divide-border border-border bg-background mt-4 grid grid-cols-3 divide-x overflow-hidden rounded-md border">
-            <MiniReadout label="SKUs" value={formatNumber(summary.itemCount)} />
-            <MiniReadout label="Low" value={formatNumber(summary.lowStockCount)} />
-            <MiniReadout label="Out" value={formatNumber(summary.outOfStockCount)} />
-          </div>
-
-          <div className="mt-3 grid gap-2">
-            <QuickAction
-              href="/dashboard/inventory?stock=low&type=all"
-              icon={AlertTriangle}
-              label="Review low stock"
-              badge={
-                summary.lowStockCount + summary.outOfStockCount > 0
-                  ? formatNumber(summary.lowStockCount + summary.outOfStockCount)
-                  : undefined
-              }
-            />
-            <QuickAction
-              href="/dashboard/purchase-orders"
-              icon={ClipboardList}
-              label="Open purchase orders"
-              badge={actions.openPoCount > 0 ? formatNumber(actions.openPoCount) : undefined}
-            />
-            <QuickAction
-              href="/dashboard/cycle-counts"
-              icon={ClipboardCheck}
-              label="Cycle counts in progress"
-              badge={actions.openCycleCount > 0 ? formatNumber(actions.openCycleCount) : undefined}
-            />
-            <QuickAction
-              href="/dashboard/purchase-orders/new"
-              icon={Zap}
-              label="Create receiving run"
-            />
-            <QuickAction href="/dashboard/reports" icon={ArrowUpRight} label="Open reports" />
-          </div>
-        </aside>
+      <div className="mb-4 flex items-end justify-between gap-3 border-b border-border pb-2">
+        <div>
+          <h2 className="font-display text-[18px] font-medium tracking-[-0.015em]">
+            30-day trends
+          </h2>
+          <p className="text-[12px] text-[var(--ed-ink-3)]">
+            Inventory value, on-hand counts, and movement velocity over the last month.
+          </p>
+        </div>
+        <div className="hidden grid-cols-4 gap-2 sm:grid sm:max-w-xl sm:flex-1">
+          <StatusMetric
+            label="Health"
+            value={`${healthRate}%`}
+            tone={attentionStockCount > 0 ? 'warn' : 'good'}
+          />
+          <StatusMetric
+            label="Critical"
+            value={formatNumber(summary.outOfStockCount)}
+            tone="danger"
+          />
+          <StatusMetric label="Avg value / SKU" value={formatCurrency(valuePerSku)} />
+          <StatusMetric label="Activity (7d)" value={formatNumber(movements7d)} />
+        </div>
       </div>
+
+      {/* Shift command — moved below the hero so the morning glance reads
+       * top-to-bottom: who/why first, then "where to click next". */}
+      <aside className="mb-4 bg-card rounded-lg border border-[var(--ed-line-strong)] p-4 shadow-[0_14px_44px_rgba(14,15,13,0.06)]">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="font-display text-[14px] font-medium tracking-[-0.01em]">
+              Shift command
+            </div>
+            <p className="mt-0.5 text-[12px] text-[var(--ed-ink-3)]">
+              Fast paths for the next inventory action.
+            </p>
+          </div>
+          <span className="border-border bg-background inline-flex h-6 items-center gap-1.5 rounded-full border px-2 text-[11px] text-[var(--ed-ink-3)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]" />
+            Live
+          </span>
+        </div>
+
+        <div className="divide-border border-border bg-background mt-4 grid grid-cols-3 divide-x overflow-hidden rounded-md border">
+          <MiniReadout label="SKUs" value={formatNumber(summary.itemCount)} />
+          <MiniReadout label="Low" value={formatNumber(summary.lowStockCount)} />
+          <MiniReadout label="Out" value={formatNumber(summary.outOfStockCount)} />
+        </div>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <QuickAction
+            href="/dashboard/inventory?stock=low&type=all"
+            icon={AlertTriangle}
+            label="Review low stock"
+            badge={
+              summary.lowStockCount + summary.outOfStockCount > 0
+                ? formatNumber(summary.lowStockCount + summary.outOfStockCount)
+                : undefined
+            }
+          />
+          <QuickAction
+            href="/dashboard/purchase-orders"
+            icon={ClipboardList}
+            label="Open purchase orders"
+            badge={actions.openPoCount > 0 ? formatNumber(actions.openPoCount) : undefined}
+          />
+          <QuickAction
+            href="/dashboard/cycle-counts"
+            icon={ClipboardCheck}
+            label="Cycle counts in progress"
+            badge={actions.openCycleCount > 0 ? formatNumber(actions.openCycleCount) : undefined}
+          />
+          <QuickAction
+            href="/dashboard/purchase-orders/new"
+            icon={Zap}
+            label="Create receiving run"
+          />
+          <QuickAction href="/dashboard/reports" icon={ArrowUpRight} label="Open reports" />
+        </div>
+      </aside>
 
       {/* Stat row */}
       <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
@@ -442,11 +620,27 @@ export default async function DashboardHome() {
         </Card>
       </div>
 
-      {/* Needs attention + Activity */}
+      {/* ──────────────── Recent activity — context, not lead ───────────────
+       *
+       * Low-stock detail table + today's movement feed. The hero up top
+       * already surfaced the "act now" version of the low-stock signal —
+       * this section gives the operator the full table so they can drill
+       * into individual SKUs.
+       */}
+      <div className="mt-2 mb-4 flex items-end justify-between gap-3 border-b border-border pb-2">
+        <div>
+          <h2 className="font-display text-[18px] font-medium tracking-[-0.015em]">
+            Recent activity
+          </h2>
+          <p className="text-[12px] text-[var(--ed-ink-3)]">
+            Low-stock detail and the live movement feed.
+          </p>
+        </div>
+      </div>
       <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-12">
         <Card className="lg:col-span-7">
           <CardHead
-            title="Needs attention"
+            title="Low-stock detail"
             subtitle="Items below reorder point"
             action={
               <Link
@@ -637,6 +831,79 @@ export default async function DashboardHome() {
         </Card>
       </div>
     </div>
+  );
+}
+
+/**
+ * Vertically-stacked attention list. Each row is a journalistic
+ * "headline + dek + take a look →" so the operator can scan top-to-bottom
+ * without having to parse a grid of pill counters. Renders the "all clear"
+ * card when the items array is empty.
+ */
+function NeedsAttentionHero({ items }: { items: AttentionItem[] }) {
+  if (items.length === 0) {
+    return (
+      <div className="border-border bg-card flex items-center gap-4 rounded-xl border p-5 shadow-[0_10px_34px_rgba(14,15,13,0.045)]">
+        <span
+          aria-hidden
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--accent)/0.16)]"
+        >
+          <CheckCircle2 className="h-5 w-5 text-[hsl(var(--accent-foreground))]" />
+        </span>
+        <div className="min-w-0">
+          <div className="font-display text-[15px] font-medium tracking-[-0.01em]">
+            All clear — nothing needs attention today.
+          </div>
+          <p className="text-[12.5px] text-[var(--ed-ink-3)]">
+            No low stock, no overdue POs, no pending approvals, no open counts, no
+            unsigned shipments. The numbers below are just context.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <ul className="border-border bg-card divide-y divide-border overflow-hidden rounded-xl border shadow-[0_10px_34px_rgba(14,15,13,0.045)]">
+      {items.map((item) => {
+        const Icon = item.icon;
+        return (
+          <li key={item.id}>
+            <Link
+              href={item.href}
+              className="hover:bg-muted/60 group flex items-start gap-4 px-5 py-4 transition-colors"
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  'mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
+                  item.tone === 'danger' && 'bg-[hsl(var(--destructive)/0.14)]',
+                  item.tone === 'warn' && 'bg-[hsl(var(--warning)/0.18)]',
+                  item.tone === 'neutral' && 'bg-muted',
+                )}
+              >
+                <Icon
+                  className={cn(
+                    'h-4 w-4',
+                    item.tone === 'danger' && 'text-[hsl(var(--destructive))]',
+                    item.tone === 'warn' && 'text-[hsl(var(--warning-foreground))]',
+                    item.tone === 'neutral' && 'text-[var(--ed-ink-3)]',
+                  )}
+                />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="font-display text-[14.5px] font-medium tracking-[-0.005em]">
+                  {item.title}
+                </div>
+                <p className="mt-0.5 text-[12.5px] text-[var(--ed-ink-3)]">{item.detail}</p>
+              </div>
+              <span className="mt-1 inline-flex shrink-0 items-center gap-1 text-[12px] font-medium text-[var(--ed-ink-2)] group-hover:text-foreground">
+                Take a look <ChevronRight className="h-3.5 w-3.5" />
+              </span>
+            </Link>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
