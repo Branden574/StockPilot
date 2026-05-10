@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
   DialogContent,
@@ -71,6 +72,7 @@ export function PoImportDetail({
   >({});
   const [busy, setBusy] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [cancelOpen, setCancelOpen] = React.useState(false);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [createLines, setCreateLines] = React.useState<PoImportLineRow[]>([]);
 
@@ -91,14 +93,16 @@ export function PoImportDetail({
       router.refresh();
     }
   }
-  async function cancel() {
-    if (!confirm('Cancel this import? It will not delete the uploaded file.'))
-      return;
+  async function confirmCancel() {
     setBusy(true);
     const r = await cancelPoImportAction(header.id);
     setBusy(false);
-    if (!r.ok) toast.error(r.error.message);
-    else router.refresh();
+    if (!r.ok) {
+      toast.error(r.error.message);
+      return;
+    }
+    setCancelOpen(false);
+    router.refresh();
   }
   function openCreateItems(lineIds: string[]) {
     if (!vendorId) {
@@ -193,12 +197,28 @@ export function PoImportDetail({
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Re-parse'}
           </Button>
           {header.status !== 'approved' && header.status !== 'canceled' && (
-            <Button variant="ghost" size="sm" onClick={cancel} disabled={busy}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setCancelOpen(true)}
+              disabled={busy}
+            >
               Cancel import
             </Button>
           )}
         </div>
       </div>
+
+      <DestructiveConfirm
+        open={cancelOpen}
+        onOpenChange={setCancelOpen}
+        title="Cancel this import?"
+        description="The import is marked canceled — no items or stock movements will be created. The uploaded file is kept on the record for the audit trail."
+        confirmLabel="Cancel import"
+        cancelLabel="Keep import"
+        pending={busy}
+        onConfirm={confirmCancel}
+      />
 
       {isScan && lowConfLineCount > 0 && (
         <div className="border-warning/40 bg-warning/5 text-foreground rounded-lg border px-4 py-3 text-sm">

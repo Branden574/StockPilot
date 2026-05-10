@@ -1,6 +1,6 @@
 'use client';
 
-import { BookOpen, HelpCircle, Search, SlidersHorizontal } from 'lucide-react';
+import { BookOpen, HelpCircle, Menu, Search } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import * as React from 'react';
@@ -230,11 +230,11 @@ export function Topbar({
     >
       <button
         type="button"
-        className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors lg:hidden"
+        className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors md:hidden"
         aria-label="Open dashboard navigation"
         onClick={onToggleSidebar}
       >
-        <SlidersHorizontal className="h-3.5 w-3.5" />
+        <Menu className="h-4 w-4" />
       </button>
 
       <nav

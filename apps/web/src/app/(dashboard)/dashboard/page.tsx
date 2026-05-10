@@ -18,7 +18,7 @@ import {
 import Link from 'next/link';
 
 import { BigChart, MiniBarChart } from '@/components/dashboard/big-chart';
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { GetStartedChecklist } from '@/components/dashboard/get-started-checklist';
 import { StatCard } from '@/components/dashboard/stat-card';
 import { Button } from '@/components/ui/button';
@@ -657,11 +657,8 @@ export default async function DashboardHome() {
                 icon={Boxes}
                 title="No inventory yet"
                 description="Add your first item to start tracking stock, locations, and movements."
-                action={
-                  <Button size="sm" asChild>
-                    <Link href="/dashboard/inventory/new">Add your first item</Link>
-                  </Button>
-                }
+                cta={{ label: 'Add your first item', href: '/dashboard/inventory/new' }}
+                size="sm"
               />
             </div>
           ) : lowStock.length === 0 ? (

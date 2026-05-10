@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -50,6 +51,8 @@ export function BinsManager({
   const [binType, setBinType] = React.useState<BinType>('storage');
   const [isDefault, setIsDefault] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const [archiveTarget, setArchiveTarget] = React.useState<BinRow | null>(null);
+  const [archiveBusy, setArchiveBusy] = React.useState(false);
 
   const grouped = React.useMemo(() => {
     const m = new Map<string, BinRow[]>();
@@ -85,12 +88,17 @@ export function BinsManager({
     toast.success('Bin saved');
     router.refresh();
   }
-  async function remove(id: string) {
-    if (!confirm('Archive this bin? Stock movements stop being possible to/from it.'))
+  async function confirmArchive() {
+    if (!archiveTarget) return;
+    setArchiveBusy(true);
+    const r = await archiveBinAction(archiveTarget.id);
+    setArchiveBusy(false);
+    if (!r.ok) {
+      toast.error(r.error.message);
       return;
-    const r = await archiveBinAction(id);
-    if (!r.ok) toast.error(r.error.message);
-    else router.refresh();
+    }
+    setArchiveTarget(null);
+    router.refresh();
   }
 
   return (
@@ -201,7 +209,7 @@ export function BinsManager({
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => remove(b.id)}
+                          onClick={() => setArchiveTarget(b)}
                           aria-label="Archive"
                         >
                           <Trash2 className="text-muted-foreground h-4 w-4" />
@@ -215,6 +223,18 @@ export function BinsManager({
           </div>
         );
       })}
+
+      <DestructiveConfirm
+        open={archiveTarget !== null}
+        onOpenChange={(v) => {
+          if (!v) setArchiveTarget(null);
+        }}
+        title={archiveTarget ? `Archive bin "${archiveTarget.code}"?` : 'Archive bin?'}
+        description="Stock movements can no longer happen to or from this bin. Any current on-hand stock stays attached to the bin until you move it. You can restore the bin later from the archived view."
+        confirmLabel="Archive"
+        pending={archiveBusy}
+        onConfirm={confirmArchive}
+      />
     </div>
   );
 }

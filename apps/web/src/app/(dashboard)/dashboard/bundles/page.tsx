@@ -1,7 +1,7 @@
 import { Package } from 'lucide-react';
 import Link from 'next/link';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -73,18 +73,19 @@ export default async function BundlesListPage({
       </form>
 
       <div className="mt-6">
-        {bundles.length === 0 ? (
+        {bundles.length === 0 && !search ? (
           <EmptyState
             icon={Package}
             title="No bundles yet"
-            description="Create a bundle to ship grouped sets of items in one click. Useful for school packs, kits, or recurring drop-offs."
-            action={
-              canManage ? (
-                <Button asChild variant="gradient">
-                  <Link href="/dashboard/bundles/new">Create your first bundle</Link>
-                </Button>
-              ) : null
-            }
+            description="Create a bundle to ship grouped sets of items in one click — useful for school packs, kits, or recurring drop-offs."
+            cta={canManage ? { label: 'Create your first bundle', href: '/dashboard/bundles/new' } : undefined}
+          />
+        ) : bundles.length === 0 ? (
+          <EmptyState
+            icon={Package}
+            title="No bundles match this search"
+            description="Try a different name or SKU, or clear the search to see all bundles."
+            cta={{ label: 'Clear search', href: includeInactive ? '/dashboard/bundles?show=all' : '/dashboard/bundles' }}
           />
         ) : (
           <div className="bg-card overflow-x-auto rounded-xl border">

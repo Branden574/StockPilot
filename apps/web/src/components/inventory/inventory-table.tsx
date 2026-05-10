@@ -16,6 +16,7 @@ import {
 } from '@/server/actions/saved-views';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Sparkline } from '@/components/ui/sparkline';
@@ -1035,6 +1036,7 @@ function SavedViewChip({
   const router = useRouter();
   const [deleting, setDeleting] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
+  const [deleteOpen, setDeleteOpen] = React.useState(false);
 
   async function apply() {
     await setActiveWarehouseAction(view.state.warehouseId ?? null);
@@ -1051,9 +1053,12 @@ function SavedViewChip({
     router.refresh();
   }
 
-  async function remove(e: React.MouseEvent) {
+  function remove(e: React.MouseEvent) {
     e.stopPropagation();
-    if (!confirm(`Delete saved view "${view.name}"?`)) return;
+    setDeleteOpen(true);
+  }
+
+  async function confirmDelete() {
     setDeleting(true);
     const res = await deleteSavedViewAction(view.id, scope);
     setDeleting(false);
@@ -1061,6 +1066,7 @@ function SavedViewChip({
       toast.error(res.error.message);
       return;
     }
+    setDeleteOpen(false);
     toast.success('View deleted');
     router.refresh();
   }
@@ -1132,6 +1138,19 @@ function SavedViewChip({
           {deleting ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <X className="h-2.5 w-2.5" />}
         </button>
       )}
+      <DestructiveConfirm
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={`Delete saved view "${view.name}"?`}
+        description={
+          view.isShared
+            ? 'This view is shared with the team — every teammate will lose access. The underlying items and filters are not affected; only the saved-view shortcut is removed.'
+            : 'The saved-view shortcut will be removed. The underlying items and filters are not affected.'
+        }
+        confirmLabel="Delete view"
+        pending={deleting}
+        onConfirm={confirmDelete}
+      />
     </span>
   );
 }

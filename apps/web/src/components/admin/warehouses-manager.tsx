@@ -7,8 +7,9 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
   DialogContent,
@@ -112,17 +113,7 @@ export function WarehousesManager({
         <EmptyState
           icon={Warehouse}
           title={`No ${termSingular.toLowerCase()}s yet`}
-          description={`Create your first ${termSingular.toLowerCase()} to start tracking stock by location.`}
-          action={
-            <Button
-              onClick={() => {
-                setEditing(null);
-                setOpen(true);
-              }}
-            >
-              Create {termSingular.toLowerCase()}
-            </Button>
-          }
+          description={`Create your first ${termSingular.toLowerCase()} to start tracking stock by location, assign managers, and route shipments. Use the New ${termSingular.toLowerCase()} button above to add one.`}
         />
       ) : (
         <div className="overflow-x-auto rounded-xl border border-border bg-card">
@@ -168,20 +159,20 @@ export function WarehousesManager({
 
 function WarehouseTableRow({ row, onEdit }: { row: WarehouseRow; onEdit: () => void }) {
   const router = useRouter();
+  const [archiveOpen, setArchiveOpen] = React.useState(false);
+  const [archiveBusy, setArchiveBusy] = React.useState(false);
 
-  async function archive() {
-    if (
-      !confirm(
-        `Archive "${row.name}"? Existing inventory in this warehouse stays put but the warehouse is hidden.`,
-      )
-    )
-      return;
+  async function confirmArchive() {
+    setArchiveBusy(true);
     const res = await archiveWarehouseAction(row.id);
-    if (!res.ok) toast.error(res.error.message);
-    else {
-      toast.success('Archived');
-      router.refresh();
+    setArchiveBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
     }
+    setArchiveOpen(false);
+    toast.success('Archived');
+    router.refresh();
   }
 
   return (
@@ -218,9 +209,23 @@ function WarehouseTableRow({ row, onEdit }: { row: WarehouseRow; onEdit: () => v
         <Button variant="outline" size="sm" onClick={onEdit}>
           Edit
         </Button>
-        <Button variant="ghost" size="icon" onClick={archive} aria-label="Archive">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setArchiveOpen(true)}
+          aria-label="Archive"
+        >
           <Trash2 className="h-4 w-4 text-muted-foreground" />
         </Button>
+        <DestructiveConfirm
+          open={archiveOpen}
+          onOpenChange={setArchiveOpen}
+          title={`Archive "${row.name}"?`}
+          description="Existing inventory in this warehouse stays put but the warehouse is hidden from pick lists and reports. You can restore it from the archived view."
+          confirmLabel="Archive"
+          pending={archiveBusy}
+          onConfirm={confirmArchive}
+        />
       </TableCell>
     </TableRow>
   );

@@ -2,7 +2,7 @@ import { AlertTriangle, FileLock } from 'lucide-react';
 
 import { AuditFilters } from '@/components/admin/audit-filters';
 import { AUDIT_CATEGORIES } from '@/components/admin/audit-categories';
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import {
   Table,
   TableBody,
@@ -270,17 +270,19 @@ export default async function AuditLogPage({
       <AuditFilters activeCategory={activeCategory} initialActor={initialActor} />
 
       {rows.length === 0 ? (
-        <EmptyState
-          icon={FileLock}
-          title={
-            actorTrim || prefix ? 'No matching audit entries' : 'No audit entries yet'
-          }
-          description={
-            actorTrim || prefix
-              ? 'Try clearing filters or broadening the search.'
-              : 'Sensitive actions are logged here automatically. Invite a user or change a role to see this populate.'
-          }
-        />
+        actorTrim || prefix ? (
+          <EmptyState
+            icon={FileLock}
+            title="No entries match these filters"
+            description="Try clearing the actor or category filter, or pick a different time range."
+          />
+        ) : (
+          <EmptyState
+            icon={FileLock}
+            title="No audit entries yet"
+            description="Sensitive actions get logged here automatically. Invite a user or adjust stock to see this populate."
+          />
+        )
       ) : (
         <div className="overflow-x-auto rounded-xl border border-border bg-card">
           <Table>

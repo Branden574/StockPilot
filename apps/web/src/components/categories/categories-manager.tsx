@@ -6,8 +6,9 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
   DialogContent,
@@ -44,6 +45,8 @@ export function CategoriesManager({ initial }: { initial: CategoryRow[] }) {
   const router = useRouter();
   const [editing, setEditing] = React.useState<CategoryRow | null>(null);
   const [open, setOpen] = React.useState(false);
+  const [archiveTarget, setArchiveTarget] = React.useState<CategoryRow | null>(null);
+  const [archiveBusy, setArchiveBusy] = React.useState(false);
 
   function openNew() {
     setEditing(null);
@@ -52,6 +55,20 @@ export function CategoriesManager({ initial }: { initial: CategoryRow[] }) {
   function openEdit(row: CategoryRow) {
     setEditing(row);
     setOpen(true);
+  }
+
+  async function confirmArchive() {
+    if (!archiveTarget) return;
+    setArchiveBusy(true);
+    const res = await archiveCategoryAction(archiveTarget.id);
+    setArchiveBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Category archived');
+    setArchiveTarget(null);
+    router.refresh();
   }
 
   return (
@@ -66,12 +83,7 @@ export function CategoriesManager({ initial }: { initial: CategoryRow[] }) {
         <EmptyState
           icon={Tag}
           title="No categories yet"
-          description="Group items by type so reports and filters make sense."
-          action={
-            <Button variant="gradient" onClick={openNew}>
-              Add a category
-            </Button>
-          }
+          description="Group items by type so reports, filters, and dashboards stay readable. Use the New category button above to add one."
         />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -98,15 +110,8 @@ export function CategoriesManager({ initial }: { initial: CategoryRow[] }) {
                 variant="ghost"
                 size="icon"
                 className="opacity-0 transition-opacity group-hover:opacity-100"
-                onClick={async () => {
-                  if (!confirm(`Archive "${cat.name}"?`)) return;
-                  const res = await archiveCategoryAction(cat.id);
-                  if (!res.ok) toast.error(res.error.message);
-                  else {
-                    toast.success('Category archived');
-                    router.refresh();
-                  }
-                }}
+                onClick={() => setArchiveTarget(cat)}
+                aria-label={`Archive ${cat.name}`}
               >
                 <Trash2 className="h-4 w-4 text-muted-foreground" />
               </Button>
@@ -116,6 +121,18 @@ export function CategoriesManager({ initial }: { initial: CategoryRow[] }) {
       )}
 
       <CategoryDialog open={open} onOpenChange={setOpen} editing={editing} />
+
+      <DestructiveConfirm
+        open={archiveTarget !== null}
+        onOpenChange={(v) => {
+          if (!v) setArchiveTarget(null);
+        }}
+        title={archiveTarget ? `Archive "${archiveTarget.name}"?` : 'Archive category?'}
+        description="The category is hidden from filters and item forms. Items already in this category keep their assignment until you move them. You can restore it from the archived view."
+        confirmLabel="Archive"
+        pending={archiveBusy}
+        onConfirm={confirmArchive}
+      />
     </>
   );
 }

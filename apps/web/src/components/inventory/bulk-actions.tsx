@@ -16,6 +16,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
   DialogContent,
@@ -277,37 +278,17 @@ export function BulkActions({
       </div>
 
       {/* Archive confirmation */}
-      <Dialog
+      <DestructiveConfirm
         open={dialog?.kind === 'archive'}
-        onOpenChange={(v) => (v ? null : setDialog(null))}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Archive {count} item{count === 1 ? '' : 's'}?</DialogTitle>
-            <DialogDescription>
-              Archived items are hidden from the default view but keep their
-              history. You can restore them later by switching the view to
-              Archived.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDialog(null)}
-              disabled={busy}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => run({ kind: 'archive' })}
-              disabled={busy}
-            >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Archive'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={(v) => {
+          if (!v) setDialog(null);
+        }}
+        title={`Archive ${count} item${count === 1 ? '' : 's'}?`}
+        description="Archived items are hidden from the default view but keep their history. You can restore them later by switching the view to Archived."
+        confirmLabel="Archive"
+        pending={busy}
+        onConfirm={() => run({ kind: 'archive' })}
+      />
 
       {/* Restore confirmation */}
       <Dialog

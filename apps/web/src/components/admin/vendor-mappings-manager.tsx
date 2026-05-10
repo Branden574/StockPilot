@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -53,6 +54,8 @@ export function VendorMappingsManager({
   const [vendorItemNumber, setVendorItemNumber] = React.useState('');
   const [vendorDescription, setVendorDescription] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const [deleteTargetId, setDeleteTargetId] = React.useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = React.useState(false);
 
   async function add() {
     if (!vendorId || !itemId || !vendorItemNumber.trim()) {
@@ -76,11 +79,21 @@ export function VendorMappingsManager({
     toast.success('Mapping saved');
     router.refresh();
   }
-  async function remove(id: string) {
-    if (!confirm('Delete this mapping?')) return;
-    const r = await deleteVendorItemMappingAction(id);
-    if (!r.ok) toast.error(r.error.message);
-    else router.refresh();
+  function remove(id: string) {
+    setDeleteTargetId(id);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTargetId) return;
+    setDeleteBusy(true);
+    const r = await deleteVendorItemMappingAction(deleteTargetId);
+    setDeleteBusy(false);
+    if (!r.ok) {
+      toast.error(r.error.message);
+      return;
+    }
+    setDeleteTargetId(null);
+    router.refresh();
   }
 
   const vendorMap = new Map(suppliers.map((s) => [s.id, s.name]));
@@ -183,6 +196,18 @@ export function VendorMappingsManager({
           </TableBody>
         </Table>
       </div>
+
+      <DestructiveConfirm
+        open={deleteTargetId !== null}
+        onOpenChange={(v) => {
+          if (!v) setDeleteTargetId(null);
+        }}
+        title="Delete this mapping?"
+        description="Future PO imports from this vendor will no longer auto-link to the mapped item — operators will need to pick the item manually until you re-add it."
+        confirmLabel="Delete"
+        pending={deleteBusy}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

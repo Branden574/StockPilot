@@ -1,7 +1,7 @@
 import { ShoppingCart } from 'lucide-react';
 import Link from 'next/link';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { OrderStatusBadge, summaryRequesterLabel } from '@/components/orders/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -137,22 +137,20 @@ export default async function OrdersPage({
 
       <div className="mt-6">
         {visible.length === 0 ? (
-          <EmptyState
-            icon={ShoppingCart}
-            title={canApprove ? 'Nothing in this queue' : 'No requests yet'}
-            description={
-              canApprove
-                ? 'When new requests come in, they will land here. Switch tabs to see other stages.'
-                : 'Place your first order request to see it here.'
-            }
-            action={
-              !canApprove ? (
-                <Button asChild variant="gradient">
-                  <Link href="/dashboard/orders/new">Place an order</Link>
-                </Button>
-              ) : undefined
-            }
-          />
+          canApprove ? (
+            <EmptyState
+              icon={ShoppingCart}
+              title={`Nothing in ${TAB_LABELS[tab].toLowerCase()}`}
+              description="No requests are sitting in this stage. Switch tabs above to see other stages of the queue."
+            />
+          ) : (
+            <EmptyState
+              icon={ShoppingCart}
+              title="No requests yet"
+              description="Place your first order request and we'll route it to the right approver."
+              cta={{ label: 'Place an order', href: '/dashboard/orders/new' }}
+            />
+          )
         ) : (
           <div className="bg-card overflow-x-auto rounded-xl border">
             <Table>

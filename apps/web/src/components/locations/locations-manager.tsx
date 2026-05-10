@@ -5,8 +5,9 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
   DialogContent,
@@ -67,6 +68,8 @@ export function LocationsManager({ initial }: { initial: LocationRow[] }) {
   const router = useRouter();
   const [editing, setEditing] = React.useState<LocationRow | null>(null);
   const [open, setOpen] = React.useState(false);
+  const [archiveTarget, setArchiveTarget] = React.useState<LocationRow | null>(null);
+  const [archiveBusy, setArchiveBusy] = React.useState(false);
 
   function openNew() {
     setEditing(null);
@@ -75,6 +78,20 @@ export function LocationsManager({ initial }: { initial: LocationRow[] }) {
   function openEdit(row: LocationRow) {
     setEditing(row);
     setOpen(true);
+  }
+
+  async function confirmArchive() {
+    if (!archiveTarget) return;
+    setArchiveBusy(true);
+    const res = await archiveLocationAction(archiveTarget.id);
+    setArchiveBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Location archived');
+    setArchiveTarget(null);
+    router.refresh();
   }
 
   return (
@@ -89,12 +106,7 @@ export function LocationsManager({ initial }: { initial: LocationRow[] }) {
         <EmptyState
           icon={Building2}
           title="No locations yet"
-          description="Add warehouses, rooms, shelves, vehicles, or job sites to track where stock lives."
-          action={
-            <Button variant="gradient" onClick={openNew}>
-              Add a location
-            </Button>
-          }
+          description="Add warehouses, rooms, shelves, vehicles, or job sites to track where stock lives. Use the New location button above to add one."
         />
       ) : (
         <div className="overflow-x-auto rounded-xl border bg-card">
@@ -124,15 +136,8 @@ export function LocationsManager({ initial }: { initial: LocationRow[] }) {
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={async () => {
-                        if (!confirm(`Archive "${row.name}"?`)) return;
-                        const res = await archiveLocationAction(row.id);
-                        if (!res.ok) toast.error(res.error.message);
-                        else {
-                          toast.success('Location archived');
-                          router.refresh();
-                        }
-                      }}
+                      onClick={() => setArchiveTarget(row)}
+                      aria-label={`Archive ${row.name}`}
                     >
                       <Trash2 className="h-4 w-4 text-muted-foreground" />
                     </Button>
@@ -145,6 +150,18 @@ export function LocationsManager({ initial }: { initial: LocationRow[] }) {
       )}
 
       <LocationDialog open={open} onOpenChange={setOpen} editing={editing} />
+
+      <DestructiveConfirm
+        open={archiveTarget !== null}
+        onOpenChange={(v) => {
+          if (!v) setArchiveTarget(null);
+        }}
+        title={archiveTarget ? `Archive "${archiveTarget.name}"?` : 'Archive location?'}
+        description="The location is hidden from pick lists and item forms. Items currently assigned to it keep their assignment until you move them. You can restore it from the archived view."
+        confirmLabel="Archive"
+        pending={archiveBusy}
+        onConfirm={confirmArchive}
+      />
     </>
   );
 }

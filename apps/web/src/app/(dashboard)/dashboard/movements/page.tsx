@@ -1,7 +1,7 @@
 import { ArrowLeftRight } from 'lucide-react';
 import Link from 'next/link';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import {
   Table,
@@ -59,15 +59,21 @@ export default async function MovementsPage({
       </div>
 
       {visible.length === 0 ? (
-        <EmptyState
-          icon={ArrowLeftRight}
-          title={page === 1 ? 'No movements yet' : 'No more movements'}
-          description={
-            page === 1
-              ? 'Movements are recorded automatically when you create items, adjust stock, or receive purchase orders.'
-              : 'You have reached the end of the ledger.'
-          }
-        />
+        page === 1 ? (
+          <EmptyState
+            icon={ArrowLeftRight}
+            title="No movements yet"
+            description="Every stock change gets recorded here — create an item, adjust quantity, or receive a PO and it'll show up."
+            cta={{ label: 'Go to inventory', href: '/dashboard/inventory' }}
+          />
+        ) : (
+          <EmptyState
+            icon={ArrowLeftRight}
+            title="End of the ledger"
+            description="You've scrolled past the oldest movement. Head back to page one to see recent activity."
+            cta={{ label: 'Back to newest', href: '/dashboard/movements' }}
+          />
+        )
       ) : (
         <div className="overflow-x-auto rounded-xl border bg-card">
           <Table>

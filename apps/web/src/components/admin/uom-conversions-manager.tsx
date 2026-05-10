@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -63,6 +64,8 @@ export function UomConversionsManager({
   const [denominator, setDenominator] = React.useState('1');
   const [rounding, setRounding] = React.useState<RoundingRule>('exact');
   const [busy, setBusy] = React.useState(false);
+  const [deleteTargetId, setDeleteTargetId] = React.useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = React.useState(false);
 
   const itemMap = React.useMemo(
     () => new Map(items.map((i) => [i.id, `${i.sku} — ${i.name}`])),
@@ -103,11 +106,21 @@ export function UomConversionsManager({
     );
     router.refresh();
   }
-  async function remove(id: string) {
-    if (!confirm('Delete this conversion? Future receipts will fail until you re-add it.')) return;
-    const r = await deleteUomConversionAction(id);
-    if (!r.ok) toast.error(r.error.message);
-    else router.refresh();
+  function remove(id: string) {
+    setDeleteTargetId(id);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTargetId) return;
+    setDeleteBusy(true);
+    const r = await deleteUomConversionAction(deleteTargetId);
+    setDeleteBusy(false);
+    if (!r.ok) {
+      toast.error(r.error.message);
+      return;
+    }
+    setDeleteTargetId(null);
+    router.refresh();
   }
 
   return (
@@ -247,6 +260,18 @@ export function UomConversionsManager({
           </TableBody>
         </Table>
       </div>
+
+      <DestructiveConfirm
+        open={deleteTargetId !== null}
+        onOpenChange={(v) => {
+          if (!v) setDeleteTargetId(null);
+        }}
+        title="Delete this conversion?"
+        description="Future receipts that rely on this conversion will fail until you re-add it. Past movements that used this conversion are unaffected."
+        confirmLabel="Delete"
+        pending={deleteBusy}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

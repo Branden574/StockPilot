@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
   DialogContent,
@@ -76,6 +77,8 @@ export function CycleCountDetail({
   const [busyLine, setBusyLine] = React.useState<string | null>(null);
   const [postBusy, setPostBusy] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [cancelOpen, setCancelOpen] = React.useState(false);
+  const [cancelBusy, setCancelBusy] = React.useState(false);
   const [filter, setFilter] = React.useState<'all' | 'uncounted' | 'variance'>('all');
 
   const completed = header.status === 'completed';
@@ -142,14 +145,17 @@ export function CycleCountDetail({
     else router.refresh();
   }
 
-  async function cancel() {
-    if (!confirm('Cancel this count? No adjustments will be posted.')) return;
+  async function confirmCancel() {
+    setCancelBusy(true);
     const r = await cancelCycleCountAction(header.id);
-    if (!r.ok) toast.error(r.error.message);
-    else {
-      toast.success('Count canceled');
-      router.refresh();
+    setCancelBusy(false);
+    if (!r.ok) {
+      toast.error(r.error.message);
+      return;
     }
+    setCancelOpen(false);
+    toast.success('Count canceled');
+    router.refresh();
   }
 
   async function post() {
@@ -178,7 +184,12 @@ export function CycleCountDetail({
         </span>
         {open && (
           <div className="ml-auto flex gap-2">
-            <Button variant="ghost" size="sm" onClick={cancel} disabled={postBusy}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setCancelOpen(true)}
+              disabled={postBusy}
+            >
               Cancel count
             </Button>
             <Button
@@ -263,6 +274,17 @@ export function CycleCountDetail({
           </TableBody>
         </Table>
       </div>
+
+      <DestructiveConfirm
+        open={cancelOpen}
+        onOpenChange={setCancelOpen}
+        title="Cancel this cycle count?"
+        description="No adjustments will be posted. Any quantities you've entered are kept on the canceled count for the audit trail but stock levels are unchanged."
+        confirmLabel="Cancel count"
+        cancelLabel="Keep counting"
+        pending={cancelBusy}
+        onConfirm={confirmCancel}
+      />
 
       <Dialog open={confirmOpen} onOpenChange={(o) => !postBusy && setConfirmOpen(o)}>
         <DialogContent className="max-w-md">

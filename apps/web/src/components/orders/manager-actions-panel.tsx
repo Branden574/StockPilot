@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -38,6 +39,7 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
   const [busy, setBusy] = React.useState<BusyKey>(null);
   const [notes, setNotes] = React.useState(internalNotes ?? '');
   const initialNotes = React.useRef(internalNotes ?? '');
+  const [deliverOpen, setDeliverOpen] = React.useState(false);
 
   async function approve() {
     setBusy('approve');
@@ -77,14 +79,7 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
     router.refresh();
   }
 
-  async function deliver() {
-    if (
-      !window.confirm(
-        'Mark delivered? This deducts stock from inventory and releases reservations.',
-      )
-    ) {
-      return;
-    }
+  async function confirmDeliver() {
     setBusy('delivered');
     const res = await markOrderRequestDeliveredAction(orderId);
     setBusy(null);
@@ -92,6 +87,7 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
       toast.error(res.error.message);
       return;
     }
+    setDeliverOpen(false);
     toast.success('Delivered. Inventory updated.');
     router.refresh();
   }
@@ -175,7 +171,11 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
           {(status === 'approved' ||
             status === 'packaging' ||
             status === 'ready_for_delivery') && (
-            <Button variant="outline" onClick={deliver} disabled={busy !== null}>
+            <Button
+              variant="outline"
+              onClick={() => setDeliverOpen(true)}
+              disabled={busy !== null}
+            >
               {busy === 'delivered' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
@@ -223,6 +223,16 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
           </div>
         </div>
       </div>
+
+      <DestructiveConfirm
+        open={deliverOpen}
+        onOpenChange={setDeliverOpen}
+        title="Mark delivered?"
+        description="Stock is deducted from inventory and any reservations on this order are released. This is the final fulfillment step and cannot be reversed — create a corrective adjustment afterwards if the deduction was wrong."
+        confirmLabel="Mark delivered"
+        pending={busy === 'delivered'}
+        onConfirm={confirmDeliver}
+      />
     </section>
   );
 }

@@ -2,7 +2,7 @@ import { ScrollText } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { EmptyState } from '@/components/dashboard/empty-state';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -113,6 +113,9 @@ export default async function AuditLogPage({
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const hasPrev = page > 1;
   const hasNext = page < totalPages;
+  const hasActiveFilters = Boolean(
+    filters.event || filters.userId || filters.entityType || filters.since || filters.until,
+  );
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -205,11 +208,19 @@ export default async function AuditLogPage({
       </div>
 
       {rows.length === 0 ? (
-        <EmptyState
-          icon={ScrollText}
-          title="No audit events match these filters."
-          description="Try widening the date range or clearing filters."
-        />
+        hasActiveFilters ? (
+          <EmptyState
+            icon={ScrollText}
+            title="No events match these filters"
+            description="Try widening the date range or clearing filters to see more activity."
+          />
+        ) : (
+          <EmptyState
+            icon={ScrollText}
+            title="No audit events yet"
+            description="Privileged actions like invites, role changes, and stock adjustments get logged here automatically."
+          />
+        )
       ) : (
         <div className="overflow-x-auto rounded-xl border bg-card">
           <Table>

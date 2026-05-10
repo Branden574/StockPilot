@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   markShipmentCancelledAction,
   markShipmentShippedAction,
@@ -22,6 +23,7 @@ export function ShipmentActions({
 }) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<'ship' | 'cancel' | null>(null);
+  const [cancelOpen, setCancelOpen] = React.useState(false);
 
   async function markShipped() {
     setBusy('ship');
@@ -43,6 +45,7 @@ export function ShipmentActions({
       toast.error(res.error.message);
       return;
     }
+    setCancelOpen(false);
     toast.success('Shipment cancelled');
     router.refresh();
   }
@@ -58,11 +61,21 @@ export function ShipmentActions({
         <Button
           variant="outline"
           disabled={busy === 'cancel'}
-          onClick={cancel}
+          onClick={() => setCancelOpen(true)}
         >
           <X className="h-4 w-4" /> Cancel
         </Button>
       )}
+      <DestructiveConfirm
+        open={cancelOpen}
+        onOpenChange={setCancelOpen}
+        title="Cancel shipment?"
+        description="The shipment will be marked cancelled and any reserved stock will be released. Already-shipped or delivered shipments cannot be cancelled."
+        confirmLabel="Cancel shipment"
+        cancelLabel="Keep shipment"
+        pending={busy === 'cancel'}
+        onConfirm={cancel}
+      />
     </>
   );
 }
