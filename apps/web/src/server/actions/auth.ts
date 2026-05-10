@@ -1,5 +1,6 @@
 'use server';
 
+import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 
@@ -18,6 +19,7 @@ import {
   type ActionResult,
   type ChangePasswordInput,
   type CompletePasswordResetInput,
+  type Database,
   type RequestPasswordResetInput,
   type SignInInput,
   type SignUpInput,
@@ -114,11 +116,18 @@ export async function completePasswordResetAction(
 }
 
 /**
- * Change the signed-in user's password. Requires re-authentication with the
- * current password before applying the new one — Supabase's updateUser does
- * not validate the existing credential on its own, so we re-check it via
- * signInWithPassword. On the SSR client this validates the credential
- * against the current session without disrupting it.
+ * Change the signed-in user's password. Re-authenticates with the current
+ * password before applying the new one.
+ *
+ * Why we DON'T call signInWithPassword on the SSR client to verify the
+ * current password: that rotates the cookie session, and a fresh
+ * password-only sign-in is AAL1 even if the user was at AAL2. For
+ * MFA-enabled accounts Supabase requires AAL2 on the calling session
+ * to update the password, so the subsequent updateUser() fails with
+ * "AAL2 session is required to update email or password when MFA is
+ * enabled." The fix: verify the current password against an isolated,
+ * in-memory-only Supabase client so the user's actual session is left
+ * untouched (and stays at AAL2 if they have MFA).
  */
 export async function changePasswordAction(
   input: ChangePasswordInput,
@@ -137,12 +146,41 @@ export async function changePasswordAction(
     return err('unauthenticated', 'Sign in required');
   }
 
-  const { error: signInError } = await supabase.auth.signInWithPassword({
+  // Side-channel password check — does NOT persist a session anywhere.
+  const checkClient = createSupabaseClient<Database>(
+    env.NEXT_PUBLIC_SUPABASE_URL,
+    env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+    },
+  );
+  const { error: pwError } = await checkClient.auth.signInWithPassword({
     email: user.email,
     password: parsed.data.currentPassword,
   });
-  if (signInError) {
+  if (pwError) {
     return err('forbidden', 'Current password is incorrect');
+  }
+
+  // For MFA-enabled accounts, Supabase requires AAL2 on the SSR session
+  // to update the password. Surface a clearer error than the generic
+  // updateUser() one if the user's session somehow isn't at AAL2.
+  const { data: factorsData } = await supabase.auth.mfa.listFactors();
+  const hasVerifiedMfa = (factorsData?.totp ?? []).some(
+    (f) => f.status === 'verified',
+  );
+  if (hasVerifiedMfa) {
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aal?.currentLevel !== 'aal2') {
+      return err(
+        'forbidden',
+        'Complete the MFA challenge before changing your password. Sign out and sign back in to step up.',
+      );
+    }
   }
 
   const { error: updateError } = await supabase.auth.updateUser({
