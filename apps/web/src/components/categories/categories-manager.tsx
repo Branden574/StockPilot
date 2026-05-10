@@ -155,6 +155,8 @@ function CategoryDialog({
     reset,
     formState: { isSubmitting, errors },
   } = useForm<FormValues>({
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: { name: '', description: '', color: '#6366f1' },
   });
 
@@ -196,10 +198,13 @@ function CategoryDialog({
           <div className="space-y-1.5">
             <Label htmlFor="name">Name</Label>
             <Input id="name" placeholder="Electronics" {...register('name', { required: true })} />
-            {errors.name && <p className="text-xs text-destructive">Name is required</p>}
+            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="description">Description</Label>
+            <Label htmlFor="description">
+              Description
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Textarea id="description" rows={2} {...register('description')} />
           </div>
           <div className="space-y-2">
@@ -223,7 +228,13 @@ function CategoryDialog({
               Cancel
             </Button>
             <Button type="submit" variant="gradient" disabled={isSubmitting}>
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : editing ? 'Save' : 'Create'}
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : editing ? (
+                'Save changes'
+              ) : (
+                'Create category'
+              )}
             </Button>
           </DialogFooter>
         </form>

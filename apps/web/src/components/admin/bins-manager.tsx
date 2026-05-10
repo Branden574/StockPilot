@@ -162,9 +162,9 @@ export function BinsManager({
           </label>
         </div>
         <div className="mt-3 flex justify-end">
-          <Button onClick={add} disabled={busy}>
+          <Button onClick={add} disabled={busy} variant="gradient">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Save
+            Save bin
           </Button>
         </div>
       </div>

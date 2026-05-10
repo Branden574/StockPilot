@@ -63,13 +63,16 @@ export function StartCycleCountForm({
             ))}
           </SelectContent>
         </Select>
-        <p className="text-muted-foreground text-[11px]">
+        <p className="text-xs text-muted-foreground">
           Restrict the count to one warehouse, or leave at "All warehouses" to
           recount every active item in the org.
         </p>
       </div>
       <div className="space-y-1.5">
-        <Label>Notes (optional)</Label>
+        <Label>
+          Notes
+          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+        </Label>
         <Textarea
           value={notes}
           onChange={(e) => setNotes(e.target.value)}

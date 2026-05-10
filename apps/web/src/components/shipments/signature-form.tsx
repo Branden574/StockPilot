@@ -25,9 +25,14 @@ const formSchema = z.object({
   signedByName: z
     .string()
     .trim()
-    .min(1, 'Please type your name')
-    .max(120, 'Name is too long'),
-  email: z.string().trim().toLowerCase().email('Enter a valid email').max(254),
+    .min(1, 'Please type your name.')
+    .max(120, 'Name is too long.'),
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .email('Enter a valid email address.')
+    .max(254),
   notes: z.string().max(2000).optional(),
 });
 type FormValues = z.infer<typeof formSchema>;
@@ -48,6 +53,8 @@ export function SignatureForm({ token, defaultEmail, onSigned }: SignatureFormPr
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: {
       signedByName: '',
       email: defaultEmail ?? '',

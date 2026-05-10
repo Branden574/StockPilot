@@ -163,7 +163,7 @@ export function PoScanForm() {
         )}
       </div>
 
-      <p className="text-muted-foreground text-[11px]">
+      <p className="text-xs text-muted-foreground">
         Scanned POs run through Gemini 2.0 Flash (free tier on Google AI
         Studio). Your data stays in your Supabase project; the scan
         endpoint only sends the image bytes for extraction. After review,

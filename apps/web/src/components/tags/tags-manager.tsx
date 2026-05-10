@@ -177,6 +177,8 @@ function TagDialog({
     reset,
     formState: { isSubmitting, errors },
   } = useForm<FormValues>({
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: { name: '', color: DEFAULT_COLOR },
   });
 
@@ -223,7 +225,7 @@ function TagDialog({
               maxLength={60}
               {...register('name', { required: true, maxLength: 60 })}
             />
-            {errors.name && <p className="text-xs text-destructive">Name is required</p>}
+            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
           </div>
           <div className="space-y-2">
             <Label>Color</Label>
@@ -269,9 +271,9 @@ function TagDialog({
               {isSubmitting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : editing ? (
-                'Save'
+                'Save changes'
               ) : (
-                'Create'
+                'Create tag'
               )}
             </Button>
           </DialogFooter>

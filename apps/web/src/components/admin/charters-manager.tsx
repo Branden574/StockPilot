@@ -186,6 +186,8 @@ function CharterDialog({
     reset,
     formState: { isSubmitting, errors },
   } = useForm<FormValues>({
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: { name: '', code: '', description: '', notes: '' },
   });
 
@@ -239,21 +241,27 @@ function CharterDialog({
               placeholder="Southern California"
               {...register('name', { required: true, maxLength: 120 })}
             />
-            {errors.name && <p className="text-xs text-destructive">Name is required</p>}
+            {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="charter-code">Code</Label>
+            <Label htmlFor="charter-code">
+              Code
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Input
               id="charter-code"
               placeholder="SOCAL"
               {...register('code', { maxLength: 32 })}
             />
-            <p className="text-[11px] text-muted-foreground">
-              Short identifier used in reports and exports. Optional.
+            <p className="text-xs text-muted-foreground">
+              Short identifier used in reports and exports.
             </p>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="charter-description">Description</Label>
+            <Label htmlFor="charter-description">
+              Description
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Textarea
               id="charter-description"
               rows={2}
@@ -262,7 +270,10 @@ function CharterDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="charter-notes">Internal notes</Label>
+            <Label htmlFor="charter-notes">
+              Internal notes
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Textarea id="charter-notes" rows={2} {...register('notes', { maxLength: 2000 })} />
           </div>
           <DialogFooter>
@@ -274,8 +285,14 @@ function CharterDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : editing ? 'Save' : 'Create'}
+            <Button type="submit" variant="gradient" disabled={isSubmitting}>
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : editing ? (
+                'Save changes'
+              ) : (
+                `Create ${termSingular.toLowerCase()}`
+              )}
             </Button>
           </DialogFooter>
         </form>

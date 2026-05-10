@@ -132,6 +132,8 @@ export function ItemForm({
     formState: { errors, isSubmitting },
   } = useForm<CreateItemInput>({
     resolver: zodResolver(createItemSchema),
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: {
       name: defaults?.name ?? '',
       sku: defaults?.sku ?? '',
@@ -477,11 +479,11 @@ export function ItemForm({
       )}
 
       <Section title="Basics">
-        <Field label="Name" error={errors.name?.message} required>
+        <Field label="Name" error={errors.name?.message}>
           <Input placeholder="Wireless mouse" autoFocus {...register('name')} />
         </Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="SKU" error={errors.sku?.message}>
+          <Field label="SKU" error={errors.sku?.message} optional>
             <div className="flex gap-2">
               <Input placeholder="Auto-generated if blank" {...register('sku')} />
               <Button
@@ -497,6 +499,7 @@ export function ItemForm({
           <Field
             label={isBook ? 'ISBN' : 'Barcode'}
             error={errors.barcode?.message}
+            optional
           >
             <div className="flex gap-2">
               <Input
@@ -522,7 +525,7 @@ export function ItemForm({
         </div>
         {isBook && (
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Author">
+            <Field label="Author" optional>
               <Input
                 placeholder="e.g. Toni Morrison"
                 value={author}
@@ -530,7 +533,10 @@ export function ItemForm({
               />
             </Field>
             <div className="space-y-1.5">
-              <Label>Grade level</Label>
+              <Label>
+                Grade level
+                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              </Label>
               <Select
                 value={grade || '__none'}
                 onValueChange={(v) => setGrade(v === '__none' ? '' : v)}
@@ -554,7 +560,7 @@ export function ItemForm({
             </div>
           </div>
         )}
-        <Field label="Description" error={errors.description?.message}>
+        <Field label="Description" error={errors.description?.message} optional>
           <Textarea rows={3} {...register('description')} />
         </Field>
       </Section>
@@ -591,6 +597,7 @@ export function ItemForm({
             onChange={(v) => setValue('categoryId', v || null)}
             options={categories}
             placeholder="Uncategorized"
+            optional
           />
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -600,6 +607,7 @@ export function ItemForm({
             onChange={(v) => setValue('supplierId', v || null)}
             options={suppliers}
             placeholder="None"
+            optional
           />
           <div />
         </div>
@@ -610,15 +618,16 @@ export function ItemForm({
             onChange={(v) => setValue('primaryLocationId', v || null)}
             options={locations}
             placeholder="None"
+            optional
           />
-          <Field label="Bin / shelf">
+          <Field label="Bin / shelf" optional>
             <Input placeholder="A-12, Shelf 3…" {...register('binLocation')} />
           </Field>
         </div>
         {isBook && (
           <>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Rack number">
+              <Field label="Rack number" optional>
                 <Input
                   placeholder="38"
                   inputMode="numeric"
@@ -626,7 +635,7 @@ export function ItemForm({
                   onChange={(e) => setRackNumber(e.target.value)}
                 />
               </Field>
-              <Field label="Rack row">
+              <Field label="Rack row" optional>
                 <Input
                   placeholder="A"
                   maxLength={4}
@@ -639,7 +648,10 @@ export function ItemForm({
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Crate color</Label>
+                <Label>
+                  Crate color
+                  <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                </Label>
                 <Select
                   value={crateColor || '__none'}
                   onValueChange={(v) => setCrateColor(v === '__none' ? '' : v)}
@@ -665,7 +677,10 @@ export function ItemForm({
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Crate number</Label>
+                <Label>
+                  Crate number
+                  <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                </Label>
                 <Input
                   placeholder="e.g. 12"
                   inputMode="numeric"
@@ -681,10 +696,7 @@ export function ItemForm({
       <Section title={`${warehouseLabel} & ${charterLabel.toLowerCase()}`}>
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <Label>
-              {warehouseLabel}
-              <span className="ml-0.5 text-destructive">*</span>
-            </Label>
+            <Label>{warehouseLabel}</Label>
             {forcedWarehouseId ? (
               <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
                 {warehouses.find((w) => w.id === forcedWarehouseId)?.name ??
@@ -713,7 +725,10 @@ export function ItemForm({
           </div>
 
           <div className="space-y-1.5">
-            <Label>{charterLabel}</Label>
+            <Label>
+              {charterLabel}
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Select
               value={watchedCharterId ?? '__generic'}
               onValueChange={(v: string) =>
@@ -907,19 +922,21 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Field({
   label,
   error,
-  required,
+  optional,
   children,
 }: {
   label: string;
   error?: string;
-  required?: boolean;
+  optional?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1.5">
       <Label>
         {label}
-        {required && <span className="ml-0.5 text-destructive">*</span>}
+        {optional && (
+          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+        )}
       </Label>
       {children}
       {error && <p className="text-xs text-destructive">{error}</p>}
@@ -933,16 +950,23 @@ function SelectField({
   onChange,
   options,
   placeholder,
+  optional,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   options: Array<{ id: string; name: string }>;
   placeholder: string;
+  optional?: boolean;
 }) {
   return (
     <div className="space-y-1.5">
-      <Label>{label}</Label>
+      <Label>
+        {label}
+        {optional && (
+          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+        )}
+      </Label>
       <Select value={value || '__none'} onValueChange={(v: string) => onChange(v === '__none' ? '' : v)}>
         <SelectTrigger>
           <SelectValue placeholder={placeholder} />

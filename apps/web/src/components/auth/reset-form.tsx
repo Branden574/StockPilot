@@ -22,6 +22,8 @@ export function ResetForm() {
     formState: { errors, isSubmitting },
   } = useForm<RequestPasswordResetInput>({
     resolver: zodResolver(requestPasswordResetSchema),
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: { email: '' },
   });
 

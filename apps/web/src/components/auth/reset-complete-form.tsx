@@ -23,6 +23,8 @@ export function ResetCompleteForm() {
     formState: { errors, isSubmitting },
   } = useForm<CompletePasswordResetInput>({
     resolver: zodResolver(completePasswordResetSchema),
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: { password: '', confirmPassword: '' },
   });
 

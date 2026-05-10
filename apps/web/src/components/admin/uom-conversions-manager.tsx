@@ -127,7 +127,7 @@ export function UomConversionsManager({
     <div className="space-y-6">
       <div className="rounded-xl border bg-card p-4">
         <h2 className="text-sm font-semibold">Add conversion</h2>
-        <p className="text-muted-foreground mt-1 text-xs">
+        <p className="mt-1 text-xs text-muted-foreground">
           Example: 1 PK of AA batteries equals 24 EA. Numerator=24, denominator=1.
         </p>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -205,9 +205,9 @@ export function UomConversionsManager({
           </div>
         </div>
         <div className="mt-3 flex justify-end">
-          <Button onClick={add} disabled={busy}>
+          <Button onClick={add} disabled={busy} variant="gradient">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Save
+            Save conversion
           </Button>
         </div>
       </div>

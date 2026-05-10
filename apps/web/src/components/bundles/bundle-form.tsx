@@ -182,7 +182,10 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="bundle-sku">SKU (optional)</Label>
+          <Label htmlFor="bundle-sku">
+            SKU
+            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+          </Label>
           <Input
             id="bundle-sku"
             value={sku}
@@ -202,7 +205,7 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
             />
             <span>Enable pre-boxing</span>
           </label>
-          <p className="text-muted-foreground text-[11.5px]">
+          <p className="text-xs text-muted-foreground">
             Lets you decrement components ahead of time and hold the kits as
             phantom inventory until distribution.
           </p>
@@ -210,7 +213,10 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="bundle-desc">Description (optional)</Label>
+        <Label htmlFor="bundle-desc">
+          Description
+          <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+        </Label>
         <Textarea
           id="bundle-desc"
           value={description}
@@ -224,7 +230,7 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
       <div className="space-y-3">
         <div>
           <Label>Components</Label>
-          <p className="text-muted-foreground mt-0.5 text-[11.5px]">
+          <p className="mt-0.5 text-xs text-muted-foreground">
             Items + per-kit quantities. Optional items don't block distribution
             when stock is short.
           </p>
@@ -334,11 +340,7 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
         )}
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Button type="submit" variant="gradient" disabled={submitting}>
-          {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          {isEdit ? 'Save changes' : 'Create bundle'}
-        </Button>
+      <div className="flex flex-wrap justify-end gap-2">
         <Button
           type="button"
           variant="outline"
@@ -346,6 +348,10 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
           disabled={submitting}
         >
           Cancel
+        </Button>
+        <Button type="submit" variant="gradient" disabled={submitting}>
+          {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {isEdit ? 'Save changes' : 'Create bundle'}
         </Button>
       </div>
     </form>

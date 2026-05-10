@@ -255,6 +255,8 @@ function WarehouseDialog({
     reset,
     formState: { isSubmitting, errors },
   } = useForm<FormValues>({
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: {
       name: '',
       code: '',
@@ -335,7 +337,7 @@ function WarehouseDialog({
                 placeholder="San Diego Main"
                 {...register('name', { required: true, maxLength: 120 })}
               />
-              {errors.name && <p className="text-xs text-destructive">Name is required</p>}
+              {errors.name && <p className="text-xs text-destructive">Name is required.</p>}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="wh-code">Code</Label>
@@ -344,13 +346,13 @@ function WarehouseDialog({
                 placeholder="SD-MAIN"
                 {...register('code', { required: true, maxLength: 32 })}
               />
-              {errors.code && <p className="text-xs text-destructive">Code is required</p>}
+              {errors.code && <p className="text-xs text-destructive">Code is required.</p>}
             </div>
           </div>
 
           <div className="space-y-1.5">
             <Label>Charters serviced</Label>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Pick every charter this {termSingular.toLowerCase()} carries inventory for.
               Items can be tagged to one of these, or marked Generic for shared stock.
             </p>
@@ -383,7 +385,10 @@ function WarehouseDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label>Manager</Label>
+            <Label>
+              Manager
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Select
               value={watch('managerUserId') || NONE_VALUE}
               onValueChange={(v: string) =>
@@ -405,7 +410,10 @@ function WarehouseDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label>Contact</Label>
+            <Label>
+              Contact
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <div className="grid grid-cols-3 gap-2">
               <Input placeholder="Name" {...register('contactName', { maxLength: 120 })} />
               <Input
@@ -418,7 +426,10 @@ function WarehouseDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="wh-notes">Notes</Label>
+            <Label htmlFor="wh-notes">
+              Notes
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Textarea id="wh-notes" rows={2} {...register('notes', { maxLength: 2000 })} />
           </div>
 
@@ -431,8 +442,14 @@ function WarehouseDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : editing ? 'Save' : 'Create'}
+            <Button type="submit" variant="gradient" disabled={isSubmitting}>
+              {isSubmitting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : editing ? (
+                'Save changes'
+              ) : (
+                `Create ${termSingular.toLowerCase()}`
+              )}
             </Button>
           </DialogFooter>
         </form>
