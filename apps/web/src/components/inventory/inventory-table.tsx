@@ -422,6 +422,7 @@ export function InventoryTable({
           selectedIds={[...selected]}
           categories={categories}
           suppliers={suppliers}
+          locations={locations}
           onClear={() => setSelected(new Set())}
           hasArchivedSelection={items.some(
             (i) => selected.has(i.id) && i.status === 'archived',

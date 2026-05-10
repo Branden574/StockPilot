@@ -1,6 +1,6 @@
 'use client';
 
-import { Archive, ClipboardList, FolderTree, Loader2, Truck, Undo2, X } from 'lucide-react';
+import { Archive, ClipboardList, FolderTree, Loader2, MapPin, Truck, Undo2, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -37,10 +37,16 @@ export interface BulkActionsSupplier {
   name: string;
 }
 
+export interface BulkActionsLocation {
+  id: string;
+  name: string;
+}
+
 interface BulkActionsProps {
   selectedIds: string[];
   categories: BulkActionsCategory[];
   suppliers: BulkActionsSupplier[];
+  locations: BulkActionsLocation[];
   onClear: () => void;
   /** Whether any of the selected rows is currently archived. Drives the
       "Restore" vs "Archive" affordance. */
@@ -52,12 +58,14 @@ type ActiveDialog =
   | { kind: 'unarchive' }
   | { kind: 'set_category' }
   | { kind: 'set_supplier' }
+  | { kind: 'set_location' }
   | null;
 
 export function BulkActions({
   selectedIds,
   categories,
   suppliers,
+  locations,
   onClear,
   hasArchivedSelection,
 }: BulkActionsProps) {
@@ -66,6 +74,7 @@ export function BulkActions({
   const [busy, setBusy] = React.useState(false);
   const [categoryId, setCategoryId] = React.useState<string>('__none__');
   const [supplierId, setSupplierId] = React.useState<string>('__none__');
+  const [locationId, setLocationId] = React.useState<string>('__none__');
 
   const count = selectedIds.length;
   const [draftBusy, setDraftBusy] = React.useState(false);
@@ -156,6 +165,15 @@ export function BulkActions({
           className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
         >
           <Truck className="h-3 w-3" /> Set supplier
+        </button>
+
+        <span className="text-[var(--ed-ink-4)]">·</span>
+        <button
+          type="button"
+          onClick={() => setDialog({ kind: 'set_location' })}
+          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
+        >
+          <MapPin className="h-3 w-3" /> Set location
         </button>
 
         <span className="text-[var(--ed-ink-4)]">·</span>
@@ -308,6 +326,56 @@ export function BulkActions({
                 run({
                   kind: 'set_category',
                   categoryId: categoryId === '__none__' ? null : categoryId,
+                })
+              }
+              disabled={busy}
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Apply'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Set location (primary_location_id) */}
+      <Dialog
+        open={dialog?.kind === 'set_location'}
+        onOpenChange={(v) => (v ? null : setDialog(null))}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Set location on {count} item{count === 1 ? '' : 's'}</DialogTitle>
+            <DialogDescription>
+              Set the primary stocking location for every selected item, or
+              pick "No location" to clear it. This does not move on-hand
+              stock between warehouses.
+            </DialogDescription>
+          </DialogHeader>
+          <Select value={locationId} onValueChange={setLocationId}>
+            <SelectTrigger>
+              <SelectValue placeholder="Pick location" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">No location</SelectItem>
+              {locations.map((l) => (
+                <SelectItem key={l.id} value={l.id}>
+                  {l.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDialog(null)}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() =>
+                run({
+                  kind: 'set_location',
+                  locationId: locationId === '__none__' ? null : locationId,
                 })
               }
               disabled={busy}
