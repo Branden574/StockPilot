@@ -4,25 +4,23 @@ import { NewShipmentForm } from '@/components/shipments/new-shipment-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { ChartersService } from '@/server/services/charters';
-import { InventoryService } from '@/server/services/inventory';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 import { WarehousesService } from '@/server/services/warehouses';
 
 export default async function NewShipmentPage() {
-  const [whSvc, invSvc, chSvc, whChSvc, access] = await Promise.all([
+  const [whSvc, chSvc, whChSvc, access] = await Promise.all([
     WarehousesService.forCurrentUser(),
-    InventoryService.forCurrentUser(),
     ChartersService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
     getWarehouseAccess(),
   ]);
-  // We bumped the inventory limit from 200 → 500 so the browseable item
-  // picker actually shows the catalog at meaningful sizes. If an org grows
-  // past 500 active items, the picker tops out — we'll add cursored
-  // pagination in a follow-up; for now this covers ~99% of the data.
-  const [allWarehouses, inventory, allCharters, pairs] = await Promise.all([
+  // Items are no longer pre-fetched at the page level. The form fetches
+  // them client-side from /api/inventory/by-warehouse, paginated and
+  // scoped to the selected source warehouse — that removes the old
+  // org-wide 500-item ceiling and lets us serve thumbnail signed URLs
+  // without paying for them on every nav.
+  const [allWarehouses, allCharters, pairs] = await Promise.all([
     whSvc.list(),
-    invSvc.list({ limit: 500, status: 'active' }),
     chSvc.list(),
     whChSvc.listPairs(),
   ]);
@@ -42,15 +40,6 @@ export default async function NewShipmentPage() {
   const charters = allCharters
     .filter((c) => c.status === 'active')
     .map((c) => ({ id: c.id, name: c.name, code: c.code }));
-
-  const items = inventory.items.map((i) => ({
-    id: i.id,
-    name: i.name,
-    sku: i.sku,
-    barcode: i.barcode ?? null,
-    warehouseId: i.warehouse_id ?? null,
-    quantityOnHand: Number(i.quantity_on_hand) || 0,
-  }));
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -79,7 +68,6 @@ export default async function NewShipmentPage() {
             sourceWarehouses={sourceWarehouses}
             charters={charters}
             warehouseCharterPairs={pairs}
-            items={items}
           />
         </CardContent>
       </Card>

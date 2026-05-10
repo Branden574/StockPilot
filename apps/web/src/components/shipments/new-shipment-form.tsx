@@ -36,18 +36,17 @@ interface WarehouseCharterPair {
   charter_id: string;
 }
 
-interface ItemOption {
+/**
+ * Shape returned by /api/inventory/by-warehouse. Slim on purpose — only
+ * what the picker rows render. Bigger item shapes belong in the dedicated
+ * inventory list pages.
+ */
+interface PickerItem {
   id: string;
-  name: string;
   sku: string;
-  barcode: string | null;
-  /** The item's home warehouse — used to filter the browse list. */
-  warehouseId: string | null;
-  /** Org-wide on-hand. When a source warehouse is selected, this is the
-   * on-hand AT that warehouse (because the item's warehouse_id IS its
-   * home warehouse, and inventory_items.quantity_on_hand is the per-row
-   * count for that home location). */
+  name: string;
   quantityOnHand: number;
+  imageUrl: string | null;
 }
 
 interface FormValues {
@@ -62,16 +61,35 @@ interface LineRow {
   qtyBackOrdered: number;
 }
 
+interface ApiResponse {
+  items: PickerItem[];
+  nextCursor: string | null;
+  total: number;
+}
+
+const PAGE_LIMIT = 50;
+const SEARCH_DEBOUNCE_MS = 250;
+
+type ItemTypeFilter = 'all' | 'book' | 'product' | 'asset' | 'consumable';
+
+// Order intentionally puts Books first — that's the dominant L4L packing-
+// slip flow. The other tabs let staff ship non-books when they need to.
+const ITEM_TYPE_TABS: Array<{ value: ItemTypeFilter; label: string }> = [
+  { value: 'book', label: 'Books' },
+  { value: 'product', label: 'Products' },
+  { value: 'asset', label: 'Assets' },
+  { value: 'consumable', label: 'Consumables' },
+  { value: 'all', label: 'All' },
+];
+
 export function NewShipmentForm({
   sourceWarehouses,
   charters,
   warehouseCharterPairs,
-  items,
 }: {
   sourceWarehouses: WarehouseOption[];
   charters: CharterOption[];
   warehouseCharterPairs: WarehouseCharterPair[];
-  items: ItemOption[];
 }) {
   const router = useRouter();
   const [sourceWarehouseId, setSourceWarehouseId] = React.useState<string>(
@@ -82,6 +100,15 @@ export function NewShipmentForm({
   const [lines, setLines] = React.useState<LineRow[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
 
+  // Cache of every PickerItem we've seen across pages and warehouses, so
+  // the right-hand "On this shipment" pane can resolve sku/name/thumb for
+  // any line item even after the user switches the picker to a different
+  // search query or warehouse and the row is no longer in the visible
+  // page. Keyed by item id; never evicted within a single form session.
+  const [itemCache, setItemCache] = React.useState<Map<string, PickerItem>>(
+    () => new Map(),
+  );
+
   const {
     register,
     handleSubmit,
@@ -89,13 +116,6 @@ export function NewShipmentForm({
   } = useForm<FormValues>({
     defaultValues: { attentionToName: '', notes: '', ccEmails: '' },
   });
-
-  // Build a map item.id → ItemOption once for row-render lookups.
-  const itemMap = React.useMemo(() => {
-    const m = new Map<string, ItemOption>();
-    for (const i of items) m.set(i.id, i);
-    return m;
-  }, [items]);
 
   // Pairs indexed by warehouse_id for O(1) lookup of charter ids.
   const chartersByWarehouse = React.useMemo(() => {
@@ -128,14 +148,14 @@ export function NewShipmentForm({
     }
   }, [filteredCharters, destinationCharterId]);
 
-  // Items at the selected source warehouse. inventory_items.warehouse_id
-  // IS the item's home warehouse, and quantity_on_hand is the count at
-  // that home; that gives us per-source-warehouse on-hand for free without
-  // joining item_stock_levels.
-  const itemsAtSource = React.useMemo(() => {
-    if (!sourceWarehouseId) return [] as ItemOption[];
-    return items.filter((i) => i.warehouseId === sourceWarehouseId);
-  }, [items, sourceWarehouseId]);
+  const upsertCache = React.useCallback((items: PickerItem[]) => {
+    if (items.length === 0) return;
+    setItemCache((prev) => {
+      const next = new Map(prev);
+      for (const item of items) next.set(item.id, item);
+      return next;
+    });
+  }, []);
 
   function addItem(itemId: string) {
     setLines((prev) => {
@@ -314,20 +334,20 @@ export function NewShipmentForm({
         <Label>Line items</Label>
         {/*
          * Browseable two-pane picker. The left pane lists every active item
-         * at the chosen source warehouse — click a row to add it (or bump
-         * its qty if it's already on the slip). The right pane is the
-         * current slip. Search is a polish filter, not a requirement:
-         * the goal is "see books properly" without forcing a keyword.
+         * at the chosen source warehouse — paginated, debounced-searchable,
+         * with thumbnails. Click a row to add it (or bump its qty if it's
+         * already on the slip). The right pane is the current slip.
          */}
         <div className="grid gap-4 lg:grid-cols-2">
           <ItemBrowsePane
-            items={itemsAtSource}
+            sourceWarehouseId={sourceWarehouseId}
             sourceWarehouseName={selectedSource?.name ?? null}
             onPick={addItem}
+            onItemsLoaded={upsertCache}
           />
           <ShipmentLinesPane
             lines={lines}
-            itemMap={itemMap}
+            itemCache={itemCache}
             onUpdate={updateLine}
             onRemove={removeLine}
           />
@@ -360,35 +380,191 @@ export function NewShipmentForm({
 }
 
 /**
- * Browseable list of items at the source warehouse. The whole row is the
- * click target so adding items is unambiguous (no "tiny button to aim at"
- * problem). Optional in-list search filters the visible rows but the
- * scrollable list is the primary affordance — users should never NEED
- * to search to find a book.
+ * Browseable, paginated list of items at the source warehouse. Fetches
+ * a server page from /api/inventory/by-warehouse on warehouse change
+ * and on debounced search-input change. Loads the next page when the
+ * sentinel scrolls into view OR when the user clicks "Load more".
+ *
+ * In-flight requests are aborted on supersede so a slow page-1 fetch
+ * can't stomp a fresh page-1 fetch triggered by a quicker search edit.
  */
 function ItemBrowsePane({
-  items,
+  sourceWarehouseId,
   sourceWarehouseName,
   onPick,
+  onItemsLoaded,
 }: {
-  items: ItemOption[];
+  sourceWarehouseId: string;
   sourceWarehouseName: string | null;
   onPick: (itemId: string) => void;
+  onItemsLoaded: (items: PickerItem[]) => void;
 }) {
-  const [query, setQuery] = React.useState('');
-  const trimmed = query.trim().toLowerCase();
+  const [items, setItems] = React.useState<PickerItem[]>([]);
+  const [cursor, setCursor] = React.useState<string | null>(null);
+  const [total, setTotal] = React.useState<number | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [searchQuery, setSearchQuery] = React.useState('');
+  const [debouncedQuery, setDebouncedQuery] = React.useState('');
+  const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
+  // Item-type filter — packing slips at L4L are usually books, so 'book'
+  // is the default tab. The picker still serves the other types on the
+  // other tabs (assets / consumables / products / all) for the cases
+  // when someone is shipping out a non-book.
+  const [itemType, setItemType] = React.useState<ItemTypeFilter>('book');
 
-  const visible = React.useMemo(() => {
-    if (trimmed.length === 0) return items;
-    return items.filter((i) => {
-      const hay = `${i.name} ${i.sku} ${i.barcode ?? ''}`.toLowerCase();
-      return hay.includes(trimmed);
-    });
-  }, [items, trimmed]);
+  const abortRef = React.useRef<AbortController | null>(null);
+  const sentinelRef = React.useRef<HTMLDivElement | null>(null);
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const onItemsLoadedRef = React.useRef(onItemsLoaded);
+  React.useEffect(() => {
+    onItemsLoadedRef.current = onItemsLoaded;
+  }, [onItemsLoaded]);
+
+  // Debounce search-query changes so we don't re-fetch on every keystroke.
+  React.useEffect(() => {
+    const t = setTimeout(
+      () => setDebouncedQuery(searchQuery.trim()),
+      SEARCH_DEBOUNCE_MS,
+    );
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  /**
+   * Single fetch primitive. `mode='reset'` clears the list before the
+   * round trip; `mode='append'` adds the page to the end (used by the
+   * sentinel + Load more). Cancels any pending request before starting.
+   */
+  const fetchPage = React.useCallback(
+    async (
+      whId: string,
+      q: string,
+      type: ItemTypeFilter,
+      cursorParam: string | null,
+      mode: 'reset' | 'append',
+    ) => {
+      if (!whId) return;
+
+      // Supersede any in-flight request — slower responses must not
+      // overwrite the result of a newer query.
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      setLoading(true);
+      setErrorMsg(null);
+
+      try {
+        const params = new URLSearchParams({
+          warehouseId: whId,
+          itemType: type,
+          limit: String(PAGE_LIMIT),
+        });
+        if (q) params.set('q', q);
+        if (cursorParam) params.set('cursor', cursorParam);
+
+        const res = await fetch(
+          `/api/inventory/by-warehouse?${params.toString()}`,
+          {
+            method: 'GET',
+            cache: 'no-store',
+            signal: controller.signal,
+          },
+        );
+        if (!res.ok) {
+          throw new Error(`Request failed: ${res.status}`);
+        }
+        const data = (await res.json()) as ApiResponse;
+
+        // Bail if a newer fetch already replaced us — controller.signal
+        // would have aborted, but defensive check covers the case where
+        // the response landed exactly between abort() and our handler.
+        if (controller.signal.aborted) return;
+
+        if (mode === 'reset') {
+          setItems(data.items);
+        } else {
+          setItems((prev) => {
+            // Dedupe across pages: if the picker reloads with the same
+            // cursor twice (race / double-click), don't double-render
+            // the same id.
+            const seen = new Set(prev.map((p) => p.id));
+            const fresh = data.items.filter((i) => !seen.has(i.id));
+            return [...prev, ...fresh];
+          });
+        }
+        setCursor(data.nextCursor);
+        setTotal(data.total);
+        onItemsLoadedRef.current(data.items);
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') return;
+        setErrorMsg('Failed to load items. Try again.');
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    },
+    [],
+  );
+
+  // Reset + fetch page 1 whenever the source warehouse or the debounced
+  // search term changes. This is the canonical "page 1" trigger; the
+  // sentinel/Load-more path only ever calls fetchPage with mode='append'.
+  React.useEffect(() => {
+    if (!sourceWarehouseId) {
+      setItems([]);
+      setCursor(null);
+      setTotal(null);
+      return;
+    }
+    setItems([]);
+    setCursor(null);
+    setTotal(null);
+    void fetchPage(sourceWarehouseId, debouncedQuery, itemType, null, 'reset');
+    // We intentionally cancel + re-fetch on warehouse, type, OR query change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceWarehouseId, debouncedQuery, itemType]);
+
+  // Cleanup any in-flight fetch on unmount.
+  React.useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  const loadMore = React.useCallback(() => {
+    if (!sourceWarehouseId || loading || !cursor) return;
+    void fetchPage(sourceWarehouseId, debouncedQuery, itemType, cursor, 'append');
+  }, [sourceWarehouseId, debouncedQuery, itemType, cursor, loading, fetchPage]);
+
+  // IntersectionObserver on the sentinel: as soon as it scrolls into view
+  // the list auto-loads the next page. The scroll container is the
+  // bounded-height list itself (max-h-[420px]), not the page viewport,
+  // so we pass it as `root` to the observer.
+  React.useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = scrollRef.current;
+    if (!sentinel || !root || !cursor) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            loadMore();
+          }
+        }
+      },
+      { root, rootMargin: '200px 0px', threshold: 0 },
+    );
+    obs.observe(sentinel);
+    return () => obs.disconnect();
+  }, [cursor, loadMore]);
+
+  const isInitialLoad = loading && items.length === 0;
+  const allLoaded = !cursor && total !== null && items.length === total;
 
   return (
     <div className="bg-card flex flex-col overflow-hidden rounded-md border">
-      <div className="border-border space-y-1.5 border-b px-3 py-2">
+      <div className="border-border space-y-2 border-b px-3 py-2">
         <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           Available items
           {sourceWarehouseName ? (
@@ -397,60 +573,147 @@ function ItemBrowsePane({
             </span>
           ) : null}
         </p>
+        <div className="flex flex-wrap gap-1" role="tablist" aria-label="Item type filter">
+          {ITEM_TYPE_TABS.map((t) => {
+            const active = t.value === itemType;
+            return (
+              <button
+                key={t.value}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                disabled={!sourceWarehouseId}
+                onClick={() => setItemType(t.value)}
+                className={
+                  active
+                    ? 'bg-foreground text-background rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors'
+                    : 'bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50'
+                }
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
         <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Type to filter…"
           className="h-8 text-sm"
+          disabled={!sourceWarehouseId}
         />
       </div>
-      <div className="max-h-[420px] overflow-y-auto">
-        {items.length === 0 ? (
+      <div ref={scrollRef} className="max-h-[420px] overflow-y-auto">
+        {!sourceWarehouseId ? (
+          <div className="text-muted-foreground flex flex-col items-center gap-2 px-4 py-10 text-center text-xs">
+            <Package className="h-5 w-5 opacity-60" />
+            <p>Pick a source warehouse to see available items.</p>
+          </div>
+        ) : isInitialLoad ? (
+          <div className="text-muted-foreground flex flex-col items-center gap-2 px-4 py-10 text-center text-xs">
+            <Loader2 className="h-5 w-5 animate-spin opacity-60" />
+            <p>Loading items…</p>
+          </div>
+        ) : errorMsg && items.length === 0 ? (
+          <div className="text-destructive flex flex-col items-center gap-2 px-4 py-10 text-center text-xs">
+            <p>{errorMsg}</p>
+            <button
+              type="button"
+              className="underline"
+              onClick={() =>
+                fetchPage(sourceWarehouseId, debouncedQuery, itemType, null, 'reset')
+              }
+            >
+              Retry
+            </button>
+          </div>
+        ) : items.length === 0 ? (
           <div className="text-muted-foreground flex flex-col items-center gap-2 px-4 py-10 text-center text-xs">
             <Package className="h-5 w-5 opacity-60" />
             <p>
-              {sourceWarehouseName
-                ? 'No active items at this warehouse yet.'
-                : 'Pick a source warehouse to see available items.'}
+              {debouncedQuery.length > 0
+                ? `No items match “${debouncedQuery}”.`
+                : 'No active items at this warehouse yet.'}
             </p>
           </div>
-        ) : visible.length === 0 ? (
-          <p className="text-muted-foreground px-4 py-6 text-center text-xs">
-            No matches for &ldquo;{query}&rdquo;.
-          </p>
         ) : (
-          <ul className="divide-border divide-y">
-            {visible.map((i) => (
-              <li key={i.id}>
-                <button
-                  type="button"
-                  onClick={() => onPick(i.id)}
-                  className="hover:bg-muted/60 focus-visible:bg-muted/60 flex w-full items-center gap-3 px-3 py-2 text-left transition-colors focus:outline-none"
-                >
-                  <ItemThumb />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-muted-foreground font-mono text-[11px]">
-                      {i.sku}
-                    </p>
-                    <p className="truncate text-sm font-medium">{i.name}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-foreground tabular-nums text-sm font-medium">
-                      {i.quantityOnHand}
-                    </p>
-                    <p className="text-muted-foreground text-[10px] uppercase tracking-wider">
-                      on hand
-                    </p>
-                  </div>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="divide-border divide-y">
+              {items.map((i) => (
+                <li key={i.id}>
+                  <button
+                    type="button"
+                    onClick={() => onPick(i.id)}
+                    className="hover:bg-muted/60 focus-visible:bg-muted/60 flex w-full items-center gap-3 px-3 py-2 text-left transition-colors focus:outline-none"
+                  >
+                    <ItemThumb
+                      imageUrl={i.imageUrl}
+                      alt={i.name}
+                      itemId={i.id}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-muted-foreground font-mono text-[11px]">
+                        {i.sku}
+                      </p>
+                      <p className="truncate text-sm font-medium">{i.name}</p>
+                    </div>
+                    <div className="text-right">
+                      <p
+                        className={`tabular-nums text-sm font-medium ${
+                          i.quantityOnHand <= 0
+                            ? 'text-muted-foreground/60'
+                            : 'text-foreground'
+                        }`}
+                      >
+                        {i.quantityOnHand}
+                      </p>
+                      <p className="text-muted-foreground text-[10px] uppercase tracking-wider">
+                        on hand
+                      </p>
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {/*
+             * Sentinel + fallback button. The sentinel triggers the next
+             * page automatically as the user scrolls; the button is a
+             * fallback for tall viewports where the list never overflows
+             * its container, plus an explicit affordance for keyboard /
+             * screen-reader users.
+             */}
+            {cursor ? (
+              <div
+                ref={sentinelRef}
+                className="flex items-center justify-center gap-2 px-3 py-3"
+              >
+                {loading ? (
+                  <span className="text-muted-foreground inline-flex items-center gap-2 text-xs">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading more…
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={loadMore}
+                    className="text-muted-foreground hover:text-foreground text-xs underline"
+                  >
+                    Load more
+                  </button>
+                )}
+              </div>
+            ) : null}
+            {allLoaded && items.length > 0 ? (
+              <p className="text-muted-foreground px-3 py-2 text-center text-[11px]">
+                All loaded
+              </p>
+            ) : null}
+          </>
         )}
       </div>
-      {items.length > 0 && (
+      {sourceWarehouseId && (items.length > 0 || total !== null) && (
         <div className="border-border bg-muted/30 text-muted-foreground border-t px-3 py-1.5 text-[11px]">
-          Showing {visible.length} of {items.length} items
+          Showing {items.length} of {total ?? '…'} items
         </div>
       )}
     </div>
@@ -458,11 +721,44 @@ function ItemBrowsePane({
 }
 
 /**
- * No `image_url` is surfaced by InventoryService.list today, so the thumb
- * is a brand-styled placeholder. Once item images land on the list query
- * this becomes an <Image src=… />.
+ * Renders a 40×40 thumbnail when the item has a primary image, falling
+ * back to the brand-styled Package icon otherwise. We swap to the icon
+ * on `onError` too, since signed URLs can race expiry or the underlying
+ * file can have been deleted between the API response and the <img>
+ * fetch — better a placeholder than a broken-image glyph.
  */
-function ItemThumb() {
+function ItemThumb({
+  imageUrl,
+  alt,
+  itemId,
+}: {
+  imageUrl: string | null;
+  alt: string;
+  itemId: string;
+}) {
+  // We track failures per-itemId so swapping back/forth in pagination
+  // doesn't accidentally re-try a known-broken URL each time.
+  const [failed, setFailed] = React.useState(false);
+  // Reset the failed flag if the URL actually changes (e.g. a new
+  // signed URL after a re-fetch). The id is included so the same image
+  // for the same item with a refreshed signature resets the state.
+  React.useEffect(() => {
+    setFailed(false);
+  }, [imageUrl, itemId]);
+
+  if (imageUrl && !failed) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={imageUrl}
+        alt={alt}
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
+        className="bg-muted h-10 w-10 flex-shrink-0 rounded-md object-cover"
+      />
+    );
+  }
   return (
     <div className="bg-muted text-muted-foreground/70 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md">
       <Package className="h-4 w-4" />
@@ -472,12 +768,12 @@ function ItemThumb() {
 
 function ShipmentLinesPane({
   lines,
-  itemMap,
+  itemCache,
   onUpdate,
   onRemove,
 }: {
   lines: LineRow[];
-  itemMap: Map<string, ItemOption>;
+  itemCache: Map<string, PickerItem>;
   onUpdate: (idx: number, patch: Partial<LineRow>) => void;
   onRemove: (idx: number) => void;
 }) {
@@ -509,7 +805,7 @@ function ShipmentLinesPane({
             </thead>
             <tbody className="divide-y">
               {lines.map((line, idx) => {
-                const item = itemMap.get(line.itemId);
+                const item = itemCache.get(line.itemId);
                 return (
                   <tr key={`${line.itemId}-${idx}`}>
                     <td className="px-3 py-2">
