@@ -1,0 +1,66 @@
+# Artillery alternative for scenario 03 (inventory-list).
+#
+# Mirrors load-tests/k6/scenarios/03-inventory-list.js for users who
+# prefer Artillery's YAML config over k6's JS. Only one scenario is
+# provided — replicate this pattern for the others if you want a full
+# Artillery suite.
+#
+# Required env:
+#   BASE_URL                 e.g. https://preview-xxx.vercel.app
+#   SUPABASE_AUTH_COOKIE     full cookie header value pasted from
+#                            browser devtools after a real sign-in
+#
+# Install:
+#   npm install -g artillery
+#
+# Run:
+#   BASE_URL=https://preview-xxx.vercel.app \
+#     SUPABASE_AUTH_COOKIE='sb-xxx-auth-token=...; ...' \
+#     artillery run load-tests/artillery/basic.yml
+
+config:
+  target: "{{ $env.BASE_URL }}"
+  # Ramp: 0->50 over 30s, hold 50 for 60s, ramp down 50->0 over 30s.
+  # Mirrors k6 DEFAULT_STAGES so results are comparable.
+  phases:
+    - duration: 30
+      arrivalRate: 0
+      rampTo: 50
+      name: ramp-up
+    - duration: 60
+      arrivalRate: 50
+      name: hold
+    - duration: 30
+      arrivalRate: 50
+      rampTo: 0
+      name: ramp-down
+  defaults:
+    headers:
+      Cookie: "{{ $env.SUPABASE_AUTH_COOKIE }}"
+  # Artillery thresholds — fail the run if p95 > 1s or error rate > 1%.
+  ensure:
+    thresholds:
+      - http.response_time.p95: 1000
+      - http.codes.200: 99   # at least 99% of responses must be 200
+  variables:
+    filter:
+      - ""
+      - "?status=active"
+      - "?status=archived"
+      - "?stock=low"
+      - "?stock=out"
+      - "?sort=name_asc"
+      - "?sort=qty_desc"
+      - "?q=widget"
+      - "?q=screw"
+      - "?page=2"
+
+scenarios:
+  - name: "inventory list with random filter"
+    flow:
+      - get:
+          url: "/dashboard/inventory{{ filter }}"
+          followRedirect: false
+          expect:
+            - statusCode: 200
+      - think: 2
