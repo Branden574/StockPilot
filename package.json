@@ -51,7 +51,9 @@
       "postcss": "^8.5.10",
       "fast-uri": "^3.1.2",
       "@xmldom/xmldom": "^0.8.13",
-      "@babel/plugin-transform-modules-systemjs": "^7.29.4"
+      "@babel/plugin-transform-modules-systemjs": "^7.29.4",
+      "vite": "^6.4.2",
+      "esbuild": "^0.25.0"
     }
   },
   "prettier": {
