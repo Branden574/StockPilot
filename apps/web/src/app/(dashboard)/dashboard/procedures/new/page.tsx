@@ -36,7 +36,8 @@ export default async function NewProcedurePage() {
       </div>
       <h1 className="text-2xl font-semibold tracking-tight">New procedure</h1>
       <p className="mt-1 text-sm text-muted-foreground">
-        Capture the steps. You can add videos on the next screen.
+        Capture the steps. Drop videos in below — they&apos;ll upload after you
+        save.
       </p>
       <div className="mt-6">
         <ProcedureForm

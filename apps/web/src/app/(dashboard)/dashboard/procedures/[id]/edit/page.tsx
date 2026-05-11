@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 
 import { Button } from '@/components/ui/button';
 import { ProcedureForm } from '@/components/procedures/procedure-form';
+import { UploadRecoveryToast } from '@/components/procedures/upload-recovery-toast';
 import { requireOrgContext } from '@/lib/auth/session';
 import { hasPermission } from '@stockpilot/core';
 import { ProcedureCategoriesService } from '@/server/services/procedure-categories';
@@ -60,6 +61,7 @@ export default async function EditProcedurePage({
           </Link>
         </Button>
       </div>
+      <UploadRecoveryToast />
       <h1 className="text-2xl font-semibold tracking-tight">Edit procedure</h1>
       <p className="mt-1 text-sm text-muted-foreground">
         Update the body or attach more videos. Changes save when you click Save.

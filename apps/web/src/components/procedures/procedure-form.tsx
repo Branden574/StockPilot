@@ -16,12 +16,21 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { createClient } from '@/lib/supabase/client';
 import {
   createProcedureAction,
+  recordProcedureVideoAction,
   updateProcedureAction,
 } from '@/server/actions/procedures';
 
-import { VideoUploader, type UploadedVideo } from './video-uploader';
+import {
+  VideoUploader,
+  extensionFromMime,
+  type StagedVideo,
+  type UploadedVideo,
+} from './video-uploader';
+
+const PROCEDURE_VIDEOS_BUCKET = 'procedure-videos';
 
 interface CategoryOption {
   id: string;
@@ -56,10 +65,16 @@ interface ProcedureFormProps {
 const NULL_VALUE = '__none';
 
 /**
- * Procedure create/edit form. The video uploader is inline but ONLY
- * shown in edit mode (we need a procedure id to upload against). The
- * create flow saves the procedure first, then routes to the edit page
- * so videos can be attached.
+ * Procedure create/edit form.
+ *
+ * Create mode: videos can be STAGED inline (held in browser memory). On
+ * submit we (1) create the procedure row, then (2) loop sequentially over
+ * the staged files, upload each to storage, and call
+ * recordProcedureVideoAction. Sequential because parallel uploads of
+ * large files thrash small uplinks.
+ *
+ * Edit mode: the uploader is in "immediate" mode — each drop uploads
+ * right away against the known procedure id.
  */
 export function ProcedureForm({
   mode,
@@ -81,6 +96,94 @@ export function ProcedureForm({
     defaults?.authoringWarehouseId ?? NULL_VALUE,
   );
   const [busy, setBusy] = React.useState(false);
+  const [staged, setStaged] = React.useState<StagedVideo[]>([]);
+  /** While > 0, the form is mid-batch uploading staged videos. */
+  const [uploadCursor, setUploadCursor] = React.useState<{
+    current: number;
+    total: number;
+  } | null>(null);
+
+  function submitButtonCopy(): string {
+    if (uploadCursor) {
+      return `Uploading ${uploadCursor.current} of ${uploadCursor.total}…`;
+    }
+    if (busy) return isEdit ? 'Saving…' : 'Creating…';
+    return isEdit ? 'Save changes' : 'Create procedure';
+  }
+
+  /**
+   * Sequentially upload each staged video to storage, then call
+   * recordProcedureVideoAction. Returns true if every file recorded;
+   * false if any failed. Mutates `staged` (via setStaged) to reflect
+   * per-file status.
+   */
+  async function runStagedUploads(procedureId: string): Promise<boolean> {
+    const supabase = createClient();
+    let allOk = true;
+    // Snapshot the array now — the indices we use for orderIdx must be
+    // stable across the loop even as we update per-item status.
+    const snapshot = staged;
+    for (let i = 0; i < snapshot.length; i++) {
+      const entry = snapshot[i]!;
+      setUploadCursor({ current: i + 1, total: snapshot.length });
+      // Flip this row to "uploading".
+      setStaged((arr) =>
+        arr.map((s) => (s.tempId === entry.tempId ? { ...s, status: 'uploading' } : s)),
+      );
+
+      try {
+        const ext =
+          extensionFromMime(entry.mimeType) ||
+          (entry.file.name.split('.').pop() ?? 'mp4');
+        const safeExt =
+          ext.replace(/[^a-z0-9]/gi, '').slice(0, 5).toLowerCase() || 'mp4';
+        const uuid = crypto.randomUUID();
+        const path = `${organizationId}/${procedureId}/${uuid}.${safeExt}`;
+
+        const { error: upErr } = await supabase.storage
+          .from(PROCEDURE_VIDEOS_BUCKET)
+          .upload(path, entry.file, {
+            cacheControl: '3600',
+            contentType: entry.mimeType || 'video/mp4',
+            upsert: false,
+          });
+        if (upErr) throw new Error(upErr.message);
+
+        const record = await recordProcedureVideoAction({
+          procedureId,
+          storagePath: path,
+          title: entry.title.trim() || entry.file.name,
+          durationSeconds: entry.durationSeconds,
+          sizeBytes: entry.sizeBytes,
+          mimeType: entry.mimeType || null,
+          orderIdx: i,
+        });
+        if (!record.ok) {
+          // DB row failed — clean up the storage object so we don't
+          // leave orphan files behind. Best-effort.
+          await supabase.storage.from(PROCEDURE_VIDEOS_BUCKET).remove([path]);
+          throw new Error(record.error.message);
+        }
+
+        setStaged((arr) =>
+          arr.map((s) => (s.tempId === entry.tempId ? { ...s, status: 'recorded' } : s)),
+        );
+      } catch (e) {
+        allOk = false;
+        const msg = e instanceof Error ? e.message : 'Upload failed';
+        setStaged((arr) =>
+          arr.map((s) =>
+            s.tempId === entry.tempId ? { ...s, status: 'failed', error: msg } : s,
+          ),
+        );
+        toast.error(`Couldn't upload "${entry.title || entry.file.name}": ${msg}`);
+        // Continue on to the next file — partial success is better than
+        // an aborted batch.
+      }
+    }
+    setUploadCursor(null);
+    return allOk;
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -109,16 +212,33 @@ export function ProcedureForm({
         toast.success('Procedure saved.');
         router.push(`/dashboard/procedures/${defaults.id}`);
         router.refresh();
+        return;
+      }
+
+      const res = await createProcedureAction(payload);
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      const newId = res.data.id;
+
+      if (staged.length === 0) {
+        toast.success('Procedure created.');
+        router.push(`/dashboard/procedures/${newId}`);
+        router.refresh();
+        return;
+      }
+
+      const allOk = await runStagedUploads(newId);
+      if (allOk) {
+        toast.success('Procedure created with videos.');
+        router.push(`/dashboard/procedures/${newId}`);
+        router.refresh();
       } else {
-        const res = await createProcedureAction(payload);
-        if (!res.ok) {
-          toast.error(res.error.message);
-          return;
-        }
-        toast.success('Procedure created. Add videos next.');
-        // Send the author to the edit page so they can attach videos to
-        // the freshly-created procedure.
-        router.push(`/dashboard/procedures/${res.data.id}/edit`);
+        // Some uploads failed; the surviving rows are already recorded
+        // and the failed ones are gone from memory after redirect. The
+        // edit page renders a recovery toast off this query param.
+        router.push(`/dashboard/procedures/${newId}/edit?upload_recovery=1`);
         router.refresh();
       }
     } finally {
@@ -137,6 +257,7 @@ export function ProcedureForm({
           placeholder="e.g. Replace a fluorescent ballast"
           maxLength={200}
           required
+          disabled={uploadCursor !== null}
         />
       </div>
 
@@ -148,13 +269,18 @@ export function ProcedureForm({
           onChange={(e) => setDescription(e.target.value)}
           placeholder="One sentence summary"
           maxLength={2000}
+          disabled={uploadCursor !== null}
         />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="category">Category</Label>
-          <Select value={categoryId} onValueChange={setCategoryId}>
+          <Select
+            value={categoryId}
+            onValueChange={setCategoryId}
+            disabled={uploadCursor !== null}
+          >
             <SelectTrigger id="category">
               <SelectValue placeholder="No category" />
             </SelectTrigger>
@@ -173,6 +299,7 @@ export function ProcedureForm({
           <Select
             value={authoringWarehouseId}
             onValueChange={setAuthoringWarehouseId}
+            disabled={uploadCursor !== null}
           >
             <SelectTrigger id="warehouse">
               <SelectValue placeholder="No warehouse" />
@@ -201,6 +328,7 @@ export function ProcedureForm({
           }
           className="font-mono text-sm"
           maxLength={50_000}
+          disabled={uploadCursor !== null}
         />
         <p className="text-xs text-muted-foreground">
           Supports standard Markdown — headings, lists, tables, task lists, and
@@ -208,13 +336,28 @@ export function ProcedureForm({
         </p>
       </div>
 
-      {isEdit && defaults?.id && (
+      {isEdit && defaults?.id ? (
         <div className="space-y-2">
           <Label>Videos</Label>
           <VideoUploader
+            mode="immediate"
             procedureId={defaults.id}
             organizationId={organizationId}
             initialVideos={videos}
+          />
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <Label>Videos</Label>
+          <p className="text-xs text-muted-foreground">
+            Drop videos in below — they upload right after the procedure is
+            created.
+          </p>
+          <VideoUploader
+            mode="staged"
+            staged={staged}
+            onStagedChange={setStaged}
+            uploading={uploadCursor !== null}
           />
         </div>
       )}
@@ -222,7 +365,7 @@ export function ProcedureForm({
       <div className="flex items-center gap-2">
         <Button type="submit" disabled={busy} variant="gradient">
           {busy && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
-          {isEdit ? 'Save changes' : 'Create procedure'}
+          {submitButtonCopy()}
         </Button>
         <Button
           type="button"
