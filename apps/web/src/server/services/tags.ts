@@ -81,7 +81,7 @@ export class TagsService {
       }
       throw new ServiceError('internal_error', error.message);
     }
-    void audit({ event: 'tag.created', entityType: 'tag', entityId: data.id, after: data });
+    void audit({ event: 'tag.created', entityType: 'tag', entityId: data.id, after: data }, this.ctx);
     return data as TagRow;
   }
 
@@ -115,7 +115,7 @@ export class TagsService {
       }
       throw new ServiceError('internal_error', error.message);
     }
-    void audit({ event: 'tag.updated', entityType: 'tag', entityId: id, after: data });
+    void audit({ event: 'tag.updated', entityType: 'tag', entityId: id, after: data }, this.ctx);
     return data as TagRow;
   }
 
@@ -133,7 +133,7 @@ export class TagsService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({ event: 'tag.deleted', entityType: 'tag', entityId: id });
+    void audit({ event: 'tag.deleted', entityType: 'tag', entityId: id }, this.ctx);
   }
 
   /**
@@ -242,12 +242,15 @@ export class TagsService {
       const { error } = await this.ctx.supabase.from('item_tags').insert(rows);
       if (error) throw new ServiceError('internal_error', error.message);
       for (const tagId of toAdd) {
-        void audit({
-          event: 'tag.applied',
-          entityType: 'inventory_item',
-          entityId: itemId,
-          extra: { tag_id: tagId },
-        });
+        void audit(
+          {
+            event: 'tag.applied',
+            entityType: 'inventory_item',
+            entityId: itemId,
+            extra: { tag_id: tagId },
+          },
+          this.ctx,
+        );
       }
     }
 
@@ -259,12 +262,15 @@ export class TagsService {
         .in('tag_id', toRemove);
       if (error) throw new ServiceError('internal_error', error.message);
       for (const tagId of toRemove) {
-        void audit({
-          event: 'tag.removed',
-          entityType: 'inventory_item',
-          entityId: itemId,
-          extra: { tag_id: tagId },
-        });
+        void audit(
+          {
+            event: 'tag.removed',
+            entityType: 'inventory_item',
+            entityId: itemId,
+            extra: { tag_id: tagId },
+          },
+          this.ctx,
+        );
       }
     }
   }
@@ -307,15 +313,18 @@ export class TagsService {
       .upsert(rows, { onConflict: 'item_id,tag_id', ignoreDuplicates: true });
     if (error) throw new ServiceError('internal_error', error.message);
 
-    void audit({
-      event: 'tag.applied',
-      entityType: 'inventory_item',
-      extra: {
-        bulk: true,
-        item_count: itemIds.length,
-        tag_ids: safeTags,
+    void audit(
+      {
+        event: 'tag.applied',
+        entityType: 'inventory_item',
+        extra: {
+          bulk: true,
+          item_count: itemIds.length,
+          tag_ids: safeTags,
+        },
       },
-    });
+      this.ctx,
+    );
   }
 
   /** Mirror of bulkAddToItems but DELETEs every (item, tag) pair in the cross product. */
@@ -330,14 +339,17 @@ export class TagsService {
       .in('tag_id', tagIds);
     if (error) throw new ServiceError('internal_error', error.message);
 
-    void audit({
-      event: 'tag.removed',
-      entityType: 'inventory_item',
-      extra: {
-        bulk: true,
-        item_count: itemIds.length,
-        tag_ids: tagIds,
+    void audit(
+      {
+        event: 'tag.removed',
+        entityType: 'inventory_item',
+        extra: {
+          bulk: true,
+          item_count: itemIds.length,
+          tag_ids: tagIds,
+        },
       },
-    });
+      this.ctx,
+    );
   }
 }

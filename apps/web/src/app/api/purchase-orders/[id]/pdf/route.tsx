@@ -128,12 +128,15 @@ export async function GET(
       />,
     );
 
-    void audit({
-      event: 'pdf.exported',
-      entityType: 'purchase_order',
-      entityId: id,
-      extra: { format: 'pdf' },
-    });
+    void audit(
+      {
+        event: 'pdf.exported',
+        entityType: 'purchase_order',
+        entityId: id,
+        extra: { format: 'pdf' },
+      },
+      ctx,
+    );
 
     const filename = `po-${(po as { po_number?: string }).po_number ?? id}.pdf`;
     return new NextResponse(stream as unknown as ReadableStream<Uint8Array>, {

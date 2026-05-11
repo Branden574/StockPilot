@@ -515,12 +515,15 @@ export class BundlesService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({
-      event: 'bundle.updated',
-      entityType: 'bundle',
-      entityId: id,
-      after: { isActive },
-    });
+    await audit(
+      {
+        event: 'bundle.updated',
+        entityType: 'bundle',
+        entityId: id,
+        after: { isActive },
+      },
+      this.ctx,
+    );
   }
 
   /**
@@ -568,12 +571,15 @@ export class BundlesService {
     }
 
     const row = Array.isArray(data) ? data[0] : data;
-    await audit({
-      event: 'bundle.assembled',
-      entityType: 'bundle',
-      entityId: id,
-      after: { quantity, warehouseId },
-    });
+    await audit(
+      {
+        event: 'bundle.assembled',
+        entityType: 'bundle',
+        entityId: id,
+        after: { quantity, warehouseId },
+      },
+      this.ctx,
+    );
     return {
       phantomItemId: (row?.phantom_item_id as string) ?? '',
       phantomQty: Number(row?.phantom_qty ?? 0),
@@ -606,18 +612,21 @@ export class BundlesService {
       }
       throw new ServiceError('internal_error', msg);
     }
-    await audit({
-      event: 'bundle.distributed',
-      entityType: 'bundle_distribution',
-      entityId: data as string,
-      after: {
-        bundleId: id,
-        quantity: input.quantity,
-        warehouseId: input.warehouseId,
-        scheduleEventId: input.scheduleEventId ?? null,
-        allowShortage: input.allowShortage ?? false,
+    await audit(
+      {
+        event: 'bundle.distributed',
+        entityType: 'bundle_distribution',
+        entityId: data as string,
+        after: {
+          bundleId: id,
+          quantity: input.quantity,
+          warehouseId: input.warehouseId,
+          scheduleEventId: input.scheduleEventId ?? null,
+          allowShortage: input.allowShortage ?? false,
+        },
       },
-    });
+      this.ctx,
+    );
     return { distributionId: data as string };
   }
 }

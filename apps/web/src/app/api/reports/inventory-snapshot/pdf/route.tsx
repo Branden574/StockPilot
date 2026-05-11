@@ -77,16 +77,19 @@ export async function GET(_req: NextRequest) {
       />,
     );
 
-    void audit({
-      event: 'pdf.exported',
-      entityType: 'inventory_snapshot',
-      entityId: null,
-      extra: {
-        format: 'pdf',
-        item_count: data.itemCount,
-        total_value: data.totalValue,
+    void audit(
+      {
+        event: 'pdf.exported',
+        entityType: 'inventory_snapshot',
+        entityId: null,
+        extra: {
+          format: 'pdf',
+          item_count: data.itemCount,
+          total_value: data.totalValue,
+        },
       },
-    });
+      ctx,
+    );
 
     const stamp = new Date().toISOString().slice(0, 10);
     const filename = `inventory-snapshot-${stamp}.pdf`;
