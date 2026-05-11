@@ -58,6 +58,7 @@ const BASE_NAV: NavSection[] = [
       { href: '/dashboard/orders', label: 'Orders', icon: ShoppingCart },
       { href: '/dashboard/shipments', label: 'Shipments', icon: Send },
       { href: '/dashboard/cycle-counts', label: 'Cycle counts', icon: ClipboardCheck },
+      { href: '/dashboard/procedures', label: 'Procedures', icon: BookOpen },
       { href: '/dashboard/purchase-orders', label: 'Purchase orders', icon: ClipboardList },
       { href: '/dashboard/purchase-orders/imports', label: 'PO imports', icon: Upload },
       { href: '/dashboard/locations', label: 'Locations', icon: MapPin },
