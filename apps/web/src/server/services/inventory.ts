@@ -366,6 +366,215 @@ export class InventoryService {
     return data;
   }
 
+  /**
+   * Batch-create N inventory items in one transaction-ish flow. Hoists the
+   * permission / plan-limit / warehouse-access / charter-pair checks out of
+   * the per-row loop and does ONE INSERT for inventory_items + ONE for
+   * stock_movements.
+   *
+   * Compared to looping `create()` per book this drops ~5N round-trips down
+   * to ~7 total for a 100-row import, which is the difference between
+   * "Vercel 504 around row 50" and "comfortably under 60s." See
+   * BooksImportService.execute for the AI-tools equivalent path.
+   *
+   * Collisions on barcode are detected via a pre-flight lookup and counted
+   * as `skipped`, NOT thrown — matches the existing per-row action's
+   * "conflict = skip" semantic. A Postgres-level 23505 still aborts the
+   * whole batch (defensive), since the pre-flight is a snapshot read.
+   */
+  async bulkCreate(input: {
+    warehouseId: string;
+    charterId?: string | null;
+    items: Array<{
+      name: string;
+      barcode: string;
+      itemType: 'book' | 'product' | 'asset' | 'consumable';
+      sku?: string | null;
+      description?: string | null;
+      quantityOnHand: number;
+      unitCost: number;
+      retailPrice: number;
+      reorderPoint?: number;
+      reorderQuantity?: number;
+      unitOfMeasure?: string;
+      trackingType?: 'none' | 'lot' | 'serial';
+      customFields?: Record<string, unknown> | null;
+      status?: 'active' | 'archived' | 'discontinued';
+    }>;
+  }): Promise<{
+    created: number;
+    skipped: number;
+    errors: Array<{ barcode: string; reason: string }>;
+    createdIds: string[];
+  }> {
+    assertPermission(this.ctx, 'items:create');
+    if (input.items.length === 0) {
+      return { created: 0, skipped: 0, errors: [], createdIds: [] };
+    }
+    if (input.items.length > 500) {
+      throw new ServiceError(
+        'validation_error',
+        'Bulk import is limited to 500 items per call.',
+      );
+    }
+
+    // Resolve warehouse ONCE (was per-row).
+    const forced = await forcedWarehouseId(this.ctx);
+    const resolvedWarehouseId = forced ?? input.warehouseId;
+    if (!resolvedWarehouseId) {
+      throw new ServiceError(
+        'validation_error',
+        'A warehouse must be selected before creating items.',
+      );
+    }
+    if (!forced) {
+      await assertWarehouseAccess(resolvedWarehouseId, 'write', this.ctx);
+    }
+
+    // Validate the (warehouse, charter) pair ONCE — same pair applies to
+    // every row in the batch.
+    const resolvedCharterId = input.charterId ?? null;
+    if (resolvedCharterId) {
+      const { data: pair } = await this.ctx.supabase
+        .from('warehouse_charters')
+        .select('charter_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('warehouse_id', resolvedWarehouseId)
+        .eq('charter_id', resolvedCharterId)
+        .maybeSingle();
+      if (!pair) {
+        throw new ServiceError(
+          'validation_error',
+          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the items as Generic.',
+        );
+      }
+    }
+
+    // Plan-limit aware of batch size — was per-row (would only catch the
+    // last row crossing the limit and fail the rest after partial inserts).
+    const { data: org } = await this.ctx.supabase
+      .from('organizations')
+      .select('plan')
+      .eq('id', this.ctx.organizationId)
+      .single();
+    const { PLANS, isUnlimited } = await import('@stockpilot/core');
+    const plan = ((org?.plan as string | undefined) ?? 'free') as keyof typeof PLANS;
+    const limit = PLANS[plan]?.limits.items ?? PLANS.free.limits.items;
+    if (!isUnlimited(limit)) {
+      const { count: currentCount } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', this.ctx.organizationId)
+        .is('deleted_at', null);
+      if ((currentCount ?? 0) + input.items.length > limit) {
+        throw new ServiceError(
+          'plan_limit_exceeded',
+          `Importing ${input.items.length} items would exceed your ${PLANS[plan].name} plan limit of ${limit} items.`,
+        );
+      }
+    }
+
+    // Pre-flight: which barcodes already exist? Count those as skipped,
+    // build payloads only for the survivors.
+    const allBarcodes = input.items.map((i) => i.barcode);
+    const { data: existing } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('barcode')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('barcode', allBarcodes);
+    const existingSet = new Set(
+      (existing ?? []).map((r: { barcode: string }) => r.barcode),
+    );
+
+    const survivors = input.items.filter((i) => !existingSet.has(i.barcode));
+    const skipped = input.items.length - survivors.length;
+
+    if (survivors.length === 0) {
+      return {
+        created: 0,
+        skipped,
+        errors: [],
+        createdIds: [],
+      };
+    }
+
+    // Build the batch INSERT payload. Generate SKUs in JS.
+    const rows = survivors.map((i) => ({
+      organization_id: this.ctx.organizationId,
+      warehouse_id: resolvedWarehouseId,
+      charter_id: resolvedCharterId,
+      sku: (i.sku && i.sku.trim()) || generateSku(),
+      barcode: i.barcode,
+      name: i.name,
+      description: i.description ?? null,
+      unit_cost: i.unitCost,
+      retail_price: i.retailPrice,
+      quantity_on_hand: i.quantityOnHand,
+      reorder_point: i.reorderPoint ?? 0,
+      reorder_quantity: i.reorderQuantity ?? 0,
+      unit_of_measure: i.unitOfMeasure ?? 'unit',
+      tracking_type: i.trackingType ?? 'none',
+      item_type: i.itemType,
+      custom_fields: i.customFields ?? {},
+      status: i.status ?? 'active',
+      created_by: this.ctx.userId,
+      updated_by: this.ctx.userId,
+    }));
+
+    const { data: inserted, error } = await this.ctx.supabase
+      .from('inventory_items')
+      .insert(rows)
+      .select('id, quantity_on_hand');
+
+    if (error) {
+      if (error.code === '23505') {
+        // A duplicate slipped past the pre-flight (race with a concurrent
+        // import). Whole batch rejected — Postgres rolled it back.
+        throw new ServiceError(
+          'conflict',
+          'A duplicate SKU or barcode was inserted by another caller during this import. Try again.',
+        );
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
+
+    const createdIds = (inserted ?? []).map((r: { id: string }) => r.id);
+
+    // Batch stock_movements for non-zero quantities (was per-row).
+    const movementRows = (inserted ?? [])
+      .filter((r: { quantity_on_hand: number }) => r.quantity_on_hand > 0)
+      .map((r: { id: string; quantity_on_hand: number }) => ({
+        organization_id: this.ctx.organizationId,
+        item_id: r.id,
+        movement_type: 'initial',
+        quantity_change: r.quantity_on_hand,
+        previous_quantity: 0,
+        new_quantity: r.quantity_on_hand,
+        user_id: this.ctx.userId,
+      }));
+
+    if (movementRows.length > 0) {
+      const { error: movementErr } = await this.ctx.supabase
+        .from('stock_movements')
+        .insert(movementRows);
+      // Don't roll back the items insert on a movement-log failure —
+      // the items exist, the audit gap is recoverable. Log and continue.
+      if (movementErr) {
+        console.warn(
+          '[bulkCreate] stock_movements insert failed after inventory_items insert',
+          movementErr.message,
+        );
+      }
+    }
+
+    return {
+      created: createdIds.length,
+      skipped,
+      errors: [],
+      createdIds,
+    };
+  }
+
   async update(id: string, patch: UpdateItemInput) {
     assertPermission(this.ctx, 'items:update');
 

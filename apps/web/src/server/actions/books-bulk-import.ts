@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { generateSku } from '@/lib/utils';
 import { InventoryService } from '@/server/services/inventory';
 import { ServiceError } from '@/server/services/context';
 
@@ -39,10 +38,18 @@ interface BulkResult {
 }
 
 /**
- * Creates inventory_items (item_type='book') from a list of resolved
- * book metadata in one batch. Each book uses its ISBN as both the SKU
- * (after de-dup) and barcode. ISBNs that collide with existing items in
- * the org are reported as skipped, not errors.
+ * Creates inventory_items (item_type='book') from a list of resolved book
+ * metadata in one batched server call. Delegates to InventoryService.bulkCreate
+ * which hoists every per-row check (warehouse access, plan limit, charter
+ * pairing) and does ONE INSERT for inventory_items + ONE for stock_movements.
+ *
+ * Compared to the previous per-row loop this drops ~500 sequential round
+ * trips to ~7 total for a 100-book import — well within Vercel's 60s
+ * function ceiling.
+ *
+ * ISBN collisions with existing items are detected via the service's
+ * pre-flight barcode lookup and counted as `skipped`, matching the prior
+ * per-row "conflict = skip" semantic.
  */
 export async function bulkCreateBooksAction(
   input: BulkBookInput,
@@ -54,61 +61,57 @@ export async function bulkCreateBooksAction(
       parsed.error.issues[0]?.message ?? 'Invalid bulk import payload',
     );
   }
+
   try {
     const svc = await InventoryService.forCurrentUser();
 
-    const result: BulkResult = { created: 0, skipped: 0, errors: [] };
-    for (const b of parsed.data.books) {
-      try {
-        const sku = generateSku(b.title);
-        const customFields: Record<string, unknown> = {};
-        if (b.author && b.author.trim().length > 0) customFields.author = b.author.trim();
-        if (b.description && b.description.trim().length > 0)
-          customFields.description = b.description.trim();
-        if (b.publisher) customFields.publisher = b.publisher;
-        if (b.publishedDate) customFields.published_date = b.publishedDate;
-        if (b.pageCount) customFields.page_count = b.pageCount;
-        if (b.thumbnailUrl) customFields.thumbnail_url = b.thumbnailUrl;
-        if (b.grade) customFields.book_grade = b.grade;
+    // Translate BulkBookInput → bulkCreate input shape. Custom fields hold
+    // everything book-specific (author / description / publisher / grade /
+    // thumbnail) so the inventory schema stays clean.
+    const items = parsed.data.books.map((b) => {
+      const customFields: Record<string, unknown> = {};
+      if (b.author && b.author.trim().length > 0) customFields.author = b.author.trim();
+      if (b.description && b.description.trim().length > 0)
+        customFields.description = b.description.trim();
+      if (b.publisher) customFields.publisher = b.publisher;
+      if (b.publishedDate) customFields.published_date = b.publishedDate;
+      if (b.pageCount) customFields.page_count = b.pageCount;
+      if (b.thumbnailUrl) customFields.thumbnail_url = b.thumbnailUrl;
+      if (b.grade) customFields.book_grade = b.grade;
 
-        await svc.create({
-          name: b.title,
-          sku,
-          barcode: b.isbn,
-          itemType: 'book',
-          quantityOnHand: b.quantityOnHand,
-          unitCost: b.unitCost,
-          retailPrice: b.retailPrice,
-          warehouseId: parsed.data.warehouseId,
-          charterId: parsed.data.charterId ?? null,
-          unitOfMeasure: 'unit',
-          customFields,
-          status: 'active',
-          reorderPoint: 0,
-          reorderQuantity: 0,
-          trackingType: 'none',
-        });
-        result.created += 1;
-      } catch (e) {
-        if (e instanceof ServiceError) {
-          if (e.code === 'conflict') {
-            result.skipped += 1;
-            continue;
-          }
-          result.errors.push({ isbn: b.isbn, reason: e.message });
-        } else {
-          result.errors.push({
-            isbn: b.isbn,
-            reason: e instanceof Error ? e.message : 'Unknown error',
-          });
-        }
-      }
-    }
+      return {
+        name: b.title,
+        barcode: b.isbn,
+        itemType: 'book' as const,
+        quantityOnHand: b.quantityOnHand,
+        unitCost: b.unitCost,
+        retailPrice: b.retailPrice,
+        unitOfMeasure: 'unit',
+        trackingType: 'none' as const,
+        customFields,
+        status: 'active' as const,
+        reorderPoint: 0,
+        reorderQuantity: 0,
+      };
+    });
+
+    const result = await svc.bulkCreate({
+      warehouseId: parsed.data.warehouseId,
+      charterId: parsed.data.charterId ?? null,
+      items,
+    });
 
     revalidatePath('/dashboard/books');
     revalidatePath('/dashboard/inventory');
     revalidatePath('/dashboard');
-    return ok(result);
+
+    return ok({
+      created: result.created,
+      skipped: result.skipped,
+      // Service returns errors keyed by barcode; map back to isbn for the
+      // existing client-side error UI.
+      errors: result.errors.map((e) => ({ isbn: e.barcode, reason: e.reason })),
+    });
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
