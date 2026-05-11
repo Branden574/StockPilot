@@ -60,15 +60,56 @@ describe('bulkCreateBooksAction', () => {
     if (!result.ok) expect(result.error.code).toBe('validation_error');
   });
 
-  it('treats conflict on a single row as skipped, not an error', async () => {
-    const create = vi
-      .fn()
-      // first book: ok
-      .mockResolvedValueOnce({ id: 'item-1' })
-      // second book: conflict
-      .mockRejectedValueOnce(new ServiceError('conflict', 'duplicate barcode'));
+  it('happy path: calls bulkCreate once, revalidates dashboard paths', async () => {
+    const bulkCreate = vi.fn(async () => ({
+      created: 1,
+      skipped: 0,
+      errors: [],
+      createdIds: ['item-1'],
+    }));
     vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({
-      create,
+      bulkCreate,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const result = await bulkCreateBooksAction({
+      warehouseId: WAREHOUSE_ID,
+      books: [makeBook({ isbn: '9780140449136', title: 'A' })],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.created).toBe(1);
+      expect(result.data.skipped).toBe(0);
+      expect(result.data.errors).toEqual([]);
+    }
+    expect(bulkCreate).toHaveBeenCalledTimes(1);
+    expect(bulkCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        warehouseId: WAREHOUSE_ID,
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            name: 'A',
+            barcode: '9780140449136',
+            itemType: 'book',
+          }),
+        ]),
+      }),
+    );
+    expect(revalidatePath).toHaveBeenCalledWith('/dashboard');
+    expect(revalidatePath).toHaveBeenCalledWith('/dashboard/inventory');
+    expect(revalidatePath).toHaveBeenCalledWith('/dashboard/books');
+  });
+
+  it('translates skipped barcodes through unchanged', async () => {
+    const bulkCreate = vi.fn(async () => ({
+      created: 1,
+      skipped: 1,
+      errors: [],
+      createdIds: ['item-1'],
+    }));
+    vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({
+      bulkCreate,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
 
@@ -84,51 +125,18 @@ describe('bulkCreateBooksAction', () => {
     if (result.ok) {
       expect(result.data.created).toBe(1);
       expect(result.data.skipped).toBe(1);
-      expect(result.data.errors).toEqual([]);
-    }
-    expect(revalidatePath).toHaveBeenCalledWith('/dashboard/books');
-  });
-
-  it('aggregates non-conflict ServiceErrors into errors[]', async () => {
-    const create = vi
-      .fn()
-      .mockResolvedValueOnce({ id: 'item-1' })
-      .mockRejectedValueOnce(new ServiceError('forbidden', 'nope'))
-      .mockRejectedValueOnce(new Error('boom'));
-    vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({
-      create,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
-
-    const result = await bulkCreateBooksAction({
-      warehouseId: WAREHOUSE_ID,
-      books: [
-        makeBook({ isbn: '9780140449136', title: 'A' }),
-        makeBook({ isbn: '9780393310733', title: 'B' }),
-        makeBook({ isbn: '9780199536566', title: 'C' }),
-      ],
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.data.created).toBe(1);
-      expect(result.data.skipped).toBe(0);
-      expect(result.data.errors).toHaveLength(2);
-      expect(result.data.errors[0]).toEqual({
-        isbn: '9780393310733',
-        reason: 'nope',
-      });
-      expect(result.data.errors[1]).toEqual({
-        isbn: '9780199536566',
-        reason: 'boom',
-      });
     }
   });
 
-  it('happy path: all created, no errors, no skips, revalidates dashboard paths', async () => {
-    const create = vi.fn(async () => ({ id: 'item' }));
+  it('maps service errors[].barcode → isbn for the client', async () => {
+    const bulkCreate = vi.fn(async () => ({
+      created: 1,
+      skipped: 0,
+      errors: [{ barcode: '9780393310733', reason: 'something' }],
+      createdIds: ['item-1'],
+    }));
     vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({
-      create,
+      bulkCreate,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
 
@@ -136,13 +144,38 @@ describe('bulkCreateBooksAction', () => {
       warehouseId: WAREHOUSE_ID,
       books: [makeBook({ isbn: '9780140449136', title: 'A' })],
     });
+
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.data.created).toBe(1);
-      expect(result.data.skipped).toBe(0);
-      expect(result.data.errors).toEqual([]);
+      expect(result.data.errors).toEqual([
+        { isbn: '9780393310733', reason: 'something' },
+      ]);
     }
-    expect(revalidatePath).toHaveBeenCalledWith('/dashboard');
-    expect(revalidatePath).toHaveBeenCalledWith('/dashboard/inventory');
+  });
+
+  it('surfaces ServiceError from bulkCreate as the action error', async () => {
+    const bulkCreate = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ServiceError(
+          'plan_limit_exceeded',
+          'Importing 5 items would exceed your Free plan limit of 100 items.',
+        ),
+      );
+    vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({
+      bulkCreate,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const result = await bulkCreateBooksAction({
+      warehouseId: WAREHOUSE_ID,
+      books: [makeBook({ isbn: '9780140449136', title: 'A' })],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('plan_limit_exceeded');
+      expect(result.error.message).toMatch(/Free plan limit of 100 items/);
+    }
   });
 });
