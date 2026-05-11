@@ -54,7 +54,12 @@ export function ArchiveButton({ procedureId }: ArchiveButtonProps) {
         open={open}
         onOpenChange={setOpen}
         title="Archive this procedure?"
-        description="The procedure is hidden from the list. Existing videos and comments stay in storage — you can restore the row from the database if needed."
+        description={
+          <>
+            The procedure is hidden from the list. Existing videos and comments stay in
+            storage. You can restore it from the <strong>Archived view</strong>.
+          </>
+        }
         confirmLabel="Archive"
         pending={busy}
         onConfirm={onConfirm}

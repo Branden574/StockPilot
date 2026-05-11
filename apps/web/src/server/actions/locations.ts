@@ -58,3 +58,14 @@ export async function archiveLocationAction(id: string): Promise<ActionResult<vo
     return toResult(e);
   }
 }
+
+export async function restoreLocationAction(id: string): Promise<ActionResult<void>> {
+  try {
+    const svc = await LocationsService.forCurrentUser();
+    await svc.restore(id);
+    revalidatePath('/dashboard/locations');
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}

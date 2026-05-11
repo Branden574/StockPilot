@@ -36,6 +36,14 @@ interface BaseProps {
    *  automatically; the caller decides (typically by calling
    *  `onOpenChange(false)` after a successful response). */
   onConfirm: () => void | Promise<void>;
+  /**
+   * Visual treatment of the confirm button + title. Defaults to
+   * `destructive` (red) which matches the original use case. Pass
+   * `primary` for inverse actions like Restore that reuse the same
+   * primitive (binary toggle on archive/restore) without the red
+   * destructive aesthetic.
+   */
+  tone?: 'destructive' | 'primary';
 }
 
 interface StandardProps extends BaseProps {
@@ -78,6 +86,7 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
     cancelLabel = 'Cancel',
     pending = false,
     onConfirm,
+    tone = 'destructive',
   } = props;
 
   const severity: Severity = props.severity ?? 'standard';
@@ -128,7 +137,9 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle className="text-destructive">{title}</DialogTitle>
+          <DialogTitle className={tone === 'destructive' ? 'text-destructive' : undefined}>
+            {title}
+          </DialogTitle>
           <DialogDescription asChild>
             <div className="space-y-2 text-sm text-muted-foreground">
               <div>{description}</div>
@@ -179,7 +190,7 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
           </Button>
           <Button
             type="button"
-            variant="destructive"
+            variant={tone === 'destructive' ? 'destructive' : 'default'}
             onClick={handleConfirm}
             disabled={confirmDisabled}
           >

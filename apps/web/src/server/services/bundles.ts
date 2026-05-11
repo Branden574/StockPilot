@@ -147,7 +147,7 @@ export class BundlesService {
     return new BundlesService(await withContext());
   }
 
-  async list(opts: { search?: string; includeInactive?: boolean } = {}): Promise<BundleSummary[]> {
+  async list(opts: { search?: string; includeInactive?: boolean; includeArchived?: boolean } = {}): Promise<BundleSummary[]> {
     let query = this.ctx.supabase
       .from('bundles')
       .select(
@@ -159,8 +159,17 @@ export class BundlesService {
       .eq('organization_id', this.ctx.organizationId)
       .order('name', { ascending: true });
 
-    if (!opts.includeInactive) {
+    // `includeArchived` is a strict toggle: when true, return ONLY rows
+    // with archived_at IS NOT NULL — these are the archived bundles the
+    // "Archived" view shows. Takes precedence over `includeInactive`.
+    if (opts.includeArchived) {
+      query = query.not('archived_at', 'is', null);
+    } else if (!opts.includeInactive) {
       query = query.eq('is_active', true).is('archived_at', null);
+    } else {
+      // Legacy includeInactive=true path: show active + inactive but
+      // exclude archived, so "All" doesn't double-up with "Archived".
+      query = query.is('archived_at', null);
     }
     if (opts.search) {
       const term = `%${opts.search}%`;
@@ -465,6 +474,26 @@ export class BundlesService {
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
     await audit({ event: 'bundle.archived', entityType: 'bundle', entityId: id });
+  }
+
+  /**
+   * Restore an archived bundle — clears `archived_at` and flips the
+   * `is_active` flag back on so the bundle reappears in the active list
+   * and can be distributed again. Same permission gate as archive().
+   */
+  async restore(id: string): Promise<void> {
+    assertPermission(this.ctx, 'bundles:manage');
+    const { error } = await this.ctx.supabase
+      .from('bundles')
+      .update({
+        is_active: true,
+        archived_at: null,
+        updated_by: this.ctx.userId,
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+    await audit({ event: 'bundle.restored', entityType: 'bundle', entityId: id });
   }
 
   async setActive(id: string, isActive: boolean): Promise<void> {

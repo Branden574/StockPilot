@@ -94,7 +94,15 @@ export class WarehousesService {
     return new WarehousesService(await withContext());
   }
 
-  async list(): Promise<WarehouseRow[]> {
+  /**
+   * Lists warehouses for the manager view. By default returns rows with
+   * `status = 'active'`. When `opts.includeArchived` is true, returns
+   * ONLY rows with `status = 'archived'`. Rows with `status = 'inactive'`
+   * intentionally show up in neither view — inactive is a separate
+   * concept (warehouses that exist but aren't operating right now).
+   */
+  async list(opts: { includeArchived?: boolean } = {}): Promise<WarehouseRow[]> {
+    const targetStatus = opts.includeArchived ? 'archived' : 'active';
     const { data, error } = await this.ctx.supabase
       .from('warehouses')
       .select(
@@ -106,7 +114,7 @@ export class WarehousesService {
          wh_charters:warehouse_charters!warehouse_id (charter:charters!charter_id (id, name))`,
       )
       .eq('organization_id', this.ctx.organizationId)
-      .neq('status', 'archived')
+      .eq('status', targetStatus)
       .order('name', { ascending: true });
     if (error) throw new ServiceError('internal_error', error.message);
 
@@ -306,5 +314,22 @@ export class WarehousesService {
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
     await audit({ event: 'warehouse.archived', entityType: 'warehouse', entityId: id, warehouseId: id });
+  }
+
+  /**
+   * Restore an archived warehouse — sets status back to 'active' so it
+   * shows up again in pick lists and reports. Same permission gate as
+   * archive(). Note: we deliberately set 'active' (not 'inactive') —
+   * restoring an archived warehouse means it goes back into active use.
+   */
+  async restore(id: string) {
+    assertPermission(this.ctx, 'organization:update');
+    const { error } = await this.ctx.supabase
+      .from('warehouses')
+      .update({ status: 'active' })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+    await audit({ event: 'warehouse.restored', entityType: 'warehouse', entityId: id, warehouseId: id });
   }
 }

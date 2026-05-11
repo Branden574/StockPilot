@@ -84,6 +84,19 @@ export async function archiveBundleAction(id: string): Promise<ActionResult<void
   }
 }
 
+export async function restoreBundleAction(id: string): Promise<ActionResult<void>> {
+  if (!z.string().uuid().safeParse(id).success) return err('validation_error', 'Invalid id');
+  try {
+    const svc = await BundlesService.forCurrentUser();
+    await svc.restore(id);
+    revalidatePath('/dashboard/bundles');
+    revalidatePath(`/dashboard/bundles/${id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 const setActiveSchema = z.object({
   id: z.string().uuid(),
   isActive: z.boolean(),

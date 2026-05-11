@@ -60,3 +60,14 @@ export async function archiveWarehouseAction(id: string): Promise<ActionResult<v
     return toResult(e);
   }
 }
+
+export async function restoreWarehouseAction(id: string): Promise<ActionResult<void>> {
+  try {
+    const svc = await WarehousesService.forCurrentUser();
+    await svc.restore(id);
+    revalidatePath('/dashboard/admin/warehouses');
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}

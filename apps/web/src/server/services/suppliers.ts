@@ -2,6 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 export const createSupplierSchema = z.object({
@@ -24,13 +25,22 @@ export class SuppliersService {
     return new SuppliersService(await withContext());
   }
 
-  async list() {
-    const { data, error } = await this.ctx.supabase
+  /**
+   * Lists active suppliers by default. When `opts.includeArchived` is true,
+   * returns ONLY archived rows (rows with `deleted_at` set). The active
+   * vs. archived view is a binary toggle — there's no combined "show all"
+   * mode.
+   */
+  async list(opts: { includeArchived?: boolean } = {}) {
+    let query = this.ctx.supabase
       .from('suppliers')
-      .select('id, name, contact_name, email, phone, website, notes, created_at, updated_at')
+      .select('id, name, contact_name, email, phone, website, notes, deleted_at, created_at, updated_at')
       .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null)
       .order('name', { ascending: true });
+    query = opts.includeArchived
+      ? query.not('deleted_at', 'is', null)
+      : query.is('deleted_at', null);
+    const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return data ?? [];
   }
@@ -82,5 +92,21 @@ export class SuppliersService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+    void audit({ event: 'supplier.archived', entityType: 'supplier', entityId: id });
+  }
+
+  /**
+   * Restore an archived supplier — flips `deleted_at` back to null so it
+   * reappears in the active list. Same permission gate as archive().
+   */
+  async restore(id: string) {
+    assertPermission(this.ctx, 'suppliers:manage');
+    const { error } = await this.ctx.supabase
+      .from('suppliers')
+      .update({ deleted_at: null })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+    void audit({ event: 'supplier.restored', entityType: 'supplier', entityId: id });
   }
 }

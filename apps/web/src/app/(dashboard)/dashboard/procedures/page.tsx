@@ -1,11 +1,13 @@
-import { BookOpen, Search, X } from 'lucide-react';
+import { BookOpen, History, Search, X } from 'lucide-react';
 import Link from 'next/link';
 
+import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { ProcedureCard } from '@/components/procedures/procedure-card';
+import { RestoreButton } from '@/components/procedures/restore-button';
 import { requireOrgContext } from '@/lib/auth/session';
 import { hasPermission } from '@stockpilot/core';
 import { ProcedureCategoriesService } from '@/server/services/procedure-categories';
@@ -21,6 +23,7 @@ interface SearchParams {
   cat?: string;
   wh?: string;
   page?: string;
+  view?: string;
 }
 
 export default async function ProceduresListPage({
@@ -33,9 +36,11 @@ export default async function ProceduresListPage({
   const cat = params.cat?.trim() || '';
   const wh = params.wh?.trim() || '';
   const page = Math.max(1, Number.parseInt(params.page ?? '1', 10) || 1);
+  const isArchivedView = params.view === 'archived';
 
   const ctx = await requireOrgContext();
   const canCreate = hasPermission(ctx.role, 'categories:manage');
+  const canRestore = canCreate; // Restore uses the same permission gate as archive.
 
   const [procService, catService, whService] = await Promise.all([
     ProceduresService.forCurrentUser(),
@@ -50,6 +55,7 @@ export default async function ProceduresListPage({
       warehouseId: wh || null,
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
+      includeArchived: isArchivedView,
     }),
     catService.list(),
     whService.list(),
@@ -60,11 +66,19 @@ export default async function ProceduresListPage({
 
   function buildQS(overrides: Partial<SearchParams>): string {
     const sp = new URLSearchParams();
-    const merged = { q, cat, wh, page: String(page), ...overrides };
+    const merged: SearchParams = {
+      q,
+      cat,
+      wh,
+      page: String(page),
+      view: isArchivedView ? 'archived' : undefined,
+      ...overrides,
+    };
     if (merged.q) sp.set('q', merged.q);
     if (merged.cat) sp.set('cat', merged.cat);
     if (merged.wh) sp.set('wh', merged.wh);
     if (merged.page && merged.page !== '1') sp.set('page', merged.page);
+    if (merged.view === 'archived') sp.set('view', 'archived');
     const s = sp.toString();
     return s ? `?${s}` : '';
   }
@@ -75,15 +89,19 @@ export default async function ProceduresListPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Procedures</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Cross-warehouse standard operating procedures, with video walkthroughs and
-            discussion.
+            {isArchivedView
+              ? 'Procedures you archived. Restore one to put it back in the active list.'
+              : 'Cross-warehouse standard operating procedures, with video walkthroughs and discussion.'}
           </p>
         </div>
-        {canCreate && (
-          <Button asChild variant="gradient">
-            <Link href="/dashboard/procedures/new">+ New procedure</Link>
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          <ArchiveViewToggle view={isArchivedView ? 'archived' : 'active'} />
+          {canCreate && !isArchivedView && (
+            <Button asChild variant="gradient">
+              <Link href="/dashboard/procedures/new">+ New procedure</Link>
+            </Button>
+          )}
+        </div>
       </div>
 
       <form action="/dashboard/procedures" method="get" className="mt-6 space-y-3">
@@ -103,12 +121,13 @@ export default async function ProceduresListPage({
           </div>
           {cat && <input type="hidden" name="cat" value={cat} />}
           {wh && <input type="hidden" name="wh" value={wh} />}
+          {isArchivedView && <input type="hidden" name="view" value="archived" />}
           <Button type="submit" variant="outline">
             Search
           </Button>
           {hasFilters && (
             <Button asChild variant="ghost">
-              <Link href="/dashboard/procedures">
+              <Link href={isArchivedView ? '/dashboard/procedures?view=archived' : '/dashboard/procedures'}>
                 <X className="mr-1 h-3.5 w-3.5" /> Clear
               </Link>
             </Button>
@@ -183,6 +202,12 @@ export default async function ProceduresListPage({
               title="No matches"
               description="Try a broader search or clear the filters."
             />
+          ) : isArchivedView ? (
+            <EmptyState
+              icon={History}
+              title="No archived procedures"
+              description="Procedures you archive show up here so you can restore them later."
+            />
           ) : (
             <EmptyState
               icon={BookOpen}
@@ -194,8 +219,13 @@ export default async function ProceduresListPage({
         ) : (
           <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {rows.map((row) => (
-              <li key={row.id}>
+              <li key={row.id} className="space-y-2">
                 <ProcedureCard procedure={row} />
+                {isArchivedView && canRestore && (
+                  <div className="flex justify-end">
+                    <RestoreButton procedureId={row.id} title={row.title} />
+                  </div>
+                )}
               </li>
             ))}
           </ul>

@@ -1,11 +1,12 @@
 'use client';
 
-import { Building2, Loader2, Plus, Trash2 } from 'lucide-react';
+import { Building2, History, Loader2, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -31,6 +32,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   archiveCharterAction,
   createCharterAction,
+  restoreCharterAction,
   updateCharterAction,
 } from '@/server/actions/charters';
 
@@ -55,32 +57,46 @@ interface FormValues {
 export function ChartersManager({
   initial,
   termSingular,
+  view = 'active',
 }: {
   initial: CharterRow[];
   termSingular: string;
+  view?: 'active' | 'archived';
 }) {
+  const isArchivedView = view === 'archived';
   const [editing, setEditing] = React.useState<CharterRow | null>(null);
   const [open, setOpen] = React.useState(false);
 
   return (
     <>
-      <div className="flex items-center justify-end">
-        <Button
-          onClick={() => {
-            setEditing(null);
-            setOpen(true);
-          }}
-        >
-          <Plus className="h-4 w-4" /> New {termSingular.toLowerCase()}
-        </Button>
+      <div className="flex items-center justify-between gap-2">
+        <ArchiveViewToggle view={view} />
+        {!isArchivedView && (
+          <Button
+            onClick={() => {
+              setEditing(null);
+              setOpen(true);
+            }}
+          >
+            <Plus className="h-4 w-4" /> New {termSingular.toLowerCase()}
+          </Button>
+        )}
       </div>
 
       {initial.length === 0 ? (
-        <EmptyState
-          icon={Building2}
-          title={`No ${termSingular.toLowerCase()}s yet`}
-          description={`Create your first ${termSingular.toLowerCase()} to start grouping warehouses and routing shipments. Use the New ${termSingular.toLowerCase()} button above to add one.`}
-        />
+        isArchivedView ? (
+          <EmptyState
+            icon={History}
+            title={`No archived ${termSingular.toLowerCase()}s`}
+            description={`${termSingular}s you archive show up here so you can restore them later.`}
+          />
+        ) : (
+          <EmptyState
+            icon={Building2}
+            title={`No ${termSingular.toLowerCase()}s yet`}
+            description={`Create your first ${termSingular.toLowerCase()} to start grouping warehouses and routing shipments. Use the New ${termSingular.toLowerCase()} button above to add one.`}
+          />
+        )
       ) : (
         <div className="overflow-x-auto rounded-xl border border-border bg-card">
           <Table>
@@ -99,6 +115,7 @@ export function ChartersManager({
                 <CharterTableRow
                   key={row.id}
                   row={row}
+                  isArchivedView={isArchivedView}
                   onEdit={() => {
                     setEditing(row);
                     setOpen(true);
@@ -120,10 +137,20 @@ export function ChartersManager({
   );
 }
 
-function CharterTableRow({ row, onEdit }: { row: CharterRow; onEdit: () => void }) {
+function CharterTableRow({
+  row,
+  isArchivedView,
+  onEdit,
+}: {
+  row: CharterRow;
+  isArchivedView: boolean;
+  onEdit: () => void;
+}) {
   const router = useRouter();
   const [archiveOpen, setArchiveOpen] = React.useState(false);
   const [archiveBusy, setArchiveBusy] = React.useState(false);
+  const [restoreOpen, setRestoreOpen] = React.useState(false);
+  const [restoreBusy, setRestoreBusy] = React.useState(false);
 
   async function confirmArchive() {
     setArchiveBusy(true);
@@ -138,6 +165,19 @@ function CharterTableRow({ row, onEdit }: { row: CharterRow; onEdit: () => void 
     router.refresh();
   }
 
+  async function confirmRestore() {
+    setRestoreBusy(true);
+    const res = await restoreCharterAction(row.id);
+    setRestoreBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    setRestoreOpen(false);
+    toast.success(`"${row.name}" restored.`);
+    router.refresh();
+  }
+
   return (
     <TableRow>
       <TableCell className="font-medium">{row.name}</TableCell>
@@ -148,21 +188,50 @@ function CharterTableRow({ row, onEdit }: { row: CharterRow; onEdit: () => void 
         {row.description ?? '—'}
       </TableCell>
       <TableCell className="flex justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={onEdit}>
-          Edit
-        </Button>
-        <Button variant="ghost" size="icon" onClick={() => setArchiveOpen(true)} aria-label="Archive">
-          <Trash2 className="h-4 w-4 text-muted-foreground" />
-        </Button>
-        <DestructiveConfirm
-          open={archiveOpen}
-          onOpenChange={setArchiveOpen}
-          title={`Archive "${row.name}"?`}
-          description="Existing warehouses keep working. You can restore this from the archived view later."
-          confirmLabel="Archive"
-          pending={archiveBusy}
-          onConfirm={confirmArchive}
-        />
+        {isArchivedView ? (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRestoreOpen(true)}
+            >
+              <RotateCcw className="h-3.5 w-3.5" /> Restore
+            </Button>
+            <DestructiveConfirm
+              open={restoreOpen}
+              onOpenChange={setRestoreOpen}
+              title={`Restore "${row.name}"?`}
+              description="This brings the charter back into the active list."
+              confirmLabel="Restore"
+              tone="primary"
+              pending={restoreBusy}
+              onConfirm={confirmRestore}
+            />
+          </>
+        ) : (
+          <>
+            <Button variant="outline" size="sm" onClick={onEdit}>
+              Edit
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => setArchiveOpen(true)} aria-label="Archive">
+              <Trash2 className="h-4 w-4 text-muted-foreground" />
+            </Button>
+            <DestructiveConfirm
+              open={archiveOpen}
+              onOpenChange={setArchiveOpen}
+              title={`Archive "${row.name}"?`}
+              description={
+                <>
+                  Existing warehouses keep working. You can restore this from the{' '}
+                  <strong>Archived view</strong> later.
+                </>
+              }
+              confirmLabel="Archive"
+              pending={archiveBusy}
+              onConfirm={confirmArchive}
+            />
+          </>
+        )}
       </TableCell>
     </TableRow>
   );

@@ -58,3 +58,14 @@ export async function archiveSupplierAction(id: string): Promise<ActionResult<vo
     return toResult(e);
   }
 }
+
+export async function restoreSupplierAction(id: string): Promise<ActionResult<void>> {
+  try {
+    const svc = await SuppliersService.forCurrentUser();
+    await svc.restore(id);
+    revalidatePath('/dashboard/suppliers');
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
