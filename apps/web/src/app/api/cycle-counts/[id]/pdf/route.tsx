@@ -90,12 +90,15 @@ export async function GET(
       />,
     );
 
-    void audit({
-      event: 'pdf.exported',
-      entityType: 'cycle_count',
-      entityId: id,
-      extra: { format: 'pdf' },
-    });
+    void audit(
+      {
+        event: 'pdf.exported',
+        entityType: 'cycle_count',
+        entityId: id,
+        extra: { format: 'pdf' },
+      },
+      ctx,
+    );
 
     const filename = `cycle-count-${id.slice(0, 8)}.pdf`;
     return new NextResponse(stream as unknown as ReadableStream<Uint8Array>, {

@@ -341,12 +341,15 @@ export class OrderRequestsService {
     }
 
     const row = header as OrderRequestRow;
-    await audit({
-      event: 'order_request.created',
-      entityType: 'order_request',
-      entityId: row.id,
-      after: { lineCount: linePayload.length, warehouseId: input.warehouseId },
-    });
+    await audit(
+      {
+        event: 'order_request.created',
+        entityType: 'order_request',
+        entityId: row.id,
+        after: { lineCount: linePayload.length, warehouseId: input.warehouseId },
+      },
+      this.ctx,
+    );
     void this.notifyEmail(row, 'submitted');
     return row;
   }
@@ -367,12 +370,15 @@ export class OrderRequestsService {
       throw new ServiceError('internal_error', msg);
     }
     const row = data as OrderRequestRow;
-    await audit({
-      event: 'order_request.cancelled',
-      entityType: 'order_request',
-      entityId: id,
-      reason: reason ?? undefined,
-    });
+    await audit(
+      {
+        event: 'order_request.cancelled',
+        entityType: 'order_request',
+        entityId: id,
+        reason: reason ?? undefined,
+      },
+      this.ctx,
+    );
     void this.notifyEmail(row, 'cancelled');
     return row;
   }
@@ -413,11 +419,14 @@ export class OrderRequestsService {
       throw new ServiceError('internal_error', msg);
     }
     const row = data as OrderRequestRow;
-    await audit({
-      event: 'order_request.approved',
-      entityType: 'order_request',
-      entityId: id,
-    });
+    await audit(
+      {
+        event: 'order_request.approved',
+        entityType: 'order_request',
+        entityId: id,
+      },
+      this.ctx,
+    );
     void this.notifyEmail(row, 'approved');
     return row;
   }
@@ -442,12 +451,15 @@ export class OrderRequestsService {
         'Request not found or no longer pending approval.',
       );
     const row = data as OrderRequestRow;
-    await audit({
-      event: 'order_request.denied',
-      entityType: 'order_request',
-      entityId: id,
-      reason,
-    });
+    await audit(
+      {
+        event: 'order_request.denied',
+        entityType: 'order_request',
+        entityId: id,
+        reason,
+      },
+      this.ctx,
+    );
     void this.notifyEmail(row, 'denied');
     return row;
   }
@@ -479,12 +491,15 @@ export class OrderRequestsService {
         `Request not in '${expectedPrev}' status; cannot move to '${next}'.`,
       );
     const row = data as OrderRequestRow;
-    await audit({
-      event: 'order_request.status_changed',
-      entityType: 'order_request',
-      entityId: id,
-      after: { from: expectedPrev, to: next },
-    });
+    await audit(
+      {
+        event: 'order_request.status_changed',
+        entityType: 'order_request',
+        entityId: id,
+        after: { from: expectedPrev, to: next },
+      },
+      this.ctx,
+    );
     void this.notifyEmail(row, next);
     return row;
   }
@@ -513,11 +528,14 @@ export class OrderRequestsService {
       throw new ServiceError('internal_error', msg);
     }
     const row = data as OrderRequestRow;
-    await audit({
-      event: 'order_request.delivered',
-      entityType: 'order_request',
-      entityId: id,
-    });
+    await audit(
+      {
+        event: 'order_request.delivered',
+        entityType: 'order_request',
+        entityId: id,
+      },
+      this.ctx,
+    );
     void this.notifyEmail(row, 'delivered');
     return row;
   }
@@ -545,11 +563,14 @@ export class OrderRequestsService {
       })
       .eq('id', this.ctx.organizationId);
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({
-      event: 'order_request.public_link_rotated',
-      entityType: 'organization',
-      entityId: this.ctx.organizationId,
-    });
+    await audit(
+      {
+        event: 'order_request.public_link_rotated',
+        entityType: 'organization',
+        entityId: this.ctx.organizationId,
+      },
+      this.ctx,
+    );
     return { token };
   }
 

@@ -128,12 +128,15 @@ export async function GET(
       />,
     );
 
-    void audit({
-      event: 'pdf.exported',
-      entityType: 'shipment',
-      entityId: id,
-      extra: { format: 'pdf', workOrderNumber: detail.workOrderNumber },
-    });
+    void audit(
+      {
+        event: 'pdf.exported',
+        entityType: 'shipment',
+        entityId: id,
+        extra: { format: 'pdf', workOrderNumber: detail.workOrderNumber },
+      },
+      ctx,
+    );
 
     const filename = `packing-slip-${detail.workOrderNumber}.pdf`;
     return new NextResponse(stream as unknown as ReadableStream<Uint8Array>, {
