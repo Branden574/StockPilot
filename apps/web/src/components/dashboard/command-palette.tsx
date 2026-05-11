@@ -2,6 +2,7 @@
 
 import { Command } from 'cmdk';
 import {
+  BookOpen,
   Boxes,
   ClipboardList,
   Home,
@@ -57,6 +58,7 @@ const NAV_COMMANDS: PaletteCommand[] = [
   { id: 'nav-suppliers', label: 'Suppliers', href: '/dashboard/suppliers', Icon: Truck, keywords: 'vendors' },
   { id: 'nav-locations', label: 'Locations', href: '/dashboard/locations', Icon: Warehouse },
   { id: 'nav-cycle-counts', label: 'Cycle counts', href: '/dashboard/cycle-counts', Icon: Receipt, keywords: 'count audit' },
+  { id: 'nav-procedures', label: 'Procedures', href: '/dashboard/procedures', Icon: BookOpen, keywords: 'sop knowledge how-to guide procedure' },
   { id: 'nav-reports', label: 'Reports', href: '/dashboard/reports', Icon: Tags },
   { id: 'nav-team', label: 'Team', href: '/dashboard/team', Icon: Users, keywords: 'members invites' },
   { id: 'nav-settings', label: 'Settings', href: '/dashboard/settings', Icon: Settings },

@@ -74,7 +74,13 @@ export type AuditEvent =
   | 'tag.updated'
   | 'tag.deleted'
   | 'tag.applied'
-  | 'tag.removed';
+  | 'tag.removed'
+  | 'procedure.created'
+  | 'procedure.updated'
+  | 'procedure.archived'
+  | 'procedure.video.added'
+  | 'procedure.video.removed'
+  | 'procedure.commented';
 
 interface AuditPayload {
   event: AuditEvent;
