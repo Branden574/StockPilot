@@ -256,13 +256,16 @@ export class WarehousesService {
       if (linkErr) throw new ServiceError('internal_error', linkErr.message);
     }
 
-    await audit({
-      event: 'warehouse.created',
-      entityType: 'warehouse',
-      entityId: newId,
-      warehouseId: newId,
-      after: input,
-    });
+    await audit(
+      {
+        event: 'warehouse.created',
+        entityType: 'warehouse',
+        entityId: newId,
+        warehouseId: newId,
+        after: input,
+      },
+      this.ctx,
+    );
     return { id: newId };
   }
 
@@ -296,13 +299,16 @@ export class WarehousesService {
       await svc.setForWarehouse(id, patch.charterIds);
     }
 
-    await audit({
-      event: 'warehouse.updated',
-      entityType: 'warehouse',
-      entityId: id,
-      warehouseId: id,
-      after: patch,
-    });
+    await audit(
+      {
+        event: 'warehouse.updated',
+        entityType: 'warehouse',
+        entityId: id,
+        warehouseId: id,
+        after: patch,
+      },
+      this.ctx,
+    );
   }
 
   async archive(id: string) {
@@ -313,7 +319,7 @@ export class WarehousesService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({ event: 'warehouse.archived', entityType: 'warehouse', entityId: id, warehouseId: id });
+    await audit({ event: 'warehouse.archived', entityType: 'warehouse', entityId: id, warehouseId: id }, this.ctx);
   }
 
   /**
@@ -330,6 +336,6 @@ export class WarehousesService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({ event: 'warehouse.restored', entityType: 'warehouse', entityId: id, warehouseId: id });
+    await audit({ event: 'warehouse.restored', entityType: 'warehouse', entityId: id, warehouseId: id }, this.ctx);
   }
 }

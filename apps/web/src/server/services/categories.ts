@@ -87,7 +87,7 @@ export class CategoriesService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({ event: 'category.archived', entityType: 'category', entityId: id });
+    void audit({ event: 'category.archived', entityType: 'category', entityId: id }, this.ctx);
   }
 
   /**
@@ -102,6 +102,6 @@ export class CategoriesService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({ event: 'category.restored', entityType: 'category', entityId: id });
+    void audit({ event: 'category.restored', entityType: 'category', entityId: id }, this.ctx);
   }
 }

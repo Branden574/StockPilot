@@ -77,7 +77,7 @@ export class PurchaseOrdersService {
   }
 
   async list(params: { warehouseId?: string } = {}) {
-    const access = await getWarehouseAccess();
+    const access = await getWarehouseAccess(this.ctx);
 
     // Scope by destination location's warehouse via inner-join when needed.
     const needsScope = !access.hasAllAccess || !!params.warehouseId;
@@ -119,7 +119,7 @@ export class PurchaseOrdersService {
     const destRow = Array.isArray(dest) ? dest[0] : dest;
     const wh = (destRow as { warehouse_id?: string | null } | null | undefined)?.warehouse_id ?? null;
     if (wh) {
-      const access = await getWarehouseAccess();
+      const access = await getWarehouseAccess(this.ctx);
       if (!access.hasAllAccess && !access.readableIds.includes(wh)) {
         throw new ServiceError('not_found', 'Purchase order not found');
       }
@@ -176,7 +176,7 @@ export class PurchaseOrdersService {
         .eq('id', input.destinationLocationId)
         .maybeSingle();
       const wh = (loc as { warehouse_id?: string | null } | null)?.warehouse_id ?? null;
-      if (wh) await assertWarehouseAccess(wh, 'write');
+      if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
     }
 
     const { data: numberRpc } = await this.ctx.supabase.rpc('next_po_number', {

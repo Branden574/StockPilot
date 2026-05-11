@@ -131,11 +131,14 @@ export class ReceivingService {
       // Postgres errcode 40001 = serialization_failure, used for
       // idempotency conflict above.
       if (error.message.includes('idempotency_conflict')) {
-        await audit({
-          event: 'idempotency.conflict',
-          entityType: 'receipt',
-          extra: { purchaseOrderId: input.purchaseOrderId },
-        });
+        await audit(
+          {
+            event: 'idempotency.conflict',
+            entityType: 'receipt',
+            extra: { purchaseOrderId: input.purchaseOrderId },
+          },
+          this.ctx,
+        );
         throw new ServiceError(
           'conflict',
           'A different receipt was already submitted with this idempotency key. Refresh and try again.',
@@ -160,19 +163,22 @@ export class ReceivingService {
     const totalAccepted = input.lines.reduce((s, l) => s + l.qtyAccepted, 0);
     const totalRejected = input.lines.reduce((s, l) => s + (l.qtyRejected ?? 0), 0);
 
-    await audit({
-      event: 'stock.receipt.posted',
-      entityType: 'receipt',
-      entityId: receipt.id,
-      warehouseId: receipt.warehouse_id,
-      after: {
-        purchaseOrderId: input.purchaseOrderId,
-        receiptNumber: receipt.receipt_number,
-        lineCount: input.lines.length,
-        totalAccepted,
-        totalRejected,
+    await audit(
+      {
+        event: 'stock.receipt.posted',
+        entityType: 'receipt',
+        entityId: receipt.id,
+        warehouseId: receipt.warehouse_id,
+        after: {
+          purchaseOrderId: input.purchaseOrderId,
+          receiptNumber: receipt.receipt_number,
+          lineCount: input.lines.length,
+          totalAccepted,
+          totalRejected,
+        },
       },
-    });
+      this.ctx,
+    );
 
     // Publish to outbox for downstream consumers (notifications, analytics).
     // Best-effort: a failure here doesn't undo the receipt.
@@ -221,16 +227,19 @@ export class ReceivingService {
     }
 
     const reversal = data as unknown as ReceiptRow;
-    await audit({
-      event: 'stock.receipt.reversed',
-      entityType: 'receipt',
-      entityId: input.receiptId,
-      warehouseId: reversal.warehouse_id,
-      after: {
-        reversalReceiptId: reversal.id,
-        reason: input.reason,
+    await audit(
+      {
+        event: 'stock.receipt.reversed',
+        entityType: 'receipt',
+        entityId: input.receiptId,
+        warehouseId: reversal.warehouse_id,
+        after: {
+          reversalReceiptId: reversal.id,
+          reason: input.reason,
+        },
       },
-    });
+      this.ctx,
+    );
 
     return reversal;
   }

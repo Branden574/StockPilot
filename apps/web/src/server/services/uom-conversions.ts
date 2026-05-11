@@ -81,12 +81,15 @@ export class UomConversionsService {
       .select('id')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({
-      event: 'uom_conversion.upserted',
-      entityType: 'uom_conversion',
-      entityId: data.id as string,
-      after: { ...input, fromUom, toUom },
-    });
+    await audit(
+      {
+        event: 'uom_conversion.upserted',
+        entityType: 'uom_conversion',
+        entityId: data.id as string,
+        after: { ...input, fromUom, toUom },
+      },
+      this.ctx,
+    );
     return { id: data.id as string };
   }
 
@@ -98,10 +101,13 @@ export class UomConversionsService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({
-      event: 'uom_conversion.deleted',
-      entityType: 'uom_conversion',
-      entityId: id,
-    });
+    await audit(
+      {
+        event: 'uom_conversion.deleted',
+        entityType: 'uom_conversion',
+        entityId: id,
+      },
+      this.ctx,
+    );
   }
 }

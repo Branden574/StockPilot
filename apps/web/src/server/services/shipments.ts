@@ -393,13 +393,16 @@ export class ShipmentsService {
       lines: linesToShip,
     });
 
-    await audit({
-      event: 'shipment.created',
-      entityType: 'shipment',
-      entityId: id,
-      warehouseId: input.sourceWarehouseId,
-      extra: { source: 'order_request', orderRequestId: input.orderRequestId },
-    });
+    await audit(
+      {
+        event: 'shipment.created',
+        entityType: 'shipment',
+        entityId: id,
+        warehouseId: input.sourceWarehouseId,
+        extra: { source: 'order_request', orderRequestId: input.orderRequestId },
+      },
+      this.ctx,
+    );
 
     return { id };
   }
@@ -438,26 +441,22 @@ export class ShipmentsService {
       lines: linesToShip,
     });
 
-    await audit({
-      event: 'shipment.created',
-      entityType: 'shipment',
-      entityId: id,
-      warehouseId: input.sourceWarehouseId,
-      extra: { source: 'manual' },
-    });
+    await audit(
+      {
+        event: 'shipment.created',
+        entityType: 'shipment',
+        entityId: id,
+        warehouseId: input.sourceWarehouseId,
+        extra: { source: 'manual' },
+      },
+      this.ctx,
+    );
 
     return { id };
   }
 
   async markShipped(id: string): Promise<void> {
     assertPermission(this.ctx, 'purchase_orders:manage');
-    const detail = await this.get(id);
-    if (detail.status !== 'draft') {
-      throw new ServiceError(
-        'validation_error',
-        `Only draft shipments can be marked shipped (this one is ${detail.status}).`,
-      );
-    }
 
     // ── Stock deduction design ────────────────────────────────────────
     //
@@ -472,67 +471,70 @@ export class ShipmentsService {
     // (per-bin levels within ONE warehouse) and would refuse if the
     // destination bin were the same as source.
     //
-    // Sequencing vs transaction: there's no app-level transaction primitive
-    // exposed here. The codebase pattern (see InventoryService.adjustStock,
-    // ReceivingService.postReceipt) is to call adjust_stock once per line
-    // — each call is itself transactional inside Postgres (it row-locks the
-    // item, updates qty, and inserts the stock_movements row in one txn).
-    // We sequence: deduct ALL lines FIRST, then flip status. If any
-    // deduction fails (e.g. insufficient_stock), we throw before the status
-    // flip, leaving the shipment as `draft`. Earlier successful deductions
-    // are NOT rolled back — same partial-rollback caveat as the existing
-    // `insertShipmentWithLines` line-insert path. The status check at the
-    // top is the de-facto idempotency gate; once status is `shipped` this
-    // method refuses, so a retry can't double-deduct.
+    // Atomicity: this whole transition (status check → per-line
+    // adjust_stock → status flip) runs inside the Postgres function
+    // `post_shipment_shipped` so the entire sequence is ONE transaction.
+    // The function `FOR UPDATE`-locks the shipment row, re-verifies
+    // status='draft' inside the lock, then loops `adjust_stock` per
+    // line and flips status to 'shipped'. Any insufficient_stock error
+    // rolls back every prior deduction in the same call, and a second
+    // concurrent caller serializes on the row lock — they'll see
+    // status='shipped' when they finally acquire it and bail cleanly
+    // without double-deducting. See supabase/migrations/0054 for the
+    // full function body and the two CRITICAL bugs it closes.
     // ──────────────────────────────────────────────────────────────────
-    const linesToDeduct = detail.lines.filter((l) => l.qtyShipped > 0);
-    let totalQtyShipped = 0;
-    for (const line of linesToDeduct) {
-      const change = -Number(line.qtyShipped);
-      const { error: rpcErr } = await this.ctx.supabase.rpc('adjust_stock', {
-        p_item_id: line.itemId,
-        p_quantity_change: change,
-        p_movement_type: 'transfer',
-        p_location_id: null,
-        p_reason: `Shipment ${detail.workOrderNumber}`,
-        p_notes: null,
-      });
-      if (rpcErr) {
-        if (rpcErr.message.includes('insufficient_stock')) {
-          throw new ServiceError(
-            'validation_error',
-            `Insufficient stock to ship ${line.qtyShipped} of item ${line.item?.sku ?? line.itemId}.`,
-          );
-        }
-        if (rpcErr.message.includes('forbidden')) {
-          throw new ServiceError(
-            'forbidden',
-            'You do not have permission to adjust stock for these items.',
-          );
-        }
+    const { data, error } = await this.ctx.supabase.rpc(
+      'post_shipment_shipped',
+      { p_shipment_id: id },
+    );
+
+    if (error) {
+      // Map Postgres error codes to ServiceError types. The function
+      // raises:
+      //   P0002 'shipment_not_found'   → not_found
+      //   P0001 'shipment_not_draft' OR adjust_stock's
+      //         'insufficient_stock'  → conflict (with specific copy)
+      //   42501 'forbidden'             → forbidden
+      const code = (error as { code?: string }).code;
+      const msg = error.message ?? '';
+      if (code === 'P0002' || msg.includes('shipment_not_found')) {
+        throw new ServiceError('not_found', 'Shipment not found');
+      }
+      if (code === 'P0001' || msg.includes('insufficient_stock') || msg.includes('shipment_not_draft')) {
+        const friendly = msg.includes('insufficient_stock')
+          ? 'Not enough stock to ship every line. Check on-hand quantities.'
+          : msg.includes('shipment_not_draft')
+            ? 'Shipment is no longer in draft status.'
+            : (msg || 'Cannot post this shipment.');
+        throw new ServiceError('conflict', friendly);
+      }
+      if (code === '42501' || msg.includes('forbidden')) {
         throw new ServiceError(
-          'internal_error',
-          `Stock deduction failed for line ${line.itemId}: ${rpcErr.message}`,
+          'forbidden',
+          'You do not have permission to post shipments.',
         );
       }
-      totalQtyShipped += line.qtyShipped;
+      throw new ServiceError(
+        'internal_error',
+        msg || 'Failed to post shipment',
+      );
     }
 
-    const { error } = await this.ctx.supabase
-      .from('shipments')
-      .update({ status: 'shipped' satisfies ShipmentStatus })
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id)
-      .eq('status', 'draft');
-    if (error) throw new ServiceError('internal_error', error.message);
+    // The RPC returns a single-row table:
+    //   [{ lines_shipped: int, total_qty_shipped: numeric }]
+    // supabase-js can hand it back as either an array or a single object
+    // depending on shape, so normalize.
+    const row = Array.isArray(data)
+      ? (data[0] as { lines_shipped?: number; total_qty_shipped?: number | string } | undefined)
+      : (data as { lines_shipped?: number; total_qty_shipped?: number | string } | null);
+
     await audit({
       event: 'shipment.shipped',
       entityType: 'shipment',
       entityId: id,
-      warehouseId: detail.sourceWarehouseId,
       extra: {
-        linesShipped: linesToDeduct.length,
-        totalQtyShipped,
+        linesShipped: Number(row?.lines_shipped ?? 0),
+        totalQtyShipped: Number(row?.total_qty_shipped ?? 0),
       },
     });
   }
@@ -552,12 +554,15 @@ export class ShipmentsService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({
-      event: 'shipment.cancelled',
-      entityType: 'shipment',
-      entityId: id,
-      warehouseId: detail.sourceWarehouseId,
-    });
+    await audit(
+      {
+        event: 'shipment.cancelled',
+        entityType: 'shipment',
+        entityId: id,
+        warehouseId: detail.sourceWarehouseId,
+      },
+      this.ctx,
+    );
   }
 
   // ── Private helpers ────────────────────────────────────────────────

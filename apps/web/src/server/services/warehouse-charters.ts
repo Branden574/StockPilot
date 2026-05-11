@@ -84,12 +84,15 @@ export class WarehouseChartersService {
       if (delErr) throw new ServiceError('internal_error', delErr.message);
     }
 
-    await audit({
-      event: 'warehouse_charters.updated',
-      entityType: 'warehouse',
-      entityId: warehouseId,
-      before: { charterIds: [...existing] },
-      after: { charterIds: [...desired] },
-    });
+    await audit(
+      {
+        event: 'warehouse_charters.updated',
+        entityType: 'warehouse',
+        entityId: warehouseId,
+        before: { charterIds: [...existing] },
+        after: { charterIds: [...desired] },
+      },
+      this.ctx,
+    );
   }
 }

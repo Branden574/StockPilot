@@ -159,12 +159,15 @@ export class ProcedureCommentsService {
     if (error) throw new ServiceError('internal_error', error.message);
     const r = data as unknown as RawCommentRow;
     const a = Array.isArray(r.author) ? r.author[0] : r.author;
-    void audit({
-      event: 'procedure.commented',
-      entityType: 'procedure',
-      entityId: input.procedureId,
-      extra: { comment_id: r.id, parent_id: input.parentId ?? null },
-    });
+    void audit(
+      {
+        event: 'procedure.commented',
+        entityType: 'procedure',
+        entityId: input.procedureId,
+        extra: { comment_id: r.id, parent_id: input.parentId ?? null },
+      },
+      this.ctx,
+    );
     return {
       id: r.id,
       procedure_id: r.procedure_id,

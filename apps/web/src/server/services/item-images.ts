@@ -75,6 +75,20 @@ export class ItemImagesService {
 
   async record(itemId: string, storagePath: string, isFirst: boolean) {
     assertPermission(this.ctx, 'items:update');
+    // Defense-in-depth: the action schema validates `storagePath` as a
+    // bare string, so a hostile client could send another org's path
+    // here. Storage RLS would still refuse to mint a signed URL for
+    // the wrong org's bucket folder (the rendered image stays
+    // private), but we'd be inserting a pointer row tagged with OUR
+    // organization_id pointing at THEIR file — a row that has no
+    // business existing. Reject it before it ever hits the DB.
+    const requiredPrefix = `${this.ctx.organizationId}/`;
+    if (!storagePath.startsWith(requiredPrefix)) {
+      throw new ServiceError(
+        'validation_error',
+        'Invalid storage path — wrong org prefix.',
+      );
+    }
     const { data, error } = await this.ctx.supabase
       .from('item_images')
       .insert({

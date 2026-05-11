@@ -13,6 +13,15 @@ import { resolveTerminology } from '@stockpilot/core';
 
 export const metadata = { title: 'Bulk ISBN import' };
 
+// Bulk ISBN imports run the server action `bulkCreateBooksAction` against
+// this route. Server actions are POSTed to the page URL, so the route-level
+// maxDuration applies to the action invocation. A 200-book import does
+// ~200 inventory_items inserts + ~200 stock_movements inserts + parallel
+// cover rehosts; well within 60s on Pro, comfortably past Hobby's default
+// 10s ceiling. Without this, real-world imports trip Vercel 504s halfway
+// through and leave partial state in inventory.
+export const maxDuration = 60;
+
 export default async function BulkIsbnImportPage() {
   const ctx = await requireOrgContext();
   const supabase = await createClient();

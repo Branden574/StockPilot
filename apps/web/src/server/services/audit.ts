@@ -4,7 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { headers } from 'next/headers';
 
 import { reportError } from '@/lib/error-reporter';
-import { withContext } from './context';
+import { withContext, type ServiceContext } from './context';
 
 export type AuditEvent =
   | 'user.invited'
@@ -105,23 +105,32 @@ interface AuditPayload {
 
 /**
  * Writes an audit log entry using the admin client (so logging never fails
- * because of RLS). Captures user from the cached withContext(), plus IP +
- * UA from request headers when available.
+ * because of RLS). Captures user from the supplied `ctx` (or cached
+ * `withContext()` as a fallback for legacy callers), plus IP + UA from
+ * request headers when available.
+ *
+ * When called from an API route (no cookies, no `x-pathname` header), the
+ * `withContext()` fallback throws `NEXT_REDIRECT` and the outer try/catch
+ * would silently drop the event. Bearer/API callers MUST pass their
+ * `ServiceContext` so the audit row is written.
  *
  * Best-effort — never throws to the caller. Audit failures are logged to
  * stderr only; we never want a logging error to break a user action.
  */
-export async function audit(payload: AuditPayload): Promise<void> {
+export async function audit(
+  payload: AuditPayload,
+  ctx?: ServiceContext,
+): Promise<void> {
   try {
-    const ctx = await withContext();
+    const c = ctx ?? (await withContext());
     const h = await headers();
     const ip = h.get('x-forwarded-for')?.split(',')[0]?.trim() || h.get('x-real-ip') || null;
     const userAgent = h.get('user-agent') || null;
 
     const admin = createAdminClient();
     await admin.from('audit_logs').insert({
-      organization_id: ctx.organizationId,
-      user_id: ctx.userId,
+      organization_id: c.organizationId,
+      user_id: c.userId,
       event: payload.event,
       ip,
       user_agent: userAgent,

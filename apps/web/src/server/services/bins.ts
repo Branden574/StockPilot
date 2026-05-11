@@ -95,13 +95,16 @@ export class BinsService {
       }
       throw new ServiceError('internal_error', error.message);
     }
-    await audit({
-      event: 'warehouse.updated',
-      entityType: 'bin',
-      entityId: data.id as string,
-      warehouseId: input.warehouseId,
-      after: { code, name, binType: input.binType, isDefault: !!input.isDefault },
-    });
+    await audit(
+      {
+        event: 'warehouse.updated',
+        entityType: 'bin',
+        entityId: data.id as string,
+        warehouseId: input.warehouseId,
+        after: { code, name, binType: input.binType, isDefault: !!input.isDefault },
+      },
+      this.ctx,
+    );
     return { id: data.id as string };
   }
 

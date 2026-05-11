@@ -30,192 +30,151 @@ vi.mock('./audit', () => ({
 }));
 
 import { ShipmentsService } from './shipments';
-import { ServiceError } from './context';
 import { audit } from './audit';
 
-// Phase 2C destination pivot — shipments now point at a charter, not a
-// warehouse. The header row carries `destination_charter_id`; the get()
-// path loads charter info, not warehouse info, for the destination.
-const SHIPMENT_HEADER = {
-  id: 'ship-1',
-  organization_id: 'org-test',
-  work_order_number: 'ISR-CHARTERA-05102026',
-  status: 'draft' as const,
-  ship_date: '2026-05-10',
-  attention_to_name: null,
-  notes: null,
-  source_warehouse_id: 'wh-a',
-  destination_charter_id: 'ch-a',
-  order_request_id: null,
-  signature_image_url: null,
-  signed_by_name: null,
-  signed_at: null,
-  signature_email_to: null,
-  signature_email_cc: null,
-  created_by: 'user-test',
-  created_at: new Date().toISOString(),
-  updated_at: new Date().toISOString(),
-};
-
-const SHIPMENT_LINES = [
-  {
-    id: 'line-1',
-    item_id: 'item-1',
-    qty_shipped: 5,
-    qty_back_ordered: 0,
-    line_order: 0,
-    item: { id: 'item-1', name: 'Widget', sku: 'W-1', barcode: null },
-  },
-  {
-    id: 'line-2',
-    item_id: 'item-2',
-    qty_shipped: 3,
-    qty_back_ordered: 1,
-    line_order: 1,
-    item: { id: 'item-2', name: 'Gadget', sku: 'G-1', barcode: null },
-  },
-];
-
-const WAREHOUSE_ROW = {
-  id: 'wh-a',
-  name: 'Main',
-  code: 'WHA',
-  address: null,
-  contact_name: null,
-  contact_email: null,
-  contact_phone: null,
-  manager_user_id: null,
-  manager: null,
-};
-
-const CHARTER_ROW = {
-  id: 'ch-a',
-  name: 'Charter A',
-  code: 'CHARTERA',
-};
+// markShipped tests use the atomic `post_shipment_shipped` RPC, so they
+// no longer need shipment/line/warehouse/charter row fixtures — the JS
+// layer never reads them. manualCreate has its own minimal scenario below.
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe('ShipmentsService.markShipped', () => {
-  it('deducts stock for every line via adjust_stock then flips status to shipped', async () => {
+  it('calls post_shipment_shipped RPC once and audits the response', async () => {
     const stub = makeSupabaseStub({
-      // get() loads header + lines + source warehouse + destination charter
-      'shipments.select.maybeSingle': { data: SHIPMENT_HEADER, error: null },
-      'shipment_lines.select': { data: SHIPMENT_LINES, error: null },
-      'warehouses.select.maybeSingle': { data: WAREHOUSE_ROW, error: null },
-      'charters.select.maybeSingle': { data: CHARTER_ROW, error: null },
-      'organization_members.select.maybeSingle': { data: null, error: null },
-      // status flip
-      'shipments.update': { data: null, error: null },
-      // RPC for stock deduction
-      'rpc:adjust_stock': { data: {}, error: null },
+      // Atomic posting — single RPC returning the table row.
+      'rpc:post_shipment_shipped': {
+        data: [{ lines_shipped: 2, total_qty_shipped: 8 }],
+        error: null,
+      },
     });
     const svc = new ShipmentsService(makeServiceContext(stub.client));
 
     await svc.markShipped('ship-1');
 
-    // Should have called adjust_stock once per line, with NEGATIVE qty.
-    expect(stub.rpcCalls).toHaveLength(2);
+    // Exactly one RPC call to the atomic posting function.
+    expect(stub.rpcCalls).toHaveLength(1);
     expect(stub.rpcCalls[0]).toEqual({
-      name: 'adjust_stock',
-      args: {
-        p_item_id: 'item-1',
-        p_quantity_change: -5,
-        p_movement_type: 'transfer',
-        p_location_id: null,
-        p_reason: 'Shipment ISR-CHARTERA-05102026',
-        p_notes: null,
-      },
-    });
-    expect(stub.rpcCalls[1]!.args).toMatchObject({
-      p_item_id: 'item-2',
-      p_quantity_change: -3,
-      p_movement_type: 'transfer',
+      name: 'post_shipment_shipped',
+      args: { p_shipment_id: 'ship-1' },
     });
 
-    // Audit metadata captures lines + total qty.
+    // Audit metadata is pulled from the RPC return row.
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'shipment.shipped',
+        entityType: 'shipment',
         entityId: 'ship-1',
-        warehouseId: 'wh-a',
         extra: { linesShipped: 2, totalQtyShipped: 8 },
       }),
     );
   });
 
-  it('refuses to flip status when a stock deduction fails (insufficient_stock)', async () => {
+  it('also accepts a single-object RPC response shape', async () => {
+    // Postgres `returns table` can come back as a bare object from
+    // supabase-js depending on shape — defensive normalization check.
     const stub = makeSupabaseStub({
-      'shipments.select.maybeSingle': { data: SHIPMENT_HEADER, error: null },
-      'shipment_lines.select': { data: SHIPMENT_LINES, error: null },
-      'warehouses.select.maybeSingle': { data: WAREHOUSE_ROW, error: null },
-      'charters.select.maybeSingle': { data: CHARTER_ROW, error: null },
-      'organization_members.select.maybeSingle': { data: null, error: null },
-      'rpc:adjust_stock': {
-        data: null,
-        error: { message: 'insufficient_stock' },
+      'rpc:post_shipment_shipped': {
+        data: { lines_shipped: 1, total_qty_shipped: 3 },
+        error: null,
       },
-      'shipments.update': { data: null, error: null },
-    });
-    const svc = new ShipmentsService(makeServiceContext(stub.client));
-
-    await expect(svc.markShipped('ship-1')).rejects.toBeInstanceOf(ServiceError);
-
-    // Audit must NOT have fired — partial-success was rejected.
-    expect(audit).not.toHaveBeenCalled();
-  });
-
-  it('rejects when shipment is not in draft status', async () => {
-    const shipped = { ...SHIPMENT_HEADER, status: 'shipped' as const };
-    const stub = makeSupabaseStub({
-      'shipments.select.maybeSingle': { data: shipped, error: null },
-      'shipment_lines.select': { data: SHIPMENT_LINES, error: null },
-      'warehouses.select.maybeSingle': { data: WAREHOUSE_ROW, error: null },
-      'charters.select.maybeSingle': { data: CHARTER_ROW, error: null },
-      'organization_members.select.maybeSingle': { data: null, error: null },
-    });
-    const svc = new ShipmentsService(makeServiceContext(stub.client));
-
-    await expect(svc.markShipped('ship-1')).rejects.toBeInstanceOf(ServiceError);
-    // No RPC fired (status check is the idempotency gate).
-    expect(stub.rpcCalls).toHaveLength(0);
-  });
-
-  it('skips deduction for lines with zero qty_shipped (e.g. back-order-only rows)', async () => {
-    const linesWithZero = [
-      {
-        ...SHIPMENT_LINES[0]!,
-        qty_shipped: 0,
-        qty_back_ordered: 4,
-      },
-      SHIPMENT_LINES[1]!,
-    ];
-    const stub = makeSupabaseStub({
-      'shipments.select.maybeSingle': { data: SHIPMENT_HEADER, error: null },
-      'shipment_lines.select': { data: linesWithZero, error: null },
-      'warehouses.select.maybeSingle': { data: WAREHOUSE_ROW, error: null },
-      'charters.select.maybeSingle': { data: CHARTER_ROW, error: null },
-      'organization_members.select.maybeSingle': { data: null, error: null },
-      'shipments.update': { data: null, error: null },
-      'rpc:adjust_stock': { data: {}, error: null },
     });
     const svc = new ShipmentsService(makeServiceContext(stub.client));
 
     await svc.markShipped('ship-1');
 
-    // Only the second line should fire adjust_stock (qty=3).
-    expect(stub.rpcCalls).toHaveLength(1);
-    expect(stub.rpcCalls[0]!.args).toMatchObject({
-      p_item_id: 'item-2',
-      p_quantity_change: -3,
-    });
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({
         extra: { linesShipped: 1, totalQtyShipped: 3 },
       }),
     );
+  });
+
+  it('maps P0001 insufficient_stock to a conflict ServiceError with actionable copy', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:post_shipment_shipped': {
+        data: null,
+        error: {
+          code: 'P0001',
+          message: 'insufficient_stock for item ...',
+        },
+      },
+    });
+    const svc = new ShipmentsService(makeServiceContext(stub.client));
+
+    await expect(svc.markShipped('ship-1')).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'Not enough stock to ship every line. Check on-hand quantities.',
+    });
+
+    // Audit must NOT have fired — RPC rolled back the whole transition.
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('maps P0001 shipment_not_draft to a conflict ServiceError (race-loser)', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:post_shipment_shipped': {
+        data: null,
+        error: {
+          code: 'P0001',
+          message: 'shipment_not_draft: Shipment ... is in status shipped',
+        },
+      },
+    });
+    const svc = new ShipmentsService(makeServiceContext(stub.client));
+
+    await expect(svc.markShipped('ship-1')).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'Shipment is no longer in draft status.',
+    });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('maps P0002 shipment_not_found to a not_found ServiceError', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:post_shipment_shipped': {
+        data: null,
+        error: { code: 'P0002', message: 'shipment_not_found' },
+      },
+    });
+    const svc = new ShipmentsService(makeServiceContext(stub.client));
+
+    await expect(svc.markShipped('ship-1')).rejects.toMatchObject({
+      code: 'not_found',
+      message: 'Shipment not found',
+    });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('maps 42501 forbidden to a forbidden ServiceError', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:post_shipment_shipped': {
+        data: null,
+        error: { code: '42501', message: 'forbidden' },
+      },
+    });
+    const svc = new ShipmentsService(makeServiceContext(stub.client));
+
+    await expect(svc.markShipped('ship-1')).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('falls through to internal_error for unmapped Postgres errors', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:post_shipment_shipped': {
+        data: null,
+        error: { code: 'XX000', message: 'unexpected database failure' },
+      },
+    });
+    const svc = new ShipmentsService(makeServiceContext(stub.client));
+
+    await expect(svc.markShipped('ship-1')).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    expect(audit).not.toHaveBeenCalled();
   });
 });
 

@@ -104,6 +104,19 @@ export class ProcedureVideosService {
   async record(input: RecordProcedureVideoInput): Promise<ProcedureVideoRow> {
     assertPermission(this.ctx, 'categories:manage');
 
+    // Defense-in-depth: the action schema accepts `storagePath` as a
+    // bare string, so a hostile caller could pass another org's path
+    // here. Storage RLS still refuses signed URLs for cross-org paths,
+    // but we'd be inserting a pointer row tagged with OUR org pointing
+    // at THEIR file. Reject it before it ever hits the DB.
+    const requiredPrefix = `${this.ctx.organizationId}/`;
+    if (!input.storagePath.startsWith(requiredPrefix)) {
+      throw new ServiceError(
+        'validation_error',
+        'Invalid storage path — wrong org prefix.',
+      );
+    }
+
     // Verify the parent procedure exists in the current org. RLS would
     // already block insert if it didn't, but this gives a friendlier
     // not_found error and keeps the storage path orphan-check tight.
@@ -148,12 +161,15 @@ export class ProcedureVideosService {
       )
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({
-      event: 'procedure.video.added',
-      entityType: 'procedure',
-      entityId: input.procedureId,
-      extra: { video_id: (data as ProcedureVideoRow).id, storage_path: input.storagePath },
-    });
+    void audit(
+      {
+        event: 'procedure.video.added',
+        entityType: 'procedure',
+        entityId: input.procedureId,
+        extra: { video_id: (data as ProcedureVideoRow).id, storage_path: input.storagePath },
+      },
+      this.ctx,
+    );
     return data as ProcedureVideoRow;
   }
 
@@ -186,12 +202,15 @@ export class ProcedureVideosService {
       .eq('id', id);
     if (delErr) throw new ServiceError('internal_error', delErr.message);
 
-    void audit({
-      event: 'procedure.video.removed',
-      entityType: 'procedure',
-      entityId: row.procedure_id as string,
-      extra: { video_id: id },
-    });
+    void audit(
+      {
+        event: 'procedure.video.removed',
+        entityType: 'procedure',
+        entityId: row.procedure_id as string,
+        extra: { video_id: id },
+      },
+      this.ctx,
+    );
     return { procedureId: row.procedure_id as string };
   }
 }

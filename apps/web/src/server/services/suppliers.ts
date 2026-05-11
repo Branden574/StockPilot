@@ -92,7 +92,7 @@ export class SuppliersService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({ event: 'supplier.archived', entityType: 'supplier', entityId: id });
+    void audit({ event: 'supplier.archived', entityType: 'supplier', entityId: id }, this.ctx);
   }
 
   /**
@@ -107,6 +107,6 @@ export class SuppliersService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({ event: 'supplier.restored', entityType: 'supplier', entityId: id });
+    void audit({ event: 'supplier.restored', entityType: 'supplier', entityId: id }, this.ctx);
   }
 }

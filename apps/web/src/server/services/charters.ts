@@ -93,7 +93,7 @@ export class ChartersService {
       .select('id')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({ event: 'charter.created', entityType: 'charter', entityId: data.id as string, after: input });
+    await audit({ event: 'charter.created', entityType: 'charter', entityId: data.id as string, after: input }, this.ctx);
     return { id: data.id as string };
   }
 
@@ -111,7 +111,7 @@ export class ChartersService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({ event: 'charter.updated', entityType: 'charter', entityId: id, after: patch });
+    await audit({ event: 'charter.updated', entityType: 'charter', entityId: id, after: patch }, this.ctx);
   }
 
   async archive(id: string) {
@@ -122,7 +122,7 @@ export class ChartersService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({ event: 'charter.archived', entityType: 'charter', entityId: id });
+    await audit({ event: 'charter.archived', entityType: 'charter', entityId: id }, this.ctx);
   }
 
   /**
@@ -138,6 +138,6 @@ export class ChartersService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({ event: 'charter.restored', entityType: 'charter', entityId: id });
+    await audit({ event: 'charter.restored', entityType: 'charter', entityId: id }, this.ctx);
   }
 }
