@@ -2,6 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { audit } from './audit';
 import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 
 export const createLocationSchema = z.object({
@@ -22,13 +23,20 @@ export class LocationsService {
     return new LocationsService(await withContext());
   }
 
-  async list() {
-    const { data, error } = await this.ctx.supabase
+  /**
+   * Lists active locations by default. When `opts.includeArchived` is true,
+   * returns ONLY archived rows (rows with `deleted_at` set).
+   */
+  async list(opts: { includeArchived?: boolean } = {}) {
+    let query = this.ctx.supabase
       .from('locations')
-      .select('id, parent_id, name, type, notes, warehouse_id, created_at, updated_at')
+      .select('id, parent_id, name, type, notes, warehouse_id, deleted_at, created_at, updated_at')
       .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null)
       .order('name', { ascending: true });
+    query = opts.includeArchived
+      ? query.not('deleted_at', 'is', null)
+      : query.is('deleted_at', null);
+    const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return data ?? [];
   }
@@ -77,5 +85,21 @@ export class LocationsService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+    void audit({ event: 'location.archived', entityType: 'location', entityId: id });
+  }
+
+  /**
+   * Restore an archived location — flips `deleted_at` back to null so it
+   * reappears in the active list. Same permission gate as archive().
+   */
+  async restore(id: string) {
+    assertPermission(this.ctx, 'locations:manage');
+    const { error } = await this.ctx.supabase
+      .from('locations')
+      .update({ deleted_at: null })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+    void audit({ event: 'location.restored', entityType: 'location', entityId: id });
   }
 }

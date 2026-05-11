@@ -1,6 +1,8 @@
-import { Package } from 'lucide-react';
+import { History, Package } from 'lucide-react';
 import Link from 'next/link';
 
+import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
+import { RestoreBundleButton } from '@/components/bundles/restore-bundle-button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,16 +22,16 @@ import { formatNumber, formatRelative } from '@/lib/utils';
 export default async function BundlesListPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; show?: string }>;
+  searchParams: Promise<{ q?: string; view?: string }>;
 }) {
   const params = await searchParams;
   const search = params.q?.trim() || undefined;
-  const includeInactive = params.show === 'all' || params.show === 'archived';
+  const isArchivedView = params.view === 'archived';
 
   const ctx = await requireOrgContext();
   const canManage = hasPermission(ctx.role, 'bundles:manage');
   const svc = await BundlesService.forCurrentUser();
-  const bundles = await svc.list({ search, includeInactive });
+  const bundles = await svc.list({ search, includeArchived: isArchivedView });
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -37,11 +39,12 @@ export default async function BundlesListPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Bundles</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Reusable kits + book packs. Pre-assemble ahead of time, or draw
-            components at distribution.
+            {isArchivedView
+              ? 'Bundles you archived. Restore one to put it back in rotation.'
+              : 'Reusable kits + book packs. Pre-assemble ahead of time, or draw components at distribution.'}
           </p>
         </div>
-        {canManage && (
+        {canManage && !isArchivedView && (
           <Button asChild variant="gradient">
             <Link href="/dashboard/bundles/new">+ New bundle</Link>
           </Button>
@@ -56,36 +59,35 @@ export default async function BundlesListPage({
           placeholder="Search by name or SKU"
           className="border-border bg-card focus:ring-ring h-9 w-full max-w-sm rounded-md border px-3 text-sm focus:outline-none focus:ring-2"
         />
-        <div className="border-border bg-background flex items-center gap-1 rounded-md border p-0.5 text-xs">
-          <Link
-            href="/dashboard/bundles"
-            className={`rounded-sm px-2 py-1 ${!includeInactive ? 'bg-foreground text-background' : 'hover:bg-muted'}`}
-          >
-            Active
-          </Link>
-          <Link
-            href="/dashboard/bundles?show=all"
-            className={`rounded-sm px-2 py-1 ${includeInactive ? 'bg-foreground text-background' : 'hover:bg-muted'}`}
-          >
-            All
-          </Link>
-        </div>
+        {isArchivedView && <input type="hidden" name="view" value="archived" />}
+        <ArchiveViewToggle view={isArchivedView ? 'archived' : 'active'} />
       </form>
 
       <div className="mt-6">
         {bundles.length === 0 && !search ? (
-          <EmptyState
-            icon={Package}
-            title="No bundles yet"
-            description="Create a bundle to ship grouped sets of items in one click — useful for school packs, kits, or recurring drop-offs."
-            cta={canManage ? { label: 'Create your first bundle', href: '/dashboard/bundles/new' } : undefined}
-          />
+          isArchivedView ? (
+            <EmptyState
+              icon={History}
+              title="No archived bundles"
+              description="Bundles you archive show up here so you can restore them later."
+            />
+          ) : (
+            <EmptyState
+              icon={Package}
+              title="No bundles yet"
+              description="Create a bundle to ship grouped sets of items in one click — useful for school packs, kits, or recurring drop-offs."
+              cta={canManage ? { label: 'Create your first bundle', href: '/dashboard/bundles/new' } : undefined}
+            />
+          )
         ) : bundles.length === 0 ? (
           <EmptyState
             icon={Package}
             title="No bundles match this search"
             description="Try a different name or SKU, or clear the search to see all bundles."
-            cta={{ label: 'Clear search', href: includeInactive ? '/dashboard/bundles?show=all' : '/dashboard/bundles' }}
+            cta={{
+              label: 'Clear search',
+              href: isArchivedView ? '/dashboard/bundles?view=archived' : '/dashboard/bundles',
+            }}
           />
         ) : (
           <div className="bg-card overflow-x-auto rounded-xl border">
@@ -97,7 +99,9 @@ export default async function BundlesListPage({
                   <TableHead className="text-right">Components</TableHead>
                   <TableHead className="text-right">Pre-assembled</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Last distributed</TableHead>
+                  <TableHead className="text-right">
+                    {isArchivedView ? 'Actions' : 'Last distributed'}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -129,8 +133,18 @@ export default async function BundlesListPage({
                         <Badge variant="warning">Inactive</Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-right text-xs">
-                      {b.lastDistributedAt ? formatRelative(b.lastDistributedAt) : 'Never'}
+                    <TableCell className="text-right">
+                      {isArchivedView ? (
+                        canManage ? (
+                          <RestoreBundleButton bundleId={b.id} bundleName={b.name} />
+                        ) : (
+                          <span className="text-muted-foreground text-xs">—</span>
+                        )
+                      ) : (
+                        <span className="text-muted-foreground text-xs">
+                          {b.lastDistributedAt ? formatRelative(b.lastDistributedAt) : 'Never'}
+                        </span>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

@@ -6,9 +6,15 @@ import { WarehousesService } from '@/server/services/warehouses';
 
 import { resolveTerminology } from '@stockpilot/core';
 
-export default async function WarehousesAdminPage() {
+export default async function WarehousesAdminPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
   const ctx = await requireOrgContext();
   const supabase = await createClient();
+  const params = await searchParams;
+  const isArchivedView = params.view === 'archived';
 
   const [orgRow, warehouses, charters, members] = await Promise.all([
     supabase
@@ -16,7 +22,7 @@ export default async function WarehousesAdminPage() {
       .select('terminology')
       .eq('id', ctx.organizationId)
       .maybeSingle(),
-    (await WarehousesService.forCurrentUser()).list(),
+    (await WarehousesService.forCurrentUser()).list({ includeArchived: isArchivedView }),
     (await ChartersService.forCurrentUser()).list(),
     supabase
       .from('organization_members')
@@ -57,6 +63,7 @@ export default async function WarehousesAdminPage() {
       </div>
 
       <WarehousesManager
+        view={isArchivedView ? 'archived' : 'active'}
         initial={warehouses}
         charters={charters.map((c) => ({ id: c.id, name: c.name }))}
         managers={managerOptions}

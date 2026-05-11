@@ -97,6 +97,18 @@ export async function archiveProcedureAction(id: string): Promise<ActionResult<v
   }
 }
 
+export async function restoreProcedureAction(id: string): Promise<ActionResult<void>> {
+  try {
+    const svc = await ProceduresService.forCurrentUser();
+    await svc.restore(id);
+    revalidatePath('/dashboard/procedures');
+    revalidatePath(`/dashboard/procedures/${id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Videos
 // ---------------------------------------------------------------------------

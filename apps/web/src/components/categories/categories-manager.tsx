@@ -1,11 +1,12 @@
 'use client';
 
-import { Loader2, Plus, Tag, Trash2 } from 'lucide-react';
+import { History, Loader2, Plus, RotateCcw, Tag, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -23,6 +24,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   archiveCategoryAction,
   createCategoryAction,
+  restoreCategoryAction,
   updateCategoryAction,
 } from '@/server/actions/categories';
 
@@ -41,12 +43,21 @@ interface FormValues {
 
 const PRESET_COLORS = ['#6366f1', '#10b981', '#f97316', '#0ea5e9', '#a855f7', '#ec4899', '#64748b', '#eab308'];
 
-export function CategoriesManager({ initial }: { initial: CategoryRow[] }) {
+export function CategoriesManager({
+  initial,
+  view = 'active',
+}: {
+  initial: CategoryRow[];
+  view?: 'active' | 'archived';
+}) {
   const router = useRouter();
+  const isArchivedView = view === 'archived';
   const [editing, setEditing] = React.useState<CategoryRow | null>(null);
   const [open, setOpen] = React.useState(false);
   const [archiveTarget, setArchiveTarget] = React.useState<CategoryRow | null>(null);
   const [archiveBusy, setArchiveBusy] = React.useState(false);
+  const [restoreTarget, setRestoreTarget] = React.useState<CategoryRow | null>(null);
+  const [restoreBusy, setRestoreBusy] = React.useState(false);
 
   function openNew() {
     setEditing(null);
@@ -71,20 +82,45 @@ export function CategoriesManager({ initial }: { initial: CategoryRow[] }) {
     router.refresh();
   }
 
+  async function confirmRestore() {
+    if (!restoreTarget) return;
+    setRestoreBusy(true);
+    const res = await restoreCategoryAction(restoreTarget.id);
+    setRestoreBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success(`"${restoreTarget.name}" restored.`);
+    setRestoreTarget(null);
+    router.refresh();
+  }
+
   return (
     <>
-      <div className="flex items-center justify-end">
-        <Button variant="gradient" onClick={openNew}>
-          <Plus className="h-4 w-4" /> New category
-        </Button>
+      <div className="flex items-center justify-between gap-2">
+        <ArchiveViewToggle view={view} />
+        {!isArchivedView && (
+          <Button variant="gradient" onClick={openNew}>
+            <Plus className="h-4 w-4" /> New category
+          </Button>
+        )}
       </div>
 
       {initial.length === 0 ? (
-        <EmptyState
-          icon={Tag}
-          title="No categories yet"
-          description="Group items by type so reports, filters, and dashboards stay readable. Use the New category button above to add one."
-        />
+        isArchivedView ? (
+          <EmptyState
+            icon={History}
+            title="No archived categories"
+            description="Categories you archive show up here so you can restore them later."
+          />
+        ) : (
+          <EmptyState
+            icon={Tag}
+            title="No categories yet"
+            description="Group items by type so reports, filters, and dashboards stay readable. Use the New category button above to add one."
+          />
+        )
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {initial.map((cat) => (
@@ -95,26 +131,40 @@ export function CategoriesManager({ initial }: { initial: CategoryRow[] }) {
                 style={{ backgroundColor: cat.color ?? '#94a3b8' }}
               />
               <div className="flex-1 min-w-0">
-                <button
-                  type="button"
-                  onClick={() => openEdit(cat)}
-                  className="block text-left font-medium transition-colors hover:text-primary"
-                >
-                  {cat.name}
-                </button>
+                {isArchivedView ? (
+                  <span className="block text-left font-medium">{cat.name}</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => openEdit(cat)}
+                    className="block text-left font-medium transition-colors hover:text-primary"
+                  >
+                    {cat.name}
+                  </button>
+                )}
                 {cat.description && (
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">{cat.description}</p>
                 )}
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="opacity-0 transition-opacity group-hover:opacity-100"
-                onClick={() => setArchiveTarget(cat)}
-                aria-label={`Archive ${cat.name}`}
-              >
-                <Trash2 className="h-4 w-4 text-muted-foreground" />
-              </Button>
+              {isArchivedView ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRestoreTarget(cat)}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" /> Restore
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="opacity-0 transition-opacity group-hover:opacity-100"
+                  onClick={() => setArchiveTarget(cat)}
+                  aria-label={`Archive ${cat.name}`}
+                >
+                  <Trash2 className="h-4 w-4 text-muted-foreground" />
+                </Button>
+              )}
             </div>
           ))}
         </div>
@@ -128,10 +178,29 @@ export function CategoriesManager({ initial }: { initial: CategoryRow[] }) {
           if (!v) setArchiveTarget(null);
         }}
         title={archiveTarget ? `Archive "${archiveTarget.name}"?` : 'Archive category?'}
-        description="The category is hidden from filters and item forms. Items already in this category keep their assignment until you move them. You can restore it from the archived view."
+        description={
+          <>
+            The category is hidden from filters and item forms. Items already in this category
+            keep their assignment until you move them. You can restore it from the{' '}
+            <strong>Archived view</strong>.
+          </>
+        }
         confirmLabel="Archive"
         pending={archiveBusy}
         onConfirm={confirmArchive}
+      />
+
+      <DestructiveConfirm
+        open={restoreTarget !== null}
+        onOpenChange={(v) => {
+          if (!v) setRestoreTarget(null);
+        }}
+        title={restoreTarget ? `Restore "${restoreTarget.name}"?` : 'Restore category?'}
+        description="This brings the category back into the active list."
+        confirmLabel="Restore"
+        tone="primary"
+        pending={restoreBusy}
+        onConfirm={confirmRestore}
       />
     </>
   );

@@ -37,7 +37,14 @@ export class ChartersService {
     return new ChartersService(await withContext());
   }
 
-  async list(): Promise<CharterRow[]> {
+  /**
+   * Lists charters for the manager view. By default returns rows with
+   * `status = 'active'`. When `opts.includeArchived` is true, returns
+   * ONLY rows with `status = 'archived'`. Inactive rows don't appear in
+   * either view by design.
+   */
+  async list(opts: { includeArchived?: boolean } = {}): Promise<CharterRow[]> {
+    const targetStatus = opts.includeArchived ? 'archived' : 'active';
     const { data, error } = await this.ctx.supabase
       .from('charters')
       .select(
@@ -46,7 +53,7 @@ export class ChartersService {
          users:user_warehouse_assignments!charter_id (user_id)`,
       )
       .eq('organization_id', this.ctx.organizationId)
-      .neq('status', 'archived')
+      .eq('status', targetStatus)
       .order('name', { ascending: true });
     if (error) throw new ServiceError('internal_error', error.message);
 
@@ -116,5 +123,21 @@ export class ChartersService {
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
     await audit({ event: 'charter.archived', entityType: 'charter', entityId: id });
+  }
+
+  /**
+   * Restore an archived charter — sets status back to 'active'. Same
+   * permission gate as archive(). Restoring goes to 'active' (not
+   * 'inactive') because that's the inverse of archive.
+   */
+  async restore(id: string) {
+    assertPermission(this.ctx, 'organization:update');
+    const { error } = await this.ctx.supabase
+      .from('charters')
+      .update({ status: 'active' })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+    await audit({ event: 'charter.restored', entityType: 'charter', entityId: id });
   }
 }

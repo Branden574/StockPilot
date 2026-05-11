@@ -58,3 +58,14 @@ export async function archiveCategoryAction(id: string): Promise<ActionResult<vo
     return toResult(e);
   }
 }
+
+export async function restoreCategoryAction(id: string): Promise<ActionResult<void>> {
+  try {
+    const svc = await CategoriesService.forCurrentUser();
+    await svc.restore(id);
+    revalidatePath('/dashboard/categories');
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}

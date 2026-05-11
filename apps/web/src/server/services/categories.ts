@@ -2,6 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 export const createCategorySchema = z.object({
@@ -25,13 +26,20 @@ export class CategoriesService {
     return new CategoriesService(await withContext());
   }
 
-  async list() {
-    const { data, error } = await this.ctx.supabase
+  /**
+   * Lists active categories by default. When `opts.includeArchived` is true,
+   * returns ONLY archived rows (rows with `deleted_at` set).
+   */
+  async list(opts: { includeArchived?: boolean } = {}) {
+    let query = this.ctx.supabase
       .from('categories')
-      .select('id, parent_id, name, description, color, icon, created_at, updated_at')
+      .select('id, parent_id, name, description, color, icon, deleted_at, created_at, updated_at')
       .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null)
       .order('name', { ascending: true });
+    query = opts.includeArchived
+      ? query.not('deleted_at', 'is', null)
+      : query.is('deleted_at', null);
+    const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return data ?? [];
   }
@@ -79,5 +87,21 @@ export class CategoriesService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+    void audit({ event: 'category.archived', entityType: 'category', entityId: id });
+  }
+
+  /**
+   * Restore an archived category — flips `deleted_at` back to null so it
+   * reappears in the active list. Same permission gate as archive().
+   */
+  async restore(id: string) {
+    assertPermission(this.ctx, 'categories:manage');
+    const { error } = await this.ctx.supabase
+      .from('categories')
+      .update({ deleted_at: null })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+    void audit({ event: 'category.restored', entityType: 'category', entityId: id });
   }
 }

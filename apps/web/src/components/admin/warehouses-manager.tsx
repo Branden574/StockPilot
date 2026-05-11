@@ -1,12 +1,13 @@
 'use client';
 
-import { Loader2, Plus, Trash2, Warehouse } from 'lucide-react';
+import { History, Loader2, Plus, RotateCcw, Trash2, Warehouse } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -39,6 +40,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   archiveWarehouseAction,
   createWarehouseAction,
+  restoreWarehouseAction,
   updateWarehouseAction,
 } from '@/server/actions/warehouses';
 
@@ -86,35 +88,49 @@ export function WarehousesManager({
   managers,
   termSingular,
   charterSingular,
+  view = 'active',
 }: {
   initial: WarehouseRow[];
   charters: CharterOption[];
   managers: ManagerOption[];
   termSingular: string;
   charterSingular: string;
+  view?: 'active' | 'archived';
 }) {
+  const isArchivedView = view === 'archived';
   const [editing, setEditing] = React.useState<WarehouseRow | null>(null);
   const [open, setOpen] = React.useState(false);
 
   return (
     <>
-      <div className="flex items-center justify-end">
-        <Button
-          onClick={() => {
-            setEditing(null);
-            setOpen(true);
-          }}
-        >
-          <Plus className="h-4 w-4" /> New {termSingular.toLowerCase()}
-        </Button>
+      <div className="flex items-center justify-between gap-2">
+        <ArchiveViewToggle view={view} />
+        {!isArchivedView && (
+          <Button
+            onClick={() => {
+              setEditing(null);
+              setOpen(true);
+            }}
+          >
+            <Plus className="h-4 w-4" /> New {termSingular.toLowerCase()}
+          </Button>
+        )}
       </div>
 
       {initial.length === 0 ? (
-        <EmptyState
-          icon={Warehouse}
-          title={`No ${termSingular.toLowerCase()}s yet`}
-          description={`Create your first ${termSingular.toLowerCase()} to start tracking stock by location, assign managers, and route shipments. Use the New ${termSingular.toLowerCase()} button above to add one.`}
-        />
+        isArchivedView ? (
+          <EmptyState
+            icon={History}
+            title={`No archived ${termSingular.toLowerCase()}s`}
+            description={`${termSingular}s you archive show up here so you can restore them later.`}
+          />
+        ) : (
+          <EmptyState
+            icon={Warehouse}
+            title={`No ${termSingular.toLowerCase()}s yet`}
+            description={`Create your first ${termSingular.toLowerCase()} to start tracking stock by location, assign managers, and route shipments. Use the New ${termSingular.toLowerCase()} button above to add one.`}
+          />
+        )
       ) : (
         <div className="overflow-x-auto rounded-xl border border-border bg-card">
           <Table>
@@ -134,6 +150,7 @@ export function WarehousesManager({
                 <WarehouseTableRow
                   key={row.id}
                   row={row}
+                  isArchivedView={isArchivedView}
                   onEdit={() => {
                     setEditing(row);
                     setOpen(true);
@@ -157,10 +174,20 @@ export function WarehousesManager({
   );
 }
 
-function WarehouseTableRow({ row, onEdit }: { row: WarehouseRow; onEdit: () => void }) {
+function WarehouseTableRow({
+  row,
+  isArchivedView,
+  onEdit,
+}: {
+  row: WarehouseRow;
+  isArchivedView: boolean;
+  onEdit: () => void;
+}) {
   const router = useRouter();
   const [archiveOpen, setArchiveOpen] = React.useState(false);
   const [archiveBusy, setArchiveBusy] = React.useState(false);
+  const [restoreOpen, setRestoreOpen] = React.useState(false);
+  const [restoreBusy, setRestoreBusy] = React.useState(false);
 
   async function confirmArchive() {
     setArchiveBusy(true);
@@ -172,6 +199,19 @@ function WarehouseTableRow({ row, onEdit }: { row: WarehouseRow; onEdit: () => v
     }
     setArchiveOpen(false);
     toast.success(`"${row.name}" archived.`);
+    router.refresh();
+  }
+
+  async function confirmRestore() {
+    setRestoreBusy(true);
+    const res = await restoreWarehouseAction(row.id);
+    setRestoreBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    setRestoreOpen(false);
+    toast.success(`"${row.name}" restored.`);
     router.refresh();
   }
 
@@ -206,26 +246,56 @@ function WarehouseTableRow({ row, onEdit }: { row: WarehouseRow; onEdit: () => v
       <TableCell className="text-right tabular-nums">{row.user_count}</TableCell>
       <TableCell className="text-right tabular-nums">{row.item_count}</TableCell>
       <TableCell className="flex justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={onEdit}>
-          Edit
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setArchiveOpen(true)}
-          aria-label="Archive"
-        >
-          <Trash2 className="h-4 w-4 text-muted-foreground" />
-        </Button>
-        <DestructiveConfirm
-          open={archiveOpen}
-          onOpenChange={setArchiveOpen}
-          title={`Archive "${row.name}"?`}
-          description="Existing inventory in this warehouse stays put but the warehouse is hidden from pick lists and reports. You can restore it from the archived view."
-          confirmLabel="Archive"
-          pending={archiveBusy}
-          onConfirm={confirmArchive}
-        />
+        {isArchivedView ? (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRestoreOpen(true)}
+            >
+              <RotateCcw className="h-3.5 w-3.5" /> Restore
+            </Button>
+            <DestructiveConfirm
+              open={restoreOpen}
+              onOpenChange={setRestoreOpen}
+              title={`Restore "${row.name}"?`}
+              description="This brings the warehouse back into the active list."
+              confirmLabel="Restore"
+              tone="primary"
+              pending={restoreBusy}
+              onConfirm={confirmRestore}
+            />
+          </>
+        ) : (
+          <>
+            <Button variant="outline" size="sm" onClick={onEdit}>
+              Edit
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setArchiveOpen(true)}
+              aria-label="Archive"
+            >
+              <Trash2 className="h-4 w-4 text-muted-foreground" />
+            </Button>
+            <DestructiveConfirm
+              open={archiveOpen}
+              onOpenChange={setArchiveOpen}
+              title={`Archive "${row.name}"?`}
+              description={
+                <>
+                  Existing inventory in this warehouse stays put but the warehouse is hidden
+                  from pick lists and reports. You can restore it from the{' '}
+                  <strong>Archived view</strong>.
+                </>
+              }
+              confirmLabel="Archive"
+              pending={archiveBusy}
+              onConfirm={confirmArchive}
+            />
+          </>
+        )}
       </TableCell>
     </TableRow>
   );
@@ -457,4 +527,3 @@ function WarehouseDialog({
     </Dialog>
   );
 }
-

@@ -1,11 +1,12 @@
 'use client';
 
-import { Loader2, Plus, Trash2, Truck } from 'lucide-react';
+import { History, Loader2, Plus, RotateCcw, Trash2, Truck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -30,6 +31,7 @@ import {
 import {
   archiveSupplierAction,
   createSupplierAction,
+  restoreSupplierAction,
   updateSupplierAction,
 } from '@/server/actions/suppliers';
 
@@ -52,12 +54,21 @@ interface FormValues {
   notes: string;
 }
 
-export function SuppliersManager({ initial }: { initial: SupplierRow[] }) {
+export function SuppliersManager({
+  initial,
+  view = 'active',
+}: {
+  initial: SupplierRow[];
+  view?: 'active' | 'archived';
+}) {
   const router = useRouter();
+  const isArchivedView = view === 'archived';
   const [editing, setEditing] = React.useState<SupplierRow | null>(null);
   const [open, setOpen] = React.useState(false);
   const [archiveTarget, setArchiveTarget] = React.useState<SupplierRow | null>(null);
   const [archiveBusy, setArchiveBusy] = React.useState(false);
+  const [restoreTarget, setRestoreTarget] = React.useState<SupplierRow | null>(null);
+  const [restoreBusy, setRestoreBusy] = React.useState(false);
 
   async function confirmArchive() {
     if (!archiveTarget) return;
@@ -73,26 +84,51 @@ export function SuppliersManager({ initial }: { initial: SupplierRow[] }) {
     router.refresh();
   }
 
+  async function confirmRestore() {
+    if (!restoreTarget) return;
+    setRestoreBusy(true);
+    const res = await restoreSupplierAction(restoreTarget.id);
+    setRestoreBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success(`"${restoreTarget.name}" restored.`);
+    setRestoreTarget(null);
+    router.refresh();
+  }
+
   return (
     <>
-      <div className="flex items-center justify-end">
-        <Button
-          variant="gradient"
-          onClick={() => {
-            setEditing(null);
-            setOpen(true);
-          }}
-        >
-          <Plus className="h-4 w-4" /> New supplier
-        </Button>
+      <div className="flex items-center justify-between gap-2">
+        <ArchiveViewToggle view={view} />
+        {!isArchivedView && (
+          <Button
+            variant="gradient"
+            onClick={() => {
+              setEditing(null);
+              setOpen(true);
+            }}
+          >
+            <Plus className="h-4 w-4" /> New supplier
+          </Button>
+        )}
       </div>
 
       {initial.length === 0 ? (
-        <EmptyState
-          icon={Truck}
-          title="No suppliers yet"
-          description="Track who you buy from so they auto-link onto purchase orders. Use the New supplier button above to add one."
-        />
+        isArchivedView ? (
+          <EmptyState
+            icon={History}
+            title="No archived suppliers"
+            description="Suppliers you archive show up here so you can restore them later."
+          />
+        ) : (
+          <EmptyState
+            icon={Truck}
+            title="No suppliers yet"
+            description="Track who you buy from so they auto-link onto purchase orders. Use the New supplier button above to add one."
+          />
+        )
       ) : (
         <div className="overflow-x-auto rounded-xl border bg-card">
           <Table>
@@ -121,24 +157,36 @@ export function SuppliersManager({ initial }: { initial: SupplierRow[] }) {
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{row.phone ?? '—'}</TableCell>
                   <TableCell className="flex justify-end gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setEditing(row);
-                        setOpen(true);
-                      }}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setArchiveTarget(row)}
-                      aria-label={`Archive ${row.name}`}
-                    >
-                      <Trash2 className="h-4 w-4 text-muted-foreground" />
-                    </Button>
+                    {isArchivedView ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setRestoreTarget(row)}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" /> Restore
+                      </Button>
+                    ) : (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setEditing(row);
+                            setOpen(true);
+                          }}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setArchiveTarget(row)}
+                          aria-label={`Archive ${row.name}`}
+                        >
+                          <Trash2 className="h-4 w-4 text-muted-foreground" />
+                        </Button>
+                      </>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -155,10 +203,29 @@ export function SuppliersManager({ initial }: { initial: SupplierRow[] }) {
           if (!v) setArchiveTarget(null);
         }}
         title={archiveTarget ? `Archive "${archiveTarget.name}"?` : 'Archive supplier?'}
-        description="The supplier is hidden from pick lists and new purchase orders. Existing items and POs that reference this supplier keep working. You can restore it from the archived view."
+        description={
+          <>
+            The supplier is hidden from pick lists and new purchase orders. Existing items and
+            POs that reference this supplier keep working. You can restore it from the{' '}
+            <strong>Archived view</strong>.
+          </>
+        }
         confirmLabel="Archive"
         pending={archiveBusy}
         onConfirm={confirmArchive}
+      />
+
+      <DestructiveConfirm
+        open={restoreTarget !== null}
+        onOpenChange={(v) => {
+          if (!v) setRestoreTarget(null);
+        }}
+        title={restoreTarget ? `Restore "${restoreTarget.name}"?` : 'Restore supplier?'}
+        description="This brings the supplier back into the active list."
+        confirmLabel="Restore"
+        tone="primary"
+        pending={restoreBusy}
+        onConfirm={confirmRestore}
       />
     </>
   );

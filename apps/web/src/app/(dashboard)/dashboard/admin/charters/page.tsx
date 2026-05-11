@@ -5,16 +5,23 @@ import { ChartersService } from '@/server/services/charters';
 
 import { resolveTerminology } from '@stockpilot/core';
 
-export default async function ChartersAdminPage() {
+export default async function ChartersAdminPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
   const ctx = await requireOrgContext();
   const supabase = await createClient();
+  const params = await searchParams;
+  const isArchivedView = params.view === 'archived';
+
   const [orgRow, charters] = await Promise.all([
     supabase
       .from('organizations')
       .select('terminology')
       .eq('id', ctx.organizationId)
       .maybeSingle(),
-    (await ChartersService.forCurrentUser()).list(),
+    (await ChartersService.forCurrentUser()).list({ includeArchived: isArchivedView }),
   ]);
 
   const term = resolveTerminology(
@@ -29,11 +36,16 @@ export default async function ChartersAdminPage() {
         </p>
         <h1 className="font-display text-[28px] font-medium tracking-[-0.025em]">{term.charter_plural}</h1>
         <p className="mt-1 text-[13.5px] text-[var(--ed-ink-3)]">
-          Top-level groupings for warehouses. The label here is configurable — if your company calls
-          them &ldquo;Regions&rdquo; or &ldquo;Divisions&rdquo;, change it in organization settings.
+          {isArchivedView
+            ? `${term.charter_plural} you archived. Restore one to bring it back into the active list.`
+            : 'Top-level groupings for warehouses. The label here is configurable — if your company calls them “Regions” or “Divisions”, change it in organization settings.'}
         </p>
       </div>
-      <ChartersManager initial={charters} termSingular={term.charter_singular} />
+      <ChartersManager
+        view={isArchivedView ? 'archived' : 'active'}
+        initial={charters}
+        termSingular={term.charter_singular}
+      />
     </div>
   );
 }

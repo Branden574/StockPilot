@@ -60,3 +60,14 @@ export async function archiveCharterAction(id: string): Promise<ActionResult<voi
     return toResult(e);
   }
 }
+
+export async function restoreCharterAction(id: string): Promise<ActionResult<void>> {
+  try {
+    const svc = await ChartersService.forCurrentUser();
+    await svc.restore(id);
+    revalidatePath('/dashboard/admin/charters');
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}

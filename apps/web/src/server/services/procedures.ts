@@ -55,6 +55,12 @@ interface ListParams {
   warehouseId?: string | null;
   limit?: number;
   offset?: number;
+  /**
+   * Binary toggle for the manager-facing list. When omitted/false, returns
+   * rows where `archived_at IS NULL`. When true, returns ONLY archived rows
+   * (`archived_at IS NOT NULL`).
+   */
+  includeArchived?: boolean;
 }
 
 /**
@@ -98,6 +104,7 @@ export class ProceduresService {
     warehouseId,
     limit = 24,
     offset = 0,
+    includeArchived = false,
   }: ListParams): Promise<{ rows: ProcedureListRow[]; total: number }> {
     const baseSelect = `id, title, description, category_id, authoring_warehouse_id,
         created_by, created_at, updated_at,
@@ -111,8 +118,10 @@ export class ProceduresService {
       let qry = this.ctx.supabase
         .from('procedures')
         .select(baseSelect, { count: 'exact' })
-        .eq('organization_id', this.ctx.organizationId)
-        .is('archived_at', null);
+        .eq('organization_id', this.ctx.organizationId);
+      qry = includeArchived
+        ? qry.not('archived_at', 'is', null)
+        : qry.is('archived_at', null);
       if (categoryId) qry = qry.eq('category_id', categoryId);
       if (warehouseId) qry = qry.eq('authoring_warehouse_id', warehouseId);
       return qry;
@@ -326,6 +335,25 @@ export class ProceduresService {
     if (error) throw new ServiceError('internal_error', error.message);
     void audit({
       event: 'procedure.archived',
+      entityType: 'procedure',
+      entityId: id,
+    });
+  }
+
+  /**
+   * Restore an archived procedure — clears `archived_at` so it reappears
+   * in the active list. Same permission gate as archive() (manager+).
+   */
+  async restore(id: string): Promise<void> {
+    assertPermission(this.ctx, 'categories:manage');
+    const { error } = await this.ctx.supabase
+      .from('procedures')
+      .update({ archived_at: null, updated_by: this.ctx.userId })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+    void audit({
+      event: 'procedure.restored',
       entityType: 'procedure',
       entityId: id,
     });

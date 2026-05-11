@@ -47,7 +47,13 @@ export function ArchiveBundleButton({
         open={open}
         onOpenChange={setOpen}
         title={`Archive "${bundleName}"?`}
-        description="The bundle is hidden from the active list. Existing distributions stay readable and on the audit trail. You can restore the bundle later from the archived view."
+        description={
+          <>
+            The bundle is hidden from the active list. Existing distributions stay readable
+            and on the audit trail. You can restore the bundle later from the{' '}
+            <strong>Archived view</strong>.
+          </>
+        }
         confirmLabel="Archive"
         pending={busy}
         onConfirm={confirmArchive}
