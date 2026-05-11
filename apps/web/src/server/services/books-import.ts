@@ -1,11 +1,17 @@
 import 'server-only';
 
+import {
+  assertWarehouseAccess,
+  forcedWarehouseId,
+  ForbiddenError,
+} from '@/lib/auth/warehouse';
 import { lookupIsbn, normalizeIsbn, type BookMetadata } from '@/lib/books/lookup';
 import { assertSafeFetchUrl, SsrfBlockedError } from '@/lib/ssrf-guard';
 import { generateSku } from '@/lib/utils';
 
-import { InventoryService } from './inventory';
-import { ServiceError, type ServiceContext } from './context';
+import { PLANS, isUnlimited, type PlanId } from '@stockpilot/core';
+
+import { assertPermission, ServiceError, type ServiceContext } from './context';
 
 // Hosts the book-lookup pipeline ever returns thumbnails from. Anything
 // else gets rejected by rehostCover() — a poisoned upstream API
@@ -85,7 +91,18 @@ async function rehostCover(
       sort_order: 0,
       alt: null,
     });
-    if (insertErr) return null;
+    if (insertErr) {
+      // DB insert failed AFTER the cover image was uploaded — remove
+      // the orphan file so we don't accumulate cover-image storage
+      // forever on intermittent RLS / constraint failures. Best-effort;
+      // we still return null to the caller.
+      try {
+        await ctx.supabase.storage.from('item-images').remove([path]);
+      } catch {
+        // swallow — orphan is the lesser problem.
+      }
+      return null;
+    }
     return path;
   } catch {
     // Network/abort/etc. — best-effort, swallow and move on.
@@ -322,6 +339,35 @@ export class BooksImportService {
    * Re-validates each ISBN, runs duplicate checks again, and creates
    * inventory_items for the ones that pass. The preview is advisory —
    * we never trust it as the source of truth at write time.
+   *
+   * Perf shape (vs. the pre-batch version that called inv.create() per row):
+   *
+   *  - Per-batch-INVARIANT checks (permission, plan limit, warehouse
+   *    access, (warehouse, charter) pairing) run ONCE before the loop
+   *    instead of once per row. inv.create() repeats those for every
+   *    call, which is unnecessary here: every row in a single import
+   *    targets the same (warehouseId, charterId) pair and the same user
+   *    so the answers are identical.
+   *
+   *  - All inventory_items rows go in via ONE batch insert; the matching
+   *    stock_movements rows go in via ONE batch insert. For a 100-row
+   *    import that's ~2 DB round trips for writes instead of ~200.
+   *
+   *  - rehostCover (network-bound: fetch upstream cover → upload to our
+   *    bucket) runs in parallel batches of 5 so we use the Vercel
+   *    function's wall-clock for I/O instead of sleeping serially.
+   *    Cover-rehost failures stay non-fatal — the book row already
+   *    exists with the third-party URL on custom_fields.thumbnail_url
+   *    as a fallback.
+   *
+   * Failure contract (changed from the per-row version on purpose):
+   *  - If the BATCH insert hits a constraint violation (duplicate SKU
+   *    across the org, etc.), the whole batch is rejected by Postgres.
+   *    No partial state — the user sees a single error and can fix the
+   *    spreadsheet. This is a better UX than the old "some got created,
+   *    some didn't" partial-import.
+   *  - Per-row preview failures (invalid_isbn, lookup_failed) still get
+   *    aggregated into result.failed[] as before.
    */
   async execute(
     rawIsbns: string[],
@@ -346,8 +392,19 @@ export class BooksImportService {
       }
     }
 
-    const inv = new InventoryService(this.ctx);
     const result: BulkImportResult = { created: 0, skipped: 0, failed: [] };
+
+    // -- Phase 1: classify each preview row, accumulate the ready ones. ----
+    // Per-row preview failures (invalid / lookup_failed / missing title) and
+    // duplicates resolve to result.failed[] / result.skipped here without
+    // touching the DB.
+    interface ReadyRow {
+      isbn: string;
+      title: string;
+      customFields: Record<string, unknown>;
+      thumbnailUrl: string | null;
+    }
+    const readyRows: ReadyRow[] = [];
 
     for (const row of preview.rows) {
       if (row.status === 'duplicate_in_db' || row.status === 'duplicate_in_list') {
@@ -366,59 +423,207 @@ export class BooksImportService {
         continue;
       }
 
+      const customFields: Record<string, unknown> = {};
+      if (row.metadata.authors.length > 0)
+        customFields.author = row.metadata.authors.join(', ');
+      if (row.metadata.publisher) customFields.publisher = row.metadata.publisher;
+      if (row.metadata.publishedDate)
+        customFields.published_date = row.metadata.publishedDate;
+      if (row.metadata.grade) customFields.book_grade = row.metadata.grade;
+      // Keep the third-party URL on custom_fields as a backup; the primary
+      // surface for image rendering becomes the rehosted copy in our own
+      // item-images bucket (Phase 4).
+      if (row.metadata.thumbnailUrl)
+        customFields.thumbnail_url = row.metadata.thumbnailUrl;
+
+      readyRows.push({
+        isbn: row.isbn,
+        title: row.metadata.title,
+        customFields,
+        thumbnailUrl: row.metadata.thumbnailUrl,
+      });
+    }
+
+    if (readyRows.length === 0) return result;
+
+    // -- Phase 2: hoist invariant checks ONCE for the whole batch. ---------
+    // These run per-row inside inv.create() in the legacy path; they don't
+    // need to. The (user, warehouse, charter) tuple is fixed for the whole
+    // import.
+    assertPermission(this.ctx, 'items:create');
+
+    const forced = await forcedWarehouseId(this.ctx);
+    const resolvedWarehouseId = forced ?? options.warehouseId;
+    if (!resolvedWarehouseId) {
+      throw new ServiceError(
+        'validation_error',
+        'A warehouse must be selected before creating an item.',
+      );
+    }
+    if (!forced) {
+      // Manager/admin path: validate write access to the chosen warehouse.
       try {
-        const customFields: Record<string, unknown> = {};
-        if (row.metadata.authors.length > 0)
-          customFields.author = row.metadata.authors.join(', ');
-        if (row.metadata.publisher) customFields.publisher = row.metadata.publisher;
-        if (row.metadata.publishedDate)
-          customFields.published_date = row.metadata.publishedDate;
-        if (row.metadata.grade) customFields.book_grade = row.metadata.grade;
-        // Keep the third-party URL in custom_fields as a backup; the
-        // primary surface for image rendering becomes the rehosted
-        // copy in our own item-images bucket (below).
-        if (row.metadata.thumbnailUrl)
-          customFields.thumbnail_url = row.metadata.thumbnailUrl;
-
-        const created = (await inv.create({
-          name: row.metadata.title,
-          sku: generateSku(row.metadata.title),
-          barcode: row.isbn,
-          itemType: 'book',
-          quantityOnHand: defaultQty,
-          unitCost: 0,
-          retailPrice: 0,
-          warehouseId: options.warehouseId,
-          charterId: options.charterId ?? null,
-          unitOfMeasure: 'unit',
-          customFields,
-          status: 'active',
-          reorderPoint: 0,
-          reorderQuantity: 0,
-          trackingType: 'none',
-        })) as { id?: string } | null;
-
-        // Re-host the cover image in our bucket. Best-effort: if it
-        // fails (cover URL unreachable, storage quota, etc.) the book
-        // is still created, and the inventory list falls back to the
-        // custom_fields.thumbnail_url we just stashed.
-        if (created?.id && row.metadata.thumbnailUrl) {
-          await rehostCover(this.ctx, created.id, row.metadata.thumbnailUrl);
-        }
-
-        result.created += 1;
+        await assertWarehouseAccess(resolvedWarehouseId, 'write', this.ctx);
       } catch (err) {
-        if (err instanceof ServiceError && err.code === 'conflict') {
-          // Race: someone else inserted this ISBN between preview and
-          // execute. Treat as skipped, not an error.
-          result.skipped += 1;
-        } else {
-          result.failed.push({
-            isbn: row.isbn,
-            reason: err instanceof Error ? err.message : 'create failed',
-          });
+        if (err instanceof ForbiddenError) {
+          throw new ServiceError('forbidden', err.message);
         }
+        throw err;
       }
+    }
+
+    const resolvedCharterId = options.charterId ?? null;
+    if (resolvedCharterId) {
+      const { data: pair } = await this.ctx.supabase
+        .from('warehouse_charters')
+        .select('charter_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('warehouse_id', resolvedWarehouseId)
+        .eq('charter_id', resolvedCharterId)
+        .maybeSingle();
+      if (!pair) {
+        throw new ServiceError(
+          'validation_error',
+          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the item as Generic.',
+        );
+      }
+    }
+
+    // Plan-limit gate. The per-row assertPlanLimit() only checks
+    // `currentCount >= limit` — fine for single inserts, wrong for a
+    // 100-row batch since it never accounts for what we're about to add.
+    // Do the math once with `currentCount + batchSize` and reject upfront
+    // so we don't half-insert and leave the org pinned at the limit.
+    const { data: orgRow } = await this.ctx.supabase
+      .from('organizations')
+      .select('plan')
+      .eq('id', this.ctx.organizationId)
+      .single();
+    const planId: PlanId = ((orgRow?.plan as PlanId | undefined) ?? 'free') as PlanId;
+    const itemLimit = PLANS[planId].limits.items;
+    if (!isUnlimited(itemLimit)) {
+      const { count } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', this.ctx.organizationId)
+        .is('deleted_at', null);
+      const currentCount = count ?? 0;
+      if (currentCount + readyRows.length > itemLimit) {
+        throw new ServiceError(
+          'plan_limit_exceeded',
+          `Importing ${readyRows.length} books would exceed your ${PLANS[planId].name} plan limit of ${itemLimit} items (currently at ${currentCount}). Upgrade your plan or import fewer books.`,
+          { plan: planId, limit: itemLimit, resource: 'items', currentCount, requested: readyRows.length },
+        );
+      }
+    }
+
+    // -- Phase 3: build all payloads in JS, then ONE batch insert. ---------
+    // SKUs are generated locally (same as inv.create() does). Duplicate-SKU
+    // collisions inside the batch itself or against existing rows surface
+    // as a single 23505 from Postgres, which we translate to a clear
+    // "import failed on row X" message below.
+    const itemInserts = readyRows.map((r) => ({
+      organization_id: this.ctx.organizationId,
+      warehouse_id: resolvedWarehouseId,
+      charter_id: resolvedCharterId,
+      sku: generateSku(r.title),
+      barcode: r.isbn,
+      name: r.title,
+      description: null,
+      category_id: null,
+      supplier_id: null,
+      primary_location_id: null,
+      unit_cost: 0,
+      retail_price: 0,
+      quantity_on_hand: defaultQty,
+      reorder_point: 0,
+      reorder_quantity: 0,
+      unit_of_measure: 'unit',
+      bin_location: null,
+      tracking_type: 'none' as const,
+      item_type: 'book' as const,
+      custom_fields: r.customFields,
+      status: 'active' as const,
+      created_by: this.ctx.userId,
+      updated_by: this.ctx.userId,
+    }));
+
+    const { data: insertedRaw, error: insertErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .insert(itemInserts)
+      .select('id, barcode');
+
+    if (insertErr) {
+      if (insertErr.code === '23505') {
+        // Unique violation — typically duplicate SKU/barcode across the
+        // org. Postgres doesn't tell us WHICH row caused it on a batch
+        // insert, but the message usually carries the conflicting value.
+        // Surface a structured, user-actionable error.
+        throw new ServiceError(
+          'conflict',
+          `Import rejected: at least one book conflicts with an existing item (duplicate SKU or barcode). No books were imported. ${insertErr.message}`,
+          { batchSize: readyRows.length, postgresMessage: insertErr.message },
+        );
+      }
+      throw new ServiceError('internal_error', insertErr.message);
+    }
+
+    const inserted = (insertedRaw ?? []) as Array<{ id: string; barcode: string }>;
+    result.created = inserted.length;
+
+    // Batch stock_movements for rows with a positive starting quantity.
+    if (defaultQty > 0 && inserted.length > 0) {
+      const movementInserts = inserted.map((row) => ({
+        organization_id: this.ctx.organizationId,
+        item_id: row.id,
+        movement_type: 'initial' as const,
+        quantity_change: defaultQty,
+        previous_quantity: 0,
+        new_quantity: defaultQty,
+        user_id: this.ctx.userId,
+        to_location_id: null,
+      }));
+      const { error: movementErr } = await this.ctx.supabase
+        .from('stock_movements')
+        .insert(movementInserts);
+      if (movementErr) {
+        // The inventory rows are already in. Don't fail the whole import
+        // for an audit-trail row failure — log via the failed[] channel so
+        // the UI surfaces it, but keep result.created as-is.
+        result.failed.push({
+          isbn: 'batch:stock_movements',
+          reason: `Initial stock movement insert failed: ${movementErr.message}`,
+        });
+      }
+    }
+
+    // -- Phase 4: rehost cover images in parallel, capped at 5 in flight. -
+    // These are network-bound (fetch from Google/OL/LoC, upload to Storage)
+    // and independent per book. Running them serially is what made the
+    // legacy import blow past Vercel Hobby's 10s timeout. Failures are
+    // non-fatal — the book row already exists with custom_fields.thumbnail_url
+    // as a fallback for the inventory list image.
+    const coverTargets = inserted
+      .map((ins) => {
+        const ready = readyRows.find((r) => r.isbn === ins.barcode);
+        if (!ready || !ready.thumbnailUrl) return null;
+        return { itemId: ins.id, url: ready.thumbnailUrl };
+      })
+      .filter((x): x is { itemId: string; url: string } => x !== null);
+
+    if (coverTargets.length > 0) {
+      const COVER_CONCURRENCY = 5;
+      await runInBatches(coverTargets, COVER_CONCURRENCY, async (target) => {
+        // rehostCover already swallows all errors and returns null on
+        // failure — this won't throw, but wrap in case the contract
+        // changes later. Don't surface cover failures in result.failed
+        // since they're an enhancement, not a missing book.
+        try {
+          await rehostCover(this.ctx, target.itemId, target.url);
+        } catch {
+          // best-effort
+        }
+      });
     }
 
     return result;
@@ -528,4 +733,27 @@ function tally(rows: BulkImportPreviewRow[]): BulkImportPreview['totals'] {
     else if (r.status === 'lookup_failed') t.lookupFailed += 1;
   }
   return t;
+}
+
+/**
+ * Run `fn` over `items` with at most `batchSize` calls in flight at a time.
+ * Used to parallelize cover rehosting (each rehost is ~1 outbound fetch +
+ * 1 storage upload + 1 row insert; doing them sequentially is what tipped
+ * 100-book imports past Vercel's function timeout).
+ *
+ * Concurrency is bounded so we don't saturate the function's outbound socket
+ * pool or get rate-limited by Google Books / Open Library.
+ */
+async function runInBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(fn));
+    results.push(...batchResults);
+  }
+  return results;
 }

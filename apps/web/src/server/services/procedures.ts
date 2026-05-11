@@ -290,12 +290,15 @@ export class ProceduresService {
       .select('id')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({
-      event: 'procedure.created',
-      entityType: 'procedure',
-      entityId: (data as { id: string }).id,
-      after: { title: input.title, category_id: input.categoryId ?? null },
-    });
+    void audit(
+      {
+        event: 'procedure.created',
+        entityType: 'procedure',
+        entityId: (data as { id: string }).id,
+        after: { title: input.title, category_id: input.categoryId ?? null },
+      },
+      this.ctx,
+    );
     return { id: (data as { id: string }).id };
   }
 
@@ -316,12 +319,15 @@ export class ProceduresService {
       .select('id')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({
-      event: 'procedure.updated',
-      entityType: 'procedure',
-      entityId: id,
-      after: patch,
-    });
+    void audit(
+      {
+        event: 'procedure.updated',
+        entityType: 'procedure',
+        entityId: id,
+        after: patch,
+      },
+      this.ctx,
+    );
     return { id: (data as { id: string }).id };
   }
 
@@ -333,11 +339,14 @@ export class ProceduresService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({
-      event: 'procedure.archived',
-      entityType: 'procedure',
-      entityId: id,
-    });
+    void audit(
+      {
+        event: 'procedure.archived',
+        entityType: 'procedure',
+        entityId: id,
+      },
+      this.ctx,
+    );
   }
 
   /**
@@ -352,10 +361,13 @@ export class ProceduresService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({
-      event: 'procedure.restored',
-      entityType: 'procedure',
-      entityId: id,
-    });
+    void audit(
+      {
+        event: 'procedure.restored',
+        entityType: 'procedure',
+        entityId: id,
+      },
+      this.ctx,
+    );
   }
 }

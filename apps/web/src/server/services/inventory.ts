@@ -374,7 +374,7 @@ export class InventoryService {
     // managers/admins can only move it if they have write access to both.
     const current = await this.get(id);
     const currentWarehouseId = (current as { warehouse_id?: string | null }).warehouse_id ?? null;
-    if (currentWarehouseId) await assertWarehouseAccess(currentWarehouseId, 'write');
+    if (currentWarehouseId) await assertWarehouseAccess(currentWarehouseId, 'write', this.ctx);
 
     const updates: Record<string, unknown> = { updated_by: this.ctx.userId };
     if (patch.name !== undefined) updates.name = patch.name;
@@ -396,7 +396,7 @@ export class InventoryService {
     if (patch.customFields !== undefined) updates.custom_fields = patch.customFields;
 
     if (patch.warehouseId !== undefined && patch.warehouseId !== currentWarehouseId) {
-      const forced = await forcedWarehouseId();
+      const forced = await forcedWarehouseId(this.ctx);
       if (forced) {
         throw new ServiceError(
           'forbidden',
@@ -406,7 +406,7 @@ export class InventoryService {
       if (!patch.warehouseId) {
         throw new ServiceError('validation_error', 'Item must remain assigned to a warehouse.');
       }
-      await assertWarehouseAccess(patch.warehouseId, 'write');
+      await assertWarehouseAccess(patch.warehouseId, 'write', this.ctx);
       updates.warehouse_id = patch.warehouseId;
     }
 
@@ -448,7 +448,7 @@ export class InventoryService {
     assertPermission(this.ctx, 'items:update');
     const current = await this.get(id);
     const wh = (current as { warehouse_id?: string | null }).warehouse_id ?? null;
-    if (wh) await assertWarehouseAccess(wh, 'write');
+    if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
     const { error } = await this.ctx.supabase
       .from('inventory_items')
       .update({ status: 'archived', updated_by: this.ctx.userId })
@@ -558,7 +558,7 @@ export class InventoryService {
     assertPermission(this.ctx, 'items:delete');
     const current = await this.get(id);
     const wh = (current as { warehouse_id?: string | null }).warehouse_id ?? null;
-    if (wh) await assertWarehouseAccess(wh, 'write');
+    if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
     const { error } = await this.ctx.supabase
       .from('inventory_items')
       .update({ deleted_at: new Date().toISOString(), updated_by: this.ctx.userId })

@@ -240,12 +240,15 @@ export class TeamService {
       html: inviteEmailHtml({ organizationName, inviterName, acceptUrl }),
       text: inviteEmailText({ organizationName, inviterName, acceptUrl }),
     });
-    await audit({
-      event: 'user.invited',
-      entityType: 'org_invite',
-      entityId: invite.id as string,
-      after: { resent: true, email: invite.email },
-    });
+    await audit(
+      {
+        event: 'user.invited',
+        entityType: 'org_invite',
+        entityId: invite.id as string,
+        after: { resent: true, email: invite.email },
+      },
+      this.ctx,
+    );
     return { acceptUrl };
   }
 
@@ -280,13 +283,16 @@ export class TeamService {
       .eq('id', memberId);
     if (error) throw new ServiceError('internal_error', error.message);
 
-    await audit({
-      event: 'user.role.changed',
-      entityType: 'organization_member',
-      entityId: memberId,
-      before: { role: target.role },
-      after: { role },
-    });
+    await audit(
+      {
+        event: 'user.role.changed',
+        entityType: 'organization_member',
+        entityId: memberId,
+        before: { role: target.role },
+        after: { role },
+      },
+      this.ctx,
+    );
   }
 
   async removeMember(memberId: string) {
@@ -315,12 +321,15 @@ export class TeamService {
       .eq('id', memberId);
     if (error) throw new ServiceError('internal_error', error.message);
 
-    await audit({
-      event: 'user.deactivated',
-      entityType: 'organization_member',
-      entityId: memberId,
-      before: { user_id: target.user_id, role: target.role },
-    });
+    await audit(
+      {
+        event: 'user.deactivated',
+        entityType: 'organization_member',
+        entityId: memberId,
+        before: { user_id: target.user_id, role: target.role },
+      },
+      this.ctx,
+    );
   }
 }
 

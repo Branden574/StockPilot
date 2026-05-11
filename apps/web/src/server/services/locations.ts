@@ -85,7 +85,7 @@ export class LocationsService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({ event: 'location.archived', entityType: 'location', entityId: id });
+    void audit({ event: 'location.archived', entityType: 'location', entityId: id }, this.ctx);
   }
 
   /**
@@ -100,6 +100,6 @@ export class LocationsService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit({ event: 'location.restored', entityType: 'location', entityId: id });
+    void audit({ event: 'location.restored', entityType: 'location', entityId: id }, this.ctx);
   }
 }

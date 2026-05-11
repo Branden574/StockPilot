@@ -128,12 +128,15 @@ export class CycleCountsService {
         'Cycle count not found, or its assignee changed since you opened this page.',
       );
     }
-    await audit({
-      event: 'cycle_count.assigned',
-      entityType: 'cycle_count',
-      entityId: id,
-      after: { assigned_to: assignedTo },
-    });
+    await audit(
+      {
+        event: 'cycle_count.assigned',
+        entityType: 'cycle_count',
+        entityId: id,
+        after: { assigned_to: assignedTo },
+      },
+      this.ctx,
+    );
     return data as unknown as CycleCountRow;
   }
 
@@ -227,15 +230,18 @@ export class CycleCountsService {
       .insert(linesPayload);
     if (linesErr) throw new ServiceError('internal_error', linesErr.message);
 
-    await audit({
-      event: 'cycle_count.started',
-      entityType: 'cycle_count',
-      entityId: cc.id as string,
-      after: {
-        warehouseId: input.warehouseId,
-        lineCount: linesPayload.length,
+    await audit(
+      {
+        event: 'cycle_count.started',
+        entityType: 'cycle_count',
+        entityId: cc.id as string,
+        after: {
+          warehouseId: input.warehouseId,
+          lineCount: linesPayload.length,
+        },
       },
-    });
+      this.ctx,
+    );
 
     return { id: cc.id as string, lineCount: linesPayload.length };
   }
@@ -290,11 +296,14 @@ export class CycleCountsService {
       .eq('id', id)
       .eq('status', 'in_progress');
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({
-      event: 'cycle_count.canceled',
-      entityType: 'cycle_count',
-      entityId: id,
-    });
+    await audit(
+      {
+        event: 'cycle_count.canceled',
+        entityType: 'cycle_count',
+        entityId: id,
+      },
+      this.ctx,
+    );
   }
 
   /**
@@ -308,11 +317,14 @@ export class CycleCountsService {
       p_cycle_count_id: id,
     });
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({
-      event: 'cycle_count.posted',
-      entityType: 'cycle_count',
-      entityId: id,
-    });
+    await audit(
+      {
+        event: 'cycle_count.posted',
+        entityType: 'cycle_count',
+        entityId: id,
+      },
+      this.ctx,
+    );
     return data as unknown as CycleCountRow;
   }
 }

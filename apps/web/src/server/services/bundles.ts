@@ -383,16 +383,19 @@ export class BundlesService {
       .insert(componentsPayload);
     if (cErr) throw new ServiceError('internal_error', cErr.message);
 
-    await audit({
-      event: 'bundle.created',
-      entityType: 'bundle',
-      entityId: bundle.id as string,
-      after: {
-        name: input.name,
-        componentCount: componentsPayload.length,
-        preassemblyEnabled: input.preassemblyEnabled ?? false,
+    await audit(
+      {
+        event: 'bundle.created',
+        entityType: 'bundle',
+        entityId: bundle.id as string,
+        after: {
+          name: input.name,
+          componentCount: componentsPayload.length,
+          preassemblyEnabled: input.preassemblyEnabled ?? false,
+        },
       },
-    });
+      this.ctx,
+    );
 
     return this.get(bundle.id as string);
   }
@@ -451,12 +454,15 @@ export class BundlesService {
       if (iErr) throw new ServiceError('internal_error', iErr.message);
     }
 
-    await audit({
-      event: 'bundle.updated',
-      entityType: 'bundle',
-      entityId: id,
-      after: patch,
-    });
+    await audit(
+      {
+        event: 'bundle.updated',
+        entityType: 'bundle',
+        entityId: id,
+        after: patch,
+      },
+      this.ctx,
+    );
 
     return this.get(id);
   }
@@ -473,7 +479,7 @@ export class BundlesService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({ event: 'bundle.archived', entityType: 'bundle', entityId: id });
+    await audit({ event: 'bundle.archived', entityType: 'bundle', entityId: id }, this.ctx);
   }
 
   /**
@@ -493,7 +499,7 @@ export class BundlesService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({ event: 'bundle.restored', entityType: 'bundle', entityId: id });
+    await audit({ event: 'bundle.restored', entityType: 'bundle', entityId: id }, this.ctx);
   }
 
   async setActive(id: string, isActive: boolean): Promise<void> {

@@ -161,20 +161,20 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     };
   }
 
-  // Cookie path (existing web flow).
+  // Cookie path (existing web flow). Mirrors the bearer path's
+  // default_organization_id preference via pickActiveMembership so a web
+  // session with multiple memberships lands on the user's intended org
+  // (parity with loadSessionAndContext used by RSC). An `X-Organization-Id`
+  // header is honored if present so a cookie-authed client can request a
+  // specific org (membership is verified before use).
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data: member } = await supabase
-    .from('organization_members')
-    .select('organization_id, role')
-    .eq('user_id', user.id)
-    .not('accepted_at', 'is', null)
-    .limit(1)
-    .maybeSingle();
+  const requestedOrgId = req?.headers.get('x-organization-id') ?? null;
+  const member = await pickActiveMembership(supabase, user.id, requestedOrgId);
   if (!member) return null;
 
   const mfa = await resolveApiMfaState(

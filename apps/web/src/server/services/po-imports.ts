@@ -130,6 +130,19 @@ export class PoImportsService {
   }): Promise<{ id: string; duplicateOf: string | null }> {
     assertPermission(this.ctx, 'purchase_orders:manage');
 
+    // Defense-in-depth: the action schema validates storagePath as a
+    // bare string. The presign step builds a per-org path, but the
+    // client could call recordPoUploadAction with someone else's path.
+    // Storage RLS still refuses cross-org downloads, but a pointer row
+    // pointing at another org's file has no business existing.
+    const requiredPrefix = `${this.ctx.organizationId}/`;
+    if (!input.storagePath.startsWith(requiredPrefix)) {
+      throw new ServiceError(
+        'validation_error',
+        'Invalid storage path — wrong org prefix.',
+      );
+    }
+
     // Duplicate check: same org + same checksum + status not in failed/canceled/duplicate.
     const { data: dup } = await this.ctx.supabase
       .from('po_imports')
@@ -158,12 +171,15 @@ export class PoImportsService {
       .select('id')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({
-      event: 'po_import.uploaded',
-      entityType: 'po_import',
-      entityId: data.id as string,
-      after: { fileName: input.fileName, sha256: input.sha256 },
-    });
+    await audit(
+      {
+        event: 'po_import.uploaded',
+        entityType: 'po_import',
+        entityId: data.id as string,
+        after: { fileName: input.fileName, sha256: input.sha256 },
+      },
+      this.ctx,
+    );
     return { id: data.id as string, duplicateOf: null };
   }
 
@@ -275,6 +291,15 @@ export class PoImportsService {
       .select('id')
       .single();
     if (impErr || !imp) {
+      // The DB row insert failed AFTER we already uploaded the scan
+      // bytes to the po-imports bucket. Remove the orphaned file
+      // best-effort so we don't accumulate storage cost over time.
+      // Re-throw with the original error regardless of cleanup result.
+      try {
+        await admin.storage.from('po-imports').remove([storagePath]);
+      } catch {
+        // swallow — original DB error is the one the user needs to see.
+      }
       throw new ServiceError(
         'internal_error',
         `Could not record the scan: ${impErr?.message ?? 'unknown'}`,
@@ -334,19 +359,22 @@ export class PoImportsService {
       if (linesErr) throw new ServiceError('internal_error', linesErr.message);
     }
 
-    await audit({
-      event: 'po_import.uploaded',
-      entityType: 'po_import',
-      entityId: importId,
-      after: {
-        sourceType: 'scan',
-        fileName: baseFileName,
-        sha256,
-        overallConfidence: extracted.overallConfidence,
-        lineCount: extracted.lines.length,
-        lowConfidenceLines: lowConfidenceCount,
+    await audit(
+      {
+        event: 'po_import.uploaded',
+        entityType: 'po_import',
+        entityId: importId,
+        after: {
+          sourceType: 'scan',
+          fileName: baseFileName,
+          sha256,
+          overallConfidence: extracted.overallConfidence,
+          lineCount: extracted.lines.length,
+          lowConfidenceLines: lowConfidenceCount,
+        },
       },
-    });
+      this.ctx,
+    );
 
     return { id: importId, duplicateOf: null, lowConfidenceLines: lowConfidenceCount };
   }
@@ -398,12 +426,15 @@ export class PoImportsService {
         .from('po_imports')
         .update({ status: 'failed', parse_error: msg })
         .eq('id', id);
-      await audit({
-        event: 'po_import.failed',
-        entityType: 'po_import',
-        entityId: id,
-        after: { reason: msg },
-      });
+      await audit(
+        {
+          event: 'po_import.failed',
+          entityType: 'po_import',
+          entityId: id,
+          after: { reason: msg },
+        },
+        this.ctx,
+      );
       return;
     }
 
@@ -481,12 +512,15 @@ export class PoImportsService {
       })
       .eq('id', id);
 
-    await audit({
-      event: 'po_import.parsed',
-      entityType: 'po_import',
-      entityId: id,
-      after: { lineCount: linesPayload.length, status: newStatus },
-    });
+    await audit(
+      {
+        event: 'po_import.parsed',
+        entityType: 'po_import',
+        entityId: id,
+        after: { lineCount: linesPayload.length, status: newStatus },
+      },
+      this.ctx,
+    );
   }
 
   /**
@@ -596,16 +630,19 @@ export class PoImportsService {
       })
       .eq('id', input.poImportId);
 
-    await audit({
-      event: 'po_import.approved',
-      entityType: 'po_import',
-      entityId: input.poImportId,
-      after: {
-        poId: po.id,
-        lineCount: inventoryLines.length,
-        warehouseId: input.warehouseId,
+    await audit(
+      {
+        event: 'po_import.approved',
+        entityType: 'po_import',
+        entityId: input.poImportId,
+        after: {
+          poId: po.id,
+          lineCount: inventoryLines.length,
+          warehouseId: input.warehouseId,
+        },
       },
-    });
+      this.ctx,
+    );
 
     return { poId: po.id as string };
   }
@@ -660,10 +697,13 @@ export class PoImportsService {
       .eq('id', id)
       .not('status', 'in', '(approved,canceled)');
     if (error) throw new ServiceError('internal_error', error.message);
-    await audit({
-      event: 'po_import.canceled',
-      entityType: 'po_import',
-      entityId: id,
-    });
+    await audit(
+      {
+        event: 'po_import.canceled',
+        entityType: 'po_import',
+        entityId: id,
+      },
+      this.ctx,
+    );
   }
 }

@@ -95,12 +95,15 @@ export class VendorItemMappingsService {
       id = data.id as string;
     }
 
-    await audit({
-      event: 'vendor_item_mapping.upserted',
-      entityType: 'vendor_item_mapping',
-      entityId: id,
-      after: input,
-    });
+    await audit(
+      {
+        event: 'vendor_item_mapping.upserted',
+        entityType: 'vendor_item_mapping',
+        entityId: id,
+        after: input,
+      },
+      this.ctx,
+    );
     return { id };
   }
 
