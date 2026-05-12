@@ -206,6 +206,7 @@ export default async function BooksPage({
             items={itemsWithImages}
             total={inventory.total}
             lookups={lookups}
+            canCreate={hasPermission(sessionCtx.role, 'items:create')}
             categories={categories.map((c) => ({
               id: c.id as string,
               name: c.name as string,

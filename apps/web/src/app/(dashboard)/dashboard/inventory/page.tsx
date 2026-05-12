@@ -227,6 +227,7 @@ export default async function InventoryPage({
             items={itemsWithImages}
             total={inventory.total}
             lookups={lookups}
+            canCreate={canCreate}
             categories={categories.map((c) => ({
               id: c.id as string,
               name: c.name as string,
