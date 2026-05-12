@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
 
-import { isAdminRole } from '@stockpilot/core';
+import { hasPermission, isAdminRole } from '@stockpilot/core';
 
 const BASE_SECTIONS = [
   { href: '/dashboard/settings/organization', title: 'Organization', description: 'Name, labels for charters and warehouses.' },
@@ -13,15 +13,30 @@ const BASE_SECTIONS = [
   { href: '/dashboard/settings/billing', title: 'Billing', description: 'Plan, invoices, payment method.' },
 ];
 
+// Manager-and-above sections. Gated by hasPermission('orders:approve')
+// so warehouse-scoped members don't see tiles they can't actually use —
+// the underlying page redirects them anyway, but the tile is the
+// discoverable surface.
+const MANAGER_SECTIONS = [
+  {
+    href: '/dashboard/settings/public-requests',
+    title: 'Public requests',
+    description:
+      'Shareable link external partners use to submit order requests — no account required.',
+  },
+];
+
 const ADMIN_SECTIONS = [
   { href: '/dashboard/settings/audit', title: 'Audit log', description: 'Every privileged action across the org.' },
 ];
 
 export default async function SettingsPage() {
   const ctx = await requireOrgContext();
-  const sections = isAdminRole(ctx.role)
-    ? [...BASE_SECTIONS, ...ADMIN_SECTIONS]
-    : BASE_SECTIONS;
+  const sections = [
+    ...BASE_SECTIONS,
+    ...(hasPermission(ctx.role, 'orders:approve') ? MANAGER_SECTIONS : []),
+    ...(isAdminRole(ctx.role) ? ADMIN_SECTIONS : []),
+  ];
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
       <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
