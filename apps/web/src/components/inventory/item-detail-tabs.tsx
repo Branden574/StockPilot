@@ -65,7 +65,7 @@ export function ItemDetailTabs({ activeTab }: { activeTab: DetailTabId }) {
                 <span
                   aria-hidden
                   className={cn(
-                    'absolute inset-x-2 -bottom-px h-0.5 rounded-full transition-colors',
+                    'absolute inset-x-2 bottom-0 h-0.5 rounded-full transition-colors',
                     isActive ? 'bg-foreground' : 'bg-transparent',
                   )}
                 />
