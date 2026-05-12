@@ -117,11 +117,14 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab }: Ite
   return (
     <div className="container mx-auto max-w-5xl px-4 pb-6 sm:px-6 sm:pb-8">
       {/* ── Sticky header ─────────────────────────────────────────────
-          Pins to top-14 so it tucks directly under the dashboard topbar
-          (which is height 56px / top-0). Same density as before — no
-          shrinking on scroll; just a stable anchor for the item name,
-          status, and primary actions on long pages. */}
-      <div className="bg-background sticky top-14 z-20 -mx-4 px-4 pt-4 sm:-mx-6 sm:px-6">
+          Pins to top-0 of the scrolling <main> in DashboardShell.
+          The dashboard Topbar lives OUTSIDE that scroll container
+          (sibling above <main>), so the sticky should pin flush
+          against main's top edge — which is already right under the
+          topbar visually. Using top-14 here would double-count the
+          topbar height and produce a 56px gap where scrolled content
+          leaks through above the sticky. */}
+      <div className="bg-background border-border sticky top-0 z-20 -mx-4 border-b px-4 py-4 sm:-mx-6 sm:px-6">
         <div className="mb-3">
           <Link
             href={backHref}

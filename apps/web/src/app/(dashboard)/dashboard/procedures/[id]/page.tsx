@@ -40,7 +40,7 @@ export default async function ProcedureDetailPage({
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="sticky top-14 z-20 -mx-4 mb-6 border-b bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
+      <div className="sticky top-0 z-20 -mx-4 mb-6 border-b bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
         <div className="flex flex-wrap items-center gap-3">
           <Button asChild variant="ghost" size="sm">
             <Link href="/dashboard/procedures">
