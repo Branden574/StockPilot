@@ -82,6 +82,13 @@ interface InventoryTableProps {
    * the Books tab; the default Items tab leaves the columns out.
    */
   showBookFields?: boolean;
+  /**
+   * Whether the current viewer can create new items. Drives the
+   * "+ New item/book" button that sits at the bottom right of the
+   * table next to pagination. Page passes this from a
+   * hasPermission(ctx.role, 'items:create') check.
+   */
+  canCreate?: boolean;
   /** 1-based current page. Default 1 — pagination UI hides if total ≤ pageSize. */
   page?: number;
   /** How many rows per page. Drives the page count math. */
@@ -210,6 +217,7 @@ export function InventoryTable({
   rowLinkPrefix = '/dashboard/inventory',
   basePath = '/dashboard/inventory',
   showBookFields = false,
+  canCreate = true,
   page = 1,
   pageSize = 50,
   trends,
@@ -673,11 +681,13 @@ export function InventoryTable({
         ) : (
           <span />
         )}
-        <Button asChild>
-          <Link href={`${basePath}/new`}>
-            + New {showBookFields ? 'book' : 'item'}
-          </Link>
-        </Button>
+        {canCreate && (
+          <Button asChild>
+            <Link href={`${basePath}/new`}>
+              + New {showBookFields ? 'book' : 'item'}
+            </Link>
+          </Button>
+        )}
       </div>
     </div>
   );
