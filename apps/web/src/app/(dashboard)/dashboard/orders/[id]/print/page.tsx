@@ -119,21 +119,41 @@ export default async function OrderPrintPage({
       <AutoPrint />
       <style>{`
         @media print {
-          /* Hide dashboard chrome — Sidebar renders as <aside>, Topbar as
-             <header>, both inside the dashboard shell. Inline skip-link
-             is hidden too. */
+          /* Browsers hide these by default, but we override display
+             below to strip the shell's flex constraints — that override
+             would otherwise make <script>'s source text render as
+             visible content on the printed page. Force them back to
+             none. */
+          script, style, link, noscript, template { display: none !important; }
+
+          /* Hide dashboard chrome — Sidebar renders as <aside>, Topbar
+             as <header>, plus the keyboard skip link. */
           aside, header { display: none !important; }
           a[href="#main-content"] { display: none !important; }
 
-          /* Strip the shell's flex/height constraints so the print page
-             flows naturally onto paper. */
-          html, body, body > * , main, main > div {
+          /* Reset document-level paint. */
+          html, body {
             background: white !important;
             color: black !important;
             height: auto !important;
+            overflow: visible !important;
+          }
+
+          /* Strip the dashboard shell's flex / h-dvh / overflow-hidden
+             constraints so the print page flows naturally onto paper.
+             We target the wrapper chain explicitly instead of body > *
+             so we don't accidentally hit <script> / <style> tags Next
+             inlines as body children. */
+          body > div,
+          body > div > div,
+          main,
+          main > div {
+            display: block !important;
+            height: auto !important;
             max-height: none !important;
             overflow: visible !important;
-            display: block !important;
+            background: white !important;
+            color: black !important;
           }
 
           .print-slip { box-shadow: none !important; border: none !important; }
