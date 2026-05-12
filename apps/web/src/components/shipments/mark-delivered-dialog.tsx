@@ -150,10 +150,15 @@ export function MarkDeliveredDialog({
                 <Eraser className="h-3 w-3" /> Clear
               </button>
             </div>
+            {/* No bg-* override here — the SignaturePad component ships
+                with a light paper-colored canvas (var(--ed-paper)) and
+                near-black strokes by design, so signatures stay legible
+                in BOTH light and dark mode. Overriding bg to
+                bg-background in dark mode painted strokes black-on-
+                black, which is what we hit first. */}
             <SignaturePad
               ref={padRef}
               onChange={(empty) => setPadEmpty(empty)}
-              className="border-border bg-background rounded-md border"
             />
             <p className="text-muted-foreground text-xs">
               Hand the phone to the receiver to sign, or leave blank for
