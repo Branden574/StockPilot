@@ -102,12 +102,17 @@ export async function markShipmentDeliveredAction(args: {
   id: string;
   receiverName: string;
   deliveredAt?: string | null;
+  /** Optional PNG data URL captured from the in-dialog signature pad.
+   * When present it lands in signature_image_url (same column the
+   * public QR / /s/[token] flow writes to). */
+  signatureDataUrl?: string | null;
 }): Promise<ActionResult<void>> {
   try {
     const svc = await ShipmentsService.forCurrentUser();
     await svc.markDelivered(args.id, {
       receiverName: args.receiverName,
       deliveredAt: args.deliveredAt ?? null,
+      signatureDataUrl: args.signatureDataUrl ?? null,
     });
     revalidatePath('/dashboard/shipments');
     revalidatePath(`/dashboard/shipments/${args.id}`);

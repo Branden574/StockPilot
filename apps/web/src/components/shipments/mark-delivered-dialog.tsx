@@ -1,10 +1,14 @@
 'use client';
 
-import { CheckCircle2, Loader2 } from 'lucide-react';
+import { CheckCircle2, Eraser, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import {
+  SignaturePad,
+  type SignaturePadHandle,
+} from '@/components/shipments/signature-pad';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -42,6 +46,8 @@ export function MarkDeliveredDialog({
   const [busy, setBusy] = React.useState(false);
   const [receiverName, setReceiverName] = React.useState(defaultReceiverName ?? '');
   const [deliveredAt, setDeliveredAt] = React.useState(todayLocalIsoDate());
+  const [padEmpty, setPadEmpty] = React.useState(true);
+  const padRef = React.useRef<SignaturePadHandle>(null);
 
   // Reset on open so a re-opened dialog after a previous submit starts
   // with today's date and the canonical attention-to fallback.
@@ -49,6 +55,8 @@ export function MarkDeliveredDialog({
     if (open) {
       setReceiverName(defaultReceiverName ?? '');
       setDeliveredAt(todayLocalIsoDate());
+      setPadEmpty(true);
+      padRef.current?.clear();
     }
   }, [open, defaultReceiverName]);
 
@@ -60,15 +68,19 @@ export function MarkDeliveredDialog({
       toast.error('Receiver name is required.');
       return;
     }
+    // Signature is optional — when present we capture the PNG data URL
+    // and ship it to the action so it lands in signature_image_url
+    // (same column the QR/public-link flow writes to). When the pad is
+    // empty we send null and the slip just shows Print Name + Date
+    // Received with the SIGNATURE line blank.
+    const signatureDataUrl =
+      !padEmpty && padRef.current ? padRef.current.toDataURL() : null;
     setBusy(true);
-    // <input type="date"> gives YYYY-MM-DD; convert to midnight-local ISO
-    // for the service. The service parses with `new Date(...)` which
-    // treats YYYY-MM-DD as UTC; that's close enough for a date-only
-    // field and matches how ship_date is handled elsewhere.
     const res = await markShipmentDeliveredAction({
       id: shipmentId,
       receiverName: trimmed,
       deliveredAt,
+      signatureDataUrl,
     });
     setBusy(false);
     if (!res.ok) {
@@ -120,6 +132,33 @@ export function MarkDeliveredDialog({
               onChange={(e) => setDeliveredAt(e.target.value)}
               required
             />
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label>
+                Signature <span className="text-muted-foreground">(optional)</span>
+              </Label>
+              <button
+                type="button"
+                onClick={() => {
+                  padRef.current?.clear();
+                  setPadEmpty(true);
+                }}
+                className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-xs"
+              >
+                <Eraser className="h-3 w-3" /> Clear
+              </button>
+            </div>
+            <SignaturePad
+              ref={padRef}
+              onChange={(empty) => setPadEmpty(empty)}
+              className="border-border bg-background rounded-md border"
+            />
+            <p className="text-muted-foreground text-xs">
+              Hand the phone to the receiver to sign, or leave blank for
+              paper-only delivery — name + date are enough either way.
+            </p>
           </div>
 
           <DialogFooter>
