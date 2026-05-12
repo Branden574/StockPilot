@@ -69,8 +69,11 @@ export interface ShipmentPdfOrg {
 }
 
 export interface ShipmentPdfSignature {
-  /** PNG data URL (or http URL); displayed inside a 200x60pt contain-box. */
-  imageDataUrl: string;
+  /** PNG data URL (or http URL) of an electronic signature image.
+   * Null for manual paper-signed deliveries — in that case we still
+   * fill in PRINT NAME and DATE RECEIVED from signedByName +
+   * signedAt and leave the SIGNATURE line blank. */
+  imageDataUrl: string | null;
   signedByName: string | null;
   signedAt: string | Date;
 }
@@ -121,13 +124,22 @@ export function addressJsonToLines(
 
 /**
  * Extract a "short" WO display from an ISR-style work order number.
- *   "ISR-CVW-MANCHESTER-04292026"  →  "WO-04292026"
- * For non-ISR formats just prefix with WO-.
+ *   "ISR-CVW-MANCHESTER-04292026"     →  "WO-04292026"
+ *   "ISR-CVLYII-VISALIA-05122026-2"   →  "WO-05122026-2"
+ * Walks segments right-to-left to find the date-shaped one (6-8 digits)
+ * so collision suffixes (-2, -3, ...) tacked on after the date by the
+ * insert-and-retry loop in shipments.ts still produce a clean short
+ * form. For non-ISR formats just prefix with WO-.
  */
 function shortWorkOrder(wo: string): string {
   const parts = wo.split('-');
-  const last = parts[parts.length - 1] ?? wo;
-  return /^\d{6,}$/.test(last) ? `WO-${last}` : `WO-${wo}`;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i] ?? '';
+    if (/^\d{6,8}$/.test(p)) {
+      return `WO-${parts.slice(i).join('-')}`;
+    }
+  }
+  return `WO-${wo}`;
 }
 
 function statusLabels(status: ShipmentPdfHeader['status']): {
@@ -687,31 +699,39 @@ export function ShipmentPdf({
             borderTopStyle: 'solid',
           }}
         >
-          {[
-            { label: 'Print Name', content: null as React.ReactNode },
-            {
-              label: 'Signature',
-              content: signature ? (
-                // eslint-disable-next-line jsx-a11y/alt-text
-                <Image
-                  src={signature.imageDataUrl}
-                  style={{ width: '100%', height: 26, objectFit: 'contain' }}
-                />
-              ) : null,
-            },
-            {
-              label: 'Date Received',
-              content: signature ? (
-                <Text style={{ fontSize: 9 }}>
-                  {formatDateForPdf(
-                    typeof signature.signedAt === 'string'
-                      ? signature.signedAt
-                      : signature.signedAt.toISOString(),
-                  )}
-                </Text>
-              ) : null,
-            },
-          ].map((c, i) => (
+          {(() => {
+            const signedAtIso = signature
+              ? typeof signature.signedAt === 'string'
+                ? signature.signedAt
+                : signature.signedAt.toISOString()
+              : null;
+            return [
+              {
+                label: 'Print Name',
+                content: signature?.signedByName ? (
+                  <Text style={{ fontSize: 10, fontFamily: 'Helvetica-Bold' }}>
+                    {signature.signedByName}
+                  </Text>
+                ) : null,
+              },
+              {
+                label: 'Signature',
+                content: signature?.imageDataUrl ? (
+                  // eslint-disable-next-line jsx-a11y/alt-text
+                  <Image
+                    src={signature.imageDataUrl}
+                    style={{ width: '100%', height: 26, objectFit: 'contain' }}
+                  />
+                ) : null,
+              },
+              {
+                label: 'Date Received',
+                content: signedAtIso ? (
+                  <Text style={{ fontSize: 10 }}>{formatDateForPdf(signedAtIso)}</Text>
+                ) : null,
+              },
+            ];
+          })().map((c) => (
             <View key={c.label} style={{ flex: 1 }}>
               <View style={{ minHeight: 26, justifyContent: 'flex-end', marginBottom: 4 }}>
                 {c.content}
@@ -733,27 +753,12 @@ export function ShipmentPdf({
                     textTransform: 'uppercase',
                   },
                 ]}
-                // hint for unused-warning in some configs
-                {...(i < 0 ? { hidden: true } : {})}
               >
                 {c.label}
               </Text>
             </View>
           ))}
         </View>
-
-        {signature?.signedByName ? (
-          <Text
-            style={{
-              marginTop: 6,
-              fontSize: 8,
-              color: PDF_COLORS.ink3,
-              textAlign: 'center',
-            }}
-          >
-            Signed by {signature.signedByName}
-          </Text>
-        ) : null}
 
         {/* ── PAGE FOOTER ──────────────────────────────────────── */}
         <View

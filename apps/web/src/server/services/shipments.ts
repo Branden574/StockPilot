@@ -580,7 +580,13 @@ export class ShipmentsService {
    */
   async markDelivered(
     id: string,
-    args: { receiverName: string; deliveredAt?: string | null },
+    args: {
+      receiverName: string;
+      deliveredAt?: string | null;
+      /** Optional PNG data URL — stored inline in signature_image_url
+       * exactly like the public /s/[token] flow does. */
+      signatureDataUrl?: string | null;
+    },
   ): Promise<void> {
     assertPermission(this.ctx, 'purchase_orders:manage');
     const detail = await this.get(id);
@@ -609,14 +615,31 @@ export class ShipmentsService {
     if (Number.isNaN(new Date(signedAt).getTime())) {
       throw new ServiceError('validation_error', 'Invalid delivered date.');
     }
+    const sigDataUrl = args.signatureDataUrl?.trim() || null;
+    // Defensive bound — same column the public flow writes to is `text`,
+    // ~50KB PNG fits fine but a runaway base64 payload shouldn't be
+    // accepted here. 1MB ceiling matches the public-link cap.
+    if (sigDataUrl && sigDataUrl.length > 1_000_000) {
+      throw new ServiceError(
+        'validation_error',
+        'Signature image is too large (max ~1MB).',
+      );
+    }
+    if (sigDataUrl && !sigDataUrl.startsWith('data:image/')) {
+      throw new ServiceError('validation_error', 'Signature must be a PNG data URL.');
+    }
 
+    const updatePayload: Record<string, unknown> = {
+      status: 'delivered' satisfies ShipmentStatus,
+      signed_by_name: receiverName,
+      signed_at: signedAt,
+    };
+    if (sigDataUrl) {
+      updatePayload.signature_image_url = sigDataUrl;
+    }
     const { error } = await this.ctx.supabase
       .from('shipments')
-      .update({
-        status: 'delivered' satisfies ShipmentStatus,
-        signed_by_name: receiverName,
-        signed_at: signedAt,
-      })
+      .update(updatePayload)
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
@@ -627,7 +650,12 @@ export class ShipmentsService {
         entityType: 'shipment',
         entityId: id,
         warehouseId: detail.sourceWarehouseId,
-        extra: { manual: true, signedByName: receiverName, signedAt },
+        extra: {
+          manual: true,
+          signedByName: receiverName,
+          signedAt,
+          hasSignatureImage: !!sigDataUrl,
+        },
       },
       this.ctx,
     );

@@ -105,6 +105,10 @@ export async function GET(
         }}
         lines={lineRows}
         manager={
+          // Prefer a linked warehouse manager (manager_user_id → user_profile)
+          // when set. Fall back to the warehouse's own contact_name /
+          // contact_phone / contact_email columns so the CONTACT block on
+          // the slip isn't empty for warehouses without a manager FK.
           detail.source?.manager
             ? {
                 fullName: detail.source.manager.fullName,
@@ -113,13 +117,28 @@ export async function GET(
                 phone: detail.source.contactPhone,
                 email: detail.source.manager.email ?? detail.source.contactEmail,
               }
-            : null
+            : detail.source?.contactName ||
+                detail.source?.contactPhone ||
+                detail.source?.contactEmail
+              ? {
+                  fullName: detail.source?.contactName ?? null,
+                  role: null,
+                  warehouseAddressLines: sourceAddrLines,
+                  phone: detail.source?.contactPhone ?? null,
+                  email: detail.source?.contactEmail ?? null,
+                }
+              : null
         }
         qrDataUrl={qrDataUrl}
         signature={
-          detail.signatureImageUrl && detail.signedAt
+          // Pass the signature block whenever there's a signedAt — covers
+          // BOTH electronic signatures (image + name + date) AND manual
+          // paper-signed deliveries (name + date only, no image). The PDF
+          // renders Print Name / Date Received from signedByName /
+          // signedAt regardless of whether imageDataUrl is set.
+          detail.signedAt
             ? {
-                imageDataUrl: detail.signatureImageUrl,
+                imageDataUrl: detail.signatureImageUrl ?? null,
                 signedByName: detail.signedByName,
                 signedAt: detail.signedAt,
               }
