@@ -130,11 +130,18 @@ export class OrderRequestsService {
     let q = this.ctx.supabase
       .from('order_requests')
       .select(
+        // requester:user_profiles join resolves the actual member name
+        // when requester_name was never written to the row (always the
+        // case for internal in-app requests — only public-link external
+        // requesters populate the requester_name / requester_email cols
+        // at create time). RLS on user_profiles already lets org members
+        // read each other, so this join is safe and cheap.
         `id, status, warehouse_id, requester_user_id, requester_email,
          requester_name, requester_org_label, source, notes,
          created_at, updated_at, approved_at, delivered_at,
          warehouse:warehouses!warehouse_id (name),
-         lines:order_request_lines (quantity_requested)`,
+         lines:order_request_lines (quantity_requested),
+         requester:user_profiles!requester_user_id (full_name, email)`,
       )
       .eq('organization_id', this.ctx.organizationId)
       .order('created_at', { ascending: false });
@@ -159,14 +166,31 @@ export class OrderRequestsService {
       const wh = r.warehouse as { name?: string } | { name?: string }[] | null;
       const warehouseName = Array.isArray(wh) ? (wh[0]?.name ?? null) : (wh?.name ?? null);
       const lines = (r.lines as Array<{ quantity_requested: number }> | null) ?? [];
+
+      // Resolve the requester display from user_profiles when the row's
+      // own requester_name / requester_email columns are null — that's
+      // the internal-in-app case (only public-link external requests
+      // populate those columns at create time).
+      const reqJoin = r.requester as
+        | { full_name?: string | null; email?: string | null }
+        | { full_name?: string | null; email?: string | null }[]
+        | null;
+      const reqProfile = Array.isArray(reqJoin) ? reqJoin[0] ?? null : reqJoin;
+      const requesterName =
+        ((r.requester_name as string | null) ?? null) ||
+        (reqProfile?.full_name?.trim() || null);
+      const requesterEmail =
+        ((r.requester_email as string | null) ?? null) ||
+        (reqProfile?.email?.trim() || null);
+
       return {
         id: r.id as string,
         status: r.status as OrderRequestStatus,
         warehouseId: r.warehouse_id as string,
         warehouseName,
         requesterUserId: (r.requester_user_id as string | null) ?? null,
-        requesterEmail: (r.requester_email as string | null) ?? null,
-        requesterName: (r.requester_name as string | null) ?? null,
+        requesterEmail,
+        requesterName,
         requesterOrgLabel: (r.requester_org_label as string | null) ?? null,
         source: r.source as OrderRequestSource,
         lineCount: lines.length,
