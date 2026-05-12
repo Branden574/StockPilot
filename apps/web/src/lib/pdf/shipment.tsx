@@ -262,11 +262,13 @@ export function ShipmentPdf({
               key={c.label}
               style={{
                 flex: 1,
+                minWidth: 0,
                 borderWidth: 0.7,
                 borderColor: CARD_BORDER,
                 borderStyle: 'solid',
                 borderRadius: CARD_RADIUS,
                 padding: 10,
+                overflow: 'hidden',
               }}
             >
               <Text
@@ -291,9 +293,13 @@ export function ShipmentPdf({
               >
                 {c.big}
               </Text>
+              {/* Subtitle: WO# can be 24-30 chars in mono (ISR-{CODE}-MMDDYYYY)
+                  which overflows ~105pt of usable card width at 8pt Courier
+                  for the longer charter codes. Drop to 6.5pt mono and 7.5pt
+                  proportional so the longest realistic codes fit on one line. */}
               <Text
                 style={{
-                  fontSize: 8,
+                  fontSize: c.subMono ? 6.5 : 7.5,
                   color: PDF_COLORS.ink3,
                   marginTop: 3,
                   fontFamily: c.subMono ? 'Courier' : 'Helvetica',
