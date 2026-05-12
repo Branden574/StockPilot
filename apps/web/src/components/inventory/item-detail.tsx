@@ -124,7 +124,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab }: Ite
           topbar visually. Using top-14 here would double-count the
           topbar height and produce a 56px gap where scrolled content
           leaks through above the sticky. */}
-      <div className="bg-background border-border sticky top-0 z-20 -mx-4 border-b px-4 py-4 sm:-mx-6 sm:px-6">
+      <div className="bg-card border-border sticky top-0 z-20 -mx-4 border-b px-4 py-4 sm:-mx-6 sm:px-6">
         <div className="mb-3">
           <Link
             href={backHref}
