@@ -6,11 +6,11 @@ import { ActivityFeed } from '@/components/inventory/activity-feed';
 import { AuditTimeline } from '@/components/audit/audit-timeline';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
 import { ImageUploader } from '@/components/inventory/image-uploader';
+import { ItemDetailTabs } from '@/components/inventory/item-detail-tabs';
 import {
-  ItemDetailTabs,
   parseDetailTab,
   type DetailTabId,
-} from '@/components/inventory/item-detail-tabs';
+} from '@/components/inventory/item-detail-tabs-shared';
 import { QuickAdjustPills } from '@/components/inventory/quick-adjust-pills';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
