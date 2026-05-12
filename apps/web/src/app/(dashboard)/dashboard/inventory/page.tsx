@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
 import { Button } from '@/components/ui/button';
+import { hasPermission } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -162,6 +163,12 @@ export default async function InventoryPage({
     locations: new Map(locations.map((l) => [l.id as string, { name: l.name as string }])),
   };
 
+  // Gate the create / import buttons on `items:create`. Viewers (read-
+  // only role) and stock-adjust-only roles should NOT see entry points
+  // for new items — the underlying page action also enforces this, but
+  // hiding the button is the user-facing fix.
+  const canCreate = hasPermission(sessionCtx.role, 'items:create');
+
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
       <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
@@ -173,14 +180,16 @@ export default async function InventoryPage({
               : 'Items, SKUs, stock levels — searchable and sortable.'}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button asChild variant="outline">
-            <Link href="/dashboard/inventory/import">Import CSV</Link>
-          </Button>
-          <Button asChild variant="gradient">
-            <Link href="/dashboard/inventory/new">+ New item</Link>
-          </Button>
-        </div>
+        {canCreate && (
+          <div className="flex gap-2">
+            <Button asChild variant="outline">
+              <Link href="/dashboard/inventory/import">Import CSV</Link>
+            </Button>
+            <Button asChild variant="gradient">
+              <Link href="/dashboard/inventory/new">+ New item</Link>
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="mt-8">
@@ -188,8 +197,16 @@ export default async function InventoryPage({
           <EmptyState
             icon={Boxes}
             title="No items yet"
-            description="Add your first item to start tracking stock, locations, and movements."
-            cta={{ label: 'Add your first item', href: '/dashboard/inventory/new' }}
+            description={
+              canCreate
+                ? 'Add your first item to start tracking stock, locations, and movements.'
+                : 'No items have been added to this workspace yet.'
+            }
+            cta={
+              canCreate
+                ? { label: 'Add your first item', href: '/dashboard/inventory/new' }
+                : undefined
+            }
           />
         ) : inventory.total === 0 && params.stock === 'low' ? (
           <EmptyState

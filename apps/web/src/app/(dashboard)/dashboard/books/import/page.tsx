@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 import { BackfillCoversButton } from '@/components/books/backfill-covers-button';
 import { BulkIsbnImport } from '@/components/books/bulk-isbn-import';
@@ -9,7 +10,7 @@ import { ChartersService } from '@/server/services/charters';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 import { WarehousesService } from '@/server/services/warehouses';
 
-import { resolveTerminology } from '@stockpilot/core';
+import { hasPermission, resolveTerminology } from '@stockpilot/core';
 
 export const metadata = { title: 'Bulk ISBN import' };
 
@@ -24,6 +25,9 @@ export const maxDuration = 60;
 
 export default async function BulkIsbnImportPage() {
   const ctx = await requireOrgContext();
+  if (!hasPermission(ctx.role, 'items:create')) {
+    redirect('/dashboard/books');
+  }
   const supabase = await createClient();
 
   const [warehousesSvc, chartersSvc, whChartersSvc, forced, orgRow] = await Promise.all([

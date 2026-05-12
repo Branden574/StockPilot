@@ -24,7 +24,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { Button } from '@/components/ui/button';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
-import { isManagerOrAbove } from '@stockpilot/core';
+import { hasPermission, isManagerOrAbove } from '@stockpilot/core';
 import {
   getDashboardActions,
   getDashboardHistory,
@@ -430,16 +430,20 @@ export default async function DashboardHome() {
                 <Download className="h-3 w-3" /> Export
               </Link>
             </Button>
-            <Button variant="outline" size="sm" asChild>
-              <Link href="/dashboard/inventory/new">
-                <Plus className="h-3 w-3" /> New item
-              </Link>
-            </Button>
-            <Button size="sm" asChild>
-              <Link href="/dashboard/purchase-orders/new">
-                <Zap className="h-3 w-3" /> Receive stock
-              </Link>
-            </Button>
+            {hasPermission(ctx.role, 'items:create') && (
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/dashboard/inventory/new">
+                  <Plus className="h-3 w-3" /> New item
+                </Link>
+              </Button>
+            )}
+            {hasPermission(ctx.role, 'purchase_orders:manage') && (
+              <Button size="sm" asChild>
+                <Link href="/dashboard/purchase-orders/new">
+                  <Zap className="h-3 w-3" /> Receive stock
+                </Link>
+              </Button>
+            )}
           </div>
         </div>
 

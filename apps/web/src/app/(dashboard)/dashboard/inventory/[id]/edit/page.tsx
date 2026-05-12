@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 
 import { ItemForm } from '@/components/inventory/item-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -16,11 +16,18 @@ import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
-import { resolveTerminology } from '@stockpilot/core';
+import { hasPermission, resolveTerminology } from '@stockpilot/core';
 
 export default async function EditItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
+  // Viewers (or any role without items:update) can't edit existing items.
+  // Bounce them back to the detail page instead of letting them see the
+  // form. The service layer also throws on submit; this just avoids
+  // wasting their time.
+  if (!hasPermission(ctx.role, 'items:update')) {
+    redirect(`/dashboard/inventory/${id}`);
+  }
   const supabase = await createClient();
 
   const [

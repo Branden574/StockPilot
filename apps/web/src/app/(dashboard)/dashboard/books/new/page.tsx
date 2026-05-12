@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 import { ItemForm } from '@/components/inventory/item-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,10 +14,16 @@ import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
-import { resolveTerminology } from '@stockpilot/core';
+import { hasPermission, resolveTerminology } from '@stockpilot/core';
 
 export default async function NewBookPage() {
   const ctx = await requireOrgContext();
+  // Same server-side gate as /dashboard/inventory/new. Viewers and
+  // any other role without items:create get bounced back to the books
+  // list instead of seeing an empty form they can't submit.
+  if (!hasPermission(ctx.role, 'items:create')) {
+    redirect('/dashboard/books');
+  }
   const supabase = await createClient();
 
   const [

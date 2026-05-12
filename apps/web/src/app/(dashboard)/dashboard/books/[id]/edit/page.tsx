@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 
 import { ItemForm } from '@/components/inventory/item-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -16,7 +16,7 @@ import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
-import { resolveTerminology } from '@stockpilot/core';
+import { hasPermission, resolveTerminology } from '@stockpilot/core';
 
 /**
  * Book edit form. Mirrors /dashboard/inventory/[id]/edit but tells
@@ -36,6 +36,9 @@ export default async function EditBookPage({
 }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
+  if (!hasPermission(ctx.role, 'items:update')) {
+    redirect(`/dashboard/inventory/${id}`);
+  }
   const supabase = await createClient();
 
   const [
