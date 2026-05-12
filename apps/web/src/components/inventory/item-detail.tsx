@@ -121,7 +121,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab }: Ite
           (which is height 56px / top-0). Same density as before — no
           shrinking on scroll; just a stable anchor for the item name,
           status, and primary actions on long pages. */}
-      <div className="bg-background border-border sticky top-14 z-20 -mx-4 border-b px-4 py-4 sm:-mx-6 sm:px-6">
+      <div className="bg-background sticky top-14 z-20 -mx-4 px-4 pt-4 sm:-mx-6 sm:px-6">
         <div className="mb-3">
           <Link
             href={backHref}
