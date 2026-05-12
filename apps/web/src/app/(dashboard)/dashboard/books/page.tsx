@@ -5,6 +5,7 @@ import { BackfillCoversButton } from '@/components/books/backfill-covers-button'
 import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
 import { Button } from '@/components/ui/button';
+import { hasPermission } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -157,15 +158,17 @@ export default async function BooksPage({
             inventory value, low stock, and out of stock on the overview.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <BackfillCoversButton />
-          <Button asChild variant="outline">
-            <Link href="/dashboard/books/import">Bulk ISBN import</Link>
-          </Button>
-          <Button asChild variant="gradient">
-            <Link href="/dashboard/books/new">+ New book</Link>
-          </Button>
-        </div>
+        {hasPermission(sessionCtx.role, 'items:create') && (
+          <div className="flex flex-wrap gap-2">
+            <BackfillCoversButton />
+            <Button asChild variant="outline">
+              <Link href="/dashboard/books/import">Bulk ISBN import</Link>
+            </Button>
+            <Button asChild variant="gradient">
+              <Link href="/dashboard/books/new">+ New book</Link>
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="mt-8">
@@ -173,8 +176,16 @@ export default async function BooksPage({
           <EmptyState
             icon={BookOpen}
             title="No books yet"
-            description="Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items."
-            cta={{ label: 'Add your first book', href: '/dashboard/books/new' }}
+            description={
+              hasPermission(sessionCtx.role, 'items:create')
+                ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
+                : 'No books have been added to this workspace yet.'
+            }
+            cta={
+              hasPermission(sessionCtx.role, 'items:create')
+                ? { label: 'Add your first book', href: '/dashboard/books/new' }
+                : undefined
+            }
           />
         ) : inventory.total === 0 && params.stock === 'low' ? (
           <EmptyState

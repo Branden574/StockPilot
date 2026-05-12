@@ -1,8 +1,16 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 import { CsvImport } from '@/components/inventory/csv-import';
+import { requireOrgContext } from '@/lib/auth/session';
 
-export default function ImportPage() {
+import { hasPermission } from '@stockpilot/core';
+
+export default async function ImportPage() {
+  const ctx = await requireOrgContext();
+  if (!hasPermission(ctx.role, 'items:create')) {
+    redirect('/dashboard/inventory');
+  }
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
       <div className="mb-6">

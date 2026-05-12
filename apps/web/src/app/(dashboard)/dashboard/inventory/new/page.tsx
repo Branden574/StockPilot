@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 import { ItemForm } from '@/components/inventory/item-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,10 +14,18 @@ import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
-import { resolveTerminology } from '@stockpilot/core';
+import { hasPermission, resolveTerminology } from '@stockpilot/core';
 
 export default async function NewItemPage() {
   const ctx = await requireOrgContext();
+  // Server-side gate: a viewer (or any role without items:create) typing
+  // /dashboard/inventory/new directly into the URL bar still bounces to
+  // the inventory list. Service-layer `assertPermission` also blocks
+  // submit, but redirecting here means they never see the form to
+  // begin with.
+  if (!hasPermission(ctx.role, 'items:create')) {
+    redirect('/dashboard/inventory');
+  }
   const supabase = await createClient();
 
   const [

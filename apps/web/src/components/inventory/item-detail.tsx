@@ -27,6 +27,8 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
+import { hasPermission } from '@stockpilot/core';
+
 
 interface ItemDetailProps {
   id: string;
@@ -110,6 +112,14 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab }: Ite
   // ActivityService feed is exactly the stock_movements rows.
   const movementEvents = activity.filter((e) => e.kind === 'movement');
 
+  // Permission gates for the sticky-header action row. Viewers see the
+  // detail page (read-only) but no Edit / Adjust / Transfer buttons.
+  // Server-layer assertPermission still throws if a request somehow
+  // bypasses this — these flags just hide the UI surfaces.
+  const canEditItem = hasPermission(ctx.role, 'items:update');
+  const canAdjustStock = hasPermission(ctx.role, 'stock:adjust');
+  const canTransferStock = hasPermission(ctx.role, 'stock:transfer');
+
   return (
     <div className="container mx-auto max-w-5xl px-4 pb-6 sm:px-6 sm:pb-8">
       {/* ── Sticky header ─────────────────────────────────────────────
@@ -155,9 +165,11 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab }: Ite
           */}
           <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
             <div className="flex w-max gap-2 sm:flex-wrap">
-              <Button asChild variant="outline" size="sm" className="sm:size-auto">
-                <Link href={editHref ?? `/dashboard/inventory/${id}/edit`}>Edit</Link>
-              </Button>
+              {canEditItem && (
+                <Button asChild variant="outline" size="sm" className="sm:size-auto">
+                  <Link href={editHref ?? `/dashboard/inventory/${id}/edit`}>Edit</Link>
+                </Button>
+              )}
               <BarcodeDisplay
                 itemId={id}
                 itemName={item.name as string}
@@ -169,12 +181,14 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab }: Ite
                   <Printer className="h-4 w-4" /> Print label
                 </Link>
               </Button>
-              <StockAdjustDialog
-                itemId={id}
-                itemName={item.name as string}
-                currentQuantity={item.quantity_on_hand as number}
-              />
-              {locations.length >= 2 && (
+              {canAdjustStock && (
+                <StockAdjustDialog
+                  itemId={id}
+                  itemName={item.name as string}
+                  currentQuantity={item.quantity_on_hand as number}
+                />
+              )}
+              {canTransferStock && locations.length >= 2 && (
                 <StockTransferDialog
                   itemId={id}
                   itemName={item.name as string}
