@@ -1,7 +1,11 @@
 import { Calendar } from 'lucide-react';
+import { redirect } from 'next/navigation';
 
 import { ScheduleCalendar } from '@/components/schedule/schedule-calendar';
+import { requireOrgContext } from '@/lib/auth/session';
 import { ScheduleService } from '@/server/services/schedule';
+
+import { hasPermission } from '@stockpilot/core';
 
 export const metadata = { title: 'Schedule' };
 
@@ -16,6 +20,13 @@ export default async function SchedulePage({
 }: {
   searchParams: Promise<{ m?: string }>;
 }) {
+  // Schedule is manager+ — viewers can't add events and don't see the
+  // surface. Sidebar already filters this out for them; redirect on
+  // direct URL access.
+  const ctx = await requireOrgContext();
+  if (!hasPermission(ctx.role, 'schedule:manage')) {
+    redirect('/dashboard');
+  }
   const params = await searchParams;
   const today = new Date();
   let year = today.getFullYear();

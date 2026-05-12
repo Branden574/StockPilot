@@ -1,5 +1,8 @@
 import { LocationsManager } from '@/components/locations/locations-manager';
+import { requireOrgContext } from '@/lib/auth/session';
 import { LocationsService } from '@/server/services/locations';
+
+import { hasPermission } from '@stockpilot/core';
 
 interface LocationsPageProps {
   searchParams: Promise<{ view?: string }>;
@@ -8,7 +11,11 @@ interface LocationsPageProps {
 export default async function LocationsPage({ searchParams }: LocationsPageProps) {
   const params = await searchParams;
   const isArchivedView = params.view === 'archived';
-  const svc = await LocationsService.forCurrentUser();
+  const [ctx, svc] = await Promise.all([
+    requireOrgContext(),
+    LocationsService.forCurrentUser(),
+  ]);
+  const canManage = hasPermission(ctx.role, 'locations:manage');
   const rows = await svc.list({ includeArchived: isArchivedView });
 
   return (
@@ -23,6 +30,7 @@ export default async function LocationsPage({ searchParams }: LocationsPageProps
       </div>
       <LocationsManager
         view={isArchivedView ? 'archived' : 'active'}
+        canManage={canManage}
         initial={rows.map((r) => ({
           id: r.id as string,
           name: r.name as string,

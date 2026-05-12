@@ -1,14 +1,23 @@
 import { Sparkles } from 'lucide-react';
+import { redirect } from 'next/navigation';
 
 import { ChatPanel } from '@/components/ai/chat-panel';
 import { requireOrgContext } from '@/lib/auth/session';
+
+import { hasPermission } from '@stockpilot/core';
 
 export const metadata = {
   title: 'AI Assistant',
 };
 
 export default async function AiPage() {
-  await requireOrgContext();
+  // AI tools include stock-adjusting actions (gated server-side by the
+  // underlying tool's assertPermission, but exposing the chat surface
+  // to a viewer is confusing). Restrict to items:update-or-better roles.
+  const ctx = await requireOrgContext();
+  if (!hasPermission(ctx.role, 'items:update')) {
+    redirect('/dashboard');
+  }
   return (
     <div className="container mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
       <div className="border-border mb-5 border-b pb-4">

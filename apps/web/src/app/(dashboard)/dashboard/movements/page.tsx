@@ -1,5 +1,6 @@
 import { ArrowLeftRight } from 'lucide-react';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
@@ -11,9 +12,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { requireOrgContext } from '@/lib/auth/session';
 import { MovementsService } from '@/server/services/movements';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { formatNumber, formatRelative } from '@/lib/utils';
+
+import { hasPermission } from '@stockpilot/core';
 
 const PAGE_SIZE = 50;
 
@@ -22,6 +26,14 @@ export default async function MovementsPage({
 }: {
   searchParams: Promise<{ page?: string }>;
 }) {
+  // Movements is the org-wide stock_movements ledger — viewer doesn't
+  // have activity_logs:read, so they get bounced back to the dashboard
+  // if they type the URL. Sidebar already hides this entry for them.
+  const ctx = await requireOrgContext();
+  if (!hasPermission(ctx.role, 'activity_logs:read')) {
+    redirect('/dashboard');
+  }
+
   const params = await searchParams;
   const page = clampPage(params.page);
   const offset = (page - 1) * PAGE_SIZE;

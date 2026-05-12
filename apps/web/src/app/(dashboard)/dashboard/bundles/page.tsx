@@ -1,5 +1,6 @@
 import { History, Package } from 'lucide-react';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { RestoreBundleButton } from '@/components/bundles/restore-bundle-button';
@@ -29,6 +30,12 @@ export default async function BundlesListPage({
   const isArchivedView = params.view === 'archived';
 
   const ctx = await requireOrgContext();
+  // Bundles list is staff-or-better (bundles:distribute). Viewers don't
+  // have it and shouldn't see the list either. Sidebar already hides
+  // this; redirect here covers direct URL access.
+  if (!hasPermission(ctx.role, 'bundles:distribute')) {
+    redirect('/dashboard');
+  }
   const canManage = hasPermission(ctx.role, 'bundles:manage');
   const svc = await BundlesService.forCurrentUser();
   const bundles = await svc.list({ search, includeArchived: isArchivedView });

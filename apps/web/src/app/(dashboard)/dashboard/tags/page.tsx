@@ -1,7 +1,18 @@
+import { redirect } from 'next/navigation';
+
 import { TagsManager } from '@/components/tags/tags-manager';
+import { requireOrgContext } from '@/lib/auth/session';
 import { TagsService } from '@/server/services/tags';
 
+import { hasPermission } from '@stockpilot/core';
+
 export default async function TagsPage() {
+  // Tags has no dedicated permission — ride on items:update as the
+  // closest writer perm so viewers don't see the manager UI.
+  const ctx = await requireOrgContext();
+  if (!hasPermission(ctx.role, 'items:update')) {
+    redirect('/dashboard');
+  }
   const svc = await TagsService.forCurrentUser();
   const rows = await svc.listWithCounts();
 

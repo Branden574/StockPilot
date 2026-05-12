@@ -39,6 +39,13 @@ export default async function ProceduresListPage({
   const isArchivedView = params.view === 'archived';
 
   const ctx = await requireOrgContext();
+  // Procedures is a manager+ surface — viewers can't read or write
+  // SOPs. Sidebar already hides the entry; this redirect covers
+  // direct URL access.
+  if (!hasPermission(ctx.role, 'items:update')) {
+    const { redirect } = await import('next/navigation');
+    redirect('/dashboard');
+  }
   const canCreate = hasPermission(ctx.role, 'categories:manage');
   const canRestore = canCreate; // Restore uses the same permission gate as archive.
 
