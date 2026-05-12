@@ -6,23 +6,18 @@ import * as React from 'react';
 
 import { cn } from '@/lib/utils';
 
-export type DetailTabId = 'overview' | 'movements' | 'activity';
+import { type DetailTabId } from './item-detail-tabs-shared';
+
+// Re-export so existing call sites that import { DetailTabId, ItemDetailTabs }
+// from this file continue to work without a sweep. parseDetailTab lives in
+// the shared module and must be imported from there for server-component use.
+export type { DetailTabId };
 
 const TABS: ReadonlyArray<{ id: DetailTabId; label: string }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'movements', label: 'Movements' },
   { id: 'activity', label: 'Activity' },
 ];
-
-/**
- * Parses the `?tab=` query string into a known DetailTabId, falling back
- * to `overview`. Exported so the server-side ItemDetail can reuse the
- * exact same coercion when picking which panel to render.
- */
-export function parseDetailTab(raw: string | null | undefined): DetailTabId {
-  if (raw === 'movements' || raw === 'activity' || raw === 'overview') return raw;
-  return 'overview';
-}
 
 /**
  * Client-side tab strip for the item detail page. Renders `Link` rows so

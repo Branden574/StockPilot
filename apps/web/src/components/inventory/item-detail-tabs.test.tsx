@@ -6,7 +6,8 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(''),
 }));
 
-import { ItemDetailTabs, parseDetailTab } from './item-detail-tabs';
+import { ItemDetailTabs } from './item-detail-tabs';
+import { parseDetailTab } from './item-detail-tabs-shared';
 
 describe('parseDetailTab', () => {
   it('falls back to overview for unknown/missing values', () => {
