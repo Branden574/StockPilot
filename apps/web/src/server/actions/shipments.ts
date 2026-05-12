@@ -97,3 +97,22 @@ export async function markShipmentCancelledAction(
     return toResult(e);
   }
 }
+
+export async function markShipmentDeliveredAction(args: {
+  id: string;
+  receiverName: string;
+  deliveredAt?: string | null;
+}): Promise<ActionResult<void>> {
+  try {
+    const svc = await ShipmentsService.forCurrentUser();
+    await svc.markDelivered(args.id, {
+      receiverName: args.receiverName,
+      deliveredAt: args.deliveredAt ?? null,
+    });
+    revalidatePath('/dashboard/shipments');
+    revalidatePath(`/dashboard/shipments/${args.id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
