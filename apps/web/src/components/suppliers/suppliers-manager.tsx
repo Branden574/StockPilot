@@ -57,9 +57,12 @@ interface FormValues {
 export function SuppliersManager({
   initial,
   view = 'active',
+  canManage = true,
 }: {
   initial: SupplierRow[];
   view?: 'active' | 'archived';
+  /** Hides New / Edit / Archive / Restore buttons when false. */
+  canManage?: boolean;
 }) {
   const router = useRouter();
   const isArchivedView = view === 'archived';
@@ -102,7 +105,7 @@ export function SuppliersManager({
     <>
       <div className="flex items-center justify-between gap-2">
         <ArchiveViewToggle view={view} />
-        {!isArchivedView && (
+        {canManage && !isArchivedView && (
           <Button
             variant="gradient"
             onClick={() => {
@@ -157,7 +160,7 @@ export function SuppliersManager({
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{row.phone ?? '—'}</TableCell>
                   <TableCell className="flex justify-end gap-2">
-                    {isArchivedView ? (
+                    {canManage && (isArchivedView ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -186,7 +189,7 @@ export function SuppliersManager({
                           <Trash2 className="h-4 w-4 text-muted-foreground" />
                         </Button>
                       </>
-                    )}
+                    ))}
                   </TableCell>
                 </TableRow>
               ))}

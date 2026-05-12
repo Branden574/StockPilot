@@ -1,5 +1,8 @@
 import { SuppliersManager } from '@/components/suppliers/suppliers-manager';
+import { requireOrgContext } from '@/lib/auth/session';
 import { SuppliersService } from '@/server/services/suppliers';
+
+import { hasPermission } from '@stockpilot/core';
 
 interface SuppliersPageProps {
   searchParams: Promise<{ view?: string }>;
@@ -8,7 +11,11 @@ interface SuppliersPageProps {
 export default async function SuppliersPage({ searchParams }: SuppliersPageProps) {
   const params = await searchParams;
   const isArchivedView = params.view === 'archived';
-  const svc = await SuppliersService.forCurrentUser();
+  const [ctx, svc] = await Promise.all([
+    requireOrgContext(),
+    SuppliersService.forCurrentUser(),
+  ]);
+  const canManage = hasPermission(ctx.role, 'suppliers:manage');
   const rows = await svc.list({ includeArchived: isArchivedView });
 
   return (
@@ -23,6 +30,7 @@ export default async function SuppliersPage({ searchParams }: SuppliersPageProps
       </div>
       <SuppliersManager
         view={isArchivedView ? 'archived' : 'active'}
+        canManage={canManage}
         initial={rows.map((r) => ({
           id: r.id as string,
           name: r.name as string,

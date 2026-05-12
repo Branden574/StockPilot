@@ -1,5 +1,6 @@
 import { Plus, Send } from 'lucide-react';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 import { EmptyState } from '@/components/ui/empty-state';
 import { ShipmentStatusBadge } from '@/components/shipments/shipment-status-badge';
@@ -12,10 +13,21 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { requireOrgContext } from '@/lib/auth/session';
 import { ShipmentsService } from '@/server/services/shipments';
 import { formatRelative } from '@/lib/utils';
 
+import { hasPermission } from '@stockpilot/core';
+
 export default async function ShipmentsPage() {
+  // Shipments is a manager+ surface (purchase_orders:manage covers
+  // create / mark shipped / mark delivered). Viewers don't get the
+  // list view either — bounced to dashboard.
+  const ctx = await requireOrgContext();
+  const canManage = hasPermission(ctx.role, 'purchase_orders:manage');
+  if (!canManage) {
+    redirect('/dashboard');
+  }
   const svc = await ShipmentsService.forCurrentUser();
   const shipments = await svc.list();
 

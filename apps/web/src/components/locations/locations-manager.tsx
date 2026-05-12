@@ -69,9 +69,12 @@ const TYPES = [
 export function LocationsManager({
   initial,
   view = 'active',
+  canManage = true,
 }: {
   initial: LocationRow[];
   view?: 'active' | 'archived';
+  /** Hides New / Edit / Archive / Restore buttons when false. */
+  canManage?: boolean;
 }) {
   const router = useRouter();
   const isArchivedView = view === 'archived';
@@ -123,7 +126,7 @@ export function LocationsManager({
     <>
       <div className="flex items-center justify-between gap-2">
         <ArchiveViewToggle view={view} />
-        {!isArchivedView && (
+        {canManage && !isArchivedView && (
           <Button variant="gradient" onClick={openNew}>
             <Plus className="h-4 w-4" /> New location
           </Button>
@@ -166,7 +169,7 @@ export function LocationsManager({
                     {row.notes ?? '—'}
                   </TableCell>
                   <TableCell className="flex justify-end gap-2">
-                    {isArchivedView ? (
+                    {canManage && (isArchivedView ? (
                       <Button
                         variant="outline"
                         size="sm"
@@ -188,7 +191,7 @@ export function LocationsManager({
                           <Trash2 className="h-4 w-4 text-muted-foreground" />
                         </Button>
                       </>
-                    )}
+                    ))}
                   </TableCell>
                 </TableRow>
               ))}

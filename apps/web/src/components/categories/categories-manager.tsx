@@ -46,9 +46,16 @@ const PRESET_COLORS = ['#6366f1', '#10b981', '#f97316', '#0ea5e9', '#a855f7', '#
 export function CategoriesManager({
   initial,
   view = 'active',
+  canManage = true,
 }: {
   initial: CategoryRow[];
   view?: 'active' | 'archived';
+  /**
+   * When false, hides the New / Edit / Archive / Restore action buttons
+   * so viewers see a read-only list. Server-side actions still throw on
+   * direct calls — this is the user-facing surface gate.
+   */
+  canManage?: boolean;
 }) {
   const router = useRouter();
   const isArchivedView = view === 'archived';
@@ -100,7 +107,7 @@ export function CategoriesManager({
     <>
       <div className="flex items-center justify-between gap-2">
         <ArchiveViewToggle view={view} />
-        {!isArchivedView && (
+        {canManage && !isArchivedView && (
           <Button variant="gradient" onClick={openNew}>
             <Plus className="h-4 w-4" /> New category
           </Button>
@@ -131,7 +138,7 @@ export function CategoriesManager({
                 style={{ backgroundColor: cat.color ?? '#94a3b8' }}
               />
               <div className="flex-1 min-w-0">
-                {isArchivedView ? (
+                {isArchivedView || !canManage ? (
                   <span className="block text-left font-medium">{cat.name}</span>
                 ) : (
                   <button
@@ -146,7 +153,7 @@ export function CategoriesManager({
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">{cat.description}</p>
                 )}
               </div>
-              {isArchivedView ? (
+              {canManage && (isArchivedView ? (
                 <Button
                   variant="outline"
                   size="sm"
@@ -164,7 +171,7 @@ export function CategoriesManager({
                 >
                   <Trash2 className="h-4 w-4 text-muted-foreground" />
                 </Button>
-              )}
+              ))}
             </div>
           ))}
         </div>

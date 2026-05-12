@@ -1,5 +1,8 @@
 import { CategoriesManager } from '@/components/categories/categories-manager';
+import { requireOrgContext } from '@/lib/auth/session';
 import { CategoriesService } from '@/server/services/categories';
+
+import { hasPermission } from '@stockpilot/core';
 
 interface CategoriesPageProps {
   searchParams: Promise<{ view?: string }>;
@@ -8,7 +11,11 @@ interface CategoriesPageProps {
 export default async function CategoriesPage({ searchParams }: CategoriesPageProps) {
   const params = await searchParams;
   const isArchivedView = params.view === 'archived';
-  const svc = await CategoriesService.forCurrentUser();
+  const [ctx, svc] = await Promise.all([
+    requireOrgContext(),
+    CategoriesService.forCurrentUser(),
+  ]);
+  const canManage = hasPermission(ctx.role, 'categories:manage');
   const rows = await svc.list({ includeArchived: isArchivedView });
 
   return (
@@ -23,6 +30,7 @@ export default async function CategoriesPage({ searchParams }: CategoriesPagePro
       </div>
       <CategoriesManager
         view={isArchivedView ? 'archived' : 'active'}
+        canManage={canManage}
         initial={rows.map((r) => ({
           id: r.id as string,
           name: r.name as string,

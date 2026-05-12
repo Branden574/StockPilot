@@ -1,5 +1,6 @@
 import { ClipboardCheck } from 'lucide-react';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
@@ -12,11 +13,20 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { requireOrgContext } from '@/lib/auth/session';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatRelative } from '@/lib/utils';
 
+import { hasPermission } from '@stockpilot/core';
+
 export default async function CycleCountsPage() {
+  // Cycle counts emit stock_movements rows when posted — gated on
+  // stock:adjust (staff+). Viewers get bounced.
+  const ctx = await requireOrgContext();
+  if (!hasPermission(ctx.role, 'stock:adjust')) {
+    redirect('/dashboard');
+  }
   const [ccSvc, warehousesSvc] = await Promise.all([
     CycleCountsService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
