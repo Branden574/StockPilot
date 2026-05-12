@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { MarkDeliveredDialog } from '@/components/shipments/mark-delivered-dialog';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
@@ -17,9 +18,12 @@ import type { ShipmentStatus } from '@/server/services/shipments';
 export function ShipmentActions({
   shipmentId,
   status,
+  attentionToName,
 }: {
   shipmentId: string;
   status: ShipmentStatus;
+  /** Pre-fills the "Received by" field in the mark-delivered dialog. */
+  attentionToName?: string | null;
 }) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<'ship' | 'cancel' | null>(null);
@@ -56,6 +60,12 @@ export function ShipmentActions({
         <Button variant="default" disabled={busy === 'ship'} onClick={markShipped}>
           <Send className="h-4 w-4" /> Mark shipped
         </Button>
+      )}
+      {status === 'shipped' && (
+        <MarkDeliveredDialog
+          shipmentId={shipmentId}
+          defaultReceiverName={attentionToName}
+        />
       )}
       {status !== 'delivered' && status !== 'cancelled' && (
         <Button

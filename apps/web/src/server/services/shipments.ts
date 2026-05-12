@@ -565,6 +565,74 @@ export class ShipmentsService {
     );
   }
 
+  /**
+   * Manual paper-delivery path: the manager hits "Mark delivered" on a
+   * shipped slip after a signed paper copy comes back from the field.
+   * No stock movement — the deduction already happened at markShipped.
+   * Captures the receiver's name + delivered date so future re-prints
+   * of the packing slip PDF render "Delivered · Signed by NAME · DATE"
+   * instead of staying at "Shipped" forever.
+   *
+   * signature_image_url is intentionally left null — that's the marker
+   * that distinguishes a manual paper-signed delivery from an
+   * electronic QR signature (which DOES populate signature_image_url
+   * via the /s/[token] flow in shipment-signature.tsx).
+   */
+  async markDelivered(
+    id: string,
+    args: { receiverName: string; deliveredAt?: string | null },
+  ): Promise<void> {
+    assertPermission(this.ctx, 'purchase_orders:manage');
+    const detail = await this.get(id);
+    if (detail.status === 'delivered') {
+      throw new ServiceError('validation_error', 'Shipment is already delivered.');
+    }
+    if (detail.status === 'cancelled') {
+      throw new ServiceError(
+        'validation_error',
+        'Cancelled shipments cannot be marked delivered.',
+      );
+    }
+    if (detail.status !== 'shipped') {
+      throw new ServiceError(
+        'validation_error',
+        `Only shipped shipments can be marked delivered. Current status: ${detail.status}.`,
+      );
+    }
+    const receiverName = args.receiverName.trim();
+    if (!receiverName) {
+      throw new ServiceError('validation_error', 'Receiver name is required.');
+    }
+    const signedAt = args.deliveredAt
+      ? new Date(args.deliveredAt).toISOString()
+      : new Date().toISOString();
+    if (Number.isNaN(new Date(signedAt).getTime())) {
+      throw new ServiceError('validation_error', 'Invalid delivered date.');
+    }
+
+    const { error } = await this.ctx.supabase
+      .from('shipments')
+      .update({
+        status: 'delivered' satisfies ShipmentStatus,
+        signed_by_name: receiverName,
+        signed_at: signedAt,
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    await audit(
+      {
+        event: 'shipment.delivered',
+        entityType: 'shipment',
+        entityId: id,
+        warehouseId: detail.sourceWarehouseId,
+        extra: { manual: true, signedByName: receiverName, signedAt },
+      },
+      this.ctx,
+    );
+  }
+
   // ── Private helpers ────────────────────────────────────────────────
 
   /**

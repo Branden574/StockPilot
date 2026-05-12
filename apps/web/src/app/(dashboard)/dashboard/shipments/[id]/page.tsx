@@ -78,7 +78,11 @@ export default async function ShipmentDetailPage({
               <Download className="h-4 w-4" /> Download PDF
             </a>
           </Button>
-          <ShipmentActions shipmentId={id} status={detail.status} />
+          <ShipmentActions
+            shipmentId={id}
+            status={detail.status}
+            attentionToName={detail.attentionToName}
+          />
         </div>
       </div>
 
