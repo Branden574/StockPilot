@@ -11,7 +11,6 @@ import {
   parseDetailTab,
   type DetailTabId,
 } from '@/components/inventory/item-detail-tabs-shared';
-import { QuickAdjustPills } from '@/components/inventory/quick-adjust-pills';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { StockTransferDialog } from '@/components/inventory/stock-transfer-dialog';
@@ -28,7 +27,6 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
-import { hasPermission } from '@stockpilot/core';
 
 interface ItemDetailProps {
   id: string;
@@ -108,8 +106,6 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab }: Ite
     updatedByName = (row?.full_name?.trim() || row?.email?.trim()) ?? null;
   }
 
-  const canAdjustStock = hasPermission(ctx.role, 'stock:adjust');
-
   // Filter for the Movements tab — kind === 'movement' from the unified
   // ActivityService feed is exactly the stock_movements rows.
   const movementEvents = activity.filter((e) => e.kind === 'movement');
@@ -144,11 +140,6 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab }: Ite
                 quantity={item.quantity_on_hand as number}
                 reorderPoint={item.reorder_point as number}
                 itemStatus={item.status as 'active' | 'archived' | 'discontinued'}
-              />
-              <QuickAdjustPills
-                itemId={id}
-                currentQuantity={item.quantity_on_hand as number}
-                canAdjust={canAdjustStock}
               />
             </div>
             <p className="text-muted-foreground mt-1 break-all font-mono text-xs">
