@@ -183,17 +183,24 @@ export default async function BooksPage({
       </div>
 
       <div className="mt-8">
-        {inventory.total === 0 && !params.q && !params.stock ? (
+        {inventory.total === 0 && lifecycleStatus === 'archived' && !params.q && !params.stock ? (
+          <EmptyState
+            icon={BookOpen}
+            title="No archived books"
+            description="Nothing here yet. Books you archive will show up in this view."
+            cta={{ label: 'Back to active books', href: '/dashboard/books' }}
+          />
+        ) : inventory.total === 0 && !params.q && !params.stock ? (
           <EmptyState
             icon={BookOpen}
             title="No books yet"
             description={
-              hasPermission(sessionCtx.role, 'items:create')
+              canCreate
                 ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
                 : 'No books have been added to this workspace yet.'
             }
             cta={
-              hasPermission(sessionCtx.role, 'items:create')
+              canCreate
                 ? { label: 'Add your first book', href: '/dashboard/books/new' }
                 : undefined
             }
