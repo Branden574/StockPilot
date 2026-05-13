@@ -2,6 +2,7 @@ import { BookOpen } from 'lucide-react';
 import Link from 'next/link';
 
 import { BackfillCoversButton } from '@/components/books/backfill-covers-button';
+import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
 import { Button } from '@/components/ui/button';
@@ -148,27 +149,37 @@ export default async function BooksPage({
     locations: new Map(locations.map((l) => [l.id as string, { name: l.name as string }])),
   };
 
+  const canCreate = hasPermission(sessionCtx.role, 'items:create');
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
       <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Books</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Books are tracked separately here but still count toward total
-            inventory value, low stock, and out of stock on the overview.
+            {lifecycleStatus === 'archived'
+              ? 'Books you archived. Restore one by editing it and setting status to Active.'
+              : 'Books are tracked separately here but still count toward total inventory value, low stock, and out of stock on the overview.'}
           </p>
         </div>
-        {hasPermission(sessionCtx.role, 'items:create') && (
-          <div className="flex flex-wrap gap-2">
-            <BackfillCoversButton />
-            <Button asChild variant="outline">
-              <Link href="/dashboard/books/import">Bulk ISBN import</Link>
-            </Button>
-            <Button asChild variant="gradient">
-              <Link href="/dashboard/books/new">+ New book</Link>
-            </Button>
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Same status-param toggle the Inventory page uses; books
+              accept the same lifecycleStatus filter. */}
+          <ArchiveViewToggle
+            paramName="status"
+            view={lifecycleStatus === 'archived' ? 'archived' : 'active'}
+          />
+          {canCreate && lifecycleStatus !== 'archived' && (
+            <>
+              <BackfillCoversButton />
+              <Button asChild variant="outline">
+                <Link href="/dashboard/books/import">Bulk ISBN import</Link>
+              </Button>
+              <Button asChild variant="gradient">
+                <Link href="/dashboard/books/new">+ New book</Link>
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="mt-8">
