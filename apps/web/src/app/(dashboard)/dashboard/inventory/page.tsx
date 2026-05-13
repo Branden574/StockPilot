@@ -205,7 +205,14 @@ export default async function InventoryPage({
       </div>
 
       <div className="mt-8">
-        {inventory.total === 0 && !params.q && !params.stock ? (
+        {inventory.total === 0 && lifecycleStatus === 'archived' && !params.q && !params.stock ? (
+          <EmptyState
+            icon={Boxes}
+            title="No archived items"
+            description="Nothing here yet. Items you archive will show up in this view."
+            cta={{ label: 'Back to active items', href: '/dashboard/inventory' }}
+          />
+        ) : inventory.total === 0 && !params.q && !params.stock ? (
           <EmptyState
             icon={Boxes}
             title="No items yet"
