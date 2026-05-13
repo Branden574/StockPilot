@@ -1,6 +1,7 @@
 import { Boxes } from 'lucide-react';
 import Link from 'next/link';
 
+import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
 import { Button } from '@/components/ui/button';
@@ -175,21 +176,32 @@ export default async function InventoryPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Inventory</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            {showingAllTypes
-              ? 'Showing every item type — products, books, assets, consumables.'
-              : 'Items, SKUs, stock levels — searchable and sortable.'}
+            {lifecycleStatus === 'archived'
+              ? 'Items you archived. Restore one by editing it and setting status to Active.'
+              : showingAllTypes
+                ? 'Showing every item type — products, books, assets, consumables.'
+                : 'Items, SKUs, stock levels — searchable and sortable.'}
           </p>
         </div>
-        {canCreate && (
-          <div className="flex gap-2">
-            <Button asChild variant="outline">
-              <Link href="/dashboard/inventory/import">Import CSV</Link>
-            </Button>
-            <Button asChild variant="gradient">
-              <Link href="/dashboard/inventory/new">+ New item</Link>
-            </Button>
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Inventory pages use ?status=active|archived|discontinued|all
+              (not ?view=); the toggle reads/writes that param so saved
+              views + deep links keep their existing shape. */}
+          <ArchiveViewToggle
+            paramName="status"
+            view={lifecycleStatus === 'archived' ? 'archived' : 'active'}
+          />
+          {canCreate && lifecycleStatus !== 'archived' && (
+            <>
+              <Button asChild variant="outline">
+                <Link href="/dashboard/inventory/import">Import CSV</Link>
+              </Button>
+              <Button asChild variant="gradient">
+                <Link href="/dashboard/inventory/new">+ New item</Link>
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="mt-8">

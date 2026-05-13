@@ -27,19 +27,35 @@ export function ArchiveViewToggle({
   className,
   activeLabel = 'Active',
   archivedLabel = 'Archived',
+  paramName = 'view',
+  archivedValue = 'archived',
 }: {
   basePath?: string;
   view?: 'active' | 'archived';
   className?: string;
   activeLabel?: string;
   archivedLabel?: string;
+  /**
+   * URL search param this toggle reads / writes. Defaults to 'view'
+   * (the legacy shape used by most manager pages). Inventory and Books
+   * already use 'status' for the lifecycle filter, so they pass
+   * paramName="status" to drive the same URL the page already parses.
+   */
+  paramName?: string;
+  /**
+   * Value to set on `paramName` for the archived state. Defaults to
+   * 'archived'. Same value for both 'view' and 'status' params today,
+   * but keeping it overridable so future filters that use different
+   * vocabulary can still use this toggle.
+   */
+  archivedValue?: string;
 }) {
   const pathname = usePathname();
   const params = useSearchParams();
 
   // Resolve current view: explicit prop wins, otherwise read from URL.
   const current: 'active' | 'archived' =
-    view ?? (params.get('view') === 'archived' ? 'archived' : 'active');
+    view ?? (params.get(paramName) === archivedValue ? 'archived' : 'active');
 
   const base = basePath ?? pathname ?? '';
 
@@ -47,8 +63,8 @@ export function ArchiveViewToggle({
   // so toggling between views doesn't blow away the user's filter state.
   function buildHref(target: 'active' | 'archived'): string {
     const sp = new URLSearchParams(params.toString());
-    sp.delete('view');
-    if (target === 'archived') sp.set('view', 'archived');
+    sp.delete(paramName);
+    if (target === 'archived') sp.set(paramName, archivedValue);
     // Reset paging when crossing views — the page count for active and
     // archived almost never lines up.
     sp.delete('page');
