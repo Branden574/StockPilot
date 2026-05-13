@@ -29,6 +29,15 @@ export interface PlanDefinition {
 }
 
 export const PLANS: Record<PlanId, PlanDefinition> = {
+  // Default plan every new org lands on. Originally a 100-item /
+  // 1-user / 1-location SaaS free tier. After the 2026-05-04 pivot
+  // to an invite-only internal-company tool, the gates aren't doing
+  // useful work — limits bumped to internal-tool comfortable ceilings
+  // so the owner doesn't hit "Free plan limit exceeded" toasts while
+  // running a real warehouse. Per-row plan_limit_exceeded errors
+  // become unreachable in normal use without ripping out the
+  // assertPlanLimit machinery (which we keep so the architecture is
+  // there if SaaS ever comes back).
   free: {
     id: 'free',
     name: 'Free',
@@ -37,11 +46,11 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
     yearlyPrice: 0,
     cta: 'Get started',
     limits: {
-      members: 1,
-      items: 100,
-      locations: 1,
-      imagesPerItem: 3,
-      attachmentsPerItem: 1,
+      members: 100,
+      items: 10000,
+      locations: 100,
+      imagesPerItem: 20,
+      attachmentsPerItem: 20,
       apiAccess: false,
       purchaseOrders: false,
       advancedReports: false,
@@ -50,7 +59,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       sso: false,
       customRoles: false,
     },
-    features: ['Up to 100 items', '1 user', '1 location', 'Manual entry', 'Basic CSV export'],
+    features: ['Up to 10,000 items', '100 team members', '100 locations', 'Manual entry', 'Basic CSV export'],
   },
   pro: {
     id: 'pro',
