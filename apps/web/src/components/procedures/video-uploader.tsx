@@ -208,6 +208,11 @@ function ImmediateUploader({
     if (list.length === 0) return;
     const supabase = createClient();
 
+    // Track how many uploads actually made it through. The pre-fix path
+    // fired "Videos uploaded." unconditionally — even when EVERY file
+    // failed validation or upload — which was a confusing lie.
+    let successCount = 0;
+
     for (const file of list) {
       const key = `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const validationError = validateFile(file);
@@ -266,6 +271,7 @@ function ImmediateUploader({
         }
 
         setPending((p) => p.map((x) => (x.key === key ? { ...x, status: 'done' } : x)));
+        successCount += 1;
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Upload failed';
         setPending((p) =>
@@ -275,7 +281,11 @@ function ImmediateUploader({
       }
     }
 
-    toast.success('Videos uploaded.');
+    if (successCount > 0) {
+      toast.success(
+        successCount === 1 ? 'Video uploaded.' : `${successCount} videos uploaded.`,
+      );
+    }
     router.refresh();
     // Clear successful pending rows after a short delay so the user sees
     // them flip to "done" before they disappear.

@@ -20,6 +20,15 @@ interface MarkdownBodyProps {
  * The component is a Server Component (no `use client`) because the
  * markdown body is always available on the server and rendering it
  * server-side gives us free SSR caching + zero client JS for the body.
+ *
+ * NOTE(deferred — bug-hunt M4): we do NOT allow-list `![alt](url)`
+ * image hosts. A manager can author a procedure that includes an image
+ * from any third-party domain, and end users will fetch it directly.
+ * For an invite-only internal tool the risk is limited, but if the
+ * product ever opens up we should pipe images through a known-good
+ * image proxy (Vercel `next/image` w/ remotePatterns) or restrict the
+ * `<img>` rendering to a small allow-list of hosts (e.g. our own
+ * Supabase storage CDN).
  */
 export function MarkdownBody({ body, className }: MarkdownBodyProps) {
   const trimmed = body?.trim() ?? '';

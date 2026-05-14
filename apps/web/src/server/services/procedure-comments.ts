@@ -7,7 +7,7 @@ import type {
 import { isAdminRole } from '@stockpilot/core';
 
 import { audit } from './audit';
-import { ServiceError, withContext, type ServiceContext } from './context';
+import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 export interface ProcedureCommentAuthor {
   id: string | null;
@@ -53,7 +53,10 @@ interface RawCommentRow {
 
 /**
  * ProcedureCommentsService — single-level threaded discussion under a
- * procedure. Any org member can post. Update/delete is allowed for the
+ * procedure. Posting a NEW comment requires `items:update` (staff+),
+ * so viewer-only accounts can read the thread but can't add to it. The
+ * database goes a step further: RLS on `procedure_comments_insert`
+ * requires manager+ (migration 0088). Update/delete is allowed for the
  * author OR an admin+. Reply-to-reply is rejected at the service layer.
  */
 export class ProcedureCommentsService {
@@ -123,6 +126,12 @@ export class ProcedureCommentsService {
    * product is intentionally single-level.
    */
   async create(input: CreateProcedureCommentInput): Promise<ProcedureCommentNode> {
+    // Gate posting on `items:update` (staff+). Viewers can read the
+    // thread via RLS but can't add to it through the service. The
+    // database insert policy is stricter still (manager+, see migration
+    // 0088) — this assert exists so a viewer hits a friendly 403 instead
+    // of a raw RLS denial from PostgREST.
+    assertPermission(this.ctx, 'items:update');
     if (input.parentId) {
       const { data: parent, error: parentErr } = await this.ctx.supabase
         .from('procedure_comments')
@@ -197,6 +206,19 @@ export class ProcedureCommentsService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+    void audit(
+      {
+        event: 'procedure.comment.updated',
+        entityType: 'procedure',
+        entityId: row.procedure_id,
+        extra: {
+          comment_id: id,
+          before_body: row.body,
+          moderator: row.author_id !== this.ctx.userId,
+        },
+      },
+      this.ctx,
+    );
   }
 
   /**
@@ -213,6 +235,19 @@ export class ProcedureCommentsService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+    void audit(
+      {
+        event: 'procedure.comment.deleted',
+        entityType: 'procedure',
+        entityId: row.procedure_id,
+        extra: {
+          comment_id: id,
+          before_body: row.body,
+          moderator: row.author_id !== this.ctx.userId,
+        },
+      },
+      this.ctx,
+    );
   }
 
   /**
@@ -223,11 +258,12 @@ export class ProcedureCommentsService {
   private async fetchOwnedOrAdmin(id: string): Promise<{
     procedure_id: string;
     author_id: string | null;
+    body: string;
     deleted_at: string | null;
   }> {
     const { data, error } = await this.ctx.supabase
       .from('procedure_comments')
-      .select('procedure_id, author_id, deleted_at')
+      .select('procedure_id, author_id, body, deleted_at')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
@@ -240,6 +276,7 @@ export class ProcedureCommentsService {
     return {
       procedure_id: data.procedure_id as string,
       author_id: authorId,
+      body: (data.body as string) ?? '',
       deleted_at: data.deleted_at as string | null,
     };
   }

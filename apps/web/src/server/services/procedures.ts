@@ -10,6 +10,19 @@ import {
   type ProcedureCommentNode,
 } from './procedure-comments';
 
+// UUID v4-ish regex; mirrors what the action schemas use upstream. Catches
+// the common case of a hand-typed id ("foo") before it ever hits Postgres,
+// where an invalid UUID becomes a 22P02 → 500. Hex-only, with the standard
+// 8-4-4-4-12 dash layout; we accept ANY version, not just v4, because we
+// generate v4 ourselves but Postgres also produces v1 in older paths.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function assertUuid(id: string, what = 'id'): void {
+  if (!UUID_RE.test(id)) {
+    throw new ServiceError('validation_error', `Invalid ${what} — expected a UUID`);
+  }
+}
+
 export interface ProcedureListRow {
   id: string;
   title: string;
@@ -75,6 +88,18 @@ function tsQueryFor(q: string): string {
 }
 
 /**
+ * Escape the two ilike wildcards (`%`, `_`) so a search like `50%_off`
+ * doesn't degenerate into "match anything containing 50, then anything,
+ * then off". PostgREST passes the pattern through to Postgres
+ * unmodified, so the escape has to happen here. We use the conventional
+ * backslash escape character — `like '...' escape '\'` is the Postgres
+ * default and PostgREST honors it without any extra wiring.
+ */
+function escapeIlike(q: string): string {
+  return q.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
+
+/**
  * ProceduresService — SOP knowledge base records.
  *
  * Read is open to org members (RLS enforces). Writes gate on
@@ -106,6 +131,13 @@ export class ProceduresService {
     offset = 0,
     includeArchived = false,
   }: ListParams): Promise<{ rows: ProcedureListRow[]; total: number }> {
+    // TODO(perf): the embedded `videos` + `comments` arrays are an N+1
+    // shape — we hydrate every row to compute the live comment count and
+    // pick a thumbnail. The proper fix is a server-side view / RPC that
+    // returns `video_count`, `live_comment_count`, and `first_video_path`
+    // pre-aggregated. Deferring for now: org procedure tables are tiny in
+    // practice (<<1K rows) and the cost is dwarfed by the storage signed
+    // URL roundtrip below. Revisit when the largest org crosses ~5K SOPs.
     const baseSelect = `id, title, description, category_id, authoring_warehouse_id,
         created_by, created_at, updated_at,
         category:procedure_categories!category_id (id, name, color),
@@ -114,6 +146,12 @@ export class ProceduresService {
         videos:procedure_videos!procedure_id (id, storage_path, order_idx),
         comments:procedure_comments!procedure_id (id, deleted_at)`;
 
+    // NOTE: We currently use `count: 'exact'` because the procedures
+    // tables stay small for the lifetime of most orgs (low hundreds of
+    // SOPs is a reasonable ceiling). If this ever exceeds ~50K rows,
+    // swap to `count: 'estimated'` — the pagination footer would lose
+    // precision but list latency wouldn't degrade linearly with table
+    // size.
     const buildBase = () => {
       let qry = this.ctx.supabase
         .from('procedures')
@@ -149,7 +187,7 @@ export class ProceduresService {
         // eslint-disable-next-line no-console
         console.warn('[procedures] tsquery parse failed, falling back to ilike', tsRes.error.message);
         const ilikeRes = await buildBase()
-          .ilike('title', `%${trimmed}%`)
+          .ilike('title', `%${escapeIlike(trimmed)}%`)
           .order('created_at', { ascending: false })
           .range(offset, offset + limit - 1);
         if (ilikeRes.error) throw new ServiceError('internal_error', ilikeRes.error.message);
@@ -221,6 +259,7 @@ export class ProceduresService {
    * info joined). Throws not_found if RLS hides the row.
    */
   async get(id: string): Promise<ProcedureDetailRow> {
+    assertUuid(id, 'procedure id');
     const { data, error } = await this.ctx.supabase
       .from('procedures')
       .select(
@@ -304,6 +343,13 @@ export class ProceduresService {
 
   async update(id: string, patch: UpdateProcedureInput): Promise<{ id: string }> {
     assertPermission(this.ctx, 'categories:manage');
+    assertUuid(id, 'procedure id');
+    // NOTE(deferred): no optimistic concurrency control here — two
+    // managers editing the same procedure can clobber each other's
+    // changes (last write wins). Adding it requires a version column
+    // and an If-Match equivalent in the action layer; not worth the
+    // refactor while authoring volume is low. Tracked in the bug-hunt
+    // M3.
     const updates: Record<string, unknown> = { updated_by: this.ctx.userId };
     if (patch.title !== undefined) updates.title = patch.title;
     if (patch.description !== undefined) updates.description = patch.description ?? null;
@@ -333,17 +379,30 @@ export class ProceduresService {
 
   async archive(id: string): Promise<void> {
     assertPermission(this.ctx, 'categories:manage');
-    const { error } = await this.ctx.supabase
+    assertUuid(id, 'procedure id');
+    // Filter on `archived_at is null` so we only flip live rows. If the
+    // procedure is already archived (or doesn't exist), the .single()
+    // returns PGRST116 and we map it to not_found instead of pretending
+    // the call did something useful.
+    const { data, error } = await this.ctx.supabase
       .from('procedures')
       .update({ archived_at: new Date().toISOString(), updated_by: this.ctx.userId })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
-    if (error) throw new ServiceError('internal_error', error.message);
+      .eq('id', id)
+      .is('archived_at', null)
+      .select('id')
+      .single();
+    if (error) {
+      if (error.code === 'PGRST116') {
+        throw new ServiceError('not_found', 'Procedure not found or already archived');
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
     void audit(
       {
         event: 'procedure.archived',
         entityType: 'procedure',
-        entityId: id,
+        entityId: (data as { id: string }).id,
       },
       this.ctx,
     );
@@ -352,20 +411,31 @@ export class ProceduresService {
   /**
    * Restore an archived procedure — clears `archived_at` so it reappears
    * in the active list. Same permission gate as archive() (manager+).
+   * Throws `not_found` when the id is unknown OR the row was already live
+   * (no-op restores are user-visible bugs, not silent successes).
    */
   async restore(id: string): Promise<void> {
     assertPermission(this.ctx, 'categories:manage');
-    const { error } = await this.ctx.supabase
+    assertUuid(id, 'procedure id');
+    const { data, error } = await this.ctx.supabase
       .from('procedures')
       .update({ archived_at: null, updated_by: this.ctx.userId })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
-    if (error) throw new ServiceError('internal_error', error.message);
+      .eq('id', id)
+      .not('archived_at', 'is', null)
+      .select('id')
+      .single();
+    if (error) {
+      if (error.code === 'PGRST116') {
+        throw new ServiceError('not_found', 'Procedure not found or not archived');
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
     void audit(
       {
         event: 'procedure.restored',
         entityType: 'procedure',
-        entityId: id,
+        entityId: (data as { id: string }).id,
       },
       this.ctx,
     );

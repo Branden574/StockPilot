@@ -5,6 +5,7 @@ import type {
   UpdateProcedureCategoryInput,
 } from '@stockpilot/core';
 
+import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 export interface ProcedureCategoryRow {
@@ -99,14 +100,43 @@ export class ProcedureCategoriesService {
     return data as ProcedureCategoryRow;
   }
 
-  /** Soft-delete: sets archived_at so the row stays linked to procedures. */
+  /**
+   * Soft-delete: sets archived_at so the row stays linked to procedures.
+   * Emits `category.archived` (reused across the categories family —
+   * see audit.ts union) so the activity log surfaces the rename in the
+   * org timeline.
+   */
   async archive(id: string): Promise<void> {
     assertPermission(this.ctx, 'organization:update');
-    const { error } = await this.ctx.supabase
+    // Only archive a live row. Re-archiving an already-archived category
+    // would otherwise silently succeed but not represent a real state
+    // change, so we treat it as not_found (the caller's id refers to a
+    // row that isn't a live archive target).
+    const { data, error } = await this.ctx.supabase
       .from('procedure_categories')
       .update({ archived_at: new Date().toISOString() })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
-    if (error) throw new ServiceError('internal_error', error.message);
+      .eq('id', id)
+      .is('archived_at', null)
+      .select('id, name')
+      .single();
+    if (error) {
+      if (error.code === 'PGRST116') {
+        throw new ServiceError(
+          'not_found',
+          'Category not found or already archived',
+        );
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
+    void audit(
+      {
+        event: 'category.archived',
+        entityType: 'procedure_category',
+        entityId: (data as { id: string }).id,
+        extra: { name: (data as { name: string }).name },
+      },
+      this.ctx,
+    );
   }
 }
