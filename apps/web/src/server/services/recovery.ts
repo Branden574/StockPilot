@@ -49,7 +49,7 @@ const ENTITY_TABLE: Record<RecoveryEntity, string> = {
  * filter on the audit page.
  */
 export const RECOVERY_AUDIT_ENTITY_TYPE: Record<RecoveryEntity, string> = {
-  inventory_items: 'item',
+  inventory_items: 'inventory_item',
   categories: 'category',
   locations: 'location',
   suppliers: 'supplier',
