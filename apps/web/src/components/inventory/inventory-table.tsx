@@ -447,10 +447,11 @@ export function InventoryTable({
 
   const valueOnHand = items.reduce((s, it) => s + it.quantity_on_hand * it.unit_cost, 0);
 
-  // Consumed by the render swap in the next task; keep the symbols live.
-  void serverHits;
-  void serverLoading;
-  void localMatches;
+  // What the table actually renders. Priority: server-authoritative
+  // result if we have one (covers cross-page matches), else the
+  // synchronous local filter (covers in-page matches with zero
+  // latency). On no search, both reduce to `items`.
+  const displayed = serverHits ?? localMatches;
 
   return (
     <div className="space-y-4">
@@ -549,7 +550,22 @@ export function InventoryTable({
         />
 
         <p className="ml-auto font-mono text-[11px] tabular-nums text-[var(--ed-ink-3)]">
-          {formatNumber(total)} SKUs · {formatCurrency(valueOnHand)} on hand
+          {(() => {
+            const needle = q.trim();
+            if (!needle) {
+              return (
+                <>
+                  {formatNumber(total)} SKUs · {formatCurrency(valueOnHand)} on hand
+                </>
+              );
+            }
+            return (
+              <>
+                Showing {formatNumber(displayed.length)} matching &ldquo;{needle}&rdquo;
+                {serverLoading ? ' (searching…)' : null}
+              </>
+            );
+          })()}
         </p>
       </div>
 
@@ -571,8 +587,10 @@ export function InventoryTable({
       {/* Top pagination — mirrors the bottom one so users on long lists
           don't have to scroll to the bottom to flip pages. Same component,
           same URL state, same buildHref. Hides on single-page lists for
-          the same reason the bottom one does. */}
-      {total > pageSize && (
+          the same reason the bottom one does. Also hides during an active
+          search because the server response delivers the full filtered
+          set up to the limit — pages recompose once `q` clears. */}
+      {!q.trim() && total > pageSize && (
         <div className="flex items-center justify-end">
           <Pagination
             page={page}
@@ -631,7 +649,7 @@ export function InventoryTable({
             </tr>
           </thead>
           <tbody>
-            {items.length === 0 && (
+            {displayed.length === 0 && (
               <tr>
                 <td
                   colSpan={showBookFields ? 13 : 11}
@@ -641,7 +659,7 @@ export function InventoryTable({
                 </td>
               </tr>
             )}
-            {items.map((item) => {
+            {displayed.map((item) => {
               const category = item.category_id ? lookups.categories.get(item.category_id) : null;
               const location = item.primary_location_id
                 ? lookups.locations.get(item.primary_location_id)
@@ -816,8 +834,9 @@ export function InventoryTable({
       <div className="flex flex-wrap items-center justify-between gap-3">
         {/* Pagination — hides when everything fits on one page so the
             single-screen empty/typical case stays clean. URL-driven so
-            paginated views are bookmarkable + shareable. */}
-        {total > pageSize ? (
+            paginated views are bookmarkable + shareable. Also hides
+            during an active search (see top-pagination comment). */}
+        {!q.trim() && total > pageSize ? (
           <Pagination
             page={page}
             pageSize={pageSize}
