@@ -22,11 +22,18 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
 import { generateSku, cn } from '@/lib/utils';
-import { createItemAction, updateItemAction } from '@/server/actions/inventory';
+import {
+  bulkCreateSizedVariantsAction,
+  createItemAction,
+  updateItemAction,
+} from '@/server/actions/inventory';
 import { createImageUploadAction, recordImageAction } from '@/server/actions/item-images';
 import { setItemTagsAction } from '@/server/actions/tags';
 
 import { createItemSchema, type CreateItemInput } from '@stockpilot/core';
+
+type SizeCode = 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
+const ALL_SIZES: ReadonlyArray<SizeCode> = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
 
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 const IMAGE_ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'image/avif'];
@@ -42,7 +49,7 @@ export interface ItemFormDefaults extends Partial<CreateItemInput> {
 
 interface ItemFormProps {
   defaults?: ItemFormDefaults;
-  categories: Array<{ id: string; name: string }>;
+  categories: Array<{ id: string; name: string; supports_sizes?: boolean }>;
   locations: Array<{ id: string; name: string }>;
   suppliers: Array<{ id: string; name: string }>;
   /** Every tag in the org. Empty array hides the Tags pill row entirely. */
@@ -202,6 +209,15 @@ export function ItemForm({
     isBook ? String(cfDefault.book_grade ?? '') : '',
   );
   const [scannerOpen, setScannerOpen] = React.useState(false);
+  /**
+   * Size-variant selection. Only meaningful when the chosen category has
+   * supports_sizes = true AND this is a create form (variants don't
+   * apply when editing one existing row). Each entry holds the size
+   * code + on-hand qty for that variant.
+   */
+  const [selectedSizes, setSelectedSizes] = React.useState<
+    Array<{ size: SizeCode; quantity: number }>
+  >([]);
   const [lookingUp, setLookingUp] = React.useState(false);
 
   // Tag selection — independent of RHF because tags don't live on the
@@ -345,6 +361,52 @@ export function ItemForm({
   }
 
   const onSubmit = handleSubmit(async (values) => {
+    // Sized-variant create path. Triggered only when the chosen
+    // category has supports_sizes = true AND the user picked at least
+    // one size on a new item. Bulk inserts one row per size, then
+    // routes back to the Inventory list (each variant gets its own
+    // detail page so a single-item redirect would be wrong).
+    const selectedCategory = categories.find((c) => c.id === values.categoryId);
+    if (
+      !isEdit &&
+      selectedCategory?.supports_sizes &&
+      selectedSizes.length > 0
+    ) {
+      if (!values.categoryId || !values.warehouseId) {
+        toast.error('Pick a category and warehouse before saving variants.');
+        return;
+      }
+      const num = rackNumber.trim();
+      const row = rackRow.trim().toUpperCase();
+      const composedBin = num ? (row ? `${num}-${row}` : num) : null;
+      const res = await bulkCreateSizedVariantsAction({
+        baseName: values.name,
+        baseSku: values.sku?.trim() || null,
+        baseBarcode: values.barcode?.trim() || null,
+        description: values.description?.trim() || null,
+        categoryId: values.categoryId,
+        supplierId: values.supplierId ?? null,
+        warehouseId: values.warehouseId,
+        primaryLocationId: values.primaryLocationId ?? null,
+        binLocation: composedBin,
+        retailPrice: values.retailPrice,
+        unitCost: values.unitCost,
+        reorderPoint: values.reorderPoint,
+        reorderQuantity: values.reorderQuantity,
+        variants: selectedSizes,
+      });
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      toast.success(
+        `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`,
+      );
+      onDone?.();
+      router.push('/dashboard/inventory');
+      return;
+    }
+
     // Merge custom fields before submit. Books get the book_* prefix
     // for rack/crate; everything else uses the neutral rack_* keys.
     // Empty fields are omitted so we don't overwrite an existing value
@@ -631,7 +693,72 @@ export function ItemForm({
             placeholder="None"
             optional
           />
-          <div />
+          {(() => {
+            const selectedCategory = categories.find(
+              (c) => c.id === watch('categoryId'),
+            );
+            const categorySupportsSizes = Boolean(
+              selectedCategory?.supports_sizes,
+            );
+            // Hide while editing — variants only apply at create-time. Each
+            // existing variant edits as a normal single row.
+            if (!categorySupportsSizes || isEdit) return <div />;
+            return (
+              <Field label="Sizes" optional>
+                <div className="flex flex-wrap gap-1.5">
+                  {ALL_SIZES.map((s) => {
+                    const picked = selectedSizes.some((x) => x.size === s);
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() =>
+                          setSelectedSizes((prev) =>
+                            picked
+                              ? prev.filter((x) => x.size !== s)
+                              : [...prev, { size: s, quantity: 0 }],
+                          )
+                        }
+                        className={cn(
+                          'rounded border border-border px-2 py-1 text-xs transition-colors',
+                          picked
+                            ? 'bg-foreground text-background'
+                            : 'hover:bg-muted',
+                        )}
+                      >
+                        {s}
+                      </button>
+                    );
+                  })}
+                </div>
+                {selectedSizes.length > 0 && (
+                  <div className="mt-3 space-y-1.5">
+                    {selectedSizes.map((entry, i) => (
+                      <div key={entry.size} className="flex items-center gap-2">
+                        <span className="w-10 text-xs font-medium">{entry.size}</span>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={entry.quantity}
+                          onChange={(e) =>
+                            setSelectedSizes((prev) => {
+                              const next = [...prev];
+                              next[i] = {
+                                ...entry,
+                                quantity: Number(e.target.value) || 0,
+                              };
+                              return next;
+                            })
+                          }
+                          className="h-8 w-24"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Field>
+            );
+          })()}
         </div>
         <div className="grid grid-cols-2 gap-3">
           <SelectField
@@ -806,38 +933,58 @@ export function ItemForm({
           </Field>
         </div>
         <div className="grid grid-cols-3 gap-3">
-          <Field label="On hand" error={errors.quantityOnHand?.message}>
-            {isEdit ? (
-              <div className="flex items-center gap-2">
-                <Input
-                  type="number"
-                  step="1"
-                  {...register('quantityOnHand', { valueAsNumber: true })}
-                  disabled
-                  className="bg-muted/40 cursor-not-allowed opacity-70"
-                  aria-readonly
-                />
-                {defaults?.id && (
-                  <StockAdjustDialog
-                    itemId={defaults.id}
-                    itemName={defaults?.name ?? 'this item'}
-                    currentQuantity={defaults?.quantityOnHand ?? 0}
-                    trigger={
-                      <Button type="button" variant="outline" size="sm" className="shrink-0">
-                        Adjust
-                      </Button>
-                    }
+          {(() => {
+            const selectedCategory = categories.find(
+              (c) => c.id === watch('categoryId'),
+            );
+            const sizedFlowActive =
+              !isEdit &&
+              Boolean(selectedCategory?.supports_sizes) &&
+              selectedSizes.length > 0;
+            if (sizedFlowActive) {
+              return (
+                <Field label="On hand">
+                  <p className="text-muted-foreground rounded-md border border-dashed border-border bg-muted/30 px-2.5 py-2 text-[11.5px]">
+                    Per-size qty is set above (Sizes).
+                  </p>
+                </Field>
+              );
+            }
+            return (
+              <Field label="On hand" error={errors.quantityOnHand?.message}>
+                {isEdit ? (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      step="1"
+                      {...register('quantityOnHand', { valueAsNumber: true })}
+                      disabled
+                      className="bg-muted/40 cursor-not-allowed opacity-70"
+                      aria-readonly
+                    />
+                    {defaults?.id && (
+                      <StockAdjustDialog
+                        itemId={defaults.id}
+                        itemName={defaults?.name ?? 'this item'}
+                        currentQuantity={defaults?.quantityOnHand ?? 0}
+                        trigger={
+                          <Button type="button" variant="outline" size="sm" className="shrink-0">
+                            Adjust
+                          </Button>
+                        }
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <Input
+                    type="number"
+                    step="1"
+                    {...register('quantityOnHand', { valueAsNumber: true })}
                   />
                 )}
-              </div>
-            ) : (
-              <Input
-                type="number"
-                step="1"
-                {...register('quantityOnHand', { valueAsNumber: true })}
-              />
-            )}
-          </Field>
+              </Field>
+            );
+          })()}
           <Field label="Reorder at" error={errors.reorderPoint?.message}>
             <Input type="number" step="1" min="0" {...register('reorderPoint', { valueAsNumber: true })} />
           </Field>

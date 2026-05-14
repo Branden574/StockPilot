@@ -456,6 +456,86 @@ export class InventoryService {
    * "conflict = skip" semantic. A Postgres-level 23505 still aborts the
    * whole batch (defensive), since the pre-flight is a snapshot read.
    */
+  /**
+   * Bulk-creates one inventory_items row per selected size in a single
+   * insert. Used by the Items form when the selected category has
+   * supports_sizes = true. Name + SKU + custom_fields.size are computed
+   * per variant; all other fields are copied verbatim. Plan-limit check
+   * runs once against the total variant count.
+   */
+  async bulkCreateSizedVariants(input: {
+    baseName: string;
+    baseSku: string | null;
+    baseBarcode: string | null;
+    description: string | null;
+    categoryId: string;
+    supplierId: string | null;
+    warehouseId: string;
+    primaryLocationId: string | null;
+    binLocation: string | null;
+    retailPrice: number;
+    unitCost: number;
+    reorderPoint: number;
+    reorderQuantity: number;
+    variants: Array<{
+      size: 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
+      quantity: number;
+    }>;
+  }): Promise<Array<{ id: string; name: string; sku: string | null }>> {
+    assertPermission(this.ctx, 'items:create');
+    if (input.variants.length === 0) {
+      throw new ServiceError(
+        'validation_error',
+        'Pick at least one size or change the category.',
+      );
+    }
+    await assertPlanLimit(this.ctx, 'items', input.variants.length);
+
+    const rows = input.variants.map((v) => ({
+      organization_id: this.ctx.organizationId,
+      name: `${input.baseName} - ${v.size}`,
+      sku: input.baseSku ? `${input.baseSku}-${v.size}` : null,
+      barcode: input.baseBarcode,
+      description: input.description,
+      category_id: input.categoryId,
+      supplier_id: input.supplierId,
+      warehouse_id: input.warehouseId,
+      primary_location_id: input.primaryLocationId,
+      bin_location: input.binLocation,
+      retail_price: input.retailPrice,
+      unit_cost: input.unitCost,
+      reorder_point: input.reorderPoint,
+      reorder_quantity: input.reorderQuantity,
+      quantity_on_hand: v.quantity,
+      item_type: 'product',
+      status: 'active',
+      tracking_type: 'none',
+      custom_fields: { size: v.size },
+      created_by: this.ctx.userId,
+      updated_by: this.ctx.userId,
+    }));
+
+    const { data, error } = await this.ctx.supabase
+      .from('inventory_items')
+      .insert(rows)
+      .select('id, name, sku');
+    if (error) {
+      // 23505 = unique_violation — typically SKU collision.
+      if ((error as { code?: string }).code === '23505') {
+        throw new ServiceError(
+          'conflict',
+          'One or more variant SKUs already exist. Pick a different base SKU.',
+        );
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
+    return (data ?? []).map((r) => ({
+      id: r.id as string,
+      name: r.name as string,
+      sku: (r.sku as string | null) ?? null,
+    }));
+  }
+
   async bulkCreate(input: {
     warehouseId: string;
     charterId?: string | null;

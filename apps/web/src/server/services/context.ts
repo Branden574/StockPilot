@@ -159,6 +159,13 @@ export async function assertRoleUnchanged(ctx: ServiceContext): Promise<void> {
 export async function assertPlanLimit(
   ctx: ServiceContext,
   resource: 'items' | 'locations' | 'members',
+  /**
+   * Number of rows about to be added. Default 1 (matches the original
+   * single-create semantics). Bulk-create flows (e.g. sized variant
+   * insert) pass the batch size so the check stays a single round trip
+   * and the error message reflects the real ask.
+   */
+  addCount: number = 1,
 ): Promise<void> {
   const { data: org } = await ctx.supabase
     .from('organizations')
@@ -189,7 +196,7 @@ export async function assertPlanLimit(
   }
 
   const { count } = await query;
-  if ((count ?? 0) >= limit) {
+  if ((count ?? 0) + addCount > limit) {
     throw new ServiceError(
       'plan_limit_exceeded',
       `You've reached your ${PLANS[plan].name} plan limit of ${limit} ${resource}. Upgrade to add more.`,
