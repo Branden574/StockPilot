@@ -152,16 +152,20 @@ select is(
 );
 
 -- ─────────────────────────────────────────────────────────────────────
--- Test 8: notification.link points at the right detail page.
+-- Test 8: notification.link routes to the filtered inventory list so
+-- the user lands on every row that needs action, not just the one item
+-- that tripped the threshold. Migration 0060 swapped the per-item
+-- detail link for the same `?stock=out|low&type=all` filter the
+-- dashboard tiles already use.
 -- ─────────────────────────────────────────────────────────────────────
 
-select like(
+select is(
   (select link from public.notifications
     where type = 'inventory.out_of_stock'
       and metadata->>'item_id' = :item_id::text
     limit 1),
-  '/dashboard/inventory/%',
-  'Low-stock notification.link routes to the item detail page'
+  '/dashboard/inventory?stock=out&type=all',
+  'Out-of-stock notification.link routes to the filtered list'
 );
 
 select * from finish();
