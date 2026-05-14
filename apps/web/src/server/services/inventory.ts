@@ -32,6 +32,13 @@ export type ItemListSort =
 
 export interface ItemListFilters {
   q?: string;
+  /**
+   * Exact-match filter on inventory_items.barcode. Used by the
+   * scan-to-search flow on /dashboard/books — the scanner emits the
+   * ISBN and we want a single deterministic match, not the prefix
+   * ilike that `q` would do.
+   */
+  barcode?: string;
   status?: 'active' | 'archived' | 'discontinued' | 'all';
   /** Legacy single-select. New callers should prefer categoryIds. */
   categoryId?: string | null;
@@ -136,6 +143,9 @@ export class InventoryService {
       query = query.or(
         `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%`,
       );
+    }
+    if (filters.barcode && filters.barcode.trim()) {
+      query = query.eq('barcode', filters.barcode.trim());
     }
     // Multi-select takes precedence; fall back to legacy single-id when
     // the array is empty/missing so AI tools and any prior caller keep
