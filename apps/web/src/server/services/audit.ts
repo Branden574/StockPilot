@@ -50,6 +50,8 @@ export type AuditEvent =
   | 'vendor_item_mapping.upserted'
   | 'stock.receipt.posted'
   | 'stock.receipt.reversed'
+  | 'purchase_order.created'
+  | 'purchase_order.status_changed'
   | 'idempotency.replay'
   | 'idempotency.conflict'
   | 'uom_conversion.upserted'
