@@ -223,7 +223,10 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
       <TableCell className="text-xs text-muted-foreground">
         {member.acceptedAt ? 'Active' : 'Invited'}
       </TableCell>
-      <TableCell className="text-right text-xs text-muted-foreground">
+      <TableCell
+        className="text-right text-xs text-muted-foreground"
+        suppressHydrationWarning
+      >
         {member.acceptedAt ? formatRelative(member.acceptedAt) : '—'}
       </TableCell>
       <TableCell>
@@ -319,7 +322,7 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
       <TableCell>
         <RoleBadge role={invite.role} />
       </TableCell>
-      <TableCell className="text-xs text-muted-foreground">{formatRelative(invite.expiresAt)}</TableCell>
+      <TableCell className="text-xs text-muted-foreground" suppressHydrationWarning>{formatRelative(invite.expiresAt)}</TableCell>
       <TableCell className="flex justify-end gap-1">
         <Button variant="outline" size="sm" onClick={resend} disabled={resending}>
           {resending ? (

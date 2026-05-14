@@ -404,7 +404,7 @@ export function ChatPanel() {
                       <span className="truncate">
                         {s.title || 'Untitled chat'}
                       </span>
-                      <span className="text-muted-foreground text-[10px]">
+                      <span className="text-muted-foreground text-[10px]" suppressHydrationWarning>
                         {formatRelative(s.updatedAt)}
                       </span>
                     </button>

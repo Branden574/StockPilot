@@ -101,7 +101,10 @@ export function NotificationsList({ notifications }: NotificationsListProps) {
                   <p className="text-sm font-medium">{n.title}</p>
                 )}
                 {n.body && <p className="mt-0.5 text-sm text-muted-foreground">{n.body}</p>}
-                <p className="mt-1 text-xs uppercase tracking-wider text-muted-foreground">
+                <p
+                  className="mt-1 text-xs uppercase tracking-wider text-muted-foreground"
+                  suppressHydrationWarning
+                >
                   {n.type.replace('_', ' ')} · {formatRelative(n.createdAt)}
                 </p>
               </div>

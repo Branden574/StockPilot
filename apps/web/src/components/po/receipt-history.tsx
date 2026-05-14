@@ -135,7 +135,7 @@ function ReceiptCard({
           <span className={`rounded-full px-2 py-0.5 text-[11px] ${STATUS_COLORS[receipt.status]}`}>
             {receipt.status}
           </span>
-          <span className="text-muted-foreground text-xs">
+          <span className="text-muted-foreground text-xs" suppressHydrationWarning>
             {formatRelative(receipt.received_at)}
           </span>
         </div>
