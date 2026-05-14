@@ -128,3 +128,225 @@ export function assertPermission(role: Role, permission: Permission): void {
     throw new Error(`Permission denied: ${role} cannot ${permission}`);
   }
 }
+
+/**
+ * Human-readable metadata for each permission. Powers the
+ * /dashboard/settings/roles reference page. Keep `group` consistent
+ * inside a feature area — the page groups + sorts by it.
+ */
+export interface PermissionMeta {
+  group: string;
+  label: string;
+  description: string;
+}
+
+export const PERMISSION_META: Record<Permission, PermissionMeta> = {
+  'organization:read': {
+    group: 'Organization',
+    label: 'View organization details',
+    description: 'See the workspace name, plan, and basic settings.',
+  },
+  'organization:update': {
+    group: 'Organization',
+    label: 'Edit organization details',
+    description: 'Rename the workspace, change terminology labels.',
+  },
+  'organization:delete': {
+    group: 'Organization',
+    label: 'Delete organization',
+    description: 'Permanently destroy the workspace and all its data.',
+  },
+  'billing:read': {
+    group: 'Organization',
+    label: 'View billing',
+    description: 'See current plan, invoices, payment method.',
+  },
+  'billing:manage': {
+    group: 'Organization',
+    label: 'Manage billing',
+    description: 'Change plan, update payment method, cancel subscription.',
+  },
+  'settings:read': {
+    group: 'Organization',
+    label: 'View settings',
+    description: 'Open the Settings area.',
+  },
+  'settings:manage': {
+    group: 'Organization',
+    label: 'Manage settings',
+    description: 'Change org-wide settings (notifications policy, etc.).',
+  },
+  'activity_logs:read': {
+    group: 'Organization',
+    label: 'View audit log',
+    description: 'See every privileged action across the org.',
+  },
+
+  'members:read': {
+    group: 'Members',
+    label: 'View members',
+    description: 'See who is in the workspace and their roles.',
+  },
+  'members:invite': {
+    group: 'Members',
+    label: 'Invite members',
+    description: 'Send invitations to new users.',
+  },
+  'members:remove': {
+    group: 'Members',
+    label: 'Remove members',
+    description: 'Revoke a member’s access.',
+  },
+  'members:update_role': {
+    group: 'Members',
+    label: 'Change member roles',
+    description: 'Promote, demote, or reassign team members.',
+  },
+
+  'items:read': {
+    group: 'Items',
+    label: 'View items',
+    description: 'Browse the inventory list, books, item details.',
+  },
+  'items:create': {
+    group: 'Items',
+    label: 'Create items',
+    description: 'Add new items (and sized variants) to inventory.',
+  },
+  'items:update': {
+    group: 'Items',
+    label: 'Edit items',
+    description: 'Change item details, prices, rack, supplier.',
+  },
+  'items:delete': {
+    group: 'Items',
+    label: 'Delete items',
+    description: 'Soft-delete items from inventory.',
+  },
+  'items:import': {
+    group: 'Items',
+    label: 'Import CSV',
+    description: 'Bulk-create items from a CSV upload.',
+  },
+  'items:export': {
+    group: 'Items',
+    label: 'Export CSV',
+    description: 'Download the inventory list as a CSV file.',
+  },
+
+  'stock:adjust': {
+    group: 'Stock',
+    label: 'Adjust on-hand',
+    description: 'Add or remove stock with an audited movement.',
+  },
+  'stock:transfer': {
+    group: 'Stock',
+    label: 'Transfer stock',
+    description: 'Move stock between locations or warehouses.',
+  },
+
+  'locations:read': {
+    group: 'Locations',
+    label: 'View locations',
+    description: 'See the locations list.',
+  },
+  'locations:manage': {
+    group: 'Locations',
+    label: 'Manage locations',
+    description: 'Create, rename, archive locations.',
+  },
+
+  'categories:read': {
+    group: 'Categories',
+    label: 'View categories',
+    description: 'See the category list and assignments.',
+  },
+  'categories:manage': {
+    group: 'Categories',
+    label: 'Manage categories',
+    description: 'Create, edit, archive categories. Flag size variants.',
+  },
+
+  'suppliers:read': {
+    group: 'Suppliers',
+    label: 'View suppliers',
+    description: 'See the suppliers list.',
+  },
+  'suppliers:manage': {
+    group: 'Suppliers',
+    label: 'Manage suppliers',
+    description: 'Create, edit, archive suppliers.',
+  },
+
+  'purchase_orders:read': {
+    group: 'Purchase orders',
+    label: 'View purchase orders',
+    description: 'See draft, approved, in-transit, received POs.',
+  },
+  'purchase_orders:manage': {
+    group: 'Purchase orders',
+    label: 'Manage purchase orders',
+    description: 'Create, approve, receive, and cancel POs.',
+  },
+
+  'reports:read': {
+    group: 'Reports',
+    label: 'View reports',
+    description: 'Open the reports dashboard.',
+  },
+  'reports:export': {
+    group: 'Reports',
+    label: 'Export reports',
+    description: 'Download reports as CSV or PDF.',
+  },
+
+  'cycle_counts:assign': {
+    group: 'Cycle counts',
+    label: 'Assign cycle counts',
+    description: 'Route a cycle count to another team member.',
+  },
+
+  'bundles:manage': {
+    group: 'Bundles',
+    label: 'Manage bundles',
+    description: 'Define and edit bundle (kit) recipes.',
+  },
+  'bundles:distribute': {
+    group: 'Bundles',
+    label: 'Distribute bundles',
+    description: 'Run a bundle distribution (ship kits at events).',
+  },
+
+  'orders:request': {
+    group: 'Order requests',
+    label: 'Submit order requests',
+    description: 'Submit a request for goods. Includes viewers.',
+  },
+  'orders:approve': {
+    group: 'Order requests',
+    label: 'Approve / fulfill orders',
+    description: 'Approve, deny, ship, and mark delivered.',
+  },
+
+  'schedule:manage': {
+    group: 'Schedule',
+    label: 'Manage schedule',
+    description: 'Create, edit, delete calendar entries.',
+  },
+};
+
+export const PERMISSION_GROUP_ORDER: ReadonlyArray<string> = [
+  'Items',
+  'Stock',
+  'Locations',
+  'Categories',
+  'Suppliers',
+  'Purchase orders',
+  'Order requests',
+  'Cycle counts',
+  'Bundles',
+  'Schedule',
+  'Reports',
+  'Members',
+  'Organization',
+];

@@ -11,6 +11,7 @@ const BASE_SECTIONS = [
   { href: '/dashboard/settings/profile', title: 'Profile', description: 'Your name and avatar.' },
   { href: '/dashboard/settings/notifications', title: 'Notifications', description: 'Weekly digest email and preferences.' },
   { href: '/dashboard/settings/billing', title: 'Billing', description: 'Plan, invoices, payment method.' },
+  { href: '/dashboard/settings/roles', title: 'Roles & permissions', description: 'Reference for what each role can see and do across StockPilot.' },
 ];
 
 // Manager-and-above sections. Gated by hasPermission('orders:approve')
