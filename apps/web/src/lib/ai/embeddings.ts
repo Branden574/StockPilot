@@ -182,3 +182,79 @@ export async function embedInventoryItem(
     console.warn('[embeddings] item embed failed:', err);
   }
 }
+
+/**
+ * Embeds up to `limit` un-embedded items in the caller's org. Shared
+ * by the admin-only server action and the AI tool so both paths use
+ * identical batching + pacing.
+ *
+ * `remaining` is the count of items still without an embedding AFTER
+ * this batch finishes, so a UI can show "X of Y done" by computing
+ * (Y - remaining).
+ */
+export async function embedItemsBatch(
+  // Keep the type loose so this stays compatible with both the
+  // service-context shape and the cached withContext() result.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: { supabase: any; organizationId: string },
+  opts: { limit?: number } = {},
+): Promise<{ embedded: number; failed: number; remaining: number }> {
+  const limit = Math.min(200, Math.max(1, opts.limit ?? 50));
+
+  const { data: rows, error: loadErr } = await ctx.supabase
+    .from('inventory_items')
+    .select('id, name, sku, barcode, description, custom_fields')
+    .eq('organization_id', ctx.organizationId)
+    .is('deleted_at', null)
+    .is('embedding', null)
+    .order('created_at', { ascending: true })
+    .limit(limit);
+  if (loadErr) throw new Error(loadErr.message);
+
+  let embedded = 0;
+  let failed = 0;
+  for (const row of (rows ?? []) as Array<{
+    id: string;
+    name: string | null;
+    sku?: string | null;
+    barcode?: string | null;
+    description?: string | null;
+    custom_fields?: Record<string, unknown> | null;
+  }>) {
+    const source = itemEmbeddingSource(row);
+    if (!source) {
+      failed += 1;
+      continue;
+    }
+    try {
+      const vec = await embedText(source);
+      const { error: updateErr } = await ctx.supabase
+        .from('inventory_items')
+        .update({ embedding: vectorLiteral(vec) })
+        .eq('organization_id', ctx.organizationId)
+        .eq('id', row.id);
+      if (updateErr) {
+        failed += 1;
+        // eslint-disable-next-line no-console
+        console.warn('[embedItemsBatch] write failed:', row.id, updateErr.message);
+        continue;
+      }
+      embedded += 1;
+    } catch (e) {
+      failed += 1;
+      // eslint-disable-next-line no-console
+      console.warn('[embedItemsBatch] embed failed:', row.id, e);
+    }
+    // Light pacing to stay below Gemini's burst limit on tier 0.
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  const { count: totalRemaining } = await ctx.supabase
+    .from('inventory_items')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', ctx.organizationId)
+    .is('deleted_at', null)
+    .is('embedding', null);
+
+  return { embedded, failed, remaining: totalRemaining ?? 0 };
+}
