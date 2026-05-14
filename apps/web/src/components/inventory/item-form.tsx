@@ -7,6 +7,7 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
 import { IsbnScanner } from '@/components/inventory/isbn-scanner';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { Button } from '@/components/ui/button';
@@ -1051,6 +1052,47 @@ export function ItemForm({
           </div>
         </Section>
       )}
+
+      {(() => {
+        if (!isEdit) return null;
+        const selectedCategory = categories.find(
+          (c) => c.id === watch('categoryId'),
+        );
+        if (!selectedCategory?.supports_sizes) return null;
+        if (
+          !defaults?.categoryId ||
+          !defaults?.warehouseId
+        )
+          return null;
+        return (
+          <div className="flex items-center justify-between rounded-md border border-dashed border-border bg-muted/30 px-3 py-2.5 text-[12.5px]">
+            <div>
+              <p className="font-medium">Add sibling sizes from this item</p>
+              <p className="text-muted-foreground text-[11.5px]">
+                Copies supplier, category, warehouse, prices, and rack — you
+                pick the sizes + per-size qty.
+              </p>
+            </div>
+            <AddSizedVariantsButton
+              source={{
+                name: defaults.name ?? '',
+                sku: defaults.sku ?? null,
+                barcode: defaults.barcode ?? null,
+                description: defaults.description ?? null,
+                categoryId: defaults.categoryId,
+                supplierId: defaults.supplierId ?? null,
+                warehouseId: defaults.warehouseId,
+                primaryLocationId: defaults.primaryLocationId ?? null,
+                binLocation: defaults.binLocation ?? null,
+                retailPrice: defaults.retailPrice ?? 0,
+                unitCost: defaults.unitCost ?? 0,
+                reorderPoint: defaults.reorderPoint ?? 0,
+                reorderQuantity: defaults.reorderQuantity ?? 0,
+              }}
+            />
+          </div>
+        );
+      })()}
 
       <div className="flex justify-end gap-2">
         {onDone && (
