@@ -40,29 +40,69 @@ interface Defaults {
   bundleAlreadyDistributed?: boolean;
 }
 
+/** A nearby event we should consider for the overlap warning. */
+interface ConflictCandidate {
+  id: string;
+  title: string;
+  startsAt: string;
+  /** May be null — open-ended events count as a single point at startsAt. */
+  endsAt: string | null;
+  warehouseId: string | null;
+  requesterName: string | null;
+}
+
 interface Props {
   warehouses: Array<{ id: string; name: string }>;
   bundles: Array<{ id: string; name: string; sku: string | null }>;
   defaults?: Defaults;
   /** When set, the date input is pre-filled. Format: YYYY-MM-DD. */
   initialDate?: string | null;
+  /**
+   * Pre-loaded events near this form's anchor date, scoped to events
+   * the caller can see. Used purely for the client-side overlap
+   * warning — no submit-blocking. Same warehouse + intersecting
+   * [startsAt, endsAt] window triggers a toast.
+   *
+   * Note: recurring events are NOT supported by the data model.
+   * Every entry here is a single-occurrence event; no expansion is
+   * required client-side.
+   */
+  conflictCandidates?: ConflictCandidate[];
 }
 
-/** Convert an ISO string ("...Z" or with offset) to the local
- *  "YYYY-MM-DDTHH:mm" format that <input type="datetime-local"> wants. */
+/**
+ * Convert an ISO string ("...Z" or with offset) to the local
+ * "YYYY-MM-DDTHH:mm[:ss]" format that <input type="datetime-local">
+ * accepts. Seconds are emitted only when non-zero so we don't show
+ * ":00" by default — but if an event was scheduled to a second-precise
+ * time, we preserve it across edit-save round trips.
+ *
+ * DST caveat: <input type="datetime-local"> is timezone-naïve. On the
+ * spring-forward hour (e.g. 2:30am the day DST starts) the time literally
+ * doesn't exist locally. new Date("YYYY-MM-DDT02:30") quietly snaps it
+ * forward to 03:30. We accept this — it matches how every other web
+ * calendar app behaves, and the org-timezone settings feature would be
+ * the right place to fix it properly (out of scope here).
+ */
 function isoToLocalInput(iso: string): string {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const base = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const seconds = d.getSeconds();
+  return seconds === 0 ? base : `${base}:${pad(seconds)}`;
 }
 
-/** Convert a "YYYY-MM-DDTHH:mm" local string to a UTC ISO string. */
+/** Convert a "YYYY-MM-DDTHH:mm[:ss]" local string to a UTC ISO string. */
 function localInputToIso(local: string): string {
   // The Date() constructor parses local-time format as local time on
   // the runtime. Then toISOString() emits UTC. That's what the schema
   // expects (datetime with offset).
   return new Date(local).toISOString();
 }
+
+/** Clamp datetime-local input to a sane civilian range. */
+const MIN_LOCAL_DATETIME = '1970-01-01T00:00';
+const MAX_LOCAL_DATETIME = '2100-12-31T23:59';
 
 const STATUS_OPTIONS: Array<{ value: Defaults['status']; label: string }> = [
   { value: 'scheduled', label: 'Scheduled' },
@@ -71,7 +111,13 @@ const STATUS_OPTIONS: Array<{ value: Defaults['status']; label: string }> = [
   { value: 'cancelled', label: 'Cancelled' },
 ];
 
-export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }: Props) {
+export function ScheduleEventForm({
+  warehouses,
+  bundles,
+  defaults,
+  initialDate,
+  conflictCandidates = [],
+}: Props) {
   const router = useRouter();
   const isEdit = Boolean(defaults?.id);
 
@@ -118,6 +164,30 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
   const [busy, setBusy] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const bundleLocked = Boolean(defaults?.bundleAlreadyDistributed);
+
+  // Overlap warning: any other non-cancelled/non-completed event in the
+  // same warehouse whose [start, end] window intersects ours triggers
+  // an inline banner. Open-ended events (endsAt null) collapse to a
+  // single point at startsAt for comparison purposes. We deliberately
+  // do NOT block submit — overlaps are sometimes intentional (two crew
+  // running parallel jobs at the same dock).
+  const conflicts = React.useMemo(() => {
+    if (!warehouseId || !startsAtLocal) return [] as ConflictCandidate[];
+    const myStart = new Date(startsAtLocal).getTime();
+    if (!Number.isFinite(myStart)) return [];
+    const myEnd = endsAtLocal ? new Date(endsAtLocal).getTime() : myStart;
+    if (!Number.isFinite(myEnd) || myEnd < myStart) return [];
+    return conflictCandidates.filter((c) => {
+      if (c.warehouseId !== warehouseId) return false;
+      const cStart = new Date(c.startsAt).getTime();
+      const cEnd = c.endsAt ? new Date(c.endsAt).getTime() : cStart;
+      if (!Number.isFinite(cStart) || !Number.isFinite(cEnd)) return false;
+      // Standard interval intersection: A starts before B ends AND
+      // B starts before A ends. Equal endpoints don't count (one
+      // ends exactly when the other starts → no real overlap).
+      return cStart < myEnd && myStart < cEnd;
+    });
+  }, [conflictCandidates, warehouseId, startsAtLocal, endsAtLocal]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -212,6 +282,8 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
             type="datetime-local"
             value={startsAtLocal}
             onChange={(e) => setStartsAtLocal(e.target.value)}
+            min={MIN_LOCAL_DATETIME}
+            max={MAX_LOCAL_DATETIME}
             required
           />
         </div>
@@ -222,11 +294,55 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
             type="datetime-local"
             value={endsAtLocal}
             onChange={(e) => setEndsAtLocal(e.target.value)}
-            min={startsAtLocal}
+            min={startsAtLocal || MIN_LOCAL_DATETIME}
+            max={MAX_LOCAL_DATETIME}
           />
         </div>
       </div>
 
+      {conflicts.length > 0 ? (
+        <div className="border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-200 rounded-md border px-3 py-2 text-[11.5px]">
+          <p className="font-medium">
+            Heads up — {conflicts.length} overlapping event
+            {conflicts.length === 1 ? '' : 's'} in this warehouse:
+          </p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {conflicts.slice(0, 5).map((c) => (
+              <li key={c.id}>
+                <span className="font-medium">{c.title}</span>{' '}
+                <span className="opacity-70">
+                  ({new Date(c.startsAt).toLocaleString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit',
+                  })}
+                  {c.requesterName ? ` · ${c.requesterName}` : ''})
+                </span>
+              </li>
+            ))}
+            {conflicts.length > 5 ? (
+              <li className="opacity-70">+{conflicts.length - 5} more</li>
+            ) : null}
+          </ul>
+          <p className="mt-1 opacity-80">
+            You can still save — overlaps are sometimes intentional.
+          </p>
+        </div>
+      ) : null}
+
+      {/*
+        all_day is *decorative*: the calendar cell + detail page hide the
+        time portion when this is checked, but starts_at / ends_at still
+        store and respect the real timestamps. If you need to reschedule
+        an all-day reminder, just edit the date; the time portion is
+        ignored at render time.
+
+        Recurring events are NOT supported by the data model — every row
+        is a single occurrence. If a job repeats weekly, the user has to
+        clone the event manually (right now we don't expose a "duplicate"
+        action; it's on the polish list).
+      */}
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -411,7 +527,11 @@ export function ScheduleEventForm({ warehouses, bundles, defaults, initialDate }
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         title="Delete this event?"
-        description="The event is removed from the schedule and from any teammates' calendars. Linked bundle quantities (if not already distributed) are released. This cannot be undone."
+        description={
+          defaults?.bundleAlreadyDistributed
+            ? "Removes the event from the calendar. The bundle distribution it already fired stays on record — deleting the event won't un-distribute kits."
+            : "Removes the event from the calendar. If a bundle is linked but not yet distributed, the auto-distribute trigger is canceled (you can still fire it manually from the bundle page). This cannot be undone."
+        }
         confirmLabel="Delete event"
         pending={busy}
         onConfirm={confirmDelete}

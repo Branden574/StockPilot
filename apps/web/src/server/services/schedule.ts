@@ -1,5 +1,8 @@
 import 'server-only';
 
+import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
+
+import { audit } from './audit';
 import {
   assertPermission,
   ServiceError,
@@ -49,6 +52,35 @@ const SELECT_COLUMNS = `
   created_by, updated_by, created_at, updated_at,
   warehouse:warehouses!warehouse_id (name)
 `;
+
+/**
+ * Hard cap on a single range query — protects the calendar page from
+ * a month with 10k events (unlikely but possible if a bulk-import
+ * goes wrong). When hit, we log a warning so we know to paginate.
+ */
+const RANGE_LIMIT = 500;
+
+/**
+ * Allowed status transitions. The form's status dropdown lets the
+ * user pick any of the four, but the service rejects illegal moves
+ * (e.g. completed → in_progress requires going through Reopen, which
+ * the UI exposes as a one-click action). Keeps the lifecycle clean
+ * and the audit trail readable.
+ *
+ * `scheduled` is the implicit reset target — Reopen flips both
+ * 'completed' and 'cancelled' back to it.
+ */
+const ALLOWED_STATUS_TRANSITIONS: Record<ScheduleStatus, ReadonlyArray<ScheduleStatus>> = {
+  scheduled: ['scheduled', 'in_progress', 'cancelled'],
+  in_progress: ['in_progress', 'completed', 'cancelled', 'scheduled'],
+  // Reopen flows: completed/cancelled → scheduled. Direct completed
+  // ↔ cancelled flips are blocked — must reopen first. This matters
+  // because going cancelled → completed used to silently re-fire
+  // distribution (the auto-distribute gate was `!= 'completed'`,
+  // which is true for 'cancelled' too).
+  completed: ['completed', 'scheduled'],
+  cancelled: ['cancelled', 'scheduled'],
+};
 
 function mapRow(
   raw: Record<string, unknown>,
@@ -156,9 +188,20 @@ export class ScheduleService {
       .eq('organization_id', this.ctx.organizationId)
       .lt('starts_at', to.toISOString())
       .or(`ends_at.is.null,ends_at.gte.${from.toISOString()}`)
-      .order('starts_at', { ascending: true });
+      .order('starts_at', { ascending: true })
+      // Hard cap so a runaway month doesn't OOM the calendar page.
+      // If we ever legitimately hit this, the WARN below tells us to
+      // paginate the calendar instead of bumping the limit.
+      .limit(RANGE_LIMIT);
     if (error) throw new ServiceError('internal_error', error.message);
     const rows = (data ?? []) as Array<Record<string, unknown>>;
+    if (rows.length >= RANGE_LIMIT) {
+      console.warn(
+        `[schedule.listInRange] hit cap of ${RANGE_LIMIT} events for org ` +
+          `${this.ctx.organizationId} (${from.toISOString()} → ${to.toISOString()}). ` +
+          `Consider paginating — some events are missing from the view.`,
+      );
+    }
     const ids = rows.map((r) => r.id as string);
     const [creators, distributed] = await Promise.all([
       loadCreatorNames(this.ctx, rows as Array<{ created_by?: string }>),
@@ -205,6 +248,31 @@ export class ScheduleService {
 
   async create(input: CreateScheduleEventInput): Promise<ScheduleEventRow> {
     assertPermission(this.ctx, 'schedule:manage');
+
+    // Verify the caller can write to the event's warehouse + (if a
+    // bundle is linked) the distribute-from warehouse. RLS already
+    // gates the event's own warehouse, but it does NOT check
+    // bundle_warehouse_id — that field doesn't show up in the
+    // schedule_events RLS policy at all. Without this guard, a
+    // warehouse-scoped manager could schedule a kit to be auto-
+    // distributed FROM a warehouse they have no rights to.
+    if (input.warehouseId) {
+      try {
+        await assertWarehouseAccess(input.warehouseId, 'write', this.ctx);
+      } catch (e) {
+        if (e instanceof ForbiddenError) throw new ServiceError('forbidden', e.message);
+        throw e;
+      }
+    }
+    if (input.bundleWarehouseId) {
+      try {
+        await assertWarehouseAccess(input.bundleWarehouseId, 'write', this.ctx);
+      } catch (e) {
+        if (e instanceof ForbiddenError) throw new ServiceError('forbidden', e.message);
+        throw e;
+      }
+    }
+
     const { data, error } = await this.ctx.supabase
       .from('schedule_events')
       .insert({
@@ -228,11 +296,112 @@ export class ScheduleService {
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
     const creators = await loadCreatorNames(this.ctx, [data as { created_by?: string }]);
-    return mapRow(data as Record<string, unknown>, creators);
+    const row = mapRow(data as Record<string, unknown>, creators);
+
+    await audit(
+      {
+        event: 'schedule.created',
+        entityType: 'schedule_event',
+        entityId: row.id,
+        warehouseId: row.warehouseId,
+        after: {
+          title: row.title,
+          startsAt: row.startsAt,
+          endsAt: row.endsAt,
+          status: row.status,
+          bundleId: row.bundleId,
+          bundleQuantity: row.bundleQuantity,
+          bundleWarehouseId: row.bundleWarehouseId,
+        },
+      },
+      this.ctx,
+    );
+
+    return row;
   }
 
   async update(id: string, patch: UpdateScheduleEventInput): Promise<ScheduleEventRow> {
     assertPermission(this.ctx, 'schedule:manage');
+
+    // Load the current row up-front so we can: enforce the status
+    // transition matrix, gate auto-distribute on the *prior* status,
+    // and lock down bundle fields once a distribution has fired.
+    const { data: beforeRow, error: beforeErr } = await this.ctx.supabase
+      .from('schedule_events')
+      .select(
+        'status, bundle_id, bundle_quantity, bundle_warehouse_id, warehouse_id',
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (beforeErr) throw new ServiceError('internal_error', beforeErr.message);
+    if (!beforeRow) throw new ServiceError('not_found', 'Event not found');
+    const beforeStatus = beforeRow.status as ScheduleStatus;
+
+    // Validate status transition before we touch anything else.
+    if (patch.status !== undefined && patch.status !== beforeStatus) {
+      const allowed = ALLOWED_STATUS_TRANSITIONS[beforeStatus] ?? [];
+      if (!allowed.includes(patch.status)) {
+        throw new ServiceError(
+          'validation_error',
+          `Cannot move event from "${beforeStatus}" to "${patch.status}". ` +
+            `Reopen the event first.`,
+        );
+      }
+    }
+
+    // Verify caller has write access to any warehouse mentioned in the
+    // patch — both the event-pin warehouse and the bundle-source
+    // warehouse. Same reasoning as create(): bundle_warehouse_id isn't
+    // covered by RLS on schedule_events.
+    if (patch.warehouseId) {
+      try {
+        await assertWarehouseAccess(patch.warehouseId, 'write', this.ctx);
+      } catch (e) {
+        if (e instanceof ForbiddenError) throw new ServiceError('forbidden', e.message);
+        throw e;
+      }
+    }
+    if (patch.bundleWarehouseId) {
+      try {
+        await assertWarehouseAccess(patch.bundleWarehouseId, 'write', this.ctx);
+      } catch (e) {
+        if (e instanceof ForbiddenError) throw new ServiceError('forbidden', e.message);
+        throw e;
+      }
+    }
+
+    // Lock down bundle fields after distribution has fired — once kits
+    // are out the door the linkage is historical and must not change.
+    // The form already disables these inputs, but the service is the
+    // source of truth.
+    const distributedBefore = await loadDistributedEventIds(this.ctx, [id]);
+    const lockedAfterDistribution = distributedBefore.has(id);
+    if (lockedAfterDistribution) {
+      const touchesBundle =
+        patch.bundleId !== undefined ||
+        patch.bundleQuantity !== undefined ||
+        patch.bundleWarehouseId !== undefined;
+      if (touchesBundle) {
+        const wouldChange =
+          (patch.bundleId !== undefined &&
+            (patch.bundleId ?? null) !== (beforeRow.bundle_id as string | null)) ||
+          (patch.bundleQuantity !== undefined &&
+            Number(patch.bundleQuantity ?? -1) !==
+              Number(beforeRow.bundle_quantity ?? -1)) ||
+          (patch.bundleWarehouseId !== undefined &&
+            (patch.bundleWarehouseId ?? null) !==
+              (beforeRow.bundle_warehouse_id as string | null));
+        if (wouldChange) {
+          throw new ServiceError(
+            'validation_error',
+            'Bundle linkage is locked: this event already triggered a ' +
+              'distribution. Adjust on the bundle page if needed.',
+          );
+        }
+      }
+    }
+
     const updates: Record<string, unknown> = {
       updated_by: this.ctx.userId,
     };
@@ -254,21 +423,6 @@ export class ScheduleService {
     if (patch.bundleWarehouseId !== undefined)
       updates.bundle_warehouse_id = patch.bundleWarehouseId ?? null;
 
-    // Detect a 'completed' transition that has a linked bundle attached
-    // and no prior distribution. We only fire distribution on the first
-    // such transition; subsequent re-completions (e.g. user reopens then
-    // completes again) are no-ops on the distribution side, so we never
-    // double-distribute the same kit.
-    const beforeRes =
-      patch.status === 'completed'
-        ? await this.ctx.supabase
-            .from('schedule_events')
-            .select('status, bundle_id, bundle_quantity, bundle_warehouse_id')
-            .eq('organization_id', this.ctx.organizationId)
-            .eq('id', id)
-            .maybeSingle()
-        : null;
-
     const { data, error } = await this.ctx.supabase
       .from('schedule_events')
       .update(updates)
@@ -279,45 +433,79 @@ export class ScheduleService {
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Event not found');
 
-    // Auto-distribute on first transition into 'completed'.
+    // Auto-distribute on first transition INTO 'completed' FROM
+    // 'in_progress'. The old gate (status !== 'completed') let a
+    // cancelled event re-fire on completion. We tighten to require
+    // the prior status to be exactly 'in_progress' — the normal
+    // workflow path. Reopen → in_progress → complete still works.
+    let autoDistFailed: { message: string; bundleId: string } | null = null;
     if (
       patch.status === 'completed' &&
-      beforeRes &&
-      beforeRes.data &&
-      beforeRes.data.status !== 'completed'
+      beforeStatus === 'in_progress'
     ) {
       const bundleId =
-        (patch.bundleId ?? (beforeRes.data.bundle_id as string | null)) ?? null;
+        (patch.bundleId ?? (beforeRow.bundle_id as string | null)) ?? null;
       const bundleQuantity =
         (patch.bundleQuantity ??
-          (beforeRes.data.bundle_quantity == null
+          (beforeRow.bundle_quantity == null
             ? null
-            : Number(beforeRes.data.bundle_quantity))) ?? null;
+            : Number(beforeRow.bundle_quantity))) ?? null;
       const bundleWarehouseId =
         (patch.bundleWarehouseId ??
-          (beforeRes.data.bundle_warehouse_id as string | null)) ??
+          (beforeRow.bundle_warehouse_id as string | null)) ??
         null;
 
       if (bundleId && bundleQuantity && bundleWarehouseId) {
-        // Only fire if no prior distribution exists for this event.
-        const distributed = await loadDistributedEventIds(this.ctx, [id]);
-        if (!distributed.has(id)) {
-          const { error: distErr } = await this.ctx.supabase.rpc('distribute_bundle', {
-            p_bundle_id: bundleId,
-            p_quantity: bundleQuantity,
-            p_warehouse_id: bundleWarehouseId,
-            p_allow_shortage: true, // event-driven distribution: log shortage rather than block
-            p_schedule_event_id: id,
-            p_notes: 'Auto-distributed on event completion',
-          });
+        // Defense in depth: the in-process duplicate check + the new
+        // unique partial index on bundle_distributions(schedule_event_id)
+        // together prevent double-fire. If the unique constraint trips
+        // (23505) we treat it as benign — another concurrent caller
+        // already distributed for this event.
+        if (!distributedBefore.has(id)) {
+          // assertWarehouseAccess guards above only cover the case
+          // where the patch mutates bundle_warehouse_id. When the
+          // caller is just flipping status and the bundle warehouse
+          // was set by someone else earlier, re-check now.
+          try {
+            await assertWarehouseAccess(bundleWarehouseId, 'write', this.ctx);
+          } catch (e) {
+            if (e instanceof ForbiddenError) {
+              throw new ServiceError(
+                'forbidden',
+                `Cannot auto-distribute: no write access to source warehouse. ${e.message}`,
+              );
+            }
+            throw e;
+          }
+
+          const { error: distErr } = await this.ctx.supabase.rpc(
+            'distribute_bundle',
+            {
+              p_bundle_id: bundleId,
+              p_quantity: bundleQuantity,
+              p_warehouse_id: bundleWarehouseId,
+              p_allow_shortage: true, // event-driven: log shortage rather than block
+              p_schedule_event_id: id,
+              p_notes: 'Auto-distributed on event completion',
+            },
+          );
           if (distErr) {
-            // The event status change already succeeded. Surface the
-            // distribution failure as a soft error so the caller (UI)
-            // can show a toast — they can retry from the bundle page.
-            throw new ServiceError(
-              'conflict',
-              `Event marked complete, but bundle distribution failed: ${distErr.message}. Retry from /dashboard/bundles/${bundleId}.`,
-            );
+            // 23505 = unique_violation. The unique partial index on
+            // bundle_distributions(schedule_event_id) is the source
+            // of truth — if it trips, somebody else already
+            // distributed. Swallow + move on.
+            const code = (distErr as { code?: string }).code;
+            const msg = distErr.message ?? '';
+            const isDup =
+              code === '23505' ||
+              msg.includes('bundle_distributions_event_uniq') ||
+              msg.toLowerCase().includes('duplicate key');
+            if (!isDup) {
+              // Status flip already succeeded. Capture the failure
+              // so we can surface a soft error to the UI after
+              // emitting audit events.
+              autoDistFailed = { message: distErr.message, bundleId };
+            }
           }
         }
       }
@@ -327,16 +515,93 @@ export class ScheduleService {
       loadCreatorNames(this.ctx, [data as { created_by?: string }]),
       loadDistributedEventIds(this.ctx, [id]),
     ]);
-    return mapRow(data as Record<string, unknown>, creators, distributedAfter);
+    const row = mapRow(data as Record<string, unknown>, creators, distributedAfter);
+
+    // Audit: emit a status-specific event for completed/canceled
+    // transitions, plus a generic .updated for everything else
+    // (title, time, bundle reassignment, etc.).
+    if (patch.status === 'completed' && beforeStatus !== 'completed') {
+      await audit(
+        {
+          event: 'schedule.completed',
+          entityType: 'schedule_event',
+          entityId: id,
+          warehouseId: row.warehouseId,
+          before: { status: beforeStatus },
+          after: { status: 'completed' },
+          extra: { autoDistributed: row.bundleDistributed },
+        },
+        this.ctx,
+      );
+    } else if (patch.status === 'cancelled' && beforeStatus !== 'cancelled') {
+      await audit(
+        {
+          event: 'schedule.canceled',
+          entityType: 'schedule_event',
+          entityId: id,
+          warehouseId: row.warehouseId,
+          before: { status: beforeStatus },
+          after: { status: 'cancelled' },
+        },
+        this.ctx,
+      );
+    } else {
+      // Non-status updates (title, time, bundle reassignment, etc.) get
+      // a generic schedule.updated entry. The patch shape doesn't carry
+      // updated_by, so we forward it as-is — audit_logs already records
+      // user_id separately.
+      await audit(
+        {
+          event: 'schedule.updated',
+          entityType: 'schedule_event',
+          entityId: id,
+          warehouseId: row.warehouseId,
+          before: { status: beforeStatus },
+          after: patch,
+        },
+        this.ctx,
+      );
+    }
+
+    if (autoDistFailed) {
+      throw new ServiceError(
+        'conflict',
+        `Event marked complete, but bundle distribution failed: ` +
+          `${autoDistFailed.message}. Retry from /dashboard/bundles/${autoDistFailed.bundleId}.`,
+      );
+    }
+
+    return row;
   }
 
   async delete(id: string): Promise<void> {
     assertPermission(this.ctx, 'schedule:manage');
+
+    // Read the row first so the audit entry can record what was
+    // removed (title + status + warehouse). Cheap; the index covers it.
+    const { data: prior } = await this.ctx.supabase
+      .from('schedule_events')
+      .select('title, status, warehouse_id, bundle_id, starts_at')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+
     const { error } = await this.ctx.supabase
       .from('schedule_events')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+
+    await audit(
+      {
+        event: 'schedule.deleted',
+        entityType: 'schedule_event',
+        entityId: id,
+        warehouseId: (prior?.warehouse_id as string | null) ?? null,
+        before: prior ?? null,
+      },
+      this.ctx,
+    );
   }
 }
