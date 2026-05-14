@@ -12,8 +12,7 @@ type Entity =
   | 'inventory_items'
   | 'categories'
   | 'locations'
-  | 'suppliers'
-  | 'tags';
+  | 'suppliers';
 
 export function RestoreButton({
   entity,

@@ -12,7 +12,6 @@ const ENTITY_VALUES = [
   'categories',
   'locations',
   'suppliers',
-  'tags',
 ] as const;
 
 const restoreSchema = z.object({
@@ -36,7 +35,6 @@ export async function restoreDeletedAction(
     revalidatePath('/dashboard/categories');
     revalidatePath('/dashboard/locations');
     revalidatePath('/dashboard/suppliers');
-    revalidatePath('/dashboard/tags');
     return ok({ id: parsed.data.id });
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);

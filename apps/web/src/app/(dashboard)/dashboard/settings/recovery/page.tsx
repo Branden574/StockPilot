@@ -41,11 +41,8 @@ const SECTIONS: ReadonlyArray<SectionDef> = [
     title: 'Suppliers',
     description: 'Soft-deleted suppliers.',
   },
-  {
-    entity: 'tags',
-    title: 'Tags',
-    description: 'Soft-deleted tags.',
-  },
+  // Tags are hard-deleted (no `deleted_at` column); they can't be
+  // restored. Categories / locations / suppliers / items have it.
 ];
 
 export default async function RecoveryPage() {
@@ -85,7 +82,7 @@ export default async function RecoveryPage() {
             <EmptyState
               icon={History}
               title="Nothing to restore"
-              description="Soft-deleted items, categories, suppliers, locations, and tags will show up here when they exist."
+              description="Soft-deleted items, categories, suppliers, and locations show up here when they exist."
             />
           </CardContent>
         </Card>

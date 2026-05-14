@@ -35,7 +35,7 @@ const ADMIN_SECTIONS = [
 // gate on `items:delete` so manager can't restore items they couldn't
 // delete in the first place. Owners and admins only.
 const RECOVERY_SECTIONS = [
-  { href: '/dashboard/settings/recovery', title: 'Recovery', description: 'Restore soft-deleted items, categories, suppliers, locations, and tags.' },
+  { href: '/dashboard/settings/recovery', title: 'Recovery', description: 'Restore soft-deleted items, categories, suppliers, and locations.' },
 ];
 
 export default async function SettingsPage() {
