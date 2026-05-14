@@ -95,7 +95,21 @@ export type AuditEvent =
   | 'procedure.restored'
   | 'procedure.video.added'
   | 'procedure.video.removed'
-  | 'procedure.commented';
+  | 'procedure.commented'
+  | 'procedure.comment.updated'
+  | 'procedure.comment.deleted'
+  | 'schedule.created'
+  | 'schedule.updated'
+  | 'schedule.deleted'
+  | 'schedule.completed'
+  | 'schedule.canceled'
+  | 'vendor_mapping.created'
+  | 'vendor_mapping.updated'
+  | 'vendor_mapping.deleted'
+  | 'bin.created'
+  | 'bin.updated'
+  | 'bin.archived'
+  | 'notification_preference.updated';
 
 interface AuditPayload {
   event: AuditEvent;
