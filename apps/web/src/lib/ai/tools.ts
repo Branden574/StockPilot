@@ -1945,6 +1945,89 @@ const getStaleItemsTool: ToolExecutor = {
   },
 };
 
+// ──────────────────────────────────────────────────────────────────
+// Semantic search (Wave 4) — vector similarity over the
+// inventory_items.embedding column. Use when keyword matching on
+// name/SKU fails to find a concept the user is describing.
+// ──────────────────────────────────────────────────────────────────
+
+const searchInventorySemanticTool: ToolExecutor = {
+  declaration: {
+    name: 'searchInventorySemantic',
+    description:
+      "Find items by MEANING, not just keyword. Use when the user asks 'something like X', 'items related to <concept>', 'we have a thing for cleaning up spills', or other fuzzy queries that searchInventory (keyword) might miss. Returns top N items ranked by cosine similarity (1.0=best). Only items that have been embedded show up; if results are empty, fall back to searchInventory.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        query: {
+          type: SchemaType.STRING,
+          description: 'Natural-language description of what you\'re looking for.',
+        },
+        limit: { type: SchemaType.NUMBER, description: '1-25. Default 8.' },
+        minScore: {
+          type: SchemaType.NUMBER,
+          description: 'Minimum similarity (0-1). Default 0.5 — anything below is usually noise.',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  async execute(args, ctx) {
+    const query = typeof args.query === 'string' ? args.query.trim() : '';
+    if (!query) {
+      return { error: 'query is required' };
+    }
+    const limit = Math.min(25, Math.max(1, Number(args.limit) || 8));
+    const minScore = Math.min(1, Math.max(0, Number(args.minScore) || 0.5));
+
+    // Lazy-import so the embeddings module + Gemini SDK aren't pulled
+    // into the build graph for tools that never call them.
+    const { embedQuery, vectorLiteral } = await import('@/lib/ai/embeddings');
+    let vec: number[];
+    try {
+      vec = await embedQuery(query);
+    } catch (err) {
+      return {
+        error: 'embedding_failed',
+        message: err instanceof Error ? err.message : 'Unknown error embedding query.',
+      };
+    }
+
+    const { data, error } = await ctx.supabase.rpc(
+      'match_inventory_items_by_embedding',
+      {
+        p_query: vectorLiteral(vec),
+        p_limit: limit,
+        p_min_score: minScore,
+      },
+    );
+    if (error) {
+      return {
+        error: 'search_failed',
+        message: error.message,
+        hint:
+          'If the message mentions the function not existing, migration 0094 needs to be applied. If no rows have embeddings yet, run the backfill from /dashboard/settings (or via the embedItems action).',
+      };
+    }
+    const rows = (data ?? []) as Array<{
+      id: string;
+      name: string | null;
+      sku: string | null;
+      warehouse_id: string | null;
+      quantity_on_hand: number;
+      similarity: number;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      name: dataTag(r.name),
+      sku: r.sku,
+      warehouseId: r.warehouse_id,
+      qty: r.quantity_on_hand,
+      similarity: Math.round(r.similarity * 1000) / 1000,
+    }));
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
   listCategories: listCategoriesTool,
@@ -1978,6 +2061,8 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   getDailyMovementCounts: getDailyMovementCountsTool,
   getTopMovers: getTopMoversTool,
   getStaleItems: getStaleItemsTool,
+  // Wave 4 — semantic search
+  searchInventorySemantic: searchInventorySemanticTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {
