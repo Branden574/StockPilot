@@ -891,7 +891,7 @@ export function InventoryTable({
   );
 }
 
-function Pagination({
+export function Pagination({
   page,
   pageSize,
   total,
@@ -927,9 +927,42 @@ function Pagination({
             </Link>
           )}
         </Button>
-        <span className="text-muted-foreground px-2 text-[11.5px]">
-          Page {safePage} of {totalPages}
-        </span>
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Jump to page"
+              className="hover:text-foreground hover:bg-muted/40 cursor-pointer rounded px-2 py-0.5 text-[11.5px] text-muted-foreground transition-colors"
+            >
+              Page {safePage} of {totalPages}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            align="center"
+            side="top"
+            className="max-h-[360px] w-auto min-w-[260px] overflow-y-auto p-2"
+          >
+            <div className="grid grid-cols-5 gap-1 sm:grid-cols-8">
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
+                <Button
+                  key={n}
+                  asChild
+                  variant={n === safePage ? 'default' : 'ghost'}
+                  size="sm"
+                  className="h-7 w-full px-2 text-[12px]"
+                >
+                  <Link
+                    href={buildHref(n)}
+                    prefetch={false}
+                    aria-current={n === safePage ? 'page' : undefined}
+                  >
+                    {n}
+                  </Link>
+                </Button>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
         <Button asChild variant="outline" size="sm" disabled={nextDisabled}>
           {nextDisabled ? (
             <span aria-disabled className="pointer-events-none opacity-50">
