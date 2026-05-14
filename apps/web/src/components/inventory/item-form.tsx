@@ -33,8 +33,8 @@ import { setItemTagsAction } from '@/server/actions/tags';
 
 import { createItemSchema, type CreateItemInput, type UpdateItemInput } from '@stockpilot/core';
 
-type SizeCode = 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
-const ALL_SIZES: ReadonlyArray<SizeCode> = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
+type SizeCode = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
+const ALL_SIZES: ReadonlyArray<SizeCode> = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
 
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 const IMAGE_ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'image/avif'];
