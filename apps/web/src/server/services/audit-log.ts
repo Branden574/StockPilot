@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { isAdminRole } from '@stockpilot/core';
+import { hasPermission } from '@stockpilot/core';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
 
@@ -95,12 +95,13 @@ export class AuditLogService {
    * audit_logs to admins, but we throw a clear "forbidden" up-front so
    * the UI doesn't have to interpret an empty list as "denied".
    *
-   * No `audit:read` permission exists in @stockpilot/core's registry,
-   * so we gate on role directly (admin or owner).
+   * Gates on `activity_logs:read` so the service matches the matrix and
+   * the page-level check at /dashboard/settings/audit. Manager and
+   * above carry this permission; staff and viewer don't.
    */
   async list(filters: AuditLogFilters = {}): Promise<{ rows: AuditLogRow[]; total: number }> {
-    if (!isAdminRole(this.ctx.role)) {
-      throw new ServiceError('forbidden', 'Audit log access requires admin role.');
+    if (!hasPermission(this.ctx.role, 'activity_logs:read')) {
+      throw new ServiceError('forbidden', 'Audit log access requires the activity_logs:read permission.');
     }
 
     const limit = Math.min(Math.max(1, filters.limit ?? 50), 200);

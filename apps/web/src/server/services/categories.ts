@@ -60,6 +60,10 @@ export class CategoriesService {
       .select('*')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
+    void audit(
+      { event: 'category.created', entityType: 'category', entityId: data.id as string },
+      this.ctx,
+    );
     return data;
   }
 
@@ -79,6 +83,15 @@ export class CategoriesService {
       .select('*')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
+    void audit(
+      {
+        event: 'category.updated',
+        entityType: 'category',
+        entityId: id,
+        extra: { changed_keys: Object.keys(updates) },
+      },
+      this.ctx,
+    );
     return data;
   }
 
