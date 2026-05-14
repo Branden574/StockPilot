@@ -759,7 +759,19 @@ export class InventoryService {
       | { kind: 'set_location'; locationId: string | null }
       | { kind: 'set_status'; status: 'active' | 'archived' | 'discontinued' }
       | { kind: 'add_tags'; tagIds: string[] }
-      | { kind: 'remove_tags'; tagIds: string[] };
+      | { kind: 'remove_tags'; tagIds: string[] }
+      | {
+          /**
+           * Bulk Set rack — merges rack_number / rack_row into each row's
+           * custom_fields (preserving anything else stored there) and
+           * derives bin_location from the composed '{number}-{row}' label
+           * so order pick + cycle-count PDFs keep their location signal.
+           * Pass null for either piece to clear it.
+           */
+          kind: 'set_rack';
+          rackNumber: string | null;
+          rackRow: string | null;
+        };
   }): Promise<{ ok: number; skipped: number }> {
     assertPermission(this.ctx, 'items:update');
     if (input.ids.length === 0) return { ok: 0, skipped: 0 };
@@ -791,6 +803,47 @@ export class InventoryService {
       }
     }
     if (allowedIds.length === 0) return { ok: 0, skipped };
+
+    // Rack ops have to MERGE into custom_fields rather than overwrite
+    // it (other keys live there too — author, book_grade, thumbnail_url,
+    // etc.). Fetch current values, merge in JS, write back one row at a
+    // time. Bulk is capped at 500 rows above so this stays bounded.
+    if (input.op.kind === 'set_rack') {
+      const num = input.op.rackNumber?.trim() || null;
+      const row = input.op.rackRow?.trim().toUpperCase() || null;
+      const composedBin = num ? (row ? `${num}-${row}` : num) : null;
+
+      const { data: cfRows, error: cfErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, custom_fields')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', allowedIds);
+      if (cfErr) throw new ServiceError('internal_error', cfErr.message);
+
+      await Promise.all(
+        ((cfRows ?? []) as Array<{
+          id: string;
+          custom_fields: Record<string, unknown> | null;
+        }>).map(async (r) => {
+          const cf: Record<string, unknown> = { ...(r.custom_fields ?? {}) };
+          if (num) cf.rack_number = num;
+          else delete cf.rack_number;
+          if (row) cf.rack_row = row;
+          else delete cf.rack_row;
+          const { error } = await this.ctx.supabase
+            .from('inventory_items')
+            .update({
+              custom_fields: cf,
+              bin_location: composedBin,
+              updated_by: this.ctx.userId,
+            })
+            .eq('organization_id', this.ctx.organizationId)
+            .eq('id', r.id);
+          if (error) throw new ServiceError('internal_error', error.message);
+        }),
+      );
+      return { ok: allowedIds.length, skipped };
+    }
 
     // Tag ops bypass the inventory_items row update — they only touch
     // the item_tags junction. Delegate to TagsService so the audit

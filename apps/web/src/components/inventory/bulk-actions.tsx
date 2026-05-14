@@ -4,6 +4,7 @@ import {
   Archive,
   ClipboardList,
   FolderTree,
+  Layers,
   Loader2,
   MapPin,
   Tags as TagsIcon,
@@ -25,6 +26,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -81,6 +84,7 @@ type ActiveDialog =
   | { kind: 'set_category' }
   | { kind: 'set_supplier' }
   | { kind: 'set_location' }
+  | { kind: 'set_rack' }
   | { kind: 'add_tags' }
   | { kind: 'remove_tags' }
   | null;
@@ -100,6 +104,8 @@ export function BulkActions({
   const [categoryId, setCategoryId] = React.useState<string>('__none__');
   const [supplierId, setSupplierId] = React.useState<string>('__none__');
   const [locationId, setLocationId] = React.useState<string>('__none__');
+  const [rackNumber, setRackNumber] = React.useState<string>('');
+  const [rackRow, setRackRow] = React.useState<string>('');
   // Tag selections are independent per dialog so opening Add → cancel →
   // Remove doesn't carry the previous picks over. Both reset on dialog
   // close.
@@ -109,6 +115,10 @@ export function BulkActions({
   React.useEffect(() => {
     if (dialog?.kind !== 'add_tags') setAddTagIds(new Set());
     if (dialog?.kind !== 'remove_tags') setRemoveTagIds(new Set());
+    if (dialog?.kind !== 'set_rack') {
+      setRackNumber('');
+      setRackRow('');
+    }
   }, [dialog]);
 
   const count = selectedIds.length;
@@ -227,6 +237,15 @@ export function BulkActions({
           className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
         >
           <MapPin className="h-3 w-3" /> Set location
+        </button>
+
+        <span className="text-[var(--ed-ink-4)]">·</span>
+        <button
+          type="button"
+          onClick={() => setDialog({ kind: 'set_rack' })}
+          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
+        >
+          <Layers className="h-3 w-3" /> Set rack
         </button>
 
         <span className="text-[var(--ed-ink-4)]">·</span>
@@ -409,6 +428,70 @@ export function BulkActions({
                 run({
                   kind: 'set_location',
                   locationId: locationId === '__none__' ? null : locationId,
+                })
+              }
+              disabled={busy}
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Apply'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Set rack */}
+      <Dialog
+        open={dialog?.kind === 'set_rack'}
+        onOpenChange={(v) => (v ? null : setDialog(null))}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Set rack on {count} item{count === 1 ? '' : 's'}</DialogTitle>
+            <DialogDescription>
+              Stamp the same rack on every selected item. Leave both fields
+              empty to clear the rack. The composed label
+              (e.g. <span className="font-mono">38-A</span>) also writes to
+              the legacy bin location so order pick + cycle-count PDFs
+              keep working.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="bulk-rack-number">Rack number</Label>
+              <Input
+                id="bulk-rack-number"
+                placeholder="38"
+                inputMode="numeric"
+                value={rackNumber}
+                onChange={(e) => setRackNumber(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="bulk-rack-row">Rack row</Label>
+              <Input
+                id="bulk-rack-row"
+                placeholder="A"
+                maxLength={4}
+                value={rackRow}
+                onChange={(e) =>
+                  setRackRow(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))
+                }
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDialog(null)}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() =>
+                run({
+                  kind: 'set_rack',
+                  rackNumber: rackNumber.trim() || null,
+                  rackRow: rackRow.trim().toUpperCase() || null,
                 })
               }
               disabled={busy}
