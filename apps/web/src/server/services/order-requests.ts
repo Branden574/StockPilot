@@ -128,6 +128,10 @@ export class OrderRequestsService {
     warehouseId?: string;
     limit?: number;
     offset?: number;
+    /** ISO timestamps. Filter on `created_at`. Used by AI tools for
+        "orders submitted yesterday / this week / between X and Y". */
+    since?: string;
+    until?: string;
   } = {}): Promise<OrderRequestSummary[]> {
     let q = this.ctx.supabase
       .from('order_requests')
@@ -158,6 +162,8 @@ export class OrderRequestsService {
     if (filters.requesterUserId) q = q.eq('requester_user_id', filters.requesterUserId);
     if (filters.requesterEmail) q = q.eq('requester_email', filters.requesterEmail);
     if (filters.warehouseId) q = q.eq('warehouse_id', filters.warehouseId);
+    if (filters.since) q = q.gte('created_at', filters.since);
+    if (filters.until) q = q.lt('created_at', filters.until);
 
     const limit = Math.min(filters.limit ?? 50, 200);
     // M3: cap the maximum offset so callers can't punch through enormous

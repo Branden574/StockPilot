@@ -1549,6 +1549,402 @@ const getOrderRequestSummaryTool: ToolExecutor = {
   },
 };
 
+// ──────────────────────────────────────────────────────────────────
+// Time-window tools (Wave 1) — let the model answer "what changed in
+// the last N days / since DATE" questions without needing to scroll
+// the entire activity feed. All accept ISO timestamps OR a relative
+// `sinceDaysAgo` (model's clock-skew shield) and resolve to ISO before
+// querying. Keeps the tool surface predictable regardless of how the
+// user phrases "yesterday".
+// ──────────────────────────────────────────────────────────────────
+
+function resolveSince(args: Record<string, unknown>): string | undefined {
+  if (typeof args.since === 'string' && args.since) return args.since;
+  if (typeof args.sinceDaysAgo === 'number' && Number.isFinite(args.sinceDaysAgo)) {
+    const days = Math.max(0, Math.min(365, args.sinceDaysAgo));
+    return new Date(Date.now() - days * 86400_000).toISOString();
+  }
+  return undefined;
+}
+function resolveUntil(args: Record<string, unknown>): string | undefined {
+  if (typeof args.until === 'string' && args.until) return args.until;
+  if (typeof args.untilDaysAgo === 'number' && Number.isFinite(args.untilDaysAgo)) {
+    const days = Math.max(0, Math.min(365, args.untilDaysAgo));
+    return new Date(Date.now() - days * 86400_000).toISOString();
+  }
+  return undefined;
+}
+
+const getRecentItemsTool: ToolExecutor = {
+  declaration: {
+    name: 'getRecentItems',
+    description:
+      "Items created OR updated within a time window. Use for 'what was added yesterday', 'items created this week', 'recently edited items'. Pass `mode: 'created'` (default) for new items, `mode: 'updated'` for edits.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        mode: { type: SchemaType.STRING, description: "'created' (default) or 'updated'." },
+        since: { type: SchemaType.STRING, description: 'ISO timestamp lower bound. Optional.' },
+        until: { type: SchemaType.STRING, description: 'ISO timestamp upper bound. Optional.' },
+        sinceDaysAgo: { type: SchemaType.NUMBER, description: 'Convenience: N days ago. Overrides nothing if since is also set.' },
+        untilDaysAgo: { type: SchemaType.NUMBER, description: 'Convenience: N days ago.' },
+        warehouseId: { type: SchemaType.STRING, description: 'Optional warehouse UUID.' },
+        itemType: { type: SchemaType.STRING, description: "'product' | 'book' | 'asset' | 'consumable' | 'all'. Default 'all'." },
+        limit: { type: SchemaType.NUMBER, description: 'Max rows (1-100). Default 25.' },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const since = resolveSince(args);
+    const until = resolveUntil(args);
+    const mode = args.mode === 'updated' ? 'updated' : 'created';
+    const svc = new InventoryService(ctx);
+    const result = await svc.list({
+      itemType:
+        typeof args.itemType === 'string' &&
+        ['product', 'book', 'asset', 'consumable', 'all'].includes(args.itemType)
+          ? (args.itemType as 'product' | 'book' | 'asset' | 'consumable' | 'all')
+          : 'all',
+      warehouseId:
+        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+          ? args.warehouseId
+          : undefined,
+      createdSince: mode === 'created' ? since : undefined,
+      createdUntil: mode === 'created' ? until : undefined,
+      updatedSince: mode === 'updated' ? since : undefined,
+      updatedUntil: mode === 'updated' ? until : undefined,
+      sort: mode === 'updated' ? 'updated_desc' : 'created_desc',
+      limit: Math.min(100, Math.max(1, Number(args.limit) || 25)),
+    });
+    return {
+      mode,
+      since: since ?? null,
+      until: until ?? null,
+      total: result.total,
+      items: result.items.map((i) => ({
+        id: i.id,
+        name: dataTag(i.name),
+        sku: i.sku,
+        qty: i.quantity_on_hand,
+        createdAt: i.created_at,
+        updatedAt: i.updated_at,
+      })),
+    };
+  },
+};
+
+const getMovementsTool: ToolExecutor = {
+  declaration: {
+    name: 'getMovements',
+    description:
+      "Stock movements (receipts, adjustments, transfers, ships, etc.) within a time window, optionally filtered by type or warehouse. Use for 'what was received yesterday', 'all adjusts this week', 'transfers in/out of warehouse X'.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        since: { type: SchemaType.STRING },
+        until: { type: SchemaType.STRING },
+        sinceDaysAgo: { type: SchemaType.NUMBER },
+        untilDaysAgo: { type: SchemaType.NUMBER },
+        types: {
+          type: SchemaType.ARRAY,
+          items: { type: SchemaType.STRING },
+          description: "Filter to movement types like ['adjust','receive_po','transfer','sale','damage','correction','initial'].",
+        },
+        warehouseId: { type: SchemaType.STRING },
+        itemId: { type: SchemaType.STRING },
+        limit: { type: SchemaType.NUMBER, description: 'Max rows (1-100). Default 30.' },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const svc = new MovementsService(ctx);
+    const list = await svc.list({
+      since: resolveSince(args),
+      until: resolveUntil(args),
+      types: Array.isArray(args.types) ? (args.types as string[]).filter((t) => typeof t === 'string') : undefined,
+      warehouseId:
+        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+          ? args.warehouseId
+          : undefined,
+      itemId:
+        typeof args.itemId === 'string' && args.itemId.length > 0 ? args.itemId : undefined,
+      limit: Math.min(100, Math.max(1, Number(args.limit) || 30)),
+    });
+    return list.map((m) => ({
+      id: m.id,
+      type: m.movement_type,
+      delta: m.quantity_change,
+      newQuantity: m.new_quantity,
+      reason: dataTag(m.reason),
+      notes: dataTag(m.notes),
+      createdAt: m.created_at,
+      itemName: dataTag(m.item?.name ?? null),
+      itemSku: m.item?.sku ?? null,
+      actor: dataTag(m.actor?.fullName ?? m.actor?.email ?? (m.user_id ? 'Unknown' : 'System')),
+    }));
+  },
+};
+
+const getRecentOrdersTool: ToolExecutor = {
+  declaration: {
+    name: 'getRecentOrders',
+    description:
+      "Order requests submitted within a time window. Use for 'orders submitted yesterday', 'recent approvals this week', 'pending requests from last 3 days'.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        since: { type: SchemaType.STRING },
+        until: { type: SchemaType.STRING },
+        sinceDaysAgo: { type: SchemaType.NUMBER },
+        untilDaysAgo: { type: SchemaType.NUMBER },
+        status: { type: SchemaType.STRING, description: "Single status filter (pending_approval/approved/packaging/ready_for_delivery/delivered/denied/cancelled)." },
+        warehouseId: { type: SchemaType.STRING },
+        limit: { type: SchemaType.NUMBER, description: 'Max rows (1-100). Default 25.' },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const svc = new OrderRequestsService(ctx);
+    const list = await svc.list({
+      since: resolveSince(args),
+      until: resolveUntil(args),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      status: (typeof args.status === 'string' && args.status ? args.status : undefined) as any,
+      warehouseId:
+        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+          ? args.warehouseId
+          : undefined,
+      limit: Math.min(100, Math.max(1, Number(args.limit) || 25)),
+    });
+    return list.map((o) => ({
+      id: o.id,
+      status: o.status,
+      requester: dataTag(o.requesterName ?? o.requesterEmail ?? null),
+      warehouseName: dataTag(o.warehouseName),
+      lineCount: o.lineCount,
+      totalQty: o.totalQuantity,
+      createdAt: o.createdAt,
+      approvedAt: o.approvedAt,
+      deliveredAt: o.deliveredAt,
+    }));
+  },
+};
+
+const getRecentShipmentsTool: ToolExecutor = {
+  declaration: {
+    name: 'getRecentShipments',
+    description:
+      "Shipments (packing slips) created within a time window. Use for 'what shipped yesterday', 'recent slips', 'unsigned slips this week'.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        since: { type: SchemaType.STRING },
+        until: { type: SchemaType.STRING },
+        sinceDaysAgo: { type: SchemaType.NUMBER },
+        untilDaysAgo: { type: SchemaType.NUMBER },
+        status: { type: SchemaType.STRING, description: "'draft' | 'shipped' | 'delivered' | 'cancelled'" },
+        sourceWarehouseId: { type: SchemaType.STRING },
+        limit: { type: SchemaType.NUMBER, description: 'Max rows (1-100). Default 25.' },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const { ShipmentsService } = await import('@/server/services/shipments');
+    const svc = new ShipmentsService(ctx);
+    const list = await svc.list({
+      since: resolveSince(args),
+      until: resolveUntil(args),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      status: (typeof args.status === 'string' && args.status ? args.status : undefined) as any,
+      sourceWarehouseId:
+        typeof args.sourceWarehouseId === 'string' && args.sourceWarehouseId.length > 0
+          ? args.sourceWarehouseId
+          : undefined,
+      limit: Math.min(100, Math.max(1, Number(args.limit) || 25)),
+    });
+    return list.map((s) => ({
+      id: s.id,
+      workOrder: s.workOrderNumber,
+      status: s.status,
+      shipDate: s.shipDate,
+      sourceWarehouse: dataTag(s.sourceWarehouseName),
+      destinationCharter: dataTag(s.destinationCharterName),
+      attentionTo: dataTag(s.attentionToName),
+      createdAt: s.createdAt,
+    }));
+  },
+};
+
+// ──────────────────────────────────────────────────────────────────
+// Analytics tools (Wave 2) — rollups and rankings that would
+// otherwise need the model to fetch + aggregate manually.
+// ──────────────────────────────────────────────────────────────────
+
+const getDailyMovementCountsTool: ToolExecutor = {
+  declaration: {
+    name: 'getDailyMovementCounts',
+    description:
+      "Per-day count of stock movements over the last N days (default 30, max 90). Use for 'how busy was last week', 'movement trend', 'busiest days'.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        days: { type: SchemaType.NUMBER, description: 'Window size in days (1-90). Default 30.' },
+        warehouseId: { type: SchemaType.STRING },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const days = Math.min(90, Math.max(1, Number(args.days) || 30));
+    const since = new Date(Date.now() - days * 86400_000).toISOString();
+    const svc = new MovementsService(ctx);
+    const rows = await svc.list({
+      since,
+      warehouseId:
+        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+          ? args.warehouseId
+          : undefined,
+      limit: 10_000,
+    });
+    const bucket: Record<string, number> = {};
+    for (const r of rows) {
+      const day = r.created_at.slice(0, 10);
+      bucket[day] = (bucket[day] ?? 0) + 1;
+    }
+    const sorted = Object.entries(bucket)
+      .map(([day, count]) => ({ day, count }))
+      .sort((a, b) => (a.day < b.day ? -1 : 1));
+    const total = sorted.reduce((s, e) => s + e.count, 0);
+    const busiest = [...sorted].sort((a, b) => b.count - a.count).slice(0, 5);
+    return {
+      windowDays: days,
+      since,
+      total,
+      averagePerDay: Math.round((total / days) * 10) / 10,
+      busiestDays: busiest,
+      perDay: sorted,
+    };
+  },
+};
+
+const getTopMoversTool: ToolExecutor = {
+  declaration: {
+    name: 'getTopMovers',
+    description:
+      "Items ranked by stock-movement count over the last N days. Use for 'top movers this month', 'busiest SKUs', 'what's selling/moving most'. Use `order: 'least'` to find slow movers.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        days: { type: SchemaType.NUMBER, description: '1-90. Default 30.' },
+        order: { type: SchemaType.STRING, description: "'most' (default) or 'least'." },
+        limit: { type: SchemaType.NUMBER, description: '1-50. Default 10.' },
+        warehouseId: { type: SchemaType.STRING },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const days = Math.min(90, Math.max(1, Number(args.days) || 30));
+    const since = new Date(Date.now() - days * 86400_000).toISOString();
+    const limit = Math.min(50, Math.max(1, Number(args.limit) || 10));
+    const order = args.order === 'least' ? 'least' : 'most';
+    const svc = new MovementsService(ctx);
+    const rows = await svc.list({
+      since,
+      warehouseId:
+        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+          ? args.warehouseId
+          : undefined,
+      limit: 10_000,
+    });
+    const agg = new Map<
+      string,
+      { count: number; absDelta: number; itemName: string | null; itemSku: string | null }
+    >();
+    for (const r of rows) {
+      const cur =
+        agg.get(r.item_id) ?? { count: 0, absDelta: 0, itemName: null, itemSku: null };
+      cur.count += 1;
+      cur.absDelta += Math.abs(Number(r.quantity_change) || 0);
+      cur.itemName = cur.itemName ?? r.item?.name ?? null;
+      cur.itemSku = cur.itemSku ?? r.item?.sku ?? null;
+      agg.set(r.item_id, cur);
+    }
+    const ranked = Array.from(agg.entries())
+      .map(([itemId, v]) => ({ itemId, ...v }))
+      .sort((a, b) => (order === 'most' ? b.count - a.count : a.count - b.count))
+      .slice(0, limit);
+    return {
+      windowDays: days,
+      since,
+      order,
+      items: ranked.map((r) => ({
+        itemId: r.itemId,
+        name: dataTag(r.itemName),
+        sku: r.itemSku,
+        movementCount: r.count,
+        totalAbsDelta: r.absDelta,
+      })),
+    };
+  },
+};
+
+const getStaleItemsTool: ToolExecutor = {
+  declaration: {
+    name: 'getStaleItems',
+    description:
+      "Items that have had ZERO stock movements in the last N days. Use for 'dead stock', 'items that haven't moved', 'cleanup candidates'.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        days: { type: SchemaType.NUMBER, description: '7-365. Default 90.' },
+        limit: { type: SchemaType.NUMBER, description: '1-100. Default 25.' },
+        warehouseId: { type: SchemaType.STRING },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const days = Math.min(365, Math.max(7, Number(args.days) || 90));
+    const since = new Date(Date.now() - days * 86400_000).toISOString();
+    const limit = Math.min(100, Math.max(1, Number(args.limit) || 25));
+    const movementsSvc = new MovementsService(ctx);
+    const recent = await movementsSvc.list({
+      since,
+      warehouseId:
+        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+          ? args.warehouseId
+          : undefined,
+      limit: 10_000,
+    });
+    const movedIds = new Set(recent.map((r) => r.item_id));
+    const inventorySvc = new InventoryService(ctx);
+    const result = await inventorySvc.list({
+      itemType: 'all',
+      warehouseId:
+        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+          ? args.warehouseId
+          : undefined,
+      sort: 'updated_asc',
+      limit: 200,
+    });
+    const stale = result.items
+      .filter((i) => !movedIds.has(i.id as string))
+      .slice(0, limit);
+    return {
+      windowDays: days,
+      since,
+      candidateCount: stale.length,
+      items: stale.map((i) => ({
+        id: i.id,
+        name: dataTag(i.name),
+        sku: i.sku,
+        qty: i.quantity_on_hand,
+        unitCost: i.unit_cost,
+        valueOnHand: Number(i.quantity_on_hand) * Number(i.unit_cost || 0),
+        lastUpdated: i.updated_at,
+      })),
+    };
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
   listCategories: listCategoriesTool,
@@ -1573,6 +1969,15 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   previewBundleDistribution: previewBundleDistributionTool,
   listOrderRequests: listOrderRequestsTool,
   getOrderRequestSummary: getOrderRequestSummaryTool,
+  // Wave 1 — time-window tools
+  getRecentItems: getRecentItemsTool,
+  getMovements: getMovementsTool,
+  getRecentOrders: getRecentOrdersTool,
+  getRecentShipments: getRecentShipmentsTool,
+  // Wave 2 — analytics
+  getDailyMovementCounts: getDailyMovementCountsTool,
+  getTopMovers: getTopMoversTool,
+  getStaleItems: getStaleItemsTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {

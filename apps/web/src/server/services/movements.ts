@@ -42,6 +42,12 @@ export class MovementsService {
       warehouseId?: string;
       limit?: number;
       offset?: number;
+      /** ISO timestamp. Filter rows with created_at >= since. */
+      since?: string;
+      /** ISO timestamp. Filter rows with created_at < until. */
+      until?: string;
+      /** Movement type filter (e.g. 'adjust', 'transfer', 'receive_po'). */
+      types?: string[];
     } = {},
   ) {
     const limit = Math.min(params.limit ?? 50, 200);
@@ -83,6 +89,11 @@ export class MovementsService {
     }
 
     if (params.itemId) query = query.eq('item_id', params.itemId);
+    if (params.since) query = query.gte('created_at', params.since);
+    if (params.until) query = query.lt('created_at', params.until);
+    if (params.types && params.types.length > 0) {
+      query = query.in('movement_type', params.types);
+    }
 
     const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);

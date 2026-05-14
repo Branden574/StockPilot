@@ -5,7 +5,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { hasPermission } from '@/lib/auth/permissions';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { streamChat, type ChatTurn, type ToolCallRecord } from '@/lib/ai/chat';
+import { buildOrgSnapshot, streamChat, type ChatTurn, type ToolCallRecord } from '@/lib/ai/chat';
 import { classifyAiError } from '@/lib/ai/errors';
 import {
   appendMessages,
@@ -201,8 +201,14 @@ export async function POST(req: Request) {
         // client disconnect propagates all the way down to Gemini and
         // the tool calls. Without this, the model keeps generating
         // (and burning quota) after the user navigates away.
+        // Compute the org snapshot once per turn and prepend it to the
+        // system prompt so basic stats ("how many active items", "low
+        // stock count", "movements today") answer instantly without
+        // burning a tool call. Failures are swallowed inside the helper.
+        const snapshot = await buildOrgSnapshot(ctx);
         const iter = streamChat(history, payload.message, ctx, {
           signal: req.signal,
+          snapshot,
         });
         // Iterate manually so we can capture the generator's return value
         // (final reply + tool calls) without losing it to a normal
