@@ -195,9 +195,17 @@ export class InventoryService {
     }
     if (filters.outOfStock) query = query.lte('quantity_on_hand', 0);
     // PostgREST can't express qty_on_hand <= reorder_point in a single
-    // filter, so narrow to items that have a reorder_point set and do the
-    // final cross-column compare in JS below.
-    if (filters.lowStock) query = query.gt('reorder_point', 0);
+    // filter, so narrow with an OR pre-filter and do the final
+    // cross-column compare in JS below:
+    //   - reorder_point > 0 → traditional "low": qty <= reorder_point
+    //   - qty <= 0           → critical regardless of reorder_point
+    // The OR catches items with reorder_point = 0 AND qty = 0, which
+    // were previously hidden from the "Review low stock" dashboard
+    // alert because the dashboard count = lowStock + outOfStock but
+    // ?stock=low only returned the lowStock half.
+    if (filters.lowStock) {
+      query = query.or('reorder_point.gt.0,quantity_on_hand.lte.0');
+    }
 
     // item_type defaults to 'product' so the legacy /dashboard/inventory tab
     // doesn't accidentally show books/assets. Pass 'all' to disable.
@@ -215,7 +223,10 @@ export class InventoryService {
     if (filters.lowStock) {
       const filtered = rows.filter(
         (r: { quantity_on_hand: number; reorder_point: number }) =>
-          r.quantity_on_hand <= r.reorder_point,
+          // Below or at reorder line, OR critically out of stock even
+          // when no reorder line was set. Matches the dashboard alert
+          // count (lowStockCount + outOfStockCount).
+          r.quantity_on_hand <= r.reorder_point || r.quantity_on_hand <= 0,
       );
       totalCount = filtered.length;
       rows = filtered;
