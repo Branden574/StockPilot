@@ -198,6 +198,10 @@ export class ShipmentsService {
      * detail page passes `limit: 10` for the recent-shipments panel.
      */
     limit?: number;
+    /** ISO timestamps for "what shipped in this window" AI queries. Filters
+        `created_at` (not `ship_date`, which is null until shipped). */
+    since?: string;
+    until?: string;
   } = {}): Promise<ShipmentSummary[]> {
     let query = this.ctx.supabase
       .from('shipments')
@@ -219,6 +223,8 @@ export class ShipmentsService {
     if (filters.sourceWarehouseId) {
       query = query.eq('source_warehouse_id', filters.sourceWarehouseId);
     }
+    if (filters.since) query = query.gte('created_at', filters.since);
+    if (filters.until) query = query.lt('created_at', filters.until);
     if (typeof filters.limit === 'number' && filters.limit > 0) {
       query = query.limit(filters.limit);
     }

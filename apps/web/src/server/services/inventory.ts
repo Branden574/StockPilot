@@ -82,6 +82,16 @@ export interface ItemListFilters {
   offset?: number;
   /** Sort order. Defaults to 'updated_desc' to keep recently-edited rows on top. */
   sort?: ItemListSort;
+  /**
+   * Time-window filters. Used by AI tools for "what was added/updated
+   * yesterday/this week" questions. `createdSince` / `createdUntil`
+   * match `inventory_items.created_at`; `updatedSince` / `updatedUntil`
+   * match `inventory_items.updated_at`. All ISO timestamps.
+   */
+  createdSince?: string;
+  createdUntil?: string;
+  updatedSince?: string;
+  updatedUntil?: string;
 }
 
 const SORT_MAP: Record<ItemListSort, { col: string; asc: boolean }> = {
@@ -272,6 +282,11 @@ export class InventoryService {
     } else if (filters.itemType !== 'all') {
       query = query.eq('item_type', filters.itemType);
     }
+
+    if (filters.createdSince) query = query.gte('created_at', filters.createdSince);
+    if (filters.createdUntil) query = query.lt('created_at', filters.createdUntil);
+    if (filters.updatedSince) query = query.gte('updated_at', filters.updatedSince);
+    if (filters.updatedUntil) query = query.lt('updated_at', filters.updatedUntil);
 
     const { data, error, count } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
