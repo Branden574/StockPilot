@@ -97,6 +97,28 @@ const SORT_MAP: Record<ItemListSort, { col: string; asc: boolean }> = {
   created_asc: { col: 'created_at', asc: true },
 };
 
+/**
+ * Numeric-aware rack comparator. Rack labels come in two shapes:
+ *   "NUM" (e.g. "38") and "NUM-ROW" (e.g. "38-A"). Lex-sorting puts
+ * "10" before "2" which is wrong for any user reading a stockroom map
+ * top-to-bottom. Parse the leading int, compare numerically, then fall
+ * back to lex order for the row segment. Exported only for tests.
+ */
+export function rackCmp(a: string, b: string): number {
+  const [aNum, aRow] = a.split('-', 2);
+  const [bNum, bRow] = b.split('-', 2);
+  const aN = parseInt(aNum ?? '0', 10);
+  const bN = parseInt(bNum ?? '0', 10);
+  const aFinite = Number.isFinite(aN);
+  const bFinite = Number.isFinite(bN);
+  if (aFinite && bFinite && aN !== bN) return aN - bN;
+  if (!aFinite || !bFinite) {
+    const cmp = (aNum ?? '').localeCompare(bNum ?? '');
+    if (cmp !== 0) return cmp;
+  }
+  return (aRow ?? '').localeCompare(bRow ?? '');
+}
+
 export class InventoryService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -339,17 +361,23 @@ export class InventoryService {
     // org. Returns a pre-sorted, deduped text[] so we don't ship
     // every row's custom_fields over the wire just to compute the
     // dropdown options.
+    //
+    // Sort numerically in JS regardless of scope. The RPC's ORDER BY
+    // is alphabetic ("10" before "2"), so we re-sort here with a
+    // comparator that parses the leading number and falls back to
+    // lex order for the row part. Doing this in JS keeps the
+    // migration count from growing for a presentation-only fix.
     if (opts.scope !== 'all') {
       const { data, error } = await this.ctx.supabase.rpc(
         'inventory_distinct_racks',
         { p_scope: opts.scope },
       );
       if (error) throw new ServiceError('internal_error', error.message);
-      return (data ?? []) as string[];
+      return ((data ?? []) as string[]).slice().sort(rackCmp);
     }
     // 'all' — the RPC only knows the two scoped key-sets, so fetch
-    // both and merge client-side. Dedupe + sort to keep the dropdown
-    // identical in shape to the single-scope path.
+    // both and merge client-side. Dedupe + numeric-sort to keep the
+    // dropdown identical in shape to the single-scope path.
     const [items, books] = await Promise.all([
       this.ctx.supabase.rpc('inventory_distinct_racks', { p_scope: 'items' }),
       this.ctx.supabase.rpc('inventory_distinct_racks', { p_scope: 'books' }),
@@ -360,7 +388,7 @@ export class InventoryService {
       ...((items.data ?? []) as string[]),
       ...((books.data ?? []) as string[]),
     ]);
-    return Array.from(set).sort();
+    return Array.from(set).sort(rackCmp);
   }
 
   async get(id: string) {
@@ -1014,6 +1042,31 @@ export class InventoryService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+
+    // Emit a stock_movements row so the dashboard's on-hand-count math
+    // doesn't silently lose qty when an item with stock is archived.
+    // movement_type enum doesn't have 'archived' (see migration 0040 — valid
+    // values: add/remove/adjust/transfer/receive_po/return/damage/loss/
+    // correction/initial/bundle_*), so we use 'adjust' and stash the
+    // lifecycle hint in `reason`. Best-effort: failure does NOT roll back
+    // the archive — same pattern as bulkCreate.
+    const onHand = Number((current as { quantity_on_hand?: number }).quantity_on_hand ?? 0);
+    if (onHand > 0) {
+      const { error: mvErr } = await this.ctx.supabase.from('stock_movements').insert({
+        organization_id: this.ctx.organizationId,
+        item_id: id,
+        movement_type: 'adjust',
+        quantity_change: -onHand,
+        previous_quantity: onHand,
+        new_quantity: 0,
+        user_id: this.ctx.userId,
+        reason: 'item_archived',
+      });
+      if (mvErr) {
+        console.warn('[archive] stock_movements writeback failed:', mvErr.message);
+      }
+    }
+
     void audit(
       {
         event: 'inventory.item.archived',
@@ -1219,6 +1272,28 @@ export class InventoryService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+
+    // Same rationale as archive() — emit a movement row so the dashboard's
+    // on-hand-count math reflects the qty going to zero. 'deleted' isn't a
+    // valid movement_type (see migration 0040); use 'adjust' with the
+    // lifecycle reason. Best-effort.
+    const onHand = Number((current as { quantity_on_hand?: number }).quantity_on_hand ?? 0);
+    if (onHand > 0) {
+      const { error: mvErr } = await this.ctx.supabase.from('stock_movements').insert({
+        organization_id: this.ctx.organizationId,
+        item_id: id,
+        movement_type: 'adjust',
+        quantity_change: -onHand,
+        previous_quantity: onHand,
+        new_quantity: 0,
+        user_id: this.ctx.userId,
+        reason: 'item_deleted',
+      });
+      if (mvErr) {
+        console.warn('[softDelete] stock_movements writeback failed:', mvErr.message);
+      }
+    }
+
     void audit(
       {
         event: 'inventory.item.deleted',
@@ -1237,6 +1312,12 @@ export class InventoryService {
     // Pass ctx so the helper doesn't fall back to requireOrgContext()
     // (NEXT_REDIRECT trap when called from /api/* routes).
     const item = await this.get(input.itemId);
+    if ((item as { status?: string }).status === 'archived') {
+      throw new ServiceError(
+        'validation_error',
+        'Cannot adjust stock on an archived item. Unarchive it first.',
+      );
+    }
     const wh = (item as { warehouse_id?: string | null }).warehouse_id ?? null;
     if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
     const { data, error } = await this.ctx.supabase.rpc('adjust_stock', {

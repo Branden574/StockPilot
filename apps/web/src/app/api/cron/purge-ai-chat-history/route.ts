@@ -1,3 +1,5 @@
+import { timingSafeEqual } from 'node:crypto';
+
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/env';
@@ -6,6 +8,21 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * Constant-time string compare. A naive `a !== b` short-circuits at the
+ * first differing byte and leaks the length of the matching prefix
+ * through timing — a remote attacker can iteratively recover the secret
+ * one byte at a time. timingSafeEqual compares every byte regardless
+ * of mismatch position. Different-length inputs return false early
+ * (length itself is not secret here — the format is `Bearer <fixed>`).
+ */
+function secretsEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
 
 /**
  * Daily cleanup for ai_chat_sessions older than 30 days. Wired to Vercel
@@ -30,7 +47,7 @@ export async function GET(req: Request) {
     );
   }
   const auth = req.headers.get('authorization') ?? '';
-  if (auth !== `Bearer ${env.CRON_SECRET}`) {
+  if (!secretsEqual(auth, `Bearer ${env.CRON_SECRET}`)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
