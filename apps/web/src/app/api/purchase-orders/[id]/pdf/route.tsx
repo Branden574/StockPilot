@@ -1,5 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { Readable } from 'node:stream';
 import { renderToStream } from '@react-pdf/renderer';
+
+import { hasPermission } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
@@ -19,14 +22,24 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   try {
-    const ctx = await withApiContext();
+    // Pass `req` so bearer-token (mobile) callers authenticate the same way
+    // as cookie sessions — /api/* bypasses middleware so this is the only
+    // place auth is resolved.
+    const ctx = await withApiContext(req);
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+    }
+    // Route-level permission gate — defense in depth on top of the
+    // service-layer check in `PurchaseOrdersService.get()`. We don't want
+    // a permission regression here to let unauthorized users stream a
+    // signed PO out of the org.
+    if (!hasPermission(ctx.role, 'purchase_orders:read')) {
+      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
 
     const poSvc = new PurchaseOrdersService(ctx);
@@ -128,7 +141,11 @@ export async function GET(
       />,
     );
 
-    void audit(
+    // Await the audit log BEFORE returning the streamed response. On Vercel
+    // serverless, the function execution can complete the moment the
+    // Response body is consumed by the platform, killing any unawaited
+    // promises (`void audit(...)`) before they hit the audit_log insert.
+    await audit(
       {
         event: 'pdf.exported',
         entityType: 'purchase_order',
@@ -139,7 +156,12 @@ export async function GET(
     );
 
     const filename = `po-${(po as { po_number?: string }).po_number ?? id}.pdf`;
-    return new NextResponse(stream as unknown as ReadableStream<Uint8Array>, {
+    // `renderToStream` is typed as the structural NodeJS.ReadableStream;
+    // at runtime it's a `stream.Readable` from node:stream, which is
+    // what `Readable.toWeb` accepts. The cast here just bridges the
+    // structural type to the concrete one — no shape change.
+    const webStream = Readable.toWeb(stream as Readable) as ReadableStream<Uint8Array>;
+    return new NextResponse(webStream, {
       status: 200,
       headers: {
         'Content-Type': 'application/pdf',

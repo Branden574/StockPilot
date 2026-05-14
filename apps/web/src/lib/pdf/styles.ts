@@ -12,10 +12,34 @@ import { StyleSheet } from '@react-pdf/renderer';
  *   --ed-line-strong = #d4d2c8 (table-row borders)
  *   accent     = #6cbfa3  (mint ~ oklch(0.74 0.12 165) approximation)
  *
+ * # Fonts and Unicode glyph coverage
+ *
  * Fonts are intentionally limited to the @react-pdf builtins (Helvetica,
  * Helvetica-Bold, Courier). Registering external fonts at request time
  * causes serverless cold-start font-fetch failures, so we keep the set
  * minimal and rely on size + weight for hierarchy instead.
+ *
+ * KNOWN LIMITATION (tracked in pdf-hunter C5): the built-in Helvetica /
+ * Courier fonts cover Latin-1 + a small set of WinAnsi punctuation, but
+ * they DO NOT contain CJK glyphs, Cyrillic, emoji, or many extended
+ * Latin marks (most non-ASCII diacritics beyond á/é/í/ó/ú/ñ). Item names
+ * containing those code points will render as missing-glyph boxes ("·"
+ * in some viewers, blank in others). The fix is to register a
+ * Unicode-capable fallback (e.g. Noto Sans) via Font.register, but that
+ * requires shipping a TTF in the build artifact or fetching one on cold
+ * start — both incur cost/risk we haven't budgeted for yet. Document
+ * the limitation here so the next maintainer doesn't rediscover it.
+ *
+ * # Currency / timezone notes
+ *
+ * `formatCurrencyForPdf` defaults to USD because every StockPilot org
+ * we ship to today bills in USD. When we introduce a per-org currency
+ * column, plumb that through here.
+ *
+ * `formatDateForPdf` defaults to America/Los_Angeles (StockPilot's
+ * operational base) so dates rendered in the PDF are stable regardless
+ * of the serverless container's runtime tz, which on Vercel is UTC.
+ * Pass an explicit `timeZone` to override per call.
  */
 export const PDF_COLORS = {
   ink: '#0e0f0d',
@@ -194,6 +218,19 @@ export const pdfStyles = StyleSheet.create({
   small: { fontSize: 8 },
   bold: { fontFamily: 'Helvetica-Bold' },
 
+  // Optional table-footer row — used for warehouse subtotals in the
+  // inventory snapshot. Visually distinct (slightly heavier divider,
+  // sunk background) so the eye stops on it at the bottom of a group.
+  tFootRow: {
+    flexDirection: 'row',
+    backgroundColor: PDF_COLORS.bgSunk,
+    borderTopWidth: 1,
+    borderTopColor: PDF_COLORS.lineStrong,
+    borderTopStyle: 'solid',
+    paddingVertical: 5,
+    paddingHorizontal: 4,
+  },
+
   // PO terms block (rendered above the signature lines, only when org
   // has a non-empty po_terms string).
   termsWrap: {
@@ -293,7 +330,19 @@ export function formatNumberForPdf(value: number, locale = 'en-US'): string {
   return new Intl.NumberFormat(locale).format(value);
 }
 
-export function formatDateForPdf(input: Date | string | null | undefined): string {
+/**
+ * Format a date for the PDF body.
+ *
+ * Defaults to the en-US locale + America/Los_Angeles tz so PDFs render
+ * the same date regardless of where the serverless container is
+ * scheduled (Vercel runs in UTC; that surfaced as "yesterday" dates
+ * for late-night PT exports). Callers can pass an explicit timezone
+ * once org-level tz settings ship.
+ */
+export function formatDateForPdf(
+  input: Date | string | null | undefined,
+  timeZone: string = 'America/Los_Angeles',
+): string {
   if (!input) return '—';
   const d = typeof input === 'string' ? new Date(input) : input;
   if (Number.isNaN(d.getTime())) return '—';
@@ -301,5 +350,6 @@ export function formatDateForPdf(input: Date | string | null | undefined): strin
     year: 'numeric',
     month: 'short',
     day: '2-digit',
+    timeZone,
   });
 }

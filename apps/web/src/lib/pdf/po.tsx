@@ -5,8 +5,21 @@ import {
   PDF_COLORS,
   formatCurrencyForPdf,
   formatDateForPdf,
+  formatNumberForPdf,
   pdfStyles,
 } from './styles';
+
+// Maximums for free-form fields rendered into the PDF. We cap here in
+// the renderer (not the API) because the underlying columns allow long
+// values, but @react-pdf gives no good defense against a 2 000-char
+// description blowing out a single line row.
+const DESCRIPTION_MAX = 140;
+const NOTES_MAX = 1200;
+
+function truncate(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1).trimEnd()}…`;
+}
 
 export interface PoPdfLine {
   sku: string;
@@ -77,10 +90,17 @@ export function PurchaseOrderPdf({
 }: PurchaseOrderPdfProps) {
   const subtotal = Number(po.subtotal) || 0;
   const total = Number(po.total) || 0;
-  const adjustments = total - subtotal; // tax + shipping rolled together; only shown when >0
+  const rawAdjustment = total - subtotal;
+  // Tax + shipping is rendered as a positive surcharge line. Negative
+  // adjustments (discounts, returns netted into the total) are shown
+  // separately as "Adjustments" so the reader doesn't see a
+  // "-$25.00" tucked into a label that says "Tax & shipping".
+  const taxAndShipping = rawAdjustment > 0 ? rawAdjustment : 0;
+  const negativeAdjustment = rawAdjustment < 0 ? rawAdjustment : 0;
   const isDraft = (po.status ?? '').toLowerCase() === 'draft';
   const terms = (org.poTerms ?? '').trim();
   const hasTerms = terms.length > 0;
+  const truncatedNotes = po.notes ? truncate(po.notes, NOTES_MAX) : null;
 
   return (
     <Document title={`Purchase Order ${po.poNumber}`}>
@@ -152,10 +172,10 @@ export function PurchaseOrderPdf({
           </View>
         </View>
 
-        {po.notes ? (
+        {truncatedNotes ? (
           <View style={pdfStyles.section}>
             <Text style={pdfStyles.sectionTitle}>Notes</Text>
-            <Text style={pdfStyles.muted}>{po.notes}</Text>
+            <Text style={pdfStyles.muted}>{truncatedNotes}</Text>
           </View>
         ) : null}
 
@@ -182,11 +202,14 @@ export function PurchaseOrderPdf({
               </View>
             ) : (
               lines.map((l, i) => (
+                // No `wrap={false}` here: long descriptions are pre-
+                // truncated above, but if a single name still wraps onto
+                // 2 lines we'd rather page-break the row than overflow
+                // the page bottom.
                 <View
                   // eslint-disable-next-line react/no-array-index-key
                   key={`${l.sku}-${i}`}
                   style={pdfStyles.tRow}
-                  wrap={false}
                 >
                   <Text style={[pdfStyles.tCell, pdfStyles.muted, { flex: PO_COLS.num }]}>
                     {i + 1}
@@ -194,9 +217,11 @@ export function PurchaseOrderPdf({
                   <Text style={[pdfStyles.tCell, pdfStyles.tCellMono, { flex: PO_COLS.sku }]}>
                     {l.sku || '—'}
                   </Text>
-                  <Text style={[pdfStyles.tCell, { flex: PO_COLS.name }]}>{l.name}</Text>
+                  <Text style={[pdfStyles.tCell, { flex: PO_COLS.name }]}>
+                    {truncate(l.name, DESCRIPTION_MAX)}
+                  </Text>
                   <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>
-                    {l.quantityOrdered}
+                    {formatNumberForPdf(l.quantityOrdered)}
                   </Text>
                   <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
                     {formatCurrencyForPdf(l.unitCost)}
@@ -216,10 +241,24 @@ export function PurchaseOrderPdf({
               <Text style={pdfStyles.totalsLabel}>Subtotal</Text>
               <Text style={pdfStyles.totalsValue}>{formatCurrencyForPdf(subtotal)}</Text>
             </View>
-            {adjustments > 0 ? (
+            {taxAndShipping > 0 ? (
               <View style={pdfStyles.totalsRow}>
                 <Text style={pdfStyles.totalsLabel}>Tax & shipping</Text>
-                <Text style={pdfStyles.totalsValue}>{formatCurrencyForPdf(adjustments)}</Text>
+                <Text style={pdfStyles.totalsValue}>
+                  {formatCurrencyForPdf(taxAndShipping)}
+                </Text>
+              </View>
+            ) : null}
+            {negativeAdjustment < 0 ? (
+              // Surface a sub-zero (total - subtotal) line explicitly so
+              // discounts / overrides don't get camouflaged into the
+              // "Tax & shipping" label. Render the value as-is — Intl
+              // will prepend a minus sign for negative currencies.
+              <View style={pdfStyles.totalsRow}>
+                <Text style={pdfStyles.totalsLabel}>Adjustments</Text>
+                <Text style={pdfStyles.totalsValue}>
+                  {formatCurrencyForPdf(negativeAdjustment)}
+                </Text>
               </View>
             ) : null}
             <View style={pdfStyles.totalsRowFinal}>

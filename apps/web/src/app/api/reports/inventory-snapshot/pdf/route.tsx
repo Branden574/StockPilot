@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { Readable } from 'node:stream';
 import { renderToStream } from '@react-pdf/renderer';
 
 import { withApiContext } from '@/lib/auth/api-context';
@@ -17,9 +18,9 @@ import { hasPermission } from '@stockpilot/core';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
   try {
-    const ctx = await withApiContext();
+    const ctx = await withApiContext(req);
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
@@ -33,6 +34,48 @@ export async function GET(_req: NextRequest) {
     const reportsSvc = new ReportsService(ctx);
     const data = await reportsSvc.inventoryValuation();
 
+    // Hydrate a location label per item. `bin_location` is the
+    // human-readable label set by the rack picker on items; when blank
+    // we fall back to the `primary_location_id` -> location.name join.
+    // RLS already scopes both tables, so we can batch in a single
+    // round-trip per table.
+    const itemIds = data.rows.map((r) => r.itemId).filter((v): v is string => Boolean(v));
+    const itemLocationMap = new Map<string, string | null>();
+    if (itemIds.length > 0) {
+      const { data: itemRows } = await ctx.supabase
+        .from('inventory_items')
+        .select('id, bin_location, primary_location_id')
+        .in('id', itemIds);
+      const rawItems = (itemRows ?? []) as Array<{
+        id: string;
+        bin_location: string | null;
+        primary_location_id: string | null;
+      }>;
+      const primaryLocIds = rawItems
+        .map((r) => r.primary_location_id)
+        .filter((v): v is string => Boolean(v));
+      const locNameById = new Map<string, string>();
+      if (primaryLocIds.length > 0) {
+        const { data: locs } = await ctx.supabase
+          .from('locations')
+          .select('id, name')
+          .in('id', primaryLocIds);
+        for (const l of (locs ?? []) as Array<{ id: string; name: string }>) {
+          locNameById.set(l.id, l.name);
+        }
+      }
+      for (const r of rawItems) {
+        const bin = r.bin_location?.trim() ?? '';
+        if (bin) {
+          itemLocationMap.set(r.id, bin);
+        } else if (r.primary_location_id) {
+          itemLocationMap.set(r.id, locNameById.get(r.primary_location_id) ?? null);
+        } else {
+          itemLocationMap.set(r.id, null);
+        }
+      }
+    }
+
     const groupsByWarehouse = new Map<string, SnapshotPdfRow[]>();
     for (const r of data.rows) {
       const key = r.warehouseName ?? 'Unassigned';
@@ -41,7 +84,7 @@ export async function GET(_req: NextRequest) {
         sku: r.sku,
         name: r.name,
         categoryName: r.categoryName,
-        location: null,
+        location: itemLocationMap.get(r.itemId) ?? null,
         quantityOnHand: r.quantityOnHand,
         unitCost: r.unitCost,
         value: r.value,
@@ -68,7 +111,12 @@ export async function GET(_req: NextRequest) {
     const orgName = ((org as { name?: string | null })?.name ?? 'StockPilot') || 'StockPilot';
     const orgLogoUrl = ((org as { logo_url?: string | null })?.logo_url ?? null) || null;
 
-    const asOf = new Date().toISOString();
+    // Capture a single "now" so the asOf shown in the PDF body matches
+    // the date stamped on the filename. Two separate `new Date()` calls
+    // could span a midnight boundary and confuse end-users diffing
+    // reports.
+    const now = new Date();
+    const asOf = now.toISOString();
     const stream = await renderToStream(
       <InventorySnapshotPdf
         org={{ name: orgName, logoUrl: orgLogoUrl }}
@@ -82,7 +130,10 @@ export async function GET(_req: NextRequest) {
       />,
     );
 
-    void audit(
+    // Await before streaming — see PO PDF route for the rationale: on
+    // Vercel the function can wind down as soon as the body is consumed,
+    // dropping any unawaited audit promise.
+    await audit(
       {
         event: 'pdf.exported',
         entityType: 'inventory_snapshot',
@@ -96,9 +147,12 @@ export async function GET(_req: NextRequest) {
       ctx,
     );
 
-    const stamp = new Date().toISOString().slice(0, 10);
+    const stamp = asOf.slice(0, 10);
     const filename = `inventory-snapshot-${stamp}.pdf`;
-    return new NextResponse(stream as unknown as ReadableStream<Uint8Array>, {
+    // `renderToStream` is typed as NodeJS.ReadableStream; at runtime it's
+    // a Node `stream.Readable` which is what `Readable.toWeb` accepts.
+    const webStream = Readable.toWeb(stream as Readable) as ReadableStream<Uint8Array>;
+    return new NextResponse(webStream, {
       status: 200,
       headers: {
         'Content-Type': 'application/pdf',
