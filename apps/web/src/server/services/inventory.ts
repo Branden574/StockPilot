@@ -324,30 +324,17 @@ export class InventoryService {
    * they surface here without the user re-saving.)
    */
   async listDistinctRacks(opts: { scope: 'items' | 'books' }): Promise<string[]> {
-    const isBooks = opts.scope === 'books';
-    const query = this.ctx.supabase
-      .from('inventory_items')
-      .select('custom_fields')
-      .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null);
-    const { data, error } = isBooks
-      ? await query.eq('item_type', 'book')
-      : await query.not('item_type', 'eq', 'book');
+    // Server-side DISTINCT via the public.inventory_distinct_racks
+    // function (migration 0066). RLS scopes the read to the caller's
+    // org. Returns a pre-sorted, deduped text[] so we don't ship
+    // every row's custom_fields over the wire just to compute the
+    // dropdown options.
+    const { data, error } = await this.ctx.supabase.rpc(
+      'inventory_distinct_racks',
+      { p_scope: opts.scope },
+    );
     if (error) throw new ServiceError('internal_error', error.message);
-
-    const numField = isBooks ? 'book_rack_number' : 'rack_number';
-    const rowField = isBooks ? 'book_rack_row' : 'rack_row';
-    const set = new Set<string>();
-    for (const r of (data ?? []) as Array<{
-      custom_fields: Record<string, unknown> | null;
-    }>) {
-      const cf = r.custom_fields ?? {};
-      const num = typeof cf[numField] === 'string' ? (cf[numField] as string).trim() : '';
-      const row = typeof cf[rowField] === 'string' ? (cf[rowField] as string).trim() : '';
-      if (!num) continue;
-      set.add(row ? `${num}-${row}` : num);
-    }
-    return Array.from(set).sort();
+    return (data ?? []) as string[];
   }
 
   async get(id: string) {

@@ -22,21 +22,31 @@ import { bulkCreateSizedVariantsAction } from '@/server/actions/inventory';
 type SizeCode = 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
 const ALL_SIZES: ReadonlyArray<SizeCode> = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
 
+const SIZE_NAME_REGEX = /(?:\s*-\s*|\s+)(?:XXXXL|XXXL|XXL|XL|L|M|S)\s*$/i;
+const SIZE_SKU_REGEX = /-(?:XXXXL|XXXL|XXL|XL|L|M|S)$/i;
+
 /**
  * Strip a trailing size suffix from a name so we can pre-fill the base
  * for "Add more sizes". Handles ' - S', '- S', and a bare trailing size
- * token (e.g. "L4L Grey Quarter Zip Men's XXL").
+ * token (e.g. "L4L Grey Quarter Zip Men's XXL"). Returns the original
+ * string when no recognized suffix is present.
  */
 function stripSizeSuffix(s: string): string {
-  return s
-    .replace(/\s*-\s*(?:XXXXL|XXXL|XXL|XL|L|M|S)\s*$/i, '')
-    .replace(/\s+(?:XXXXL|XXXL|XXL|XL|L|M|S)\s*$/i, '')
-    .trim();
+  return s.replace(SIZE_NAME_REGEX, '').trim();
 }
 
-function stripSkuSuffix(s: string | null): string | null {
-  if (!s) return null;
-  return s.replace(/-(?:XXXXL|XXXL|XXL|XL|L|M|S)$/i, '');
+/**
+ * Strip a trailing size suffix from a SKU — BUT only when the name had
+ * a recognized size suffix too. Auto-generated SKUs are random base36
+ * and can coincidentally end in `-L`/`-M`/`-S` even when the item isn't
+ * sized; without the name-side check we'd mangle e.g. "SP-OKX68-UAL"
+ * into "SP-OKX68-UA". Tying it to the name keeps the heuristic safe:
+ * if the source item's name doesn't look sized, leave the SKU alone.
+ */
+function stripSkuSuffix(sku: string | null, name: string): string | null {
+  if (!sku) return null;
+  if (!SIZE_NAME_REGEX.test(name)) return sku;
+  return sku.replace(SIZE_SKU_REGEX, '');
 }
 
 export interface AddSizedVariantsButtonProps {
@@ -65,7 +75,9 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
   const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [baseName, setBaseName] = React.useState(stripSizeSuffix(source.name));
-  const [baseSku, setBaseSku] = React.useState<string>(stripSkuSuffix(source.sku) ?? '');
+  const [baseSku, setBaseSku] = React.useState<string>(
+    stripSkuSuffix(source.sku, source.name) ?? '',
+  );
   const [selected, setSelected] = React.useState<
     Array<{ size: SizeCode; quantity: number }>
   >([]);
@@ -73,7 +85,7 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
   React.useEffect(() => {
     if (open) {
       setBaseName(stripSizeSuffix(source.name));
-      setBaseSku(stripSkuSuffix(source.sku) ?? '');
+      setBaseSku(stripSkuSuffix(source.sku, source.name) ?? '');
       setSelected([]);
     }
   }, [open, source.name, source.sku]);
