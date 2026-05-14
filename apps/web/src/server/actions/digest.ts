@@ -104,7 +104,17 @@ export async function sendDigestPreviewAction() {
   const subject = `[Preview] ${weeklyDigestSubject()}`;
   const html = weeklyDigestHtml(payload, opts);
   const text = weeklyDigestText(payload, opts);
-  const res = await sendEmail({ to: ctx.email, subject, html, text });
+  // Match the production cron's List-Unsubscribe header so preview
+  // emails behave the same way in the recipient's inbox.
+  const res = await sendEmail({
+    to: ctx.email,
+    subject,
+    html,
+    text,
+    headers: {
+      'List-Unsubscribe': `<${settingsUrl}>`,
+    },
+  });
   if (!res.ok) {
     return {
       ok: false as const,

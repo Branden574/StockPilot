@@ -15,6 +15,15 @@ interface SendEmailInput {
   html: string;
   text?: string;
   attachments?: EmailAttachment[];
+  /**
+   * Extra RFC-822 headers to attach to the message. Resend forwards
+   * these to the recipient verbatim. Common uses:
+   *   - `List-Unsubscribe`: `<https://app.example/api/unsubscribe?...>`
+   *   - `List-Unsubscribe-Post`: `List-Unsubscribe=One-Click`
+   * Keep header names valid (token chars only) and values short — Resend
+   * rejects very long header values.
+   */
+  headers?: Record<string, string>;
 }
 
 interface SendResult {
@@ -38,6 +47,7 @@ export async function sendEmail({
   html,
   text,
   attachments,
+  headers,
 }: SendEmailInput): Promise<SendResult> {
   if (!env.RESEND_API_KEY) {
     // Dry-run logging on staging / dev. Don't log the body — the
@@ -67,6 +77,7 @@ export async function sendEmail({
         html,
         text,
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
       }),
     });
 

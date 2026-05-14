@@ -32,10 +32,23 @@ export function NotificationBell({ userId, initialUnread }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const [count, setCount] = React.useState(initialUnread);
+  // Cache the supabase client so the cleanup path can call removeChannel
+  // on the SAME instance that opened the subscription. Calling
+  // createClient() again in cleanup creates a fresh socket and leaks
+  // the original (see M4).
+  const supabaseRef = React.useRef<ReturnType<typeof createClient> | null>(null);
+  if (supabaseRef.current === null) {
+    try {
+      supabaseRef.current = createClient();
+    } catch {
+      supabaseRef.current = null;
+    }
+  }
 
   const refetch = React.useCallback(async () => {
+    const supabase = supabaseRef.current;
+    if (!supabase) return;
     try {
-      const supabase = createClient();
       const { count: c, error } = await supabase
         .from('notifications')
         .select('id', { count: 'exact', head: true })
@@ -48,13 +61,37 @@ export function NotificationBell({ userId, initialUnread }: Props) {
     }
   }, [userId]);
 
+  // Throttle router.refresh() to at most once every 500ms. Without this,
+  // a burst of postgres_changes events (e.g. bulk-import fan-out, mark
+  // all read) re-renders the entire RSC tree N times. setTimeout +
+  // pending flag is enough — we want a leading-edge call AND a trailing
+  // call to capture the final state. (I3, M6)
+  const lastRefreshAtRef = React.useRef(0);
+  const refreshPendingRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestRefresh = React.useCallback(() => {
+    const now = Date.now();
+    const since = now - lastRefreshAtRef.current;
+    if (since >= 500) {
+      lastRefreshAtRef.current = now;
+      router.refresh();
+      return;
+    }
+    if (refreshPendingRef.current) return;
+    refreshPendingRef.current = setTimeout(() => {
+      refreshPendingRef.current = null;
+      lastRefreshAtRef.current = Date.now();
+      router.refresh();
+    }, 500 - since);
+  }, [router]);
+
   // Realtime: any change to this user's notifications retriggers a
   // count fetch. Cheap (head-only count query) and self-correcting if
   // a write happens off-channel (e.g. from another browser tab).
   React.useEffect(() => {
-    let channel: ReturnType<ReturnType<typeof createClient>['channel']> | null = null;
+    const supabase = supabaseRef.current;
+    if (!supabase) return;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
     try {
-      const supabase = createClient();
       channel = supabase.channel(`user:${userId}:notifications`);
       channel.on(
         'postgres_changes',
@@ -70,7 +107,7 @@ export function NotificationBell({ userId, initialUnread }: Props) {
           // the router refresh re-fetches its data; the badge updates
           // via refetch() directly.
           void refetch();
-          router.refresh();
+          requestRefresh();
         },
       );
       channel.subscribe();
@@ -79,15 +116,19 @@ export function NotificationBell({ userId, initialUnread }: Props) {
     }
 
     return () => {
-      if (channel) {
+      if (channel && supabase) {
         try {
-          createClient().removeChannel(channel);
+          supabase.removeChannel(channel);
         } catch {
           /* noop */
         }
       }
+      if (refreshPendingRef.current) {
+        clearTimeout(refreshPendingRef.current);
+        refreshPendingRef.current = null;
+      }
     };
-  }, [userId, refetch, router]);
+  }, [userId, refetch, requestRefresh]);
 
   // Re-count on path change so visiting /dashboard/notifications (which
   // calls markAllRead in the page server action) immediately clears

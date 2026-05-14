@@ -178,8 +178,11 @@ const DATE_FMT = new Intl.DateTimeFormat('en-US', {
   year: 'numeric',
 });
 
-export function weeklyDigestSubject(): string {
-  return `StockPilot weekly digest — ${DATE_FMT.format(new Date())}`;
+export function weeklyDigestSubject(now: Date = new Date()): string {
+  // Accept an explicit `now` so callers can lock the subject to the
+  // cron-start time even if rendering individual emails takes a long
+  // time. Default to the current wall clock for preview / one-shot use.
+  return `StockPilot weekly digest — ${DATE_FMT.format(now)}`;
 }
 
 export function weeklyDigestHtml(payload: DigestPayload, opts: DigestEmailOpts): string {
