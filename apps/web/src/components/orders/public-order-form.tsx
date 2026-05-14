@@ -67,6 +67,11 @@ export function PublicOrderForm({
   const [cart, setCart] = useState<Map<string, number>>(() => new Map());
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState<SubmittedState | null>(null);
+  // I13: honeypot. A hidden field labeled "website" that real
+  // submitters never see / fill, but naive form-bots will. The
+  // server treats any non-empty value here as a bot signal and
+  // silently 200s without persisting.
+  const [hp, setHp] = useState('');
 
   // The book list itself is currently bound to the initial warehouse —
   // when the user changes warehouses, we reset the cart and let the
@@ -126,6 +131,7 @@ export function PublicOrderForm({
           requesterOrgLabel: orgLabel.trim() || undefined,
           notes: notes.trim() || undefined,
           lines,
+          hp: hp || undefined,
         }),
       });
       const json: unknown = await res.json().catch(() => ({}));
@@ -159,7 +165,10 @@ export function PublicOrderForm({
           Request ID: <span className="font-mono">{submitted.id}</span>
         </p>
         <a
-          href={`${submitted.trackUrl}&t=${encodeURIComponent(token)}`}
+          // I15: the server already folds `&t=<token>` into trackUrl —
+          // appending it client-side produced a double `&t=` query
+          // parameter. Use trackUrl verbatim.
+          href={submitted.trackUrl}
           className="mt-6 inline-block text-sm underline"
         >
           Track this order
@@ -170,6 +179,37 @@ export function PublicOrderForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-8 pb-28">
+      {/*
+        I13: honeypot field. Rendered off-screen via `aria-hidden` +
+        absolute positioning so real users (including screen-reader
+        users) never see it. Tab-index is -1 so keyboard navigation
+        skips it. `autoComplete="off"` discourages browser autofill
+        from populating it. Empty submissions pass through; any
+        non-empty value triggers the server-side silent-200.
+      */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: '-10000px',
+          top: 'auto',
+          width: 1,
+          height: 1,
+          overflow: 'hidden',
+        }}
+      >
+        <label htmlFor="por-hp">Website</label>
+        <input
+          type="text"
+          id="por-hp"
+          name="website"
+          tabIndex={-1}
+          autoComplete="off"
+          value={hp}
+          onChange={(e) => setHp(e.target.value)}
+        />
+      </div>
+
       {/* Requester info */}
       <section className="space-y-4">
         <h2 className="font-display text-lg">Your info</h2>

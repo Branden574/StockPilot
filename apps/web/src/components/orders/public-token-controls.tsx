@@ -26,6 +26,12 @@ interface Props {
   appUrl: string;
   initialToken: string | null;
   initialBlurb: string | null;
+  /**
+   * Last rotation timestamp for the public token. Used to surface a
+   * 90-day rotation reminder banner. Null when no link has ever been
+   * generated.
+   */
+  initialRotatedAt: string | null;
   warehouses: WarehouseRow[];
 }
 
@@ -33,12 +39,30 @@ export function PublicTokenControls({
   appUrl,
   initialToken,
   initialBlurb,
+  initialRotatedAt,
   warehouses,
 }: Props) {
   const router = useRouter();
   const [token, setToken] = React.useState<string | null>(initialToken);
+  const [rotatedAt, setRotatedAt] = React.useState<string | null>(initialRotatedAt);
   const [rotating, setRotating] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
+
+  // I11: 90-day rotation reminder. Computed in the client so it stays
+  // accurate across long-lived tabs without forcing a server refetch.
+  // We treat 90 days as the threshold to match common credential-
+  // rotation guidance; teams in heavy use should rotate sooner.
+  const ROTATION_THRESHOLD_DAYS = 90;
+  const daysSinceRotation = React.useMemo(() => {
+    if (!rotatedAt) return null;
+    const ms = Date.now() - new Date(rotatedAt).getTime();
+    if (!Number.isFinite(ms) || ms < 0) return null;
+    return Math.floor(ms / (24 * 60 * 60 * 1000));
+  }, [rotatedAt]);
+  const showRotationReminder =
+    token != null &&
+    daysSinceRotation != null &&
+    daysSinceRotation >= ROTATION_THRESHOLD_DAYS;
 
   const [blurb, setBlurb] = React.useState(initialBlurb ?? '');
   const blurbInitial = React.useRef(initialBlurb ?? '');
@@ -71,6 +95,10 @@ export function PublicTokenControls({
       return;
     }
     setToken(res.data.token);
+    // Reset the local rotation timestamp so the reminder banner clears
+    // immediately on success — the server has already persisted `now()`
+    // for `public_request_token_rotated_at`.
+    setRotatedAt(new Date().toISOString());
     setRotateOpen(false);
     toast.success('Public link regenerated. The old link no longer works.');
     router.refresh();
@@ -125,6 +153,20 @@ export function PublicTokenControls({
 
   return (
     <div className="space-y-6">
+      {showRotationReminder ? (
+        <div className="rounded-xl border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm dark:border-amber-700/40 dark:bg-amber-950/40">
+          <p className="font-medium text-amber-900 dark:text-amber-200">
+            Public link is {daysSinceRotation} days old
+          </p>
+          <p className="mt-0.5 text-xs text-amber-800/90 dark:text-amber-200/80">
+            Rotate it every 90 days to invalidate links that may have
+            leaked (forwarded emails, printed flyers, archived chats).
+            Use the Regenerate button below — the old URL stops working
+            immediately.
+          </p>
+        </div>
+      ) : null}
+
       <section className="bg-card space-y-3 rounded-xl border p-4">
         <div>
           <h2 className="text-sm font-medium">Public request link</h2>

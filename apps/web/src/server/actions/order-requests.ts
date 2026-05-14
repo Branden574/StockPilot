@@ -27,7 +27,12 @@ const createSchema = z
       .array(
         z.object({
           itemId: z.string().uuid(),
-          quantity: z.coerce.number().positive().max(MAX_QTY_PER_LINE),
+          // I14: every order line is an integer count of books — fractional
+          // requests like 1.5 don't represent anything sensible and would
+          // confuse downstream stock-movement math. `.int()` rejects them
+          // outright; `.coerce` keeps tolerating string inputs from form
+          // posts.
+          quantity: z.coerce.number().int().positive().max(MAX_QTY_PER_LINE),
           notes: z.string().max(500).nullable().optional(),
         }),
       )

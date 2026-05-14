@@ -26,7 +26,10 @@ export const dynamic = 'force-dynamic';
 
 const lineSchema = z.object({
   itemId: z.string().uuid(),
-  quantity: z.coerce.number().positive().max(10_000),
+  // I14: integer-only quantities here too. Mirrors the internal create
+  // schema so the public surface can't slip a fractional order past
+  // the internal validators.
+  quantity: z.coerce.number().int().positive().max(10_000),
   notes: z.string().max(500).nullish(),
 });
 
@@ -38,6 +41,14 @@ const bodySchema = z.object({
   requesterOrgLabel: z.string().trim().max(160).nullish(),
   notes: z.string().max(2000).nullish(),
   lines: z.array(lineSchema).min(1).max(100),
+  // I13: hidden honeypot field. Real submitters never fill it in
+  // (it's not visible to humans); naive form-fillers fill every
+  // visible+invisible field. Reject when it's non-empty so we can
+  // drop the most casual bot traffic before it even hits validation.
+  // The field is intentionally permissive on the schema (`optional`,
+  // any string) so blocks happen at the explicit check below, not
+  // via schema-rejection that would leak its purpose in error text.
+  hp: z.string().max(500).optional(),
 });
 
 type Body = z.infer<typeof bodySchema>;
@@ -69,23 +80,18 @@ export async function POST(req: NextRequest) {
   }
   const body: Body = parsed.data;
 
-  // 1b. Enforce a total-quantity cap and dedupe lines by itemId so a
-  // submitter can't bypass the per-line max by sending 50 rows of
-  // 10,000 each, and can't bloat the request with duplicate itemIds.
-  // Mirrors `MAX_TOTAL_QTY` in `server/actions/order-requests.ts`.
-  const totalQty = body.lines.reduce(
-    (sum, l) => sum + (Number(l.quantity) || 0),
-    0,
-  );
-  if (totalQty > MAX_TOTAL_QTY) {
-    return NextResponse.json(
-      {
-        error: 'too_many_units',
-        message: `Total quantity exceeds ${MAX_TOTAL_QTY.toLocaleString()} units per request.`,
-      },
-      { status: 400 },
-    );
+  // I13: honeypot trip — silently 200 so bots can't distinguish
+  // success from failure and tune around it. (We don't actually
+  // persist anything; the request just looks accepted from outside.)
+  if (typeof body.hp === 'string' && body.hp.trim().length > 0) {
+    return NextResponse.json({ id: 'ok' });
   }
+
+  // 1b. Dedupe lines by itemId BEFORE the total-qty check so a
+  // submitter can't trip the cap with duplicate rows that we'd
+  // collapse anyway. (I5: dedup-before-total ordering swap.)
+  // Then enforce the total-quantity cap. Mirrors `MAX_TOTAL_QTY`
+  // in `server/actions/order-requests.ts`.
   const byItem = new Map<string, { quantity: number; notes: string | null }>();
   for (const l of body.lines) {
     const prev = byItem.get(l.itemId);
@@ -101,10 +107,29 @@ export async function POST(req: NextRequest) {
     quantity: v.quantity,
     notes: v.notes,
   }));
+  const totalQty = dedupedLines.reduce(
+    (sum, l) => sum + (Number(l.quantity) || 0),
+    0,
+  );
+  if (totalQty > MAX_TOTAL_QTY) {
+    return NextResponse.json(
+      {
+        error: 'too_many_units',
+        message: `Total quantity exceeds ${MAX_TOTAL_QTY.toLocaleString()} units per request.`,
+      },
+      { status: 400 },
+    );
+  }
 
-  // 2. Rate limit per IP. We trust x-forwarded-for since Vercel sets it.
+  // 2. Rate limit per IP. We only trust `x-forwarded-for` when running
+  // on Vercel — outside of Vercel the platform may not strip client-
+  // supplied XFF, so a submitter could rotate the header to bypass
+  // the per-IP cap. Local dev / self-hosted falls back to the socket
+  // address via `x-real-ip`, or the unknown bucket. (C7)
+  const onVercel = process.env.VERCEL === '1';
+  const xff = onVercel ? req.headers.get('x-forwarded-for') : null;
   const ip =
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+    xff?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||
     'unknown';
   // `mode: 'closed'` — this is an unauthenticated endpoint, so a DB
@@ -200,6 +225,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // C8: normalize the requester email to lowercase on insert so the
+  // public track route's case-insensitive match (`lower(stored) ===
+  // lower(query)`) never has to coerce stored values at read time.
+  // Also collapses "Alice@Foo.com" vs "alice@foo.com" duplicates
+  // into a single canonical address for downstream dedupe / lookup.
+  const requesterEmail = body.requesterEmail.toLowerCase();
+
   // 6. Insert header. Use the rollback-on-line-error pattern from
   // OrderRequestsService.create — if line insert fails, delete the
   // header so we don't leave orphans behind.
@@ -211,7 +243,7 @@ export async function POST(req: NextRequest) {
       status: 'pending_approval',
       source: 'public_link',
       requester_user_id: null,
-      requester_email: body.requesterEmail,
+      requester_email: requesterEmail,
       requester_name: body.requesterName,
       requester_org_label: body.requesterOrgLabel ?? null,
       notes: body.notes ?? null,
@@ -251,7 +283,7 @@ export async function POST(req: NextRequest) {
     await sendOrderRequestEmail({
       kind: 'submitted',
       request: header,
-      recipientEmail: body.requesterEmail,
+      recipientEmail: requesterEmail,
       recipientName: body.requesterName,
       appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
     });
@@ -268,7 +300,7 @@ export async function POST(req: NextRequest) {
     // returned URL verbatim.
     trackUrl:
       `/r/track?id=${header.id}` +
-      `&email=${encodeURIComponent(body.requesterEmail)}` +
+      `&email=${encodeURIComponent(requesterEmail)}` +
       `&t=${encodeURIComponent(body.token)}`,
   });
 }
