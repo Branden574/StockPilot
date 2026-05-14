@@ -67,6 +67,12 @@ export interface AddSizedVariantsButtonProps {
     reorderPoint: number;
     reorderQuantity: number;
     unitOfMeasure: string;
+    /**
+     * Item type of the source row. Drives post-submit routing so the
+     * user lands back on the same tab they started on — books go to
+     * /dashboard/books, everything else to /dashboard/inventory.
+     */
+    itemType?: 'product' | 'book' | 'asset' | 'consumable';
   };
 }
 
@@ -127,7 +133,10 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
         `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`,
       );
       setOpen(false);
-      router.push('/dashboard/inventory');
+      // Route back to the tab the source item lives on. Books have
+      // their own /dashboard/books page; everything else funnels to
+      // /dashboard/inventory.
+      router.push(source.itemType === 'book' ? '/dashboard/books' : '/dashboard/inventory');
     } finally {
       setBusy(false);
     }
