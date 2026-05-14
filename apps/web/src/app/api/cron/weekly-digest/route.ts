@@ -1,3 +1,5 @@
+import { timingSafeEqual } from 'node:crypto';
+
 import { NextResponse } from 'next/server';
 
 import { sendEmail } from '@/lib/email/resend';
@@ -17,6 +19,19 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * Constant-time string compare. A naive `a !== b` short-circuits at the
+ * first differing byte and leaks the length of the matching prefix
+ * through timing. timingSafeEqual compares every byte regardless of
+ * mismatch position. See cron/purge-ai-chat-history for the same guard.
+ */
+function secretsEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
 // Vercel default function timeout is 10s for Hobby. The cron iterates orgs
 // + sends emails sequentially; bump generously since each Resend send is
 // a network round trip.
@@ -43,7 +58,7 @@ export async function GET(req: Request) {
     );
   }
   const auth = req.headers.get('authorization') ?? '';
-  if (auth !== `Bearer ${env.CRON_SECRET}`) {
+  if (!secretsEqual(auth, `Bearer ${env.CRON_SECRET}`)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
