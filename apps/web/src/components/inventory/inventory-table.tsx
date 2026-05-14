@@ -392,13 +392,20 @@ export function InventoryTable({
       setServerHits(null);
       setServerLoading(false);
       // Clear the q param from the URL when the user empties the box.
+      // Use router.replace (not history.replaceState) so Next.js
+      // re-runs the server component and re-fetches the FULL item
+      // list — otherwise the page stays seeded with whatever
+      // filtered set the URL was loaded with (e.g. after a round
+      // trip from the detail page that started with ?q=lanyard,
+      // clearing the box would leave only the lanyard rows on
+      // screen because the page-level fetch never re-ran).
       const next = new URLSearchParams(params.toString());
       if (next.has('q') || next.has('page')) {
         next.delete('q');
         next.delete('page');
         const qs = next.toString();
         const newUrl = qs ? `${basePath}?${qs}` : basePath;
-        window.history.replaceState(null, '', newUrl);
+        router.replace(newUrl, { scroll: false });
       }
       return;
     }
@@ -414,6 +421,16 @@ export function InventoryTable({
         }
         for (const v of params.getAll('cat')) url.searchParams.append('cat', v);
         for (const v of params.getAll('loc')) url.searchParams.append('loc', v);
+        // Scope the API query to the tab's item type when the URL
+        // didn't explicitly set ?type=. The books tab passes
+        // `showBookFields` and its page-level fetch hardcodes
+        // `itemType: 'book'`, but that's invisible to the API URL
+        // — without this override, the endpoint defaults to
+        // 'product' (the InventoryService default) and books get
+        // filtered out of the search results.
+        if (!url.searchParams.has('type') && showBookFields) {
+          url.searchParams.set('type', 'book');
+        }
         url.searchParams.set('limit', String(pageSize));
 
         const res = await fetch(url.toString(), { signal: ctrl.signal });
