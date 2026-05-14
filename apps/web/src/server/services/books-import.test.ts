@@ -165,11 +165,11 @@ describe('BooksImportService.execute', () => {
   });
 
   it('throws plan_limit_exceeded BEFORE the insert when batch would overflow plan limit', async () => {
-    // 'free' plan limits items to 100; seed currentItemCount at 99 so
-    // adding 2 books trips the gate (99 + 2 > 100).
+    // 'free' plan limits items to 10000; seed currentItemCount at 9999
+    // so adding 2 books trips the gate (9999 + 2 > 10000).
     const stub = execStub({
       plan: 'free',
-      currentItemCount: 99,
+      currentItemCount: 9999,
       insertedItems: [], // would never run
     });
 

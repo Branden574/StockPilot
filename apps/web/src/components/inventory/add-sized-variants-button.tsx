@@ -49,12 +49,14 @@ export interface AddSizedVariantsButtonProps {
     categoryId: string;
     supplierId: string | null;
     warehouseId: string;
+    charterId: string | null;
     primaryLocationId: string | null;
     binLocation: string | null;
     retailPrice: number;
     unitCost: number;
     reorderPoint: number;
     reorderQuantity: number;
+    unitOfMeasure: string;
   };
 }
 
@@ -94,12 +96,14 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
       categoryId: source.categoryId,
       supplierId: source.supplierId,
       warehouseId: source.warehouseId,
+      charterId: source.charterId,
       primaryLocationId: source.primaryLocationId,
       binLocation: source.binLocation,
       retailPrice: source.retailPrice,
       unitCost: source.unitCost,
       reorderPoint: source.reorderPoint,
       reorderQuantity: source.reorderQuantity,
+      unitOfMeasure: source.unitOfMeasure,
       variants: selected,
     });
     setBusy(false);

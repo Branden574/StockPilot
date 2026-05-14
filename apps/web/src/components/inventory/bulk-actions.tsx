@@ -462,7 +462,7 @@ export function BulkActions({
                 placeholder="38"
                 inputMode="numeric"
                 value={rackNumber}
-                onChange={(e) => setRackNumber(e.target.value)}
+                onChange={(e) => setRackNumber(e.target.value.replace(/[^0-9]/g, ''))}
               />
             </div>
             <div className="space-y-1.5">

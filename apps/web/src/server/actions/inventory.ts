@@ -95,12 +95,14 @@ const bulkCreateSizedSchema = z.object({
   categoryId: z.string().uuid(),
   supplierId: z.string().uuid().nullable(),
   warehouseId: z.string().uuid(),
+  charterId: z.string().uuid().nullable(),
   primaryLocationId: z.string().uuid().nullable(),
   binLocation: z.string().max(120).nullable(),
   retailPrice: z.coerce.number().min(0),
   unitCost: z.coerce.number().min(0),
   reorderPoint: z.coerce.number().int().min(0),
   reorderQuantity: z.coerce.number().int().min(0),
+  unitOfMeasure: z.string().min(1).max(40),
   variants: z
     .array(
       z.object({
@@ -151,6 +153,16 @@ export async function bulkUpdateInventoryAction(input: {
   }
   if (input.ids.some((id) => typeof id !== 'string' || id.length === 0)) {
     return err('validation_error', 'Invalid item id in selection');
+  }
+  if (input.op.kind === 'set_rack') {
+    const rn = input.op.rackNumber;
+    const rr = input.op.rackRow;
+    if (rn !== null && (typeof rn !== 'string' || rn.length > 50)) {
+      return err('validation_error', 'Rack number must be 50 characters or fewer.');
+    }
+    if (rr !== null && (typeof rr !== 'string' || rr.length > 10)) {
+      return err('validation_error', 'Rack row must be 10 characters or fewer.');
+    }
   }
   try {
     const svc = await InventoryService.forCurrentUser();
