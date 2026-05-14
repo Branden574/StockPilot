@@ -67,7 +67,7 @@ function makeStub() {
 describe('InventoryService.list rack filter', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('matches bin_location case-insensitively for non-book items', async () => {
+  it('matches custom_fields.rack_number + rack_row for non-book items', async () => {
     const stub = makeStub();
     const svc = new InventoryService({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -79,7 +79,14 @@ describe('InventoryService.list rack filter', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
     await svc.list({ rack: '20-A', itemType: 'product' });
-    expect(stub._ilikeCalls).toContainEqual(['bin_location', '20-A']);
+    const numCall = stub._filterCalls.find(
+      (c) => c[0] === 'custom_fields->>rack_number',
+    );
+    const rowCall = stub._filterCalls.find(
+      (c) => c[0] === 'custom_fields->>rack_row',
+    );
+    expect(numCall).toEqual(['custom_fields->>rack_number', 'eq', '20']);
+    expect(rowCall).toEqual(['custom_fields->>rack_row', 'eq', 'A']);
   });
 
   it('matches book_rack_number on custom_fields for books', async () => {

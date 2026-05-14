@@ -93,6 +93,23 @@ function strOrNull(v: unknown): string | null {
  * custom_fields JSONB. Returns nulls for any missing piece so callers
  * can render conditionally without checking each field individually.
  */
+/**
+ * Reads the non-book rack number/row out of an item's custom_fields.
+ * Items use the neutral rack_number / rack_row keys (vs books which
+ * use book_rack_* — both are matched by InventoryService.list per
+ * item-type, so they stay isolated).
+ */
+export function readItemRack(
+  customFields: Record<string, unknown> | null | undefined,
+): { rackNumber: string | null; rackRow: string | null; rackLabel: string | null } {
+  const cf = customFields ?? {};
+  const rackNumber = strOrNull(cf.rack_number);
+  const rackRow = strOrNull(cf.rack_row);
+  const rackLabel =
+    rackNumber || rackRow ? [rackNumber, rackRow].filter(Boolean).join('-') : null;
+  return { rackNumber, rackRow, rackLabel };
+}
+
 export function readBookStorage(
   customFields: Record<string, unknown> | null | undefined,
 ): BookStorageInfo {

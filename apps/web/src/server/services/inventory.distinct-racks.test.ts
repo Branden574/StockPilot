@@ -30,12 +30,13 @@ function buildScopedChain(rows: unknown[]) {
 }
 
 describe('InventoryService.listDistinctRacks', () => {
-  it('returns dedup + sorted bin_locations for items scope', async () => {
+  it('returns combined "{number}-{row}" labels for items scope', async () => {
     const rows = [
-      { bin_location: '20-A' },
-      { bin_location: '5-B' },
-      { bin_location: '20-A' },
-      { bin_location: null },
+      { custom_fields: { rack_number: '20', rack_row: 'A' } },
+      { custom_fields: { rack_number: '5', rack_row: 'B' } },
+      { custom_fields: { rack_number: '20', rack_row: 'A' } },
+      { custom_fields: { rack_number: '12' } },
+      { custom_fields: null },
     ];
     const chain = buildScopedChain(rows);
     const svc = new InventoryService({
@@ -48,7 +49,7 @@ describe('InventoryService.listDistinctRacks', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
     const out = await svc.listDistinctRacks({ scope: 'items' });
-    expect(out).toEqual(['20-A', '5-B'].sort());
+    expect(out).toEqual(['12', '20-A', '5-B']);
   });
 
   it('returns combined "{number}-{row}" labels for books scope', async () => {

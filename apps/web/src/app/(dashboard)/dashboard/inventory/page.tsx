@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
+import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
 import { hasPermission } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
@@ -65,6 +66,7 @@ export default async function InventoryPage({
     sort?: string;
     cat?: string | string[];
     loc?: string | string[];
+    rack?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -105,8 +107,9 @@ export default async function InventoryPage({
   const sort = parseSort(params.sort);
   const categoryIds = parseIdList(params.cat);
   const locationIds = parseIdList(params.loc);
+  const rack = typeof params.rack === 'string' ? params.rack : undefined;
 
-  const [inventory, categories, locations, suppliers, tags, savedViews] = await Promise.all([
+  const [inventory, categories, locations, suppliers, tags, savedViews, racks] = await Promise.all([
     inventorySvc.list({
       q: params.q,
       status: lifecycleStatus,
@@ -116,6 +119,7 @@ export default async function InventoryPage({
       warehouseId: warehouseFilter,
       categoryIds,
       locationIds,
+      rack,
       sort,
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
@@ -125,6 +129,7 @@ export default async function InventoryPage({
     suppliersSvc.list(),
     tagsSvc.list(),
     savedViewsSvc.list('inventory'),
+    inventorySvc.listDistinctRacks({ scope: 'items' }),
   ]);
 
   // Per-row 14-day trend series (qty + moves) for the sparkline column.
@@ -191,6 +196,7 @@ export default async function InventoryPage({
             paramName="status"
             view={lifecycleStatus === 'archived' ? 'archived' : 'active'}
           />
+          <RackFilterDropdown racks={racks} />
           {canCreate && lifecycleStatus !== 'archived' && (
             <>
               <Button asChild variant="outline">
