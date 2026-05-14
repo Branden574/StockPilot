@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronDown, Download, Loader2, Pin, Plus, Search, Users, X } from 'lucide-react';
+import { ChevronDown, Download, Loader2, Pin, Plus, ScanLine, Search, Users, X } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -48,7 +48,7 @@ interface Lookups {
   locations: Map<string, { name: string }>;
 }
 
-interface InventoryTableProps {
+export interface InventoryTableProps {
   items: Item[];
   lookups: Lookups;
   /** Lists used by the bulk actions bar AND the new filter dropdowns.
@@ -89,6 +89,14 @@ interface InventoryTableProps {
    * hasPermission(ctx.role, 'items:create') check.
    */
   canCreate?: boolean;
+  /**
+   * When provided, renders a small camera button inside the search
+   * input on the right edge. Click invokes the callback so the
+   * parent can open its own scanner modal + handle the result. The
+   * table never imports IsbnScanner itself — keeps the dependency
+   * direction one-way.
+   */
+  onScanRequest?: () => void;
   /** 1-based current page. Default 1 — pagination UI hides if total ≤ pageSize. */
   page?: number;
   /** How many rows per page. Drives the page count math. */
@@ -218,6 +226,7 @@ export function InventoryTable({
   basePath = '/dashboard/inventory',
   showBookFields = false,
   canCreate = true,
+  onScanRequest,
   page = 1,
   pageSize = 50,
   trends,
@@ -383,9 +392,19 @@ export function InventoryTable({
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search name, SKU, barcode…"
-            className="h-8 pl-8 text-[12.5px]"
+            className={cn('h-8 pl-8 text-[12.5px]', onScanRequest && 'pr-8')}
             aria-label="Search items"
           />
+          {onScanRequest && (
+            <button
+              type="button"
+              onClick={onScanRequest}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-[var(--ed-ink-4)] transition-colors hover:text-foreground"
+              aria-label="Scan barcode"
+            >
+              <ScanLine className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
 
         <SortMenu value={sort} onChange={setSort} />
