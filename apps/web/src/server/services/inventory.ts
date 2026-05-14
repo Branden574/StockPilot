@@ -159,19 +159,21 @@ export class InventoryService {
     }
     if (filters.rack && filters.rack.trim()) {
       const rack = filters.rack.trim();
-      if (filters.itemType === 'book') {
-        // Books store rack as custom_fields.book_rack_number + book_rack_row.
-        // "38-A" splits into number/row; "38" alone matches just the number.
-        const [num, row] = rack.split('-');
-        if (num) {
-          query = query.filter('custom_fields->>book_rack_number', 'eq', num);
-        }
-        if (row) {
-          query = query.filter('custom_fields->>book_rack_row', 'eq', row);
-        }
-      } else {
-        query = query.ilike('bin_location', rack);
-      }
+      // Books use the legacy book_rack_* keys; everything else uses the
+      // neutral rack_* keys. Both are inside custom_fields and matched
+      // exactly. "38-A" splits into number/row; "38" alone matches just
+      // the number.
+      const numKey =
+        filters.itemType === 'book'
+          ? 'custom_fields->>book_rack_number'
+          : 'custom_fields->>rack_number';
+      const rowKey =
+        filters.itemType === 'book'
+          ? 'custom_fields->>book_rack_row'
+          : 'custom_fields->>rack_row';
+      const [num, row] = rack.split('-');
+      if (num) query = query.filter(numKey, 'eq', num);
+      if (row) query = query.filter(rowKey, 'eq', row);
     }
     // Multi-select takes precedence; fall back to legacy single-id when
     // the array is empty/missing so AI tools and any prior caller keep
@@ -284,39 +286,26 @@ export class InventoryService {
    * rack set yet.
    */
   async listDistinctRacks(opts: { scope: 'items' | 'books' }): Promise<string[]> {
-    if (opts.scope === 'items') {
-      const { data, error } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('bin_location')
-        .eq('organization_id', this.ctx.organizationId)
-        .is('deleted_at', null)
-        .not('bin_location', 'is', null)
-        .not('item_type', 'eq', 'book');
-      if (error) throw new ServiceError('internal_error', error.message);
-      const set = new Set<string>();
-      for (const r of (data ?? []) as Array<{ bin_location: string | null }>) {
-        const v = (r.bin_location ?? '').trim();
-        if (v) set.add(v);
-      }
-      return Array.from(set).sort();
-    }
-
-    const { data, error } = await this.ctx.supabase
+    const isBooks = opts.scope === 'books';
+    const query = this.ctx.supabase
       .from('inventory_items')
       .select('custom_fields')
       .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null)
-      .eq('item_type', 'book');
+      .is('deleted_at', null);
+    const { data, error } = isBooks
+      ? await query.eq('item_type', 'book')
+      : await query.not('item_type', 'eq', 'book');
     if (error) throw new ServiceError('internal_error', error.message);
+
+    const numField = isBooks ? 'book_rack_number' : 'rack_number';
+    const rowField = isBooks ? 'book_rack_row' : 'rack_row';
     const set = new Set<string>();
     for (const r of (data ?? []) as Array<{
       custom_fields: Record<string, unknown> | null;
     }>) {
       const cf = r.custom_fields ?? {};
-      const num =
-        typeof cf.book_rack_number === 'string' ? cf.book_rack_number.trim() : '';
-      const row =
-        typeof cf.book_rack_row === 'string' ? cf.book_rack_row.trim() : '';
+      const num = typeof cf[numField] === 'string' ? (cf[numField] as string).trim() : '';
+      const row = typeof cf[rowField] === 'string' ? (cf[rowField] as string).trim() : '';
       if (!num) continue;
       set.add(row ? `${num}-${row}` : num);
     }

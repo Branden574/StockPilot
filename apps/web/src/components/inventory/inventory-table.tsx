@@ -21,7 +21,7 @@ import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
-import { getCrateColor, readBookStorage } from '@/lib/book-storage';
+import { getCrateColor, readBookStorage, readItemRack } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 
@@ -501,7 +501,7 @@ export function InventoryTable({
                         ['Rack', 'left'],
                         ['Crate', 'left'],
                       ] as const)
-                    : ([] as const)),
+                    : ([['Rack', 'left']] as const)),
                   ['On hand', 'right'],
                   ['Coverage', 'left'],
                   ['14-day', 'right'],
@@ -529,7 +529,7 @@ export function InventoryTable({
             {items.length === 0 && (
               <tr>
                 <td
-                  colSpan={showBookFields ? 13 : 10}
+                  colSpan={showBookFields ? 13 : 11}
                   className="py-12 text-center text-[12.5px] text-[var(--ed-ink-4)]"
                 >
                   No items match your filters.
@@ -614,6 +614,20 @@ export function InventoryTable({
                     )}
                   </td>
                   <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">{location?.name ?? '—'}</td>
+                  {!showBookFields && (
+                    <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+                      {(() => {
+                        const rack = readItemRack(item.custom_fields);
+                        return rack.rackLabel ? (
+                          <span className="font-mono tabular-nums">
+                            {rack.rackLabel}
+                          </span>
+                        ) : (
+                          <span className="text-[var(--ed-ink-4)]">—</span>
+                        );
+                      })()}
+                    </td>
+                  )}
                   {showBookFields &&
                     (() => {
                       const storage = readBookStorage(item.custom_fields);

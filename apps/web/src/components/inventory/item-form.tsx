@@ -179,13 +179,18 @@ export function ItemForm({
   const [author, setAuthor] = React.useState<string>(
     isBook ? String(cfDefault.author ?? '') : '',
   );
-  // Book-only storage location fields. Persisted into custom_fields with
-  // the book_* prefix so they don't collide with anything else.
+  // Rack number / row inputs. Books write to custom_fields.book_rack_*
+  // (kept that way so historical data keeps matching); everything else
+  // writes to neutral custom_fields.rack_* keys.
   const [rackNumber, setRackNumber] = React.useState<string>(
-    isBook ? String(cfDefault.book_rack_number ?? '') : '',
+    isBook
+      ? String(cfDefault.book_rack_number ?? '')
+      : String(cfDefault.rack_number ?? ''),
   );
   const [rackRow, setRackRow] = React.useState<string>(
-    isBook ? String(cfDefault.book_rack_row ?? '') : '',
+    isBook
+      ? String(cfDefault.book_rack_row ?? '')
+      : String(cfDefault.rack_row ?? ''),
   );
   const [crateColor, setCrateColor] = React.useState<string>(
     isBook ? String(cfDefault.book_crate_color ?? '') : '',
@@ -340,9 +345,10 @@ export function ItemForm({
   }
 
   const onSubmit = handleSubmit(async (values) => {
-    // Merge book-specific fields (Author + rack + crate) into
-    // custom_fields before submit. Empty fields are omitted so we don't
-    // overwrite an existing value with an empty string on edit.
+    // Merge custom fields before submit. Books get the book_* prefix
+    // for rack/crate; everything else uses the neutral rack_* keys.
+    // Empty fields are omitted so we don't overwrite an existing value
+    // with an empty string on edit.
     const mergedValues = isBook
       ? {
           ...values,
@@ -363,7 +369,23 @@ export function ItemForm({
             ...(grade ? { book_grade: grade } : {}),
           },
         }
-      : values;
+      : (() => {
+          const num = rackNumber.trim();
+          const row = rackRow.trim().toUpperCase();
+          // Auto-derive bin_location from rack so order pick + cycle-
+          // count flows that read bin_location keep working. Format
+          // matches the human label users would type: '38-A' or '38'.
+          const composedBin = num ? (row ? `${num}-${row}` : num) : undefined;
+          return {
+            ...values,
+            binLocation: composedBin ?? values.binLocation,
+            customFields: {
+              ...(values.customFields ?? {}),
+              ...(num ? { rack_number: num } : {}),
+              ...(row ? { rack_row: row } : {}),
+            },
+          };
+        })();
     const action = isEdit && defaults?.id ? updateItemAction(defaults.id, mergedValues) : createItemAction(mergedValues);
     const res = await action;
     if (!res.ok) {
@@ -620,32 +642,36 @@ export function ItemForm({
             placeholder="None"
             optional
           />
-          <Field label="Bin / shelf" optional>
-            <Input placeholder="A-12, Shelf 3…" {...register('binLocation')} />
+          {isBook ? (
+            <Field label="Bin / shelf" optional>
+              <Input placeholder="A-12, Shelf 3…" {...register('binLocation')} />
+            </Field>
+          ) : (
+            <div />
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Rack number" optional>
+            <Input
+              placeholder="38"
+              inputMode="numeric"
+              value={rackNumber}
+              onChange={(e) => setRackNumber(e.target.value)}
+            />
+          </Field>
+          <Field label="Rack row" optional>
+            <Input
+              placeholder="A"
+              maxLength={4}
+              value={rackRow}
+              onChange={(e) =>
+                setRackRow(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))
+              }
+            />
           </Field>
         </div>
         {isBook && (
           <>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Rack number" optional>
-                <Input
-                  placeholder="38"
-                  inputMode="numeric"
-                  value={rackNumber}
-                  onChange={(e) => setRackNumber(e.target.value)}
-                />
-              </Field>
-              <Field label="Rack row" optional>
-                <Input
-                  placeholder="A"
-                  maxLength={4}
-                  value={rackRow}
-                  onChange={(e) =>
-                    setRackRow(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))
-                  }
-                />
-              </Field>
-            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>
