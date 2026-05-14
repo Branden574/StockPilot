@@ -925,8 +925,12 @@ function StatusMetric({
       <div
         className={cn(
           'mt-1 font-mono text-[18px] font-medium tabular-nums leading-none',
-          tone === 'good' && 'text-[hsl(var(--accent-foreground))]',
-          tone === 'warn' && 'text-[hsl(var(--warning-foreground))]',
+          // Use the standalone hue vars (`--accent`, `--warning`) not the
+          // *-foreground vars — those are designed for text painted ON a
+          // colored background and are near-black/near-white, which goes
+          // invisible when used as standalone text on the card surface.
+          tone === 'good' && 'text-[hsl(var(--accent))]',
+          tone === 'warn' && 'text-[hsl(var(--warning))]',
           tone === 'danger' && 'text-[hsl(var(--destructive))]',
         )}
       >
