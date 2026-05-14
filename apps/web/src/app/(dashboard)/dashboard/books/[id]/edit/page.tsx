@@ -4,6 +4,7 @@ import { notFound, redirect } from 'next/navigation';
 import { ItemForm } from '@/components/inventory/item-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
+import { safeReturnPath } from '@/lib/safe-return-path';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { CategoriesService } from '@/server/services/categories';
@@ -31,10 +32,13 @@ import { hasPermission, resolveTerminology } from '@stockpilot/core';
  */
 export default async function EditBookPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ return?: string }>;
 }) {
   const { id } = await params;
+  const { return: returnParam } = await searchParams;
   const ctx = await requireOrgContext();
   if (!hasPermission(ctx.role, 'items:update')) {
     redirect(`/dashboard/inventory/${id}`);
@@ -96,11 +100,16 @@ export default async function EditBookPage({
     }> | null) ?? null,
   );
 
+  // Mirror of /dashboard/inventory/[id]/edit/page.tsx — see that file
+  // for the rationale on why `backHref` always resolves to a non-empty
+  // value and what that means for ItemForm's post-save behavior.
+  const backHref = safeReturnPath(returnParam) ?? `/dashboard/books/${id}`;
+
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
         <Link
-          href={`/dashboard/books/${id}`}
+          href={backHref}
           className="text-muted-foreground hover:text-foreground text-sm"
         >
           ← Back to book
@@ -153,6 +162,7 @@ export default async function EditBookPage({
             forcedWarehouseId={forced}
             warehouseLabel={terminology.warehouse_singular}
             charterLabel={terminology.charter_singular}
+            returnHref={backHref}
           />
         </CardContent>
       </Card>
