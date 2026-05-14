@@ -115,42 +115,62 @@ export default async function InventoryPage({
   // partial list. Otherwise we stick to the items scope.
   const rackScope: 'items' | 'books' | 'all' = itemType === 'all' ? 'all' : 'items';
 
+  // Wrap each query so a single failure surfaces with its tag in Vercel
+  // logs instead of the generic "Server Components render" error
+  // message that omits details in production. Each promise stays in
+  // Promise.all so the page parallelism is preserved.
+  function tagged<T>(label: string, p: Promise<T>): Promise<T> {
+    return p.catch((err) => {
+      console.error(`[inventory page] ${label} failed:`, err);
+      throw err;
+    });
+  }
   const [inventory, categories, locations, suppliers, tags, savedViews, racks] = await Promise.all([
-    inventorySvc.list({
-      q: params.q,
-      status: lifecycleStatus,
-      lowStock: params.stock === 'low',
-      outOfStock: params.stock === 'out',
-      itemType,
-      warehouseId: warehouseFilter,
-      categoryIds,
-      locationIds,
-      rack,
-      sort,
-      limit: PAGE_SIZE,
-      offset: (page - 1) * PAGE_SIZE,
-    }),
-    categoriesSvc.list(),
-    locationsSvc.list(),
-    suppliersSvc.list(),
-    tagsSvc.list(),
-    savedViewsSvc.list('inventory'),
-    inventorySvc.listDistinctRacks({ scope: rackScope }),
+    tagged(
+      'inventorySvc.list',
+      inventorySvc.list({
+        q: params.q,
+        status: lifecycleStatus,
+        lowStock: params.stock === 'low',
+        outOfStock: params.stock === 'out',
+        itemType,
+        warehouseId: warehouseFilter,
+        categoryIds,
+        locationIds,
+        rack,
+        sort,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+      }),
+    ),
+    tagged('categoriesSvc.list', categoriesSvc.list()),
+    tagged('locationsSvc.list', locationsSvc.list()),
+    tagged('suppliersSvc.list', suppliersSvc.list()),
+    tagged('tagsSvc.list', tagsSvc.list()),
+    tagged('savedViewsSvc.list', savedViewsSvc.list('inventory')),
+    tagged(
+      `inventorySvc.listDistinctRacks(${rackScope})`,
+      inventorySvc.listDistinctRacks({ scope: rackScope }),
+    ),
   ]);
 
   // Per-row 14-day trend series (qty + moves) for the sparkline column.
   // One round trip via stock_movements; flat fallback for items with no
   // movements in the window. See docs/superpowers/specs/2026-05-08-…
-  const trends = await getItemTrends(
-    inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+  const trends = await tagged(
+    'getItemTrends',
+    getItemTrends(
+      inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+    ),
   );
 
   // Fetch primary images in batch (1 query + 1 createSignedUrls call,
   // not N round trips). Returns Map<itemId, signedUrl>. Falls back to
   // a custom_fields.thumbnail_url stashed by the bulk-ISBN importer
   // for books that came in before the cover-rehost flow landed.
-  const imagesById = await imagesSvc.primaryImagesForItems(
-    inventory.items.map((i) => i.id),
+  const imagesById = await tagged(
+    'imagesSvc.primaryImagesForItems',
+    imagesSvc.primaryImagesForItems(inventory.items.map((i) => i.id)),
   );
   const itemsWithImages = inventory.items.map((i) => {
     const cf = (i as { custom_fields?: Record<string, unknown> | null })
