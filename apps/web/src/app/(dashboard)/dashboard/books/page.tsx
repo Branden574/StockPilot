@@ -5,6 +5,7 @@ import { BackfillCoversButton } from '@/components/books/backfill-covers-button'
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { BooksInventoryTable } from '@/components/books/books-inventory-table';
+import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
 import { hasPermission } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
@@ -65,6 +66,7 @@ export default async function BooksPage({
     sort?: string;
     cat?: string | string[];
     loc?: string | string[];
+    rack?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -92,8 +94,9 @@ export default async function BooksPage({
   const sort = parseSort(params.sort);
   const categoryIds = parseIdList(params.cat);
   const locationIds = parseIdList(params.loc);
+  const rack = typeof params.rack === 'string' ? params.rack : undefined;
 
-  const [inventory, categories, locations, suppliers, tags, savedViews] = await Promise.all([
+  const [inventory, categories, locations, suppliers, tags, savedViews, racks] = await Promise.all([
     inventorySvc.list({
       q: params.q,
       status: lifecycleStatus,
@@ -103,6 +106,7 @@ export default async function BooksPage({
       itemType: 'book',
       categoryIds,
       locationIds,
+      rack,
       sort,
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
@@ -112,6 +116,7 @@ export default async function BooksPage({
     suppliersSvc.list(),
     tagsSvc.list(),
     savedViewsSvc.list('books'),
+    inventorySvc.listDistinctRacks({ scope: 'books' }),
   ]);
 
   // Per-row 14-day trend series (qty + moves) for the sparkline column.
@@ -168,6 +173,7 @@ export default async function BooksPage({
             paramName="status"
             view={lifecycleStatus === 'archived' ? 'archived' : 'active'}
           />
+          <RackFilterDropdown racks={racks} />
           {canCreate && lifecycleStatus !== 'archived' && (
             <>
               <BackfillCoversButton />
