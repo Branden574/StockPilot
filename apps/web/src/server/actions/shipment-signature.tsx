@@ -2,6 +2,7 @@
 
 import { Buffer } from 'node:buffer';
 
+import { headers } from 'next/headers';
 import { renderToStream } from '@react-pdf/renderer';
 
 import { sendEmail } from '@/lib/email/resend';
@@ -16,6 +17,7 @@ import {
   addressJsonToLines,
   type ShipmentPdfLine,
 } from '@/lib/pdf/shipment';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import {
@@ -25,6 +27,14 @@ import {
   type ActionResult,
   type SubmitShipmentSignatureInput,
 } from '@stockpilot/core';
+
+// I2: cap the merged notes column so a long original notes value plus a
+// long signer-supplied notes value can't blow past the column / index
+// budgets. The original notes column is already validated to <= 2000 at
+// create time, and signer notes are <= 2000 at the schema layer; the
+// concatenation could otherwise reach ~4100 chars. 4000 is a safe ceiling
+// that preserves both ends in the common case.
+const MERGED_NOTES_MAX = 4000;
 
 /**
  * Public, unauthenticated server action invoked by the /s/[token] page.
@@ -53,6 +63,39 @@ export async function submitShipmentSignatureAction(
   }
   const { token, signatureDataUrl, signedByName, email, notes } = parsed.data;
 
+  // I11: rate-limit the public signature endpoint. The token is the auth
+  // gate, but a leaked link + a runaway client could otherwise pound the
+  // PDF render + email send paths. 10 attempts per 5 minutes per token is
+  // generous for legitimate retries (slow connection, server hiccup) and
+  // cheap enough that a flooder can't extract value. Closed-mode failure
+  // so a DB blip can't accidentally unlock unlimited submissions.
+  const rl = await checkRateLimit(
+    `shipment-sign:${token}`,
+    10,
+    5 * 60 * 1000,
+    'closed',
+  );
+  if (!rl.allowed) {
+    return err(
+      'validation_error',
+      'Too many signature attempts. Wait a few minutes and try again.',
+    );
+  }
+
+  // Capture the signer's IP for audit metadata (I10). Vercel sets
+  // `x-forwarded-for` (comma-separated, leftmost is the originating
+  // client); fall back to `x-real-ip` and finally to null. We do NOT
+  // trust this for auth — it's an audit-trail breadcrumb only.
+  let signerIp: string | null = null;
+  try {
+    const h = await headers();
+    const fwd = h.get('x-forwarded-for');
+    if (fwd) signerIp = fwd.split(',')[0]?.trim() || null;
+    if (!signerIp) signerIp = h.get('x-real-ip');
+  } catch {
+    // headers() throws outside a request context; non-fatal for tests.
+  }
+
   const admin = createAdminClient();
 
   // 1. Look up the shipment by token. Service-role bypasses RLS.
@@ -62,7 +105,7 @@ export async function submitShipmentSignatureAction(
       'id, organization_id, work_order_number, status, ship_date, ' +
         'attention_to_name, notes, source_warehouse_id, ' +
         'destination_charter_id, signature_token_expires_at, ' +
-        'signature_email_cc, signature_token',
+        'signature_email_to, signature_email_cc, signature_token',
     )
     .eq('signature_token', token)
     .maybeSingle();
@@ -84,9 +127,26 @@ export async function submitShipmentSignatureAction(
     source_warehouse_id: string;
     destination_charter_id: string;
     signature_token_expires_at: string | null;
+    signature_email_to: string | null;
     signature_email_cc: string[] | null;
     signature_token: string;
   };
+
+  // I11: if the original packing slip locked the signer to a specific
+  // email (signature_email_to set at create time), refuse a submission
+  // from anyone else. The token is the auth gate, but if a recipient
+  // forwards the link the actual signer should match the addressee.
+  // Case-insensitive compare; empty signature_email_to means anyone
+  // with the token may sign (back-compat with pre-2C slips).
+  if (shipment.signature_email_to) {
+    const lockedTo = shipment.signature_email_to.trim().toLowerCase();
+    if (lockedTo && email.trim().toLowerCase() !== lockedTo) {
+      return err(
+        'forbidden',
+        'This signature link was issued to a different email address. Ask the warehouse manager for a fresh link.',
+      );
+    }
+  }
 
   if (shipment.status === 'delivered' || shipment.status === 'cancelled') {
     return err(
@@ -111,18 +171,37 @@ export async function submitShipmentSignatureAction(
   }
 
   const signedAt = new Date();
-  const mergedNotes =
+  // I2: cap merged notes at MERGED_NOTES_MAX so the concatenation can't
+  // grow unbounded across re-signatures (defensive — the schema caps
+  // each side at 2000, but the column is `text` and we don't want to
+  // store > 4KB for a single shipment's notes).
+  const rawMerged =
     notes && notes.length > 0
       ? shipment.notes && shipment.notes.length > 0
         ? `${shipment.notes}\n\n[Signed by ${signedByName}]: ${notes}`
         : `[Signed by ${signedByName}]: ${notes}`
       : shipment.notes;
+  const mergedNotes =
+    rawMerged && rawMerged.length > MERGED_NOTES_MAX
+      ? `${rawMerged.slice(0, MERGED_NOTES_MAX - 1)}…`
+      : rawMerged;
 
   // 2. Persist the signature + flip the state machine. We store the PNG
   // data URL inline in `signature_image_url` — the column is `text` and
   // a ~10–50KB PNG fits fine. Keeps the path simple (no storage bucket,
   // no signed URLs, no second round-trip from the PDF renderer).
-  const { error: updateErr } = await admin
+  //
+  // C3: null signature_token on this write so the public /s/[token]
+  // page stops serving the receipt forever once the slip is delivered.
+  // The token is single-use (sign once → expire); future visits fall
+  // back to the InactiveCard ("This link is no longer active").
+  //
+  // C6: chain .select('id') so we can detect zero-row updates (status
+  // changed under us, e.g. a manager hit Mark Delivered via the
+  // authenticated path between lookup and update). The `.in('status',
+  // ['shipped'])` filter silently passes on zero rows; without the
+  // select-and-check we'd think we succeeded when we actually didn't.
+  const { data: updatedRows, error: updateErr } = await admin
     .from('shipments')
     .update({
       signature_image_url: signatureDataUrl,
@@ -131,12 +210,25 @@ export async function submitShipmentSignatureAction(
       signature_email_to: email,
       notes: mergedNotes,
       status: 'delivered',
+      signature_token: null,
     })
     .eq('id', shipment.id)
-    .in('status', ['shipped']);
+    .in('status', ['shipped'])
+    .select('id');
   if (updateErr) {
     void reportError(updateErr, { tag: 'shipment-signature.update' });
     return err('internal_error', 'Could not record signature. Please retry.');
+  }
+  if (!updatedRows || updatedRows.length === 0) {
+    // Lost the race — the shipment is no longer in 'shipped' status.
+    // Could be: a manager marked it delivered through the authenticated
+    // UI between our lookup and our update, or it was cancelled. Either
+    // way, treat as not_found so the user-facing message matches the
+    // /s/[token] page's InactiveCard.
+    return err(
+      'not_found',
+      'This shipment is no longer accepting signatures.',
+    );
   }
 
   // 3. Load the bits we need to re-render the signed PDF + send the email.
@@ -322,35 +414,41 @@ export async function submitShipmentSignatureAction(
     }
   }
 
-  // 6. Audit. We can't use `audit()` (it depends on withContext()), so we
-  // write directly via the admin client. user_id falls back to the source
-  // warehouse manager — they're effectively the org-side party of record
-  // for this state change. We use Promise.allSettled so a logging hiccup
-  // never fails the request after we already succeeded.
-  const auditorUserId = src?.manager_user_id ?? null;
+  // 6. Audit. We can't use `audit()` (it depends on withContext()), so
+  // we write directly via the admin client.
+  //
+  // I10: user_id is NULL — the signer is unauthenticated, not the
+  // warehouse manager. Attributing audit rows to the manager was wrong:
+  // a future "who did this?" lookup would point at someone who never
+  // touched the slip. The signer's identity goes in metadata (name +
+  // email + ip), which is the right shape for an external-party audit.
+  // Promise.allSettled so a logging hiccup never fails the request
+  // after we already succeeded.
   const baseMeta = {
     entity_type: 'shipment',
     entity_id: shipment.id,
     warehouse_id: shipment.source_warehouse_id,
     signed_by_name: signedByName,
+    signed_by_email: email,
+    signer_ip: signerIp,
     work_order_number: shipment.work_order_number,
   };
   await Promise.allSettled([
     admin.from('audit_logs').insert({
       organization_id: shipment.organization_id,
-      user_id: auditorUserId,
+      user_id: null,
       event: 'shipment.signed',
       metadata: baseMeta,
     }),
     admin.from('audit_logs').insert({
       organization_id: shipment.organization_id,
-      user_id: auditorUserId,
+      user_id: null,
       event: 'shipment.delivered',
       metadata: baseMeta,
     }),
     admin.from('audit_logs').insert({
       organization_id: shipment.organization_id,
-      user_id: auditorUserId,
+      user_id: null,
       event: 'shipment.email_sent',
       metadata: { ...baseMeta, recipientCount: recipientList.length },
     }),

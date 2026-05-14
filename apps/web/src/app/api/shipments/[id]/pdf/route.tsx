@@ -11,7 +11,7 @@ import {
   type ShipmentPdfLine,
 } from '@/lib/pdf/shipment';
 import { audit } from '@/server/services/audit';
-import { ServiceError } from '@/server/services/context';
+import { assertPermission, ServiceError } from '@/server/services/context';
 import { ShipmentsService } from '@/server/services/shipments';
 
 // @react-pdf/renderer needs Node APIs (Buffer, fs-style streams) — Edge runtime
@@ -30,6 +30,14 @@ export async function GET(
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
+
+    // I4 + I5: gate this route behind the same permission that gates
+    // every other shipment write surface. The PDF contains an inline
+    // signature image AND a QR code that embeds the signature_token —
+    // a viewer-role org member shouldn't be able to download either.
+    // Closing this gate also closes the I5 token-leak path, since a
+    // user without purchase_orders:manage can no longer hit the route.
+    assertPermission(ctx, 'purchase_orders:manage');
 
     const svc = new ShipmentsService(ctx);
     const detail = await svc.get(id);

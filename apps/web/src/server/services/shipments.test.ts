@@ -43,6 +43,12 @@ beforeEach(() => {
 describe('ShipmentsService.markShipped', () => {
   it('calls post_shipment_shipped RPC once and audits the response', async () => {
     const stub = makeSupabaseStub({
+      // I6: markShipped now pre-fetches the source warehouse for the
+      // warehouse-access gate before hitting the RPC.
+      'shipments.select.maybeSingle': {
+        data: { source_warehouse_id: 'wh-a' },
+        error: null,
+      },
       // Atomic posting — single RPC returning the table row.
       'rpc:post_shipment_shipped': {
         data: [{ lines_shipped: 2, total_qty_shipped: 8 }],
@@ -75,6 +81,10 @@ describe('ShipmentsService.markShipped', () => {
     // Postgres `returns table` can come back as a bare object from
     // supabase-js depending on shape — defensive normalization check.
     const stub = makeSupabaseStub({
+      'shipments.select.maybeSingle': {
+        data: { source_warehouse_id: 'wh-a' },
+        error: null,
+      },
       'rpc:post_shipment_shipped': {
         data: { lines_shipped: 1, total_qty_shipped: 3 },
         error: null,
@@ -93,6 +103,10 @@ describe('ShipmentsService.markShipped', () => {
 
   it('maps P0001 insufficient_stock to a conflict ServiceError with actionable copy', async () => {
     const stub = makeSupabaseStub({
+      'shipments.select.maybeSingle': {
+        data: { source_warehouse_id: 'wh-a' },
+        error: null,
+      },
       'rpc:post_shipment_shipped': {
         data: null,
         error: {
@@ -114,6 +128,10 @@ describe('ShipmentsService.markShipped', () => {
 
   it('maps P0001 shipment_not_draft to a conflict ServiceError (race-loser)', async () => {
     const stub = makeSupabaseStub({
+      'shipments.select.maybeSingle': {
+        data: { source_warehouse_id: 'wh-a' },
+        error: null,
+      },
       'rpc:post_shipment_shipped': {
         data: null,
         error: {
@@ -132,7 +150,11 @@ describe('ShipmentsService.markShipped', () => {
   });
 
   it('maps P0002 shipment_not_found to a not_found ServiceError', async () => {
+    // Source-warehouse pre-lookup also returns null → not_found surfaces
+    // before the RPC ever fires. That's the realistic race: the slip
+    // was hard-deleted between the user click and our service call.
     const stub = makeSupabaseStub({
+      'shipments.select.maybeSingle': { data: null, error: null },
       'rpc:post_shipment_shipped': {
         data: null,
         error: { code: 'P0002', message: 'shipment_not_found' },
@@ -149,6 +171,10 @@ describe('ShipmentsService.markShipped', () => {
 
   it('maps 42501 forbidden to a forbidden ServiceError', async () => {
     const stub = makeSupabaseStub({
+      'shipments.select.maybeSingle': {
+        data: { source_warehouse_id: 'wh-a' },
+        error: null,
+      },
       'rpc:post_shipment_shipped': {
         data: null,
         error: { code: '42501', message: 'forbidden' },
@@ -164,6 +190,10 @@ describe('ShipmentsService.markShipped', () => {
 
   it('falls through to internal_error for unmapped Postgres errors', async () => {
     const stub = makeSupabaseStub({
+      'shipments.select.maybeSingle': {
+        data: { source_warehouse_id: 'wh-a' },
+        error: null,
+      },
       'rpc:post_shipment_shipped': {
         data: null,
         error: { code: 'XX000', message: 'unexpected database failure' },
@@ -180,8 +210,13 @@ describe('ShipmentsService.markShipped', () => {
 
 describe('ShipmentsService.manualCreate', () => {
   it('rejects when the destination charter is not serviced by the source warehouse', async () => {
-    // warehouse_charters lookup returns null → not serviced.
+    // Item exists at the right warehouse → I8/wrong-warehouse checks
+    // both pass; warehouse_charters lookup returns null → not serviced.
     const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [{ id: 'item-1', warehouse_id: 'wh-a' }],
+        error: null,
+      },
       'warehouse_charters.select.maybeSingle': { data: null, error: null },
     });
     const svc = new ShipmentsService(makeServiceContext(stub.client));
@@ -199,5 +234,47 @@ describe('ShipmentsService.manualCreate', () => {
 
     // We must NOT have proceeded to insert anything.
     expect(stub.fromCalls).not.toContain('shipments');
+  });
+
+  it('rejects when any line ID does not resolve (I8 — wrong org, deleted, or hand-crafted)', async () => {
+    // inventory_items query returns only 1 of the 2 requested IDs.
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [{ id: 'item-1', warehouse_id: 'wh-a' }],
+        error: null,
+      },
+    });
+    const svc = new ShipmentsService(makeServiceContext(stub.client));
+
+    await expect(
+      svc.manualCreate({
+        sourceWarehouseId: 'wh-a',
+        destinationCharterId: 'ch-1',
+        lines: [
+          { itemId: 'item-1', qtyShipped: 1 },
+          { itemId: 'item-missing', qtyShipped: 1 },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Some item IDs are invalid or cross-org.',
+    });
+    expect(stub.fromCalls).not.toContain('shipments');
+  });
+
+  it('rejects when every line has qtyShipped = 0 (I12 — back-order-only is not a slip)', async () => {
+    const stub = makeSupabaseStub({});
+    const svc = new ShipmentsService(makeServiceContext(stub.client));
+
+    await expect(
+      svc.manualCreate({
+        sourceWarehouseId: 'wh-a',
+        destinationCharterId: 'ch-1',
+        lines: [{ itemId: 'item-1', qtyShipped: 0, qtyBackOrdered: 5 }],
+      }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Add at least one line with a non-zero shipped quantity.',
+    });
   });
 });
