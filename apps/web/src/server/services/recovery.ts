@@ -8,12 +8,14 @@ import {
   type ServiceContext,
 } from './context';
 
+// Tags are hard-deleted (no deleted_at column in the schema), so they
+// can't be recovered — exclude from this surface. The other four
+// tables all carry a deleted_at column from 0002_inventory.sql.
 export type RecoveryEntity =
   | 'inventory_items'
   | 'categories'
   | 'locations'
-  | 'suppliers'
-  | 'tags';
+  | 'suppliers';
 
 export interface DeletedRow {
   id: string;
@@ -27,7 +29,6 @@ const ENTITY_TABLE: Record<RecoveryEntity, string> = {
   categories: 'categories',
   locations: 'locations',
   suppliers: 'suppliers',
-  tags: 'tags',
 };
 
 /**
