@@ -119,6 +119,18 @@ export async function GET(
   const warehouseName =
     (whRes.data as { name?: string } | null)?.name ?? null;
 
+  // I9: don't leak the manager-typed `denied_reason` to the public
+  // requester. The reason often contains internal-only context
+  // ("we're saving these for Lincoln Elementary", "this teacher
+  // hasn't returned their last batch", etc.) and the public-facing
+  // page is the wrong audience for it. Replace with a stock string
+  // that gives the requester closure without exposing the rationale.
+  // Future enhancement: per-request `share_denied_reason_with_requester`
+  // opt-in flag on the manager actions panel — until then, default
+  // private.
+  const sanitizedDeniedReason =
+    h.status === 'denied' ? 'Your request was not approved.' : null;
+
   return NextResponse.json({
     id: h.id,
     status: h.status,
@@ -131,7 +143,7 @@ export async function GET(
     readyAt: h.ready_at,
     deliveredAt: h.delivered_at,
     cancelledAt: h.cancelled_at,
-    deniedReason: h.denied_reason,
+    deniedReason: sanitizedDeniedReason,
     notes: h.notes,
   });
 }

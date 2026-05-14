@@ -53,6 +53,7 @@ export default async function PublicRequestsSettingsPage() {
         appUrl={appUrl}
         initialToken={settings.token}
         initialBlurb={settings.blurb}
+        initialRotatedAt={settings.rotatedAt}
         warehouses={warehouseRows}
       />
     </div>

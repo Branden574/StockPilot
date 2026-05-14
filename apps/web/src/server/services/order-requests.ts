@@ -146,7 +146,10 @@ export class OrderRequestsService {
          requester:user_profiles!requester_user_id (full_name, email)`,
       )
       .eq('organization_id', this.ctx.organizationId)
-      .order('created_at', { ascending: false });
+      // M1: secondary `id desc` sort gives a stable order when two rows
+      // share the same `created_at` (rare but possible under bulk inserts).
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false });
 
     if (filters.status) {
       const arr = Array.isArray(filters.status) ? filters.status : [filters.status];
@@ -157,7 +160,10 @@ export class OrderRequestsService {
     if (filters.warehouseId) q = q.eq('warehouse_id', filters.warehouseId);
 
     const limit = Math.min(filters.limit ?? 50, 200);
-    const offset = Math.max(0, filters.offset ?? 0);
+    // M3: cap the maximum offset so callers can't punch through enormous
+    // page numbers and force the DB into a deep-offset scan.
+    const MAX_OFFSET = 10_000;
+    const offset = Math.min(MAX_OFFSET, Math.max(0, filters.offset ?? 0));
     q = q.range(offset, offset + limit - 1);
 
     const { data, error } = await q;
@@ -233,14 +239,29 @@ export class OrderRequestsService {
     if (hErr) throw new ServiceError('internal_error', hErr.message);
     if (!header) throw new ServiceError('not_found', 'Order request not found');
 
-    const { data: lines, error: lErr } = await this.ctx.supabase
-      .from('order_request_lines')
-      .select(
-        `id, order_request_id, item_id, quantity_requested,
-         quantity_fulfilled, unit_cost_at_request, notes,
-         item:inventory_items!item_id (id, name, sku, quantity_on_hand, barcode)`,
-      )
-      .eq('order_request_id', id);
+    // M6: lines, reservations, and warehouse name are independent reads —
+    // fan them out concurrently to shave a round-trip off the detail page.
+    const [linesRes, rsRes, whRes] = await Promise.all([
+      this.ctx.supabase
+        .from('order_request_lines')
+        .select(
+          `id, order_request_id, item_id, quantity_requested,
+           quantity_fulfilled, unit_cost_at_request, notes,
+           item:inventory_items!item_id (id, name, sku, quantity_on_hand, barcode)`,
+        )
+        .eq('order_request_id', id),
+      this.ctx.supabase
+        .from('stock_reservations')
+        .select('id, item_id, warehouse_id, quantity, created_at')
+        .eq('order_request_id', id)
+        .is('released_at', null),
+      this.ctx.supabase
+        .from('warehouses')
+        .select('name')
+        .eq('id', (header as OrderRequestRow).warehouse_id)
+        .maybeSingle(),
+    ]);
+    const { data: lines, error: lErr } = linesRes;
     if (lErr) throw new ServiceError('internal_error', lErr.message);
 
     const flatLines: OrderRequestLineWithItem[] = (lines ?? []).map((row) => {
@@ -262,17 +283,8 @@ export class OrderRequestsService {
       };
     });
 
-    const { data: rs } = await this.ctx.supabase
-      .from('stock_reservations')
-      .select('id, item_id, warehouse_id, quantity, created_at')
-      .eq('order_request_id', id)
-      .is('released_at', null);
-
-    const { data: wh } = await this.ctx.supabase
-      .from('warehouses')
-      .select('name')
-      .eq('id', (header as OrderRequestRow).warehouse_id)
-      .maybeSingle();
+    const { data: rs } = rsRes;
+    const { data: wh } = whRes;
 
     const h = header as OrderRequestRow;
     const requesterDisplay = h.requester_user_id
@@ -387,6 +399,48 @@ export class OrderRequestsService {
   }
 
   async cancel(id: string, reason?: string | null): Promise<OrderRequestRow> {
+    // C2: gate on the same permission used to create a request. The
+    // underlying RPC (SECURITY DEFINER) still enforces its own
+    // membership + owner-or-manager checks; the TS gate closes the
+    // role-permissions-elision hole and surfaces a clean ServiceError
+    // for forbidden callers before any round trip.
+    assertPermission(this.ctx, 'orders:request');
+    // M7: requesters can only self-cancel a request that is still
+    // pending approval. Once managers have approved (and stock has
+    // been reserved) or moved it into packaging/ready, a self-serve
+    // cancel could orphan downstream work — managers must take that
+    // path explicitly. Managers themselves are unaffected: the RPC's
+    // own role check still permits any non-terminal cancel.
+    if (
+      this.ctx.role !== 'owner' &&
+      this.ctx.role !== 'admin' &&
+      this.ctx.role !== 'manager'
+    ) {
+      const { data: row } = await this.ctx.supabase
+        .from('order_requests')
+        .select('status, requester_user_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', id)
+        .maybeSingle();
+      if (
+        row &&
+        (row as { requester_user_id: string | null }).requester_user_id === this.ctx.userId
+      ) {
+        const status = (row as { status: OrderRequestStatus }).status;
+        if (status !== 'pending_approval') {
+          throw new ServiceError(
+            'validation_error',
+            'You can only cancel your own request while it is still pending approval. Ask a manager to cancel approved or in-progress requests.',
+          );
+        }
+      }
+    }
+    // I2: NB — the *public-link* cancel path (anonymous external
+    // requester) does NOT pass through this service. There is no
+    // public cancel endpoint today; external requesters who need to
+    // cancel must contact the org admin, who cancels on their behalf.
+    // Surface this here so anyone hunting for a public cancel route
+    // knows it is intentional, not an oversight.
     const { data, error } = await this.ctx.supabase.rpc('cancel_order_request', {
       p_id: id,
       p_reason: reason ?? null,
@@ -419,6 +473,10 @@ export class OrderRequestsService {
 
   async approve(id: string, internalNotes?: string | null): Promise<OrderRequestRow> {
     assertPermission(this.ctx, 'orders:approve');
+    // C3: warehouse-scoped managers must have write access to the
+    // request's warehouse before flipping its status. The RPC's
+    // has_org_role check covers role; this covers scope.
+    await this.requireWarehouseAccess(id, 'write');
     if (internalNotes !== undefined) {
       const { error } = await this.ctx.supabase
         .from('order_requests')
@@ -465,6 +523,8 @@ export class OrderRequestsService {
 
   async deny(id: string, reason: string): Promise<OrderRequestRow> {
     assertPermission(this.ctx, 'orders:approve');
+    // C3: warehouse-scope gate before any mutation.
+    await this.requireWarehouseAccess(id, 'write');
     const { data, error } = await this.ctx.supabase
       .from('order_requests')
       .update({
@@ -501,6 +561,30 @@ export class OrderRequestsService {
     next: 'packaging' | 'ready_for_delivery',
   ): Promise<OrderRequestRow> {
     assertPermission(this.ctx, 'orders:approve');
+    // C3: warehouse-scope gate. The helper returns the warehouse_id so
+    // we can reuse it for the ready-for-delivery sanity check below
+    // without an extra round trip.
+    const warehouseId = await this.requireWarehouseAccess(id, 'write');
+    // M8: 'ready_for_delivery' implies an external handoff is on the
+    // table. If the destination warehouse has been archived after the
+    // request was approved, surface that as a friendlier error than
+    // letting a downstream pickup hit a 404. We don't gate on
+    // `is_public_orderable` itself — internal-only requests can still
+    // be marked ready — but archived destinations are always wrong.
+    if (next === 'ready_for_delivery') {
+      const { data: wh } = await this.ctx.supabase
+        .from('warehouses')
+        .select('id, status')
+        .eq('id', warehouseId)
+        .maybeSingle();
+      const whStatus = (wh as { status?: string } | null)?.status;
+      if (!wh || whStatus === 'archived') {
+        throw new ServiceError(
+          'validation_error',
+          'The destination warehouse is archived. Restore it or move the request before marking ready.',
+        );
+      }
+    }
     const expectedPrev =
       next === 'packaging' ? 'approved' : 'packaging';
     const stampField =
@@ -538,6 +622,9 @@ export class OrderRequestsService {
 
   async markDelivered(id: string): Promise<OrderRequestRow> {
     assertPermission(this.ctx, 'orders:approve');
+    // C3: warehouse-scope gate before the deliver RPC fires stock
+    // movements + reservation releases.
+    await this.requireWarehouseAccess(id, 'write');
     const { data, error } = await this.ctx.supabase.rpc('deliver_order_request', {
       p_id: id,
     });
@@ -553,9 +640,13 @@ export class OrderRequestsService {
           'Only approved / packaging / ready orders can be marked delivered.',
         );
       if (msg.includes('insufficient_stock'))
+        // I4: prior copy said "edit line qtys", which doesn't match the
+        // actual remediation — line quantities aren't editable post-
+        // approval. The correct fix is to top-up / transfer-in stock
+        // and retry the deliver.
         throw new ServiceError(
           'validation_error',
-          'Stock has dropped below what the request asked for since approval. Edit line qtys to actual delivered amounts and retry.',
+          'Stock has dropped below what the request asked for since approval. Adjust stock first, then retry.',
         );
       throw new ServiceError('internal_error', msg);
     }
@@ -574,12 +665,43 @@ export class OrderRequestsService {
 
   async setInternalNotes(id: string, notes: string | null): Promise<void> {
     assertPermission(this.ctx, 'orders:approve');
+    // C3: 'read' is enough for editing internal notes — the RLS UPDATE
+    // policy further restricts writes to manager+, and we already
+    // gated on `orders:approve`. A warehouse-scoped manager who can
+    // READ a warehouse should be able to annotate its requests even
+    // without write privileges on the warehouse itself.
+    await this.requireWarehouseAccess(id, 'read');
     const { error } = await this.ctx.supabase
       .from('order_requests')
       .update({ internal_notes: notes })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+  }
+
+  // ── Helper ──────────────────────────────────────────────────────
+
+  /**
+   * Loads the request's warehouse_id and asserts the caller can access
+   * it for the requested op. Throws `not_found` when the row doesn't
+   * exist or isn't in the caller's org. Returns the warehouse_id so
+   * callers can reuse it (e.g. setStatus → warehouse-status lookup).
+   */
+  private async requireWarehouseAccess(
+    requestId: string,
+    op: 'read' | 'write',
+  ): Promise<string> {
+    const { data, error } = await this.ctx.supabase
+      .from('order_requests')
+      .select('warehouse_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', requestId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('not_found', 'Order request not found');
+    const warehouseId = (data as { warehouse_id: string }).warehouse_id;
+    await assertWarehouseAccess(warehouseId, op, this.ctx);
+    return warehouseId;
   }
 
   // ── Public link admin ───────────────────────────────────────────
