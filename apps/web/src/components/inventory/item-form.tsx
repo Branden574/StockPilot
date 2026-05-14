@@ -73,6 +73,16 @@ interface ItemFormProps {
    *   'book'              → "ISBN" + Author field that writes custom_fields.author
    */
   itemType?: 'product' | 'book' | 'asset' | 'consumable';
+  /**
+   * Optional same-origin path the form returns to after a successful
+   * save (or when the user clicks Cancel). Used by the edit-page flow
+   * to honor the `?return=` round-trip back to the list URL.
+   * When omitted, the form keeps its current behavior:
+   *   - on create: router.push to the new item's detail page
+   *   - on edit:   router.refresh in place
+   *   - on cancel: onDone() callback (no route change)
+   */
+  returnHref?: string;
   onDone?: () => void;
 }
 
@@ -90,6 +100,7 @@ export function ItemForm({
   warehouseLabel,
   charterLabel,
   itemType = 'product',
+  returnHref,
   onDone,
 }: ItemFormProps) {
   const router = useRouter();
@@ -546,7 +557,13 @@ export function ItemForm({
     }
 
     onDone?.();
-    if (!isEdit) {
+    if (returnHref) {
+      // Edit page passes a `returnHref` so saving bounces the user
+      // back to the list URL they came from — preserves the search /
+      // filter / sort / page they had typed. Both create + edit
+      // honor the param when it's present.
+      router.push(returnHref);
+    } else if (!isEdit) {
       router.push(`/dashboard/inventory/${res.data.id}`);
     } else {
       router.refresh();
@@ -1163,8 +1180,16 @@ export function ItemForm({
       })()}
 
       <div className="flex justify-end gap-2">
-        {onDone && (
-          <Button type="button" variant="outline" onClick={onDone} disabled={isSubmitting || uploadingImages}>
+        {(onDone || returnHref) && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              if (returnHref) router.push(returnHref);
+              onDone?.();
+            }}
+            disabled={isSubmitting || uploadingImages}
+          >
             Cancel
           </Button>
         )}
