@@ -23,6 +23,11 @@ const createBinSchema = z.object({
   isDefault: z.boolean().optional(),
 });
 
+// B11: validate the archive target's id at the action boundary so a
+// malformed payload (empty string, JSON object, etc.) is rejected
+// before the service touches the DB.
+const archiveBinSchema = z.string().uuid();
+
 export async function createBinAction(input: {
   warehouseId: string;
   code: string;
@@ -46,9 +51,13 @@ export async function createBinAction(input: {
 }
 
 export async function archiveBinAction(id: string): Promise<ActionResult<void>> {
+  const parsed = archiveBinSchema.safeParse(id);
+  if (!parsed.success) {
+    return err('validation_error', 'Invalid bin id.');
+  }
   try {
     const svc = await BinsService.forCurrentUser();
-    await svc.archive(id);
+    await svc.archive(parsed.data);
     revalidatePath('/dashboard/admin/bins');
     return ok(undefined);
   } catch (e) {
