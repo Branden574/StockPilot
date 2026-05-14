@@ -52,12 +52,12 @@ export class MovementsService {
     // service file's siblings (see InventoryService.list).
     const access = await getWarehouseAccess(this.ctx);
 
-    // Use `!inner` on the embed so we can filter parent rows by the item's
-    // warehouse_id without a second round trip.
-    const needsScope = !access.hasAllAccess || !!params.warehouseId;
-    const itemEmbed = needsScope
-      ? 'item:inventory_items!item_id!inner (id, name, sku, warehouse_id)'
-      : 'item:inventory_items!item_id (id, name, sku, warehouse_id)';
+    // Use `!inner` on the embed so we can (a) filter parent rows by the
+    // item's warehouse_id without a second round trip, and (b) drop
+    // movements whose parent item has been soft-deleted (so the
+    // recent-activity feed doesn't surface deleted SKUs).
+    const itemEmbed =
+      'item:inventory_items!item_id!inner (id, name, sku, warehouse_id, deleted_at)';
 
     let query = this.ctx.supabase
       .from('stock_movements')
@@ -71,6 +71,7 @@ export class MovementsService {
       `,
       )
       .eq('organization_id', this.ctx.organizationId)
+      .is('item.deleted_at', null)
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -199,14 +200,16 @@ export async function getThirtyDayMetrics(
 ): Promise<ThirtyDayMetrics> {
   const ctx = await withContext();
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  // Always inner-join inventory_items so we can filter out movements whose
+  // parent item has been soft-deleted. Without this the 30-day series
+  // double-counts events for SKUs that no longer exist on the dash.
   let query = ctx.supabase
     .from('stock_movements')
     .select(
-      options.warehouseId
-        ? 'movement_type, created_at, item:inventory_items!item_id!inner (warehouse_id)'
-        : 'movement_type, created_at',
+      'movement_type, created_at, item:inventory_items!item_id!inner (warehouse_id, deleted_at)',
     )
     .eq('organization_id', ctx.organizationId)
+    .is('item.deleted_at', null)
     .gte('created_at', since.toISOString())
     .order('created_at', { ascending: true });
   if (options.warehouseId) {
