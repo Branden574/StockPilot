@@ -93,6 +93,13 @@ export default async function EditItemPage({
     }> | null) ?? null,
   );
 
+  // backHref is the target for both the breadcrumb back-link and the
+  // post-save navigation in ItemForm. Because we always resolve to a
+  // non-empty value (the detail page is the fallback), ItemForm's
+  // `router.refresh()` branch is never reached from this page —
+  // post-save on the edit page always navigates somewhere, which is
+  // the intended UX: the user gets a visible confirmation by landing
+  // on the detail page or the list they came from.
   const backHref = safeReturnPath(returnParam) ?? `/dashboard/inventory/${id}`;
 
   return (
