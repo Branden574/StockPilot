@@ -39,13 +39,10 @@ export default async function ProceduresListPage({
   const isArchivedView = params.view === 'archived';
 
   const ctx = await requireOrgContext();
-  // Procedures is a manager+ surface — viewers can't read or write
-  // SOPs. Sidebar already hides the entry; this redirect covers
-  // direct URL access.
-  if (!hasPermission(ctx.role, 'items:update')) {
-    const { redirect } = await import('next/navigation');
-    redirect('/dashboard');
-  }
+  // Procedures is a read-everywhere surface: every org member (incl.
+  // viewers) can browse the SOP knowledge base. Writing is gated at
+  // the service/action layer on `categories:manage` (manager+), matching
+  // the table's RLS. The sidebar still surfaces the entry for everyone.
   const canCreate = hasPermission(ctx.role, 'categories:manage');
   const canRestore = canCreate; // Restore uses the same permission gate as archive.
 
