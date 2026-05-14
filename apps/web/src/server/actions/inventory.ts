@@ -94,7 +94,8 @@ export type BulkInventoryOp =
   | { kind: 'set_location'; locationId: string | null }
   | { kind: 'set_status'; status: 'active' | 'archived' | 'discontinued' }
   | { kind: 'add_tags'; tagIds: string[] }
-  | { kind: 'remove_tags'; tagIds: string[] };
+  | { kind: 'remove_tags'; tagIds: string[] }
+  | { kind: 'set_rack'; rackNumber: string | null; rackRow: string | null };
 
 export async function bulkUpdateInventoryAction(input: {
   ids: string[];
