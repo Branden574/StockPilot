@@ -1112,7 +1112,11 @@ export class InventoryService {
     if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
     const { error } = await this.ctx.supabase
       .from('inventory_items')
-      .update({ deleted_at: new Date().toISOString(), updated_by: this.ctx.userId })
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: this.ctx.userId,
+        updated_by: this.ctx.userId,
+      })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);

@@ -88,7 +88,7 @@ export class SuppliersService {
     assertPermission(this.ctx, 'suppliers:manage');
     const { error } = await this.ctx.supabase
       .from('suppliers')
-      .update({ deleted_at: new Date().toISOString() })
+      .update({ deleted_at: new Date().toISOString(), deleted_by: this.ctx.userId })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
@@ -103,7 +103,7 @@ export class SuppliersService {
     assertPermission(this.ctx, 'suppliers:manage');
     const { error } = await this.ctx.supabase
       .from('suppliers')
-      .update({ deleted_at: null })
+      .update({ deleted_at: null, deleted_by: null })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);

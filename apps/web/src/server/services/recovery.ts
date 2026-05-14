@@ -25,6 +25,14 @@ export interface DeletedRow {
   sku?: string | null;
   /** ISO timestamp of the soft-delete. */
   deleted_at: string;
+  /**
+   * Display name of the user who soft-deleted the row, when known.
+   * Sourced from user_profiles via the deleted_by FK. Falls back to
+   * the user's email if full_name is null. Null when the column was
+   * never set (legacy rows, or items where the inventory service
+   * doesn't yet emit deleted_by — see migration 0072 header).
+   */
+  deleted_by_name: string | null;
 }
 
 const ENTITY_TABLE: Record<RecoveryEntity, string> = {
@@ -68,10 +76,11 @@ export class RecoveryService {
   async listDeleted(entity: RecoveryEntity, limit = 200): Promise<DeletedRow[]> {
     assertPermission(this.ctx, 'items:delete');
     const table = ENTITY_TABLE[entity];
-    const selectCols =
-      entity === 'inventory_items'
-        ? 'id, name, sku, deleted_at'
-        : 'id, name, deleted_at';
+    // Embed the deleted_by FK so we get the actor's display name in one
+    // round trip. PostgREST's `deleter:deleted_by (...)` syntax follows
+    // the FK declared in migration 0072.
+    const baseCols = entity === 'inventory_items' ? 'id, name, sku, deleted_at' : 'id, name, deleted_at';
+    const selectCols = `${baseCols}, deleter:deleted_by (id, full_name, email)`;
     const { data, error } = await this.ctx.supabase
       .from(table)
       .select(selectCols)
@@ -80,12 +89,26 @@ export class RecoveryService {
       .order('deleted_at', { ascending: false })
       .limit(limit);
     if (error) throw new ServiceError('internal_error', error.message);
-    return ((data ?? []) as unknown as Array<Record<string, unknown>>).map((r) => ({
-      id: r.id as string,
-      name: ((r.name as string | null) ?? '').trim() || '(unnamed)',
-      sku: entity === 'inventory_items' ? ((r.sku as string | null) ?? null) : undefined,
-      deleted_at: r.deleted_at as string,
-    }));
+    return ((data ?? []) as unknown as Array<Record<string, unknown>>).map((r) => {
+      // PostgREST returns embedded one-to-one rows as either an object
+      // or a single-element array depending on the SDK version; normalize.
+      const rawDeleter = r.deleter as
+        | { full_name: string | null; email: string | null }
+        | Array<{ full_name: string | null; email: string | null }>
+        | null;
+      const deleter = Array.isArray(rawDeleter) ? (rawDeleter[0] ?? null) : rawDeleter;
+      const deletedByName =
+        deleter && (deleter.full_name?.trim() || deleter.email?.trim())
+          ? (deleter.full_name?.trim() || deleter.email?.trim()) ?? null
+          : null;
+      return {
+        id: r.id as string,
+        name: ((r.name as string | null) ?? '').trim() || '(unnamed)',
+        sku: entity === 'inventory_items' ? ((r.sku as string | null) ?? null) : undefined,
+        deleted_at: r.deleted_at as string,
+        deleted_by_name: deletedByName,
+      };
+    });
   }
 
   async restore(entity: RecoveryEntity, id: string): Promise<void> {
@@ -93,7 +116,7 @@ export class RecoveryService {
     const table = ENTITY_TABLE[entity];
     const { error } = await this.ctx.supabase
       .from(table)
-      .update({ deleted_at: null })
+      .update({ deleted_at: null, deleted_by: null })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .not('deleted_at', 'is', null);
