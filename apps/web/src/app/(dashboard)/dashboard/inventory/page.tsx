@@ -154,24 +154,26 @@ export default async function InventoryPage({
     ),
   ]);
 
-  // Per-row 14-day trend series (qty + moves) for the sparkline column.
-  // One round trip via stock_movements; flat fallback for items with no
-  // movements in the window. See docs/superpowers/specs/2026-05-08-…
-  const trends = await tagged(
-    'getItemTrends',
-    getItemTrends(
-      inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+  // Per-row trends + primary images both depend on the resolved item
+  // list, but they're independent of each other — run them in parallel.
+  // Previously sequential, which doubled the second-wave latency.
+  //   trends    → 14-day sparkline data (1 round trip via stock_movements)
+  //   imagesById → primary photo signed URL per item (1 select + 1 batch
+  //                createSignedUrls; falls back to custom_fields.thumbnail_url
+  //                stashed by the bulk-ISBN importer for legacy books).
+  const itemIdList = inventory.items.map((i) => i.id);
+  const [trends, imagesById] = await Promise.all([
+    tagged(
+      'getItemTrends',
+      getItemTrends(
+        inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+      ),
     ),
-  );
-
-  // Fetch primary images in batch (1 query + 1 createSignedUrls call,
-  // not N round trips). Returns Map<itemId, signedUrl>. Falls back to
-  // a custom_fields.thumbnail_url stashed by the bulk-ISBN importer
-  // for books that came in before the cover-rehost flow landed.
-  const imagesById = await tagged(
-    'imagesSvc.primaryImagesForItems',
-    imagesSvc.primaryImagesForItems(inventory.items.map((i) => i.id)),
-  );
+    tagged(
+      'imagesSvc.primaryImagesForItems',
+      imagesSvc.primaryImagesForItems(itemIdList),
+    ),
+  ]);
   const itemsWithImages = inventory.items.map((i) => {
     const cf = (i as { custom_fields?: Record<string, unknown> | null })
       .custom_fields;

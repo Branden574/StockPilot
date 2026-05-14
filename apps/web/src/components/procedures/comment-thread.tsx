@@ -123,6 +123,9 @@ function CommentRow({
             dateTime={comment.created_at}
             className="text-xs text-muted-foreground tabular-nums"
             title={new Date(comment.created_at).toLocaleString()}
+            // clock drifts between SSR + hydration; tolerate it instead
+            // of unmounting the comment thread with React error #418.
+            suppressHydrationWarning
           >
             {formatRelative(comment.created_at)}
           </time>
