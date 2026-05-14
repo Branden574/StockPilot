@@ -63,6 +63,15 @@ export function ChatPanel() {
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
 
   // Load persisted session list + restore active session on mount.
+  //
+  // Deliberate stale-closure: `loadSession` is omitted from the deps
+  // array on purpose. We only want this effect to run ONCE on mount —
+  // adding loadSession would re-fire the bootstrap every render
+  // (loadSession is a new function instance each render), re-fetching
+  // the session list and racing with the user's first prompt. The
+  // closure captures the initial loadSession, which is fine: that
+  // function reads the latest `sessionId` via setSessionId, and
+  // localStorage carries the active session across renders.
   React.useEffect(() => {
     let cancelled = false;
     async function bootstrap() {
@@ -477,6 +486,16 @@ export function ChatPanel() {
                         thinking…
                       </div>
                     ) : (
+                      // Plain-text render with whitespace preserved.
+                      // NOTE: markdown is NOT parsed here — links the AI
+                      // emits (e.g. "[Download CSV](https://…)") show up
+                      // as their raw text. This is intentional for v1:
+                      // skipping markdown sidesteps XSS surface, and the
+                      // CSV-download URLs are long-lived enough for users
+                      // to copy-paste. If you ever turn this on, sanitize
+                      // first (DOMPurify / react-markdown with a strict
+                      // schema) and watch out for tool output that may
+                      // contain user-supplied free text.
                       <div className="whitespace-pre-wrap">{t.content}</div>
                     )}
                     {t.toolCalls && t.toolCalls.length > 0 && (

@@ -3,6 +3,8 @@ import 'server-only';
 import { lookup } from 'node:dns/promises';
 import net from 'node:net';
 
+import { Agent, fetch as undiciFetch } from 'undici';
+
 /**
  * Server-side guard against SSRF (Server-Side Request Forgery) when
  * fetching a URL whose hostname comes from user input. Rejects:
@@ -14,16 +16,21 @@ import net from 'node:net';
  *     IPv4-mapped IPv6 like ::ffff:10.0.0.1, ::ffff:169.254.169.254)
  *   • the AWS / GCP / Alibaba metadata service IPs explicitly
  *
- * Use:
- *   await assertSafeFetchUrl(rawUrl);
- *   const res = await fetch(rawUrl);
+ * Use one of:
  *
- * The check resolves DNS and validates EVERY returned address — DNS
- * rebinding (a hostname that returns a public IP at validate time
- * and a private IP at fetch time) is partially mitigated by callers
- * who pass `lookup` to fetch's underlying agent. For this codebase
- * the threat model is reconnaissance + exfiltration, not full DNS
- * rebinding, so a single resolution check is acceptable.
+ *   await assertSafeFetchUrl(rawUrl);
+ *   const res = await fetch(rawUrl);  // legacy path — TOCTOU window
+ *
+ * — OR, for the hardened path that closes the resolve/fetch race:
+ *
+ *   const res = await safeFetch(rawUrl, { ... });
+ *
+ * `safeFetch` resolves the URL's host ONCE through the SSRF guard,
+ * pins the resulting IP, and dispatches the HTTP request against that
+ * IP with the original Host header intact. This closes the DNS-rebinding
+ * TOCTOU gap where a hostname returns a public IP at validate time and
+ * a private IP at fetch time. SNI / TLS verification still use the
+ * original hostname.
  */
 
 const PRIVATE_V4_CIDRS: Array<[number, number]> = [
@@ -94,6 +101,19 @@ export async function assertSafeFetchUrl(
   raw: string,
   opts: SsrfGuardOptions = {},
 ): Promise<URL> {
+  const { url } = await resolveSafeUrl(raw, opts);
+  return url;
+}
+
+/**
+ * Like {@link assertSafeFetchUrl}, but also returns the resolved IP —
+ * used internally by {@link safeFetch} to pin the connection to the
+ * exact address we just validated.
+ */
+async function resolveSafeUrl(
+  raw: string,
+  opts: SsrfGuardOptions = {},
+): Promise<{ url: URL; address: string; family: 4 | 6 }> {
   let url: URL;
   try {
     url = new URL(raw);
@@ -113,32 +133,93 @@ export async function assertSafeFetchUrl(
   }
 
   // If the URL was given as an IP literal, validate directly.
-  if (net.isIPv4(hostname) && isV4Private(hostname)) {
-    throw new SsrfBlockedError(`private IPv4 literal: ${hostname}`);
+  if (net.isIPv4(hostname)) {
+    if (isV4Private(hostname)) {
+      throw new SsrfBlockedError(`private IPv4 literal: ${hostname}`);
+    }
+    return { url, address: hostname, family: 4 };
   }
-  if (net.isIPv6(hostname) && isV6Private(hostname)) {
-    throw new SsrfBlockedError(`private IPv6 literal: ${hostname}`);
+  if (net.isIPv6(hostname)) {
+    if (isV6Private(hostname)) {
+      throw new SsrfBlockedError(`private IPv6 literal: ${hostname}`);
+    }
+    return { url, address: hostname, family: 6 };
   }
 
   // Resolve DNS and reject if any returned address is private.
-  if (!net.isIP(hostname)) {
-    let addrs: Array<{ address: string; family: number }>;
-    try {
-      addrs = await lookup(hostname, { all: true });
-    } catch (e) {
-      throw new SsrfBlockedError(
-        `DNS resolution failed for ${hostname}: ${e instanceof Error ? e.message : 'unknown'}`,
-      );
+  let addrs: Array<{ address: string; family: number }>;
+  try {
+    addrs = await lookup(hostname, { all: true });
+  } catch (e) {
+    throw new SsrfBlockedError(
+      `DNS resolution failed for ${hostname}: ${e instanceof Error ? e.message : 'unknown'}`,
+    );
+  }
+  for (const a of addrs) {
+    if (a.family === 4 && isV4Private(a.address)) {
+      throw new SsrfBlockedError(`${hostname} resolves to private IPv4 ${a.address}`);
     }
-    for (const a of addrs) {
-      if (a.family === 4 && isV4Private(a.address)) {
-        throw new SsrfBlockedError(`${hostname} resolves to private IPv4 ${a.address}`);
-      }
-      if (a.family === 6 && isV6Private(a.address)) {
-        throw new SsrfBlockedError(`${hostname} resolves to private IPv6 ${a.address}`);
-      }
+    if (a.family === 6 && isV6Private(a.address)) {
+      throw new SsrfBlockedError(`${hostname} resolves to private IPv6 ${a.address}`);
     }
   }
+  // Pick the first address — pinning ANY one of the validated set is
+  // safe (they all passed the private-range check).
+  const first = addrs[0];
+  if (!first) {
+    throw new SsrfBlockedError(`DNS returned no addresses for ${hostname}`);
+  }
+  return {
+    url,
+    address: first.address,
+    family: first.family === 6 ? 6 : 4,
+  };
+}
 
-  return url;
+/**
+ * SSRF-hardened fetch. Resolves and validates the URL through the SSRF
+ * guard, then pins the connection to the exact IP we resolved so a
+ * DNS rebinder can't slip a private IP in between the check and the
+ * connect(). The original hostname is preserved for the Host header
+ * and for TLS SNI / cert validation.
+ *
+ * Implementation: per-request undici `Agent` with a `lookup` override
+ * that always returns the validated address. The Agent is closed in a
+ * `finally` so we don't leak sockets.
+ */
+export async function safeFetch(
+  raw: string,
+  init?: Parameters<typeof undiciFetch>[1] & {
+    /** Optional SSRF allowlist of hostnames. */
+    hostAllowlist?: ReadonlyArray<string>;
+  },
+): Promise<Response> {
+  const { hostAllowlist, ...rest } = init ?? {};
+  const { url, address } = await resolveSafeUrl(raw, { hostAllowlist });
+
+  // undici's connect.lookup uses the callback signature from node:dns
+  // (NOT the promise version). We always return the pre-validated IP
+  // regardless of hostname, so a rebinder can't slip a different
+  // address into the connect.
+  const agent = new Agent({
+    connect: {
+      lookup: (
+        _hostname: string,
+        _options: unknown,
+        cb: (err: NodeJS.ErrnoException | null, address: string, family: number) => void,
+      ) => {
+        const family = net.isIPv4(address) ? 4 : 6;
+        cb(null, address, family);
+      },
+    },
+  });
+
+  try {
+    // Cast undici's Response to the global Response type — they're
+    // structurally compatible for our usage (status, headers, body).
+    const res = await undiciFetch(url, { ...rest, dispatcher: agent });
+    return res as unknown as Response;
+  } finally {
+    void agent.close().catch(() => {});
+  }
 }
