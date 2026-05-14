@@ -41,12 +41,16 @@ export interface ItemListFilters {
   barcode?: string;
   /**
    * Rack / bin filter. Dispatched per item-type:
-   *   - itemType === 'book'  → matches custom_fields->>'book_rack_number'
-   *                            (exact), plus an optional "{number}-{row}"
-   *                            split that also matches book_rack_row.
-   *   - otherwise             → matches inventory_items.bin_location
-   *                            (case-insensitive equality).
-   * "Any rack" is signaled by omitting the filter entirely.
+   *   - itemType === 'book'  → custom_fields.book_rack_number / _row
+   *                            (legacy keys, kept so book data keeps
+   *                            matching without re-saving).
+   *   - itemType === 'all'   → OR-of-ANDs: book-row matches book keys,
+   *                            non-book matches the neutral rack_* keys.
+   *   - otherwise            → custom_fields.rack_number / rack_row
+   *                            (neutral keys, used by items).
+   * "Any rack" is signaled by omitting the filter entirely. "{number}-
+   * {row}" is split on the first dash; "{number}" alone matches just
+   * the number.
    */
   rack?: string;
   status?: 'active' | 'archived' | 'discontinued' | 'all';
@@ -149,10 +153,19 @@ export class InventoryService {
     }
 
     if (filters.q && filters.q.trim()) {
-      const term = filters.q.trim();
-      query = query.or(
-        `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%`,
-      );
+      // PostgREST's .or() takes a raw filter string. Strip characters
+      // that would let a search term escape its clause and fan out the
+      // filter tree (commas, parens, asterisks, percent signs). Also
+      // cap at a sane length so a 10MB search term can't be ingested.
+      const term = filters.q
+        .trim()
+        .slice(0, 120)
+        .replace(/[,()%*]/g, ' ');
+      if (term) {
+        query = query.or(
+          `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%`,
+        );
+      }
     }
     if (filters.barcode && filters.barcode.trim()) {
       query = query.eq('barcode', filters.barcode.trim());
@@ -162,18 +175,31 @@ export class InventoryService {
       // Books use the legacy book_rack_* keys; everything else uses the
       // neutral rack_* keys. Both are inside custom_fields and matched
       // exactly. "38-A" splits into number/row; "38" alone matches just
-      // the number.
-      const numKey =
-        filters.itemType === 'book'
-          ? 'custom_fields->>book_rack_number'
-          : 'custom_fields->>rack_number';
-      const rowKey =
-        filters.itemType === 'book'
-          ? 'custom_fields->>book_rack_row'
-          : 'custom_fields->>rack_row';
-      const [num, row] = rack.split('-');
-      if (num) query = query.filter(numKey, 'eq', num);
-      if (row) query = query.filter(rowKey, 'eq', row);
+      // the number. When itemType is 'all' (the dashboard "Review low
+      // stock" link uses this), we OR both key sets so each row matches
+      // against its OWN type's keys — otherwise a books-with-rack-38
+      // row would be invisible to the items rack filter.
+      const [num, row] = rack.split('-', 2);
+      if (num) {
+        if (filters.itemType === 'book') {
+          query = query.filter('custom_fields->>book_rack_number', 'eq', num);
+          if (row) query = query.filter('custom_fields->>book_rack_row', 'eq', row);
+        } else if (filters.itemType === 'all') {
+          // OR-of-ANDs: (item is a book AND book keys match) OR
+          // (item is not a book AND rack keys match). PostgREST OR
+          // supports nested and(...) clauses separated by commas.
+          const bookClause = row
+            ? `and(item_type.eq.book,custom_fields->>book_rack_number.eq.${num},custom_fields->>book_rack_row.eq.${row})`
+            : `and(item_type.eq.book,custom_fields->>book_rack_number.eq.${num})`;
+          const itemClause = row
+            ? `and(item_type.neq.book,custom_fields->>rack_number.eq.${num},custom_fields->>rack_row.eq.${row})`
+            : `and(item_type.neq.book,custom_fields->>rack_number.eq.${num})`;
+          query = query.or(`${bookClause},${itemClause}`);
+        } else {
+          query = query.filter('custom_fields->>rack_number', 'eq', num);
+          if (row) query = query.filter('custom_fields->>rack_row', 'eq', row);
+        }
+      }
     }
     // Multi-select takes precedence; fall back to legacy single-id when
     // the array is empty/missing so AI tools and any prior caller keep
@@ -288,13 +314,14 @@ export class InventoryService {
   }
 
   /**
-   * Distinct rack / bin-location values for the rack-filter dropdown.
-   * Scope picks which column to read:
-   *   - 'items' → distinct bin_location across non-book items.
-   *   - 'books' → distinct {book_rack_number}{-book_rack_row?} pulled
-   *     from custom_fields on book items.
+   * Distinct rack labels for the rack-filter dropdown. Reads JSONB
+   * custom_fields directly (per-scope key set):
+   *   - 'items' → {rack_number}{-rack_row?} from non-book items
+   *   - 'books' → {book_rack_number}{-book_rack_row?} from books
    * Returns sorted, de-duplicated strings; empty when nothing has a
-   * rack set yet.
+   * rack set yet. (Pre-existing items that only have bin_location set
+   * are mirrored into custom_fields.rack_number by migration 0065 so
+   * they surface here without the user re-saving.)
    */
   async listDistinctRacks(opts: { scope: 'items' | 'books' }): Promise<string[]> {
     const isBooks = opts.scope === 'books';
@@ -473,6 +500,11 @@ export class InventoryService {
    * supports_sizes = true. Name + SKU + custom_fields.size are computed
    * per variant; all other fields are copied verbatim. Plan-limit check
    * runs once against the total variant count.
+   *
+   * Mirrors create()'s guards: warehouse resolution (forced for staff/
+   * viewer, asserted for managers), charter-pair validation, and
+   * stock_movements writeback after the insert so the audit trail +
+   * dashboard sparklines stay accurate.
    */
   async bulkCreateSizedVariants(input: {
     baseName: string;
@@ -482,17 +514,19 @@ export class InventoryService {
     categoryId: string;
     supplierId: string | null;
     warehouseId: string;
+    charterId: string | null;
     primaryLocationId: string | null;
     binLocation: string | null;
     retailPrice: number;
     unitCost: number;
     reorderPoint: number;
     reorderQuantity: number;
+    unitOfMeasure: string;
     variants: Array<{
       size: 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
       quantity: number;
     }>;
-  }): Promise<Array<{ id: string; name: string; sku: string | null }>> {
+  }): Promise<Array<{ id: string; name: string; sku: string }>> {
     assertPermission(this.ctx, 'items:create');
     if (input.variants.length === 0) {
       throw new ServiceError(
@@ -502,15 +536,54 @@ export class InventoryService {
     }
     await assertPlanLimit(this.ctx, 'items', input.variants.length);
 
+    // Resolve warehouse: warehouse-scoped users get their assignment
+    // forced; managers must specify a warehouse they can write to.
+    // Mirrors create() exactly so the security gates are identical.
+    const forced = await forcedWarehouseId(this.ctx);
+    const resolvedWarehouseId = forced ?? input.warehouseId ?? null;
+    if (!resolvedWarehouseId) {
+      throw new ServiceError(
+        'validation_error',
+        'A warehouse must be selected before creating variants.',
+      );
+    }
+    if (!forced) {
+      await assertWarehouseAccess(resolvedWarehouseId, 'write', this.ctx);
+    }
+
+    // Validate (warehouse, charter) pair when a charter is set.
+    const resolvedCharterId = input.charterId ?? null;
+    if (resolvedCharterId) {
+      const { data: pair } = await this.ctx.supabase
+        .from('warehouse_charters')
+        .select('charter_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('warehouse_id', resolvedWarehouseId)
+        .eq('charter_id', resolvedCharterId)
+        .maybeSingle();
+      if (!pair) {
+        throw new ServiceError(
+          'validation_error',
+          'This charter is not serviced by the chosen warehouse. Pick a different one or mark the variants as Generic.',
+        );
+      }
+    }
+
+    // Auto-generate ONE shared base when the user didn't type a SKU
+    // (matches the spec: "auto-gen base, then suffix per size"). Skipping
+    // this would NOT-NULL-violate the inventory_items.sku constraint.
+    const sharedBase = (input.baseSku && input.baseSku.trim()) || generateSku();
+
     const rows = input.variants.map((v) => ({
       organization_id: this.ctx.organizationId,
       name: `${input.baseName} - ${v.size}`,
-      sku: input.baseSku ? `${input.baseSku}-${v.size}` : null,
+      sku: `${sharedBase}-${v.size}`,
       barcode: input.baseBarcode,
       description: input.description,
       category_id: input.categoryId,
       supplier_id: input.supplierId,
-      warehouse_id: input.warehouseId,
+      warehouse_id: resolvedWarehouseId,
+      charter_id: resolvedCharterId,
       primary_location_id: input.primaryLocationId,
       bin_location: input.binLocation,
       retail_price: input.retailPrice,
@@ -518,6 +591,7 @@ export class InventoryService {
       reorder_point: input.reorderPoint,
       reorder_quantity: input.reorderQuantity,
       quantity_on_hand: v.quantity,
+      unit_of_measure: input.unitOfMeasure,
       item_type: 'product',
       status: 'active',
       tracking_type: 'none',
@@ -529,7 +603,7 @@ export class InventoryService {
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
       .insert(rows)
-      .select('id, name, sku');
+      .select('id, name, sku, quantity_on_hand, primary_location_id');
     if (error) {
       // 23505 = unique_violation — typically SKU collision.
       if ((error as { code?: string }).code === '23505') {
@@ -540,11 +614,43 @@ export class InventoryService {
       }
       throw new ServiceError('internal_error', error.message);
     }
-    return (data ?? []).map((r) => ({
-      id: r.id as string,
-      name: r.name as string,
-      sku: (r.sku as string | null) ?? null,
-    }));
+
+    // Stock_movements for non-zero variants so the audit trail and the
+    // 14-day sparklines pick up the initial qty event. Mirrors the
+    // same pattern as bulkCreate; a movement-log failure does NOT roll
+    // back the items insert (items exist, gap is recoverable).
+    const inserted = (data ?? []) as Array<{
+      id: string;
+      name: string;
+      sku: string;
+      quantity_on_hand: number;
+      primary_location_id: string | null;
+    }>;
+    const movementRows = inserted
+      .filter((r) => r.quantity_on_hand > 0)
+      .map((r) => ({
+        organization_id: this.ctx.organizationId,
+        item_id: r.id,
+        movement_type: 'initial',
+        quantity_change: r.quantity_on_hand,
+        previous_quantity: 0,
+        new_quantity: r.quantity_on_hand,
+        user_id: this.ctx.userId,
+        to_location_id: r.primary_location_id,
+      }));
+    if (movementRows.length > 0) {
+      const { error: movementErr } = await this.ctx.supabase
+        .from('stock_movements')
+        .insert(movementRows);
+      if (movementErr) {
+        console.warn(
+          '[bulkCreateSizedVariants] stock_movements insert failed',
+          movementErr.message,
+        );
+      }
+    }
+
+    return inserted.map((r) => ({ id: r.id, name: r.name, sku: r.sku }));
   }
 
   async bulkCreate(input: {
@@ -895,44 +1001,24 @@ export class InventoryService {
     }
     if (allowedIds.length === 0) return { ok: 0, skipped };
 
-    // Rack ops have to MERGE into custom_fields rather than overwrite
-    // it (other keys live there too — author, book_grade, thumbnail_url,
-    // etc.). Fetch current values, merge in JS, write back one row at a
-    // time. Bulk is capped at 500 rows above so this stays bounded.
+    // Rack ops merge into custom_fields server-side via a SECURITY
+    // INVOKER Postgres function (migration 0064). The function does a
+    // single atomic UPDATE with `custom_fields - keys || jsonb_build_object(...)`
+    // so concurrent edits to other keys (author, book_grade,
+    // thumbnail_url, etc.) aren't clobbered by a JS read-modify-write
+    // race. RLS still enforces org isolation.
     if (input.op.kind === 'set_rack') {
       const num = input.op.rackNumber?.trim() || null;
       const row = input.op.rackRow?.trim().toUpperCase() || null;
       const composedBin = num ? (row ? `${num}-${row}` : num) : null;
 
-      const { data: cfRows, error: cfErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, custom_fields')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', allowedIds);
-      if (cfErr) throw new ServiceError('internal_error', cfErr.message);
-
-      await Promise.all(
-        ((cfRows ?? []) as Array<{
-          id: string;
-          custom_fields: Record<string, unknown> | null;
-        }>).map(async (r) => {
-          const cf: Record<string, unknown> = { ...(r.custom_fields ?? {}) };
-          if (num) cf.rack_number = num;
-          else delete cf.rack_number;
-          if (row) cf.rack_row = row;
-          else delete cf.rack_row;
-          const { error } = await this.ctx.supabase
-            .from('inventory_items')
-            .update({
-              custom_fields: cf,
-              bin_location: composedBin,
-              updated_by: this.ctx.userId,
-            })
-            .eq('organization_id', this.ctx.organizationId)
-            .eq('id', r.id);
-          if (error) throw new ServiceError('internal_error', error.message);
-        }),
-      );
+      const { error } = await this.ctx.supabase.rpc('inventory_set_rack', {
+        p_item_ids: allowedIds,
+        p_rack_number: num,
+        p_rack_row: row,
+        p_bin_location: composedBin,
+      });
+      if (error) throw new ServiceError('internal_error', error.message);
       return { ok: allowedIds.length, skipped };
     }
 

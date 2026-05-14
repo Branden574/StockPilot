@@ -219,6 +219,13 @@ export function ItemForm({
   const [selectedSizes, setSelectedSizes] = React.useState<
     Array<{ size: SizeCode; quantity: number }>
   >([]);
+  // Drop sized selections whenever the category changes. Avoids stale
+  // picks sticking when the user toggles between a size-flagged
+  // category and a non-flagged one.
+  const watchedCategoryId = watch('categoryId');
+  React.useEffect(() => {
+    setSelectedSizes([]);
+  }, [watchedCategoryId]);
   const [lookingUp, setLookingUp] = React.useState(false);
 
   // Tag selection — independent of RHF because tags don't live on the
@@ -388,12 +395,14 @@ export function ItemForm({
         categoryId: values.categoryId,
         supplierId: values.supplierId ?? null,
         warehouseId: values.warehouseId,
+        charterId: values.charterId ?? null,
         primaryLocationId: values.primaryLocationId ?? null,
         binLocation: composedBin,
         retailPrice: values.retailPrice,
         unitCost: values.unitCost,
         reorderPoint: values.reorderPoint,
         reorderQuantity: values.reorderQuantity,
+        unitOfMeasure: values.unitOfMeasure,
         variants: selectedSizes,
       });
       if (!res.ok) {
@@ -784,7 +793,7 @@ export function ItemForm({
               placeholder="38"
               inputMode="numeric"
               value={rackNumber}
-              onChange={(e) => setRackNumber(e.target.value)}
+              onChange={(e) => setRackNumber(e.target.value.replace(/[^0-9]/g, ''))}
             />
           </Field>
           <Field label="Rack row" optional>
@@ -1082,12 +1091,14 @@ export function ItemForm({
                 categoryId: defaults.categoryId,
                 supplierId: defaults.supplierId ?? null,
                 warehouseId: defaults.warehouseId,
+                charterId: defaults.charterId ?? null,
                 primaryLocationId: defaults.primaryLocationId ?? null,
                 binLocation: defaults.binLocation ?? null,
                 retailPrice: defaults.retailPrice ?? 0,
                 unitCost: defaults.unitCost ?? 0,
                 reorderPoint: defaults.reorderPoint ?? 0,
                 reorderQuantity: defaults.reorderQuantity ?? 0,
+                unitOfMeasure: defaults.unitOfMeasure ?? 'unit',
               }}
             />
           </div>
