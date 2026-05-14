@@ -39,6 +39,16 @@ export interface ItemListFilters {
    * ilike that `q` would do.
    */
   barcode?: string;
+  /**
+   * Rack / bin filter. Dispatched per item-type:
+   *   - itemType === 'book'  → matches custom_fields->>'book_rack_number'
+   *                            (exact), plus an optional "{number}-{row}"
+   *                            split that also matches book_rack_row.
+   *   - otherwise             → matches inventory_items.bin_location
+   *                            (case-insensitive equality).
+   * "Any rack" is signaled by omitting the filter entirely.
+   */
+  rack?: string;
   status?: 'active' | 'archived' | 'discontinued' | 'all';
   /** Legacy single-select. New callers should prefer categoryIds. */
   categoryId?: string | null;
@@ -146,6 +156,22 @@ export class InventoryService {
     }
     if (filters.barcode && filters.barcode.trim()) {
       query = query.eq('barcode', filters.barcode.trim());
+    }
+    if (filters.rack && filters.rack.trim()) {
+      const rack = filters.rack.trim();
+      if (filters.itemType === 'book') {
+        // Books store rack as custom_fields.book_rack_number + book_rack_row.
+        // "38-A" splits into number/row; "38" alone matches just the number.
+        const [num, row] = rack.split('-');
+        if (num) {
+          query = query.filter('custom_fields->>book_rack_number', 'eq', num);
+        }
+        if (row) {
+          query = query.filter('custom_fields->>book_rack_row', 'eq', row);
+        }
+      } else {
+        query = query.ilike('bin_location', rack);
+      }
     }
     // Multi-select takes precedence; fall back to legacy single-id when
     // the array is empty/missing so AI tools and any prior caller keep
