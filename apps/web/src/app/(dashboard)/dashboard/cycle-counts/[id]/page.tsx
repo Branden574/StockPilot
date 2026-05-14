@@ -34,6 +34,19 @@ export default async function CycleCountDetailPage({
     throw e;
   }
 
+  // Items-in-scope check is only meaningful while the count is open;
+  // closed counts compare against a fixed snapshot. Best-effort: if
+  // the head query fails we render without the warning rather than
+  // breaking the page.
+  let itemsInScopeCount: number | undefined = undefined;
+  if (header.status === 'in_progress') {
+    try {
+      itemsInScopeCount = await ccSvc.itemsInScopeCount(id);
+    } catch {
+      itemsInScopeCount = undefined;
+    }
+  }
+
   const warehouses = await warehousesSvc.list();
   const warehouseName = header.warehouse_id
     ? (warehouses.find((w) => w.id === header.warehouse_id)?.name ?? null)
@@ -116,7 +129,10 @@ export default async function CycleCountDetailPage({
               target="_blank"
               rel="noopener noreferrer"
             >
-              <Download className="h-4 w-4" /> Download PDF
+              <Download className="h-4 w-4" />{' '}
+              {header.status === 'in_progress'
+                ? 'Print count sheet'
+                : 'Variance report PDF'}
             </a>
           </Button>
         </div>
@@ -128,6 +144,7 @@ export default async function CycleCountDetailPage({
         canAssign={canAssign}
         members={members}
         assigneeName={assigneeName}
+        itemsInScopeCount={itemsInScopeCount}
       />
     </div>
   );

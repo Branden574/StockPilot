@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { audit } from './audit';
 import {
@@ -22,6 +22,8 @@ export interface CycleCountRow {
   started_at: string;
   completed_by: string | null;
   completed_at: string | null;
+  canceled_by: string | null;
+  canceled_at: string | null;
   /** Manager-set assignee responsible for the count. Null = unassigned. */
   assigned_to: string | null;
 }
@@ -30,6 +32,8 @@ export interface CycleCountLineRow {
   id: string;
   cycle_count_id: string;
   item_id: string;
+  /** Snapshot of the item's warehouse at start() time. Set by migration 0081. */
+  warehouse_id: string | null;
   expected_quantity: number;
   counted_quantity: number | null;
   reason: string | null;
@@ -46,6 +50,37 @@ export interface CycleCountLineWithItem extends CycleCountLineRow {
     unit_of_measure: string;
     barcode: string | null;
   } | null;
+}
+
+/**
+ * Maps stable PG raise-exception codes from post_cycle_count (v2,
+ * migration 0079) into user-friendly errors. Codes are kept stable
+ * across releases; UI strings live in TypeScript so we can tune them
+ * without a DB migration.
+ */
+function mapPostCycleCountError(message: string): ServiceError {
+  if (message.includes('cycle_count_not_found')) {
+    return new ServiceError('not_found', 'Cycle count not found.');
+  }
+  if (message.includes('cycle_count_not_open')) {
+    return new ServiceError(
+      'conflict',
+      'This cycle count is no longer open. Reload to see the latest status.',
+    );
+  }
+  if (message.includes('forbidden')) {
+    return new ServiceError(
+      'forbidden',
+      'You do not have permission to post this cycle count.',
+    );
+  }
+  if (message.includes('item_out_of_scope')) {
+    return new ServiceError(
+      'validation_error',
+      'An item moved to a different warehouse mid-count. Cancel this count and restart it for the new warehouse, or clear the affected lines.',
+    );
+  }
+  return new ServiceError('internal_error', message);
 }
 
 export class CycleCountsService {
@@ -74,6 +109,13 @@ export class CycleCountsService {
   }
 
   async list(filters: { assignedTo?: string | null } = {}): Promise<CycleCountRow[]> {
+    // Warehouse-scoped users (staff/viewer with assignments) only see
+    // counts for warehouses they can write to. Managers+ have
+    // hasAllAccess and see every count. Org-wide counts (warehouse_id
+    // is null) only surface for full-access users since those sessions
+    // span any warehouse.
+    const access = await getWarehouseAccess(this.ctx);
+
     let query = this.ctx.supabase
       .from('cycle_counts')
       .select('*')
@@ -83,6 +125,12 @@ export class CycleCountsService {
       // org. Pagination + cursor can come later if any org actually
       // crosses this; the cap exists to bound memory + payload size.
       .limit(200);
+
+    if (!access.hasAllAccess) {
+      if (access.writableIds.length === 0) return [];
+      query = query.in('warehouse_id', access.writableIds);
+    }
+
     if (filters.assignedTo === null) {
       // Explicit unassigned filter — used by the "unassigned" view.
       query = query.is('assigned_to', null);
@@ -112,6 +160,48 @@ export class CycleCountsService {
   ): Promise<CycleCountRow> {
     assertPermission(this.ctx, 'cycle_counts:assign');
 
+    // Refuse to update if the count is closed — assigning a completed
+    // or canceled count is meaningless and would silently drop the
+    // assignee history. The status filter below would already block it
+    // (returning no row), but the explicit lookup gives us a clean
+    // error code distinct from a stale-assignee conflict.
+    const { data: header, error: hErr } = await this.ctx.supabase
+      .from('cycle_counts')
+      .select('status')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (hErr) throw new ServiceError('internal_error', hErr.message);
+    if (!header) throw new ServiceError('not_found', 'Cycle count not found.');
+    if ((header as { status: CycleCountStatus }).status !== 'in_progress') {
+      throw new ServiceError(
+        'conflict',
+        'This cycle count is closed — assignment can\'t be changed.',
+      );
+    }
+
+    // Cross-org tampering check: the assignee must be an accepted
+    // member of THIS organization, otherwise a malicious caller could
+    // route a count to a user_id they happen to know but who isn't on
+    // the team. RLS on organization_members enforces org scope on the
+    // select, so this query is safe.
+    if (assignedTo) {
+      const { data: member, error: mErr } = await this.ctx.supabase
+        .from('organization_members')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('user_id', assignedTo)
+        .not('accepted_at', 'is', null)
+        .maybeSingle();
+      if (mErr) throw new ServiceError('internal_error', mErr.message);
+      if (!member) {
+        throw new ServiceError(
+          'validation_error',
+          'That user is not an active member of this organization.',
+        );
+      }
+    }
+
     let query = this.ctx.supabase
       .from('cycle_counts')
       .update({ assigned_to: assignedTo })
@@ -135,7 +225,7 @@ export class CycleCountsService {
         event: 'cycle_count.assigned',
         entityType: 'cycle_count',
         entityId: id,
-        after: { assigned_to: assignedTo },
+        after: { assigned_to: assignedTo, expected: expectedAssignee ?? null },
       },
       this.ctx,
     );
@@ -154,14 +244,36 @@ export class CycleCountsService {
     if (hErr) throw new ServiceError('internal_error', hErr.message);
     if (!header) throw new ServiceError('not_found', 'Cycle count not found');
 
+    const h = header as unknown as CycleCountRow;
+    // Warehouse-access gate. Counts scoped to a specific warehouse
+    // require read access to that warehouse; org-wide counts
+    // (warehouse_id is null) skip the gate since they cover every
+    // warehouse and only full-access roles can start them. We surface
+    // a 404 instead of a 403 so we don't leak the existence of a
+    // count in a warehouse the caller can't see.
+    if (h.warehouse_id) {
+      try {
+        await assertWarehouseAccess(h.warehouse_id, 'read', this.ctx);
+      } catch (e) {
+        if (e instanceof ForbiddenError) {
+          throw new ServiceError('not_found', 'Cycle count not found');
+        }
+        throw e;
+      }
+    }
+
     const { data: lines, error: lErr } = await this.ctx.supabase
       .from('cycle_count_lines')
       .select(
-        `id, cycle_count_id, item_id, expected_quantity, counted_quantity,
+        `id, cycle_count_id, item_id, warehouse_id, expected_quantity, counted_quantity,
          reason, notes, counted_by, counted_at,
          item:inventory_items!item_id (id, name, sku, unit_of_measure, barcode)`,
       )
       .eq('cycle_count_id', id)
+      // In-progress lines: sort by SKU so the on-screen list matches
+      // the printed count-sheet order (also SKU-sorted in the PDF).
+      // Completed lines: sort by counted_at descending so the most
+      // recent activity is at the top. Tie-broken on SKU either way.
       .order('counted_at', { ascending: false, nullsFirst: false });
     if (lErr) throw new ServiceError('internal_error', lErr.message);
 
@@ -176,10 +288,50 @@ export class CycleCountsService {
       return { ...r, item } as CycleCountLineWithItem;
     });
 
-    return {
-      header: header as unknown as CycleCountRow,
-      lines: flattened,
-    };
+    // Stable secondary sort by SKU for the in-progress view. Lines
+    // without an item (deleted mid-count) sort last by name/sku, which
+    // keeps the active rows clustered at the top.
+    if (h.status === 'in_progress') {
+      flattened.sort((a, b) => {
+        const ak = a.item?.sku ?? '￿';
+        const bk = b.item?.sku ?? '￿';
+        return ak.localeCompare(bk);
+      });
+    }
+
+    return { header: h, lines: flattened };
+  }
+
+  /**
+   * Counts the active items in scope right now. Used by the UI to
+   * surface a "new items added mid-count" warning when this number
+   * exceeds the line count from the original snapshot. Cheap head
+   * query — no row data is transferred.
+   */
+  async itemsInScopeCount(cycleCountId: string): Promise<number> {
+    const { data: header, error: hErr } = await this.ctx.supabase
+      .from('cycle_counts')
+      .select('warehouse_id, status')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', cycleCountId)
+      .maybeSingle();
+    if (hErr) throw new ServiceError('internal_error', hErr.message);
+    if (!header) throw new ServiceError('not_found', 'Cycle count not found.');
+    const h = header as { warehouse_id: string | null; status: CycleCountStatus };
+    // Only meaningful for open counts. Closed counts compare against
+    // a fixed snapshot — new items added afterwards aren't "missing".
+    if (h.status !== 'in_progress') return 0;
+
+    let q = this.ctx.supabase
+      .from('inventory_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId)
+      .is('deleted_at', null)
+      .eq('status', 'active');
+    if (h.warehouse_id) q = q.eq('warehouse_id', h.warehouse_id);
+    const { count, error } = await q;
+    if (error) throw new ServiceError('internal_error', error.message);
+    return count ?? 0;
   }
 
   /**
@@ -200,7 +352,7 @@ export class CycleCountsService {
 
     let itemQuery = this.ctx.supabase
       .from('inventory_items')
-      .select('id, quantity_on_hand')
+      .select('id, quantity_on_hand, warehouse_id')
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
       .eq('status', 'active');
@@ -210,9 +362,12 @@ export class CycleCountsService {
     const { data: items, error: iErr } = await itemQuery;
     if (iErr) throw new ServiceError('internal_error', iErr.message);
     if (!items || items.length === 0) {
+      const where = input.warehouseId
+        ? 'this warehouse'
+        : 'your organization';
       throw new ServiceError(
         'validation_error',
-        'No active items in scope — add items first or pick a different warehouse.',
+        `No active items found in ${where}. Add items first, or pick a different warehouse.`,
       );
     }
 
@@ -232,6 +387,9 @@ export class CycleCountsService {
     const linesPayload = items.map((it) => ({
       cycle_count_id: cc.id as string,
       item_id: it.id as string,
+      // Snapshot the item's warehouse at start() time. post() refuses
+      // to apply variance if the item has moved warehouses since.
+      warehouse_id: (it.warehouse_id as string | null) ?? null,
       expected_quantity: Number(it.quantity_on_hand) || 0,
     }));
 
@@ -288,7 +446,12 @@ export class CycleCountsService {
   }): Promise<void> {
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(input.cycleCountId);
-    const { error } = await this.ctx.supabase
+    // Use .select() so an RLS-blocked or already-missing row surfaces
+    // as a real not_found error instead of a silent no-op. v1 silently
+    // returned ok=true when RLS denied a staff record, which made the
+    // mobile app look like it had recorded a count even though the DB
+    // had ignored it. See hunter findings #3 + #13.
+    const { data, error } = await this.ctx.supabase
       .from('cycle_count_lines')
       .update({
         counted_quantity: input.countedQuantity,
@@ -298,15 +461,27 @@ export class CycleCountsService {
         counted_at: new Date().toISOString(),
       })
       .eq('cycle_count_id', input.cycleCountId)
-      .eq('id', input.lineId);
+      .eq('id', input.lineId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) {
+      // Row either doesn't exist OR RLS / parent-status blocked the
+      // write. We can't tell the difference from the API, so map both
+      // to a 404 with a helpful message — the UI will tell the user to
+      // reload, which surfaces the real state.
+      throw new ServiceError(
+        'not_found',
+        'Line not found or no longer editable. Reload the count.',
+      );
+    }
   }
 
   /** Clears a previously-recorded count for a line so the user can recount. */
   async clearCount(input: { cycleCountId: string; lineId: string }): Promise<void> {
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(input.cycleCountId);
-    const { error } = await this.ctx.supabase
+    const { data, error } = await this.ctx.supabase
       .from('cycle_count_lines')
       .update({
         counted_quantity: null,
@@ -316,26 +491,52 @@ export class CycleCountsService {
         counted_at: null,
       })
       .eq('cycle_count_id', input.cycleCountId)
-      .eq('id', input.lineId);
+      .eq('id', input.lineId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) {
+      throw new ServiceError(
+        'not_found',
+        'Line not found or no longer editable. Reload the count.',
+      );
+    }
   }
 
   /** Cancels the session without posting any adjustments. */
   async cancel(id: string): Promise<void> {
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(id);
-    const { error } = await this.ctx.supabase
+    // Use .select().maybeSingle() so a stale page (someone else
+    // posted/canceled it first) returns a clean conflict instead of
+    // silently succeeding. The status filter on the update ensures we
+    // only flip an in_progress row.
+    const nowIso = new Date().toISOString();
+    const { data, error } = await this.ctx.supabase
       .from('cycle_counts')
-      .update({ status: 'canceled' })
+      .update({
+        status: 'canceled',
+        canceled_by: this.ctx.userId,
+        canceled_at: nowIso,
+      })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
-      .eq('status', 'in_progress');
+      .eq('status', 'in_progress')
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) {
+      throw new ServiceError(
+        'conflict',
+        'This cycle count is no longer open. Reload to see the latest status.',
+      );
+    }
     await audit(
       {
         event: 'cycle_count.canceled',
         entityType: 'cycle_count',
         entityId: id,
+        extra: { canceled_at: nowIso },
       },
       this.ctx,
     );
@@ -352,7 +553,12 @@ export class CycleCountsService {
     const { data, error } = await this.ctx.supabase.rpc('post_cycle_count', {
       p_cycle_count_id: id,
     });
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) {
+      // Map stable PG raise codes to user-friendly ServiceErrors.
+      // post_cycle_count v2 emits: cycle_count_not_found,
+      // cycle_count_not_open, forbidden, item_out_of_scope.
+      throw mapPostCycleCountError(error.message);
+    }
     await audit(
       {
         event: 'cycle_count.posted',

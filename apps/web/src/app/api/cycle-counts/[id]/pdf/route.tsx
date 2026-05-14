@@ -5,7 +5,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { CycleCountSheetPdf, type CycleCountPdfLine } from '@/lib/pdf/cycle-count';
 import { audit } from '@/server/services/audit';
-import { ServiceError } from '@/server/services/context';
+import { assertPermission, ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { WarehousesService } from '@/server/services/warehouses';
 
@@ -22,6 +22,13 @@ export async function GET(
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
+    // Cycle-count PDFs reveal counted qtys, variance, and notes that
+    // can include WIP context (count notes often record discrepancies
+    // before any adjustment is made). Restrict to the same permission
+    // that gates the rest of the cycle-count UI so viewers can't pull
+    // the report directly via URL. The dashboard page already redirects
+    // viewers; this is defense-in-depth against direct API calls.
+    assertPermission(ctx, 'stock:adjust');
 
     const ccSvc = new CycleCountsService(ctx);
     const warehousesSvc = new WarehousesService(ctx);
@@ -66,6 +73,11 @@ export async function GET(
       unitOfMeasure: l.item?.unit_of_measure ?? '',
       location: binByItem.get(l.item_id) ?? null,
       expectedQuantity: Number(l.expected_quantity) || 0,
+      // Pass counted qty so the PDF can render a variance report when
+      // the count is closed. The PDF component decides what to render
+      // based on cycle.status.
+      countedQuantity:
+        l.counted_quantity == null ? null : Number(l.counted_quantity),
     }));
 
     const { data: org } = await ctx.supabase
@@ -90,12 +102,23 @@ export async function GET(
       />,
     );
 
-    void audit(
+    // Block on the audit write so a render-then-process-exit (Vercel
+    // can terminate the request after the response stream resolves)
+    // doesn't drop the log row. audit() is best-effort internally —
+    // a slow audit_logs insert can't fail this request.
+    await audit(
       {
         event: 'pdf.exported',
         entityType: 'cycle_count',
         entityId: id,
-        extra: { format: 'pdf' },
+        extra: {
+          format: 'pdf',
+          // Distinguishes a printed count sheet from a posted variance
+          // report in the audit trail. Different artifact, same route.
+          variant:
+            header.status === 'in_progress' ? 'count_sheet' : 'variance_report',
+          line_count: lineRows.length,
+        },
       },
       ctx,
     );
@@ -111,7 +134,12 @@ export async function GET(
     });
   } catch (e) {
     if (e instanceof ServiceError) {
-      const status = e.code === 'not_found' ? 404 : e.code === 'forbidden' ? 403 : 500;
+      const status =
+        e.code === 'not_found'
+          ? 404
+          : e.code === 'forbidden'
+            ? 403
+            : 500;
       return NextResponse.json({ error: e.code, message: e.message }, { status });
     }
     void reportError(e, { tag: 'pdf.cycle_count' });
