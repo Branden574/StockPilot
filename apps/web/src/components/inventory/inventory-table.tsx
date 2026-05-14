@@ -320,6 +320,14 @@ export function InventoryTable({
     return qs ? `${basePath}?${qs}` : basePath;
   }
 
+  // Encoded full current list URL — used to round-trip search/filter
+  // state when the user clicks into a row, views, and comes back.
+  // Recomputed on every render so live keystrokes flow through.
+  const currentListUrl = React.useMemo(() => {
+    const qs = params.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  }, [params, basePath]);
+
   function navigateWith(mutator: (p: URLSearchParams) => void) {
     const next = new URLSearchParams(params.toString());
     mutator(next);
@@ -707,7 +715,7 @@ export function InventoryTable({
                         />
                       )}
                       <Link
-                        href={`${rowLinkPrefix}/${item.id}`}
+                        href={`${rowLinkPrefix}/${item.id}?return=${encodeURIComponent(currentListUrl)}`}
                         className="font-medium hover:underline"
                       >
                         {item.name}
