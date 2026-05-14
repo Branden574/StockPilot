@@ -1112,20 +1112,25 @@ export function ItemForm({
             <AddSizedVariantsButton
               source={{
                 name: watch('name') ?? '',
-                sku: watch('sku') ?? null,
-                barcode: watch('barcode') ?? null,
-                description: watch('description') ?? null,
+                sku: (watch('sku') ?? null) || null,
+                barcode: (watch('barcode') ?? null) || null,
+                description: (watch('description') ?? null) || null,
                 categoryId: watch('categoryId') as string,
                 supplierId: watch('supplierId') ?? null,
                 warehouseId: watch('warehouseId') as string,
                 charterId: watch('charterId') ?? null,
                 primaryLocationId: watch('primaryLocationId') ?? null,
                 binLocation: watch('binLocation') ?? null,
-                retailPrice: watch('retailPrice') ?? 0,
-                unitCost: watch('unitCost') ?? 0,
-                reorderPoint: watch('reorderPoint') ?? 0,
-                reorderQuantity: watch('reorderQuantity') ?? 0,
+                retailPrice: Number(watch('retailPrice') ?? 0),
+                unitCost: Number(watch('unitCost') ?? 0),
+                reorderPoint: Number(watch('reorderPoint') ?? 0),
+                reorderQuantity: Number(watch('reorderQuantity') ?? 0),
                 unitOfMeasure: watch('unitOfMeasure') ?? 'unit',
+                itemType: (watch('itemType') ?? itemType) as
+                  | 'product'
+                  | 'book'
+                  | 'asset'
+                  | 'consumable',
               }}
             />
           </div>

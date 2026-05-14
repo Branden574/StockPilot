@@ -46,14 +46,17 @@ function makeSvc(rpcResult: { data: string[] | null; error: unknown }) {
 }
 
 describe('InventoryService.listDistinctRacks', () => {
-  it('passes the items scope through to the RPC', async () => {
+  it('passes the items scope through to the RPC and numeric-sorts the result', async () => {
     const { svc, rpcCalls } = makeSvc({
+      // RPC sorts lexicographically ("12" < "20-A" < "5-B"), so the
+      // service re-sorts numerically before returning. The dropdown
+      // user reads "Rack 5 → 12 → 20" top-down instead of "12 → 20 → 5".
       data: ['12', '20-A', '5-B'],
       error: null,
     });
     const out = await svc.listDistinctRacks({ scope: 'items' });
     expect(rpcCalls).toEqual([['inventory_distinct_racks', { p_scope: 'items' }]]);
-    expect(out).toEqual(['12', '20-A', '5-B']);
+    expect(out).toEqual(['5-B', '12', '20-A']);
   });
 
   it('passes the books scope through to the RPC', async () => {
