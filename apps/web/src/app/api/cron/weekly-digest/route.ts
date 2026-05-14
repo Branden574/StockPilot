@@ -147,7 +147,11 @@ export async function GET(req: Request) {
 
     const appUrl = (env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '');
     const settingsUrl = `${appUrl}/dashboard/settings/notifications`;
-    const subject = weeklyDigestSubject();
+    // Lock the subject's date label to the cron-start time so every
+    // recipient in this run gets the same dateline, even if the loop
+    // spans midnight UTC.
+    const runStartedAt = new Date();
+    const subject = weeklyDigestSubject(runStartedAt);
 
     for (const [orgId, group] of byOrg) {
       try {
@@ -196,7 +200,20 @@ export async function GET(req: Request) {
           }
           const html = weeklyDigestHtml(payload, opts);
           const text = weeklyDigestText(payload, opts);
-          const res = await sendEmail({ to, subject, html, text });
+          // RFC 8058 List-Unsubscribe header. Until a dedicated
+          // one-click endpoint ships, point at the in-app settings
+          // page — that's the canonical place to flip the
+          // email_digest_optin flag and Gmail / Apple Mail both
+          // surface it as the inline "Unsubscribe" link.
+          const res = await sendEmail({
+            to,
+            subject,
+            html,
+            text,
+            headers: {
+              'List-Unsubscribe': `<${settingsUrl}>`,
+            },
+          });
           if (res.ok) sent += 1;
           else {
             failed += 1;
