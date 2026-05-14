@@ -6,11 +6,14 @@ import { ScheduleStatusActions } from '@/components/schedule/schedule-status-act
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { requireOrgContext } from '@/lib/auth/session';
+import { formatNumber } from '@/lib/utils';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 import { ScheduleService } from '@/server/services/schedule';
 import { WarehousesService } from '@/server/services/warehouses';
-import { formatNumber } from '@/lib/utils';
+
+import { hasPermission } from '@stockpilot/core';
 
 const STATUS_LABEL: Record<string, string> = {
   scheduled: 'Scheduled',
@@ -54,6 +57,11 @@ export default async function ScheduleEventDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // Schedule is manager+ only — viewers/staff who land here directly via URL
+  // get a 404 rather than a permission error. Mirrors /dashboard/schedule.
+  const ctx = await requireOrgContext();
+  if (!hasPermission(ctx.role, 'schedule:manage')) notFound();
+
   const svc = await ScheduleService.forCurrentUser();
   let event;
   try {
@@ -188,9 +196,15 @@ export default async function ScheduleEventDetailPage({
             </div>
             <p className="text-muted-foreground text-[12px]">
               {event.bundleQuantity != null ? formatNumber(event.bundleQuantity) : '—'}{' '}
-              kit{event.bundleQuantity === 1 ? '' : 's'} will be distributed from{' '}
-              {bundleWarehouseName ?? 'a warehouse'} when this event is marked
-              complete.
+              {/* Pluralize on the absolute count — fractional kits read
+                  as plural to match how every other quantity copy in
+                  the app behaves (e.g. "0.5 kits", "2.5 kits"). */}
+              kit
+              {event.bundleQuantity != null && Math.abs(event.bundleQuantity) === 1
+                ? ''
+                : 's'}{' '}
+              will be distributed from {bundleWarehouseName ?? 'a warehouse'}{' '}
+              when this event is marked complete.
               {event.bundleDistributed
                 ? ' This event already triggered a distribution — re-completing won\'t re-fire.'
                 : ''}

@@ -61,6 +61,13 @@ const scheduleEventBaseSchema = z.object({
 const endAfterStart = {
   check: (v: { startsAt: string; endsAt?: string | null }) => {
     if (!v.endsAt) return true;
+    // `>=` (not `>`) is intentional. Zero-duration events are a
+    // legitimate calendar idiom — "pickup at 9:00am sharp", a
+    // bell-ring reminder, a single-point marker for a check-in.
+    // Forcing endsAt to strictly exceed startsAt would force every
+    // such event to fake a 1-minute span, which then clutters the
+    // calendar's range queries. The DB CHECK in migration 0083
+    // mirrors this comparison.
     return new Date(v.endsAt).getTime() >= new Date(v.startsAt).getTime();
   },
   msg: { message: 'End time must be on or after the start time', path: ['endsAt'] },
