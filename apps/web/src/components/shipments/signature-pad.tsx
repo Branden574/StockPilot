@@ -27,6 +27,12 @@ interface SignaturePadProps {
 
 const STROKE_COLOR = '#0c0c0e';
 const STROKE_WIDTH = 2;
+// M8: hardcode the pad background so the exported PNG always renders on
+// the same canvas color the user signed on. Tying it to a CSS variable
+// (--ed-paper) means a theme tweak or a missing root variable could
+// turn the captured signature into a near-invisible stroke on a too-
+// dark or too-light background when re-rendered in the PDF.
+const PAD_BACKGROUND = '#fafaf7';
 
 /**
  * Vanilla-canvas signature pad — no dependency. Built for warehouse-loading-
@@ -329,11 +335,11 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
           'aspect-[3/1]',
           'rounded-xl',
           'border border-dashed border-[var(--ed-line-strong)]',
-          'bg-[color:var(--ed-paper,#fafaf7)]',
           className ?? '',
         ]
           .filter(Boolean)
           .join(' ')}
+        style={{ backgroundColor: PAD_BACKGROUND }}
       >
         {/*
           The hint sits absolutely behind the canvas. Hidden as soon as

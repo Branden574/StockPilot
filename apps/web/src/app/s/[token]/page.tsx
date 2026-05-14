@@ -1,5 +1,25 @@
+import { cache } from 'react';
+
 import { PublicSignaturePage } from '@/components/shipments/public-signature-page';
 import { createAdminClient } from '@/lib/supabase/admin';
+
+// M3: dedupe the work_order_number lookup that runs in BOTH
+// generateMetadata and the page render. React.cache is per-request, so
+// the page render that runs after generateMetadata reuses the result.
+// This drops the page from 5 admin DB round-trips to 4.
+const lookupShipmentByToken = cache(async (token: string) => {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from('shipments')
+    .select(
+      'id, organization_id, work_order_number, status, ship_date, ' +
+        'attention_to_name, signed_by_name, signed_at, signature_email_to, ' +
+        'signature_token_expires_at, source_warehouse_id, destination_charter_id',
+    )
+    .eq('signature_token', token)
+    .maybeSingle();
+  return data;
+});
 
 const SIGNED_DATE_FMT = new Intl.DateTimeFormat('en-US', {
   month: 'short',
@@ -67,13 +87,17 @@ export async function generateMetadata({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const admin = createAdminClient();
-  const { data } = await admin
-    .from('shipments')
-    .select('work_order_number')
-    .eq('signature_token', token)
-    .maybeSingle();
-  const wo = (data as { work_order_number?: string } | null)?.work_order_number;
+  // Token validation — same shape as the page below. Skip the DB hit
+  // when the token can't possibly match.
+  const looksValid =
+    typeof token === 'string' &&
+    token.length >= 32 &&
+    /^[a-f0-9]+$/i.test(token);
+  if (!looksValid) {
+    return { title: 'Sign packing slip', robots: { index: false, follow: false } };
+  }
+  const row = await lookupShipmentByToken(token);
+  const wo = (row as { work_order_number?: string } | null)?.work_order_number;
   return {
     title: wo ? `Sign packing slip ${wo}` : 'Sign packing slip',
     robots: { index: false, follow: false },
@@ -110,15 +134,8 @@ export default async function ShipmentSignaturePage({
   // Pull the shipment + the two warehouse names + the org branding all up
   // front. One round trip would be nicer but the four lookups are cheap
   // and reading them separately keeps the typing honest.
-  const { data: shipmentRow } = await admin
-    .from('shipments')
-    .select(
-      'id, organization_id, work_order_number, status, ship_date, ' +
-        'attention_to_name, signed_by_name, signed_at, signature_email_to, ' +
-        'signature_token_expires_at, source_warehouse_id, destination_charter_id',
-    )
-    .eq('signature_token', token)
-    .maybeSingle();
+  // M3: shared cached lookup with generateMetadata (above).
+  const shipmentRow = await lookupShipmentByToken(token);
 
   if (!shipmentRow) {
     return (

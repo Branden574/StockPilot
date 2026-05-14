@@ -124,6 +124,17 @@ interface ManualCreateInput {
 
 const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+// PNG-only base64 data URL. Matches the public-signature submission
+// regex in @stockpilot/core's submitShipmentSignatureSchema so both the
+// authenticated mark-delivered path and the unauth signature path accept
+// the same shape (no SVG, JPG, or other image types — react-pdf renders
+// the inline signature, and arbitrary image bytes break the print path).
+const SIGNATURE_PNG_DATA_URL_RE = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/;
+// Signature payload cap — matches submitShipmentSignatureSchema (1.4M
+// chars after base64 inflation, ~1MB of binary). I1: standardize across
+// the action and service paths.
+const SIGNATURE_MAX_CHARS = 1_400_000;
+
 /**
  * Phase 2A — print-and-paper-sign packing slip path. The shipment row carries
  * a signature_token + expires_at populated at create time, but Phase 2A doesn't
@@ -252,6 +263,15 @@ export class ShipmentsService {
     if (hErr) throw new ServiceError('internal_error', hErr.message);
     if (!header) throw new ServiceError('not_found', 'Shipment not found');
     const h = header as Record<string, unknown>;
+    // I6: warehouse-scoped users only see shipments from their assigned
+    // source warehouses. Enforcing here keeps the not_found / forbidden
+    // distinction sharp on the service surface (org-mate sees not_found;
+    // cross-warehouse user in the same org sees forbidden).
+    await assertWarehouseAccess(
+      h.source_warehouse_id as string,
+      'read',
+      this.ctx,
+    );
 
     const { data: lineRows, error: lErr } = await this.ctx.supabase
       .from('shipment_lines')
@@ -411,18 +431,22 @@ export class ShipmentsService {
     assertPermission(this.ctx, 'purchase_orders:manage');
     await assertWarehouseAccess(input.sourceWarehouseId, 'write', this.ctx);
 
+    // I12: refuse lines with qtyShipped === 0 even if qtyBackOrdered is
+    // set — a slip with no shipped quantity is a back-order log, not a
+    // packing slip. post_shipment_shipped would happily flip it to
+    // shipped with zero movement, which is just noise in the audit trail.
     const linesToShip = input.lines
       .map((l) => ({
         itemId: l.itemId,
         qtyShipped: Number(l.qtyShipped) || 0,
         qtyBackOrdered: Number(l.qtyBackOrdered ?? 0) || 0,
       }))
-      .filter((l) => l.qtyShipped > 0 || l.qtyBackOrdered > 0);
+      .filter((l) => l.qtyShipped > 0);
 
     if (linesToShip.length === 0) {
       throw new ServiceError(
         'validation_error',
-        'Add at least one line with a non-zero quantity.',
+        'Add at least one line with a non-zero shipped quantity.',
       );
     }
 
@@ -438,10 +462,22 @@ export class ShipmentsService {
         .eq('organization_id', this.ctx.organizationId)
         .in('id', itemIds);
       if (itemErr) throw new ServiceError('internal_error', itemErr.message);
-      const wrongWarehouse = (items ?? []).filter(
-        (it) =>
-          ((it as { warehouse_id: string | null }).warehouse_id ?? null) !==
-          input.sourceWarehouseId,
+      const itemRows = (items ?? []) as Array<{
+        id: string;
+        warehouse_id: string | null;
+      }>;
+      // I8: any ID that didn't resolve = wrong org, deleted, or hand-
+      // crafted. Without this, those IDs slip past the wrongWarehouse
+      // check below (which only sees the ones that DID resolve) and
+      // hit a cryptic RLS/FK error at insert time.
+      if (itemRows.length !== itemIds.length) {
+        throw new ServiceError(
+          'validation_error',
+          'Some item IDs are invalid or cross-org.',
+        );
+      }
+      const wrongWarehouse = itemRows.filter(
+        (it) => (it.warehouse_id ?? null) !== input.sourceWarehouseId,
       );
       if (wrongWarehouse.length > 0) {
         throw new ServiceError(
@@ -482,6 +518,25 @@ export class ShipmentsService {
 
   async markShipped(id: string): Promise<void> {
     assertPermission(this.ctx, 'purchase_orders:manage');
+
+    // I6: warehouse access gate. The RPC enforces the manager role on
+    // the shipment's org but doesn't know about warehouse-scope
+    // assignments, so a warehouse-scoped manager could otherwise post
+    // a shipment outside their assignment. Look up the source warehouse
+    // first so we have something to check.
+    const { data: whRow, error: whErr } = await this.ctx.supabase
+      .from('shipments')
+      .select('source_warehouse_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (whErr) throw new ServiceError('internal_error', whErr.message);
+    if (!whRow) throw new ServiceError('not_found', 'Shipment not found');
+    await assertWarehouseAccess(
+      (whRow as { source_warehouse_id: string }).source_warehouse_id,
+      'write',
+      this.ctx,
+    );
 
     // ── Stock deduction design ────────────────────────────────────────
     //
@@ -567,6 +622,8 @@ export class ShipmentsService {
   async markCancelled(id: string): Promise<void> {
     assertPermission(this.ctx, 'purchase_orders:manage');
     const detail = await this.get(id);
+    // I6: get() asserts read access; cancel is a write op, re-assert.
+    await assertWarehouseAccess(detail.sourceWarehouseId, 'write', this.ctx);
     if (
       detail.status === 'delivered' ||
       detail.status === 'cancelled' ||
@@ -585,12 +642,48 @@ export class ShipmentsService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+
+    // C2: cancelling a draft shipment linked to an order_request leaves
+    // the order's stock_reservations dangling. The slip never shipped,
+    // so the order's "available" math was inflated by the reservation
+    // for the slip's lifetime — and now nothing will ever release it.
+    // Release here with reason='shipment_cancelled' so audit history can
+    // trace the release back. We release ALL active reservations for
+    // the order (not per-line): a cancelled draft means the order has
+    // been abandoned at the warehouse side. If the user re-packs, the
+    // order-side flow re-creates fresh reservations on the next pack.
+    if (detail.orderRequestId) {
+      const { error: relErr } = await this.ctx.supabase
+        .from('stock_reservations')
+        .update({
+          released_at: new Date().toISOString(),
+          released_reason: 'shipment_cancelled',
+        })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('order_request_id', detail.orderRequestId)
+        .is('released_at', null);
+      if (relErr) {
+        // Status flip already succeeded; logging-only so the user
+        // doesn't lose the cancel because of a reservation hiccup.
+        // Dangling rows can be reconciled by ops; rolling back the
+        // cancel here would be worse for the user.
+        console.warn(
+          '[shipments.markCancelled] failed to release reservations',
+          relErr.message,
+        );
+      }
+    }
+
     await audit(
       {
         event: 'shipment.cancelled',
         entityType: 'shipment',
         entityId: id,
         warehouseId: detail.sourceWarehouseId,
+        extra: {
+          orderRequestId: detail.orderRequestId,
+          releasedReservations: !!detail.orderRequestId,
+        },
       },
       this.ctx,
     );
@@ -621,6 +714,9 @@ export class ShipmentsService {
   ): Promise<void> {
     assertPermission(this.ctx, 'purchase_orders:manage');
     const detail = await this.get(id);
+    // I6/I7: get() asserts read on source warehouse. Mark-delivered is
+    // a write op, so re-assert.
+    await assertWarehouseAccess(detail.sourceWarehouseId, 'write', this.ctx);
     if (detail.status === 'delivered') {
       throw new ServiceError('validation_error', 'Shipment is already delivered.');
     }
@@ -647,25 +743,36 @@ export class ShipmentsService {
       throw new ServiceError('validation_error', 'Invalid delivered date.');
     }
     const sigDataUrl = args.signatureDataUrl?.trim() || null;
-    // Defensive bound — same column the public flow writes to is `text`,
-    // ~50KB PNG fits fine but a runaway base64 payload shouldn't be
-    // accepted here. 1MB ceiling matches the public-link cap.
-    if (sigDataUrl && sigDataUrl.length > 1_000_000) {
+    // I1: cap matches the public-signature flow (1.4M chars after base64
+    // inflation, ~1MB binary). C4: PNG-only regex, same as
+    // submitShipmentSignatureSchema — startsWith('data:image/') accepted
+    // SVG, GIF, JPG, and even data:image/garbage; we render this back
+    // into a PDF later so the shape needs to be PNG.
+    if (sigDataUrl && sigDataUrl.length > SIGNATURE_MAX_CHARS) {
       throw new ServiceError(
         'validation_error',
         'Signature image is too large (max ~1MB).',
       );
     }
-    if (sigDataUrl && !sigDataUrl.startsWith('data:image/')) {
+    if (sigDataUrl && !SIGNATURE_PNG_DATA_URL_RE.test(sigDataUrl)) {
       throw new ServiceError('validation_error', 'Signature must be a PNG data URL.');
     }
 
+    // I3: don't clobber signed_at / signed_by_name / signature_image_url
+    // when they're already set. If the public signature flow already
+    // wrote those (stale browser tab → manager hits Mark delivered),
+    // keeping the earliest values preserves the audit timeline and the
+    // real signer's name. Status is the only thing we always flip.
     const updatePayload: Record<string, unknown> = {
       status: 'delivered' satisfies ShipmentStatus,
-      signed_by_name: receiverName,
-      signed_at: signedAt,
     };
-    if (sigDataUrl) {
+    if (!detail.signedAt) {
+      updatePayload.signed_at = signedAt;
+    }
+    if (!detail.signedByName) {
+      updatePayload.signed_by_name = receiverName;
+    }
+    if (sigDataUrl && !detail.signatureImageUrl) {
       updatePayload.signature_image_url = sigDataUrl;
     }
     const { error } = await this.ctx.supabase
@@ -759,12 +866,12 @@ export class ShipmentsService {
     const baseWo = `ISR-${code}-${mm}${dd}${yyyy}`;
     const shipDate = `${yyyy}-${mm}-${dd}`; // YYYY-MM-DD for date column
 
-    const signatureToken = randomBytes(24).toString('hex');
     const signatureExpires = new Date(Date.now() + TOKEN_TTL_MS).toISOString();
 
     // Try base WO# then -2, -3, ... up to -50. INSERT-and-catch on UNIQUE
     // violation avoids the SELECT-then-INSERT race window.
     let insertedId: string | null = null;
+    let signatureToken = randomBytes(24).toString('hex');
     for (let suffix = 1; suffix <= 50; suffix += 1) {
       const wo = suffix === 1 ? baseWo : `${baseWo}-${suffix}`;
       const { data, error } = await this.ctx.supabase
@@ -791,13 +898,24 @@ export class ShipmentsService {
         insertedId = data.id as string;
         break;
       }
-      // 23505 = unique_violation. Could be the (org, work_order_number)
-      // collision OR the unique signature_token. We regenerate a fresh
-      // token on retry just in case.
+      // 23505 = unique_violation. M1: distinguish a token collision from
+      // a WO# collision so we know what to regenerate. A token collision
+      // is astronomically rare (24-byte random) — but if it happens, we
+      // regen the token and retry the SAME suffix. A WO# collision is
+      // the expected case; bump the suffix.
       if (error.code !== '23505') {
         throw new ServiceError('internal_error', error.message);
       }
-      // Will retry with next suffix.
+      const constraint = (error as { details?: string; message?: string })
+        .details ?? (error as { message?: string }).message ?? '';
+      if (constraint.includes('signature_token')) {
+        // Token collision — astronomically rare, but stay defensive.
+        // Regen the token; don't burn a suffix on a non-WO collision.
+        signatureToken = randomBytes(24).toString('hex');
+        suffix -= 1;
+        continue;
+      }
+      // Otherwise treat as a WO# collision: bump the suffix on next iter.
     }
     if (!insertedId) {
       throw new ServiceError(
@@ -819,9 +937,14 @@ export class ShipmentsService {
       .insert(linesPayload);
     if (linesErr) {
       // Roll back the header by hand — no transaction wrapper here.
+      // M2: scope the rollback by org_id for defense in depth. RLS
+      // already prevents cross-org deletes, but pinning it explicitly
+      // keeps the failure mode predictable if anyone runs this path
+      // with the service-role client.
       await this.ctx.supabase
         .from('shipments')
         .delete()
+        .eq('organization_id', this.ctx.organizationId)
         .eq('id', insertedId);
       throw new ServiceError('internal_error', linesErr.message);
     }
