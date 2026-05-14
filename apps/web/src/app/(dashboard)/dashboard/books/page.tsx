@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { BackfillCoversButton } from '@/components/books/backfill-covers-button';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
-import { InventoryTable } from '@/components/inventory/inventory-table';
+import { BooksInventoryTable } from '@/components/books/books-inventory-table';
 import { Button } from '@/components/ui/button';
 import { hasPermission } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
@@ -220,7 +220,7 @@ export default async function BooksPage({
             cta={{ label: 'Show all books', href: '/dashboard/books' }}
           />
         ) : (
-          <InventoryTable
+          <BooksInventoryTable
             items={itemsWithImages}
             total={inventory.total}
             lookups={lookups}
