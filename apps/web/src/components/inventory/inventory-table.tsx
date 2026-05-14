@@ -690,7 +690,15 @@ export function InventoryTable({
                       itemStatus={item.status}
                     />
                   </td>
-                  <td className="px-3 text-right text-[11.5px] text-[var(--ed-ink-4)]">
+                  <td
+                    className="px-3 text-right text-[11.5px] text-[var(--ed-ink-4)]"
+                    // `formatRelative` reads `new Date()` at call time, so the
+                    // string produced during server SSR ("15 minutes ago") can
+                    // shift by the time the client hydrates ("16 minutes
+                    // ago"), tripping React error #418. Tolerate the drift —
+                    // exactly the case suppressHydrationWarning is for.
+                    suppressHydrationWarning
+                  >
                     {formatRelative(item.updated_at)}
                   </td>
                 </tr>
