@@ -200,6 +200,19 @@ Rules:
       candidates" → getStaleItems (default 90 days, items with ZERO
       movements in window).
 
+- Semantic / fuzzy search ("something like X", "items related to
+  concept Y", "the thing for cleaning spills"):
+    - Use searchInventorySemantic when the user describes a CONCEPT
+      not a specific name/SKU. It ranks by meaning, not keywords.
+    - Use searchInventory (keyword) when the user gives an exact
+      word, partial SKU, barcode, or known name fragment.
+    - If searchInventorySemantic returns 0 rows or an error about
+      missing embeddings, fall back to searchInventory automatically
+      — don't bother the user about it. The user can run a backfill
+      from settings if they want richer results.
+    - Similarity is 0-1 (1=best); below 0.5 is usually noise. The
+      tool filters those out by default.
+
 - The "out of scope" reply is ONLY for genuinely unrelated questions
   (general knowledge, weather, news, code questions). Inventory,
   stock, suppliers, warehouses, movements, POs, items, value, and

@@ -540,6 +540,15 @@ export class InventoryService {
       this.ctx,
     );
 
+    // Fire-and-forget embedding so the new row participates in semantic
+    // search. Failures are swallowed inside the helper — never block
+    // create on a Gemini hiccup.
+    void (async () => {
+      const { embedInventoryItem } = await import('@/lib/ai/embeddings');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await embedInventoryItem(data.id as string, this.ctx as any);
+    })();
+
     return data;
   }
 
@@ -1041,6 +1050,23 @@ export class InventoryService {
       },
       this.ctx,
     );
+
+    // Re-embed only when an embedding-relevant field changed — saves a
+    // Gemini call when the user only edited price / reorder thresholds.
+    const EMBED_RELEVANT_KEYS = new Set([
+      'name',
+      'sku',
+      'barcode',
+      'description',
+      'custom_fields',
+    ]);
+    if (changedKeys.some((k) => EMBED_RELEVANT_KEYS.has(k))) {
+      void (async () => {
+        const { embedInventoryItem } = await import('@/lib/ai/embeddings');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await embedInventoryItem(id, this.ctx as any);
+      })();
+    }
 
     return data;
   }
