@@ -287,13 +287,6 @@ export function InventoryTable({
     });
   }, [items, q]);
 
-  // Set up the search state structure for the debounced effect (next commit).
-  // Reference all pieces to satisfy noUnusedLocals.
-  React.useMemo(
-    () => ({ serverHits, setServerHits, serverLoading, setServerLoading, localMatches }),
-    [serverHits, setServerHits, serverLoading, setServerLoading, localMatches]
-  );
-
   const view = paramsToView(params.get('stock'));
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
 
@@ -362,18 +355,81 @@ export function InventoryTable({
     });
   }
 
+  // Instant-search flow. On every q change:
+  //   1. localMatches has already updated synchronously (see useMemo
+  //      above) — the table is already showing the user's typed-filter
+  //      view.
+  //   2. After 150ms of no further typing, fetch /api/items/search
+  //      with q + the page's current URL filters so we catch matches
+  //      on other pages.
+  //   3. Update the URL via history.replaceState (NOT router.replace)
+  //      so Next.js App Router doesn't re-execute the parent server
+  //      component and re-fetch all 8 page queries — that's the bug
+  //      this whole effort is escaping.
+  //
+  // AbortController cancels in-flight requests on rapid typing. On
+  // any error we silently fall back to localMatches (which is still
+  // mounted) — no toast, no UX disruption.
   React.useEffect(() => {
-    const t = setTimeout(() => {
+    const needle = q.trim();
+    if (!needle) {
+      setServerHits(null);
+      setServerLoading(false);
+      // Clear the q param from the URL when the user empties the box.
       const next = new URLSearchParams(params.toString());
-      if (q.trim()) next.set('q', q.trim());
-      else next.delete('q');
-      // Search changes the result set — staying on page 5 isn't right
-      // if the new query has fewer pages.
-      next.delete('page');
-      const qs = next.toString();
-      router.replace(qs ? `${basePath}?${qs}` : basePath);
-    }, 250);
-    return () => clearTimeout(t);
+      if (next.has('q') || next.has('page')) {
+        next.delete('q');
+        next.delete('page');
+        const qs = next.toString();
+        const newUrl = qs ? `${basePath}?${qs}` : basePath;
+        window.history.replaceState(null, '', newUrl);
+      }
+      return;
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
+      setServerLoading(true);
+      try {
+        const url = new URL('/api/items/search', window.location.origin);
+        url.searchParams.set('q', needle);
+        for (const k of ['type', 'status', 'stock', 'sort', 'rack']) {
+          const v = params.get(k);
+          if (v) url.searchParams.set(k, v);
+        }
+        for (const v of params.getAll('cat')) url.searchParams.append('cat', v);
+        for (const v of params.getAll('loc')) url.searchParams.append('loc', v);
+        url.searchParams.set('limit', String(pageSize));
+
+        const res = await fetch(url.toString(), { signal: ctrl.signal });
+        if (!res.ok) throw new Error(`search failed: ${res.status}`);
+        const data = (await res.json()) as { items: Item[]; total: number };
+        setServerHits(data.items);
+
+        // URL update LAST. history.replaceState updates the address
+        // bar without invoking Next.js's router, so the page-level
+        // server component doesn't re-execute. router.replace would
+        // — and that's exactly the page-reload-per-keystroke we're
+        // escaping.
+        const next = new URLSearchParams(params.toString());
+        next.set('q', needle);
+        next.delete('page');
+        const newUrl = `${basePath}?${next.toString()}`;
+        window.history.replaceState(null, '', newUrl);
+      } catch (e) {
+        if ((e as Error).name !== 'AbortError') {
+          // Silent fall-back to localMatches. Don't toast — the user
+          // already has results on screen; a toast would imply
+          // something is broken when it isn't.
+          setServerHits(null);
+        }
+      } finally {
+        setServerLoading(false);
+      }
+    }, 150);
+    return () => {
+      ctrl.abort();
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
@@ -390,6 +446,11 @@ export function InventoryTable({
   }
 
   const valueOnHand = items.reduce((s, it) => s + it.quantity_on_hand * it.unit_cost, 0);
+
+  // Consumed by the render swap in the next task; keep the symbols live.
+  void serverHits;
+  void serverLoading;
+  void localMatches;
 
   return (
     <div className="space-y-4">
