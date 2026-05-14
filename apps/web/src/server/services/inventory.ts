@@ -274,6 +274,55 @@ export class InventoryService {
     }));
   }
 
+  /**
+   * Distinct rack / bin-location values for the rack-filter dropdown.
+   * Scope picks which column to read:
+   *   - 'items' → distinct bin_location across non-book items.
+   *   - 'books' → distinct {book_rack_number}{-book_rack_row?} pulled
+   *     from custom_fields on book items.
+   * Returns sorted, de-duplicated strings; empty when nothing has a
+   * rack set yet.
+   */
+  async listDistinctRacks(opts: { scope: 'items' | 'books' }): Promise<string[]> {
+    if (opts.scope === 'items') {
+      const { data, error } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('bin_location')
+        .eq('organization_id', this.ctx.organizationId)
+        .is('deleted_at', null)
+        .not('bin_location', 'is', null)
+        .not('item_type', 'eq', 'book');
+      if (error) throw new ServiceError('internal_error', error.message);
+      const set = new Set<string>();
+      for (const r of (data ?? []) as Array<{ bin_location: string | null }>) {
+        const v = (r.bin_location ?? '').trim();
+        if (v) set.add(v);
+      }
+      return Array.from(set).sort();
+    }
+
+    const { data, error } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('custom_fields')
+      .eq('organization_id', this.ctx.organizationId)
+      .is('deleted_at', null)
+      .eq('item_type', 'book');
+    if (error) throw new ServiceError('internal_error', error.message);
+    const set = new Set<string>();
+    for (const r of (data ?? []) as Array<{
+      custom_fields: Record<string, unknown> | null;
+    }>) {
+      const cf = r.custom_fields ?? {};
+      const num =
+        typeof cf.book_rack_number === 'string' ? cf.book_rack_number.trim() : '';
+      const row =
+        typeof cf.book_rack_row === 'string' ? cf.book_rack_row.trim() : '';
+      if (!num) continue;
+      set.add(row ? `${num}-${row}` : num);
+    }
+    return Array.from(set).sort();
+  }
+
   async get(id: string) {
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
