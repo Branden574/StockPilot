@@ -5,6 +5,7 @@ import { ItemForm } from '@/components/inventory/item-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
+import { safeReturnPath } from '@/lib/safe-return-path';
 import { createClient } from '@/lib/supabase/server';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
@@ -18,8 +19,15 @@ import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
 import { hasPermission, resolveTerminology } from '@stockpilot/core';
 
-export default async function EditItemPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function EditItemPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ return?: string }>;
+}) {
   const { id } = await params;
+  const { return: returnParam } = await searchParams;
   const ctx = await requireOrgContext();
   // Viewers (or any role without items:update) can't edit existing items.
   // Bounce them back to the detail page instead of letting them see the
@@ -85,11 +93,13 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
     }> | null) ?? null,
   );
 
+  const backHref = safeReturnPath(returnParam) ?? `/dashboard/inventory/${id}`;
+
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
         <Link
-          href={`/dashboard/inventory/${id}`}
+          href={backHref}
           className="text-muted-foreground hover:text-foreground text-sm"
         >
           ← Back to item
@@ -150,6 +160,7 @@ export default async function EditItemPage({ params }: { params: Promise<{ id: s
             forcedWarehouseId={forced}
             warehouseLabel={terminology.warehouse_singular}
             charterLabel={terminology.charter_singular}
+            returnHref={backHref}
           />
         </CardContent>
       </Card>
