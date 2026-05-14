@@ -600,7 +600,7 @@ export class InventoryService {
     rackNumber?: string | null;
     rackRow?: string | null;
     variants: Array<{
-      size: 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
+      size: 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
       quantity: number;
     }>;
   }): Promise<Array<{ id: string; name: string; sku: string }>> {
