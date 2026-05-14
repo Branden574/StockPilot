@@ -16,6 +16,7 @@ import type {
 } from '@stockpilot/core';
 
 import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
+import { audit } from './audit';
 import { TagsService } from './tags';
 
 export type ItemListSort =
@@ -487,6 +488,16 @@ export class InventoryService {
       });
     }
 
+    void audit(
+      {
+        event: 'inventory.item.created',
+        entityType: 'inventory_item',
+        entityId: data.id as string,
+        warehouseId: resolvedWarehouseId,
+      },
+      this.ctx,
+    );
+
     return data;
   }
 
@@ -677,6 +688,19 @@ export class InventoryService {
       }
     }
 
+    for (const r of inserted) {
+      void audit(
+        {
+          event: 'inventory.item.created',
+          entityType: 'inventory_item',
+          entityId: r.id as string,
+          warehouseId: resolvedWarehouseId,
+          extra: { bulk_op: 'sized_variants' },
+        },
+        this.ctx,
+      );
+    }
+
     return inserted.map((r) => ({ id: r.id, name: r.name, sku: r.sku }));
   }
 
@@ -865,6 +889,19 @@ export class InventoryService {
       }
     }
 
+    for (const id of createdIds) {
+      void audit(
+        {
+          event: 'inventory.item.created',
+          entityType: 'inventory_item',
+          entityId: id,
+          warehouseId: input.warehouseId,
+          extra: { bulk_op: 'bulk_create' },
+        },
+        this.ctx,
+      );
+    }
+
     return {
       created: createdIds.length,
       skipped,
@@ -948,6 +985,21 @@ export class InventoryService {
       .single();
 
     if (error) throw new ServiceError('internal_error', error.message);
+
+    // Drop the cosmetic `updated_by` from the changed-keys list so the
+    // audit row reflects what the caller actually edited.
+    const changedKeys = Object.keys(updates).filter((k) => k !== 'updated_by');
+    void audit(
+      {
+        event: 'inventory.item.updated',
+        entityType: 'inventory_item',
+        entityId: id,
+        warehouseId: (data as { warehouse_id?: string | null }).warehouse_id ?? null,
+        extra: { changed_keys: changedKeys },
+      },
+      this.ctx,
+    );
+
     return data;
   }
 
@@ -962,6 +1014,15 @@ export class InventoryService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+    void audit(
+      {
+        event: 'inventory.item.archived',
+        entityType: 'inventory_item',
+        entityId: id,
+        warehouseId: wh,
+      },
+      this.ctx,
+    );
   }
 
   /**
@@ -1055,6 +1116,21 @@ export class InventoryService {
       );
       if (error) throw new ServiceError('internal_error', error.message);
       const ok = typeof updatedCount === 'number' ? updatedCount : 0;
+      // Emit a per-item audit row for the set_rack mutation. We don't
+      // know which of `allowedIds` survived RLS, so this slightly
+      // over-counts when ok < allowedIds.length — acceptable cost for
+      // a queryable trail.
+      for (const id of allowedIds) {
+        void audit(
+          {
+            event: 'inventory.item.updated',
+            entityType: 'inventory_item',
+            entityId: id,
+            extra: { bulk_op: 'set_rack', rack_number: num, rack_row: row },
+          },
+          this.ctx,
+        );
+      }
       // RLS filtered the gap (if any). Surface it in `skipped` so the
       // "Updated X · Skipped Y" toast remains truthful.
       return { ok, skipped: skipped + (allowedIds.length - ok) };
@@ -1102,6 +1178,29 @@ export class InventoryService {
       .in('id', allowedIds);
     if (error) throw new ServiceError('internal_error', error.message);
 
+    // Emit one audit row per affected item so the per-item history
+    // surfaces in the "View history" link on the Recovery page and in
+    // the audit log's entity filter. Map archive/unarchive to the
+    // matching lifecycle events; everything else funnels into
+    // `inventory.item.updated` with the bulk op kind in `extra` so the
+    // audit reader can tell apart "edited via single form" from
+    // "edited via bulk action".
+    const bulkEvent =
+      input.op.kind === 'archive'
+        ? ('inventory.item.archived' as const)
+        : ('inventory.item.updated' as const);
+    for (const id of allowedIds) {
+      void audit(
+        {
+          event: bulkEvent,
+          entityType: 'inventory_item',
+          entityId: id,
+          extra: { bulk_op: input.op.kind },
+        },
+        this.ctx,
+      );
+    }
+
     return { ok: allowedIds.length, skipped };
   }
 
@@ -1120,6 +1219,15 @@ export class InventoryService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+    void audit(
+      {
+        event: 'inventory.item.deleted',
+        entityType: 'inventory_item',
+        entityId: id,
+        warehouseId: wh,
+      },
+      this.ctx,
+    );
   }
 
   async adjustStock(input: AdjustStockInput) {
