@@ -33,12 +33,14 @@ interface CategoryRow {
   name: string;
   description: string | null;
   color: string | null;
+  supports_sizes: boolean;
 }
 
 interface FormValues {
   name: string;
   description: string;
   color: string;
+  supportsSizes: boolean;
 }
 
 const PRESET_COLORS = ['#6366f1', '#10b981', '#f97316', '#0ea5e9', '#a855f7', '#ec4899', '#64748b', '#eab308'];
@@ -233,7 +235,12 @@ function CategoryDialog({
   } = useForm<FormValues>({
     mode: 'onBlur',
     reValidateMode: 'onChange',
-    defaultValues: { name: '', description: '', color: '#6366f1' },
+    defaultValues: {
+      name: '',
+      description: '',
+      color: '#6366f1',
+      supportsSizes: false,
+    },
   });
 
   React.useEffect(() => {
@@ -242,6 +249,7 @@ function CategoryDialog({
         name: editing?.name ?? '',
         description: editing?.description ?? '',
         color: editing?.color ?? '#6366f1',
+        supportsSizes: editing?.supports_sizes ?? false,
       });
     }
   }, [open, editing, reset]);
@@ -251,6 +259,7 @@ function CategoryDialog({
       name: values.name,
       description: values.description || undefined,
       color: values.color || undefined,
+      supportsSizes: values.supportsSizes,
     };
     const res = editing
       ? await updateCategoryAction(editing.id, payload)
@@ -299,6 +308,26 @@ function CategoryDialog({
               ))}
             </div>
           </div>
+          <label
+            htmlFor="cat-supports-sizes"
+            className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer"
+          >
+            <input
+              id="cat-supports-sizes"
+              type="checkbox"
+              className="mt-0.5 h-4 w-4"
+              {...register('supportsSizes')}
+            />
+            <div className="space-y-0.5">
+              <span className="block text-sm font-medium">
+                Has size variants (S, M, L, XL…)
+              </span>
+              <p className="text-muted-foreground text-xs">
+                When on, items in this category get a Sizes selector on the
+                item form, and saving creates one variant per chosen size.
+              </p>
+            </div>
+          </label>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
               Cancel
