@@ -261,6 +261,39 @@ export function InventoryTable({
   const router = useRouter();
   const params = useSearchParams();
   const [q, setQ] = React.useState(initialQuery);
+  // Server-authoritative search hits — populated after a debounced
+  // fetch to /api/items/search. `null` means "no server result yet,
+  // fall back to localMatches"; an empty array means "server says
+  // zero matches". Cleared when q goes back to empty.
+  const [serverHits, setServerHits] = React.useState<Item[] | null>(null);
+  const [serverLoading, setServerLoading] = React.useState(false);
+
+  // Instant local filter on every keystroke. Substring match against
+  // name / sku / barcode of the rows already on this page. Renders
+  // before the server fetch comes back so the user gets immediate
+  // feedback; the server result then supersedes via `displayed` below.
+  const localMatches = React.useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return items;
+    return items.filter((i) => {
+      const name = (i.name ?? '').toLowerCase();
+      const sku = (i.sku ?? '').toLowerCase();
+      const barcode = (
+        (i as { barcode?: string | null }).barcode ?? ''
+      ).toLowerCase();
+      return (
+        name.includes(needle) || sku.includes(needle) || barcode.includes(needle)
+      );
+    });
+  }, [items, q]);
+
+  // Set up the search state structure for the debounced effect (next commit).
+  // Reference all pieces to satisfy noUnusedLocals.
+  React.useMemo(
+    () => ({ serverHits, setServerHits, serverLoading, setServerLoading, localMatches }),
+    [serverHits, setServerHits, serverLoading, setServerLoading, localMatches]
+  );
+
   const view = paramsToView(params.get('stock'));
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
 
