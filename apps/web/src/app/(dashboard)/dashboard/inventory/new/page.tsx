@@ -92,7 +92,11 @@ export default async function NewItemPage() {
         </CardHeader>
         <CardContent>
           <ItemForm
-            categories={categories.map((c) => ({ id: c.id as string, name: c.name as string }))}
+            categories={categories.map((c) => ({
+              id: c.id as string,
+              name: c.name as string,
+              supports_sizes: Boolean(c.supports_sizes),
+            }))}
             locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
             tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}

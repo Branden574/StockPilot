@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { z } from 'zod';
 
 import { InventoryService } from '@/server/services/inventory';
 import { ServiceError } from '@/server/services/context';
@@ -81,6 +82,50 @@ export async function deleteItemAction(id: string): Promise<ActionResult<void>> 
     await svc.softDelete(id);
     revalidatePath('/dashboard/inventory');
     return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const bulkCreateSizedSchema = z.object({
+  baseName: z.string().min(1).max(200),
+  baseSku: z.string().max(120).nullable(),
+  baseBarcode: z.string().max(120).nullable(),
+  description: z.string().max(2000).nullable(),
+  categoryId: z.string().uuid(),
+  supplierId: z.string().uuid().nullable(),
+  warehouseId: z.string().uuid(),
+  primaryLocationId: z.string().uuid().nullable(),
+  binLocation: z.string().max(120).nullable(),
+  retailPrice: z.coerce.number().min(0),
+  unitCost: z.coerce.number().min(0),
+  reorderPoint: z.coerce.number().int().min(0),
+  reorderQuantity: z.coerce.number().int().min(0),
+  variants: z
+    .array(
+      z.object({
+        size: z.enum(['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL']),
+        quantity: z.coerce.number().int().min(0),
+      }),
+    )
+    .min(1)
+    .max(7),
+});
+
+export async function bulkCreateSizedVariantsAction(
+  input: z.input<typeof bulkCreateSizedSchema>,
+): Promise<ActionResult<{ created: number; ids: string[] }>> {
+  const parsed = bulkCreateSizedSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const svc = await InventoryService.forCurrentUser();
+    const rows = await svc.bulkCreateSizedVariants(parsed.data);
+    revalidatePath('/dashboard/inventory');
+    revalidatePath('/dashboard/books');
+    revalidatePath('/dashboard');
+    return ok({ created: rows.length, ids: rows.map((r) => r.id) });
   } catch (e) {
     return toResult(e);
   }
