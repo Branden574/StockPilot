@@ -23,6 +23,7 @@ export class BillingService {
   }
 
   async getOrgBilling() {
+    assertPermission(this.ctx, 'billing:read');
     const { data, error } = await this.ctx.supabase
       .from('organizations')
       .select('id, name, plan, stripe_customer_id, stripe_subscription_id, trial_ends_at')

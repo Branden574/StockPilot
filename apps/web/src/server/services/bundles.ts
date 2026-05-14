@@ -285,6 +285,12 @@ export class BundlesService {
    * included in the preview but their `shortage` count is informational
    * only — distribution won't fail because an optional is short.
    */
+  // FIXME: preview should validate that components live in the given
+  // warehouseId — today the component-side check is global (item
+  // `quantity_on_hand` is org-wide), so cross-warehouse stock can
+  // mask a real shortage. The distribution-side check lands in
+  // migration 0070_bundle_distribute_warehouse_scope.sql; this
+  // service-side preview will be brought in line in a follow-up.
   async preview(
     id: string,
     quantity: number,

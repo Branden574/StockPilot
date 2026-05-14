@@ -1,9 +1,7 @@
 import type { Role } from './roles';
 
 export const PERMISSIONS = [
-  'organization:read',
   'organization:update',
-  'organization:delete',
   'billing:read',
   'billing:manage',
   'members:read',
@@ -29,8 +27,6 @@ export const PERMISSIONS = [
   'reports:read',
   'reports:export',
   'activity_logs:read',
-  'settings:read',
-  'settings:manage',
   // Cycle counts: most actions (start, record, post) gate on stock:adjust
   // because they emit stock_movements. ASSIGN is a manager+-only call so
   // a staff/viewer can't reroute work to someone else.
@@ -58,11 +54,8 @@ const ALL_PERMISSIONS: Permission[] = [...PERMISSIONS];
 
 export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   owner: ALL_PERMISSIONS,
-  admin: ALL_PERMISSIONS.filter(
-    (p) => p !== 'organization:delete' && p !== 'billing:manage',
-  ),
+  admin: ALL_PERMISSIONS.filter((p) => p !== 'billing:manage'),
   manager: [
-    'organization:read',
     'members:read',
     'items:read',
     'items:create',
@@ -82,7 +75,6 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'reports:read',
     'reports:export',
     'activity_logs:read',
-    'settings:read',
     'cycle_counts:assign',
     'bundles:manage',
     'bundles:distribute',
@@ -91,11 +83,11 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'schedule:manage',
   ],
   staff: [
-    'organization:read',
     'members:read',
     'items:read',
     'items:create',
     'items:update',
+    'items:import',
     'stock:adjust',
     'stock:transfer',
     'locations:read',
@@ -107,7 +99,6 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'orders:request',
   ],
   viewer: [
-    'organization:read',
     'members:read',
     'items:read',
     'locations:read',
@@ -141,20 +132,10 @@ export interface PermissionMeta {
 }
 
 export const PERMISSION_META: Record<Permission, PermissionMeta> = {
-  'organization:read': {
-    group: 'Organization',
-    label: 'View organization details',
-    description: 'See the workspace name, plan, and basic settings.',
-  },
   'organization:update': {
     group: 'Organization',
     label: 'Edit organization details',
     description: 'Rename the workspace, change terminology labels.',
-  },
-  'organization:delete': {
-    group: 'Organization',
-    label: 'Delete organization',
-    description: 'Permanently destroy the workspace and all its data.',
   },
   'billing:read': {
     group: 'Organization',
@@ -165,16 +146,6 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     group: 'Organization',
     label: 'Manage billing',
     description: 'Change plan, update payment method, cancel subscription.',
-  },
-  'settings:read': {
-    group: 'Organization',
-    label: 'View settings',
-    description: 'Open the Settings area.',
-  },
-  'settings:manage': {
-    group: 'Organization',
-    label: 'Manage settings',
-    description: 'Change org-wide settings (notifications policy, etc.).',
   },
   'activity_logs:read': {
     group: 'Organization',

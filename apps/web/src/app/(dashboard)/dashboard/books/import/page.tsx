@@ -25,7 +25,7 @@ export const maxDuration = 60;
 
 export default async function BulkIsbnImportPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'items:create')) {
+  if (!hasPermission(ctx.role, 'items:import')) {
     redirect('/dashboard/books');
   }
   const supabase = await createClient();

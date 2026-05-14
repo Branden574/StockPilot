@@ -28,6 +28,15 @@ function toResult<T>(error: unknown): ActionResult<T> {
   return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
 }
 
+// Validate UUIDs before they hit Postgres. Without this, a malformed string
+// passed to set_category/set_supplier/set_location surfaces as an internal_error
+// with a raw "invalid input syntax for type uuid" message — both a 500-as-400
+// UX bug and a tiny information leak.
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuidOrNull(v: unknown): boolean {
+  return v === null || (typeof v === 'string' && UUID_REGEX.test(v));
+}
+
 export async function createItemAction(input: CreateItemInput): Promise<ActionResult<{ id: string }>> {
   const parsed = createItemSchema.safeParse(input);
   if (!parsed.success) {
@@ -103,6 +112,8 @@ const bulkCreateSizedSchema = z.object({
   reorderPoint: z.coerce.number().int().min(0),
   reorderQuantity: z.coerce.number().int().min(0),
   unitOfMeasure: z.string().min(1).max(40),
+  rackNumber: z.string().max(50).nullable().optional(),
+  rackRow: z.string().max(10).nullable().optional(),
   variants: z
     .array(
       z.object({
@@ -153,6 +164,15 @@ export async function bulkUpdateInventoryAction(input: {
   }
   if (input.ids.some((id) => typeof id !== 'string' || id.length === 0)) {
     return err('validation_error', 'Invalid item id in selection');
+  }
+  if (input.op.kind === 'set_category' && !isUuidOrNull(input.op.categoryId)) {
+    return err('validation_error', 'Invalid category id.');
+  }
+  if (input.op.kind === 'set_supplier' && !isUuidOrNull(input.op.supplierId)) {
+    return err('validation_error', 'Invalid supplier id.');
+  }
+  if (input.op.kind === 'set_location' && !isUuidOrNull(input.op.locationId)) {
+    return err('validation_error', 'Invalid location id.');
   }
   if (input.op.kind === 'set_rack') {
     const rn = input.op.rackNumber;

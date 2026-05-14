@@ -21,11 +21,14 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * own; the gate is "you can call it" which we accept on every code
  * path.
  *
- * Failure mode: if the RPC throws (DB unreachable, table missing
- * during a deploy gap), we fail OPEN — return allowed=true with a
- * placeholder reset. Failing closed would soft-DoS the public order
- * form during a transient DB blip; we'd rather log + allow than
+ * Failure mode: by default we fail OPEN — return allowed=true with a
+ * placeholder reset. Failing closed would soft-DoS authenticated
+ * surfaces during a transient DB blip; we'd rather log + allow than
  * stonewall legitimate users.
+ *
+ * For unauthenticated public endpoints where an open failure mode can
+ * be abused (the bucket lookup throwing == infinite request budget),
+ * pass `mode: 'closed'` to flip the catch path to deny.
  */
 
 interface RateLimitResult {
@@ -38,6 +41,7 @@ export async function checkRateLimit(
   key: string,
   limit: number,
   windowMs: number,
+  mode: 'open' | 'closed' = 'open',
 ): Promise<RateLimitResult> {
   try {
     const admin = createAdminClient();
@@ -47,15 +51,21 @@ export async function checkRateLimit(
       p_window_ms: windowMs,
     });
     if (error || !data) {
-      // DB error path: fail open. The RPC is a security DEFINER
-      // function so an error is unusual; a missing-function error
-      // during a migration window is the most likely cause. Allow
-      // the request rather than locking everyone out.
+      // DB error path. By default we fail open (auth'd surfaces); when
+      // `mode === 'closed'` (public endpoints) we deny instead so a
+      // DB outage can't unlock unlimited submissions.
+      if (mode === 'closed') {
+        console.warn('[rate-limit] RPC failed, denying request (closed mode)', error?.message);
+        return { allowed: false, count: limit, resetAt: Date.now() + windowMs };
+      }
       console.warn('[rate-limit] RPC failed, allowing request', error?.message);
       return { allowed: true, count: 0, resetAt: Date.now() + windowMs };
     }
     const row = Array.isArray(data) ? data[0] : data;
     if (!row) {
+      if (mode === 'closed') {
+        return { allowed: false, count: limit, resetAt: Date.now() + windowMs };
+      }
       return { allowed: true, count: 0, resetAt: Date.now() + windowMs };
     }
     return {
@@ -64,6 +74,10 @@ export async function checkRateLimit(
       resetAt: row.reset_at ? new Date(row.reset_at).getTime() : Date.now() + windowMs,
     };
   } catch (e) {
+    if (mode === 'closed') {
+      console.warn('[rate-limit] threw, denying request (closed mode)', e);
+      return { allowed: false, count: limit, resetAt: Date.now() + windowMs };
+    }
     console.warn('[rate-limit] threw, allowing request', e);
     return { allowed: true, count: 0, resetAt: Date.now() + windowMs };
   }

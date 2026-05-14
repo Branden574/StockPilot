@@ -109,6 +109,12 @@ export default async function InventoryPage({
   const locationIds = parseIdList(params.loc);
   const rack = typeof params.rack === 'string' ? params.rack : undefined;
 
+  // When the page is showing every item type (?type=all) we need the
+  // rack dropdown to include both items-scope and books-scope racks so
+  // the deep-link from the dashboard's all-types view doesn't show a
+  // partial list. Otherwise we stick to the items scope.
+  const rackScope: 'items' | 'books' | 'all' = itemType === 'all' ? 'all' : 'items';
+
   const [inventory, categories, locations, suppliers, tags, savedViews, racks] = await Promise.all([
     inventorySvc.list({
       q: params.q,
@@ -129,7 +135,7 @@ export default async function InventoryPage({
     suppliersSvc.list(),
     tagsSvc.list(),
     savedViewsSvc.list('inventory'),
-    inventorySvc.listDistinctRacks({ scope: 'items' }),
+    inventorySvc.listDistinctRacks({ scope: rackScope }),
   ]);
 
   // Per-row 14-day trend series (qty + moves) for the sparkline column.

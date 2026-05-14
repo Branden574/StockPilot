@@ -177,17 +177,26 @@ export class InventoryService {
       // exactly. "38-A" splits into number/row; "38" alone matches just
       // the number. When itemType is 'all' (the dashboard "Review low
       // stock" link uses this), we OR both key sets so each row matches
-      // against its OWN type's keys — otherwise a books-with-rack-38
-      // row would be invisible to the items rack filter.
-      const [num, row] = rack.split('-', 2);
+      // against its OWN type's keys.
+      //
+      // Sanitize: `num` and `row` are interpolated into PostgREST's .or()
+      // string for the 'all' branch. Without an alphanumeric allow-list a
+      // hostile rack value (e.g. "20),or(deleted_at.not.is.null") could
+      // escape the and(...) clause and inject a sibling predicate. Form
+      // and bulk inputs already digits-only / [A-Z0-9]; this is
+      // defense-in-depth at the service layer.
+      const sanitize = (s: string | undefined): string =>
+        (s ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 40);
+      const [rawNum, rawRow] = rack.split('-', 2);
+      const num = sanitize(rawNum);
+      const row = sanitize(rawRow);
       if (num) {
         if (filters.itemType === 'book') {
           query = query.filter('custom_fields->>book_rack_number', 'eq', num);
           if (row) query = query.filter('custom_fields->>book_rack_row', 'eq', row);
         } else if (filters.itemType === 'all') {
           // OR-of-ANDs: (item is a book AND book keys match) OR
-          // (item is not a book AND rack keys match). PostgREST OR
-          // supports nested and(...) clauses separated by commas.
+          // (item is not a book AND rack keys match).
           const bookClause = row
             ? `and(item_type.eq.book,custom_fields->>book_rack_number.eq.${num},custom_fields->>book_rack_row.eq.${row})`
             : `and(item_type.eq.book,custom_fields->>book_rack_number.eq.${num})`;
@@ -323,18 +332,34 @@ export class InventoryService {
    * are mirrored into custom_fields.rack_number by migration 0065 so
    * they surface here without the user re-saving.)
    */
-  async listDistinctRacks(opts: { scope: 'items' | 'books' }): Promise<string[]> {
+  async listDistinctRacks(opts: { scope: 'items' | 'books' | 'all' }): Promise<string[]> {
     // Server-side DISTINCT via the public.inventory_distinct_racks
     // function (migration 0066). RLS scopes the read to the caller's
     // org. Returns a pre-sorted, deduped text[] so we don't ship
     // every row's custom_fields over the wire just to compute the
     // dropdown options.
-    const { data, error } = await this.ctx.supabase.rpc(
-      'inventory_distinct_racks',
-      { p_scope: opts.scope },
-    );
-    if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []) as string[];
+    if (opts.scope !== 'all') {
+      const { data, error } = await this.ctx.supabase.rpc(
+        'inventory_distinct_racks',
+        { p_scope: opts.scope },
+      );
+      if (error) throw new ServiceError('internal_error', error.message);
+      return (data ?? []) as string[];
+    }
+    // 'all' — the RPC only knows the two scoped key-sets, so fetch
+    // both and merge client-side. Dedupe + sort to keep the dropdown
+    // identical in shape to the single-scope path.
+    const [items, books] = await Promise.all([
+      this.ctx.supabase.rpc('inventory_distinct_racks', { p_scope: 'items' }),
+      this.ctx.supabase.rpc('inventory_distinct_racks', { p_scope: 'books' }),
+    ]);
+    if (items.error) throw new ServiceError('internal_error', items.error.message);
+    if (books.error) throw new ServiceError('internal_error', books.error.message);
+    const set = new Set<string>([
+      ...((items.data ?? []) as string[]),
+      ...((books.data ?? []) as string[]),
+    ]);
+    return Array.from(set).sort();
   }
 
   async get(id: string) {
@@ -509,6 +534,9 @@ export class InventoryService {
     reorderPoint: number;
     reorderQuantity: number;
     unitOfMeasure: string;
+    /** Structured rack stamp written to every variant's custom_fields.rack_number/rack_row. */
+    rackNumber?: string | null;
+    rackRow?: string | null;
     variants: Array<{
       size: 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
       quantity: number;
@@ -561,6 +589,18 @@ export class InventoryService {
     // this would NOT-NULL-violate the inventory_items.sku constraint.
     const sharedBase = (input.baseSku && input.baseSku.trim()) || generateSku();
 
+    // Rack stamp shared by every variant. Stripped to the same shapes
+    // the form input enforces (digits-only number, A-Z0-9 row uppercase).
+    const rackNum = input.rackNumber?.trim().replace(/[^0-9]/g, '') || null;
+    const rackRow =
+      input.rackRow?.trim().toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
+    const variantCustomFields = (size: string) => {
+      const cf: Record<string, unknown> = { size };
+      if (rackNum) cf.rack_number = rackNum;
+      if (rackRow) cf.rack_row = rackRow;
+      return cf;
+    };
+
     const rows = input.variants.map((v) => ({
       organization_id: this.ctx.organizationId,
       name: `${input.baseName} - ${v.size}`,
@@ -582,7 +622,7 @@ export class InventoryService {
       item_type: 'product',
       status: 'active',
       tracking_type: 'none',
-      custom_fields: { size: v.size },
+      custom_fields: variantCustomFields(v.size),
       created_by: this.ctx.userId,
       updated_by: this.ctx.userId,
     }));
@@ -989,24 +1029,35 @@ export class InventoryService {
     if (allowedIds.length === 0) return { ok: 0, skipped };
 
     // Rack ops merge into custom_fields server-side via a SECURITY
-    // INVOKER Postgres function (migration 0064). The function does a
-    // single atomic UPDATE with `custom_fields - keys || jsonb_build_object(...)`
-    // so concurrent edits to other keys (author, book_grade,
-    // thumbnail_url, etc.) aren't clobbered by a JS read-modify-write
-    // race. RLS still enforces org isolation.
+    // INVOKER Postgres function (migrations 0064/0068). The function
+    // does a single atomic UPDATE with
+    // `custom_fields - keys || jsonb_build_object(...)` so concurrent
+    // edits to other keys (author, book_grade, thumbnail_url) aren't
+    // clobbered. p_scope='auto' branches per row on item_type so books
+    // get the legacy book_rack_* keys and items get the neutral rack_*.
+    // The RPC returns the actual row_count, which we surface as `ok`
+    // so a UI like "Updated N items" doesn't lie when RLS filtered
+    // some rows out.
     if (input.op.kind === 'set_rack') {
       const num = input.op.rackNumber?.trim() || null;
       const row = input.op.rackRow?.trim().toUpperCase() || null;
       const composedBin = num ? (row ? `${num}-${row}` : num) : null;
 
-      const { error } = await this.ctx.supabase.rpc('inventory_set_rack', {
-        p_item_ids: allowedIds,
-        p_rack_number: num,
-        p_rack_row: row,
-        p_bin_location: composedBin,
-      });
+      const { data: updatedCount, error } = await this.ctx.supabase.rpc(
+        'inventory_set_rack',
+        {
+          p_item_ids: allowedIds,
+          p_rack_number: num,
+          p_rack_row: row,
+          p_bin_location: composedBin,
+          p_scope: 'auto',
+        },
+      );
       if (error) throw new ServiceError('internal_error', error.message);
-      return { ok: allowedIds.length, skipped };
+      const ok = typeof updatedCount === 'number' ? updatedCount : 0;
+      // RLS filtered the gap (if any). Surface it in `skipped` so the
+      // "Updated X · Skipped Y" toast remains truthful.
+      return { ok, skipped: skipped + (allowedIds.length - ok) };
     }
 
     // Tag ops bypass the inventory_items row update — they only touch

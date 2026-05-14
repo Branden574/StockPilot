@@ -119,14 +119,22 @@ export default async function RolesPage() {
 
       <div className="mt-4 overflow-x-auto rounded-lg border border-border">
         <table className="w-full min-w-[640px] text-[12.5px]">
+          <caption className="sr-only">
+            Roles and permissions matrix. Rows are permissions grouped by feature.
+            Columns are the five roles: Owner, Admin, Manager, Staff, Viewer.
+          </caption>
           <thead className="bg-muted/40">
             <tr>
-              <th className="sticky left-0 z-10 bg-muted/40 px-4 py-2 text-left font-medium text-[var(--ed-ink-3)]">
+              <th
+                scope="col"
+                className="sticky left-0 z-10 bg-muted/40 px-4 py-2 text-left font-medium text-[var(--ed-ink-3)]"
+              >
                 Permission
               </th>
               {ROLES.map((r) => (
                 <th
                   key={r}
+                  scope="col"
                   className={cn(
                     'px-3 py-2 text-center font-medium',
                     r === myRole ? 'text-foreground' : 'text-[var(--ed-ink-3)]',
@@ -164,22 +172,23 @@ function RoleGroupRows({ group, myRole }: { group: GroupedRow; myRole: Role }) {
       <tr className="border-t border-border bg-background">
         <td
           colSpan={1 + ROLES.length}
-          className="sticky left-0 z-10 bg-background px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--ed-ink-4)]"
+          className="bg-background px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--ed-ink-4)]"
         >
           {group.group}
         </td>
       </tr>
       {group.permissions.map((p) => (
         <tr key={p.id} className="border-t border-border hover:bg-muted/30">
-          <td
-            className="sticky left-0 z-10 bg-background px-4 py-2 align-top"
+          <th
+            scope="row"
+            className="sticky left-0 z-10 bg-background px-4 py-2 text-left align-top font-normal"
             title={`${p.description}\n(${p.id})`}
           >
             <div className="text-foreground">{p.label}</div>
             <div className="mt-0.5 hidden text-[11px] text-muted-foreground sm:block">
               {p.description}
             </div>
-          </td>
+          </th>
           {ROLES.map((r) => {
             const granted = hasPermission(r, p.id);
             return (
@@ -191,20 +200,30 @@ function RoleGroupRows({ group, myRole }: { group: GroupedRow; myRole: Role }) {
                 )}
               >
                 {granted ? (
-                  <Check
-                    className={cn(
-                      'mx-auto h-4 w-4',
-                      r === myRole
-                        ? 'text-[hsl(var(--accent))]'
-                        : 'text-[var(--ed-ink-2)]',
-                    )}
-                    aria-label="granted"
-                  />
+                  <>
+                    <Check
+                      className={cn(
+                        'mx-auto h-4 w-4',
+                        r === myRole
+                          ? 'text-[hsl(var(--accent))]'
+                          : 'text-[var(--ed-ink-2)]',
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span className="sr-only">
+                      {ROLE_DEFINITIONS[r].name} can {p.label}
+                    </span>
+                  </>
                 ) : (
-                  <Minus
-                    className="mx-auto h-3.5 w-3.5 text-[var(--ed-ink-4)]/40"
-                    aria-label="not granted"
-                  />
+                  <>
+                    <Minus
+                      className="mx-auto h-3.5 w-3.5 text-[var(--ed-ink-4)]/40"
+                      aria-hidden="true"
+                    />
+                    <span className="sr-only">
+                      {ROLE_DEFINITIONS[r].name} cannot {p.label}
+                    </span>
+                  </>
                 )}
               </td>
             );

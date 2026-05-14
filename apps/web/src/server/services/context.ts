@@ -28,9 +28,6 @@ async function resolveMfaState(
   organizationId: string,
   role: Role,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean }> {
-  // Best-effort: failures here default to "not required" so a flaky
-  // org lookup doesn't lock everyone out. The banner in the
-  // dashboard layout still shows the org's MFA status.
   let mfaRequired = false;
   let mfaSatisfied = false;
   try {
@@ -53,9 +50,13 @@ async function resolveMfaState(
     } else {
       mfaSatisfied = true;
     }
-  } catch {
-    mfaRequired = false;
-    mfaSatisfied = true;
+  } catch (err) {
+    // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
+    // org lookup must NOT silently let an admin bypass MFA. The user
+    // sees a clear "MFA required" error instead of silent bypass;
+    // matches enterprise expectations from the org MFA policy.
+    console.error('[resolveMfaState] failed:', err);
+    return { mfaRequired: true, mfaSatisfied: false };
   }
   return { mfaRequired, mfaSatisfied };
 }

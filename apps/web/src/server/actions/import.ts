@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { ServiceError } from '@/server/services/context';
+import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -40,7 +40,9 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
   if (!parsed.success) return err('validation_error', 'Invalid input');
 
   try {
-    const svc = await InventoryService.forCurrentUser();
+    const ctx = await withContext();
+    assertPermission(ctx, 'items:import');
+    const svc = new InventoryService(ctx);
     const summary: ImportSummary = { total: parsed.data.rows.length, created: 0, failed: 0, errors: [] };
 
     for (let i = 0; i < parsed.data.rows.length; i++) {

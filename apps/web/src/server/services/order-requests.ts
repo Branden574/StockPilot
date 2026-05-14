@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+
 import { audit } from './audit';
 import {
   assertPermission,
@@ -300,6 +302,12 @@ export class OrderRequestsService {
 
   async create(input: CreateOrderRequestInput): Promise<OrderRequestRow> {
     assertPermission(this.ctx, 'orders:request');
+    // Gate by warehouse access too — `orders:request` is org-wide, but a
+    // requester restricted to warehouse A shouldn't be able to file a
+    // request against warehouse B. The public-link path doesn't reach
+    // this method (the public route builds rows via the admin client),
+    // so this check is safe to apply unconditionally here.
+    await assertWarehouseAccess(input.warehouseId, 'read', this.ctx);
     if (input.lines.length === 0) {
       throw new ServiceError('validation_error', 'A request needs at least one line');
     }

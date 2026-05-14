@@ -426,6 +426,31 @@ export class ShipmentsService {
       );
     }
 
+    // Verify every line item belongs to the source warehouse. Without
+    // this check, the markShipped → post_shipment_shipped RPC would
+    // refuse (or worse, silently mis-account) when a line lives at a
+    // different warehouse than the slip's source.
+    const itemIds = linesToShip.map((l) => l.itemId);
+    if (itemIds.length > 0) {
+      const { data: items, error: itemErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, warehouse_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', itemIds);
+      if (itemErr) throw new ServiceError('internal_error', itemErr.message);
+      const wrongWarehouse = (items ?? []).filter(
+        (it) =>
+          ((it as { warehouse_id: string | null }).warehouse_id ?? null) !==
+          input.sourceWarehouseId,
+      );
+      if (wrongWarehouse.length > 0) {
+        throw new ServiceError(
+          'validation_error',
+          "Some items don't live in the source warehouse. Move them or pick a different warehouse.",
+        );
+      }
+    }
+
     await this.assertWarehouseServicesCharter(
       input.sourceWarehouseId,
       input.destinationCharterId,
@@ -542,10 +567,16 @@ export class ShipmentsService {
   async markCancelled(id: string): Promise<void> {
     assertPermission(this.ctx, 'purchase_orders:manage');
     const detail = await this.get(id);
-    if (detail.status === 'delivered' || detail.status === 'cancelled') {
+    if (
+      detail.status === 'delivered' ||
+      detail.status === 'cancelled' ||
+      detail.status === 'shipped'
+    ) {
       throw new ServiceError(
-        'validation_error',
-        `Shipment is already ${detail.status}; cannot cancel.`,
+        'forbidden',
+        detail.status === 'shipped'
+          ? 'This slip has already shipped. Cancelling it would silently lose inventory — a returns/RMA flow is needed instead. Reach out to support to reverse a shipped slip.'
+          : `This slip is already ${detail.status}.`,
       );
     }
     const { error } = await this.ctx.supabase

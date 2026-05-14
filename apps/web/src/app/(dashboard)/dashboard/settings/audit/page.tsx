@@ -22,7 +22,7 @@ import { formatRelative } from '@/lib/utils';
 import { AuditLogService } from '@/server/services/audit-log';
 import { ServiceError } from '@/server/services/context';
 
-import { isAdminRole } from '@stockpilot/core';
+import { hasPermission } from '@stockpilot/core';
 
 const PAGE_SIZE = 50;
 const MAX_PAGE = 10_000;
@@ -82,7 +82,9 @@ export default async function AuditLogPage({
   // returning notFound() at the page level avoids a generic 500 for
   // non-admins who hand-edit the URL.
   const ctx = await requireOrgContext();
-  if (!isAdminRole(ctx.role)) notFound();
+  if (!hasPermission(ctx.role, 'activity_logs:read')) {
+    notFound();
+  }
 
   const params = await searchParams;
   const page = clampPage(params.page);

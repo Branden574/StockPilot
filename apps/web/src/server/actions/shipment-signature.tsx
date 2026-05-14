@@ -94,6 +94,15 @@ export async function submitShipmentSignatureAction(
       'This shipment is no longer accepting signatures.',
     );
   }
+  if (shipment.status === 'draft') {
+    // Signing a draft slip would skip the `post_shipment_shipped` RPC —
+    // the only path that decrements stock. Block here so a signed
+    // draft can never silently lose inventory.
+    return err(
+      'validation_error',
+      "This packing slip hasn't been shipped yet — ask a manager to mark it shipped before signing.",
+    );
+  }
   if (
     shipment.signature_token_expires_at &&
     new Date(shipment.signature_token_expires_at).getTime() < Date.now()
@@ -124,7 +133,7 @@ export async function submitShipmentSignatureAction(
       status: 'delivered',
     })
     .eq('id', shipment.id)
-    .in('status', ['draft', 'shipped']);
+    .in('status', ['shipped']);
   if (updateErr) {
     void reportError(updateErr, { tag: 'shipment-signature.update' });
     return err('internal_error', 'Could not record signature. Please retry.');

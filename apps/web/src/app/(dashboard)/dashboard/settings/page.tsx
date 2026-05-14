@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
 
-import { hasPermission, isAdminRole } from '@stockpilot/core';
+import { hasPermission } from '@stockpilot/core';
 
 const BASE_SECTIONS = [
   { href: '/dashboard/settings/organization', title: 'Organization', description: 'Name, labels for charters and warehouses.' },
@@ -31,12 +31,20 @@ const ADMIN_SECTIONS = [
   { href: '/dashboard/settings/audit', title: 'Audit log', description: 'Every privileged action across the org.' },
 ];
 
+// Recovery (restoring soft-deleted rows) is a destructive admin action;
+// gate on `items:delete` so manager can't restore items they couldn't
+// delete in the first place. Owners and admins only.
+const RECOVERY_SECTIONS = [
+  { href: '/dashboard/settings/recovery', title: 'Recovery', description: 'Restore soft-deleted items, categories, suppliers, locations, and tags.' },
+];
+
 export default async function SettingsPage() {
   const ctx = await requireOrgContext();
   const sections = [
     ...BASE_SECTIONS,
     ...(hasPermission(ctx.role, 'orders:approve') ? MANAGER_SECTIONS : []),
-    ...(isAdminRole(ctx.role) ? ADMIN_SECTIONS : []),
+    ...(hasPermission(ctx.role, 'activity_logs:read') ? ADMIN_SECTIONS : []),
+    ...(hasPermission(ctx.role, 'items:delete') ? RECOVERY_SECTIONS : []),
   ];
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">

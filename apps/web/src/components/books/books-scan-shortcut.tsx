@@ -20,7 +20,10 @@ export const BooksScanShortcut = React.forwardRef<BooksScanShortcutHandle>(
     React.useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), []);
 
     async function handleDetected(isbn: string) {
-      if (busy) return;
+      if (busy) {
+        toast.info('Still looking up the last scan — give it a second.');
+        return;
+      }
       setBusy(true);
       try {
         const res = await lookupBookByIsbnAction({ isbn });

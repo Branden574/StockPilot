@@ -24,10 +24,21 @@ interface MfaChallengeFormProps {
   factorId: string;
 }
 
+/**
+ * Same-origin path sanitizer. Rejects absolute URLs, protocol-relative
+ * (`//evil.com`), and non-path inputs to prevent an open-redirect via the
+ * `?redirect=` query param after a successful MFA challenge.
+ */
+function safeRedirectPath(raw: string | null): string {
+  if (!raw) return '/dashboard';
+  if (!raw.startsWith('/') || raw.startsWith('//')) return '/dashboard';
+  return raw;
+}
+
 export function MfaChallengeForm({ factorId }: MfaChallengeFormProps) {
   const router = useRouter();
   const params = useSearchParams();
-  const redirect = params.get('redirect') ?? '/dashboard';
+  const redirect = safeRedirectPath(params.get('redirect'));
   const [code, setCode] = React.useState('');
   const [pending, setPending] = React.useState(false);
   const [recoveryOpen, setRecoveryOpen] = React.useState(false);

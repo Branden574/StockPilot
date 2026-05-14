@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+
 import { audit } from './audit';
 import {
   assertPermission,
@@ -187,6 +189,14 @@ export class CycleCountsService {
    */
   async start(input: { warehouseId: string | null; notes?: string | null }): Promise<{ id: string; lineCount: number }> {
     assertPermission(this.ctx, 'stock:adjust');
+    // Defense-in-depth: warehouse-write check so a manager can't
+    // start a cycle count for a warehouse they can't write to (the
+    // post() path eventually zeros out the warehouse's stock — that
+    // must be gated). Org-wide counts (warehouseId = null) skip the
+    // gate; only admins+ realistically reach that branch via UI.
+    if (input.warehouseId) {
+      await assertWarehouseAccess(input.warehouseId, 'write', this.ctx);
+    }
 
     let itemQuery = this.ctx.supabase
       .from('inventory_items')
@@ -246,6 +256,28 @@ export class CycleCountsService {
     return { id: cc.id as string, lineCount: linesPayload.length };
   }
 
+  /**
+   * Loads the session's warehouse_id and asserts the caller can write
+   * to it. Called by every mutator (record/clear/cancel/post) so a
+   * manager can't tamper with a warehouse they don't have access to,
+   * even if they hold the cycle-count id.
+   */
+  private async assertSessionAccess(cycleCountId: string): Promise<void> {
+    const { data, error } = await this.ctx.supabase
+      .from('cycle_counts')
+      .select('warehouse_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', cycleCountId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('not_found', 'Cycle count not found.');
+    const wh = (data as { warehouse_id: string | null }).warehouse_id;
+    // Org-wide sessions (null warehouse) skip the gate — only admins+
+    // can start those today, and the start() guard already enforces
+    // permission. Any future role expansion should re-check here.
+    if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
+  }
+
   /** Records a counted quantity for a single line. */
   async recordCount(input: {
     cycleCountId: string;
@@ -255,6 +287,7 @@ export class CycleCountsService {
     notes?: string | null;
   }): Promise<void> {
     assertPermission(this.ctx, 'stock:adjust');
+    await this.assertSessionAccess(input.cycleCountId);
     const { error } = await this.ctx.supabase
       .from('cycle_count_lines')
       .update({
@@ -272,6 +305,7 @@ export class CycleCountsService {
   /** Clears a previously-recorded count for a line so the user can recount. */
   async clearCount(input: { cycleCountId: string; lineId: string }): Promise<void> {
     assertPermission(this.ctx, 'stock:adjust');
+    await this.assertSessionAccess(input.cycleCountId);
     const { error } = await this.ctx.supabase
       .from('cycle_count_lines')
       .update({
@@ -289,6 +323,7 @@ export class CycleCountsService {
   /** Cancels the session without posting any adjustments. */
   async cancel(id: string): Promise<void> {
     assertPermission(this.ctx, 'stock:adjust');
+    await this.assertSessionAccess(id);
     const { error } = await this.ctx.supabase
       .from('cycle_counts')
       .update({ status: 'canceled' })
@@ -313,6 +348,7 @@ export class CycleCountsService {
    */
   async post(id: string): Promise<CycleCountRow> {
     assertPermission(this.ctx, 'stock:adjust');
+    await this.assertSessionAccess(id);
     const { data, error } = await this.ctx.supabase.rpc('post_cycle_count', {
       p_cycle_count_id: id,
     });

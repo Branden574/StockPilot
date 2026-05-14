@@ -38,6 +38,7 @@ export type AuditEvent =
   | 'category.restored'
   | 'location.archived'
   | 'location.restored'
+  | 'recovery.restored'
   | 'report.exported'
   | 'po_import.uploaded'
   | 'po_import.parsed'

@@ -175,7 +175,11 @@ export class ReportsService {
       .order('quantity_on_hand', { ascending: false });
     if (error) throw new ServiceError('internal_error', error.message);
 
-    const rows: ValuationRow[] = (data ?? []).map((r) => {
+    // Hold each raw row alongside the warehouse_id / category_id needed to
+    // bucket by id (not name). Two warehouses with the same name —
+    // e.g. "Main" in two regions — must NOT collapse into one row.
+    type Enriched = ValuationRow & { warehouseId: string | null; categoryId: string | null };
+    const enriched: Enriched[] = (data ?? []).map((r) => {
       const rec = r as unknown as {
         id: string;
         sku: string;
@@ -195,7 +199,9 @@ export class ReportsService {
         itemId: rec.id,
         sku: rec.sku,
         name: rec.name,
+        warehouseId: rec.warehouse_id ?? null,
         warehouseName: wh?.name ?? null,
+        categoryId: rec.category_id ?? null,
         categoryName: cat?.name ?? null,
         quantityOnHand: qty,
         unitCost: cost,
@@ -203,16 +209,29 @@ export class ReportsService {
       };
     });
 
-    const byWh = new Map<string, { warehouseId: string | null; warehouseName: string; value: number; units: number }>();
-    const byCat = new Map<string, { categoryId: string | null; categoryName: string; value: number; units: number }>();
+    const rows: ValuationRow[] = enriched.map(
+      ({ warehouseId: _w, categoryId: _c, ...rest }) => rest,
+    );
+
+    // Key buckets by id ('__none' for null) so same-named warehouses /
+    // categories stay distinct. Preserve both id and name on the bucket
+    // so consumers can deep-link.
+    const byWh = new Map<
+      string,
+      { warehouseId: string | null; warehouseName: string; value: number; units: number }
+    >();
+    const byCat = new Map<
+      string,
+      { categoryId: string | null; categoryName: string; value: number; units: number }
+    >();
     let totalValue = 0;
     let totalUnits = 0;
-    for (const r of rows) {
+    for (const r of enriched) {
       totalValue += r.value;
       totalUnits += r.quantityOnHand;
-      const whKey = r.warehouseName ?? '__none';
+      const whKey = r.warehouseId ?? '__none';
       const whEntry = byWh.get(whKey) ?? {
-        warehouseId: null,
+        warehouseId: r.warehouseId,
         warehouseName: r.warehouseName ?? 'Unassigned',
         value: 0,
         units: 0,
@@ -221,9 +240,9 @@ export class ReportsService {
       whEntry.units += r.quantityOnHand;
       byWh.set(whKey, whEntry);
 
-      const catKey = r.categoryName ?? '__none';
+      const catKey = r.categoryId ?? '__none';
       const catEntry = byCat.get(catKey) ?? {
-        categoryId: null,
+        categoryId: r.categoryId,
         categoryName: r.categoryName ?? 'Uncategorized',
         value: 0,
         units: 0,
