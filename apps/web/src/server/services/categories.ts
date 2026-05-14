@@ -13,6 +13,7 @@ export const createCategorySchema = z.object({
     .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex color like #6366f1')
     .optional(),
   parentId: z.string().uuid().nullable().optional(),
+  supportsSizes: z.boolean().optional(),
 });
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 
@@ -33,7 +34,7 @@ export class CategoriesService {
   async list(opts: { includeArchived?: boolean } = {}) {
     let query = this.ctx.supabase
       .from('categories')
-      .select('id, parent_id, name, description, color, icon, deleted_at, created_at, updated_at')
+      .select('id, parent_id, name, description, color, icon, supports_sizes, deleted_at, created_at, updated_at')
       .eq('organization_id', this.ctx.organizationId)
       .order('name', { ascending: true });
     query = opts.includeArchived
@@ -54,6 +55,7 @@ export class CategoriesService {
         description: input.description ?? null,
         color: input.color ?? null,
         parent_id: input.parentId ?? null,
+        supports_sizes: input.supportsSizes ?? false,
       })
       .select('*')
       .single();
@@ -68,6 +70,7 @@ export class CategoriesService {
     if (patch.description !== undefined) updates.description = patch.description ?? null;
     if (patch.color !== undefined) updates.color = patch.color ?? null;
     if (patch.parentId !== undefined) updates.parent_id = patch.parentId ?? null;
+    if (patch.supportsSizes !== undefined) updates.supports_sizes = patch.supportsSizes;
     const { data, error } = await this.ctx.supabase
       .from('categories')
       .update(updates)

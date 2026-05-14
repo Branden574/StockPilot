@@ -36,6 +36,7 @@ export default async function CategoriesPage({ searchParams }: CategoriesPagePro
           name: r.name as string,
           description: (r.description as string | null) ?? null,
           color: (r.color as string | null) ?? null,
+          supports_sizes: Boolean(r.supports_sizes),
         }))}
       />
     </div>
