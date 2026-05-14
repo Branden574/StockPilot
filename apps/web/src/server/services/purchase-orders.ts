@@ -107,6 +107,11 @@ export class PurchaseOrdersService {
   }
 
   async get(id: string) {
+    // Permission gate — `get()` is reused by the detail page, the PDF
+    // route, and bulk actions, so the cheapest place to enforce read is
+    // here. RLS would also keep the row hidden, but an explicit check
+    // returns a clear `forbidden` instead of a confusing `not_found`.
+    assertPermission(this.ctx, 'purchase_orders:read');
     const { data: po, error } = await this.ctx.supabase
       .from('purchase_orders')
       .select('*, destination:locations!destination_location_id (warehouse_id)')
