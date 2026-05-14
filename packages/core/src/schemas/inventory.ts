@@ -34,9 +34,9 @@ const emptyToUndefined = (v: unknown) =>
 
 export const createItemSchema = z.object({
   name: z.string().min(1).max(200).trim(),
-  sku: z.preprocess(emptyToUndefined, z.string().min(1).max(64).trim().optional()),
-  barcode: z.preprocess(emptyToUndefined, z.string().max(128).trim().optional()),
-  description: z.string().max(5000).optional(),
+  sku: z.preprocess(emptyToUndefined, z.string().min(1).max(64).trim().nullable().optional()),
+  barcode: z.preprocess(emptyToUndefined, z.string().max(128).trim().nullable().optional()),
+  description: z.string().max(5000).nullable().optional(),
   categoryId: uuidSchema.nullable().optional(),
   supplierId: uuidSchema.nullable().optional(),
   primaryLocationId: uuidSchema.nullable().optional(),
@@ -49,7 +49,7 @@ export const createItemSchema = z.object({
   reorderPoint: numericQty.default(0),
   reorderQuantity: numericQty.default(0),
   unitOfMeasure: z.string().max(32).default('unit'),
-  binLocation: z.string().max(64).optional(),
+  binLocation: z.string().max(64).nullable().optional(),
   /** 'none' (default), 'lot', or 'serial'. Drives capture requirements at receive time. */
   trackingType: z.enum(['none', 'lot', 'serial']).default('none'),
   /** 'product' (default), 'book', 'asset', or 'consumable'. Drives which UI tab the row appears under. */

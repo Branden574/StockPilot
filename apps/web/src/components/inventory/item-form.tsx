@@ -506,11 +506,6 @@ export function ItemForm({
             },
           };
         })();
-    // Cast: `binLocation: null` is the runtime-correct value for
-    // clearing an existing rack, but the action schema is currently
-    // `z.string().optional()` (no `.nullable()`). The service layer
-    // coerces null → null in the patch path, so this is safe; the
-    // schema agent is tracking the type-side cleanup separately.
     const action =
       isEdit && defaults?.id
         ? updateItemAction(defaults.id, mergedValues as UpdateItemInput)
