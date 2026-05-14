@@ -237,12 +237,23 @@ export function InventoryTable({
 }: InventoryTableProps) {
   // Sparkline mode preference. localStorage-backed so it sticks across
   // reloads + tabs but doesn't pollute URLs (it's a personal preference,
-  // not a query filter). Lazy initializer reads on first mount only.
-  const [sparkMode, setSparkMode] = React.useState<SparkMode>(() => {
-    if (typeof window === 'undefined') return 'qty';
-    const v = window.localStorage.getItem(SPARK_MODE_KEY);
-    return v === 'moves' ? 'moves' : 'qty';
-  });
+  // not a query filter). MUST initialize to the server-safe default
+  // ('qty') so the SSR markup matches the client's first hydration —
+  // reading localStorage in the initializer caused React error #418
+  // because the server always saw 'qty' and the client might pick
+  // 'moves'. We swap in the stored preference post-mount via the
+  // effect below; ‑any sparkline columns rendered during hydration
+  // briefly show qty mode before flipping. This is exactly the
+  // tradeoff React's docs recommend for storage-backed UI state.
+  const [sparkMode, setSparkMode] = React.useState<SparkMode>('qty');
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = window.localStorage.getItem(SPARK_MODE_KEY);
+    if (stored === 'moves' && sparkMode !== 'moves') {
+      setSparkMode('moves');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(SPARK_MODE_KEY, sparkMode);
