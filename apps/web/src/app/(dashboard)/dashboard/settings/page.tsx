@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
 
-import { hasPermission } from '@stockpilot/core';
+import { hasPermission, isAdminRole } from '@stockpilot/core';
 
 const BASE_SECTIONS = [
   { href: '/dashboard/settings/organization', title: 'Organization', description: 'Name, labels for charters and warehouses.' },
@@ -31,6 +31,13 @@ const ADMIN_SECTIONS = [
   { href: '/dashboard/settings/audit', title: 'Audit log', description: 'Every privileged action across the org.' },
 ];
 
+// AI settings (embeddings backfill, etc.) — admin-only because the
+// embedding backfill burns Gemini API quota and shouldn't be a
+// manager-level toggle.
+const AI_SECTIONS = [
+  { href: '/dashboard/settings/ai', title: 'AI', description: 'Semantic-search embeddings and AI assistant configuration.' },
+];
+
 // Recovery (restoring soft-deleted rows) is a destructive admin action;
 // gate on `items:delete` so manager can't restore items they couldn't
 // delete in the first place. Owners and admins only.
@@ -44,6 +51,7 @@ export default async function SettingsPage() {
     ...BASE_SECTIONS,
     ...(hasPermission(ctx.role, 'orders:approve') ? MANAGER_SECTIONS : []),
     ...(hasPermission(ctx.role, 'activity_logs:read') ? ADMIN_SECTIONS : []),
+    ...(isAdminRole(ctx.role) ? AI_SECTIONS : []),
     ...(hasPermission(ctx.role, 'items:delete') ? RECOVERY_SECTIONS : []),
   ];
   return (

@@ -2028,6 +2028,38 @@ const searchInventorySemanticTool: ToolExecutor = {
   },
 };
 
+const backfillEmbeddingsTool: ToolExecutor = {
+  declaration: {
+    name: 'backfillEmbeddings',
+    description:
+      "Admin-only. Embed up to `limit` items that don't yet have a vector embedding (used for semantic search). Returns embedded/failed/remaining counts. Call repeatedly until `remaining` is 0. Use when the user asks to 'backfill embeddings', 'enable semantic search for old items', or 'fill in embeddings'.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        limit: { type: SchemaType.NUMBER, description: '1-200. Default 50.' },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    // Admin gate. The model's role-check pattern from other write tools.
+    if (ctx.role !== 'owner' && ctx.role !== 'admin') {
+      return { error: 'forbidden', message: 'Embedding backfill requires admin role.' };
+    }
+    const { embedItemsBatch } = await import('@/lib/ai/embeddings');
+    try {
+      const result = await embedItemsBatch(ctx, {
+        limit: Math.min(200, Math.max(1, Number(args.limit) || 50)),
+      });
+      return result;
+    } catch (e) {
+      return {
+        error: 'backfill_failed',
+        message: e instanceof Error ? e.message : 'Unknown error',
+      };
+    }
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
   listCategories: listCategoriesTool,
@@ -2063,6 +2095,7 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   getStaleItems: getStaleItemsTool,
   // Wave 4 — semantic search
   searchInventorySemantic: searchInventorySemanticTool,
+  backfillEmbeddings: backfillEmbeddingsTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {
