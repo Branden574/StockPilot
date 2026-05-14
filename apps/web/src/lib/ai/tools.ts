@@ -1616,18 +1616,60 @@ const getRecentItemsTool: ToolExecutor = {
       sort: mode === 'updated' ? 'updated_desc' : 'created_desc',
       limit: Math.min(100, Math.max(1, Number(args.limit) || 25)),
     });
+
+    // Resolve actor names ("who added this") via a single batch fetch
+    // on user_profiles. Without this the AI has to say "I can't tell
+    // you who added them" even when the data is right there.
+    type ItemRow = {
+      id: string;
+      name: string | null;
+      sku: string | null;
+      quantity_on_hand: number;
+      created_at: string;
+      updated_at: string;
+      created_by?: string | null;
+      updated_by?: string | null;
+    };
+    const items = result.items as unknown as ItemRow[];
+    const actorIds = new Set<string>();
+    for (const it of items) {
+      if (it.created_by) actorIds.add(it.created_by);
+      if (it.updated_by) actorIds.add(it.updated_by);
+    }
+    const actorMap = new Map<string, string>();
+    if (actorIds.size > 0) {
+      const { data: users } = await ctx.supabase
+        .from('user_profiles')
+        .select('id, full_name, email')
+        .in('id', Array.from(actorIds));
+      for (const u of (users ?? []) as Array<{
+        id: string;
+        full_name: string | null;
+        email: string | null;
+      }>) {
+        const display = (u.full_name?.trim() || u.email?.trim()) ?? '';
+        if (display) actorMap.set(u.id, display);
+      }
+    }
+    const resolveActor = (id: string | null | undefined): string | null => {
+      if (!id) return null;
+      return actorMap.get(id) ?? 'Unknown user';
+    };
+
     return {
       mode,
       since: since ?? null,
       until: until ?? null,
       total: result.total,
-      items: result.items.map((i) => ({
+      items: items.map((i) => ({
         id: i.id,
         name: dataTag(i.name),
         sku: i.sku,
         qty: i.quantity_on_hand,
         createdAt: i.created_at,
         updatedAt: i.updated_at,
+        createdBy: dataTag(resolveActor(i.created_by)),
+        updatedBy: dataTag(resolveActor(i.updated_by)),
       })),
     };
   },

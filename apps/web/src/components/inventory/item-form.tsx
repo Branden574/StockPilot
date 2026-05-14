@@ -412,9 +412,39 @@ export function ItemForm({
         toast.error(res.error.message);
         return;
       }
-      toast.success(
-        `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`,
-      );
+
+      // Photo upload for the sized-bulk flow. The single-item path
+      // below at line ~512 only handles `res.data.id`; this branch
+      // returned early before the fix and silently dropped any
+      // staged photos. Storage paths are item-scoped (per
+      // ItemImagesService.createUploadUrl), so each variant needs
+      // its own copy — there's no shared-storage shortcut without a
+      // schema change. We loop variants and upload N×M times.
+      const createdIds = res.data.ids ?? [];
+      let totalUploaded = 0;
+      let totalFailed = 0;
+      if (staged.length > 0 && createdIds.length > 0) {
+        for (const variantId of createdIds) {
+          const r = await uploadStagedImages(variantId);
+          totalUploaded += r.uploaded;
+          totalFailed += r.failed;
+        }
+      }
+
+      const expected = staged.length * createdIds.length;
+      if (expected === 0) {
+        toast.success(
+          `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`,
+        );
+      } else if (totalFailed === 0) {
+        toast.success(
+          `Created ${res.data.created} variants with ${staged.length} photo${staged.length === 1 ? '' : 's'} each.`,
+        );
+      } else {
+        toast.warning(
+          `Created ${res.data.created} variants. ${totalUploaded} of ${expected} photo uploads succeeded — ${totalFailed} failed.`,
+        );
+      }
       onDone?.();
       router.push('/dashboard/inventory');
       return;
