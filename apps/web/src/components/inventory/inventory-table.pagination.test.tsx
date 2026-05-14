@@ -10,10 +10,18 @@ vi.mock('next/link', () => ({
   default: ({
     href,
     children,
+    // Strip Next-Link-only props so they don't reach the DOM <a> and
+    // trigger React's "unknown DOM prop" console warning during tests.
+    prefetch: _prefetch,
+    scroll: _scroll,
+    replace: _replace,
     ...rest
   }: {
     href: string;
     children: React.ReactNode;
+    prefetch?: boolean;
+    scroll?: boolean;
+    replace?: boolean;
   }) => (
     <a href={typeof href === 'string' ? href : '#'} {...rest}>
       {children}
