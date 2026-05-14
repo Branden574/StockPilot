@@ -48,9 +48,9 @@ interface ItemDetailProps {
    */
   tab?: string;
   /**
-   * Encoded list URL the user came from. Threaded into the "Edit"
-   * link so the edit page can offer the same round-trip back.
-   * Comes pre-validated by the page (safeReturnPath).
+   * Pre-validated list URL the user came from (decoded — safeReturnPath
+   * runs on the page before this prop is set). Threaded into the
+   * "Edit" link so the edit page can offer the same round-trip back.
    */
   returnParam?: string;
 }
@@ -171,24 +171,19 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
           */}
           <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
             <div className="flex w-max gap-2 sm:flex-wrap">
-              {canEditItem && (
-                <Button asChild variant="outline" size="sm" className="sm:size-auto">
-                  <Link
-                    href={
-                      (() => {
-                        const base = editHref ?? `/dashboard/inventory/${id}/edit`;
-                        // Append the return param so editing → save still bounces
-                        // back to the same list URL the user came from.
-                        return returnParam
-                          ? `${base}?return=${encodeURIComponent(returnParam)}`
-                          : base;
-                      })()
-                    }
-                  >
-                    Edit
-                  </Link>
-                </Button>
-              )}
+              {canEditItem && (() => {
+                // Append the return param so editing → save still bounces
+                // back to the same list URL the user came from.
+                const editBase = editHref ?? `/dashboard/inventory/${id}/edit`;
+                const href = returnParam
+                  ? `${editBase}?return=${encodeURIComponent(returnParam)}`
+                  : editBase;
+                return (
+                  <Button asChild variant="outline" size="sm" className="sm:size-auto">
+                    <Link href={href}>Edit</Link>
+                  </Button>
+                );
+              })()}
               <BarcodeDisplay
                 itemId={id}
                 itemName={item.name as string}
