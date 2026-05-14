@@ -1062,6 +1062,47 @@ const identifyFromPhotoTool: ToolExecutor = {
     }
     const hint = typeof args.hint === 'string' ? args.hint.slice(0, 500) : '';
 
+    // Cheap pre-flight: HEAD the URL so we can reject obviously-huge
+    // images BEFORE we buffer the whole thing into memory. Signed
+    // Supabase URLs typically return content-length; arbitrary CDNs
+    // may not. If the server doesn't advertise a length we fall
+    // through to the streaming size cap below — at worst the in-flight
+    // download is bounded by VISION_FETCH_TIMEOUT_MS + VISION_MAX_BYTES.
+    try {
+      const headAc = new AbortController();
+      const headTimer = setTimeout(() => headAc.abort(), VISION_FETCH_TIMEOUT_MS);
+      try {
+        const headRes = await fetch(url, { method: 'HEAD', signal: headAc.signal });
+        if (headRes.ok) {
+          const advertisedType = headRes.headers
+            .get('content-type')
+            ?.split(';')[0]
+            ?.trim();
+          if (advertisedType && !advertisedType.startsWith('image/')) {
+            throw new Error(
+              `URL did not return an image (content-type: ${advertisedType})`,
+            );
+          }
+          const advertisedLen = Number(headRes.headers.get('content-length') ?? 0);
+          if (advertisedLen > VISION_MAX_BYTES) {
+            throw new Error(
+              `image too large (${advertisedLen} bytes; max ${VISION_MAX_BYTES})`,
+            );
+          }
+        }
+        // Non-OK HEAD: don't fail — many CDNs (incl. some Supabase
+        // signed-URL paths) reject HEAD. Fall through to GET.
+      } finally {
+        clearTimeout(headTimer);
+      }
+    } catch (e) {
+      // Re-throw only our own size/type errors — network errors on HEAD
+      // shouldn't block a working GET.
+      if (e instanceof Error && /image too large|did not return an image/.test(e.message)) {
+        throw e;
+      }
+    }
+
     // Fetch the image with a hard timeout + size cap so a malicious or
     // huge URL can't tie up a function instance.
     const ac = new AbortController();
@@ -1076,6 +1117,15 @@ const identifyFromPhotoTool: ToolExecutor = {
       mimeType = res.headers.get('content-type')?.split(';')[0]?.trim() ?? 'image/jpeg';
       if (!mimeType.startsWith('image/')) {
         throw new Error(`URL did not return an image (content-type: ${mimeType})`);
+      }
+      // Belt-and-suspenders: if the GET response advertises a length
+      // that already exceeds the cap, bail before allocating the
+      // ArrayBuffer.
+      const advertisedLen = Number(res.headers.get('content-length') ?? 0);
+      if (advertisedLen > VISION_MAX_BYTES) {
+        throw new Error(
+          `image too large (${advertisedLen} bytes; max ${VISION_MAX_BYTES})`,
+        );
       }
       bytes = await res.arrayBuffer();
       if (bytes.byteLength > VISION_MAX_BYTES) {
