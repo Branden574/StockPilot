@@ -19,8 +19,11 @@ export type RecoveryEntity =
 
 export interface DeletedRow {
   id: string;
-  /** Display label for the row — for items it's name+sku, for others it's name. */
-  label: string;
+  /** Primary display name. Always present (falls back to '(unnamed)'). */
+  name: string;
+  /** SKU for inventory items, undefined for other entity types. */
+  sku?: string | null;
+  /** ISO timestamp of the soft-delete. */
   deleted_at: string;
 }
 
@@ -29,6 +32,19 @@ const ENTITY_TABLE: Record<RecoveryEntity, string> = {
   categories: 'categories',
   locations: 'locations',
   suppliers: 'suppliers',
+};
+
+/**
+ * Audit log records `metadata.entity_type` as the singular form
+ * ('item', 'category', ...). Map recovery entity names to that value
+ * so the "View history" deep-link on each recovery row hits the right
+ * filter on the audit page.
+ */
+export const RECOVERY_AUDIT_ENTITY_TYPE: Record<RecoveryEntity, string> = {
+  inventory_items: 'item',
+  categories: 'category',
+  locations: 'location',
+  suppliers: 'supplier',
 };
 
 /**
@@ -66,10 +82,8 @@ export class RecoveryService {
     if (error) throw new ServiceError('internal_error', error.message);
     return ((data ?? []) as unknown as Array<Record<string, unknown>>).map((r) => ({
       id: r.id as string,
-      label:
-        entity === 'inventory_items'
-          ? `${r.name ?? ''}${r.sku ? ` (${r.sku})` : ''}`
-          : ((r.name as string | null) ?? '(unnamed)'),
+      name: ((r.name as string | null) ?? '').trim() || '(unnamed)',
+      sku: entity === 'inventory_items' ? ((r.sku as string | null) ?? null) : undefined,
       deleted_at: r.deleted_at as string,
     }));
   }

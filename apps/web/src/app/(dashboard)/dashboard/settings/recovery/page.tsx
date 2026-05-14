@@ -2,7 +2,7 @@ import { History } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { hasPermission } from '@stockpilot/core';
+import { hasPermission, isAdminRole } from '@stockpilot/core';
 
 import { RestoreButton } from '@/components/settings/restore-button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,9 +10,26 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { requireOrgContext } from '@/lib/auth/session';
 import { formatRelative } from '@/lib/utils';
 import {
+  RECOVERY_AUDIT_ENTITY_TYPE,
   RecoveryService,
   type RecoveryEntity,
 } from '@/server/services/recovery';
+
+/**
+ * Render an absolute timestamp for the title= tooltip. Uses the
+ * browser/server's local format with seconds dropped — gives enough
+ * precision to disambiguate same-day deletes without being verbose.
+ */
+function formatExact(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
 
 interface SectionDef {
   entity: RecoveryEntity;
@@ -50,6 +67,10 @@ export default async function RecoveryPage() {
   if (!hasPermission(ctx.role, 'items:delete')) {
     notFound();
   }
+  // "View history" links route to /dashboard/settings/audit, which
+  // requires admin role. Hide the link for non-admins so we don't
+  // dangle a click that 404s.
+  const canSeeAudit = isAdminRole(ctx.role);
   const svc = await RecoveryService.forCurrentUser();
   const buckets = await Promise.all(
     SECTIONS.map(async (s) => ({
@@ -106,24 +127,45 @@ export default async function RecoveryPage() {
                 </CardHeader>
                 <CardContent>
                   <ul className="divide-border divide-y">
-                    {b.rows.map((r) => (
-                      <li
-                        key={r.id}
-                        className="flex flex-wrap items-center justify-between gap-3 py-2.5 text-[13px]"
-                      >
-                        <div className="min-w-0">
-                          <div className="truncate font-medium">{r.label}</div>
-                          <div className="text-muted-foreground text-[11.5px]">
-                            Deleted {formatRelative(r.deleted_at)}
+                    {b.rows.map((r) => {
+                      const auditHref = `/dashboard/settings/audit?entityType=${RECOVERY_AUDIT_ENTITY_TYPE[b.entity]}&entityId=${r.id}`;
+                      return (
+                        <li
+                          key={r.id}
+                          className="flex flex-wrap items-center justify-between gap-3 py-2.5 text-[13px]"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">{r.name}</div>
+                            {r.sku && (
+                              <div className="text-muted-foreground truncate font-mono text-[11px]">
+                                SKU {r.sku}
+                              </div>
+                            )}
+                            <div className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px]">
+                              <span title={formatExact(r.deleted_at)}>
+                                Deleted {formatRelative(r.deleted_at)}
+                              </span>
+                              {canSeeAudit && (
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <Link
+                                    href={auditHref}
+                                    className="underline-offset-2 hover:text-foreground hover:underline"
+                                  >
+                                    View history
+                                  </Link>
+                                </>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                        <RestoreButton
-                          entity={b.entity}
-                          id={r.id}
-                          label={r.label}
-                        />
-                      </li>
-                    ))}
+                          <RestoreButton
+                            entity={b.entity}
+                            id={r.id}
+                            label={r.name}
+                          />
+                        </li>
+                      );
+                    })}
                   </ul>
                 </CardContent>
               </Card>

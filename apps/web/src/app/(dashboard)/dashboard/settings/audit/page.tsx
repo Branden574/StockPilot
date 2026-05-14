@@ -31,6 +31,12 @@ interface SearchParams {
   event?: string;
   userId?: string;
   entityType?: string;
+  /**
+   * Filter by metadata.entity_id. Set when arriving from the
+   * Recovery page's "View history" deep-link so the audit trail for
+   * a single restored/archived row surfaces directly.
+   */
+  entityId?: string;
   since?: string;
   until?: string;
   page?: string;
@@ -54,6 +60,7 @@ function buildPageHref(params: SearchParams, nextPage: number): string {
   if (params.event) usp.set('event', params.event);
   if (params.userId) usp.set('userId', params.userId);
   if (params.entityType) usp.set('entityType', params.entityType);
+  if (params.entityId) usp.set('entityId', params.entityId);
   if (params.since) usp.set('since', params.since);
   if (params.until) usp.set('until', params.until);
   if (nextPage > 1) usp.set('page', String(nextPage));
@@ -94,6 +101,7 @@ export default async function AuditLogPage({
     event: trim(params.event),
     userId: trim(params.userId),
     entityType: trim(params.entityType),
+    entityId: trim(params.entityId),
     since: trim(params.since),
     until: trim(params.until),
     limit: PAGE_SIZE,

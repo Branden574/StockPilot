@@ -24,6 +24,12 @@ export interface AuditLogFilters {
   event?: string;
   userId?: string;
   entityType?: string;
+  /**
+   * Filter by metadata.entity_id. Used by the recovery page's "View
+   * history" deep-link so a single soft-deleted row's audit trail
+   * surfaces. Always paired with entityType for correctness.
+   */
+  entityId?: string;
   since?: string;
   until?: string;
   limit?: number;
@@ -111,6 +117,9 @@ export class AuditLogService {
     if (filters.userId) query = query.eq('user_id', filters.userId);
     if (filters.entityType) {
       query = query.filter('metadata->>entity_type', 'eq', filters.entityType);
+    }
+    if (filters.entityId) {
+      query = query.filter('metadata->>entity_id', 'eq', filters.entityId);
     }
     if (filters.since) query = query.gte('created_at', filters.since);
     if (filters.until) query = query.lte('created_at', filters.until);
