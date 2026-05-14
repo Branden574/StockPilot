@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError } from '@/server/services/context';
 
@@ -32,6 +33,22 @@ export async function POST(
     return NextResponse.json({ error: 'invalid_id' }, { status: 400 });
   }
 
+  // Per-user rate limit. The mobile client batches scans locally and
+  // replays them when it reconnects — a burst of 200 lines from a
+  // single bag-loose-trigger scanner is realistic, but 30/sec sustained
+  // is not. 120/min covers normal-paced shelf walking (~2/sec) and
+  // hard-limits a malicious or buggy client.
+  const rl = await checkRateLimit(`cycle-count-record:${ctx.userId}`, 120, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: 'rate_limited', retryAt: rl.resetAt },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
+      },
+    );
+  }
+
   let body: unknown;
   try {
     body = await req.json();
@@ -59,7 +76,13 @@ export async function POST(
   } catch (e) {
     if (e instanceof ServiceError) {
       const status =
-        e.code === 'forbidden' ? 403 : e.code === 'not_found' ? 404 : 500;
+        e.code === 'forbidden'
+          ? 403
+          : e.code === 'not_found'
+            ? 404
+            : e.code === 'conflict' || e.code === 'validation_error'
+              ? 409
+              : 500;
       return NextResponse.json({ error: e.code, message: e.message }, { status });
     }
     return NextResponse.json(

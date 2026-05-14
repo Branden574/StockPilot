@@ -63,6 +63,11 @@ interface Props {
   /** Display name of the current assignee, resolved server-side so the
       read-only badge has a name to show. */
   assigneeName?: string | null;
+  /** Live count of items in scope right now (org-active items in the
+      session's warehouse). When this exceeds lines.length, new items
+      were added after start() — surfaced as a warning so the counter
+      can decide to cancel + restart. */
+  itemsInScopeCount?: number;
 }
 
 export function CycleCountDetail({
@@ -71,6 +76,7 @@ export function CycleCountDetail({
   canAssign = false,
   members = [],
   assigneeName = null,
+  itemsInScopeCount,
 }: Props) {
   const router = useRouter();
   const [search, setSearch] = React.useState('');
@@ -113,6 +119,36 @@ export function CycleCountDetail({
     (sum, l) => sum + ((l.counted_quantity ?? 0) - l.expected_quantity),
     0,
   );
+
+  // New-items-added warning. If the snapshot has fewer lines than the
+  // current items-in-scope count, someone added items to inventory
+  // after the count was started. They won't be in the snapshot and
+  // won't be counted/adjusted by post(). Surface the gap so the
+  // counter can decide to cancel + restart.
+  const newItemsCount =
+    open && typeof itemsInScopeCount === 'number'
+      ? Math.max(0, itemsInScopeCount - lines.length)
+      : 0;
+
+  // Browser-leave guard for in-progress counts with unsaved input.
+  // We can't directly observe Input draft state from here, so we
+  // gate on "open + any line still uncounted" — the user came to the
+  // page to count and there's still work pending. Closed counts never
+  // arm the listener.
+  const hasPendingWork = open && uncounted > 0;
+  React.useEffect(() => {
+    if (!hasPendingWork) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      // Standard pattern: setReturnValue + return string. Browsers
+      // ignore the message and show their own dialog, but they
+      // require one of the two to trigger the dialog at all.
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [hasPendingWork]);
 
   async function saveCount(line: CycleCountLineWithItem, raw: string) {
     const value = Number(raw);
@@ -211,6 +247,15 @@ export function CycleCountDetail({
         canAssign={canAssign && open}
         members={members}
       />
+
+      {newItemsCount > 0 && (
+        <div className="border-warning/40 bg-warning/5 text-warning rounded-md border px-3 py-2 text-[12.5px]">
+          {newItemsCount} new item{newItemsCount === 1 ? '' : 's'} were added to
+          this scope after the count started. They are not in this snapshot and
+          will not be adjusted by posting. Cancel and restart the count if
+          you'd like to include them.
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Items in scope" value={formatNumber(lines.length)} />
