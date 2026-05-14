@@ -144,6 +144,9 @@ export default async function RecoveryPage() {
                             <div className="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px]">
                               <span title={formatExact(r.deleted_at)}>
                                 Deleted {formatRelative(r.deleted_at)}
+                                {r.deleted_by_name && (
+                                  <> by <span className="text-foreground">{r.deleted_by_name}</span></>
+                                )}
                               </span>
                               {canSeeAudit && (
                                 <>
