@@ -65,4 +65,25 @@ describe('safeReturnPath', () => {
       '/dashboard/inventory?q=foo',
     );
   });
+
+  it('trims tab + newline whitespace too', () => {
+    // Confirms trim() handles all whitespace, not just spaces. A
+    // hostile sender can't smuggle a `\t/dashboard/...` past the
+    // trim and into a downstream consumer that strips differently.
+    expect(safeReturnPath('\t/dashboard/inventory?q=foo')).toBe(
+      '/dashboard/inventory?q=foo',
+    );
+    expect(safeReturnPath('\n/dashboard/inventory')).toBe(
+      '/dashboard/inventory',
+    );
+  });
+
+  it('rejects null bytes in the decoded path', () => {
+    // `%00` decodes to a literal null byte. Browsers and URL parsers
+    // truncate at null bytes in some contexts; safer to reject
+    // outright than ship a value that may behave differently
+    // upstream vs. downstream.
+    expect(safeReturnPath('/dashboard/%00inventory')).toBeNull();
+    expect(safeReturnPath('/dashboard/inventory?q=foo%00')).toBeNull();
+  });
 });

@@ -41,6 +41,13 @@ export function safeReturnPath(raw: string | null | undefined): string | null {
     return null;
   }
 
+  if (decoded.includes('\x00')) {
+    // Null bytes can confuse downstream URL parsers and browsers
+    // truncate at them in some contexts. A legitimate `?return=`
+    // value will never contain one.
+    return null;
+  }
+
   if (!decoded.startsWith('/dashboard/')) {
     return null;
   }
