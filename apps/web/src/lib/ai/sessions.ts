@@ -99,20 +99,47 @@ export async function createSession(
   };
 }
 
-export async function deleteSession(ctx: ServiceContext, sessionId: string): Promise<void> {
-  const { error } = await ctx.supabase
+/**
+ * Result of {@link deleteSession}. `ok=false` means no row matched the
+ * (id, user, org) tuple — likely a cross-user attempt, a typo, or a
+ * row already purged by the 30-day cron. The caller turns this into a
+ * 404 instead of a silent 200.
+ */
+export interface DeleteSessionResult {
+  ok: boolean;
+}
+
+export async function deleteSession(
+  ctx: ServiceContext,
+  sessionId: string,
+): Promise<DeleteSessionResult> {
+  // RLS already restricts to (user_id, organization_id) but we ALSO
+  // ask PostgREST to RETURN the deleted row's id — that way a request
+  // that matched zero rows (cross-user, stale id, etc.) surfaces as
+  // an empty array and we can 404 properly instead of cheerfully
+  // claiming success.
+  const { data, error } = await ctx.supabase
     .from('ai_chat_sessions')
     .delete()
     .eq('id', sessionId)
     .eq('user_id', ctx.userId)
-    .eq('organization_id', ctx.organizationId);
+    .eq('organization_id', ctx.organizationId)
+    .select('id');
   if (error) throw new Error(error.message);
+  return { ok: Array.isArray(data) && data.length > 0 };
 }
 
 /**
  * Verifies the caller owns the session and returns it. Returns null
  * when no row matches — RLS would also block, but an explicit check
  * lets the API return 404 vs 500 cleanly.
+ *
+ * Cosmetic race note: if a session is deleted between the moment a
+ * request reads it via getSession and the moment `appendMessages`
+ * inserts new turns, the insert will fail at the FK and the caller
+ * throws. That's fine — RLS + FK keep us safe; the user just sees
+ * "couldn't save chat" instead of a phantom message. Not worth a
+ * cross-request transaction for v1.
  */
 export async function getSession(
   ctx: ServiceContext,
@@ -141,17 +168,32 @@ export async function getSession(
   };
 }
 
+/**
+ * Hard cap on how many messages we ever load from a session. Long-lived
+ * sessions can accumulate hundreds of turns; the chat route only needs
+ * the most recent slice for context, and we also can't blow past
+ * Gemini's prompt budget. 60 messages == ~30 turns == well under a
+ * 1M-token window on modern Gemini models. The route applies its own
+ * 40-turn cap on top of this.
+ */
+const MAX_LOADED_MESSAGES = 60;
+
 export async function listMessages(
   ctx: ServiceContext,
   sessionId: string,
 ): Promise<ChatMessageRow[]> {
+  // Fetch the NEWEST MAX_LOADED_MESSAGES, then reverse so the caller
+  // still gets chronological (oldest-first) order. Doing it this way
+  // means we never materialize a 1000-row history just to throw most
+  // of it away — the LIMIT is applied at the DB layer.
   const { data, error } = await ctx.supabase
     .from('ai_chat_messages')
     .select('id, role, content, tool_calls, created_at')
     .eq('session_id', sessionId)
-    .order('created_at', { ascending: true });
+    .order('created_at', { ascending: false })
+    .limit(MAX_LOADED_MESSAGES);
   if (error) throw new Error(error.message);
-  return ((data ?? []) as Array<{
+  const rows = ((data ?? []) as Array<{
     id: string;
     role: 'user' | 'assistant';
     content: string;
@@ -164,6 +206,9 @@ export async function listMessages(
     toolCalls: r.tool_calls,
     createdAt: r.created_at,
   }));
+  // Reverse in-place — cheaper than another allocation and the array
+  // is already at-most MAX_LOADED_MESSAGES long.
+  return rows.reverse();
 }
 
 export async function appendMessages(

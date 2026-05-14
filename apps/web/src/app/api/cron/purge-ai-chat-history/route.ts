@@ -40,11 +40,15 @@ export async function GET(req: Request) {
   // misconfigured staging/dev deployments serve this route to any
   // unauthenticated GET, which is an admin-client surface (drops chat
   // history org-wide). Reject hard whenever the secret is absent.
+  //
+  // Status: 401 (not 503). A 503 leaks the fact that the secret is
+  // misconfigured — an attacker scanning for cron endpoints uses 503
+  // as a "come back later" signal. 401 means "authentication failed"
+  // and is what an unauthenticated GET should always see, regardless
+  // of whether the secret exists or just doesn't match. Operators
+  // still notice via the absence of cron deletes in the daily run log.
   if (!env.CRON_SECRET) {
-    return NextResponse.json(
-      { error: 'cron_secret_not_configured' },
-      { status: 503 },
-    );
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
   const auth = req.headers.get('authorization') ?? '';
   if (!secretsEqual(auth, `Bearer ${env.CRON_SECRET}`)) {

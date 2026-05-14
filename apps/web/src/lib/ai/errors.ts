@@ -53,7 +53,9 @@ export function classifyAiError(err: unknown): ClassifiedAiError {
     text.includes('credits are depleted') ||
     text.includes('billing') ||
     text.includes('payment_required') ||
-    text.includes('insufficient') && text.includes('credit')
+    // Parens are load-bearing: without them && binds tighter than ||
+    // and the previous reader had to mentally re-precedence the line.
+    (text.includes('insufficient') && text.includes('credit'))
   ) {
     return {
       code: 'billing',

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { hasPermission } from '@/lib/auth/permissions';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { streamChat, type ChatTurn, type ToolCallRecord } from '@/lib/ai/chat';
@@ -24,11 +25,18 @@ const turnSchema = z.object({
   content: z.string().min(1).max(8000),
 });
 
+// `history` is bounded to keep prompt tokens predictable; streamChat
+// caps internally too. `sessionId` is a UUID (zod enforces format),
+// which also satisfies the "validate sessionId at route level" item.
 const bodySchema = z.object({
   message: z.string().min(1).max(2000),
   sessionId: z.string().uuid().optional(),
   history: z.array(turnSchema).max(40).optional(),
 });
+
+// Mirrors the streamChat history cap. Kept here as well so that any
+// DB-loaded history is trimmed before being passed in.
+const MAX_HISTORY_TURNS = 40;
 
 /**
  * Streaming chat endpoint. Returns NDJSON — one JSON object per line —
@@ -48,6 +56,15 @@ export async function POST(req: Request) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
+  // Route-level role gate. The write tools each assertPermission too,
+  // but viewers can still spend Gemini tokens by chatting read-only —
+  // this endpoint is staff+ only so we don't have to rely on tool-by-
+  // tool gating alone. We use 'items:update' as the minimum write
+  // capability: staff/manager/admin/owner all have it; viewers do not.
+  if (!hasPermission(ctx.role, 'items:update')) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+  }
+
   // Per-user rate limit on the AI chat — protects the org's Gemini
   // quota from a single misbehaving user (or an attacker with a
   // hijacked session) burning through the daily budget. 60 turns/min
@@ -59,6 +76,27 @@ export async function POST(req: Request) {
         error: 'rate_limited',
         message: 'Too many AI chat requests. Slow down for a moment.',
         retryAt: rl.resetAt,
+      },
+      { status: 429 },
+    );
+  }
+
+  // Per-ORG daily cap. A single user is bounded by the per-user limit
+  // above, but an org with 50 staff can still pile on. 1,000 chat
+  // turns per org per day is plenty for any sensible internal use and
+  // hard-stops accidental token-spend explosions.
+  const orgRl = await checkRateLimit(
+    `ai-chat-org:${ctx.organizationId}`,
+    1000,
+    24 * 60 * 60 * 1000,
+  );
+  if (!orgRl.allowed) {
+    return NextResponse.json(
+      {
+        error: 'rate_limited_org',
+        message:
+          'Your organization has hit its daily AI chat limit. It resets in 24 hours.',
+        retryAt: orgRl.resetAt,
       },
       { status: 429 },
     );
@@ -95,6 +133,14 @@ export async function POST(req: Request) {
     if (!sessionId && payload.history && payload.history.length > 0) {
       history = payload.history as ChatTurn[];
     }
+    // Cap whatever we ended up with (DB-loaded or client-sent) — even
+    // though the DB layer caps at 60 messages and the client zod
+    // schema caps at 40 turns, both paths funnel through this single
+    // gate so a future regression in either source still won't blow
+    // past the token budget.
+    if (history.length > MAX_HISTORY_TURNS) {
+      history = history.slice(-MAX_HISTORY_TURNS);
+    }
   } catch (err) {
     void reportError(err, { tag: 'ai.chat.prep', organizationId: ctx.organizationId });
     return NextResponse.json(
@@ -103,22 +149,66 @@ export async function POST(req: Request) {
     );
   }
 
+  // Lazy-create the session BEFORE streaming starts so the user turn
+  // can be persisted up front. If the stream blows up mid-flight we
+  // still have a paper trail of what the user asked. The assistant
+  // turn (partial or complete) is persisted in the finally below.
+  let resolvedSessionId = sessionId;
+  try {
+    if (!resolvedSessionId) {
+      const session = await createSession(ctx, deriveTitle(payload.message));
+      resolvedSessionId = session.id;
+    }
+    await appendMessages(ctx, resolvedSessionId, [
+      { role: 'user', content: payload.message },
+    ]);
+  } catch (err) {
+    void reportError(err, {
+      tag: 'ai.chat.persist-user',
+      organizationId: ctx.organizationId,
+    });
+    return NextResponse.json(
+      { error: 'internal_error', message: 'Could not save your message.' },
+      { status: 500 },
+    );
+  }
+
+  // After this point we MUST always send a `done` event before closing
+  // the stream — the client uses it as the terminator. Errors are
+  // sent as `error` events, then `done` follows.
+  const finalSessionId = resolvedSessionId;
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (event: Record<string, unknown>) => {
-        controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        // controller.desiredSize === null means the consumer (client)
+        // cancelled the stream — avoid pushing more bytes into a
+        // closed queue, which can throw and abort our finally cleanup.
+        if (controller.desiredSize === null) return;
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        } catch {
+          // Client disconnected mid-write. Swallow — finally still runs.
+        }
       };
 
       let assembledReply = '';
       const toolCallsUsed: ToolCallRecord[] = [];
+      let errorEvent: Record<string, unknown> | null = null;
 
       try {
-        const iter = streamChat(history, payload.message, ctx);
+        // Thread the request's AbortSignal into the chat loop so a
+        // client disconnect propagates all the way down to Gemini and
+        // the tool calls. Without this, the model keeps generating
+        // (and burning quota) after the user navigates away.
+        const iter = streamChat(history, payload.message, ctx, {
+          signal: req.signal,
+        });
         // Iterate manually so we can capture the generator's return value
         // (final reply + tool calls) without losing it to a normal
         // for-await consumer.
         while (true) {
+          if (req.signal.aborted) break;
           const next = await iter.next();
           if (next.done) {
             assembledReply = next.value.reply;
@@ -135,35 +225,50 @@ export async function POST(req: Request) {
             send({ type: 'tool', name: ev.name, ok: ev.ok });
           }
         }
-
-        // Lazy-create session AFTER successful stream so failed turns
-        // don't leave orphan empty sessions in the sidebar.
-        let resolvedSessionId = sessionId;
-        if (!resolvedSessionId) {
-          const session = await createSession(ctx, deriveTitle(payload.message));
-          resolvedSessionId = session.id;
-        }
-        await appendMessages(ctx, resolvedSessionId, [
-          { role: 'user', content: payload.message },
-          {
-            role: 'assistant',
-            content: assembledReply,
-            toolCalls: toolCallsUsed.map((t) => ({ name: t.name, ok: t.ok })),
-          },
-        ]);
-
-        send({
-          type: 'done',
-          sessionId: resolvedSessionId,
-          reply: assembledReply,
-          toolCallsUsed: toolCallsUsed.map((t) => ({ name: t.name, ok: t.ok })),
-        });
       } catch (err) {
         void reportError(err, { tag: 'ai.chat', organizationId: ctx.organizationId });
         const classified = classifyAiError(err);
-        send({ type: 'error', code: classified.code, message: classified.userMessage });
+        errorEvent = {
+          type: 'error',
+          code: classified.code,
+          message: classified.userMessage,
+        };
       } finally {
-        controller.close();
+        // Always persist the assistant turn — even a partial reply —
+        // so the user can see what was attempted. Wrapped in its own
+        // try/catch so a persistence failure doesn't swallow the
+        // `done` event the client is waiting for.
+        if (assembledReply || toolCallsUsed.length > 0) {
+          try {
+            await appendMessages(ctx, finalSessionId, [
+              {
+                role: 'assistant',
+                content: assembledReply || '[no response]',
+                toolCalls: toolCallsUsed.map((t) => ({ name: t.name, ok: t.ok })),
+              },
+            ]);
+          } catch (persistErr) {
+            void reportError(persistErr, {
+              tag: 'ai.chat.persist-assistant',
+              organizationId: ctx.organizationId,
+            });
+            // Don't escalate — the user's message is already saved and
+            // the stream still terminates cleanly below.
+          }
+        }
+
+        if (errorEvent) send(errorEvent);
+        send({
+          type: 'done',
+          sessionId: finalSessionId,
+          reply: assembledReply,
+          toolCallsUsed: toolCallsUsed.map((t) => ({ name: t.name, ok: t.ok })),
+        });
+        try {
+          controller.close();
+        } catch {
+          // Already closed — fine.
+        }
       }
     },
   });
