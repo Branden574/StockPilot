@@ -332,6 +332,40 @@ export class TagsService {
     assertPermission(this.ctx, 'items:update');
     if (itemIds.length === 0 || tagIds.length === 0) return;
 
+    // Validate every tag id belongs to this org — same defense as
+    // bulkAddToItems. RLS would already block a delete on a cross-org
+    // tag link, but this surfaces a clear error and keeps audit
+    // entries honest.
+    const uniqueTags = Array.from(new Set(tagIds));
+    const { data: validTags, error: validTagErr } = await this.ctx.supabase
+      .from('tags')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', uniqueTags);
+    if (validTagErr) throw new ServiceError('internal_error', validTagErr.message);
+    if ((validTags?.length ?? 0) !== uniqueTags.length) {
+      throw new ServiceError(
+        'validation_error',
+        'One or more tags do not belong to this organization.',
+      );
+    }
+
+    // Same check on item ids. A forged item id (cross-org or
+    // non-existent) is silently no-op'd by RLS today; flag it.
+    const uniqueItems = Array.from(new Set(itemIds));
+    const { data: validItems, error: validItemErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', uniqueItems);
+    if (validItemErr) throw new ServiceError('internal_error', validItemErr.message);
+    if ((validItems?.length ?? 0) !== uniqueItems.length) {
+      throw new ServiceError(
+        'validation_error',
+        'One or more items do not belong to this organization.',
+      );
+    }
+
     const { error } = await this.ctx.supabase
       .from('item_tags')
       .delete()

@@ -8,7 +8,7 @@ import { hasPermission } from '@stockpilot/core';
 
 export default async function ImportPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'items:create')) {
+  if (!hasPermission(ctx.role, 'items:import')) {
     redirect('/dashboard/inventory');
   }
   return (

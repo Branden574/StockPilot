@@ -551,10 +551,14 @@ export async function getLowStockItems(
     }>;
   }
 
-  // Warehouse-scoped fallback. The RPC is org-wide; reproduce its
-  // semantics here for the filter case (active items where qty <=
-  // reorder_point and reorder_point > 0, ordered by smallest gap).
-  const { data, error } = await ctx.supabase
+  // Warehouse-scoped path. The RPC is org-wide; reproduce its
+  // semantics here. PostgREST can't express qty <= reorder_point in
+  // one filter, so we narrow with an OR (reorder_point > 0 OR qty <=
+  // 0 — matches the lowStock fix in InventoryService.list) and finish
+  // in JS. Previous version had a `.filter(... 'reorder_point' as never)`
+  // that always errored and fell through to a dead `if (error)` path —
+  // wasted round trip. Now we do the right thing directly.
+  const { data: candidates, error } = await ctx.supabase
     .from('inventory_items')
     .select(
       'id, name, sku, quantity_on_hand, reorder_point, reorder_quantity, primary_location:locations!primary_location_id (name)',
@@ -563,46 +567,18 @@ export async function getLowStockItems(
     .eq('warehouse_id', options.warehouseId)
     .eq('status', 'active')
     .is('deleted_at', null)
-    .gt('reorder_point', 0)
-    .filter('quantity_on_hand', 'lte', 'reorder_point' as never as number)
+    .or('reorder_point.gt.0,quantity_on_hand.lte.0')
     .order('quantity_on_hand', { ascending: true })
-    .limit(limit);
-  if (error) {
-    // The qty<=reorder_point filter via PostgREST `column-to-column`
-    // syntax isn't supported in every supabase-js version; fall back
-    // to client-side filter.
-    const { data: all } = await ctx.supabase
-      .from('inventory_items')
-      .select(
-        'id, name, sku, quantity_on_hand, reorder_point, reorder_quantity, primary_location:locations!primary_location_id (name)',
-      )
-      .eq('organization_id', ctx.organizationId)
-      .eq('warehouse_id', options.warehouseId)
-      .eq('status', 'active')
-      .is('deleted_at', null)
-      .gt('reorder_point', 0)
-      .order('quantity_on_hand', { ascending: true })
-      .limit(200);
-    const filtered = ((all ?? []) as Array<Record<string, unknown>>)
-      .filter(
-        (r) => Number(r.quantity_on_hand) <= Number(r.reorder_point),
-      )
-      .slice(0, limit);
-    return filtered.map((r) => {
-      const loc = r.primary_location as { name: string } | { name: string }[] | null;
-      const locObj = Array.isArray(loc) ? loc[0] : loc;
-      return {
-        id: r.id as string,
-        name: r.name as string,
-        sku: r.sku as string,
-        quantity_on_hand: Number(r.quantity_on_hand),
-        reorder_point: Number(r.reorder_point),
-        reorder_quantity: Number(r.reorder_quantity),
-        primary_location: locObj?.name ?? null,
-      };
-    });
-  }
-  return (data ?? []).map((r) => {
+    .limit(200);
+  if (error) throw new ServiceError('internal_error', error.message);
+  const filtered = ((candidates ?? []) as Array<Record<string, unknown>>)
+    .filter((r) => {
+      const qty = Number(r.quantity_on_hand);
+      const rp = Number(r.reorder_point);
+      return qty <= rp || qty <= 0;
+    })
+    .slice(0, limit);
+  return filtered.map((r) => {
     const rec = r as Record<string, unknown>;
     const loc = rec.primary_location as { name: string } | { name: string }[] | null;
     const locObj = Array.isArray(loc) ? loc[0] : loc;

@@ -124,11 +124,11 @@ export class TeamService {
       throw new ServiceError('conflict', 'An active invite already exists for that email.');
     }
 
-    // 8 bytes = 11 base64url chars (~64 bits of entropy). Plenty for a
-    // 7-day-expiring single-use invite, AND short enough that the full URL
-    // (~57 chars) fits on one line in Teams/Slack/iMessage so the link
-    // doesn't visually word-wrap and break.
-    const token = randomBytes(8).toString('base64url');
+    // 16 bytes = 22 base64url chars (~128 bits of entropy). Matches the
+    // 256-bit standard used elsewhere (order-requests public_request_token)
+    // and removes the brute-forceable narrowness of an 8-byte token. Still
+    // short enough that /i/<token> fits on a single line in Teams/Slack/iMessage.
+    const token = randomBytes(16).toString('base64url');
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
     const { data: invite, error } = await this.ctx.supabase
@@ -269,6 +269,12 @@ export class TeamService {
       .eq('id', memberId)
       .maybeSingle();
     if (!target) throw new ServiceError('not_found', 'Member not found');
+    if ((target.role as string) === 'owner') {
+      throw new ServiceError(
+        'forbidden',
+        'The owner role can only be reassigned via a separate ownership-transfer flow.',
+      );
+    }
     if ((target.user_id as string) === this.ctx.userId) {
       throw new ServiceError(
         'forbidden',

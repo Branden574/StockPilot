@@ -44,6 +44,13 @@ type Body = z.infer<typeof bodySchema>;
 
 const RATE_LIMIT_PER_HOUR = 10;
 const ONE_HOUR_MS = 60 * 60 * 1000;
+/**
+ * Hard cap on total units per public submission. Mirrors `MAX_TOTAL_QTY`
+ * in `server/actions/order-requests.ts` so a public submitter can't
+ * file a request that's larger than what an authenticated team member
+ * could file in-app.
+ */
+const MAX_TOTAL_QTY = 10_000;
 
 export async function POST(req: NextRequest) {
   // 1. Parse + validate body BEFORE touching the admin client.
@@ -62,12 +69,53 @@ export async function POST(req: NextRequest) {
   }
   const body: Body = parsed.data;
 
+  // 1b. Enforce a total-quantity cap and dedupe lines by itemId so a
+  // submitter can't bypass the per-line max by sending 50 rows of
+  // 10,000 each, and can't bloat the request with duplicate itemIds.
+  // Mirrors `MAX_TOTAL_QTY` in `server/actions/order-requests.ts`.
+  const totalQty = body.lines.reduce(
+    (sum, l) => sum + (Number(l.quantity) || 0),
+    0,
+  );
+  if (totalQty > MAX_TOTAL_QTY) {
+    return NextResponse.json(
+      {
+        error: 'too_many_units',
+        message: `Total quantity exceeds ${MAX_TOTAL_QTY.toLocaleString()} units per request.`,
+      },
+      { status: 400 },
+    );
+  }
+  const byItem = new Map<string, { quantity: number; notes: string | null }>();
+  for (const l of body.lines) {
+    const prev = byItem.get(l.itemId);
+    const qty = (prev?.quantity ?? 0) + (Number(l.quantity) || 0);
+    // Keep the first non-null note we see for an itemId — collapses
+    // duplicates without dropping line-level context the submitter
+    // attached. Empty/null notes from a later dup don't overwrite.
+    const notes = prev?.notes ?? l.notes ?? null;
+    byItem.set(l.itemId, { quantity: qty, notes });
+  }
+  const dedupedLines = Array.from(byItem.entries()).map(([itemId, v]) => ({
+    itemId,
+    quantity: v.quantity,
+    notes: v.notes,
+  }));
+
   // 2. Rate limit per IP. We trust x-forwarded-for since Vercel sets it.
   const ip =
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     req.headers.get('x-real-ip') ||
     'unknown';
-  const limit = await checkRateLimit(`public-order-request:${ip}`, RATE_LIMIT_PER_HOUR, ONE_HOUR_MS);
+  // `mode: 'closed'` — this is an unauthenticated endpoint, so a DB
+  // outage that makes the rate-limiter fall back to fail-open would
+  // grant unlimited submissions. Prefer to 429 during the outage.
+  const limit = await checkRateLimit(
+    `public-order-request:${ip}`,
+    RATE_LIMIT_PER_HOUR,
+    ONE_HOUR_MS,
+    'closed',
+  );
   if (!limit.allowed) {
     const retryAfter = Math.max(1, Math.ceil((limit.resetAt - Date.now()) / 1000));
     return NextResponse.json(
@@ -116,8 +164,9 @@ export async function POST(req: NextRequest) {
 
   // 5. Validate every line item: belongs to this org + warehouse,
   // item_type='book', not soft-deleted, status='active'. Snapshot
-  // unit_cost from each item.
-  const itemIds = [...new Set(body.lines.map((l) => l.itemId))];
+  // unit_cost from each item. Operates on `dedupedLines` so the
+  // validation set matches what we'll actually insert.
+  const itemIds = [...new Set(dedupedLines.map((l) => l.itemId))];
   const { data: items, error: itemsErr } = await admin
     .from('inventory_items')
     .select('id, warehouse_id, unit_cost, item_type, status, deleted_at')
@@ -142,7 +191,7 @@ export async function POST(req: NextRequest) {
     if (row.warehouse_id !== body.warehouseId) continue;
     itemMap.set(row.id, { unitCost: Number(row.unit_cost) || 0 });
   }
-  for (const line of body.lines) {
+  for (const line of dedupedLines) {
     if (!itemMap.has(line.itemId)) {
       return NextResponse.json(
         { error: 'invalid_line', message: 'One of the books is no longer available.' },
@@ -177,7 +226,7 @@ export async function POST(req: NextRequest) {
   }
   const header = headerRow as OrderRequestRow;
 
-  const linePayload = body.lines.map((l) => ({
+  const linePayload = dedupedLines.map((l) => ({
     order_request_id: header.id,
     item_id: l.itemId,
     quantity_requested: l.quantity,

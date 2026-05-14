@@ -89,6 +89,20 @@ export class ItemImagesService {
         'Invalid storage path — wrong org prefix.',
       );
     }
+
+    // Verify the target item exists in this org. Without this, a forged
+    // item_id from a hostile client lets us insert a pointer row that
+    // either references nothing or — if RLS were ever loosened —
+    // attaches our org's storage path to someone else's item view.
+    const { data: itemRow, error: itemErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', itemId)
+      .is('deleted_at', null)
+      .maybeSingle();
+    if (itemErr) throw new ServiceError('internal_error', itemErr.message);
+    if (!itemRow) throw new ServiceError('not_found', 'Item not found');
     const { data, error } = await this.ctx.supabase
       .from('item_images')
       .insert({
@@ -129,6 +143,20 @@ export class ItemImagesService {
    */
   async createUploadUrl(itemId: string, fileExt: string) {
     assertPermission(this.ctx, 'items:update');
+    // Verify the item exists in this org BEFORE minting an upload URL.
+    // Without this, a forged item_id from a hostile client would mint a
+    // valid signed upload URL pointing at our bucket folder for an item
+    // we have no business touching.
+    const { data: itemRow, error: itemErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', itemId)
+      .is('deleted_at', null)
+      .maybeSingle();
+    if (itemErr) throw new ServiceError('internal_error', itemErr.message);
+    if (!itemRow) throw new ServiceError('not_found', 'Item not found');
+
     const safeExt = fileExt.replace(/[^a-z0-9]/gi, '').slice(0, 5).toLowerCase() || 'jpg';
     const fileName = `${crypto.randomUUID()}.${safeExt}`;
     const path = `${this.ctx.organizationId}/items/${itemId}/${fileName}`;

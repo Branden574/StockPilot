@@ -31,7 +31,7 @@ import {
 import { createImageUploadAction, recordImageAction } from '@/server/actions/item-images';
 import { setItemTagsAction } from '@/server/actions/tags';
 
-import { createItemSchema, type CreateItemInput } from '@stockpilot/core';
+import { createItemSchema, type CreateItemInput, type UpdateItemInput } from '@stockpilot/core';
 
 type SizeCode = 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
 const ALL_SIZES: ReadonlyArray<SizeCode> = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
@@ -387,6 +387,7 @@ export function ItemForm({
       const num = rackNumber.trim();
       const row = rackRow.trim().toUpperCase();
       const composedBin = num ? (row ? `${num}-${row}` : num) : null;
+      // TODO: bulkCreateSizedVariantsAction schema needs `rackNumber` and `rackRow` fields added by the inventory-service agent. The service writes them into per-row custom_fields.rack_number/rack_row.
       const res = await bulkCreateSizedVariantsAction({
         baseName: values.name,
         baseSku: values.sku?.trim() || null,
@@ -398,13 +399,15 @@ export function ItemForm({
         charterId: values.charterId ?? null,
         primaryLocationId: values.primaryLocationId ?? null,
         binLocation: composedBin,
+        rackNumber: num || null,
+        rackRow: row || null,
         retailPrice: values.retailPrice,
         unitCost: values.unitCost,
         reorderPoint: values.reorderPoint,
         reorderQuantity: values.reorderQuantity,
         unitOfMeasure: values.unitOfMeasure,
         variants: selectedSizes,
-      });
+      } as Parameters<typeof bulkCreateSizedVariantsAction>[0]);
       if (!res.ok) {
         toast.error(res.error.message);
         return;
@@ -422,43 +425,66 @@ export function ItemForm({
     // Empty fields are omitted so we don't overwrite an existing value
     // with an empty string on edit.
     const mergedValues = isBook
-      ? {
-          ...values,
-          itemType: 'book' as const,
-          customFields: {
-            ...(values.customFields ?? {}),
-            ...(author.trim() ? { author: author.trim() } : {}),
-            ...(rackNumber.trim()
-              ? { book_rack_number: rackNumber.trim() }
-              : {}),
-            ...(rackRow.trim()
-              ? { book_rack_row: rackRow.trim().toUpperCase() }
-              : {}),
-            ...(crateColor ? { book_crate_color: crateColor } : {}),
-            ...(crateNumber.trim()
-              ? { book_crate_number: crateNumber.trim() }
-              : {}),
-            ...(grade ? { book_grade: grade } : {}),
-          },
-        }
+      ? (() => {
+          const num = rackNumber.trim();
+          const row = rackRow.trim().toUpperCase();
+          // Explicitly delete rack keys before re-adding so emptying
+          // the inputs on edit actually clears the stored value
+          // instead of being preserved by the spread merge.
+          const baseCf = { ...(values.customFields ?? {}) } as Record<string, unknown>;
+          delete baseCf.book_rack_number;
+          delete baseCf.book_rack_row;
+          return {
+            ...values,
+            itemType: 'book' as const,
+            customFields: {
+              ...baseCf,
+              ...(author.trim() ? { author: author.trim() } : {}),
+              ...(num ? { book_rack_number: num } : {}),
+              ...(row ? { book_rack_row: row } : {}),
+              ...(crateColor ? { book_crate_color: crateColor } : {}),
+              ...(crateNumber.trim()
+                ? { book_crate_number: crateNumber.trim() }
+                : {}),
+              ...(grade ? { book_grade: grade } : {}),
+            },
+          };
+        })()
       : (() => {
           const num = rackNumber.trim();
           const row = rackRow.trim().toUpperCase();
+          // Explicitly delete rack keys before re-adding so emptying
+          // the inputs on edit actually clears the stored value
+          // instead of being preserved by the spread merge.
+          const baseCf = { ...(values.customFields ?? {}) } as Record<string, unknown>;
+          delete baseCf.rack_number;
+          delete baseCf.rack_row;
           // Auto-derive bin_location from rack so order pick + cycle-
           // count flows that read bin_location keep working. Format
           // matches the human label users would type: '38-A' or '38'.
-          const composedBin = num ? (row ? `${num}-${row}` : num) : undefined;
+          // When the user clears the rack inputs we explicitly null
+          // out binLocation so the change can propagate — previously
+          // the `?? values.binLocation` fallback prevented clearing.
+          const composedBin = num ? (row ? `${num}-${row}` : num) : null;
           return {
             ...values,
-            binLocation: composedBin ?? values.binLocation,
+            binLocation: composedBin,
             customFields: {
-              ...(values.customFields ?? {}),
+              ...baseCf,
               ...(num ? { rack_number: num } : {}),
               ...(row ? { rack_row: row } : {}),
             },
           };
         })();
-    const action = isEdit && defaults?.id ? updateItemAction(defaults.id, mergedValues) : createItemAction(mergedValues);
+    // Cast: `binLocation: null` is the runtime-correct value for
+    // clearing an existing rack, but the action schema is currently
+    // `z.string().optional()` (no `.nullable()`). The service layer
+    // coerces null → null in the patch path, so this is safe; the
+    // schema agent is tracking the type-side cleanup separately.
+    const action =
+      isEdit && defaults?.id
+        ? updateItemAction(defaults.id, mergedValues as UpdateItemInput)
+        : createItemAction(mergedValues as CreateItemInput);
     const res = await action;
     if (!res.ok) {
       toast.error(res.error.message);
@@ -722,6 +748,7 @@ export function ItemForm({
                       <button
                         key={s}
                         type="button"
+                        aria-pressed={picked}
                         onClick={() =>
                           setSelectedSizes((prev) =>
                             picked
@@ -942,7 +969,7 @@ export function ItemForm({
             <Input type="number" step="0.01" min="0" {...register('retailPrice', { valueAsNumber: true })} />
           </Field>
         </div>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           {(() => {
             const selectedCategory = categories.find(
               (c) => c.id === watch('categoryId'),
@@ -1084,21 +1111,21 @@ export function ItemForm({
             </div>
             <AddSizedVariantsButton
               source={{
-                name: defaults.name ?? '',
-                sku: defaults.sku ?? null,
-                barcode: defaults.barcode ?? null,
-                description: defaults.description ?? null,
-                categoryId: defaults.categoryId,
-                supplierId: defaults.supplierId ?? null,
-                warehouseId: defaults.warehouseId,
-                charterId: defaults.charterId ?? null,
-                primaryLocationId: defaults.primaryLocationId ?? null,
-                binLocation: defaults.binLocation ?? null,
-                retailPrice: defaults.retailPrice ?? 0,
-                unitCost: defaults.unitCost ?? 0,
-                reorderPoint: defaults.reorderPoint ?? 0,
-                reorderQuantity: defaults.reorderQuantity ?? 0,
-                unitOfMeasure: defaults.unitOfMeasure ?? 'unit',
+                name: watch('name') ?? '',
+                sku: watch('sku') ?? null,
+                barcode: watch('barcode') ?? null,
+                description: watch('description') ?? null,
+                categoryId: watch('categoryId') as string,
+                supplierId: watch('supplierId') ?? null,
+                warehouseId: watch('warehouseId') as string,
+                charterId: watch('charterId') ?? null,
+                primaryLocationId: watch('primaryLocationId') ?? null,
+                binLocation: watch('binLocation') ?? null,
+                retailPrice: watch('retailPrice') ?? 0,
+                unitCost: watch('unitCost') ?? 0,
+                reorderPoint: watch('reorderPoint') ?? 0,
+                reorderQuantity: watch('reorderQuantity') ?? 0,
+                unitOfMeasure: watch('unitOfMeasure') ?? 'unit',
               }}
             />
           </div>

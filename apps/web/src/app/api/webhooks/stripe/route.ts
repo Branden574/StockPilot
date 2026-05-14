@@ -6,10 +6,52 @@ import { getStripe } from '@/lib/stripe/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { syncSubscriptionFromStripe } from '@/server/services/billing';
 
-import type { PlanId } from '@stockpilot/core';
+import { PLANS, type PlanId } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * Resolve the org's PlanId from a Stripe event. We trust two signals,
+ * in order: (1) Stripe metadata.plan that matches a known PLANS key,
+ * (2) the subscription's price ID via STRIPE_PRICE_TO_PLAN. If
+ * neither is conclusive, default to 'free' (NOT 'pro') and log a
+ * warning — silent upgrades to a paid plan because metadata went
+ * missing is exactly the bug this guards against.
+ */
+function priceIdToPlanMap(): Record<string, PlanId> {
+  // Optional env-driven map: STRIPE_PRICE_TO_PLAN='{"price_xxx":"pro","price_yyy":"business"}'.
+  // Kept lazy so a malformed env var only blows up here, not at module load.
+  const raw = (process.env.STRIPE_PRICE_TO_PLAN ?? '').trim();
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    const out: Record<string, PlanId> = {};
+    for (const [priceId, planId] of Object.entries(parsed)) {
+      if (planId in PLANS) out[priceId] = planId as PlanId;
+    }
+    return out;
+  } catch (e) {
+    console.warn('[stripe webhook] STRIPE_PRICE_TO_PLAN is not valid JSON', e);
+    return {};
+  }
+}
+
+function resolvePlanFromStripe(
+  metadataPlan: string | undefined,
+  priceId: string | undefined,
+): PlanId {
+  if (metadataPlan && metadataPlan in PLANS) return metadataPlan as PlanId;
+  if (priceId) {
+    const map = priceIdToPlanMap();
+    if (map[priceId]) return map[priceId];
+  }
+  console.warn(
+    '[stripe webhook] Plan not resolvable from metadata or price id; defaulting to free.',
+    { metadataPlan, priceId },
+  );
+  return 'free';
+}
 
 export async function POST(req: NextRequest) {
   if (!env.STRIPE_WEBHOOK_SECRET) {
@@ -74,13 +116,15 @@ export async function POST(req: NextRequest) {
         const session = event.data.object as Stripe.Checkout.Session;
         const customerId = (session.customer as string) ?? null;
         const subscriptionId = (session.subscription as string) ?? null;
-        const plan = (session.metadata?.plan as PlanId) ?? 'pro';
 
         let trialEndsAt: string | null = null;
+        let priceId: string | undefined;
         if (subscriptionId) {
           const sub = await stripe.subscriptions.retrieve(subscriptionId);
           trialEndsAt = sub.trial_end ? new Date(sub.trial_end * 1000).toISOString() : null;
+          priceId = sub.items.data[0]?.price?.id;
         }
+        const plan = resolvePlanFromStripe(session.metadata?.plan, priceId);
 
         if (customerId) {
           await syncSubscriptionFromStripe({
@@ -98,7 +142,8 @@ export async function POST(req: NextRequest) {
       case 'customer.subscription.created': {
         const sub = event.data.object as Stripe.Subscription;
         const customerId = sub.customer as string;
-        const planFromMeta = (sub.metadata?.plan as PlanId | undefined) ?? 'pro';
+        const priceId = sub.items.data[0]?.price?.id;
+        const planFromMeta = resolvePlanFromStripe(sub.metadata?.plan, priceId);
         const trialEndsAt = sub.trial_end ? new Date(sub.trial_end * 1000).toISOString() : null;
 
         await syncSubscriptionFromStripe({

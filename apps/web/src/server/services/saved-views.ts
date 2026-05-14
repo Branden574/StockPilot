@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
+
 import { ServiceError, withContext, type ServiceContext } from './context';
 
 import type { ItemListSort } from './inventory';
@@ -114,28 +116,42 @@ export class SavedViewsService {
       .order('sort_order', { ascending: true })
       .order('created_at', { ascending: true });
     if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []).map((row) => {
-      const r = row as {
-        id: string;
-        name: string;
-        scope: SavedViewScope;
-        state: unknown;
-        sort_order: number;
-        created_at: string;
-        is_shared: boolean;
-        user_id: string;
-      };
-      return {
-        id: r.id,
-        name: r.name,
-        scope: r.scope,
-        state: sanitizeState(r.state),
-        sortOrder: r.sort_order,
-        createdAt: r.created_at,
-        isShared: r.is_shared,
-        ownerId: r.user_id,
-      };
-    });
+
+    // Defense in depth: a view shared org-wide can encode a warehouseId
+    // the current viewer doesn't have access to (e.g. shared by a
+    // manager, applied by a warehouse-scoped staff). Drop those so the
+    // chip never appears for someone who can't use it. Own views are
+    // always kept — the user picked their own warehouse.
+    const access = await getWarehouseAccess(this.ctx);
+    return (data ?? [])
+      .map((row) => {
+        const r = row as {
+          id: string;
+          name: string;
+          scope: SavedViewScope;
+          state: unknown;
+          sort_order: number;
+          created_at: string;
+          is_shared: boolean;
+          user_id: string;
+        };
+        return {
+          id: r.id,
+          name: r.name,
+          scope: r.scope,
+          state: sanitizeState(r.state),
+          sortOrder: r.sort_order,
+          createdAt: r.created_at,
+          isShared: r.is_shared,
+          ownerId: r.user_id,
+        };
+      })
+      .filter((v) => {
+        if (v.ownerId === this.ctx.userId) return true;
+        const wh = v.state.warehouseId;
+        if (!wh) return true;
+        return access.hasAllAccess || access.readableIds.includes(wh);
+      });
   }
 
   async create(input: {

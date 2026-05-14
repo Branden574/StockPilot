@@ -16,10 +16,21 @@ import { signInAction } from '@/server/actions/auth';
 
 import { signInSchema, type SignInInput } from '@stockpilot/core';
 
+/**
+ * Same-origin path sanitizer. Rejects absolute URLs, protocol-relative
+ * (`//evil.com`), and non-path inputs to prevent an open-redirect via the
+ * `?redirect=` query param.
+ */
+function safeRedirectPath(raw: string | null): string {
+  if (!raw) return '/dashboard';
+  if (!raw.startsWith('/') || raw.startsWith('//')) return '/dashboard';
+  return raw;
+}
+
 export function SignInForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const redirect = params.get('redirect') ?? '/dashboard';
+  const redirect = safeRedirectPath(params.get('redirect'));
 
   const {
     register,

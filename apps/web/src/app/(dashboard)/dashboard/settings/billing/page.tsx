@@ -1,14 +1,20 @@
+import { notFound } from 'next/navigation';
 import { Check, ExternalLink } from 'lucide-react';
 
 import { BillingActions } from '@/components/billing/billing-actions';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { requireOrgContext } from '@/lib/auth/session';
 import { BillingService } from '@/server/services/billing';
 import { formatRelative } from '@/lib/utils';
 
-import { isUnlimited, PLANS, type PlanId } from '@stockpilot/core';
+import { hasPermission, isUnlimited, PLANS, type PlanId } from '@stockpilot/core';
 
 export default async function BillingSettingsPage() {
+  const ctx = await requireOrgContext();
+  if (!hasPermission(ctx.role, 'billing:read')) {
+    notFound();
+  }
   const svc = await BillingService.forCurrentUser();
   const org = await svc.getOrgBilling();
 

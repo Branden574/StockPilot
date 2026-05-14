@@ -12,6 +12,8 @@ import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 
+import { hasPermission } from '@stockpilot/core';
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -70,6 +72,9 @@ export async function GET(request: Request) {
     const ctx = await withApiContext(request);
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+    }
+    if (!hasPermission(ctx.role, 'items:export')) {
+      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
 
     const url = new URL(request.url);

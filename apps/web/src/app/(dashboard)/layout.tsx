@@ -1,3 +1,5 @@
+import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
@@ -79,6 +81,21 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     (f) => f.status === 'verified',
   );
   const showMfaBanner = mfaRequired && !hasVerifiedFactor;
+
+  // Hard gate for the strictest policy: when policy === 'all_required'
+  // and the user has no verified factor, the banner alone isn't enough
+  // — they can still navigate. Redirect to security settings (which is
+  // exempt from the gate so enrollment still works) instead of showing
+  // the full dashboard. assertPermission in services already blocks
+  // mutating actions at AAL1, but this prevents read-only data leakage
+  // across the rest of the dashboard until they enroll.
+  if (policy === 'all_required' && !hasVerifiedFactor) {
+    const h = await headers();
+    const pathname = h.get('x-pathname') ?? '';
+    if (!pathname.startsWith('/dashboard/settings/security')) {
+      redirect('/dashboard/settings/security?mfa=required');
+    }
+  }
 
   const term = resolveTerminology(
     (orgRow.data?.terminology as Partial<ReturnType<typeof resolveTerminology>>) ?? null,

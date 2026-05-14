@@ -94,6 +94,7 @@ export async function GET(req: Request) {
     };
 
     interface RecipientLite {
+      userId: string;
       email: string;
       sections: { lowStock: boolean; openPos: boolean; cycleCounts: boolean };
     }
@@ -122,8 +123,8 @@ export async function GET(req: Request) {
           orgName: orgRow.name,
           recipients: [],
         };
-        if (!existing.recipients.some((r) => r.email === row.email)) {
-          existing.recipients.push({ email: row.email, sections });
+        if (!existing.recipients.some((r) => r.userId === row.id)) {
+          existing.recipients.push({ userId: row.id, email: row.email, sections });
         }
         byOrg.set(orgRow.id, existing);
       }
@@ -137,7 +138,40 @@ export async function GET(req: Request) {
       try {
         const fullPayload = await getDigestData(admin, orgId);
         const opts = { orgName: group.orgName, appUrl, settingsUrl };
-        for (const { email: to, sections } of group.recipients) {
+        for (const { userId, email: to, sections } of group.recipients) {
+          // Re-check membership + opt-in IMMEDIATELY before sending.
+          // The recipient set was assembled at the top of this run — for
+          // a large fleet that gap can be tens of seconds. If the user
+          // toggled the digest off, or was removed from the org, we
+          // must not deliver. Two cheap point reads guard both axes:
+          //   1) organization_members still active for (org, user)
+          //   2) user_profiles.email_digest_optin still true
+          const [membershipRes, profileRes] = await Promise.all([
+            admin
+              .from('organization_members')
+              .select('user_id, accepted_at')
+              .eq('organization_id', orgId)
+              .eq('user_id', userId)
+              .maybeSingle(),
+            admin
+              .from('user_profiles')
+              .select('email_digest_optin')
+              .eq('id', userId)
+              .maybeSingle(),
+          ]);
+          const membership = membershipRes.data as
+            | { user_id: string; accepted_at: string | null }
+            | null;
+          const profile = profileRes.data as { email_digest_optin: boolean | null } | null;
+          if (!membership || !membership.accepted_at) {
+            skipped += 1;
+            continue;
+          }
+          if (!profile || profile.email_digest_optin === false) {
+            skipped += 1;
+            continue;
+          }
+
           // Each recipient sees only their opted-in sections; one or two
           // could be all-empty even when the org's full payload isn't.
           const payload = applySectionOptIns(fullPayload, sections);

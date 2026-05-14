@@ -100,34 +100,37 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
       return;
     }
     setBusy(true);
-    const res = await bulkCreateSizedVariantsAction({
-      baseName: baseName.trim(),
-      baseSku: baseSku.trim() || null,
-      baseBarcode: source.barcode,
-      description: source.description,
-      categoryId: source.categoryId,
-      supplierId: source.supplierId,
-      warehouseId: source.warehouseId,
-      charterId: source.charterId,
-      primaryLocationId: source.primaryLocationId,
-      binLocation: source.binLocation,
-      retailPrice: source.retailPrice,
-      unitCost: source.unitCost,
-      reorderPoint: source.reorderPoint,
-      reorderQuantity: source.reorderQuantity,
-      unitOfMeasure: source.unitOfMeasure,
-      variants: selected,
-    });
-    setBusy(false);
-    if (!res.ok) {
-      toast.error(res.error.message);
-      return;
+    try {
+      const res = await bulkCreateSizedVariantsAction({
+        baseName: baseName.trim(),
+        baseSku: baseSku.trim() || null,
+        baseBarcode: source.barcode,
+        description: source.description,
+        categoryId: source.categoryId,
+        supplierId: source.supplierId,
+        warehouseId: source.warehouseId,
+        charterId: source.charterId,
+        primaryLocationId: source.primaryLocationId,
+        binLocation: source.binLocation,
+        retailPrice: source.retailPrice,
+        unitCost: source.unitCost,
+        reorderPoint: source.reorderPoint,
+        reorderQuantity: source.reorderQuantity,
+        unitOfMeasure: source.unitOfMeasure,
+        variants: selected,
+      });
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      toast.success(
+        `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`,
+      );
+      setOpen(false);
+      router.push('/dashboard/inventory');
+    } finally {
+      setBusy(false);
     }
-    toast.success(
-      `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`,
-    );
-    setOpen(false);
-    router.push('/dashboard/inventory');
   }
 
   return (
@@ -186,6 +189,7 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
                   <button
                     key={s}
                     type="button"
+                    aria-pressed={picked}
                     onClick={() =>
                       setSelected((prev) =>
                         picked

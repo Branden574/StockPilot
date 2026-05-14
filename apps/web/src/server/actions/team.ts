@@ -190,13 +190,27 @@ export async function acceptInviteWithSignupAction(input: {
   // 2. Check if an auth user already exists for this email. If so, this is
   //    actually the "I have an account, sign me in" path — return a clear
   //    error directing them to the sign-in option.
-  const existing = await admin.auth.admin.listUsers({
-    page: 1,
-    perPage: 1,
-  });
-  const alreadyExists = existing.data?.users.some(
-    (u) => u.email?.toLowerCase() === email,
-  );
+  //
+  //    The Supabase admin listUsers API in this SDK version does NOT support a
+  //    server-side email filter (only `page` + `perPage`). We paginate at the
+  //    max page size and short-circuit on the first match. Bounded by a hard
+  //    cap so a runaway org can't hang this action.
+  const MAX_PAGES = 100;
+  const PER_PAGE = 1000;
+  let alreadyExists = false;
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const { data, error: listErr } = await admin.auth.admin.listUsers({
+      page,
+      perPage: PER_PAGE,
+    });
+    if (listErr) return err('internal_error', listErr.message);
+    const users = data?.users ?? [];
+    if (users.some((u) => u.email?.toLowerCase() === email)) {
+      alreadyExists = true;
+      break;
+    }
+    if (users.length < PER_PAGE) break;
+  }
   if (alreadyExists) {
     return err(
       'conflict',
