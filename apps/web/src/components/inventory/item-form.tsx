@@ -576,7 +576,7 @@ export function ItemForm({
         <Field label="Name" error={errors.name?.message}>
           <Input placeholder="Wireless mouse" autoFocus {...register('name')} />
         </Field>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="SKU" error={errors.sku?.message} optional>
             <div className="flex gap-2">
               <Input placeholder="Auto-generated if blank" {...register('sku')} />
@@ -618,7 +618,7 @@ export function ItemForm({
           </Field>
         </div>
         {isBook && (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Author" optional>
               <Input
                 placeholder="e.g. Toni Morrison"
@@ -660,7 +660,7 @@ export function ItemForm({
       </Section>
 
       <Section title="Classification">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label>Item type</Label>
             <Select
@@ -694,7 +694,7 @@ export function ItemForm({
             optional
           />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <SelectField
             label="Supplier"
             value={watch('supplierId') ?? ''}
@@ -770,7 +770,7 @@ export function ItemForm({
             );
           })()}
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <SelectField
             label="Primary location"
             value={watch('primaryLocationId') ?? ''}
@@ -787,7 +787,7 @@ export function ItemForm({
             <div />
           )}
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Rack number" optional>
             <Input
               placeholder="38"
@@ -809,7 +809,7 @@ export function ItemForm({
         </div>
         {isBook && (
           <>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label>
                   Crate color
@@ -857,7 +857,7 @@ export function ItemForm({
       </Section>
 
       <Section title={`${warehouseLabel} & ${charterLabel.toLowerCase()}`}>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label>{warehouseLabel}</Label>
             {forcedWarehouseId ? (
@@ -934,7 +934,7 @@ export function ItemForm({
       </Section>
 
       <Section title="Pricing & stock">
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Unit cost" error={errors.unitCost?.message}>
             <Input type="number" step="0.01" min="0" {...register('unitCost', { valueAsNumber: true })} />
           </Field>

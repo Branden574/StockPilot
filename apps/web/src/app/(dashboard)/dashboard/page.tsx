@@ -1005,18 +1005,18 @@ function CardHead({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="border-border flex items-center justify-between gap-3 border-b px-5 py-3.5">
-      <div>
+    <div className="border-border flex flex-wrap items-start justify-between gap-x-3 gap-y-2 border-b px-5 py-3.5 sm:items-center">
+      <div className="min-w-0">
         <div className="font-display text-[14px] font-medium tracking-[-0.01em]">{title}</div>
         {subtitle && <div className="text-[12px] text-[var(--ed-ink-3)]">{subtitle}</div>}
       </div>
       {chips && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
           {chips.map((c) => (
             <span
               key={c}
               className={cn(
-                'inline-flex h-6 items-center rounded-full border px-2.5 text-[11.5px]',
+                'inline-flex h-6 shrink-0 items-center rounded-full border px-2.5 text-[11.5px]',
                 c.startsWith('+')
                   ? 'border-border border-dashed text-[var(--ed-ink-3)]'
                   : 'border-border bg-background text-[var(--ed-ink-2)]',
