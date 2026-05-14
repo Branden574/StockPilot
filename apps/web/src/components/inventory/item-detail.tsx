@@ -47,9 +47,15 @@ interface ItemDetailProps {
    * from its own `searchParams`.
    */
   tab?: string;
+  /**
+   * Encoded list URL the user came from. Threaded into the "Edit"
+   * link so the edit page can offer the same round-trip back.
+   * Comes pre-validated by the page (safeReturnPath).
+   */
+  returnParam?: string;
 }
 
-export async function ItemDetail({ id, backHref, backLabel, editHref, tab }: ItemDetailProps) {
+export async function ItemDetail({ id, backHref, backLabel, editHref, tab, returnParam }: ItemDetailProps) {
   const activeTab: DetailTabId = parseDetailTab(tab);
 
   const [ctx, inventorySvc, activitySvc, imagesSvc, categoriesSvc, locationsSvc, suppliersSvc] =
@@ -167,7 +173,20 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab }: Ite
             <div className="flex w-max gap-2 sm:flex-wrap">
               {canEditItem && (
                 <Button asChild variant="outline" size="sm" className="sm:size-auto">
-                  <Link href={editHref ?? `/dashboard/inventory/${id}/edit`}>Edit</Link>
+                  <Link
+                    href={
+                      (() => {
+                        const base = editHref ?? `/dashboard/inventory/${id}/edit`;
+                        // Append the return param so editing → save still bounces
+                        // back to the same list URL the user came from.
+                        return returnParam
+                          ? `${base}?return=${encodeURIComponent(returnParam)}`
+                          : base;
+                      })()
+                    }
+                  >
+                    Edit
+                  </Link>
                 </Button>
               )}
               <BarcodeDisplay
