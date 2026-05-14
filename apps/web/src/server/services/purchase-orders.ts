@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { audit } from './audit';
 import { ItemImagesService } from './item-images';
 
 const lineInputSchema = z.object({
@@ -217,6 +218,20 @@ export class PurchaseOrdersService {
       .insert(linesPayload);
     if (linesError) throw new ServiceError('internal_error', linesError.message);
 
+    void audit(
+      {
+        event: 'purchase_order.created',
+        entityType: 'purchase_order',
+        entityId: po.id as string,
+        extra: {
+          po_number: poNumber,
+          supplier_id: input.supplierId ?? null,
+          line_count: input.lines.length,
+        },
+      },
+      this.ctx,
+    );
+
     return { id: po.id as string, poNumber };
   }
 
@@ -233,6 +248,15 @@ export class PurchaseOrdersService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+    void audit(
+      {
+        event: 'purchase_order.status_changed',
+        entityType: 'purchase_order',
+        entityId: id,
+        extra: { new_status: status },
+      },
+      this.ctx,
+    );
   }
 
   /**
