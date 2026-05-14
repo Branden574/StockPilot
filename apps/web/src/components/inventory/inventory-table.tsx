@@ -322,11 +322,19 @@ export function InventoryTable({
 
   // Encoded full current list URL — used to round-trip search/filter
   // state when the user clicks into a row, views, and comes back.
-  // Recomputed on every render so live keystrokes flow through.
+  // Recomputes when `params`, `basePath`, or the live `q` state
+  // changes. We merge `q` into the URL explicitly because the search
+  // box writes to React state immediately but only debounces into
+  // the URL after 150ms — clicking a row mid-keystroke would
+  // otherwise lose the typed-but-not-yet-committed search.
   const currentListUrl = React.useMemo(() => {
-    const qs = params.toString();
+    const next = new URLSearchParams(params.toString());
+    const trimmed = q.trim();
+    if (trimmed) next.set('q', trimmed);
+    else next.delete('q');
+    const qs = next.toString();
     return qs ? `${basePath}?${qs}` : basePath;
-  }, [params, basePath]);
+  }, [params, basePath, q]);
 
   function navigateWith(mutator: (p: URLSearchParams) => void) {
     const next = new URLSearchParams(params.toString());
