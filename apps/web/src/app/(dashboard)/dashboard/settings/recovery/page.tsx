@@ -2,7 +2,7 @@ import { History } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { hasPermission, isAdminRole } from '@stockpilot/core';
+import { hasPermission } from '@stockpilot/core';
 
 import { RestoreButton } from '@/components/settings/restore-button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -67,10 +67,12 @@ export default async function RecoveryPage() {
   if (!hasPermission(ctx.role, 'items:delete')) {
     notFound();
   }
-  // "View history" links route to /dashboard/settings/audit, which
-  // requires admin role. Hide the link for non-admins so we don't
-  // dangle a click that 404s.
-  const canSeeAudit = isAdminRole(ctx.role);
+  // "View history" links route to /dashboard/settings/audit, which is
+  // gated on `activity_logs:read`. Migration 0100 widened the audit_logs
+  // SELECT RLS to manager+, matching the matrix — so checking the
+  // permission instead of `isAdminRole` lets managers (who already have
+  // activity_logs:read) follow the link cleanly. See C11.
+  const canSeeAudit = hasPermission(ctx.role, 'activity_logs:read');
   const svc = await RecoveryService.forCurrentUser();
   const buckets = await Promise.all(
     SECTIONS.map(async (s) => ({
