@@ -1,7 +1,8 @@
 import Link from 'next/link';
 
-import { ProfileNameEditor } from '@/components/settings/profile-name-editor';
 import { AvatarUploader } from '@/components/settings/avatar-uploader';
+import { DeleteAccountButton } from '@/components/settings/delete-account-button';
+import { ProfileNameEditor } from '@/components/settings/profile-name-editor';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireSession } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
@@ -74,6 +75,21 @@ export default async function ProfileSettingsPage() {
           </CardHeader>
           <CardContent>
             <p className="text-sm tabular-nums">{email}</p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-destructive/40">
+          <CardHeader>
+            <CardTitle className="text-base text-destructive">Delete account</CardTitle>
+            <CardDescription>
+              Permanently remove your access to StockPilot and tombstone your
+              profile. Historical records you touched stay attributed to your
+              name. If you own a workspace with other members, transfer
+              ownership first.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DeleteAccountButton />
           </CardContent>
         </Card>
       </div>
