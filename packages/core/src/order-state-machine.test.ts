@@ -63,3 +63,66 @@ describe('ALLOWED_TRANSITIONS', () => {
     );
   });
 });
+
+import { assertTransition, OrderTransitionError } from './order-state-machine';
+
+describe('assertTransition', () => {
+  const baseCtx = {
+    fulfillmentType: 'delivery' as const,
+    hasAssignedDelivery: false,
+  };
+
+  it('accepts a legal transition', () => {
+    expect(() =>
+      assertTransition('pending_approval', 'approved', baseCtx),
+    ).not.toThrow();
+  });
+
+  it('rejects an illegal transition', () => {
+    expect(() =>
+      assertTransition('completed', 'pending_approval', baseCtx),
+    ).toThrow(OrderTransitionError);
+  });
+
+  it('rejects same-status transitions as no-ops (throws with code=no_op)', () => {
+    expect(() =>
+      assertTransition('approved', 'approved', baseCtx),
+    ).toThrow(/no_op/);
+  });
+
+  it('rejects staged_for_delivery on a pickup order', () => {
+    expect(() =>
+      assertTransition('packing_slip_generated', 'staged_for_delivery', {
+        ...baseCtx,
+        fulfillmentType: 'pickup',
+      }),
+    ).toThrow(/fulfillment_type/);
+  });
+
+  it('rejects staged_for_pickup on a delivery order', () => {
+    expect(() =>
+      assertTransition('packing_slip_generated', 'staged_for_pickup', {
+        ...baseCtx,
+        fulfillmentType: 'delivery',
+      }),
+    ).toThrow(/fulfillment_type/);
+  });
+
+  it('rejects in_transit when no delivery user is assigned', () => {
+    expect(() =>
+      assertTransition('staged_for_delivery', 'in_transit', {
+        ...baseCtx,
+        hasAssignedDelivery: false,
+      }),
+    ).toThrow(/assigned_delivery/);
+  });
+
+  it('accepts in_transit when delivery is assigned', () => {
+    expect(() =>
+      assertTransition('staged_for_delivery', 'in_transit', {
+        ...baseCtx,
+        hasAssignedDelivery: true,
+      }),
+    ).not.toThrow();
+  });
+});
