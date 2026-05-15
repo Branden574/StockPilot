@@ -53,8 +53,16 @@ export function AvatarUploader({
     setBusy(true);
     try {
       const supabase = createClient();
-      const ext = file.name.split('.').pop() ?? 'jpg';
-      const path = `${userId}/${Date.now()}.${ext}`;
+      // Normalize the extension to ASCII alphanumerics so a malformed
+      // filename can't sneak path traversal or odd-character keys into
+      // the bucket. Falls back to "jpg" if nothing survives the filter.
+      const rawExt = (file.name.split('.').pop() ?? 'jpg').toLowerCase();
+      const ext = rawExt.replace(/[^a-z0-9]/g, '').slice(0, 5) || 'jpg';
+      // Random filename so the upload path doesn't leak a timestamp that
+      // can be used to enumerate other users' upload times or correlate
+      // avatars across orgs. crypto.randomUUID() is available in every
+      // browser that ships an HTTPS dashboard (so universally here).
+      const path = `${userId}/${crypto.randomUUID()}.${ext}`;
       const upRes = await supabase.storage
         .from('user-avatars')
         .upload(path, file, { upsert: true, contentType: file.type });
@@ -63,14 +71,17 @@ export function AvatarUploader({
         return;
       }
       const { data } = supabase.storage.from('user-avatars').getPublicUrl(path);
-      // Append a cache-buster so the topbar avatar reloads without a hard refresh.
-      const cacheBust = `${data.publicUrl}?t=${Date.now()}`;
-      const r = await setAvatarUrlAction({ url: cacheBust });
+      // Persist the bare public URL — no cache-buster in the stored
+      // column. revalidatePath('/dashboard', 'layout') inside the
+      // server action triggers Next to refetch the topbar avatar.
+      // The filename is a fresh UUID per upload, so the URL itself is
+      // already unique and won't collide with a cached previous one.
+      const r = await setAvatarUrlAction({ url: data.publicUrl });
       if (!r.ok) {
         toast.error(r.error.message);
         return;
       }
-      setUrl(cacheBust);
+      setUrl(data.publicUrl);
       toast.success('Avatar updated.');
       router.refresh();
     } finally {
