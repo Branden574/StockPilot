@@ -10,8 +10,15 @@ const BASE_SECTIONS = [
   { href: '/dashboard/settings/security', title: 'Security', description: 'Two-factor authentication and org MFA policy.' },
   { href: '/dashboard/settings/profile', title: 'Profile', description: 'Your name and avatar.' },
   { href: '/dashboard/settings/notifications', title: 'Notifications', description: 'Weekly digest email and preferences.' },
-  { href: '/dashboard/settings/billing', title: 'Billing', description: 'Plan, invoices, payment method.' },
   { href: '/dashboard/settings/roles', title: 'Roles & permissions', description: 'Reference for what each role can see and do across StockPilot.' },
+];
+
+// Billing is gated on the `billing:read` permission — staff/viewer
+// roles can't visit /dashboard/settings/billing (the underlying page
+// redirects them), so the tile was previously visible-but-broken.
+// Show it only when the role actually has access.
+const BILLING_SECTIONS = [
+  { href: '/dashboard/settings/billing', title: 'Billing', description: 'Plan, invoices, payment method.' },
 ];
 
 // Manager-and-above sections. Gated by hasPermission('orders:approve')
@@ -49,6 +56,7 @@ export default async function SettingsPage() {
   const ctx = await requireOrgContext();
   const sections = [
     ...BASE_SECTIONS,
+    ...(hasPermission(ctx.role, 'billing:read') ? BILLING_SECTIONS : []),
     ...(hasPermission(ctx.role, 'orders:approve') ? MANAGER_SECTIONS : []),
     ...(hasPermission(ctx.role, 'activity_logs:read') ? ADMIN_SECTIONS : []),
     ...(isAdminRole(ctx.role) ? AI_SECTIONS : []),
