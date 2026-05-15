@@ -1,10 +1,11 @@
 'use server';
 
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { env } from '@/lib/env';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { audit } from '@/server/services/audit';
 import { createClient } from '@/lib/supabase/server';
 import { REMEMBER_SESSION_COOKIE, rememberPreferenceOptions } from '@/lib/supabase/session-cookies';
@@ -24,6 +25,21 @@ import {
   type SignInInput,
   type SignUpInput,
 } from '@stockpilot/core';
+
+/**
+ * Best-effort client-IP extraction from request headers. Used as a
+ * secondary rate-limit key on unauthenticated flows so an attacker can't
+ * fan out across many email addresses from one host. `next/headers` is
+ * async in Next 16.
+ */
+async function getClientIp(): Promise<string> {
+  const h = await headers();
+  return (
+    h.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    h.get('x-real-ip') ??
+    'unknown'
+  );
+}
 
 /**
  * Public self-signup is disabled — this is an internal-company tool.
@@ -48,6 +64,23 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
   const parsed = signInSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+
+  // Rate-limit dual-keyed on email AND IP. 5/min/email blocks single-
+  // account brute force; 30/min/ip stops a single host from fanning out
+  // across many email addresses. Both gates run 'closed' — a DB outage
+  // must NOT unlock unlimited attempts on the unauthenticated front
+  // door. Return the typed `rate_limited` error (don't throw) so the
+  // sign-in form can toast a clean message.
+  const emailKey = parsed.data.email.toLowerCase();
+  const ip = await getClientIp();
+  const emailRl = await checkRateLimit(`signin:${emailKey}`, 5, 60_000, 'closed');
+  if (!emailRl.allowed) {
+    return err('rate_limited', 'Too many sign-in attempts. Try again in a minute.');
+  }
+  const ipRl = await checkRateLimit(`signin-ip:${ip}`, 30, 60_000, 'closed');
+  if (!ipRl.allowed) {
+    return err('rate_limited', 'Too many sign-in attempts. Try again in a minute.');
   }
 
   const supabase = await createClient({ rememberSession: parsed.data.rememberMe });
@@ -94,6 +127,16 @@ export async function requestPasswordResetAction(
   const parsed = requestPasswordResetSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', 'Invalid email');
 
+  // 3 requests / 15 min / email. Closed mode — a DB outage must NOT
+  // unlock unlimited reset-email blasts (which would spam the user
+  // and burn through Resend quota). Same generic ok() return on rate
+  // hit to keep account-enumeration resistance.
+  const emailKey = parsed.data.email.toLowerCase();
+  const rl = await checkRateLimit(`pwreset-req:${emailKey}`, 3, 15 * 60_000, 'closed');
+  if (!rl.allowed) {
+    return ok({ ok: true });
+  }
+
   const supabase = await createClient();
   await supabase.auth.resetPasswordForEmail(parsed.data.email, {
     redirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/reset/complete`,
@@ -109,6 +152,16 @@ export async function completePasswordResetAction(
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
+
+  // 5 completes / 15 min / ip. Closed mode — the user is briefly
+  // authenticated by the recovery token at this point, but the
+  // endpoint is still effectively unauthenticated front door.
+  const ip = await getClientIp();
+  const rl = await checkRateLimit(`pwreset-complete:${ip}`, 5, 15 * 60_000, 'closed');
+  if (!rl.allowed) {
+    return err('rate_limited', 'Too many attempts. Try again in a few minutes.');
+  }
+
   const supabase = await createClient();
   const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
   if (error) return err('internal_error', error.message);
@@ -144,6 +197,14 @@ export async function changePasswordAction(
   } = await supabase.auth.getUser();
   if (!user || !user.email) {
     return err('unauthenticated', 'Sign in required');
+  }
+
+  // 5 attempts / 15 min / user. Closed mode — prevents an authenticated
+  // attacker (or stolen-session scenario) from brute-forcing the
+  // currentPassword check.
+  const rl = await checkRateLimit(`pwchange:${user.id}`, 5, 15 * 60_000, 'closed');
+  if (!rl.allowed) {
+    return err('rate_limited', 'Too many password-change attempts. Try again in a few minutes.');
   }
 
   // Side-channel password check — does NOT persist a session anywhere.
