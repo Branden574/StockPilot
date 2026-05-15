@@ -101,13 +101,89 @@ function isTabVisible(): boolean {
   return typeof document !== 'undefined' && document.visibilityState === 'visible';
 }
 
-function fireOne(
+/**
+ * Single-leader election for sonner toasts across multiple tabs of the
+ * same app. The realtime channel delivers each notification INSERT to
+ * EVERY tab the user has open; without this, two visible tabs would
+ * each pop their own toast for the same row. We don't lock the OS
+ * Notification path — the browser's per-tag dedup already collapses
+ * those to a single OS popup.
+ *
+ * Strategy: try to acquire a per-notification Web Lock with
+ * `ifAvailable: true`. Whichever tab wins fires the toast and HOLDS
+ * the lock for `LOCK_HOLD_MS`, so even tabs whose realtime event
+ * arrives a few seconds later can't double-fire. On unsupported
+ * browsers (no `navigator.locks`) we fall back to the prior
+ * fire-anyway behavior — the cost is "duplicate toasts on Safari
+ * <15.4 across two tabs," which we accept rather than skipping the
+ * toast entirely.
+ *
+ * The lock auto-releases when the tab closes (browser cleans up the
+ * lock manager), so a leader tab being closed lets the next event
+ * land on a sibling tab as normal.
+ */
+const LOCK_HOLD_MS = 60_000;
+
+interface LockManagerLike {
+  request(
+    name: string,
+    options: { ifAvailable: true; mode?: 'exclusive' | 'shared' },
+    callback: (lock: unknown | null) => Promise<void> | void,
+  ): Promise<unknown>;
+}
+
+function getLockManager(): LockManagerLike | null {
+  if (typeof navigator === 'undefined') return null;
+  const nav = navigator as Navigator & { locks?: LockManagerLike };
+  return nav.locks ?? null;
+}
+
+/**
+ * Returns a Promise<boolean>. Resolves true if THIS tab won the
+ * right to fire the toast for `key`; false if another tab already
+ * holds the lock for it. Independent of the actual fire — caller
+ * checks the result and only fires when true.
+ */
+function acquireToastLock(key: string): Promise<boolean> {
+  const locks = getLockManager();
+  if (!locks) return Promise.resolve(true); // fail-open on unsupported browsers
+  const lockName = `stockpilot-toast-${key}`;
+  return new Promise<boolean>((resolve) => {
+    try {
+      void locks.request(
+        lockName,
+        { ifAvailable: true, mode: 'exclusive' },
+        async (lock: unknown | null) => {
+          if (lock === null) {
+            resolve(false);
+            return;
+          }
+          resolve(true);
+          // Hold the lock for a window long enough that any sibling
+          // tab whose realtime event arrives late still finds it
+          // taken. The callback's promise pending = lock held.
+          await new Promise<void>((r) => setTimeout(r, LOCK_HOLD_MS));
+        },
+      );
+    } catch {
+      // Lock manager threw (unusual) — fail-open.
+      resolve(true);
+    }
+  });
+}
+
+async function fireOne(
   payload: LiveNotificationPayload,
   navigate: (link: string) => void,
-): void {
+): Promise<void> {
   const link = safeRedirect(payload.link);
 
   if (isTabVisible()) {
+    // Cross-tab dedup: only one visible tab actually pops the toast.
+    // OS notifications below dedupe via the `tag` attribute, so they
+    // don't need the lock.
+    const won = await acquireToastLock(payload.id);
+    if (!won) return;
     toast(payload.title, {
       description: payload.body ?? undefined,
       action: link
@@ -140,10 +216,10 @@ function fireOne(
   }
 }
 
-function fireBurstSummary(
+async function fireBurstSummary(
   payloads: LiveNotificationPayload[],
   navigate: (link: string) => void,
-): void {
+): Promise<void> {
   // Try to surface a useful link — most fan-outs share the same link
   // shape (e.g. /dashboard/orders/<id>). If all links match, route
   // there; otherwise route to the notifications inbox.
@@ -153,6 +229,14 @@ function fireBurstSummary(
   const fallback = '/dashboard/notifications';
 
   if (isTabVisible()) {
+    // Lock key derived from the first event's id. Sibling tabs that
+    // batch the same realtime events into a burst will compute the
+    // same key (events arrive in the same order over the WebSocket),
+    // so they race for the same lock — only one wins and shows the
+    // summary toast.
+    const lockKey = payloads[0] ? `burst-${payloads[0].id}` : 'burst';
+    const won = await acquireToastLock(lockKey);
+    if (!won) return;
     toast(`${payloads.length} new notifications`, {
       description: 'Open the bell to review them.',
       action: sharedLink
@@ -200,9 +284,9 @@ export function queueLiveNotification(
     burst.queue = [];
     burst.timer = null;
     if (drained.length === 1 && drained[0]) {
-      fireOne(drained[0], navigate);
+      void fireOne(drained[0], navigate);
     } else if (drained.length > 1) {
-      fireBurstSummary(drained, navigate);
+      void fireBurstSummary(drained, navigate);
     }
   }, BURST_WINDOW_MS);
 }
