@@ -139,9 +139,14 @@ async function resolvePublicImageUrl(
     .limit(1);
   const imgRow = (imgRows ?? [])[0] as { storage_path?: string } | undefined;
   if (imgRow?.storage_path) {
+    // M5: 1h TTL. The /p/items/[id] page is server-rendered per
+    // request, so the signed URL is freshly minted on each load —
+    // there's no SSG cache that depends on a long TTL. A 7-day window
+    // means a leaked signed URL stays viewable for a week; 1h tracks
+    // the actual session length and removes that exposure.
     const { data: signed } = await admin.storage
       .from('item-images')
-      .createSignedUrl(imgRow.storage_path, 7 * 24 * 60 * 60); // 7 days
+      .createSignedUrl(imgRow.storage_path, 60 * 60); // 1 hour
     if (signed?.signedUrl) return signed.signedUrl;
   }
 
