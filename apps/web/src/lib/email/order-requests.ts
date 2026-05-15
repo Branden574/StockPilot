@@ -9,9 +9,9 @@ export type OrderRequestEmailKind =
   | 'confirm_request'
   | 'approved'
   | 'denied'
-  | 'packaging'
-  | 'ready_for_delivery'
-  | 'delivered'
+  | 'packing_slip_generated'
+  | 'staged_for_delivery'
+  | 'completed'
   | 'cancelled';
 
 interface SendInput {
@@ -45,9 +45,9 @@ const SUBJECTS: Record<OrderRequestEmailKind, string> = {
   confirm_request: 'Confirm your order request',
   approved: 'Your order request was approved',
   denied: 'Your order request was denied',
-  packaging: 'Your order is being packaged',
-  ready_for_delivery: 'Your order is ready',
-  delivered: 'Your order was delivered',
+  packing_slip_generated: 'Your order is being packaged',
+  staged_for_delivery: 'Your order is ready',
+  completed: 'Your order was delivered',
   cancelled: 'Your order was cancelled',
 };
 
@@ -56,9 +56,9 @@ const HEADLINES: Record<OrderRequestEmailKind, string> = {
   confirm_request: 'Confirm your order request',
   approved: 'Approved',
   denied: 'Request denied',
-  packaging: 'Now being packaged',
-  ready_for_delivery: 'Ready to deliver',
-  delivered: 'Delivered',
+  packing_slip_generated: 'Now being packaged',
+  staged_for_delivery: 'Ready to deliver',
+  completed: 'Delivered',
   cancelled: 'Cancelled',
 };
 
@@ -187,11 +187,11 @@ function bodyParagraph(kind: OrderRequestEmailKind): string {
       return 'Your request was approved and stock has been reserved. Packaging will start soon.';
     case 'denied':
       return 'Your request was not approved.';
-    case 'packaging':
+    case 'packing_slip_generated':
       return 'Your order is being packaged right now.';
-    case 'ready_for_delivery':
+    case 'staged_for_delivery':
       return 'Your order is packed and ready for pickup or delivery.';
-    case 'delivered':
+    case 'completed':
       return 'Your order was delivered. Thanks!';
     case 'cancelled':
       return 'Your order request was cancelled. Any reserved stock has been released.';

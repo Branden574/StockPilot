@@ -137,7 +137,7 @@ export async function denyOrderRequestAction(
 
 const setStatusSchema = z.object({
   id: z.string().uuid(),
-  status: z.enum(['packaging', 'ready_for_delivery']),
+  status: z.enum(['packing_slip_generated', 'staged_for_delivery']),
 });
 
 export async function setOrderRequestStatusAction(

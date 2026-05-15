@@ -65,7 +65,7 @@ export default async function OrderDetailPage({
   // request still has unfulfilled lines that could ship.
   const canPack =
     canApprove &&
-    ['approved', 'packaging', 'ready_for_delivery'].includes(request.status);
+    ['approved', 'packing_slip_generated', 'staged_for_delivery'].includes(request.status);
   const remainingToShip = lines.reduce(
     (s, l) =>
       s +

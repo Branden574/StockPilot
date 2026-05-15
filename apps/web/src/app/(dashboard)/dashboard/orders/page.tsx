@@ -27,35 +27,35 @@ const PAGE_SIZE = 50;
 type StatusTab =
   | 'pending_approval'
   | 'approved'
-  | 'packaging'
-  | 'ready_for_delivery'
-  | 'delivered'
+  | 'packing_slip_generated'
+  | 'staged_for_delivery'
+  | 'completed'
   | 'closed';
 
 const TAB_LABELS: Record<StatusTab, string> = {
   pending_approval: 'Pending',
   approved: 'Approved',
-  packaging: 'Packaging',
-  ready_for_delivery: 'Ready',
-  delivered: 'Delivered',
+  packing_slip_generated: 'Packaging',
+  staged_for_delivery: 'Ready',
+  completed: 'Delivered',
   closed: 'Cancelled / Denied',
 };
 
 const TAB_FILTERS: Record<StatusTab, OrderRequestStatus | OrderRequestStatus[]> = {
   pending_approval: 'pending_approval',
   approved: 'approved',
-  packaging: 'packaging',
-  ready_for_delivery: 'ready_for_delivery',
-  delivered: 'delivered',
+  packing_slip_generated: 'packing_slip_generated',
+  staged_for_delivery: 'staged_for_delivery',
+  completed: 'completed',
   closed: ['cancelled', 'denied'],
 };
 
 const TAB_ORDER: StatusTab[] = [
   'pending_approval',
   'approved',
-  'packaging',
-  'ready_for_delivery',
-  'delivered',
+  'packing_slip_generated',
+  'staged_for_delivery',
+  'completed',
   'closed',
 ];
 

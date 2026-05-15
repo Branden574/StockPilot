@@ -374,19 +374,20 @@ export class ShipmentsService {
     const orSvc = new OrderRequestsService(this.ctx);
     const detail = await orSvc.get(input.orderRequestId);
 
-    const allowedSourceStatuses: Array<'approved' | 'packaging' | 'ready_for_delivery'> = [
-      'approved',
-      'packaging',
-      'ready_for_delivery',
-    ];
+    const allowedSourceStatuses: Array<
+      'approved' | 'packing_slip_generated' | 'staged_for_delivery'
+    > = ['approved', 'packing_slip_generated', 'staged_for_delivery'];
     if (
       !allowedSourceStatuses.includes(
-        detail.request.status as 'approved' | 'packaging' | 'ready_for_delivery',
+        detail.request.status as
+          | 'approved'
+          | 'packing_slip_generated'
+          | 'staged_for_delivery',
       )
     ) {
       throw new ServiceError(
         'validation_error',
-        'Only approved / packaging / ready order requests can be packed.',
+        'Only approved / packing-slip-generated / staged order requests can be packed.',
       );
     }
 

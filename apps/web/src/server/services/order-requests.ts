@@ -16,9 +16,15 @@ export type OrderRequestStatus =
   | 'pending_confirmation'
   | 'pending_approval'
   | 'approved'
-  | 'packaging'
-  | 'ready_for_delivery'
-  | 'delivered'
+  | 'pick_slip_generated'
+  | 'picking_in_progress'
+  | 'picking_complete'
+  | 'packing_slip_generated'
+  | 'staged_for_pickup'
+  | 'staged_for_delivery'
+  | 'in_transit'
+  | 'signature_requested'
+  | 'completed'
   | 'denied'
   | 'cancelled';
 
@@ -421,7 +427,7 @@ export class OrderRequestsService {
     assertPermission(this.ctx, 'orders:request');
     // M7: requesters can only self-cancel a request that is still
     // pending approval. Once managers have approved (and stock has
-    // been reserved) or moved it into packaging/ready, a self-serve
+    // been reserved) or moved it into packing-slip/staged, a self-serve
     // cancel could orphan downstream work — managers must take that
     // path explicitly. Managers themselves are unaffected: the RPC's
     // own role check still permits any non-terminal cancel.
@@ -572,20 +578,20 @@ export class OrderRequestsService {
 
   async setStatus(
     id: string,
-    next: 'packaging' | 'ready_for_delivery',
+    next: 'packing_slip_generated' | 'staged_for_delivery',
   ): Promise<OrderRequestRow> {
     assertPermission(this.ctx, 'orders:approve');
     // C3: warehouse-scope gate. The helper returns the warehouse_id so
-    // we can reuse it for the ready-for-delivery sanity check below
+    // we can reuse it for the staged-for-delivery sanity check below
     // without an extra round trip.
     const warehouseId = await this.requireWarehouseAccess(id, 'write');
-    // M8: 'ready_for_delivery' implies an external handoff is on the
+    // M8: 'staged_for_delivery' implies an external handoff is on the
     // table. If the destination warehouse has been archived after the
     // request was approved, surface that as a friendlier error than
     // letting a downstream pickup hit a 404. We don't gate on
     // `is_public_orderable` itself — internal-only requests can still
     // be marked ready — but archived destinations are always wrong.
-    if (next === 'ready_for_delivery') {
+    if (next === 'staged_for_delivery') {
       const { data: wh } = await this.ctx.supabase
         .from('warehouses')
         .select('id, status')
@@ -600,9 +606,9 @@ export class OrderRequestsService {
       }
     }
     const expectedPrev =
-      next === 'packaging' ? 'approved' : 'packaging';
+      next === 'packing_slip_generated' ? 'approved' : 'packing_slip_generated';
     const stampField =
-      next === 'packaging' ? 'packaging_at' : 'ready_at';
+      next === 'packing_slip_generated' ? 'packaging_at' : 'ready_at';
     const { data, error } = await this.ctx.supabase
       .from('order_requests')
       .update({
@@ -651,7 +657,7 @@ export class OrderRequestsService {
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError(
           'validation_error',
-          'Only approved / packaging / ready orders can be marked delivered.',
+          'Only approved / packing-slip-generated / staged orders can be marked completed.',
         );
       if (msg.includes('insufficient_stock'))
         // I4: prior copy said "edit line qtys", which doesn't match the
@@ -673,7 +679,7 @@ export class OrderRequestsService {
       },
       this.ctx,
     );
-    void this.notifyEmail(row, 'delivered');
+    void this.notifyEmail(row, 'completed');
     return row;
   }
 
@@ -809,9 +815,9 @@ export class OrderRequestsService {
       | 'submitted'
       | 'approved'
       | 'denied'
-      | 'packaging'
-      | 'ready_for_delivery'
-      | 'delivered'
+      | 'packing_slip_generated'
+      | 'staged_for_delivery'
+      | 'completed'
       | 'cancelled',
   ): Promise<void> {
     try {
