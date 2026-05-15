@@ -46,6 +46,12 @@ export const PERMISSIONS = [
   // can't mutate it. Without this gate, a viewer could call the
   // server actions directly and silently change anyone's events.
   'schedule:manage',
+  // AI assistant configuration (embeddings backfill, model selection,
+  // anything that burns external API quota). Admin-only so a manager
+  // can't accidentally rerun a Gemini-heavy backfill across the whole
+  // inventory. Used by /dashboard/settings/ai and the AI tile on
+  // /dashboard/settings. Owners + admins.
+  'ai:manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -303,6 +309,12 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     group: 'Schedule',
     label: 'Manage schedule',
     description: 'Create, edit, delete calendar entries.',
+  },
+
+  'ai:manage': {
+    group: 'Organization',
+    label: 'Manage AI assistant',
+    description: 'Run semantic-search embeddings backfill and configure AI features.',
   },
 };
 

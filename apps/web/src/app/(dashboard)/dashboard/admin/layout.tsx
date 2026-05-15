@@ -2,16 +2,17 @@ import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 
 import { requireOrgContext } from '@/lib/auth/session';
-import { isAdminRole } from '@stockpilot/core';
+import { hasPermission } from '@stockpilot/core';
 
 /**
  * Hard guard: every page under /dashboard/admin requires owner or admin
- * role. Non-admin users are bounced to the regular dashboard. The
- * Admin section in the sidebar is also hidden from them, but this layout
- * is the actual security boundary.
+ * role. Gated on the `organization:update` permission (admin+ in the
+ * matrix) rather than `isAdminRole()` so routing flows through the
+ * permission matrix consistently — same audience today, but role surgery
+ * stays a one-line matrix change.
  */
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   const ctx = await requireOrgContext();
-  if (!isAdminRole(ctx.role)) redirect('/dashboard');
+  if (!hasPermission(ctx.role, 'organization:update')) redirect('/dashboard');
   return <>{children}</>;
 }
