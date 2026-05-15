@@ -4,13 +4,13 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { cn } from '@/lib/utils';
 import {
   NOTIFICATION_PREF_KEYS,
-  updateNotificationPreferencesAction,
   type NotificationPrefKey,
   type NotificationPreferences,
-} from '@/server/actions/notification-preferences';
+} from '@/lib/notification-prefs';
+import { cn } from '@/lib/utils';
+import { updateNotificationPreferencesAction } from '@/server/actions/notification-preferences';
 
 interface ToggleDef {
   key: NotificationPrefKey;

@@ -3,30 +3,17 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import {
+  NOTIFICATION_PREF_KEYS,
+  type NotificationPrefKey,
+  type NotificationPreferences,
+} from '@/lib/notification-prefs';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { audit } from '@/server/services/audit';
 import { ServiceError } from '@/server/services/context';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
-
-/**
- * Keys we surface in the Settings → Notifications UI. Each must exist
- * as a boolean column on public.notification_preferences. Order here
- * matches the rendered order in the page.
- */
-export const NOTIFICATION_PREF_KEYS = [
-  'email_low_stock',
-  'email_po_status',
-  'email_team_invites',
-  'push_low_stock',
-  'push_po_status',
-  'push_stock_transfer',
-] as const;
-
-export type NotificationPrefKey = (typeof NOTIFICATION_PREF_KEYS)[number];
-
-export type NotificationPreferences = Record<NotificationPrefKey, boolean>;
 
 const updateSchema = z
   .object(
