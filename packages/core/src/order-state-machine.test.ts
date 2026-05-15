@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ALLOWED_TRANSITIONS,
+  assertTransition,
+  availableOrderActions,
+  OrderTransitionError,
   type OrderStatus,
 } from './order-state-machine';
 
@@ -64,8 +67,6 @@ describe('ALLOWED_TRANSITIONS', () => {
   });
 });
 
-import { assertTransition, OrderTransitionError } from './order-state-machine';
-
 describe('assertTransition', () => {
   const baseCtx = {
     fulfillmentType: 'delivery' as const,
@@ -126,8 +127,6 @@ describe('assertTransition', () => {
     ).not.toThrow();
   });
 });
-
-import { availableOrderActions } from './order-state-machine';
 
 describe('availableOrderActions', () => {
   const base = {

@@ -74,10 +74,23 @@ export class OrderTransitionError extends Error {
 }
 
 /**
+ * Asserts that `from → to` is a legal transition and that the
+ * fulfillment-type + assigned-delivery preconditions are satisfied.
+ *
+ * RBAC IS OUT OF SCOPE FOR THIS FUNCTION. The transition guard is
+ * a *correctness* check on the order's own state; role-based
+ * authorization (who is allowed to drive an order from approved to
+ * pick_slip_generated, for example) belongs in the action layer
+ * (`apps/web/src/server/actions/orders/*`) via the existing
+ * `assertPermission(ctx, 'orders:...')` pattern. Action authors
+ * MUST call BOTH:
+ *   1. `assertPermission(ctx, ...)` — RBAC gate
+ *   2. `assertTransition(from, to, ctx)` — state-machine gate
+ *
  * Throws `OrderTransitionError` when the proposed transition is not
- * legal. Returns silently when it is. The action layer wraps this
- * around every status mutation; the DB trigger applies the same
- * rules a second time as defense-in-depth.
+ * legal. Returns silently when it is. The Postgres trigger
+ * `_validate_order_request_status_transition` mirrors these checks
+ * as defense-in-depth.
  */
 export function assertTransition(
   from: OrderStatus,
