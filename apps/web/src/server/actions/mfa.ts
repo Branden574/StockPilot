@@ -93,10 +93,10 @@ export async function verifyEnrollmentAction(input: {
       return err('validation_error', vErr.message ?? 'Invalid code');
     }
     await audit({
-      event: 'user.role.changed', // closest existing — represents an account-security mutation
+      event: 'mfa.enrolled',
       entityType: 'user',
       entityId: session.userId,
-      after: { mfa: 'enrolled' },
+      extra: { factorId: parsed.data.factorId },
     });
     revalidatePath('/dashboard/settings/security');
     return ok(undefined);
@@ -145,10 +145,10 @@ export async function unenrollFactorAction(input: {
     const { error } = await supabase.auth.mfa.unenroll({ factorId: parsed.data.factorId });
     if (error) return err('internal_error', error.message);
     await audit({
-      event: 'user.role.changed',
+      event: 'mfa.unenrolled',
       entityType: 'user',
       entityId: session.userId,
-      after: { mfa: 'disabled' },
+      extra: { factorId: parsed.data.factorId },
     });
     revalidatePath('/dashboard/settings/security');
     return ok(undefined);
@@ -230,7 +230,7 @@ export async function setOrgMfaPolicyAction(input: {
       .eq('id', ctx.organizationId);
     if (error) return err('internal_error', error.message);
     await audit({
-      event: 'warehouse.updated', // org meta change — closest existing event
+      event: 'organization.mfa_policy.changed',
       entityType: 'organization',
       entityId: ctx.organizationId,
       before: { mfa_policy: prev?.mfa_policy ?? null },
