@@ -203,6 +203,11 @@ export class ShipmentsService {
     since?: string;
     until?: string;
   } = {}): Promise<ShipmentSummary[]> {
+    // Gate reads on `purchase_orders:read` (viewer+) — shipments are
+    // PO-adjacent docs and the same audience that can read POs should
+    // be able to read packing slips. Aligns the service surface with
+    // every other read entrypoint in this file.
+    assertPermission(this.ctx, 'purchase_orders:read');
     let query = this.ctx.supabase
       .from('shipments')
       .select(
@@ -260,6 +265,9 @@ export class ShipmentsService {
   }
 
   async get(id: string): Promise<ShipmentDetail> {
+    // Same gate as list() — `purchase_orders:read` is granted to viewer+
+    // and is the consistent read perm for PO-adjacent surfaces.
+    assertPermission(this.ctx, 'purchase_orders:read');
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('shipments')
       .select('*')

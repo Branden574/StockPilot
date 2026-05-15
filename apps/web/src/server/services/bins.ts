@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
@@ -113,6 +115,11 @@ export class BinsService {
     // B1: validate the referenced warehouse belongs to this org BEFORE
     // doing any writes.
     await this.assertWarehouseBelongsToOrg(input.warehouseId);
+    // H4: enforce warehouse-scope access for warehouse-scoped roles.
+    // `locations:manage` is org-wide, but a warehouse-scoped manager
+    // shouldn't be able to spin up bins inside a warehouse they aren't
+    // assigned to. Owners/admins/org-wide managers pass through unchanged.
+    await assertWarehouseAccess(input.warehouseId, 'write', this.ctx);
 
     // B3: if marked as default, insert FIRST then call the atomic
     // `set_default_bin()` function so the clear-others + set-default
@@ -180,6 +187,24 @@ export class BinsService {
   async archive(id: string): Promise<void> {
     // B6: same permission alignment as create().
     assertPermission(this.ctx, 'locations:manage');
+
+    // H4: warehouse-scope access — look up the bin's warehouse and refuse
+    // archive if the caller is a warehouse-scoped role with no write
+    // access to it. Read first (org-scoped) so we get a clean not_found
+    // for cross-org or missing rows before the scope check fires.
+    const { data: binRow, error: binErr } = await this.ctx.supabase
+      .from('bins')
+      .select('warehouse_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (binErr) throw new ServiceError('internal_error', binErr.message);
+    if (!binRow) throw new ServiceError('not_found', 'Bin not found');
+    await assertWarehouseAccess(
+      (binRow as { warehouse_id: string }).warehouse_id,
+      'write',
+      this.ctx,
+    );
 
     // B4: when archiving a bin that is currently the default for its
     // (warehouse, bin_type) pair, also flip is_default=false so the

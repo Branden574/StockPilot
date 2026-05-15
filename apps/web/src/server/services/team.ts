@@ -61,6 +61,12 @@ export class TeamService {
   }
 
   async listPendingInvites() {
+    // C10: gate explicitly on `members:invite` (admin+). RLS already
+    // blocks non-admins from selecting `organization_invites`, so the
+    // observable behavior is identical — the assert just makes intent
+    // explicit and gives non-admins a clean forbidden instead of an
+    // empty list.
+    assertPermission(this.ctx, 'members:invite');
     const { data, error } = await this.ctx.supabase
       .from('organization_invites')
       .select('id, email, role, token, expires_at, created_at')
