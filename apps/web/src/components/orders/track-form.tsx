@@ -49,6 +49,7 @@ const TIMELINE: Array<{
 ];
 
 const STATUS_LABELS: Record<string, string> = {
+  pending_confirmation: 'Waiting for your confirmation',
   pending_approval: 'Pending approval',
   approved: 'Approved',
   packaging: 'Packaging',
@@ -171,6 +172,13 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
           Status
         </p>
         <h2 className="font-display mt-1 text-2xl">{statusLabel}</h2>
+        {result.status === 'pending_confirmation' ? (
+          <p className="text-muted-foreground mt-2 text-sm">
+            Check your inbox (and spam folder) for a confirmation email from
+            StockPilot. Until you click the link, your request stays on hold
+            and no one on the team can see it.
+          </p>
+        ) : null}
         {result.warehouseName ? (
           <p className="text-muted-foreground mt-1 text-sm">
             Pickup: {result.warehouseName}
@@ -182,8 +190,10 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
           </p>
         ) : null}
 
-        {/* Timeline — only for non-terminal-negative paths. */}
-        {!isTerminalNegative ? (
+        {/* Timeline — only for non-terminal-negative paths and only
+            once the requester has confirmed (pending_confirmation
+            rows haven't "created" yet from the team's view). */}
+        {!isTerminalNegative && result.status !== 'pending_confirmation' ? (
           <ol className="mt-5 space-y-3">
             {TIMELINE.map((step) => {
               const ts = result[step.key];
