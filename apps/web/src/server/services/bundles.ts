@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+
 import { audit } from './audit';
 import {
   assertPermission,
@@ -296,6 +298,11 @@ export class BundlesService {
     quantity: number,
     _warehouseId: string,
   ): Promise<DistributionPreview> {
+    // Reads bundle components + stock levels; viewer+ already see inventory
+    // counts, so use `items:read` as the consistent read gate. Without
+    // this gate a public-route caller (no permission elision intended)
+    // could probe preview math.
+    assertPermission(this.ctx, 'items:read');
     if (quantity <= 0) {
       throw new ServiceError('validation_error', 'Quantity must be positive');
     }
@@ -344,6 +351,9 @@ export class BundlesService {
   async recentDistributions(
     opts: { bundleId?: string; limit?: number } = {},
   ): Promise<BundleDistributionRow[]> {
+    // Reads distribution history; gate at `items:read` to match preview()
+    // and the rest of the bundle read surface.
+    assertPermission(this.ctx, 'items:read');
     let query = this.ctx.supabase
       .from('bundle_distributions')
       .select('*')
@@ -544,6 +554,12 @@ export class BundlesService {
     notes?: string | null,
   ): Promise<{ phantomItemId: string; phantomQty: number }> {
     assertPermission(this.ctx, 'bundles:manage');
+    // H3: warehouse-scoped managers can hold `bundles:manage` org-wide
+    // but must still be assigned to the target warehouse. Without this
+    // gate, a manager restricted to warehouse A could pre-assemble kits
+    // into warehouse B's stock. The RPC itself only knows about org role,
+    // not assignment scope.
+    await assertWarehouseAccess(warehouseId, 'write', this.ctx);
     const { data, error } = await this.ctx.supabase.rpc('assemble_bundle', {
       p_bundle_id: id,
       p_quantity: quantity,
@@ -594,6 +610,10 @@ export class BundlesService {
 
   async distribute(id: string, input: DistributeInput): Promise<{ distributionId: string }> {
     assertPermission(this.ctx, 'bundles:distribute');
+    // H3: warehouse-scope gate. Same rationale as assemble(): a warehouse-
+    // scoped staff member shouldn't be able to draw from a warehouse they
+    // aren't assigned to even though they hold `bundles:distribute`.
+    await assertWarehouseAccess(input.warehouseId, 'write', this.ctx);
     const { data, error } = await this.ctx.supabase.rpc('distribute_bundle', {
       p_bundle_id: id,
       p_quantity: input.quantity,

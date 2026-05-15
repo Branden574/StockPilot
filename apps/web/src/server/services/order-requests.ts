@@ -741,7 +741,8 @@ export class OrderRequestsService {
   }
 
   async setBlurb(blurb: string | null): Promise<void> {
-    assertPermission(this.ctx, 'orders:approve');
+    // C1: writes `organizations.public_request_blurb`; RLS requires admin+.
+    assertPermission(this.ctx, 'organization:update');
     const { error } = await this.ctx.supabase
       .from('organizations')
       .update({ public_request_blurb: blurb })
@@ -753,7 +754,11 @@ export class OrderRequestsService {
     warehouseId: string,
     on: boolean,
   ): Promise<void> {
-    assertPermission(this.ctx, 'orders:approve');
+    // C1: writes `warehouses.is_public_orderable`; `warehouses_admin_write`
+    // RLS requires admin+. Was previously `orders:approve` (manager+) which
+    // let a manager-scoped session through the service gate and then trip
+    // an RLS denial — confusing for the user.
+    assertPermission(this.ctx, 'organization:update');
     const { error } = await this.ctx.supabase
       .from('warehouses')
       .update({ is_public_orderable: on })
@@ -804,12 +809,30 @@ export class OrderRequestsService {
     try {
       const { recipientEmail, recipientName } = await this.resolveRecipient(row);
       if (!recipientEmail) return;
+      // M3: public-link requesters (no requester_user_id) get a
+      // /r/track link in the email — that route's GET requires the
+      // org's public_request_token, so load it here and pass through.
+      // For authenticated requesters the email links to the
+      // dashboard and doesn't need the token, but loading once and
+      // sending it through is harmless.
+      let publicRequestToken: string | null = null;
+      if (!row.requester_user_id) {
+        const { data: orgRow } = await this.ctx.supabase
+          .from('organizations')
+          .select('public_request_token')
+          .eq('id', this.ctx.organizationId)
+          .maybeSingle();
+        publicRequestToken =
+          (orgRow as { public_request_token?: string | null } | null)
+            ?.public_request_token ?? null;
+      }
       await sendOrderRequestEmail({
         kind,
         request: row,
         recipientEmail,
         recipientName,
         appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
+        publicRequestToken,
       });
     } catch (e) {
       console.warn('[order-requests] email send failed', e);
