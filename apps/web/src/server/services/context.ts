@@ -133,6 +133,43 @@ export function assertPermission(ctx: ServiceContext, permission: Permission) {
  * `assertPermission`. Cheap (one round-trip) and it kills the demote-mid-
  * request escalation window.
  */
+/**
+ * Hard-requires the *current* session to be at AAL2 (i.e. the user has
+ * completed their MFA challenge in this session). Use as a step-up gate
+ * on actions that mutate account-security state — unenrolling a factor,
+ * changing the org MFA policy, resetting another user's MFA. The org's
+ * `mfa_policy` is irrelevant here: even if the policy is `optional`,
+ * the user must prove possession of a second factor before they're
+ * allowed to weaken the security posture.
+ *
+ * Returns silently when AAL2 is satisfied. Throws a `forbidden`
+ * `ServiceError` with `reason: 'aal2_required'` otherwise, which the
+ * UI surfaces as a re-prompt CTA pointing at `/signin/mfa`.
+ *
+ * NOTE: a user with NO verified factors has `currentLevel === 'aal1'`
+ * (because there's nothing to step up to). We treat that as "not AAL2"
+ * — they shouldn't be calling MFA-mutating actions without an MFA
+ * factor in the first place, and erring on the strict side keeps the
+ * gate's semantics crisp.
+ */
+export async function assertCurrentAal2(ctx: ServiceContext): Promise<void> {
+  const { data, error } = await ctx.supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (error || !data) {
+    throw new ServiceError(
+      'forbidden',
+      'Could not verify your two-factor authentication state. Sign in again and try once more.',
+      { reason: 'aal2_required' },
+    );
+  }
+  if (data.currentLevel !== 'aal2') {
+    throw new ServiceError(
+      'forbidden',
+      'Re-authenticate with MFA before changing security settings.',
+      { reason: 'aal2_required' },
+    );
+  }
+}
+
 export async function assertRoleUnchanged(ctx: ServiceContext): Promise<void> {
   const { data, error } = await ctx.supabase
     .from('organization_members')
