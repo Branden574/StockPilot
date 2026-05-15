@@ -33,7 +33,9 @@ export async function inviteMemberAction(
 ): Promise<ActionResult<{ acceptUrl: string }>> {
   const parsed = inviteMemberSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
-  if (parsed.data.role === 'owner') return err('forbidden', 'Cannot invite as owner');
+  // Note: `inviteMemberSchema.role` is restricted to INVITEABLE_ROLES, so
+  // `parsed.data.role` cannot be 'owner'. The schema is the single source
+  // of truth — owner is only reassigned via the ownership-transfer flow.
 
   try {
     const session = await requireSession();
@@ -191,26 +193,16 @@ export async function acceptInviteWithSignupAction(input: {
   //    actually the "I have an account, sign me in" path — return a clear
   //    error directing them to the sign-in option.
   //
-  //    The Supabase admin listUsers API in this SDK version does NOT support a
-  //    server-side email filter (only `page` + `perPage`). We paginate at the
-  //    max page size and short-circuit on the first match. Bounded by a hard
-  //    cap so a runaway org can't hang this action.
-  const MAX_PAGES = 100;
-  const PER_PAGE = 1000;
-  let alreadyExists = false;
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const { data, error: listErr } = await admin.auth.admin.listUsers({
-      page,
-      perPage: PER_PAGE,
-    });
-    if (listErr) return err('internal_error', listErr.message);
-    const users = data?.users ?? [];
-    if (users.some((u) => u.email?.toLowerCase() === email)) {
-      alreadyExists = true;
-      break;
-    }
-    if (users.length < PER_PAGE) break;
-  }
+  //    Implemented via the SECURITY DEFINER function
+  //    `public.auth_user_exists_by_email` (migration 0097), which does a single
+  //    indexed lookup against `auth.users`. Replaces the previous O(n) paginated
+  //    `listUsers` loop that scanned up to 100k users per invite acceptance.
+  const { data: existsData, error: existsErr } = await admin.rpc(
+    'auth_user_exists_by_email',
+    { p_email: email },
+  );
+  if (existsErr) return err('internal_error', existsErr.message);
+  const alreadyExists = existsData === true;
   if (alreadyExists) {
     return err(
       'conflict',
