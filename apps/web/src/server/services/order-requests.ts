@@ -13,6 +13,7 @@ import {
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 
 export type OrderRequestStatus =
+  | 'pending_confirmation'
   | 'pending_approval'
   | 'approved'
   | 'packaging'
@@ -158,6 +159,13 @@ export class OrderRequestsService {
     if (filters.status) {
       const arr = Array.isArray(filters.status) ? filters.status : [filters.status];
       q = q.in('status', arr);
+    } else {
+      // Anti-spam: pending_confirmation rows are public-submit limbo —
+      // the requester hasn't clicked the confirmation email yet, so
+      // managers should never see them in the inbox. Callers can
+      // still opt-in by passing `status: 'pending_confirmation'`
+      // explicitly.
+      q = q.neq('status', 'pending_confirmation');
     }
     if (filters.requesterUserId) q = q.eq('requester_user_id', filters.requesterUserId);
     if (filters.requesterEmail) q = q.eq('requester_email', filters.requesterEmail);

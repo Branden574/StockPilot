@@ -6,6 +6,7 @@ import type { OrderRequestRow } from '@/server/services/order-requests';
 
 export type OrderRequestEmailKind =
   | 'submitted'
+  | 'confirm_request'
   | 'approved'
   | 'denied'
   | 'packaging'
@@ -29,10 +30,19 @@ interface SendInput {
    * supply it.
    */
   publicRequestToken?: string | null;
+  /**
+   * Plaintext confirmation token. Required ONLY for `kind ===
+   * 'confirm_request'` — the CTA in that email points to
+   * `/r/confirm?id=<id>&t=<plaintext>`. Hashing happens server-side
+   * before storage so the email is the only place the raw value
+   * lives. Not used by any other kind.
+   */
+  confirmationToken?: string | null;
 }
 
 const SUBJECTS: Record<OrderRequestEmailKind, string> = {
   submitted: 'Your order request was submitted',
+  confirm_request: 'Confirm your order request',
   approved: 'Your order request was approved',
   denied: 'Your order request was denied',
   packaging: 'Your order is being packaged',
@@ -43,6 +53,7 @@ const SUBJECTS: Record<OrderRequestEmailKind, string> = {
 
 const HEADLINES: Record<OrderRequestEmailKind, string> = {
   submitted: 'Request received',
+  confirm_request: 'Confirm your order request',
   approved: 'Approved',
   denied: 'Request denied',
   packaging: 'Now being packaged',
@@ -61,8 +72,15 @@ const HEADLINES: Record<OrderRequestEmailKind, string> = {
  * the call site.
  */
 export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
-  const { kind, request, recipientEmail, recipientName, appUrl, publicRequestToken } =
-    input;
+  const {
+    kind,
+    request,
+    recipientEmail,
+    recipientName,
+    appUrl,
+    publicRequestToken,
+    confirmationToken,
+  } = input;
   const subject = SUBJECTS[kind];
   const headline = HEADLINES[kind];
   const reasonLine =
@@ -81,13 +99,37 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
       `&email=${encodeURIComponent(recipientEmail)}` +
       `&t=${encodeURIComponent(publicRequestToken)}`
     : `${appUrl}/r/track?id=${request.id}&email=${encodeURIComponent(recipientEmail)}`;
-  const link = request.requester_user_id
-    ? `${appUrl}/dashboard/orders/${request.id}`
-    : publicTrackUrl;
+
+  // confirm_request emails get a dedicated `/r/confirm` link instead
+  // of the "View request" track URL — the recipient must click it to
+  // promote the row from pending_confirmation to pending_approval. We
+  // refuse to send if the confirmation token is missing, so an empty
+  // call never produces a useless email.
+  if (kind === 'confirm_request' && !confirmationToken) {
+    throw new Error(
+      'confirm_request email requires a confirmationToken — refusing to send empty CTA.',
+    );
+  }
+  const confirmUrl =
+    kind === 'confirm_request' && confirmationToken
+      ? `${appUrl}/r/confirm?id=${request.id}&t=${encodeURIComponent(confirmationToken)}`
+      : null;
+
+  const link = confirmUrl
+    ? confirmUrl
+    : request.requester_user_id
+      ? `${appUrl}/dashboard/orders/${request.id}`
+      : publicTrackUrl;
+  const ctaLabel = kind === 'confirm_request' ? 'Confirm request' : 'View request';
 
   const greeting = recipientName
     ? `Hi ${escapeHtml(recipientName)},`
     : 'Hello,';
+
+  const expiryNote =
+    kind === 'confirm_request'
+      ? `<p style="margin:8px 0 0;color:#888;font-size:12px;">This confirmation link expires in 24 hours. If you didn't request this, you can safely ignore this email — nothing else happens until you click.</p>`
+      : '';
 
   const html = `<!doctype html>
 <html><body style="font-family:-apple-system,Segoe UI,sans-serif;background:#f6f6f6;margin:0;padding:24px;">
@@ -100,8 +142,9 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
     </p>
     ${reasonLine}
     <p style="margin:24px 0;">
-      <a href="${link}" style="background:#0a66ff;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">View request</a>
+      <a href="${link}" style="background:#0a66ff;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">${escapeHtml(ctaLabel)}</a>
     </p>
+    ${expiryNote}
     <p style="margin:24px 0 0;color:#999;font-size:11px;">
       Request ID: ${request.id}
     </p>
@@ -115,8 +158,8 @@ ${greeting}
 ${bodyParagraphPlain(kind)}
 ${request.denied_reason ? '\nReason: ' + sanitizePlainText(request.denied_reason) : ''}
 
-View request: ${link}
-
+${ctaLabel}: ${link}
+${kind === 'confirm_request' ? '\nThis link expires in 24 hours. If you didn\'t request this, you can safely ignore this email.\n' : ''}
 Request ID: ${request.id}`;
 
   await sendEmail({ to: recipientEmail, subject, html, text });
@@ -138,6 +181,8 @@ function bodyParagraph(kind: OrderRequestEmailKind): string {
   switch (kind) {
     case 'submitted':
       return "We've received your order request. A manager will review it shortly.";
+    case 'confirm_request':
+      return "Please confirm your order request by clicking the button below. Until you confirm, your request is on hold and won't be sent to a manager for review.";
     case 'approved':
       return 'Your request was approved and stock has been reserved. Packaging will start soon.';
     case 'denied':

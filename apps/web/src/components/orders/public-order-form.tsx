@@ -155,11 +155,17 @@ export function PublicOrderForm({
   if (submitted) {
     return (
       <div className="border-border bg-card mt-2 rounded-2xl border p-6 text-center">
-        <h2 className="font-display text-xl">Request received</h2>
+        <h2 className="font-display text-xl">Check your inbox</h2>
         <p className="text-muted-foreground mt-2 text-sm">
           We&apos;ve emailed{' '}
           <span className="text-foreground font-medium">{submitted.email}</span>{' '}
-          a confirmation. {orgName}&apos;s team will review your request shortly.
+          a link to confirm this order request. Once you click the link,
+          {' '}{orgName}&apos;s team will review it — until then, the request
+          stays on hold and is not visible to anyone else.
+        </p>
+        <p className="text-muted-foreground mt-3 text-xs">
+          Didn&apos;t get it? Check your spam folder, or try again with a
+          different email address. The confirmation link expires in 24 hours.
         </p>
         <p className="text-muted-foreground mt-4 text-xs">
           Request ID: <span className="font-mono">{submitted.id}</span>

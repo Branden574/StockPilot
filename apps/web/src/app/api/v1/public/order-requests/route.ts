@@ -1,3 +1,5 @@
+import { createHash, randomBytes } from 'node:crypto';
+
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
@@ -330,6 +332,28 @@ export async function POST(req: NextRequest) {
   // into a single canonical address for downstream dedupe / lookup.
   const requesterEmail = body.requesterEmail.toLowerCase();
 
+  // Anti-spam double opt-in: every public submit lands as
+  // `pending_confirmation` and only becomes visible to the manager
+  // queue once the requester clicks the link in the confirmation
+  // email. This converts our threat model from "anyone with the org
+  // token can spam Resend / the manager inbox" to "anyone with the org
+  // token can prompt the listed email with one click-to-confirm
+  // message" — much narrower. The token below is 256 bits of randomness;
+  // we store ONLY its sha256 hash and email the plaintext.
+  const plaintextToken = randomBytes(32).toString('hex');
+  const tokenHash = createHash('sha256').update(plaintextToken).digest('hex');
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+  // Cheap reaper — clear stale unconfirmed rows so the table doesn't
+  // accumulate junk over time. Best-effort; never fail the submit on
+  // it. Supabase's RPC builder is a PromiseLike (no .catch), so we
+  // await it inside a try/catch and swallow any error.
+  try {
+    await admin.rpc('cleanup_expired_unconfirmed_order_requests');
+  } catch {
+    /* non-fatal */
+  }
+
   // 6. Insert header. Use the rollback-on-line-error pattern from
   // OrderRequestsService.create — if line insert fails, delete the
   // header so we don't leave orphans behind.
@@ -338,13 +362,15 @@ export async function POST(req: NextRequest) {
     .insert({
       organization_id: organizationId,
       warehouse_id: body.warehouseId,
-      status: 'pending_approval',
+      status: 'pending_confirmation',
       source: 'public_link',
       requester_user_id: null,
       requester_email: requesterEmail,
       requester_name: body.requesterName,
       requester_org_label: body.requesterOrgLabel ?? null,
       notes: body.notes ?? null,
+      confirmation_token_hash: tokenHash,
+      confirmation_token_expires_at: expiresAt,
     })
     .select('*')
     .single();
@@ -374,24 +400,30 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 7. Send confirmation email. Background-style — failure to send
-  // shouldn't 500 the whole submit, since the row is already persisted
-  // and the manager bell+push trigger has fired DB-side.
+  // 7. Send the confirm-click email. The row is sitting at
+  // `pending_confirmation`; until the recipient clicks the link the
+  // manager queue does not see it (the notify trigger skips the
+  // INSERT broadcast for that status; see migration 0108). Send is
+  // best-effort but a hard failure here means the row CAN'T be
+  // confirmed — log and let the user reach out by other means.
   try {
     await sendOrderRequestEmail({
-      kind: 'submitted',
+      kind: 'confirm_request',
       request: header,
       recipientEmail: requesterEmail,
       recipientName: body.requesterName,
       appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
-      // F2: pass the org's public_request_token so the confirmation
-      // email's "View request" link includes `&t=…`. Without it the
-      // recipient's click lands on a silent 404 — the GET track route
-      // scopes lookups by org token.
+      // Plaintext token goes ONLY in the email. The DB stores the
+      // sha256 hash so a DB leak alone doesn't grant confirm
+      // power.
+      confirmationToken: plaintextToken,
+      // publicRequestToken is unused for confirm_request (the
+      // CTA points at /r/confirm, not /r/track) but pass it for
+      // future flexibility.
       publicRequestToken: body.token,
     });
   } catch (e) {
-    console.warn('[public order-requests] email send failed', e);
+    console.warn('[public order-requests] confirm-email send failed', e);
   }
 
   return NextResponse.json({
