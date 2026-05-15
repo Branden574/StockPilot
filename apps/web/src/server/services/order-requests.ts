@@ -713,7 +713,13 @@ export class OrderRequestsService {
   // ── Public link admin ───────────────────────────────────────────
 
   async rotatePublicToken(): Promise<{ token: string }> {
-    assertPermission(this.ctx, 'orders:approve');
+    // C1: org-level public-link admin (token rotation, blurb, per-warehouse
+    // public_orderable toggle) writes to the `organizations` / `warehouses`
+    // tables whose UPDATE RLS policies require admin+. Previously gated on
+    // `orders:approve` (manager+), so a warehouse-scoped manager would pass
+    // the service gate and then hit a confusing RLS denial at the DB. Align
+    // service gate with RLS: admin+ only.
+    assertPermission(this.ctx, 'organization:update');
     const token = generateToken();
     const { error } = await this.ctx.supabase
       .from('organizations')
