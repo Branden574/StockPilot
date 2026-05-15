@@ -41,9 +41,13 @@ async function resolveApiMfaState(
     } else {
       mfaSatisfied = true;
     }
-  } catch {
-    mfaRequired = false;
-    mfaSatisfied = true;
+  } catch (err) {
+    // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
+    // org lookup must NOT silently let an admin bypass MFA on the
+    // bearer/API path either. Mirrors resolveMfaState() in
+    // services/context.ts for parity between cookie and bearer flows.
+    console.error('[resolveApiMfaState] failed:', err);
+    return { mfaRequired: true, mfaSatisfied: false };
   }
   return { mfaRequired, mfaSatisfied };
 }
