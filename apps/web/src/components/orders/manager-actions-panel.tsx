@@ -28,9 +28,9 @@ interface Props {
 type BusyKey =
   | 'approve'
   | 'deny'
-  | 'packaging'
-  | 'ready_for_delivery'
-  | 'delivered'
+  | 'packing_slip_generated'
+  | 'staged_for_delivery'
+  | 'completed'
   | 'notes'
   | null;
 
@@ -67,7 +67,7 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
     router.refresh();
   }
 
-  async function moveTo(next: 'packaging' | 'ready_for_delivery') {
+  async function moveTo(next: 'packing_slip_generated' | 'staged_for_delivery') {
     setBusy(next);
     const res = await setOrderRequestStatusAction({ id: orderId, status: next });
     setBusy(null);
@@ -75,12 +75,16 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
       toast.error(res.error.message);
       return;
     }
-    toast.success(next === 'packaging' ? 'Marked as packaging.' : 'Marked as ready for delivery.');
+    toast.success(
+      next === 'packing_slip_generated'
+        ? 'Marked as packaging.'
+        : 'Marked as ready for delivery.',
+    );
     router.refresh();
   }
 
   async function confirmDeliver() {
-    setBusy('delivered');
+    setBusy('completed');
     const res = await markOrderRequestDeliveredAction(orderId);
     setBusy(null);
     if (!res.ok) {
@@ -143,8 +147,12 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
           )}
 
           {status === 'approved' && (
-            <Button variant="gradient" onClick={() => moveTo('packaging')} disabled={busy !== null}>
-              {busy === 'packaging' ? (
+            <Button
+              variant="gradient"
+              onClick={() => moveTo('packing_slip_generated')}
+              disabled={busy !== null}
+            >
+              {busy === 'packing_slip_generated' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <PackageOpen className="h-3.5 w-3.5" />
@@ -153,13 +161,13 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
             </Button>
           )}
 
-          {status === 'packaging' && (
+          {status === 'packing_slip_generated' && (
             <Button
               variant="gradient"
-              onClick={() => moveTo('ready_for_delivery')}
+              onClick={() => moveTo('staged_for_delivery')}
               disabled={busy !== null}
             >
-              {busy === 'ready_for_delivery' ? (
+              {busy === 'staged_for_delivery' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <PackageCheck className="h-3.5 w-3.5" />
@@ -169,14 +177,14 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
           )}
 
           {(status === 'approved' ||
-            status === 'packaging' ||
-            status === 'ready_for_delivery') && (
+            status === 'packing_slip_generated' ||
+            status === 'staged_for_delivery') && (
             <Button
               variant="outline"
               onClick={() => setDeliverOpen(true)}
               disabled={busy !== null}
             >
-              {busy === 'delivered' ? (
+              {busy === 'completed' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <Truck className="h-3.5 w-3.5" />
@@ -185,7 +193,7 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
             </Button>
           )}
 
-          {(status === 'delivered' || status === 'denied' || status === 'cancelled') && (
+          {(status === 'completed' || status === 'denied' || status === 'cancelled') && (
             <div className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
               <CheckCircle2 className="h-3.5 w-3.5" />
               No further actions — this request is in a terminal state.
@@ -230,7 +238,7 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
         title="Mark delivered?"
         description="Stock is deducted from inventory and any reservations on this order are released. This is the final fulfillment step and cannot be reversed — create a corrective adjustment afterwards if the deduction was wrong."
         confirmLabel="Mark delivered"
-        pending={busy === 'delivered'}
+        pending={busy === 'completed'}
         onConfirm={confirmDeliver}
       />
     </section>

@@ -4,15 +4,29 @@ import type { OrderRequestStatus, OrderRequestSummary } from '@/server/services/
 
 export function OrderStatusBadge({ status }: { status: OrderRequestStatus }) {
   switch (status) {
+    case 'pending_confirmation':
+      return <Badge variant="outline">Awaiting confirmation</Badge>;
     case 'pending_approval':
       return <Badge variant="warning">Pending</Badge>;
     case 'approved':
       return <Badge variant="default">Approved</Badge>;
-    case 'packaging':
+    case 'pick_slip_generated':
+      return <Badge variant="secondary">Pick slip</Badge>;
+    case 'picking_in_progress':
+      return <Badge variant="secondary">Picking</Badge>;
+    case 'picking_complete':
+      return <Badge variant="secondary">Picked</Badge>;
+    case 'packing_slip_generated':
       return <Badge variant="secondary">Packaging</Badge>;
-    case 'ready_for_delivery':
+    case 'staged_for_pickup':
+      return <Badge variant="secondary">Staged (pickup)</Badge>;
+    case 'staged_for_delivery':
       return <Badge variant="secondary">Ready</Badge>;
-    case 'delivered':
+    case 'in_transit':
+      return <Badge variant="secondary">In transit</Badge>;
+    case 'signature_requested':
+      return <Badge variant="secondary">Awaiting signature</Badge>;
+    case 'completed':
       return <Badge variant="success">Delivered</Badge>;
     case 'denied':
       return <Badge variant="destructive">Denied</Badge>;

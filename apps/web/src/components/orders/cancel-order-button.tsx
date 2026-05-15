@@ -13,7 +13,7 @@ import { cancelOrderRequestAction } from '@/server/actions/order-requests';
 
 import type { OrderRequestStatus } from '@/server/services/order-requests';
 
-const TERMINAL: OrderRequestStatus[] = ['delivered', 'denied', 'cancelled'];
+const TERMINAL: OrderRequestStatus[] = ['completed', 'denied', 'cancelled'];
 
 interface Props {
   orderId: string;

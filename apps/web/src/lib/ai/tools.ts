@@ -1380,14 +1380,14 @@ const listOrderRequestsTool: ToolExecutor = {
   declaration: {
     name: 'listOrderRequests',
     description:
-      "READ-ONLY — list order requests in the workspace queue. Use for 'what orders are waiting', 'show me pending requests', 'what did Maria order', 'any orders from sequoia elementary'. Filter by status (pending_approval | approved | packaging | ready_for_delivery | delivered | denied | cancelled) and/or by an external requester's email (matches order_requests.requester_email exactly — public-link submissions only). Returns total + a compact row per request with requesterDisplay (name + org for externals, full_name/email for internal users), warehouseName, lineCount, totalQuantity, and key timestamps. There is NO execute tool for order writes — direct the user to /dashboard/orders/<id> to approve / deny / change status.",
+      "READ-ONLY — list order requests in the workspace queue. Use for 'what orders are waiting', 'show me pending requests', 'what did Maria order', 'any orders from sequoia elementary'. Filter by status (pending_approval | approved | packing_slip_generated | staged_for_delivery | completed | denied | cancelled) and/or by an external requester's email (matches order_requests.requester_email exactly — public-link submissions only). Returns total + a compact row per request with requesterDisplay (name + org for externals, full_name/email for internal users), warehouseName, lineCount, totalQuantity, and key timestamps. There is NO execute tool for order writes — direct the user to /dashboard/orders/<id> to approve / deny / change status.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {
         status: {
           type: SchemaType.STRING,
           description:
-            "Optional status filter. One of 'pending_approval', 'approved', 'packaging', 'ready_for_delivery', 'delivered', 'denied', 'cancelled'. Empty = all statuses.",
+            "Optional status filter. One of 'pending_approval', 'approved', 'packing_slip_generated', 'staged_for_delivery', 'completed', 'denied', 'cancelled'. Empty = all statuses.",
         },
         requesterEmail: {
           type: SchemaType.STRING,
@@ -1405,9 +1405,9 @@ const listOrderRequestsTool: ToolExecutor = {
     const allowedStatuses = new Set([
       'pending_approval',
       'approved',
-      'packaging',
-      'ready_for_delivery',
-      'delivered',
+      'packing_slip_generated',
+      'staged_for_delivery',
+      'completed',
       'denied',
       'cancelled',
     ]);
@@ -1416,9 +1416,9 @@ const listOrderRequestsTool: ToolExecutor = {
         ? (args.status as
             | 'pending_approval'
             | 'approved'
-            | 'packaging'
-            | 'ready_for_delivery'
-            | 'delivered'
+            | 'packing_slip_generated'
+            | 'staged_for_delivery'
+            | 'completed'
             | 'denied'
             | 'cancelled')
         : undefined;
@@ -1492,7 +1492,7 @@ const getOrderRequestSummaryTool: ToolExecutor = {
   declaration: {
     name: 'getOrderRequestSummary',
     description:
-      "READ-ONLY — overall order-request stats. Returns pendingCount, overdueCount (pending_approval older than 3 days), and a byStatus breakdown { pending_approval, approved, packaging, ready_for_delivery, delivered_today }. Use for 'anything overdue', 'how many pending', 'summary of orders'. There is NO execute tool for order writes — direct the user to /dashboard/orders/<id> to approve / deny / change status.",
+      "READ-ONLY — overall order-request stats. Returns pendingCount, overdueCount (pending_approval older than 3 days), and a byStatus breakdown { pending_approval, approved, packing_slip_generated, staged_for_delivery, completed_today }. Use for 'anything overdue', 'how many pending', 'summary of orders'. There is NO execute tool for order writes — direct the user to /dashboard/orders/<id> to approve / deny / change status.",
     parameters: { type: SchemaType.OBJECT, properties: {} },
   },
   async execute(_args, ctx) {
@@ -1519,8 +1519,8 @@ const getOrderRequestSummaryTool: ToolExecutor = {
     ] = await Promise.all([
       baseCount('pending_approval'),
       baseCount('approved'),
-      baseCount('packaging'),
-      baseCount('ready_for_delivery'),
+      baseCount('packing_slip_generated'),
+      baseCount('staged_for_delivery'),
       ctx.supabase
         .from('order_requests')
         .select('id', { count: 'exact', head: true })
@@ -1531,7 +1531,7 @@ const getOrderRequestSummaryTool: ToolExecutor = {
         .from('order_requests')
         .select('id', { count: 'exact', head: true })
         .eq('organization_id', ctx.organizationId)
-        .eq('status', 'delivered')
+        .eq('status', 'completed')
         .gte('delivered_at', startOfTodayIso),
     ]);
 
@@ -1541,9 +1541,9 @@ const getOrderRequestSummaryTool: ToolExecutor = {
       byStatus: {
         pending_approval: pendingRes.count ?? 0,
         approved: approvedRes.count ?? 0,
-        packaging: packagingRes.count ?? 0,
-        ready_for_delivery: readyRes.count ?? 0,
-        delivered_today: deliveredTodayRes.count ?? 0,
+        packing_slip_generated: packagingRes.count ?? 0,
+        staged_for_delivery: readyRes.count ?? 0,
+        completed_today: deliveredTodayRes.count ?? 0,
       },
     };
   },
@@ -1739,7 +1739,7 @@ const getRecentOrdersTool: ToolExecutor = {
         until: { type: SchemaType.STRING },
         sinceDaysAgo: { type: SchemaType.NUMBER },
         untilDaysAgo: { type: SchemaType.NUMBER },
-        status: { type: SchemaType.STRING, description: "Single status filter (pending_approval/approved/packaging/ready_for_delivery/delivered/denied/cancelled)." },
+        status: { type: SchemaType.STRING, description: "Single status filter (pending_approval/approved/packing_slip_generated/staged_for_delivery/completed/denied/cancelled)." },
         warehouseId: { type: SchemaType.STRING },
         limit: { type: SchemaType.NUMBER, description: 'Max rows (1-100). Default 25.' },
       },
