@@ -45,3 +45,81 @@ export const ALLOWED_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = 
   cancelled: [],
   completed: [],
 };
+
+export interface OrderTransitionContext {
+  fulfillmentType: FulfillmentType;
+  /**
+   * Whether `assigned_delivery_user_id` is non-null on the row.
+   * Required by the `staged_for_delivery → in_transit` rule.
+   */
+  hasAssignedDelivery: boolean;
+}
+
+export class OrderTransitionError extends Error {
+  constructor(
+    message: string,
+    public readonly code:
+      | 'illegal_transition'
+      | 'no_op'
+      | 'fulfillment_type_mismatch'
+      | 'assigned_delivery_required',
+    public readonly from: OrderStatus,
+    public readonly to: OrderStatus,
+  ) {
+    super(message);
+    this.name = 'OrderTransitionError';
+  }
+}
+
+/**
+ * Throws `OrderTransitionError` when the proposed transition is not
+ * legal. Returns silently when it is. The action layer wraps this
+ * around every status mutation; the DB trigger applies the same
+ * rules a second time as defense-in-depth.
+ */
+export function assertTransition(
+  from: OrderStatus,
+  to: OrderStatus,
+  ctx: OrderTransitionContext,
+): void {
+  if (from === to) {
+    throw new OrderTransitionError(
+      `Same-status transition (${from}) — likely a no_op or race.`,
+      'no_op',
+      from,
+      to,
+    );
+  }
+  if (!ALLOWED_TRANSITIONS[from]?.includes(to)) {
+    throw new OrderTransitionError(
+      `Cannot move order from ${from} to ${to}.`,
+      'illegal_transition',
+      from,
+      to,
+    );
+  }
+  if (to === 'staged_for_delivery' && ctx.fulfillmentType !== 'delivery') {
+    throw new OrderTransitionError(
+      `staged_for_delivery requires fulfillment_type='delivery' (got '${ctx.fulfillmentType}').`,
+      'fulfillment_type_mismatch',
+      from,
+      to,
+    );
+  }
+  if (to === 'staged_for_pickup' && ctx.fulfillmentType !== 'pickup') {
+    throw new OrderTransitionError(
+      `staged_for_pickup requires fulfillment_type='pickup' (got '${ctx.fulfillmentType}').`,
+      'fulfillment_type_mismatch',
+      from,
+      to,
+    );
+  }
+  if (to === 'in_transit' && !ctx.hasAssignedDelivery) {
+    throw new OrderTransitionError(
+      `in_transit requires assigned_delivery_user_id to be set first.`,
+      'assigned_delivery_required',
+      from,
+      to,
+    );
+  }
+}
