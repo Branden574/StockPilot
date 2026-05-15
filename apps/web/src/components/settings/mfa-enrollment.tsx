@@ -35,6 +35,7 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
     secret: string;
   } | null>(null);
   const [code, setCode] = React.useState('');
+  const [password, setPassword] = React.useState('');
   const [pending, setPending] = React.useState(false);
   const [disableTarget, setDisableTarget] = React.useState<string | null>(null);
 
@@ -56,8 +57,16 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
 
   async function verifyCode() {
     if (!enrollment) return;
+    if (!password) {
+      toast.error('Confirm your password to finish enrollment.');
+      return;
+    }
     setPending(true);
-    const res = await verifyEnrollmentAction({ factorId: enrollment.factorId, code });
+    const res = await verifyEnrollmentAction({
+      factorId: enrollment.factorId,
+      code,
+      password,
+    });
     setPending(false);
     if (!res.ok) {
       toast.error(res.error.message);
@@ -66,6 +75,7 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
     toast.success('Authenticator enabled.');
     setEnrollment(null);
     setCode('');
+    setPassword('');
     setStep('idle');
     // Hard-navigate to clear the ?enroll=1 query and force a fresh
     // session-aware render of the layout — router.refresh() alone left
@@ -184,19 +194,38 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
             className="font-mono tracking-widest"
           />
         </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="mfa-verify-password">Step 3 — confirm your password</Label>
+          <Input
+            id="mfa-verify-password"
+            type="password"
+            autoComplete="current-password"
+            placeholder="Your account password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <p className="text-muted-foreground text-[11px]">
+            We re-check your password so a stolen session can't enroll an attacker's
+            authenticator app.
+          </p>
+        </div>
         <div className="flex gap-2">
           <Button
             variant="outline"
             onClick={() => {
               setEnrollment(null);
               setCode('');
+              setPassword('');
               setStep('idle');
             }}
             disabled={pending}
           >
             Cancel
           </Button>
-          <Button onClick={verifyCode} disabled={pending || code.length !== 6}>
+          <Button
+            onClick={verifyCode}
+            disabled={pending || code.length !== 6 || !password}
+          >
             {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Verify & enable'}
           </Button>
         </div>

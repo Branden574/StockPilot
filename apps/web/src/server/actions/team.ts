@@ -2,9 +2,16 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { ServiceError } from '@/server/services/context';
+import {
+  assertCurrentAal2,
+  ServiceError,
+  withContext,
+} from '@/server/services/context';
+import { audit } from '@/server/services/audit';
 import { TeamService, acceptInviteWithToken } from '@/server/services/team';
 import { requireSession } from '@/lib/auth/session';
+import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 
@@ -116,6 +123,135 @@ export async function removeMemberAction(memberId: string): Promise<ActionResult
     await svc.removeMember(parsed.data.memberId);
     revalidatePath('/dashboard/team');
     return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const transferOwnershipSchema = z.object({
+  targetMemberId: z.string().uuid('Invalid member id'),
+  password: z.string().min(1, 'Confirm your password').max(128),
+});
+
+/**
+ * Transfers organization ownership from the calling user to another
+ * active member. This is the ONLY supported path to change the owner
+ * — the DB role-guard trigger blocks every other route (direct UPDATE
+ * from an admin or even a non-bypassing definer function).
+ *
+ * Defense-in-depth gates the action layer enforces BEFORE the swap:
+ *   1. Caller must currently hold the `owner` role in the request's org.
+ *   2. Caller's session MUST satisfy AAL2 (proven MFA this session) if
+ *      they have any verified MFA factor. Stripping/handing off the
+ *      owner role is among the most-destructive admin mutations.
+ *   3. Caller must re-confirm their password out-of-band. Even with a
+ *      stolen AAL2 cookie an attacker doesn't know the password.
+ *   4. Rate-limited (5 attempts / 15min, closed mode) so a leaked
+ *      cookie can't brute-force the password gate.
+ *   5. Target must be an accepted member of the same org and NOT the
+ *      caller (the DB function also enforces this — belt + braces).
+ *
+ * The actual swap runs in a SECURITY DEFINER RPC so it's atomic and
+ * bypasses the role-guard trigger via the service-role branch.
+ */
+export async function transferOwnershipAction(input: {
+  targetMemberId: string;
+  password: string;
+}): Promise<ActionResult<{ newOwnerUserId: string }>> {
+  const parsed = transferOwnershipSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+
+  try {
+    const ctx = await withContext();
+    if (ctx.role !== 'owner') {
+      return err('forbidden', 'Only the current owner can transfer ownership.');
+    }
+
+    const session = await requireSession();
+
+    // Rate-limit BEFORE the password verify so a leaked cookie can't
+    // brute-force the password.
+    const rl = await checkRateLimit(
+      `owner-transfer:${session.userId}`,
+      5,
+      15 * 60_000,
+      'closed',
+    );
+    if (!rl.allowed) {
+      return err(
+        'rate_limited',
+        'Too many ownership-transfer attempts. Try again in a few minutes.',
+      );
+    }
+
+    // AAL2 step-up. If caller has any verified factor, they must have
+    // completed the MFA challenge this session.
+    const { data: factorsData } = await ctx.supabase.auth.mfa.listFactors();
+    const hasVerifiedFactor = (factorsData?.totp ?? []).some(
+      (f) => f.status === 'verified',
+    );
+    if (hasVerifiedFactor) {
+      await assertCurrentAal2(ctx);
+    }
+
+    // Password re-confirm.
+    const pwRes = await verifyPasswordSideChannel(session.email, parsed.data.password);
+    if (!pwRes.ok) {
+      return err(
+        pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',
+        pwRes.message,
+      );
+    }
+
+    // Look up the target member, sanity-check before invoking the RPC
+    // (gives a friendlier error than a raw 'invalid_parameter_value'
+    // from Postgres).
+    const admin = createAdminClient();
+    const { data: target, error: targetErr } = await admin
+      .from('organization_members')
+      .select('id, user_id, role, accepted_at')
+      .eq('organization_id', ctx.organizationId)
+      .eq('id', parsed.data.targetMemberId)
+      .maybeSingle();
+    if (targetErr) return err('internal_error', targetErr.message);
+    if (!target) return err('not_found', 'Target member not found in this organization.');
+    if ((target.user_id as string) === ctx.userId) {
+      return err('validation_error', 'You cannot transfer ownership to yourself.');
+    }
+    if (!target.accepted_at) {
+      return err(
+        'validation_error',
+        'Target has not accepted their invite yet. Wait until they finish onboarding.',
+      );
+    }
+    if ((target.role as string) === 'owner') {
+      return err('validation_error', 'That member is already the owner.');
+    }
+
+    const { error: rpcErr } = await admin.rpc('transfer_org_ownership', {
+      p_organization_id: ctx.organizationId,
+      p_caller_user_id: ctx.userId,
+      p_target_user_id: target.user_id as string,
+    });
+    if (rpcErr) return err('internal_error', rpcErr.message);
+
+    await audit(
+      {
+        event: 'organization.ownership.transferred',
+        entityType: 'organization',
+        entityId: ctx.organizationId,
+        before: { owner_user_id: ctx.userId },
+        after: { owner_user_id: target.user_id as string },
+        extra: { previous_owner_member_id: target.id as string },
+      },
+      ctx,
+    );
+
+    revalidatePath('/dashboard/team');
+    revalidatePath('/dashboard');
+    return ok({ newOwnerUserId: target.user_id as string });
   } catch (e) {
     return toResult(e);
   }

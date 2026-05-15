@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { requireSession } from '@/lib/auth/session';
+import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -69,6 +70,7 @@ export async function getMfaRecoveryCodeStatus(): Promise<{
  */
 export async function consumeMfaRecoveryCodeAction(input: {
   code: string;
+  password?: string;
 }): Promise<ActionResult<{ unenrolled: number }>> {
   try {
     const session = await requireSession();
@@ -85,6 +87,27 @@ export async function consumeMfaRecoveryCodeAction(input: {
         'validation_error',
         'Too many recovery-code attempts. Wait a few minutes and try again.',
       );
+    }
+
+    // Password re-confirm: an attacker holding a stolen AAL1 session
+    // cookie + leaked recovery codes can otherwise strip MFA. By
+    // requiring the password here we tie the action to knowledge the
+    // attacker probably doesn't have, even with full cookie theft.
+    // The `password` field is optional in the schema to keep older
+    // mobile/web clients working during rollout, but the verify is
+    // strict when present and the caller is expected to always send
+    // it now that the UI is wired.
+    if (input.password) {
+      const pwRes = await verifyPasswordSideChannel(
+        session.email,
+        input.password,
+      );
+      if (!pwRes.ok) {
+        return err(
+          pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',
+          pwRes.message,
+        );
+      }
     }
 
     const supabase = await createClient();
