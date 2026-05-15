@@ -5,10 +5,12 @@ import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 
 import { env } from '@/lib/env';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { audit } from '@/server/services/audit';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { REMEMBER_SESSION_COOKIE, rememberPreferenceOptions } from '@/lib/supabase/session-cookies';
+import { audit, type AuditEvent } from '@/server/services/audit';
 
 import {
   changePasswordSchema,
@@ -39,6 +41,109 @@ async function getClientIp(): Promise<string> {
     h.get('x-real-ip') ??
     'unknown'
   );
+}
+
+/**
+ * Writes an auth-lifecycle audit row directly via the admin client.
+ *
+ * The standard `audit()` helper requires a ServiceContext, and its
+ * `withContext()` fallback throws NEXT_REDIRECT for org-less callers —
+ * which would corrupt the control flow of a sign-in (no resolved org
+ * yet) or a sign-in-failure (no authenticated user). This direct helper
+ * mirrors the shipment-signature.tsx pattern: write the event with
+ * whatever attribution we have, tag IP/UA from headers, never throw.
+ *
+ * organization_id and user_id are both nullable on audit_logs (see
+ * migration 0002_inventory.sql), so a sign-in-failure with both null
+ * is still a valid forensic row.
+ */
+async function emitAuthAudit(params: {
+  event: AuditEvent;
+  userId?: string | null;
+  organizationId?: string | null;
+  extra?: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    const h = await headers();
+    const ip =
+      h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? h.get('x-real-ip') ?? null;
+    const userAgent = h.get('user-agent') ?? null;
+
+    const admin = createAdminClient();
+    await admin.from('audit_logs').insert({
+      organization_id: params.organizationId ?? null,
+      user_id: params.userId ?? null,
+      event: params.event,
+      ip,
+      user_agent: userAgent,
+      metadata: {
+        entity_type: 'user',
+        entity_id: params.userId ?? null,
+        warehouse_id: null,
+        before: null,
+        after: null,
+        reason: null,
+        ...(params.extra ?? {}),
+      },
+    });
+  } catch (e) {
+    // Best-effort — never let a logging failure break an auth action.
+    void reportError(e, {
+      tag: 'audit.auth_emit_failed',
+      level: 'warning',
+      extra: { event: params.event },
+    });
+  }
+}
+
+/**
+ * Resolves a user's default organization + role for audit attribution
+ * and ServiceContext construction. Returns nulls if the lookup fails —
+ * the audit row is still written (organization_id is nullable). Uses
+ * the admin client because the user may be on a freshly-issued or
+ * recovery session with limited RLS context.
+ */
+async function resolveDefaultOrgAndRole(
+  userId: string,
+): Promise<{ organizationId: string | null; role: string | null }> {
+  try {
+    const admin = createAdminClient();
+    const { data: profile } = await admin
+      .from('user_profiles')
+      .select('default_organization_id')
+      .eq('id', userId)
+      .maybeSingle();
+    const defaultOrgId =
+      (profile as { default_organization_id: string | null } | null)
+        ?.default_organization_id ?? null;
+
+    if (defaultOrgId) {
+      const { data: member } = await admin
+        .from('organization_members')
+        .select('organization_id, role')
+        .eq('user_id', userId)
+        .eq('organization_id', defaultOrgId)
+        .not('accepted_at', 'is', null)
+        .maybeSingle();
+      const row = member as { organization_id: string; role: string } | null;
+      if (row) return { organizationId: row.organization_id, role: row.role };
+    }
+
+    const { data: anyMember } = await admin
+      .from('organization_members')
+      .select('organization_id, role')
+      .eq('user_id', userId)
+      .not('accepted_at', 'is', null)
+      .limit(1)
+      .maybeSingle();
+    const row = anyMember as { organization_id: string; role: string } | null;
+    return {
+      organizationId: row?.organization_id ?? null,
+      role: row?.role ?? null,
+    };
+  } catch {
+    return { organizationId: null, role: null };
+  }
 }
 
 /**
@@ -84,11 +189,24 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
   }
 
   const supabase = await createClient({ rememberSession: parsed.data.rememberMe });
-  const { error } = await supabase.auth.signInWithPassword({
+  const { data: signInData, error } = await supabase.auth.signInWithPassword({
     email: parsed.data.email,
     password: parsed.data.password,
   });
-  if (error) return err('unauthenticated', 'Invalid email or password');
+  if (error) {
+    // Audit failed sign-ins for forensics. NEVER include the supplied
+    // password (even on the wire). `email` is OK on a failure row — an
+    // attacker who can read audit_logs already has tenant admin and
+    // emails are not high-entropy secrets. user_id stays null because
+    // the auth call did not return a user.
+    await emitAuthAudit({
+      event: 'user.sign_in_failed',
+      userId: null,
+      organizationId: null,
+      extra: { email: parsed.data.email, reason: 'invalid_credentials' },
+    });
+    return err('unauthenticated', 'Invalid email or password');
+  }
 
   const cookieStore = await cookies();
   cookieStore.set(
@@ -101,15 +219,47 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
   // brings them to AAL1. They must complete the TOTP challenge to reach
   // AAL2 and access the dashboard.
   const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-  if (aal && aal.currentLevel === 'aal1' && aal.nextLevel === 'aal2') {
-    return ok({ next: '/signin/mfa' });
-  }
+  const nextPath =
+    aal && aal.currentLevel === 'aal1' && aal.nextLevel === 'aal2'
+      ? '/signin/mfa'
+      : '/dashboard';
 
-  return ok({ next: '/dashboard' });
+  // Audit successful sign-in. Resolve org + role best-effort for
+  // attribution — these are nullable on audit_logs so a brand-new user
+  // (no membership) still gets a row.
+  const userId = signInData.user?.id ?? null;
+  let organizationId: string | null = null;
+  let role: string | null = null;
+  if (userId) {
+    const resolved = await resolveDefaultOrgAndRole(userId);
+    organizationId = resolved.organizationId;
+    role = resolved.role;
+  }
+  await emitAuthAudit({
+    event: 'user.signed_in',
+    userId,
+    organizationId,
+    extra: {
+      email: parsed.data.email,
+      role,
+      remember: parsed.data.rememberMe,
+      mfa_required: nextPath === '/signin/mfa',
+    },
+  });
+
+  return ok({ next: nextPath });
 }
 
 export async function signOutAction(): Promise<void> {
   const supabase = await createClient();
+
+  // Snapshot the user BEFORE signOut so we still have a userId to
+  // attribute the audit row to. Best-effort: a missing user just yields
+  // a null-attributed row, which is fine on the sign-out path.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
   // scope: 'global' revokes ALL refresh tokens for the user across
   // every device + tab. Default ('local') only kills the calling
   // tab's token, leaving other browser tabs and the mobile app
@@ -118,6 +268,17 @@ export async function signOutAction(): Promise<void> {
   await supabase.auth.signOut({ scope: 'global' });
   const cookieStore = await cookies();
   cookieStore.delete(REMEMBER_SESSION_COOKIE);
+
+  if (user) {
+    const { organizationId } = await resolveDefaultOrgAndRole(user.id);
+    await emitAuthAudit({
+      event: 'user.signed_out',
+      userId: user.id,
+      organizationId,
+      extra: { email: user.email ?? null, scope: 'global' },
+    });
+  }
+
   redirect('/');
 }
 
@@ -141,6 +302,17 @@ export async function requestPasswordResetAction(
   await supabase.auth.resetPasswordForEmail(parsed.data.email, {
     redirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/reset/complete`,
   });
+
+  // Audit reset requests (email only; resetPasswordForEmail does not
+  // return the user, and looking it up would leak account-enumeration
+  // signal back to the caller). user_id stays null.
+  await emitAuthAudit({
+    event: 'user.password.reset_requested',
+    userId: null,
+    organizationId: null,
+    extra: { email: parsed.data.email },
+  });
+
   // Always return ok to avoid account enumeration.
   return ok({ ok: true });
 }
@@ -163,9 +335,39 @@ export async function completePasswordResetAction(
   }
 
   const supabase = await createClient();
+
+  // Snapshot the user BEFORE updateUser/signOut so we can attribute the
+  // audit row to a real userId even after the global signOut.
+  const {
+    data: { user: preUser },
+  } = await supabase.auth.getUser();
+
   const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
   if (error) return err('internal_error', error.message);
-  return ok({ next: '/dashboard' });
+
+  // SECURITY: after an email-recovery password update, force a fresh
+  // sign-in rather than auto-elevating the recovery session into the
+  // dashboard. The recovery link is the only factor that's been verified
+  // here — an attacker who intercepted a reset link could otherwise
+  // pivot straight into the account. scope: 'global' also kills every
+  // other live session for this user across all devices so a leaked
+  // legitimate session is forcibly evicted.
+  await supabase.auth.signOut({ scope: 'global' });
+
+  // Audit the successful recovery-based reset.
+  if (preUser) {
+    const { organizationId } = await resolveDefaultOrgAndRole(preUser.id);
+    await emitAuthAudit({
+      event: 'user.password.reset_completed',
+      userId: preUser.id,
+      organizationId,
+      extra: { email: preUser.email ?? null },
+    });
+  }
+
+  // Redirect to /signin. The sign-in form's existing success toast
+  // ("Password updated.") still fires from the consumer page.
+  return ok({ next: '/signin?reset=success' });
 }
 
 /**
@@ -248,6 +450,16 @@ export async function changePasswordAction(
     password: parsed.data.newPassword,
   });
   if (updateError) return err('internal_error', updateError.message);
+
+  // SECURITY: revoke every OTHER live session for this user (mobile,
+  // other browsers, stale tabs) but keep the current tab signed in so
+  // the in-app password change doesn't bounce the user to /signin.
+  // Best-effort — never block the success response on a signOut error.
+  try {
+    await supabase.auth.signOut({ scope: 'others' });
+  } catch (e) {
+    console.warn('[changePasswordAction] signOut others failed:', e);
+  }
 
   await audit({
     event: 'user.password.changed',
