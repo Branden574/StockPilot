@@ -307,7 +307,7 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     description: 'Approve, deny, ship, and mark delivered.',
   },
   'orders:assign_delivery': {
-    group: 'Orders',
+    group: 'Order requests',
     label: 'Assign deliveries',
     description: 'Assign a staged delivery to a driver. Manager+ only.',
   },
