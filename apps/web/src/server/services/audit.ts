@@ -77,6 +77,10 @@ export type AuditEvent =
   | 'order_request.cancelled'
   | 'order_request.delivered'
   | 'order_request.public_link_rotated'
+  // New 'order.*' events for the refactored pick → pack → stage → sign
+  // workflow (phases 3–5). Coexist with legacy 'order_request.*' events
+  // above so historical audit-log queries stay valid; new emissions use
+  // this prefix.
   | 'order.pick_slip_generated'
   | 'order.picking_complete'
   | 'order.packing_slip_generated'
