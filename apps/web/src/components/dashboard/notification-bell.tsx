@@ -5,6 +5,10 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import {
+  queueLiveNotification,
+  type LiveNotificationPayload,
+} from '@/lib/notifications/live-toast';
 import { createClient } from '@/lib/supabase/client';
 
 interface Props {
@@ -101,13 +105,31 @@ export function NotificationBell({ userId, initialUnread }: Props) {
           table: 'notifications',
           filter: `user_id=eq.${userId}`,
         },
-        () => {
+        (payload) => {
           // Both the bell badge and any open `/dashboard/notifications`
           // page should reflect new data. The page is RSC, so nudging
           // the router refresh re-fetches its data; the badge updates
           // via refetch() directly.
           void refetch();
           requestRefresh();
+
+          // Live toast / desktop notification — only on fresh INSERTs.
+          // UPDATEs (read_at flip) and DELETEs shouldn't pop. The
+          // payload shape from postgres_changes is
+          // `{ eventType, new, old, ... }`.
+          if (payload.eventType !== 'INSERT') return;
+          const row = payload.new as Partial<LiveNotificationPayload> | null;
+          if (!row || !row.id || !row.title) return;
+          queueLiveNotification(
+            {
+              id: row.id,
+              type: row.type ?? 'unknown',
+              title: row.title,
+              body: row.body ?? null,
+              link: row.link ?? null,
+            },
+            (link) => router.push(link),
+          );
         },
       );
       channel.subscribe();
