@@ -374,17 +374,21 @@ export class ShipmentsService {
     const orSvc = new OrderRequestsService(this.ctx);
     const detail = await orSvc.get(input.orderRequestId);
 
-    const allowedSourceStatuses: Array<
-      'approved' | 'packing_slip_generated' | 'staged_for_delivery'
-    > = ['approved', 'packing_slip_generated', 'staged_for_delivery'];
-    if (
-      !allowedSourceStatuses.includes(
-        detail.request.status as
-          | 'approved'
-          | 'packing_slip_generated'
-          | 'staged_for_delivery',
-      )
-    ) {
+    // Pre-migration window: until migration 0109 applies, the DB still
+    // serves legacy 'packaging' / 'ready_for_delivery' status values.
+    // We accept BOTH legacy and new identifiers here so shipment
+    // creation doesn't break during the rollout. After 0109 ships and
+    // those legacy values are gone, this list can be tightened back to
+    // just the new identifiers.
+    const allowedSourceStatuses: readonly string[] = [
+      'approved',
+      'packing_slip_generated',
+      'staged_for_delivery',
+      // Legacy fallback — removable after migration 0109 ships
+      'packaging',
+      'ready_for_delivery',
+    ];
+    if (!allowedSourceStatuses.includes(detail.request.status as string)) {
       throw new ServiceError(
         'validation_error',
         'Only approved / packing-slip-generated / staged order requests can be packed.',
