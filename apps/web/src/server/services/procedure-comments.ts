@@ -53,11 +53,13 @@ interface RawCommentRow {
 
 /**
  * ProcedureCommentsService — single-level threaded discussion under a
- * procedure. Posting a NEW comment requires `items:update` (staff+),
- * so viewer-only accounts can read the thread but can't add to it. The
- * database goes a step further: RLS on `procedure_comments_insert`
- * requires manager+ (migration 0088). Update/delete is allowed for the
- * author OR an admin+. Reply-to-reply is rejected at the service layer.
+ * procedure. Posting a NEW comment requires `categories:manage` (manager+),
+ * matching the RLS insert policy from migration 0088. The previous staff-
+ * level `items:update` gate let staff through the service and then trip
+ * a raw RLS denial at the DB — surfacing as a generic forbidden instead
+ * of the friendly ServiceError this gate now produces. Update/delete is
+ * allowed for the author OR an admin+. Reply-to-reply is rejected at the
+ * service layer.
  */
 export class ProcedureCommentsService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -126,12 +128,11 @@ export class ProcedureCommentsService {
    * product is intentionally single-level.
    */
   async create(input: CreateProcedureCommentInput): Promise<ProcedureCommentNode> {
-    // Gate posting on `items:update` (staff+). Viewers can read the
-    // thread via RLS but can't add to it through the service. The
-    // database insert policy is stricter still (manager+, see migration
-    // 0088) — this assert exists so a viewer hits a friendly 403 instead
-    // of a raw RLS denial from PostgREST.
-    assertPermission(this.ctx, 'items:update');
+    // Gate posting on `categories:manage` (manager+), matching the RLS
+    // insert policy from migration 0088. Previously gated on `items:update`
+    // (staff+), which let staff pass the service gate and trip a raw RLS
+    // denial — confusing UX. Viewers can still read the thread.
+    assertPermission(this.ctx, 'categories:manage');
     if (input.parentId) {
       const { data: parent, error: parentErr } = await this.ctx.supabase
         .from('procedure_comments')
