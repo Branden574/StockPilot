@@ -54,16 +54,19 @@ export type ManualCreateShipmentInput = z.infer<typeof manualCreateShipmentSchem
  * Phase 2B — public signature submission.
  *
  * The signature token is a 48-character hex string (24 bytes — see
- * ShipmentsService.insertShipmentWithLines). We accept 32..96 hex chars to
- * leave room for a future change to the token width without breaking the
- * schema. The signatureDataUrl must look like a PNG data URL; we cap it
- * at ~1MB (1.3M chars after base64 inflation) so a malicious caller can't
- * post a multi-MB blob.
+ * ShipmentsService.insertShipmentWithLines). F10: tightened min to 48
+ * (down from 32) so the schema matches the generator exactly — there's
+ * no legitimate path that produces a shorter token, and accepting
+ * shorter values just expanded the attacker's search space at the
+ * action edge. 96 max still leaves room to widen the generator later
+ * without a coordinated schema rollout. The signatureDataUrl must look
+ * like a PNG data URL; we cap it at ~1MB (1.3M chars after base64
+ * inflation) so a malicious caller can't post a multi-MB blob.
  */
 export const submitShipmentSignatureSchema = z.object({
   token: z
     .string()
-    .min(32)
+    .min(48)
     .max(96)
     .regex(/^[a-f0-9]+$/i, 'Invalid signature token'),
   signatureDataUrl: z

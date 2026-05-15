@@ -26,13 +26,23 @@ export async function generateMetadata({
 }) {
   const { id } = await params;
   const item = await getPublicItem(id);
+  // F8: noindex the public item page. The page is intentionally public
+  // (anyone with a QR scan can land here) but should NOT be a crawled,
+  // search-indexable surface — quantity-on-hand and cover images
+  // leaking into Google's index would broaden the threat model beyond
+  // the labeled-item-in-the-building case we accept. Matches /r, /s,
+  // /invite.
   if (!item) {
-    return { title: 'Item not found · StockPilot' };
+    return {
+      title: 'Item not found · StockPilot',
+      robots: { index: false, follow: false },
+    };
   }
   const subtitle = item.bookAuthor ?? item.category ?? 'Inventory item';
   return {
     title: `${item.name} · StockPilot`,
     description: subtitle,
+    robots: { index: false, follow: false },
     openGraph: {
       title: item.name,
       description: subtitle,

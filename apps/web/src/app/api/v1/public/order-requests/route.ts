@@ -384,6 +384,11 @@ export async function POST(req: NextRequest) {
       recipientEmail: requesterEmail,
       recipientName: body.requesterName,
       appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
+      // F2: pass the org's public_request_token so the confirmation
+      // email's "View request" link includes `&t=…`. Without it the
+      // recipient's click lands on a silent 404 — the GET track route
+      // scopes lookups by org token.
+      publicRequestToken: body.token,
     });
   } catch (e) {
     console.warn('[public order-requests] email send failed', e);

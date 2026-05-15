@@ -132,20 +132,30 @@ export async function submitShipmentSignatureAction(
     signature_token: string;
   };
 
-  // I11: if the original packing slip locked the signer to a specific
-  // email (signature_email_to set at create time), refuse a submission
-  // from anyone else. The token is the auth gate, but if a recipient
-  // forwards the link the actual signer should match the addressee.
-  // Case-insensitive compare; empty signature_email_to means anyone
-  // with the token may sign (back-compat with pre-2C slips).
-  if (shipment.signature_email_to) {
-    const lockedTo = shipment.signature_email_to.trim().toLowerCase();
-    if (lockedTo && email.trim().toLowerCase() !== lockedTo) {
-      return err(
-        'forbidden',
-        'This signature link was issued to a different email address. Ask the warehouse manager for a fresh link.',
-      );
-    }
+  // I11 + M1/M7: the packing slip's `signature_email_to` is the
+  // manager-set recipient lock. The signer's email MUST match it.
+  //
+  // Pre-2C ("back-compat") slips were created without setting
+  // `signature_email_to`; previously NULL was treated as "anyone with
+  // the token may sign," and the column was then overwritten with
+  // whatever email the submitter typed. That made the body-supplied
+  // `email` a self-elected recipient lock — any holder of a leaked
+  // link could hand-pick where the signed PDF + audit emails got
+  // delivered. Refuse with a clear validation error so the manager
+  // rotates the link with a proper `signature_email_to` set, rather
+  // than silently letting the submitter elect themselves.
+  if (!shipment.signature_email_to || !shipment.signature_email_to.trim()) {
+    return err(
+      'validation_error',
+      'This slip requires a manager to set the recipient email first.',
+    );
+  }
+  const lockedTo = shipment.signature_email_to.trim().toLowerCase();
+  if (email.trim().toLowerCase() !== lockedTo) {
+    return err(
+      'forbidden',
+      'This signature link was issued to a different email address. Ask the warehouse manager for a fresh link.',
+    );
   }
 
   if (shipment.status === 'delivered' || shipment.status === 'cancelled') {
@@ -201,13 +211,18 @@ export async function submitShipmentSignatureAction(
   // authenticated path between lookup and update). The `.in('status',
   // ['shipped'])` filter silently passes on zero rows; without the
   // select-and-check we'd think we succeeded when we actually didn't.
+  // M7: do NOT overwrite `signature_email_to` here. It's the
+  // manager-set recipient lock and was validated equal to the
+  // submitter's email above. Writing the submitter-supplied `email`
+  // back into the column would be a no-op today but would silently
+  // re-introduce the body-controlled-recipient vector if the lock
+  // check ever loosens.
   const { data: updatedRows, error: updateErr } = await admin
     .from('shipments')
     .update({
       signature_image_url: signatureDataUrl,
       signed_by_name: signedByName,
       signed_at: signedAt.toISOString(),
-      signature_email_to: email,
       notes: mergedNotes,
       status: 'delivered',
       signature_token: null,
@@ -367,8 +382,13 @@ export async function submitShipmentSignatureAction(
   }
 
   // 5. Build the recipient list. Type narrows + dedupes.
+  // M7: seed the recipient list from the manager-set
+  // `signature_email_to` (already validated equal to `email` above),
+  // NOT the submitter-supplied body field. Defense-in-depth against
+  // any future loosening of the lock-equality check — the recipient
+  // list should always be derived from manager-controlled state.
   const recipients = new Set<string>();
-  recipients.add(email);
+  recipients.add(shipment.signature_email_to.trim());
   if (sourceManager?.email) recipients.add(sourceManager.email);
   if (shipment.signature_email_cc) {
     for (const cc of shipment.signature_email_cc) {

@@ -19,6 +19,16 @@ interface SendInput {
   recipientEmail: string;
   recipientName: string | null;
   appUrl: string;
+  /**
+   * F2: org's `public_request_token`. Required for public-link
+   * requesters so the email's "View request" CTA includes `&t=…` —
+   * the GET /api/v1/public/order-requests/[id] handler scopes the
+   * lookup by org public_request_token and silently 404s without it.
+   * Only consulted when `request.requester_user_id` is null (public
+   * submission). Optional/nullable so internal callers don't have to
+   * supply it.
+   */
+  publicRequestToken?: string | null;
 }
 
 const SUBJECTS: Record<OrderRequestEmailKind, string> = {
@@ -51,7 +61,8 @@ const HEADLINES: Record<OrderRequestEmailKind, string> = {
  * the call site.
  */
 export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
-  const { kind, request, recipientEmail, recipientName, appUrl } = input;
+  const { kind, request, recipientEmail, recipientName, appUrl, publicRequestToken } =
+    input;
   const subject = SUBJECTS[kind];
   const headline = HEADLINES[kind];
   const reasonLine =
@@ -59,9 +70,20 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
       ? `<p style="color:#666;">Reason: ${escapeHtml(request.denied_reason)}</p>`
       : '';
 
+  // F2: public-link recipients need `&t=<token>` in the track URL —
+  // the GET /api/v1/public/order-requests/[id] handler scopes lookups
+  // by org token and silently 404s without it. If a caller forgot to
+  // pass the token, fall back to the tokenless URL so the email still
+  // sends; the user lands on a clean "we couldn't find that order"
+  // state and can re-enter the token on /r/track manually.
+  const publicTrackUrl = publicRequestToken
+    ? `${appUrl}/r/track?id=${request.id}` +
+      `&email=${encodeURIComponent(recipientEmail)}` +
+      `&t=${encodeURIComponent(publicRequestToken)}`
+    : `${appUrl}/r/track?id=${request.id}&email=${encodeURIComponent(recipientEmail)}`;
   const link = request.requester_user_id
     ? `${appUrl}/dashboard/orders/${request.id}`
-    : `${appUrl}/r/track?id=${request.id}&email=${encodeURIComponent(recipientEmail)}`;
+    : publicTrackUrl;
 
   const greeting = recipientName
     ? `Hi ${escapeHtml(recipientName)},`

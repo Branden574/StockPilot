@@ -1,7 +1,23 @@
 import { notFound } from 'next/navigation';
 
 import { PublicOrderForm } from '@/components/orders/public-order-form';
+import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
+
+/**
+ * F9: org.logo_url is editable by org admins and could in theory hold
+ * any URL — including an off-site image used for tracking pixel attacks
+ * against everyone who scans the public order link. Lock the rendered
+ * logo to our Supabase storage public bucket. If the stored value
+ * doesn't match the allowlist (legacy data, manual edit), render no
+ * image rather than throwing — the page itself still works fine
+ * without a logo.
+ */
+function isAllowedLogoUrl(value: string | null): value is string {
+  if (!value) return false;
+  const allowedPrefix = `${env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/org-logos/`;
+  return value.startsWith(allowedPrefix);
+}
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -148,7 +164,7 @@ function Header({
 }) {
   return (
     <header className="mb-6 flex flex-col items-center text-center">
-      {org.logo_url ? (
+      {isAllowedLogoUrl(org.logo_url) ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={org.logo_url}
@@ -213,9 +229,14 @@ async function loadBooks(
   }
   const urlByPath = new Map<string, string>();
   if (pathByItem.size > 0) {
+    // F6: 1-hour TTL. This page is force-dynamic so signed URLs are
+    // re-minted on every load — no SSG cache benefits from a long TTL.
+    // The previous 7-day window meant browsable item-image links
+    // lingered in mailbox previews and screenshots for a week past
+    // the actual session.
     const { data: signed } = await admin.storage
       .from('item-images')
-      .createSignedUrls([...pathByItem.values()], 7 * 24 * 60 * 60);
+      .createSignedUrls([...pathByItem.values()], 60 * 60);
     for (const entry of signed ?? []) {
       if (entry.signedUrl && entry.path) urlByPath.set(entry.path, entry.signedUrl);
     }
