@@ -52,7 +52,7 @@ import {
 } from '@/server/actions/team';
 import { formatRelative } from '@/lib/utils';
 
-import { ROLES, ROLE_LABELS, type Role } from '@stockpilot/core';
+import { ROLES, ROLE_LABELS, type InviteableRole, type Role } from '@stockpilot/core';
 
 interface Member {
   id: string;
@@ -354,7 +354,10 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
 
 interface InviteFormValues {
   email: string;
-  role: Role;
+  // Owner is never invitable — it can only be transferred from the
+  // current owner via the dedicated ownership-transfer flow. Schema
+  // mirrors `inviteMemberSchema.role` in @stockpilot/core.
+  role: InviteableRole;
   charterId: string;
   warehouseId: string;
   message: string;
@@ -488,7 +491,7 @@ function InviteDialog({
               <Label>Role</Label>
               <Select
                 value={role}
-                onValueChange={(v: string) => setValue('role', v as Role)}
+                onValueChange={(v: string) => setValue('role', v as InviteableRole)}
               >
                 <SelectTrigger>
                   <SelectValue />
