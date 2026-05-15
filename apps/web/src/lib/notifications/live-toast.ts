@@ -83,42 +83,60 @@ function safeRedirect(path: string | null): string | null {
   return path;
 }
 
+/**
+ * At fire time (NOT queue time) pick the surface that actually makes
+ * sense for the user's current tab state:
+ *   - visible → in-app sonner toast.
+ *   - hidden + desktop opt-in granted → OS Notification.
+ *   - hidden + no opt-in → drop the toast entirely; the bell badge
+ *     already updated, the user will see the unread count when they
+ *     come back to the tab.
+ *
+ * The previous version fired the sonner toast unconditionally even
+ * while hidden, which caused a stack of stale toasts to appear when
+ * the user refocused the tab (sonner keeps undismissed toasts in the
+ * DOM until their duration elapses).
+ */
+function isTabVisible(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'visible';
+}
+
 function fireOne(
   payload: LiveNotificationPayload,
   navigate: (link: string) => void,
 ): void {
   const link = safeRedirect(payload.link);
-  toast(payload.title, {
-    description: payload.body ?? undefined,
-    action: link
-      ? {
-          label: 'View',
-          onClick: () => navigate(link),
-        }
-      : undefined,
-  });
-  // Browser Notification (when hidden + opted in). Keep title +
-  // body short; some browsers truncate aggressively.
-  if (
-    typeof document !== 'undefined' &&
-    document.visibilityState === 'hidden' &&
-    isDesktopNotificationsEnabled()
-  ) {
-    try {
-      const n = new Notification(payload.title, {
-        body: payload.body ?? undefined,
-        tag: payload.id, // dedupes per-OS so the same row can't double-fire
-      });
-      if (link) {
-        n.onclick = () => {
-          window.focus();
-          navigate(link);
-          n.close();
-        };
-      }
-    } catch {
-      /* Notification disabled mid-session or browser refused */
+
+  if (isTabVisible()) {
+    toast(payload.title, {
+      description: payload.body ?? undefined,
+      action: link
+        ? {
+            label: 'View',
+            onClick: () => navigate(link),
+          }
+        : undefined,
+    });
+    return;
+  }
+
+  // Tab hidden — try OS notification if the user opted in. Keep
+  // title + body short; some browsers truncate aggressively.
+  if (!isDesktopNotificationsEnabled()) return;
+  try {
+    const n = new Notification(payload.title, {
+      body: payload.body ?? undefined,
+      tag: payload.id, // dedupes per-OS so the same row can't double-fire
+    });
+    if (link) {
+      n.onclick = () => {
+        window.focus();
+        navigate(link);
+        n.close();
+      };
     }
+  } catch {
+    /* Notification disabled mid-session or browser refused */
   }
 }
 
@@ -128,37 +146,38 @@ function fireBurstSummary(
 ): void {
   // Try to surface a useful link — most fan-outs share the same link
   // shape (e.g. /dashboard/orders/<id>). If all links match, route
-  // there; otherwise drop the action.
+  // there; otherwise route to the notifications inbox.
   const links = new Set(payloads.map((p) => p.link ?? ''));
   const sharedLink =
     links.size === 1 && payloads[0]?.link ? safeRedirect(payloads[0].link) : null;
-  toast(`${payloads.length} new notifications`, {
-    description: 'Open the bell to review them.',
-    action: sharedLink
-      ? {
-          label: 'View',
-          onClick: () => navigate(sharedLink),
-        }
-      : { label: 'Open bell', onClick: () => navigate('/dashboard/notifications') },
-  });
-  if (
-    typeof document !== 'undefined' &&
-    document.visibilityState === 'hidden' &&
-    isDesktopNotificationsEnabled()
-  ) {
-    try {
-      const n = new Notification('New notifications', {
-        body: `${payloads.length} new updates in StockPilot.`,
-        tag: 'stockpilot-burst', // single burst notification only
-      });
-      n.onclick = () => {
-        window.focus();
-        navigate(sharedLink ?? '/dashboard/notifications');
-        n.close();
-      };
-    } catch {
-      /* swallow */
-    }
+  const fallback = '/dashboard/notifications';
+
+  if (isTabVisible()) {
+    toast(`${payloads.length} new notifications`, {
+      description: 'Open the bell to review them.',
+      action: sharedLink
+        ? {
+            label: 'View',
+            onClick: () => navigate(sharedLink),
+          }
+        : { label: 'View all', onClick: () => navigate(fallback) },
+    });
+    return;
+  }
+
+  if (!isDesktopNotificationsEnabled()) return;
+  try {
+    const n = new Notification('New notifications', {
+      body: `${payloads.length} new updates in StockPilot.`,
+      tag: 'stockpilot-burst', // single burst notification only
+    });
+    n.onclick = () => {
+      window.focus();
+      navigate(sharedLink ?? fallback);
+      n.close();
+    };
+  } catch {
+    /* swallow */
   }
 }
 

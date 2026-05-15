@@ -10,7 +10,7 @@ import {
   setDesktopOptIn,
 } from '@/lib/notifications/live-toast';
 
-type PermissionState = 'unsupported' | 'default' | 'granted' | 'denied';
+type PermissionState = 'loading' | 'unsupported' | 'default' | 'granted' | 'denied';
 
 /**
  * Per-device opt-in for desktop / OS-level notifications. When the
@@ -29,7 +29,11 @@ type PermissionState = 'unsupported' | 'default' | 'granted' | 'denied';
  * work.
  */
 export function DesktopNotificationsOptIn() {
-  const [perm, setPerm] = React.useState<PermissionState>('unsupported');
+  // Start in 'loading' so the initial render doesn't briefly flash the
+  // "unsupported" panel before useEffect reads the real permission
+  // state. The settings page is `'use client'`, so the loading state
+  // shows for one tick and is immediately replaced.
+  const [perm, setPerm] = React.useState<PermissionState>('loading');
   const [optIn, setOptIn] = React.useState(false);
   const [pending, setPending] = React.useState(false);
 
@@ -76,6 +80,15 @@ export function DesktopNotificationsOptIn() {
     setDesktopOptIn(false);
     setOptIn(false);
     toast.success('Desktop notifications paused for this device.');
+  }
+
+  if (perm === 'loading') {
+    return (
+      <div className="text-muted-foreground flex items-center gap-2 text-sm">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Checking browser support…
+      </div>
+    );
   }
 
   if (perm === 'unsupported') {
