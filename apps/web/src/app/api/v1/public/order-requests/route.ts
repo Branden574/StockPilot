@@ -43,6 +43,19 @@ const bodySchema = z.object({
   requesterOrgLabel: z.string().trim().max(160).nullish(),
   notes: z.string().max(2000).nullish(),
   lines: z.array(lineSchema).min(1).max(100),
+  fulfillmentType: z.enum(['pickup', 'delivery']),
+  requesterPhone: z.string().trim().max(40).nullish(),
+  deliveryAddress: z
+    .object({
+      line1: z.string().trim().min(1).max(200),
+      line2: z.string().trim().max(200).nullish(),
+      city: z.string().trim().min(1).max(120),
+      region: z.string().trim().max(120).nullish(),
+      postal: z.string().trim().max(40).nullish(),
+      instructions: z.string().trim().max(1000).nullish(),
+    })
+    .nullish(),
+  pickupLocationNotes: z.string().trim().max(2000).nullish(),
   // I13: hidden honeypot field. Real submitters never fill it in
   // (it's not visible to humans); naive form-fillers fill every
   // visible+invisible field. Reject when it's non-empty so we can
@@ -107,6 +120,13 @@ export async function POST(req: NextRequest) {
     );
   }
   const body: Body = parsed.data;
+
+  if (body.fulfillmentType === 'delivery' && !body.deliveryAddress) {
+    return NextResponse.json(
+      { error: 'delivery_address_required', message: 'Delivery orders need a shipping address.' },
+      { status: 400 },
+    );
+  }
 
   // I13: honeypot trip — silently 200 so bots can't distinguish
   // success from failure and tune around it. (We don't actually
@@ -369,6 +389,10 @@ export async function POST(req: NextRequest) {
       requester_name: body.requesterName,
       requester_org_label: body.requesterOrgLabel ?? null,
       notes: body.notes ?? null,
+      fulfillment_type: body.fulfillmentType,
+      requester_phone: body.requesterPhone ?? null,
+      delivery_address: body.deliveryAddress ?? null,
+      pickup_location_notes: body.pickupLocationNotes ?? null,
       confirmation_token_hash: tokenHash,
       confirmation_token_expires_at: expiresAt,
     })
