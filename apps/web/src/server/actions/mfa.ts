@@ -4,9 +4,11 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { audit } from '@/server/services/audit';
-import { ServiceError } from '@/server/services/context';
+import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/context';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
+import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createClient } from '@/lib/supabase/server';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -60,15 +62,22 @@ export async function enrollFactorAction(): Promise<
 const verifyEnrollmentSchema = z.object({
   factorId: z.string().min(1),
   code: z.string().regex(/^\d{6}$/, 'Enter the 6-digit code'),
+  password: z.string().min(1, 'Confirm your password').max(128).optional(),
 });
 
 /**
  * Confirms a freshly enrolled factor. After this succeeds the factor becomes
  * `verified` and counts toward the user's AAL2.
+ *
+ * Optional password re-confirm: when present, validated out-of-band so a
+ * stolen mid-enrollment session cookie alone can't finish enrolling an
+ * attacker-controlled factor. Optional today for client-rollout safety;
+ * the UI always sends it.
  */
 export async function verifyEnrollmentAction(input: {
   factorId: string;
   code: string;
+  password?: string;
 }): Promise<ActionResult<void>> {
   const parsed = verifyEnrollmentSchema.safeParse(input);
   if (!parsed.success) {
@@ -77,6 +86,31 @@ export async function verifyEnrollmentAction(input: {
   try {
     const session = await requireSession();
     const supabase = await createClient();
+
+    if (parsed.data.password) {
+      const rl = await checkRateLimit(
+        `mfa-enroll-verify:${session.userId}`,
+        5,
+        15 * 60_000,
+        'closed',
+      );
+      if (!rl.allowed) {
+        return err(
+          'validation_error',
+          'Too many enrollment confirmations. Try again in a few minutes.',
+        );
+      }
+      const pwRes = await verifyPasswordSideChannel(
+        session.email,
+        parsed.data.password,
+      );
+      if (!pwRes.ok) {
+        return err(
+          pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',
+          pwRes.message,
+        );
+      }
+    }
 
     const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({
       factorId: parsed.data.factorId,
@@ -122,6 +156,15 @@ export async function unenrollFactorAction(input: {
   try {
     const session = await requireSession();
     const supabase = await createClient();
+
+    // AAL2 step-up gate: removing a TOTP factor weakens the account's
+    // security posture. The session MUST currently satisfy AAL2 (i.e.
+    // the user completed the TOTP challenge this session) before they
+    // can disable it. Without this gate, a stolen AAL1-only session
+    // (eg. cookie theft from a still-AAL1 device) could strip MFA off
+    // an account whose enrolled factor the attacker doesn't own.
+    const svcCtx = await withContext();
+    await assertCurrentAal2(svcCtx);
 
     // Block disabling if the user's org policy requires MFA.
     const ctx = await requireOrgContext();
@@ -218,6 +261,13 @@ export async function setOrgMfaPolicyAction(input: {
     if (ctx.role !== 'owner' && ctx.role !== 'admin') {
       return err('forbidden', 'Only admins can change the MFA policy.');
     }
+    // AAL2 step-up: an admin changing the org-wide MFA policy is a
+    // security-critical mutation (a malicious admin lowering policy
+    // from `all_required` to `optional` opens the door to phishing
+    // weaker accounts). Require the calling admin to have completed
+    // their MFA challenge this session.
+    const svcCtx = await withContext();
+    await assertCurrentAal2(svcCtx);
     const supabase = await createClient();
     const { data: prev } = await supabase
       .from('organizations')

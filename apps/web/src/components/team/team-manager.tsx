@@ -48,6 +48,7 @@ import {
   removeMemberAction,
   resendInviteAction,
   revokeInviteAction,
+  transferOwnershipAction,
   updateMemberRoleAction,
 } from '@/server/actions/team';
 import { formatRelative } from '@/lib/utils';
@@ -171,6 +172,10 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
   const router = useRouter();
   const [removeOpen, setRemoveOpen] = React.useState(false);
   const [removeBusy, setRemoveBusy] = React.useState(false);
+  const [transferOpen, setTransferOpen] = React.useState(false);
+  const [transferPassword, setTransferPassword] = React.useState('');
+  const [transferAck, setTransferAck] = React.useState(false);
+  const [transferBusy, setTransferBusy] = React.useState(false);
   const initials = (member.fullName || member.email)
     .split(/\s+/)
     .map((s) => s[0])
@@ -179,6 +184,9 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
     .join('');
 
   const canManage = (currentUserRole === 'owner' || currentUserRole === 'admin') && member.role !== 'owner';
+  // Only the owner can hand off the role, and only to an accepted (non-owner) member.
+  const canTransferOwnership =
+    currentUserRole === 'owner' && member.role !== 'owner' && member.acceptedAt !== null;
   const displayName = member.fullName ?? member.email;
 
   async function changeRole(role: Role) {
@@ -200,6 +208,34 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
     }
     setRemoveOpen(false);
     toast.success(`"${displayName}" removed from the workspace.`);
+    router.refresh();
+  }
+
+  async function confirmTransfer() {
+    if (!transferPassword) {
+      toast.error('Enter your password to confirm.');
+      return;
+    }
+    if (!transferAck) {
+      toast.error('Acknowledge the consequences before transferring.');
+      return;
+    }
+    setTransferBusy(true);
+    const res = await transferOwnershipAction({
+      targetMemberId: member.id,
+      password: transferPassword,
+    });
+    setTransferBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    setTransferOpen(false);
+    setTransferPassword('');
+    setTransferAck(false);
+    toast.success(
+      `Ownership transferred to ${displayName}. You are now an admin in this workspace.`,
+    );
     router.refresh();
   }
 
@@ -249,6 +285,11 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
                 </DropdownMenuItem>
               ))}
               <DropdownMenuSeparator />
+              {canTransferOwnership && (
+                <DropdownMenuItem onClick={() => setTransferOpen(true)}>
+                  Transfer ownership…
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 onClick={() => setRemoveOpen(true)}
                 className="text-destructive"
@@ -267,6 +308,75 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
           pending={removeBusy}
           onConfirm={confirmRemove}
         />
+        <Dialog
+          open={transferOpen}
+          onOpenChange={(v) => {
+            if (transferBusy) return;
+            setTransferOpen(v);
+            if (!v) {
+              setTransferPassword('');
+              setTransferAck(false);
+            }
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Transfer ownership to {displayName}?</DialogTitle>
+              <DialogDescription>
+                {displayName} will become the new owner of this workspace. You'll
+                be demoted to <strong>admin</strong> and lose owner-only
+                permissions (billing, ownership transfer, deleting the workspace).
+                This action is reversible only if the new owner transfers it back.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="transfer-password">Confirm your password</Label>
+                <Input
+                  id="transfer-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={transferPassword}
+                  onChange={(e) => setTransferPassword(e.target.value)}
+                  placeholder="Your account password"
+                />
+              </div>
+              <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={transferAck}
+                  onChange={(e) => setTransferAck(e.target.checked)}
+                />
+                <span>
+                  I understand I will be demoted to admin and {displayName} will
+                  control billing, role policy, and ownership of this workspace
+                  going forward.
+                </span>
+              </label>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setTransferOpen(false)}
+                disabled={transferBusy}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmTransfer}
+                disabled={transferBusy || !transferPassword || !transferAck}
+              >
+                {transferBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  'Transfer ownership'
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </TableCell>
     </TableRow>
   );

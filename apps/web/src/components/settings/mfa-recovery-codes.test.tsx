@@ -76,15 +76,44 @@ describe('MfaRecoveryCodes', () => {
     });
   });
 
-  it("'I've saved them' closes the dialog", async () => {
+  it("'I've saved them' closes the dialog once codes have been copied or downloaded", async () => {
     const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+
     render(<MfaRecoveryCodes total={0} unused={0} />);
     await user.click(screen.getByRole('button', { name: /Generate codes/i }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toBeInTheDocument();
+
+    // Save-enforcement: the close button is disabled until codes are
+    // copied or downloaded.
+    const closeBtnBefore = screen.getByRole('button', {
+      name: /Copy or download first/i,
+    });
+    expect(closeBtnBefore).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /Copy all/i }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+
     await user.click(screen.getByRole('button', { name: /I've saved them/i }));
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
+  });
+
+  it('regenerating with existing codes shows a destructive confirm first', async () => {
+    const user = userEvent.setup();
+    render(<MfaRecoveryCodes total={10} unused={8} />);
+    await user.click(screen.getByRole('button', { name: /Regenerate codes/i }));
+    // The destructive confirm should be visible BEFORE the action runs.
+    expect(
+      await screen.findByText(/Regenerate recovery codes\?/i),
+    ).toBeInTheDocument();
+    expect(generateMfaRecoveryCodesAction).not.toHaveBeenCalled();
   });
 });

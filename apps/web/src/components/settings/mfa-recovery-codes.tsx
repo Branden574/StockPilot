@@ -5,6 +5,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
   Dialog,
   DialogContent,
@@ -22,24 +23,42 @@ interface MfaRecoveryCodesProps {
 
 export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
   const [open, setOpen] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [codes, setCodes] = React.useState<string[] | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // D4: hold the dialog open until the user has at least copied OR
+  // downloaded the codes — otherwise an accidental close throws away
+  // values that are unrecoverable. The "I've saved them" button is
+  // disabled until one of those actions has fired.
+  const [savedOnce, setSavedOnce] = React.useState(false);
+
+  function startGenerate() {
+    if (total === 0) {
+      // First-time generation: no destruction risk, skip confirm.
+      void generate();
+      return;
+    }
+    setConfirmOpen(true);
+  }
 
   async function generate() {
     setBusy(true);
     const r = await generateMfaRecoveryCodesAction();
     setBusy(false);
+    setConfirmOpen(false);
     if (!r.ok) {
       toast.error(r.error.message);
       return;
     }
     setCodes(r.data.codes);
+    setSavedOnce(false);
     setOpen(true);
   }
 
   async function copyAll() {
     if (!codes) return;
     await navigator.clipboard.writeText(codes.join('\n'));
+    setSavedOnce(true);
     toast.success('Recovery codes copied to clipboard.');
   }
 
@@ -60,9 +79,14 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
     a.download = `stockpilot-recovery-codes-${new Date().toISOString().slice(0, 10)}.txt`;
     a.click();
     URL.revokeObjectURL(url);
+    setSavedOnce(true);
   }
 
   function close() {
+    if (!savedOnce) {
+      toast.error('Copy or download your codes before closing — they are not retrievable.');
+      return;
+    }
     setOpen(false);
     // Hold the codes in memory until next mount so the user has a chance
     // to scroll back up and copy/download. Cleared on page navigation.
@@ -91,11 +115,21 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button onClick={generate} disabled={busy} variant="outline">
+        <Button onClick={startGenerate} disabled={busy} variant="outline">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldAlert className="h-4 w-4" />}
           {total === 0 ? 'Generate codes' : 'Regenerate codes'}
         </Button>
       </div>
+
+      <DestructiveConfirm
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Regenerate recovery codes?"
+        description="Any existing recovery codes will stop working immediately. Make sure you have access to your authenticator app, or save the new codes before closing the next dialog."
+        confirmLabel="Regenerate"
+        pending={busy}
+        onConfirm={generate}
+      />
 
       <Dialog open={open} onOpenChange={(v) => (v ? setOpen(true) : close())}>
         <DialogContent>
@@ -128,7 +162,9 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
           </div>
 
           <DialogFooter>
-            <Button onClick={close}>I've saved them</Button>
+            <Button onClick={close} disabled={!savedOnce}>
+              {savedOnce ? "I've saved them" : 'Copy or download first'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

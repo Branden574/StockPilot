@@ -19,15 +19,24 @@ export default async function MfaChallengePage() {
   if (!user) redirect('/signin');
 
   const { data: factorsData } = await supabase.auth.mfa.listFactors();
-  const verifiedTotp = (factorsData?.totp ?? []).find((f) => f.status === 'verified');
+  const verifiedTotp = (factorsData?.totp ?? []).filter((f) => f.status === 'verified');
 
   // No verified factor → user shouldn't be here. Send them to the dashboard
   // (they're already signed in at AAL1, which is sufficient when no MFA exists).
-  if (!verifiedTotp) redirect('/dashboard');
+  if (verifiedTotp.length === 0) redirect('/dashboard');
 
   // Already at AAL2? Skip the challenge.
   const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
   if (aal?.currentLevel === 'aal2') redirect('/dashboard');
+
+  // D5: when more than one TOTP factor is verified (eg. user has both
+  // phone + hardware backup app), pass the full list so the form can
+  // let them pick which one they want to challenge against.
+  const factors = verifiedTotp.map((f) => ({
+    id: f.id,
+    friendlyName:
+      (f.friendly_name as string | null) ?? null,
+  }));
 
   return (
     <AuthCard
@@ -35,7 +44,7 @@ export default async function MfaChallengePage() {
       description="One more step. Confirm it's you with a code from your authenticator app."
     >
       <Suspense fallback={<ChallengeSkeleton />}>
-        <MfaChallengeForm factorId={verifiedTotp.id} />
+        <MfaChallengeForm factors={factors} />
       </Suspense>
     </AuthCard>
   );

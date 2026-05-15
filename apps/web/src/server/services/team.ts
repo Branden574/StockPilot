@@ -326,6 +326,7 @@ export class TeamService {
         'You cannot remove your own membership. Ask another admin.',
       );
     }
+    const removedUserId = target.user_id as string;
     const { error } = await this.ctx.supabase
       .from('organization_members')
       .delete()
@@ -333,15 +334,85 @@ export class TeamService {
       .eq('id', memberId);
     if (error) throw new ServiceError('internal_error', error.message);
 
+    // Belt-and-braces cleanup of per-warehouse access grants for the
+    // removed user inside THIS organization. Most other org-scoped
+    // rows are already locked down by RLS once the membership row is
+    // gone, but `user_warehouse_assignments` is keyed only by
+    // (user_id, warehouse_id) and we don't want a stale assignment
+    // resurfacing if the same user is re-invited later. Best-effort:
+    // a failure here doesn't undo the membership removal, but we
+    // surface it through the audit trail.
+    let assignmentsCleared = 0;
+    let sessionRevoked = false;
+    try {
+      const admin = createAdminClient();
+
+      // Warehouses in this org
+      const { data: orgWarehouses } = await admin
+        .from('warehouses')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId);
+      const warehouseIds = (orgWarehouses ?? []).map(
+        (w) => w.id as string,
+      );
+      if (warehouseIds.length > 0) {
+        const { data: cleared, error: clearErr } = await admin
+          .from('user_warehouse_assignments')
+          .delete()
+          .eq('user_id', removedUserId)
+          .in('warehouse_id', warehouseIds)
+          .select('warehouse_id');
+        if (!clearErr) {
+          assignmentsCleared = (cleared ?? []).length;
+        }
+      }
+
+      // Kill the removed user's auth sessions globally. This forces
+      // them to sign in again — at which point RLS + missing
+      // membership row will keep them out of this org. If the user
+      // belongs to multiple orgs we accept the collateral sign-out
+      // (rare; org membership is invite-only and most users only
+      // belong to a single workspace).
+      const { error: signOutErr } = await admin.auth.admin.signOut(
+        removedUserId,
+        'global',
+      );
+      sessionRevoked = !signOutErr;
+    } catch {
+      // No admin client (missing SUPABASE_SERVICE_ROLE_KEY) or
+      // network failure. Membership row deletion already happened,
+      // so the user is logically out; they just keep their existing
+      // session cookie until it expires naturally.
+    }
+
     await audit(
       {
         event: 'user.deactivated',
         entityType: 'organization_member',
         entityId: memberId,
-        before: { user_id: target.user_id, role: target.role },
+        before: { user_id: removedUserId, role: target.role },
+        extra: {
+          assignments_cleared: assignmentsCleared,
+          session_revoked: sessionRevoked,
+        },
       },
       this.ctx,
     );
+
+    if (sessionRevoked) {
+      // Emit a dedicated session-invalidation audit row so the audit
+      // log clearly shows the kicked user's sessions were revoked
+      // (separate from the membership removal entry above).
+      await audit(
+        {
+          event: 'user.session.invalidated',
+          entityType: 'user',
+          entityId: removedUserId,
+          extra: { reason: 'member_removed' },
+        },
+        this.ctx,
+      );
+    }
   }
 }
 

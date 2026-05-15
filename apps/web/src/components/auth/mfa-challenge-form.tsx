@@ -20,8 +20,13 @@ import { challengeFactorAction } from '@/server/actions/mfa';
 import { signOutAction } from '@/server/actions/auth';
 import { consumeMfaRecoveryCodeAction } from '@/server/actions/mfa-recovery';
 
+interface MfaChallengeFactor {
+  id: string;
+  friendlyName: string | null;
+}
+
 interface MfaChallengeFormProps {
-  factorId: string;
+  factors: MfaChallengeFactor[];
 }
 
 /**
@@ -35,18 +40,24 @@ function safeRedirectPath(raw: string | null): string {
   return raw;
 }
 
-export function MfaChallengeForm({ factorId }: MfaChallengeFormProps) {
+export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
   const router = useRouter();
   const params = useSearchParams();
   const redirect = safeRedirectPath(params.get('redirect'));
+  const [factorId, setFactorId] = React.useState<string>(factors[0]?.id ?? '');
   const [code, setCode] = React.useState('');
   const [pending, setPending] = React.useState(false);
   const [recoveryOpen, setRecoveryOpen] = React.useState(false);
   const [recoveryCode, setRecoveryCode] = React.useState('');
+  const [recoveryPassword, setRecoveryPassword] = React.useState('');
   const [recoveryPending, setRecoveryPending] = React.useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!factorId) {
+      toast.error('Pick an authenticator to use.');
+      return;
+    }
     if (code.length !== 6) {
       toast.error('Enter the 6-digit code from your authenticator app.');
       return;
@@ -69,8 +80,15 @@ export function MfaChallengeForm({ factorId }: MfaChallengeFormProps) {
       toast.error('Enter a recovery code.');
       return;
     }
+    if (!recoveryPassword) {
+      toast.error('Enter your password to confirm.');
+      return;
+    }
     setRecoveryPending(true);
-    const res = await consumeMfaRecoveryCodeAction({ code: recoveryCode.trim() });
+    const res = await consumeMfaRecoveryCodeAction({
+      code: recoveryCode.trim(),
+      password: recoveryPassword,
+    });
     setRecoveryPending(false);
     if (!res.ok) {
       toast.error(res.error.message);
@@ -80,6 +98,7 @@ export function MfaChallengeForm({ factorId }: MfaChallengeFormProps) {
       `Recovery code accepted. ${res.data.unenrolled} factor${res.data.unenrolled === 1 ? '' : 's'} removed — re-enroll a new device on the next page.`,
     );
     setRecoveryOpen(false);
+    setRecoveryPassword('');
     router.replace('/dashboard/settings/security');
     router.refresh();
   }
@@ -98,6 +117,30 @@ export function MfaChallengeForm({ factorId }: MfaChallengeFormProps) {
           Open your authenticator app and enter the 6-digit code for StockPilot.
         </p>
       </div>
+
+      {factors.length > 1 && (
+        <div className="space-y-2">
+          <Label htmlFor="mfa-factor">Authenticator</Label>
+          <select
+            id="mfa-factor"
+            value={factorId}
+            onChange={(e) => {
+              setFactorId(e.target.value);
+              setCode('');
+            }}
+            className="border-border bg-background h-10 w-full rounded-md border px-3 text-sm"
+          >
+            {factors.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.friendlyName ?? `Authenticator (${f.id.slice(0, 6)})`}
+              </option>
+            ))}
+          </select>
+          <p className="text-muted-foreground text-[11px]">
+            Multiple authenticators are enrolled — pick the one you have a code for.
+          </p>
+        </div>
+      )}
 
       <div className="space-y-2">
         <Label htmlFor="mfa-code">Authentication code</Label>
@@ -163,6 +206,20 @@ export function MfaChallengeForm({ factorId }: MfaChallengeFormProps) {
                 maxLength={32}
                 autoFocus
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="recovery-password">Confirm your password</Label>
+              <Input
+                id="recovery-password"
+                type="password"
+                autoComplete="current-password"
+                value={recoveryPassword}
+                onChange={(e) => setRecoveryPassword(e.target.value)}
+                placeholder="Your account password"
+              />
+              <p className="text-muted-foreground text-[11px]">
+                Required so a stolen sign-in cookie can't strip your MFA on its own.
+              </p>
             </div>
             <DialogFooter>
               <Button
