@@ -25,9 +25,16 @@ export const updateOrganizationSchema = z.object({
 });
 export type UpdateOrganizationInput = z.infer<typeof updateOrganizationSchema>;
 
+// Inviteable roles never include `owner` — owner is only reassigned via
+// the ownership-transfer flow. Keeping this enum tight here gives a
+// clean validation error at the schema layer instead of relying on the
+// action to re-check.
+export const INVITEABLE_ROLES = ['admin', 'manager', 'staff', 'viewer'] as const;
+export type InviteableRole = (typeof INVITEABLE_ROLES)[number];
+
 export const inviteMemberSchema = z.object({
   email: emailSchema,
-  role: z.enum(ROLES).default('staff'),
+  role: z.enum(INVITEABLE_ROLES).default('staff'),
   charterId: z.string().uuid().nullable().optional(),
   warehouseId: z.string().uuid().nullable().optional(),
   message: z.string().max(2000).optional(),
