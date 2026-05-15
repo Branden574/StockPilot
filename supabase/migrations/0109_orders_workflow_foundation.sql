@@ -72,7 +72,22 @@ alter table public.order_requests
 
 -- ────────────────────────────────────────────────────────────────────
 -- 4. Status enum: rewrite legacy values + extend the check constraint
+--
+-- Ordering note: the existing transition-guard trigger
+-- (`trg_order_requests_validate_transition`, from migrations 0076 +
+-- 0108) treats `delivered` as a terminal state and would reject the
+-- `delivered → completed` data rewrite below. We DISABLE the trigger
+-- for the rewrite, drop the old check constraint, run the UPDATEs,
+-- add the new check constraint, and only then re-enable the trigger.
+-- Section 5 immediately after replaces the trigger function body so
+-- the next enable picks up the new state machine.
 -- ────────────────────────────────────────────────────────────────────
+
+alter table public.order_requests
+  disable trigger trg_order_requests_validate_transition;
+
+alter table public.order_requests
+  drop constraint if exists order_requests_status_check;
 
 update public.order_requests
    set status = 'packing_slip_generated'
@@ -86,9 +101,6 @@ update public.order_requests
    set status = 'completed',
        completed_at = coalesce(delivered_at, updated_at)
  where status = 'delivered';
-
-alter table public.order_requests
-  drop constraint if exists order_requests_status_check;
 
 alter table public.order_requests
   add constraint order_requests_status_check
@@ -108,6 +120,12 @@ alter table public.order_requests
     'denied',
     'cancelled'
   ));
+
+-- Re-enable the trigger. Section 5 below replaces the function body
+-- in place — the trigger references the function by name, so the
+-- next status transition will use the new state machine.
+alter table public.order_requests
+  enable trigger trg_order_requests_validate_transition;
 
 -- ────────────────────────────────────────────────────────────────────
 -- 5. Rewrite _validate_order_request_status_transition to mirror the
