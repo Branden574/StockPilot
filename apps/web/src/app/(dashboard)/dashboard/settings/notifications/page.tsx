@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { DesktopNotificationsOptIn } from '@/components/settings/desktop-notifications-opt-in';
 import { DigestControls } from '@/components/settings/digest-controls';
 import { NotificationPreferencesForm } from '@/components/settings/notification-preferences-form';
 import {
@@ -59,6 +60,20 @@ export default async function NotificationsSettingsPage() {
       </div>
 
       <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Desktop notifications</CardTitle>
+            <CardDescription>
+              Get a pop-up from your operating system when something happens
+              in StockPilot while this tab isn&apos;t focused. Stored
+              per-device — enable separately on each browser you use.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <DesktopNotificationsOptIn />
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Per-event notifications</CardTitle>
