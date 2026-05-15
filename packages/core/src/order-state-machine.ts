@@ -6,6 +6,8 @@
  * reject a transition the TS layer accepts (or vice versa).
  */
 
+import type { Role } from './constants/roles';
+
 export type OrderStatus =
   | 'pending_confirmation'
   | 'pending_approval'
@@ -122,4 +124,106 @@ export function assertTransition(
       to,
     );
   }
+}
+
+export type OrderAction =
+  | 'approve'
+  | 'deny'
+  | 'cancel'
+  | 'generate_pick_slip'
+  | 'reassign_picker'
+  | 'open_digital_pick'
+  | 'print_pick_slip'
+  | 'mark_picking_complete'
+  | 'generate_packing_slips'
+  | 'print_customer_slip'
+  | 'print_warehouse_slip'
+  | 'mark_staged_pickup'
+  | 'mark_staged_delivery'
+  | 'assign_delivery'
+  | 'mark_in_transit'
+  | 'collect_signature'
+  | 'view_signature'
+  | 'view_denial_reason'
+  | 'view_final_packing_slip';
+
+export interface AvailableActionsInput {
+  status: OrderStatus;
+  fulfillmentType: FulfillmentType;
+  hasAssignedDelivery: boolean;
+  viewerRole: Role;
+  viewerUserId: string;
+  assignedPickerId: string | null;
+  assignedDeliveryUserId: string | null;
+}
+
+const MANAGER_OR_ABOVE: Role[] = ['owner', 'admin', 'manager'];
+
+/**
+ * Compute the list of UI actions available for the given order +
+ * viewer combination. This is the single source of truth that the
+ * order-detail page reads; never branch on status anywhere else.
+ */
+export function availableOrderActions(input: AvailableActionsInput): OrderAction[] {
+  const isManagerOrAbove = MANAGER_OR_ABOVE.includes(input.viewerRole);
+  const isAssignedDriver =
+    input.assignedDeliveryUserId !== null &&
+    input.assignedDeliveryUserId === input.viewerUserId;
+
+  const actions: OrderAction[] = [];
+
+  switch (input.status) {
+    case 'pending_confirmation':
+      if (isManagerOrAbove) actions.push('cancel');
+      break;
+    case 'pending_approval':
+      actions.push('approve', 'deny');
+      if (isManagerOrAbove) actions.push('cancel');
+      break;
+    case 'approved':
+      actions.push('generate_pick_slip');
+      if (isManagerOrAbove) actions.push('reassign_picker', 'cancel');
+      break;
+    case 'pick_slip_generated':
+    case 'picking_in_progress':
+      actions.push('open_digital_pick', 'print_pick_slip', 'mark_picking_complete');
+      if (isManagerOrAbove) actions.push('reassign_picker', 'cancel');
+      break;
+    case 'picking_complete':
+      actions.push('generate_packing_slips');
+      if (isManagerOrAbove) actions.push('cancel');
+      break;
+    case 'packing_slip_generated':
+      actions.push('print_customer_slip', 'print_warehouse_slip');
+      if (input.fulfillmentType === 'pickup') actions.push('mark_staged_pickup');
+      else actions.push('mark_staged_delivery');
+      if (isManagerOrAbove) actions.push('cancel');
+      break;
+    case 'staged_for_pickup':
+      actions.push('collect_signature', 'print_warehouse_slip');
+      if (isManagerOrAbove) actions.push('cancel');
+      break;
+    case 'staged_for_delivery':
+      if (isManagerOrAbove) actions.push('assign_delivery');
+      if (input.hasAssignedDelivery && (isAssignedDriver || isManagerOrAbove)) {
+        actions.push('mark_in_transit');
+      }
+      if (isManagerOrAbove) actions.push('cancel');
+      break;
+    case 'in_transit':
+    case 'signature_requested':
+      actions.push('collect_signature');
+      if (isManagerOrAbove) actions.push('cancel');
+      break;
+    case 'completed':
+      actions.push('view_signature', 'view_final_packing_slip');
+      break;
+    case 'denied':
+      actions.push('view_denial_reason');
+      break;
+    case 'cancelled':
+      break;
+  }
+
+  return actions;
 }

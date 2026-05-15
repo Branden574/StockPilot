@@ -126,3 +126,74 @@ describe('assertTransition', () => {
     ).not.toThrow();
   });
 });
+
+import { availableOrderActions } from './order-state-machine';
+
+describe('availableOrderActions', () => {
+  const base = {
+    status: 'approved' as const,
+    fulfillmentType: 'delivery' as const,
+    hasAssignedDelivery: false,
+    viewerRole: 'manager' as const,
+    viewerUserId: 'u-mgr',
+    assignedPickerId: null as string | null,
+    assignedDeliveryUserId: null as string | null,
+  };
+
+  it('returns generate_pick_slip on approved orders', () => {
+    expect(availableOrderActions(base)).toContain('generate_pick_slip');
+  });
+
+  it('returns approve+deny on pending_approval', () => {
+    const actions = availableOrderActions({ ...base, status: 'pending_approval' });
+    expect(actions).toContain('approve');
+    expect(actions).toContain('deny');
+  });
+
+  it('returns assign_delivery on staged_for_delivery for manager+', () => {
+    const actions = availableOrderActions({
+      ...base,
+      status: 'staged_for_delivery',
+    });
+    expect(actions).toContain('assign_delivery');
+  });
+
+  it('does NOT return assign_delivery for staff role', () => {
+    const actions = availableOrderActions({
+      ...base,
+      status: 'staged_for_delivery',
+      viewerRole: 'staff',
+    });
+    expect(actions).not.toContain('assign_delivery');
+  });
+
+  it('returns mark_in_transit only when delivery is assigned', () => {
+    const without = availableOrderActions({
+      ...base,
+      status: 'staged_for_delivery',
+      hasAssignedDelivery: false,
+    });
+    const withAssigned = availableOrderActions({
+      ...base,
+      status: 'staged_for_delivery',
+      hasAssignedDelivery: true,
+      assignedDeliveryUserId: 'u-driver',
+      viewerUserId: 'u-driver',
+      viewerRole: 'staff',
+    });
+    expect(without).not.toContain('mark_in_transit');
+    expect(withAssigned).toContain('mark_in_transit');
+  });
+
+  it('terminal states return only view-only actions', () => {
+    const actions = availableOrderActions({ ...base, status: 'completed' });
+    expect(actions).not.toContain('generate_pick_slip');
+    expect(actions).toContain('view_signature');
+  });
+
+  it('denied state offers only view_denial_reason', () => {
+    expect(availableOrderActions({ ...base, status: 'denied' })).toEqual([
+      'view_denial_reason',
+    ]);
+  });
+});
