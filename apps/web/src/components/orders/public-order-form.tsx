@@ -67,6 +67,15 @@ export function PublicOrderForm({
   const [cart, setCart] = useState<Map<string, number>>(() => new Map());
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState<SubmittedState | null>(null);
+  const [fulfillmentType, setFulfillmentType] = useState<'pickup' | 'delivery'>('delivery');
+  const [phone, setPhone] = useState('');
+  const [addrLine1, setAddrLine1] = useState('');
+  const [addrLine2, setAddrLine2] = useState('');
+  const [addrCity, setAddrCity] = useState('');
+  const [addrRegion, setAddrRegion] = useState('');
+  const [addrPostal, setAddrPostal] = useState('');
+  const [addrInstructions, setAddrInstructions] = useState('');
+  const [pickupNotes, setPickupNotes] = useState('');
   // I13: honeypot. A hidden field labeled "website" that real
   // submitters never see / fill, but naive form-bots will. The
   // server treats any non-empty value here as a bot signal and
@@ -113,6 +122,12 @@ export function PublicOrderForm({
       toast.error('Add at least one book to your request.');
       return;
     }
+    if (fulfillmentType === 'delivery') {
+      if (!addrLine1.trim() || !addrCity.trim()) {
+        toast.error('Please fill in the street address and city for delivery.');
+        return;
+      }
+    }
 
     const lines = Array.from(cart.entries())
       .filter(([, q]) => q > 0)
@@ -131,6 +146,23 @@ export function PublicOrderForm({
           requesterOrgLabel: orgLabel.trim() || undefined,
           notes: notes.trim() || undefined,
           lines,
+          fulfillmentType,
+          requesterPhone: phone.trim() || null,
+          deliveryAddress:
+            fulfillmentType === 'delivery'
+              ? {
+                  line1: addrLine1.trim(),
+                  line2: addrLine2.trim() || null,
+                  city: addrCity.trim(),
+                  region: addrRegion.trim() || null,
+                  postal: addrPostal.trim() || null,
+                  instructions: addrInstructions.trim() || null,
+                }
+              : null,
+          pickupLocationNotes:
+            fulfillmentType === 'pickup'
+              ? pickupNotes.trim() || null
+              : null,
           hp: hp || undefined,
         }),
       });
@@ -258,6 +290,136 @@ export function PublicOrderForm({
             />
           </div>
         </div>
+      </section>
+
+      {/* Fulfillment type — pickup vs. delivery + contact / address details. */}
+      <section className="border-border bg-card space-y-4 rounded-2xl border p-5">
+        <h2 className="font-display text-lg">How should we get this to you?</h2>
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={() => setFulfillmentType('pickup')}
+            className={cn(
+              'border-border flex-1 rounded-xl border p-4 text-left transition-colors',
+              fulfillmentType === 'pickup' && 'border-primary bg-primary/5',
+            )}
+          >
+            <div className="font-medium">📦 Pickup</div>
+            <div className="text-muted-foreground text-xs mt-1">
+              I&apos;ll come to the warehouse.
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setFulfillmentType('delivery')}
+            className={cn(
+              'border-border flex-1 rounded-xl border p-4 text-left transition-colors',
+              fulfillmentType === 'delivery' && 'border-primary bg-primary/5',
+            )}
+          >
+            <div className="font-medium">🚚 Delivery</div>
+            <div className="text-muted-foreground text-xs mt-1">
+              Bring it to me.
+            </div>
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="phone">Phone (optional)</Label>
+          <Input
+            id="phone"
+            type="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="(555) 123-4567"
+            autoComplete="tel"
+            maxLength={40}
+          />
+        </div>
+
+        {fulfillmentType === 'delivery' ? (
+          <div className="space-y-3 rounded-xl bg-muted/40 p-4">
+            <p className="text-muted-foreground text-xs">Delivery address</p>
+            <div className="space-y-2">
+              <Label htmlFor="addr-line1">Street address</Label>
+              <Input
+                id="addr-line1"
+                value={addrLine1}
+                onChange={(e) => setAddrLine1(e.target.value)}
+                placeholder="123 Main St"
+                required
+                autoComplete="address-line1"
+                maxLength={200}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="addr-line2">Apt / suite / room (optional)</Label>
+              <Input
+                id="addr-line2"
+                value={addrLine2}
+                onChange={(e) => setAddrLine2(e.target.value)}
+                autoComplete="address-line2"
+                maxLength={200}
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="addr-city">City</Label>
+                <Input
+                  id="addr-city"
+                  value={addrCity}
+                  onChange={(e) => setAddrCity(e.target.value)}
+                  required
+                  autoComplete="address-level2"
+                  maxLength={120}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="addr-region">State / region</Label>
+                <Input
+                  id="addr-region"
+                  value={addrRegion}
+                  onChange={(e) => setAddrRegion(e.target.value)}
+                  autoComplete="address-level1"
+                  maxLength={120}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="addr-postal">ZIP / postal code</Label>
+              <Input
+                id="addr-postal"
+                value={addrPostal}
+                onChange={(e) => setAddrPostal(e.target.value)}
+                autoComplete="postal-code"
+                maxLength={40}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="addr-instructions">Delivery instructions (optional)</Label>
+              <Textarea
+                id="addr-instructions"
+                value={addrInstructions}
+                onChange={(e) => setAddrInstructions(e.target.value)}
+                placeholder="Gate code, where to leave the box, who to ask for"
+                rows={2}
+                maxLength={1000}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <Label htmlFor="pickup-notes">Pickup notes (optional)</Label>
+            <Textarea
+              id="pickup-notes"
+              value={pickupNotes}
+              onChange={(e) => setPickupNotes(e.target.value)}
+              placeholder="When you'll come by, who's picking up, etc."
+              rows={2}
+              maxLength={2000}
+            />
+          </div>
+        )}
       </section>
 
       {/* Warehouse picker — only when more than one is eligible. */}
