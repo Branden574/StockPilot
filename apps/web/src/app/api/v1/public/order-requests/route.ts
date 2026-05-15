@@ -54,6 +54,32 @@ const bodySchema = z.object({
 type Body = z.infer<typeof bodySchema>;
 
 const RATE_LIMIT_PER_HOUR = 10;
+/**
+ * Per-email cap to stop Resend-spam-via-public-form. Five confirmation
+ * emails per hour to a single address is plenty for any legitimate
+ * submitter (resubmit-after-typo, multi-warehouse split) and small
+ * enough that an attacker fanning attacker-controlled `requesterEmail`
+ * out of a single domain can't burn our Resend allotment to send abuse
+ * to third parties.
+ */
+const RATE_LIMIT_PER_EMAIL_PER_HOUR = 5;
+/**
+ * Per-org-token cap. Caps the total submission volume against a single
+ * org so a single leaked or guessed token can't be used to flood that
+ * org's manager inbox or DB write surface. 60/hr is well above
+ * legitimate large-school use (a teacher placing rolling orders) but
+ * keeps a runaway client from generating thousands of pending_approval
+ * rows that a manager would then have to sweep.
+ */
+const RATE_LIMIT_PER_TOKEN_PER_HOUR = 60;
+/**
+ * F1 soft-flag threshold. When a single requester email + org token
+ * is seen from more than this many distinct IPs in one hour, log a
+ * console.warn (does NOT block). Useful breadcrumb for spam-pattern
+ * investigation; legitimate cross-device use (mobile + desktop + home
+ * wifi) plausibly hits 2-3 IPs in a session.
+ */
+const IP_FANOUT_FLAG = 3;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 /**
  * Hard cap on total units per public submission. Mirrors `MAX_TOTAL_QTY`
@@ -135,14 +161,45 @@ export async function POST(req: NextRequest) {
   // `mode: 'closed'` — this is an unauthenticated endpoint, so a DB
   // outage that makes the rate-limiter fall back to fail-open would
   // grant unlimited submissions. Prefer to 429 during the outage.
-  const limit = await checkRateLimit(
-    `public-order-request:${ip}`,
-    RATE_LIMIT_PER_HOUR,
-    ONE_HOUR_MS,
-    'closed',
-  );
-  if (!limit.allowed) {
-    const retryAfter = Math.max(1, Math.ceil((limit.resetAt - Date.now()) / 1000));
+  //
+  // H1: three independent buckets — per-IP (existing), per-email,
+  // per-token. Per-email caps Resend-spam fan-out where an attacker
+  // rotates IPs but reuses an attacker-supplied `requesterEmail`.
+  // Per-token caps the total volume against a single org so a leaked
+  // link can't be used to flood one tenant. All three use the same
+  // window and closed mode. Email is keyed on the lowercased value
+  // so case rotation can't create a new bucket per submission.
+  const emailKey = body.requesterEmail.trim().toLowerCase();
+  const tokenKey = body.token;
+  const [ipLimit, emailLimit, tokenLimit] = await Promise.all([
+    checkRateLimit(
+      `public-order-request:${ip}`,
+      RATE_LIMIT_PER_HOUR,
+      ONE_HOUR_MS,
+      'closed',
+    ),
+    checkRateLimit(
+      `public-order-request:email:${emailKey}`,
+      RATE_LIMIT_PER_EMAIL_PER_HOUR,
+      ONE_HOUR_MS,
+      'closed',
+    ),
+    checkRateLimit(
+      `public-order-request:token:${tokenKey}`,
+      RATE_LIMIT_PER_TOKEN_PER_HOUR,
+      ONE_HOUR_MS,
+      'closed',
+    ),
+  ]);
+  const denied = !ipLimit.allowed
+    ? ipLimit
+    : !emailLimit.allowed
+      ? emailLimit
+      : !tokenLimit.allowed
+        ? tokenLimit
+        : null;
+  if (denied) {
+    const retryAfter = Math.max(1, Math.ceil((denied.resetAt - Date.now()) / 1000));
     return NextResponse.json(
       {
         error: 'rate_limited',
@@ -151,6 +208,47 @@ export async function POST(req: NextRequest) {
       },
       { status: 429, headers: { 'retry-after': String(retryAfter) } },
     );
+  }
+
+  // F1 soft-flag: track distinct IPs per (email, token) over the same
+  // hour window. We DO NOT block here — co-workers on a shared inbox
+  // switching mobile → desktop → home wifi can easily trip 2-3 IPs in a
+  // single session. Past IP_FANOUT_FLAG we just console.warn so the
+  // pattern surfaces in logs for manual review.
+  //
+  // Implementation: a high-limit 'open' bucket per (email|token|ip)
+  // tuple. First touch in the hour increments to 1, telling us "this IP
+  // is new for this (email, token) this hour"; we then bump a separate
+  // (email|token) counter and check it against the threshold. Open
+  // mode + try/catch ensures a DB blip here NEVER fails the submission.
+  try {
+    const fanoutTuple = await checkRateLimit(
+      `public-order-request:fanout:${emailKey}|${tokenKey}|${ip}`,
+      9999,
+      ONE_HOUR_MS,
+      'open',
+    );
+    if (fanoutTuple.count === 1) {
+      const distinctIps = await checkRateLimit(
+        `public-order-request:fanout-distinct:${emailKey}|${tokenKey}`,
+        9999,
+        ONE_HOUR_MS,
+        'open',
+      );
+      if (distinctIps.count > IP_FANOUT_FLAG) {
+        console.warn(
+          '[public order-requests] suspected IP fanout',
+          JSON.stringify({
+            email: emailKey,
+            tokenPrefix: tokenKey.slice(0, 8),
+            distinctIpsThisHour: distinctIps.count,
+            ip,
+          }),
+        );
+      }
+    }
+  } catch {
+    // Non-fatal — logging-only path; do not bubble.
   }
 
   const admin = createAdminClient();
