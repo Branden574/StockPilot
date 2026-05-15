@@ -109,7 +109,32 @@ export type AuditEvent =
   | 'bin.created'
   | 'bin.updated'
   | 'bin.archived'
-  | 'notification_preference.updated';
+  | 'notification_preference.updated'
+  // Auth lifecycle (pre-staged for the user-role bug-hunt fix sweep so
+  // parallel fixer agents don't race on this file when adding emits).
+  | 'user.signed_in'
+  | 'user.sign_in_failed'
+  | 'user.signed_out'
+  | 'user.password.reset_requested'
+  | 'user.password.reset_completed'
+  | 'user.profile.updated'
+  | 'user.session.invalidated'
+  // Org-level admin actions (replacing prior misuse of warehouse.updated
+  // for org logo / MFA policy changes).
+  | 'organization.updated'
+  | 'organization.mfa_policy.changed'
+  | 'organization.public_request_token.rotated'
+  // MFA discrete events (replacing prior misuse of user.role.changed
+  // and warehouse.updated for these forensic-relevant flows).
+  | 'mfa.enrolled'
+  | 'mfa.unenrolled'
+  | 'mfa.policy.changed'
+  | 'mfa.recovery.generated'
+  | 'mfa.recovery.consumed'
+  | 'mfa.recovery.failed'
+  // Ownership transfer — the action doesn't exist yet but the event
+  // type lets the fixer agent emit it when the missing flow lands.
+  | 'organization.ownership.transferred';
 
 interface AuditPayload {
   event: AuditEvent;
