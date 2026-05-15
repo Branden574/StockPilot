@@ -14,6 +14,17 @@ export function ProfileNameEditor({ current }: { current: string }) {
   const router = useRouter();
   const [name, setName] = React.useState(current);
   const [busy, setBusy] = React.useState(false);
+
+  // Server-driven prop sync: after router.refresh() the parent server
+  // component re-renders with the new `current` value (e.g. trimmed
+  // version of what we sent). Without this, a whitespace-only edit
+  // landed local state out of sync with `current` and disabled Save
+  // incorrectly on subsequent edits. Skip the resync while a save is
+  // in flight so the user's typed value isn't clobbered mid-keystroke.
+  React.useEffect(() => {
+    if (!busy) setName(current);
+  }, [current, busy]);
+
   const dirty = name.trim() !== current.trim();
 
   async function save() {
