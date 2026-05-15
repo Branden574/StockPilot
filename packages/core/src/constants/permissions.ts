@@ -41,6 +41,7 @@ export const PERMISSIONS = [
   // change status / mark delivered / regenerate the public token.
   'orders:request',
   'orders:approve',
+  'orders:assign_delivery',
   // Schedule events: manager+ creates/edits/deletes calendar entries.
   // Viewers can still read the calendar (RLS allows org members) but
   // can't mutate it. Without this gate, a viewer could call the
@@ -86,6 +87,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'bundles:distribute',
     'orders:request',
     'orders:approve',
+    'orders:assign_delivery',
     'schedule:manage',
   ],
   staff: [
@@ -303,6 +305,11 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     group: 'Order requests',
     label: 'Approve / fulfill orders',
     description: 'Approve, deny, ship, and mark delivered.',
+  },
+  'orders:assign_delivery': {
+    group: 'Orders',
+    label: 'Assign deliveries',
+    description: 'Assign a staged delivery to a driver. Manager+ only.',
   },
 
   'schedule:manage': {
