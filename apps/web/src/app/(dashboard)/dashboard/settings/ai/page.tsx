@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { isAdminRole } from '@stockpilot/core';
+import { hasPermission } from '@stockpilot/core';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmbeddingsBackfillPanel } from '@/components/settings/embeddings-backfill-panel';
@@ -12,7 +12,12 @@ export const dynamic = 'force-dynamic';
 
 export default async function AiSettingsPage() {
   const ctx = await requireOrgContext();
-  if (!isAdminRole(ctx.role)) {
+  // Gate on the explicit `ai:manage` permission (admin+) rather than
+  // `isAdminRole()`. Same audience today, but routing through the
+  // permission matrix keeps role/permission consistency tight and makes
+  // future role surgery (e.g. a hypothetical "AI admin" role) a one-line
+  // matrix change instead of a hunt for `isAdminRole` calls.
+  if (!hasPermission(ctx.role, 'ai:manage')) {
     notFound();
   }
   // Pre-fetch counts so the panel renders meaningful numbers on first

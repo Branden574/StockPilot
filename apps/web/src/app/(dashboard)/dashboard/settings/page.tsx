@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
 
-import { hasPermission, isAdminRole } from '@stockpilot/core';
+import { hasPermission } from '@stockpilot/core';
 
 const BASE_SECTIONS = [
   { href: '/dashboard/settings/organization', title: 'Organization', description: 'Name, labels for charters and warehouses.' },
@@ -38,9 +38,9 @@ const ADMIN_SECTIONS = [
   { href: '/dashboard/settings/audit', title: 'Audit log', description: 'Every privileged action across the org.' },
 ];
 
-// AI settings (embeddings backfill, etc.) — admin-only because the
-// embedding backfill burns Gemini API quota and shouldn't be a
-// manager-level toggle.
+// AI settings (embeddings backfill, etc.) — gated on the explicit
+// `ai:manage` permission (admin+ in the matrix). Embedding backfill
+// burns Gemini API quota and shouldn't be a manager-level toggle.
 const AI_SECTIONS = [
   { href: '/dashboard/settings/ai', title: 'AI', description: 'Semantic-search embeddings and AI assistant configuration.' },
 ];
@@ -59,7 +59,7 @@ export default async function SettingsPage() {
     ...(hasPermission(ctx.role, 'billing:read') ? BILLING_SECTIONS : []),
     ...(hasPermission(ctx.role, 'orders:approve') ? MANAGER_SECTIONS : []),
     ...(hasPermission(ctx.role, 'activity_logs:read') ? ADMIN_SECTIONS : []),
-    ...(isAdminRole(ctx.role) ? AI_SECTIONS : []),
+    ...(hasPermission(ctx.role, 'ai:manage') ? AI_SECTIONS : []),
     ...(hasPermission(ctx.role, 'items:delete') ? RECOVERY_SECTIONS : []),
   ];
   return (
