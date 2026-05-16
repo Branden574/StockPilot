@@ -1,6 +1,9 @@
 import {
   Image as PdfImage,
+  Path,
+  Rect,
   StyleSheet,
+  Svg,
   Text,
   View,
 } from '@react-pdf/renderer';
@@ -61,13 +64,7 @@ export const styles = StyleSheet.create({
     borderBottom: `1pt solid ${colors.hairline}`,
   },
   brandLeft: { flexDirection: 'row', alignItems: 'center' },
-  brandMark: {
-    width: 22,
-    height: 22,
-    borderRadius: 5,
-    backgroundColor: colors.brand,
-    marginRight: 9,
-  },
+  brandMarkBox: { width: 22, height: 22, marginRight: 9 },
   brandWord: {
     fontSize: 13,
     fontFamily: 'Helvetica-Bold',
@@ -401,6 +398,35 @@ export function addressLines(addr: WarehouseAddress | null): string[] {
 
 // ── Shared sub-components ─────────────────────────────────────────────
 
+/**
+ * Carved-S stencil mark from the brand sheet, drawn in @react-pdf/renderer
+ * primitives. @react-pdf supports <Mask> in v3+ but the implementation
+ * is fragile across version bumps, so we composite the same visual in
+ * two passes:
+ *   1. Solid rounded ink rect at viewBox 12..88 with rx=16.
+ *   2. The S-curve and pip in the page-background color stroked over
+ *      the rect, which carves the negative space visually.
+ * Result is indistinguishable from the masked version when the
+ * surrounding page bg matches.
+ */
+export function BrandMark({ size = 22 }: { size?: number }) {
+  return (
+    <View style={{ width: size, height: size, marginRight: 9 }}>
+      <Svg viewBox="0 0 100 100" width="100%" height="100%">
+        <Rect x={12} y={12} width={76} height={76} rx={16} fill={colors.ink} />
+        <Path
+          d="M 32 78 Q 72 78 72 66 Q 72 54 54 54 Q 32 54 32 42 Q 32 24 72 24"
+          stroke={colors.cream}
+          strokeWidth={11}
+          strokeLinecap="round"
+          fill="none"
+        />
+        <Rect x={66} y={18} width={12} height={12} rx={6} fill={colors.cream} />
+      </Svg>
+    </View>
+  );
+}
+
 export function BrandBand({
   tag,
   whenIso,
@@ -412,7 +438,7 @@ export function BrandBand({
   return (
     <View style={styles.brandRow}>
       <View style={styles.brandLeft}>
-        <View style={styles.brandMark} />
+        <BrandMark size={22} />
         <Text style={styles.brandWord}>StockPilot</Text>
         <View style={styles.brandDivider} />
         <Text style={styles.brandTag}>{tag}</Text>

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { sendEmail } from './resend';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import type { OrderRequestRow } from '@/server/services/order-requests';
 
@@ -23,12 +24,12 @@ interface SendInput {
   appUrl: string;
   /**
    * F2: org's `public_request_token`. Required for public-link
-   * requesters so the email's "View request" CTA includes `&t=…` —
-   * the GET /api/v1/public/order-requests/[id] handler scopes the
-   * lookup by org public_request_token and silently 404s without it.
-   * Only consulted when `request.requester_user_id` is null (public
-   * submission). Optional/nullable so internal callers don't have to
-   * supply it.
+   * requesters so the email's "Track" CTA includes `&t=…` — the GET
+   * /api/v1/public/order-requests/[id] handler scopes the lookup by
+   * org public_request_token and silently 404s without it. Only
+   * consulted when `request.requester_user_id` is null (public
+   * submission). Optional/nullable so internal callers don't have
+   * to supply it.
    */
   publicRequestToken?: string | null;
   /**
@@ -36,66 +37,467 @@ interface SendInput {
    * 'confirm_request'` — the CTA in that email points to
    * `/r/confirm?id=<id>&t=<plaintext>`. Hashing happens server-side
    * before storage so the email is the only place the raw value
-   * lives. Not used by any other kind.
+   * lives.
    */
   confirmationToken?: string | null;
 }
 
-const SUBJECTS: Record<OrderRequestEmailKind, string> = {
-  submitted: 'Your order request was submitted',
-  confirm_request: 'Confirm your order request',
-  approved: 'Your order request was approved',
-  denied: 'Your order request was denied',
-  packing_slip_generated: 'Your order is being packaged',
-  staged_for_delivery: 'Your order is ready',
-  in_transit: 'Your order is on the way',
-  completed: 'Your order was delivered',
-  cancelled: 'Your order was cancelled',
+// ─── Subject + preheader ─────────────────────────────────────────────
+
+const SUBJECT_BY_KIND: Record<OrderRequestEmailKind, (orderId: string) => string> = {
+  submitted: (id) => `${id} received — we're on it`,
+  confirm_request: (id) => `Confirm ${id} to send it to the warehouse`,
+  approved: (id) => `${id} is approved — packing has started`,
+  denied: (id) => `${id} wasn't approved`,
+  packing_slip_generated: (id) => `${id} is being packaged`,
+  staged_for_delivery: (id) => `${id} is ready`,
+  in_transit: (id) => `${id} is on the way`,
+  completed: (id) => `${id} was delivered — thanks`,
+  cancelled: (id) => `${id} was cancelled`,
 };
 
-const HEADLINES: Record<OrderRequestEmailKind, string> = {
-  submitted: 'Request received',
-  confirm_request: 'Confirm your order request',
+const PILL_LABEL: Record<OrderRequestEmailKind, string> = {
+  submitted: 'Received',
+  confirm_request: 'Action needed',
   approved: 'Approved',
-  denied: 'Request denied',
-  packing_slip_generated: 'Now being packaged',
-  staged_for_delivery: 'Ready to deliver',
-  in_transit: 'On the way',
+  denied: 'Denied',
+  packing_slip_generated: 'Packing',
+  staged_for_delivery: 'Ready',
+  in_transit: 'In transit',
   completed: 'Delivered',
   cancelled: 'Cancelled',
 };
 
-/** Status pill color tokens — picks the visual tone of the headline. */
-type StatusTone = 'info' | 'success' | 'warning' | 'danger' | 'neutral';
-const TONES: Record<OrderRequestEmailKind, StatusTone> = {
-  submitted: 'info',
-  confirm_request: 'warning',
-  approved: 'success',
-  denied: 'danger',
-  packing_slip_generated: 'info',
-  staged_for_delivery: 'info',
-  in_transit: 'info',
-  completed: 'success',
-  cancelled: 'neutral',
+// Pill colors mirror the design's OK_BG/OK_FG palette. Other kinds get
+// tonal variants that read against the cream paper.
+const PILL_COLORS: Record<OrderRequestEmailKind, { bg: string; fg: string }> = {
+  submitted: { bg: '#e6ecf2', fg: '#1f3a5f' },
+  confirm_request: { bg: '#faecd8', fg: '#7a4c12' },
+  approved: { bg: '#e6efe7', fg: '#2f6a4a' },
+  denied: { bg: '#f3dada', fg: '#7a1f1f' },
+  packing_slip_generated: { bg: '#e6ecf2', fg: '#1f3a5f' },
+  staged_for_delivery: { bg: '#e6efe7', fg: '#2f6a4a' },
+  in_transit: { bg: '#e6ecf2', fg: '#1f3a5f' },
+  completed: { bg: '#e6efe7', fg: '#2f6a4a' },
+  cancelled: { bg: '#ece9e3', fg: '#5a5853' },
 };
 
-const TONE_COLORS: Record<StatusTone, { bg: string; fg: string; border: string }> = {
-  info: { bg: '#eef2ff', fg: '#3730a3', border: '#c7d2fe' },
-  success: { bg: '#ecfdf5', fg: '#065f46', border: '#a7f3d0' },
-  warning: { bg: '#fff7ed', fg: '#9a3412', border: '#fed7aa' },
-  danger: { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca' },
-  neutral: { bg: '#f1f5f9', fg: '#334155', border: '#cbd5e1' },
-};
+function headlineFor(
+  kind: OrderRequestEmailKind,
+  orderId: string,
+  isPickup: boolean,
+): { lead: string; tail: string } {
+  switch (kind) {
+    case 'submitted':
+      return { lead: `${orderId} received.`, tail: 'Manager review next.' };
+    case 'confirm_request':
+      return { lead: `Confirm ${orderId}.`, tail: 'One click to send it.' };
+    case 'approved':
+      return { lead: `${orderId} is approved.`, tail: 'Packing starts now.' };
+    case 'denied':
+      return { lead: `${orderId} wasn't approved.`, tail: 'No items moved.' };
+    case 'packing_slip_generated':
+      return { lead: `${orderId} is being packaged.`, tail: 'Almost out the door.' };
+    case 'staged_for_delivery':
+      return isPickup
+        ? { lead: `${orderId} is ready.`, tail: 'Come pick it up.' }
+        : { lead: `${orderId} is ready to ship.`, tail: 'Awaiting carrier.' };
+    case 'in_transit':
+      return { lead: `${orderId} is on the way.`, tail: 'Watch the dock.' };
+    case 'completed':
+      return { lead: `${orderId} was delivered.`, tail: 'Thank you.' };
+    case 'cancelled':
+      return { lead: `${orderId} was cancelled.`, tail: 'Stock released.' };
+  }
+}
+
+function leadParagraph(
+  kind: OrderRequestEmailKind,
+  isPickup: boolean,
+  name: string,
+): string {
+  const hi = `Hi ${name} — `;
+  switch (kind) {
+    case 'submitted':
+      return `${hi}we've got your request and it's queued for manager review. We'll write again the moment a decision lands.`;
+    case 'confirm_request':
+      return `${hi}we need a quick confirmation before this request reaches a manager. The button below will set it in motion.`;
+    case 'approved':
+      return `${hi}we've reserved every unit on this request. You'll get another note the moment it leaves the dock.`;
+    case 'denied':
+      return `${hi}this request wasn't approved. No stock was moved. The reason is below — reach out if anything looks off.`;
+    case 'packing_slip_generated':
+      return `${hi}your order is being packaged right now. We'll write again when it's out the door.`;
+    case 'staged_for_delivery':
+      return isPickup
+        ? `${hi}your order is packed and ready for pickup whenever you are.`
+        : `${hi}your order is packed and waiting for the carrier. We'll write again once it's in transit.`;
+    case 'in_transit':
+      return `${hi}your order just left the dock. The next note will confirm delivery.`;
+    case 'completed':
+      return `${hi}your order was signed for and delivered. Thanks for working with us.`;
+    case 'cancelled':
+      return `${hi}your order request was cancelled. Any reserved stock has been released back to inventory.`;
+  }
+}
+
+// ─── Data fetching ───────────────────────────────────────────────────
+
+interface SummaryData {
+  lineCount: number;
+  unitCount: number;
+  shipDate: string | null;
+  shipFrom: string | null;
+  shipTo: string | null;
+  orderNumber: string;
+}
+
+async function fetchSummary(row: OrderRequestRow): Promise<SummaryData> {
+  let admin: ReturnType<typeof createAdminClient> | null = null;
+  try {
+    admin = createAdminClient();
+  } catch {
+    // No service-role key — return a degraded summary the template
+    // can still render around (counts default to 0, shipDate/ships
+    // omitted by the template when null).
+    return {
+      lineCount: 0,
+      unitCount: 0,
+      shipDate: null,
+      shipFrom: null,
+      shipTo: null,
+      orderNumber: row.id,
+    };
+  }
+
+  const [linesRes, whRes, charterRes] = await Promise.all([
+    admin
+      .from('order_request_lines')
+      .select('quantity_picked, quantity_requested')
+      .eq('order_request_id', row.id),
+    admin
+      .from('warehouses')
+      .select('name, code, address')
+      .eq('id', row.warehouse_id)
+      .maybeSingle(),
+    row.delivery_charter_id
+      ? admin
+          .from('charters')
+          .select('name, code')
+          .eq('id', row.delivery_charter_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+
+  type LineRow = { quantity_picked: number | null; quantity_requested: number | null };
+  const lines = (linesRes.data ?? []) as LineRow[];
+  const lineCount = lines.length;
+  const unitCount = lines.reduce((sum, l) => {
+    const qty = l.quantity_picked ?? l.quantity_requested ?? 0;
+    return sum + (Number(qty) || 0);
+  }, 0);
+
+  type Wh = {
+    name?: string;
+    code?: string;
+    address?: { city?: string; state?: string } | null;
+  };
+  const wh = (whRes.data ?? null) as Wh | null;
+  const shipFrom = wh
+    ? `${wh.code ?? wh.name ?? '—'}${wh.address?.city ? ` — ${wh.address.city}` : ''}`
+    : null;
+
+  type Ch = { name?: string; code?: string };
+  const ch = (charterRes.data ?? null) as Ch | null;
+  const isPickup = row.fulfillment_type === 'pickup';
+  const shipTo = isPickup
+    ? row.requester_name ?? 'Pickup customer'
+    : ch
+      ? `${ch.code ?? ch.name ?? '—'}`
+      : row.requester_name ?? '—';
+
+  const shipDateIso =
+    row.packing_slip_generated_at ?? row.approved_at ?? row.created_at;
+  const shipDate = shipDateIso
+    ? new Date(shipDateIso).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : null;
+
+  return {
+    lineCount,
+    unitCount,
+    shipDate,
+    shipFrom,
+    shipTo,
+    orderNumber: row.id, // full UUID as the long reference
+  };
+}
+
+// ─── URL builders ────────────────────────────────────────────────────
+
+function buildTrackUrl(
+  row: OrderRequestRow,
+  appUrl: string,
+  recipientEmail: string,
+  publicRequestToken: string | null,
+): string {
+  if (row.requester_user_id) {
+    return `${appUrl}/dashboard/orders/${row.id}`;
+  }
+  const base = `${appUrl}/r/track?id=${row.id}&email=${encodeURIComponent(recipientEmail)}`;
+  return publicRequestToken
+    ? `${base}&t=${encodeURIComponent(publicRequestToken)}`
+    : base;
+}
+
+function buildUnsubscribeUrl(appUrl: string, recipientEmail: string): string {
+  // Unsigned for now — the real Gmail/Yahoo compliance work would mint
+  // a 90-day HMAC token here and validate it on the destination route.
+  // Today we route to the per-event preferences page; the dashboard
+  // gate forwards anonymous visitors to login, which is acceptable
+  // until the public preferences surface is built.
+  return `${appUrl}/dashboard/settings/notifications?email=${encodeURIComponent(recipientEmail)}`;
+}
+
+// ─── Inline brand mark (rendered in modern clients; Outlook hides) ──
 
 /**
- * Sends a transactional email about an order-request status change.
- *
- * Templates are email-client-safe (table layout, inline styles, no
- * external CSS, system-font stack). Public requesters get a CTA to
- * the /r/track page AND a "Tracking details" card with the Request
- * ID + tracking key spelled out so the email survives clients that
- * strip query strings on link rewrites.
+ * The carved-S stencil mark from the brand sheet. ~28×28 inline SVG —
+ * Gmail web/iOS/Android, Apple Mail, Outlook 365 web all render it.
+ * Outlook 2007–2019 desktop strips inline SVG; the wordmark text to
+ * the right preserves the brand identity in those clients.
  */
+const BRAND_MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 100 100" aria-hidden="true" style="display:inline-block;vertical-align:middle;margin-right:10px"><defs><mask id="sp-mask"><rect width="100" height="100" fill="white"/><path d="M 32 78 Q 72 78 72 66 Q 72 54 54 54 Q 32 54 32 42 Q 32 24 72 24" stroke="black" stroke-width="11" stroke-linecap="round" fill="none"/><circle cx="72" cy="24" r="6" fill="black"/></mask></defs><rect x="12" y="12" width="76" height="76" rx="16" fill="#0c0c0e" mask="url(#sp-mask)"/></svg>`;
+
+// ─── Template ────────────────────────────────────────────────────────
+
+interface TemplateArgs {
+  kind: OrderRequestEmailKind;
+  request: OrderRequestRow;
+  recipientEmail: string;
+  recipientName: string | null;
+  summary: SummaryData;
+  trackUrl: string;
+  unsubscribeUrl: string;
+  reasonText: string | null;
+  confirmExpiryNote: string | null;
+}
+
+function renderHtml(a: TemplateArgs): string {
+  const isPickup = a.request.fulfillment_type === 'pickup';
+  const orderId = `WO-${a.request.id.slice(0, 8).toUpperCase()}`;
+  const firstName = (a.recipientName ?? '').trim().split(/\s+/)[0] || 'there';
+  const head = headlineFor(a.kind, orderId, isPickup);
+  const pill = PILL_COLORS[a.kind];
+  const pillLabel = PILL_LABEL[a.kind];
+  const lead = leadParagraph(a.kind, isPickup, escapeHtml(firstName));
+
+  const units = a.summary.unitCount;
+  const lineCount = a.summary.lineCount;
+  const unitsLabel = `${units} ${units === 1 ? 'unit' : 'units'}`;
+  const linesLabel = `${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`;
+
+  const previewText = `Reserved ${unitsLabel} across ${linesLabel}. Track from your dashboard or the link inside.`;
+
+  const showSummaryCard = a.kind !== 'denied' && a.kind !== 'cancelled' && lineCount > 0;
+  const showReason = !!a.reasonText;
+  const showShipDate = !!a.summary.shipDate;
+
+  const reasonBlock = showReason
+    ? `
+    <tr><td class="px" style="padding:0 36px 28px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid rgba(122,31,31,0.20);background:#f3dada;border-radius:6px">
+        <tr><td style="padding:14px 16px">
+          <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#7a1f1f;font-weight:600;margin-bottom:6px">Reason</div>
+          <div style="font-size:13px;line-height:1.55;color:#5a1414">${escapeHtml(a.reasonText ?? '')}</div>
+        </td></tr>
+      </table>
+    </td></tr>`
+    : '';
+
+  const summaryCard = showSummaryCard
+    ? `
+    <tr><td class="px" style="padding:0 36px 28px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="grid" style="border:1px solid rgba(12,12,14,0.12);border-radius:6px">
+        <tr>
+          <td width="50%" style="padding:18px 20px;vertical-align:top">
+            <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;font-weight:500;margin-bottom:5px">Order</div>
+            <div style="font-size:14px;font-weight:600;color:#0c0c0e">${escapeHtml(orderId)}</div>
+            <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;color:#8b887f;margin-top:3px;word-break:break-all">${escapeHtml(a.summary.orderNumber)}</div>
+          </td>
+          <td width="50%" style="padding:18px 20px;vertical-align:top">
+            <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;font-weight:500;margin-bottom:5px">Reserved</div>
+            <div style="font-size:14px;font-weight:600;color:#0c0c0e">${escapeHtml(unitsLabel)} <span style="color:#8b887f;font-weight:400">· ${escapeHtml(linesLabel)}</span></div>
+            ${showShipDate ? `<div style="font-size:11.5px;color:#5a5853;margin-top:3px">Ships ${escapeHtml(a.summary.shipDate ?? '')}</div>` : ''}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 20px 18px;vertical-align:top">
+            <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;font-weight:500;margin-bottom:5px">From</div>
+            <div style="font-size:13px;color:#2a2a2c">${escapeHtml(a.summary.shipFrom ?? '—')}</div>
+          </td>
+          <td style="padding:0 20px 18px;vertical-align:top">
+            <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;font-weight:500;margin-bottom:5px">${isPickup ? 'Pickup' : 'To'}</div>
+            <div style="font-size:13px;color:#2a2a2c">${escapeHtml(a.summary.shipTo ?? '—')}</div>
+          </td>
+        </tr>
+      </table>
+    </td></tr>`
+    : '';
+
+  const expiryBlock = a.confirmExpiryNote
+    ? `
+    <tr><td class="px" style="padding:0 36px 28px">
+      <div style="font-size:11.5px;color:#8b887f;line-height:1.55">${escapeHtml(a.confirmExpiryNote)}</div>
+    </td></tr>`
+    : '';
+
+  const ctaLabel = a.kind === 'confirm_request' ? 'Confirm request' : 'Track this order';
+  const eyebrowRight =
+    a.kind === 'confirm_request'
+      ? 'Action Needed'
+      : a.kind === 'denied' || a.kind === 'cancelled'
+        ? 'Order Update'
+        : 'Order Update';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="x-apple-disable-message-reformatting">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light only">
+<title>${escapeHtml(SUBJECT_BY_KIND[a.kind](orderId))}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Tinos:ital@0;1&display=swap" rel="stylesheet">
+<!--[if mso]><style>*{font-family:Helvetica,Arial,sans-serif!important}</style><![endif]-->
+<style>
+  @media (max-width:620px){
+    .container{width:100%!important}
+    .px{padding-left:24px!important;padding-right:24px!important}
+    .h1{font-size:26px!important;line-height:1.15!important}
+    .grid td{display:block!important;width:100%!important;padding-right:0!important}
+    .foot-row td{display:block!important;width:100%!important;text-align:left!important;padding-bottom:6px!important}
+  }
+</style>
+</head>
+<body style="margin:0;padding:0;background:#e8e5dd;font-family:'Space Grotesk',Helvetica,Arial,sans-serif;color:#0c0c0e;-webkit-font-smoothing:antialiased">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${escapeHtml(previewText)}</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#e8e5dd">
+<tr><td align="center" style="padding:32px 16px">
+
+  <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background:#f6f4ef;border-radius:6px;overflow:hidden">
+
+    <!-- Brand strip -->
+    <tr><td class="px" style="padding:20px 36px;border-bottom:1px solid rgba(12,12,14,0.12)">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td style="vertical-align:middle">
+          ${BRAND_MARK_SVG}<span style="font-family:'Space Grotesk',Helvetica,Arial,sans-serif;font-size:15px;font-weight:600;letter-spacing:-0.025em;color:#0c0c0e;vertical-align:middle">Stock<span style="font-weight:500;opacity:0.6">Pilot</span></span>
+        </td>
+        <td align="right" style="vertical-align:middle;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f">${escapeHtml(eyebrowRight)}</td>
+      </tr></table>
+    </td></tr>
+
+    <!-- Hero -->
+    <tr><td class="px" style="padding:36px 36px 28px">
+      <div style="display:inline-block;padding:4px 10px;background:${pill.bg};border-radius:999px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:${pill.fg};font-weight:600">● ${escapeHtml(pillLabel)}</div>
+      <h1 class="h1" style="margin:18px 0 14px;font-family:'Space Grotesk',Helvetica,Arial,sans-serif;font-size:32px;line-height:1.1;letter-spacing:-0.03em;font-weight:500;color:#0c0c0e">
+        ${escapeHtml(head.lead)}<br>
+        <span style="color:#5a5853;font-family:'Tinos',Georgia,serif;font-style:italic;font-weight:400">${escapeHtml(head.tail)}</span>
+      </h1>
+      <p style="margin:0;font-size:14.5px;line-height:1.55;color:#2a2a2c;max-width:480px">
+        ${lead}
+      </p>
+    </td></tr>
+
+    ${reasonBlock}
+    ${summaryCard}
+
+    <!-- CTA -->
+    <tr><td class="px" style="padding:0 36px 28px">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="#0c0c0e" style="border-radius:6px">
+        <a href="${escapeHtml(a.trackUrl)}" style="display:inline-block;padding:12px 18px;background:#0c0c0e;color:#f6f4ef;border-radius:6px;font-family:'Space Grotesk',Helvetica,Arial,sans-serif;font-size:13.5px;font-weight:500;text-decoration:none">${escapeHtml(ctaLabel)} &rarr;</a>
+      </td></tr></table>
+      <div style="margin-top:14px;font-size:11.5px;color:#5a5853;line-height:1.55">
+        Or paste this link into your browser:
+        <span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;color:#2a2a2c;word-break:break-all">${escapeHtml(a.trackUrl)}</span>
+      </div>
+    </td></tr>
+
+    ${expiryBlock}
+
+    <!-- Foot -->
+    <tr><td class="px" style="padding:18px 36px;border-top:1px solid rgba(12,12,14,0.12);background:#eeece5">
+      <div style="font-size:11px;color:#8b887f;line-height:1.6">
+        You're getting this because the request linked to <span style="color:#2a2a2c;text-decoration:underline">${escapeHtml(a.recipientEmail)}</span> moved through StockPilot. <a href="${escapeHtml(a.unsubscribeUrl)}" style="color:#2a2a2c">Manage notifications</a>
+      </div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(12,12,14,0.12);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9.5px;letter-spacing:0.18em;text-transform:uppercase;color:#8b887f">
+        <table role="presentation" class="foot-row" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+          <td>StockPilot · Inventory + Order Management</td>
+          <td align="right">stockpilotusa.com</td>
+        </tr></table>
+      </div>
+    </td></tr>
+
+  </table>
+
+</td></tr></table>
+</body>
+</html>`;
+}
+
+// ─── Plaintext fallback ──────────────────────────────────────────────
+
+function renderText(a: TemplateArgs): string {
+  const isPickup = a.request.fulfillment_type === 'pickup';
+  const orderId = `WO-${a.request.id.slice(0, 8).toUpperCase()}`;
+  const firstName = (a.recipientName ?? '').trim().split(/\s+/)[0] || 'there';
+  const head = headlineFor(a.kind, orderId, isPickup);
+  const lead = leadParagraph(a.kind, isPickup, firstName).replace(/<[^>]+>/g, '');
+
+  const lines: string[] = [];
+  lines.push(`StockPilot — ${head.lead} ${head.tail}`);
+  lines.push('');
+  lines.push(lead);
+  if (a.reasonText) {
+    lines.push('');
+    lines.push(`Reason: ${sanitizePlainText(a.reasonText)}`);
+  }
+  if (a.summary.lineCount > 0) {
+    lines.push('');
+    lines.push('— Order summary —');
+    lines.push(`Order: ${orderId} (${a.summary.orderNumber})`);
+    const units = a.summary.unitCount;
+    const lc = a.summary.lineCount;
+    lines.push(
+      `Reserved: ${units} ${units === 1 ? 'unit' : 'units'} across ${lc} ${lc === 1 ? 'line' : 'lines'}`,
+    );
+    if (a.summary.shipDate) lines.push(`Ships: ${a.summary.shipDate}`);
+    if (a.summary.shipFrom) lines.push(`From: ${a.summary.shipFrom}`);
+    if (a.summary.shipTo) lines.push(`${isPickup ? 'Pickup' : 'To'}: ${a.summary.shipTo}`);
+  }
+  lines.push('');
+  const ctaLabel = a.kind === 'confirm_request' ? 'Confirm request' : 'Track this order';
+  lines.push(`${ctaLabel}: ${a.trackUrl}`);
+  if (a.confirmExpiryNote) {
+    lines.push('');
+    lines.push(a.confirmExpiryNote);
+  }
+  lines.push('');
+  lines.push('—');
+  lines.push('StockPilot · Inventory + Order Management · stockpilotusa.com');
+  lines.push(`Manage notifications: ${a.unsubscribeUrl}`);
+  return lines.join('\n');
+}
+
+// ─── Public entry ────────────────────────────────────────────────────
+
 export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
   const {
     kind,
@@ -107,353 +509,54 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
     confirmationToken,
   } = input;
 
-  const isPickup = request.fulfillment_type === 'pickup';
-  const subject =
-    kind === 'staged_for_delivery' && isPickup
-      ? 'Your order is ready for pickup'
-      : SUBJECTS[kind];
-  const headline =
-    kind === 'staged_for_delivery' && isPickup
-      ? 'Ready for pickup'
-      : HEADLINES[kind];
-  const tone = TONES[kind];
-
-  const publicTrackUrl = publicRequestToken
-    ? `${appUrl}/r/track?id=${request.id}` +
-      `&email=${encodeURIComponent(recipientEmail)}` +
-      `&t=${encodeURIComponent(publicRequestToken)}`
-    : `${appUrl}/r/track?id=${request.id}&email=${encodeURIComponent(recipientEmail)}`;
-
   if (kind === 'confirm_request' && !confirmationToken) {
     throw new Error(
       'confirm_request email requires a confirmationToken — refusing to send empty CTA.',
     );
   }
-  const confirmUrl =
+
+  const orderId = `WO-${request.id.slice(0, 8).toUpperCase()}`;
+  const summary = await fetchSummary(request);
+
+  const trackUrl =
     kind === 'confirm_request' && confirmationToken
       ? `${appUrl}/r/confirm?id=${request.id}&t=${encodeURIComponent(confirmationToken)}`
+      : buildTrackUrl(request, appUrl, recipientEmail, publicRequestToken ?? null);
+  const unsubscribeUrl = buildUnsubscribeUrl(appUrl, recipientEmail);
+
+  const reasonText =
+    (kind === 'denied' || kind === 'cancelled') && request.denied_reason
+      ? request.denied_reason
       : null;
 
-  const isPublicRequester = request.requester_user_id === null;
-  const link = confirmUrl
-    ? confirmUrl
-    : isPublicRequester
-      ? publicTrackUrl
-      : `${appUrl}/dashboard/orders/${request.id}`;
-  const ctaLabel = kind === 'confirm_request' ? 'Confirm request' : 'View order';
+  const confirmExpiryNote =
+    kind === 'confirm_request'
+      ? "This confirmation link expires in 24 hours. If you didn't request this, you can safely ignore — nothing else happens until you click."
+      : null;
 
-  const greeting = recipientName
-    ? `Hi ${escapeHtml(recipientName.split(' ')[0] ?? recipientName)},`
-    : 'Hello,';
-
-  const html = renderHtml({
-    headline,
-    tone,
-    greeting,
-    bodyHtml: bodyParagraph(kind, request),
-    reasonHtml:
-      (kind === 'denied' || kind === 'cancelled') && request.denied_reason
-        ? escapeHtml(request.denied_reason)
-        : null,
-    ctaLabel,
-    ctaUrl: link,
-    showTrackingCard: isPublicRequester && kind !== 'confirm_request',
-    requestId: request.id,
+  const args: TemplateArgs = {
+    kind,
+    request,
     recipientEmail,
-    trackingKey: publicRequestToken ?? null,
-    trackingUrl: publicTrackUrl,
-    expiryNote:
-      kind === 'confirm_request'
-        ? "This confirmation link expires in 24 hours. If you didn't request this, you can safely ignore this email — nothing else happens until you click."
-        : null,
-    appUrl,
-  });
+    recipientName,
+    summary,
+    trackUrl,
+    unsubscribeUrl,
+    reasonText,
+    confirmExpiryNote,
+  };
 
-  const text = renderText({
-    headline,
-    greeting,
-    body: bodyParagraphPlain(kind, request),
-    reason:
-      (kind === 'denied' || kind === 'cancelled') && request.denied_reason
-        ? sanitizePlainText(request.denied_reason)
-        : null,
-    ctaLabel,
-    ctaUrl: link,
-    showTrackingCard: isPublicRequester && kind !== 'confirm_request',
-    requestId: request.id,
-    recipientEmail,
-    trackingKey: publicRequestToken ?? null,
-    trackingUrl: publicTrackUrl,
-    expiryNote:
-      kind === 'confirm_request'
-        ? "This confirmation link expires in 24 hours. If you didn't request this, you can safely ignore this email."
-        : null,
-  });
+  const html = renderHtml(args);
+  const text = renderText(args);
+  const subject = SUBJECT_BY_KIND[kind](orderId);
 
   await sendEmail({ to: recipientEmail, subject, html, text });
 }
 
-// ─── HTML renderer ────────────────────────────────────────────────────
-
-interface RenderArgs {
-  headline: string;
-  tone: StatusTone;
-  greeting: string;
-  bodyHtml: string;
-  reasonHtml: string | null;
-  ctaLabel: string;
-  ctaUrl: string;
-  showTrackingCard: boolean;
-  requestId: string;
-  recipientEmail: string;
-  trackingKey: string | null;
-  trackingUrl: string;
-  expiryNote: string | null;
-  appUrl: string;
-}
-
-/**
- * Email-client-safe HTML. Table-based outer layout for Outlook, inline
- * styles for everything (Gmail, Outlook, Apple Mail all strip <style>
- * tags inconsistently), system-font stack with web-safe fallbacks.
- * Preview text injected via `display:none` div so inbox previews show
- * a useful snippet instead of "Hi Branden,".
- */
-function renderHtml(a: RenderArgs): string {
-  const tc = TONE_COLORS[a.tone];
-  const previewText = stripTags(a.bodyHtml).slice(0, 110);
-
-  const reasonBlock = a.reasonHtml
-    ? `
-      <tr>
-        <td style="padding:0 32px;">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:10px;">
-            <tr>
-              <td style="padding:14px 16px;">
-                <p style="margin:0;font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#991b1b;">Reason</p>
-                <p style="margin:6px 0 0;font-size:14px;line-height:1.5;color:#7f1d1d;">${a.reasonHtml}</p>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>`
-    : '';
-
-  const trackingCard = a.showTrackingCard
-    ? `
-      <tr>
-        <td style="padding:0 32px;">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
-            <tr>
-              <td style="padding:18px 20px;">
-                <p style="margin:0 0 12px;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Tracking details</p>
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="font-size:13px;line-height:1.5;color:#0f172a;">
-                  <tr>
-                    <td style="padding:6px 0;color:#64748b;width:120px;vertical-align:top;">Request ID</td>
-                    <td style="padding:6px 0;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:12px;color:#0f172a;word-break:break-all;">${escapeHtml(a.requestId)}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding:6px 0;color:#64748b;vertical-align:top;">Email</td>
-                    <td style="padding:6px 0;color:#0f172a;word-break:break-all;">${escapeHtml(a.recipientEmail)}</td>
-                  </tr>
-                  ${
-                    a.trackingKey
-                      ? `<tr>
-                    <td style="padding:6px 0;color:#64748b;vertical-align:top;">Tracking key</td>
-                    <td style="padding:6px 0;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:12px;color:#0f172a;word-break:break-all;">${escapeHtml(a.trackingKey)}</td>
-                  </tr>`
-                      : ''
-                  }
-                </table>
-                <p style="margin:14px 0 0;font-size:11.5px;color:#64748b;line-height:1.5;">
-                  Save this info. If the button above doesn't work, copy these into the form at
-                  <a href="${escapeHtml(a.appUrl)}/r/track" style="color:#4f46e5;text-decoration:none;">${escapeHtml(stripProtocol(a.appUrl))}/r/track</a>.
-                </p>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>`
-    : '';
-
-  const expiryBlock = a.expiryNote
-    ? `
-      <tr>
-        <td style="padding:0 32px;">
-          <p style="margin:18px 0 0;font-size:11.5px;color:#64748b;line-height:1.55;">${escapeHtml(a.expiryNote)}</p>
-        </td>
-      </tr>`
-    : '';
-
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="x-apple-disable-message-reformatting">
-  <meta name="color-scheme" content="light only">
-  <meta name="supported-color-schemes" content="light only">
-  <title>${escapeHtml(a.headline)}</title>
-</head>
-<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:#0f172a;">
-  <div style="display:none;max-height:0;overflow:hidden;color:transparent;font-size:1px;line-height:1px;opacity:0;">${escapeHtml(previewText)}</div>
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f1f5f9;">
-    <tr>
-      <td align="center" style="padding:32px 16px;">
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;background:#ffffff;border-radius:16px;box-shadow:0 1px 2px rgba(15,23,42,0.04),0 8px 24px -8px rgba(15,23,42,0.12);overflow:hidden;">
-          <!-- Brand band -->
-          <tr>
-            <td style="padding:24px 32px 0;">
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-                <tr>
-                  <td style="vertical-align:middle;">
-                    <span style="display:inline-block;width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#4f46e5,#7c3aed);vertical-align:middle;"></span>
-                    <span style="display:inline-block;margin-left:10px;vertical-align:middle;font-size:14px;font-weight:700;letter-spacing:-0.01em;color:#0f172a;">StockPilot</span>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <!-- Status pill -->
-          <tr>
-            <td style="padding:24px 32px 0;">
-              <span style="display:inline-block;padding:5px 12px;border-radius:999px;background:${tc.bg};color:${tc.fg};border:1px solid ${tc.border};font-size:11.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;">${escapeHtml(a.headline)}</span>
-            </td>
-          </tr>
-          <!-- Body -->
-          <tr>
-            <td style="padding:14px 32px 0;">
-              <p style="margin:0 0 8px;font-size:15px;line-height:1.55;color:#334155;">${a.greeting}</p>
-              <p style="margin:0;font-size:15.5px;line-height:1.6;color:#0f172a;">${a.bodyHtml}</p>
-            </td>
-          </tr>
-          ${reasonBlock}
-          <!-- CTA -->
-          <tr>
-            <td style="padding:24px 32px 4px;" align="left">
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td style="border-radius:10px;background:#4f46e5;">
-                    <a href="${escapeHtml(a.ctaUrl)}" style="display:inline-block;padding:12px 22px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:10px;letter-spacing:0.01em;">${escapeHtml(a.ctaLabel)} →</a>
-                  </td>
-                </tr>
-              </table>
-              <p style="margin:10px 0 0;font-size:11px;color:#94a3b8;line-height:1.5;">Or paste this link in your browser:<br><span style="color:#475569;word-break:break-all;">${escapeHtml(a.ctaUrl)}</span></p>
-            </td>
-          </tr>
-          ${trackingCard}
-          ${expiryBlock}
-          <!-- Divider -->
-          <tr>
-            <td style="padding:32px 32px 0;">
-              <hr style="border:none;border-top:1px solid #e2e8f0;margin:0;">
-            </td>
-          </tr>
-          <!-- Footer -->
-          <tr>
-            <td style="padding:18px 32px 28px;">
-              <p style="margin:0;font-size:11px;line-height:1.55;color:#94a3b8;">
-                You're receiving this because a request linked to <strong style="color:#64748b;font-weight:600;">${escapeHtml(a.recipientEmail)}</strong> moved through StockPilot.<br>
-                StockPilot · Inventory + order management
-              </p>
-            </td>
-          </tr>
-        </table>
-        <p style="margin:20px 0 0;font-size:10.5px;color:#94a3b8;">© StockPilot. All rights reserved.</p>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
-}
-
-// ─── Plaintext renderer ───────────────────────────────────────────────
-
-interface RenderTextArgs {
-  headline: string;
-  greeting: string;
-  body: string;
-  reason: string | null;
-  ctaLabel: string;
-  ctaUrl: string;
-  showTrackingCard: boolean;
-  requestId: string;
-  recipientEmail: string;
-  trackingKey: string | null;
-  trackingUrl: string;
-  expiryNote: string | null;
-}
-
-function renderText(a: RenderTextArgs): string {
-  const lines: string[] = [];
-  lines.push(`StockPilot — ${a.headline}`);
-  lines.push('');
-  lines.push(a.greeting);
-  lines.push('');
-  lines.push(a.body);
-  if (a.reason) {
-    lines.push('');
-    lines.push(`Reason: ${a.reason}`);
-  }
-  lines.push('');
-  lines.push(`${a.ctaLabel}: ${a.ctaUrl}`);
-  if (a.showTrackingCard) {
-    lines.push('');
-    lines.push('— Tracking details —');
-    lines.push(`Request ID: ${a.requestId}`);
-    lines.push(`Email: ${a.recipientEmail}`);
-    if (a.trackingKey) lines.push(`Tracking key: ${a.trackingKey}`);
-  }
-  if (a.expiryNote) {
-    lines.push('');
-    lines.push(a.expiryNote);
-  }
-  lines.push('');
-  lines.push('—');
-  lines.push('StockPilot · Inventory + order management');
-  return lines.join('\n');
-}
+// ─── Helpers ─────────────────────────────────────────────────────────
 
 function sanitizePlainText(s: string): string {
   return s.replace(/[\r\n]+/g, ' ').trim();
-}
-
-function bodyParagraph(
-  kind: OrderRequestEmailKind,
-  request?: OrderRequestRow,
-): string {
-  const isPickup = request?.fulfillment_type === 'pickup';
-  switch (kind) {
-    case 'submitted':
-      return isPickup
-        ? "We've received your order request. We'll email you when it's ready to pick up."
-        : "We've received your order request. We'll email you when it ships.";
-    case 'confirm_request':
-      return "Please confirm your order request by clicking the button below. Until you confirm, your request is on hold and won't be sent to a manager for review.";
-    case 'approved':
-      return 'Your request was approved and stock has been reserved. Packaging will start soon.';
-    case 'denied':
-      return 'Your request was not approved.';
-    case 'packing_slip_generated':
-      return 'Your order is being packaged right now.';
-    case 'staged_for_delivery':
-      return isPickup
-        ? 'Your order is packed and ready for pickup.'
-        : 'Your order is packed and ready to head out for delivery.';
-    case 'in_transit':
-      return "Your order is now in transit. We'll email you again when it's delivered.";
-    case 'completed':
-      return 'Your order was delivered. Thanks!';
-    case 'cancelled':
-      return 'Your order request was cancelled. Any reserved stock has been released.';
-  }
-}
-
-function bodyParagraphPlain(
-  kind: OrderRequestEmailKind,
-  request?: OrderRequestRow,
-): string {
-  return bodyParagraph(kind, request).replace(/<[^>]+>/g, '');
 }
 
 function escapeHtml(s: string): string {
@@ -463,12 +566,4 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function stripTags(s: string): string {
-  return s.replace(/<[^>]+>/g, '');
-}
-
-function stripProtocol(s: string): string {
-  return s.replace(/^https?:\/\//, '');
 }
