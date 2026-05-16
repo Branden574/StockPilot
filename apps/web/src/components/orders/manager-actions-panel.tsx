@@ -8,7 +8,6 @@ import {
   ClipboardList,
   Loader2,
   PackageCheck,
-  PackageOpen,
   Printer,
   Save,
   ScanLine,
@@ -25,7 +24,6 @@ import {
   type DriverOption,
 } from '@/components/orders/assign-delivery-dialog';
 import { Button } from '@/components/ui/button';
-import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -35,9 +33,7 @@ import {
   generatePackingSlipsAction,
   generatePickSlipAction,
   markInTransitAction,
-  markOrderRequestDeliveredAction,
   setOrderInternalNotesAction,
-  setOrderRequestStatusAction,
   stageOrderAction,
 } from '@/server/actions/order-requests';
 
@@ -62,9 +58,6 @@ type BusyKey =
   | 'stage-pickup'
   | 'stage-delivery'
   | 'mark-in-transit'
-  | 'packing_slip_generated'
-  | 'staged_for_delivery'
-  | 'completed'
   | 'notes'
   | null;
 
@@ -90,7 +83,6 @@ export function ManagerActionsPanel({
   const [busy, setBusy] = React.useState<BusyKey>(null);
   const [notes, setNotes] = React.useState(internalNotes ?? '');
   const initialNotes = React.useRef(internalNotes ?? '');
-  const [deliverOpen, setDeliverOpen] = React.useState(false);
 
   async function approve() {
     setBusy('approve');
@@ -218,35 +210,6 @@ export function ManagerActionsPanel({
     );
   }
 
-  async function moveTo(next: 'packing_slip_generated' | 'staged_for_delivery') {
-    setBusy(next);
-    const res = await setOrderRequestStatusAction({ id: orderId, status: next });
-    setBusy(null);
-    if (!res.ok) {
-      toast.error(res.error.message);
-      return;
-    }
-    toast.success(
-      next === 'packing_slip_generated'
-        ? 'Marked as packaging.'
-        : 'Marked as ready for delivery.',
-    );
-    router.refresh();
-  }
-
-  async function confirmDeliver() {
-    setBusy('completed');
-    const res = await markOrderRequestDeliveredAction(orderId);
-    setBusy(null);
-    if (!res.ok) {
-      toast.error(res.error.message);
-      return;
-    }
-    setDeliverOpen(false);
-    toast.success('Marked as delivered. Inventory updated.');
-    router.refresh();
-  }
-
   async function saveNotes() {
     setBusy('notes');
     const res = await setOrderInternalNotesAction({
@@ -298,32 +261,18 @@ export function ManagerActionsPanel({
           )}
 
           {status === 'approved' && (
-            <>
-              <Button
-                variant="gradient"
-                onClick={generatePickSlip}
-                disabled={busy !== null}
-              >
-                {busy === 'generate-pick-slip' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <ClipboardList className="h-3.5 w-3.5" />
-                )}
-                Generate pick slip
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => moveTo('packing_slip_generated')}
-                disabled={busy !== null}
-              >
-                {busy === 'packing_slip_generated' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <PackageOpen className="h-3.5 w-3.5" />
-                )}
-                Mark packaging
-              </Button>
-            </>
+            <Button
+              variant="gradient"
+              onClick={generatePickSlip}
+              disabled={busy !== null}
+            >
+              {busy === 'generate-pick-slip' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ClipboardList className="h-3.5 w-3.5" />
+              )}
+              Generate pick slip
+            </Button>
           )}
 
           {(status === 'pick_slip_generated' || status === 'picking_in_progress') && (
@@ -475,23 +424,6 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
-          {(status === 'approved' ||
-            status === 'packing_slip_generated' ||
-            status === 'staged_for_delivery') && (
-            <Button
-              variant="outline"
-              onClick={() => setDeliverOpen(true)}
-              disabled={busy !== null}
-            >
-              {busy === 'completed' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Truck className="h-3.5 w-3.5" />
-              )}
-              Mark delivered
-            </Button>
-          )}
-
           {(status === 'completed' || status === 'denied' || status === 'cancelled') && (
             <div className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
               <CheckCircle2 className="h-3.5 w-3.5" />
@@ -531,15 +463,6 @@ export function ManagerActionsPanel({
         </div>
       </div>
 
-      <DestructiveConfirm
-        open={deliverOpen}
-        onOpenChange={setDeliverOpen}
-        title="Mark delivered?"
-        description="Stock is deducted from inventory and any reservations on this order are released. This is the final fulfillment step and cannot be reversed — create a corrective adjustment afterwards if the deduction was wrong."
-        confirmLabel="Mark delivered"
-        pending={busy === 'completed'}
-        onConfirm={confirmDeliver}
-      />
     </section>
   );
 }

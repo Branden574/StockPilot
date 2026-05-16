@@ -170,43 +170,6 @@ export async function denyOrderRequestAction(
   }
 }
 
-const setStatusSchema = z.object({
-  id: z.string().uuid(),
-  status: z.enum(['packing_slip_generated', 'staged_for_delivery']),
-});
-
-export async function setOrderRequestStatusAction(
-  input: z.input<typeof setStatusSchema>,
-): Promise<ActionResult<void>> {
-  const parsed = setStatusSchema.safeParse(input);
-  if (!parsed.success) return err('validation_error', 'Invalid input');
-  try {
-    const svc = await OrderRequestsService.forCurrentUser();
-    await svc.setStatus(parsed.data.id, parsed.data.status);
-    revalidatePath('/dashboard/orders');
-    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
-    return ok(undefined);
-  } catch (e) {
-    return toResult(e);
-  }
-}
-
-export async function markOrderRequestDeliveredAction(
-  id: string,
-): Promise<ActionResult<void>> {
-  if (!z.string().uuid().safeParse(id).success)
-    return err('validation_error', 'Invalid id');
-  try {
-    const svc = await OrderRequestsService.forCurrentUser();
-    await svc.markDelivered(id);
-    revalidatePath('/dashboard/orders');
-    revalidatePath(`/dashboard/orders/${id}`);
-    return ok(undefined);
-  } catch (e) {
-    return toResult(e);
-  }
-}
-
 const generatePickSlipSchema = z.object({ id: z.string().uuid() });
 
 export async function generatePickSlipAction(
