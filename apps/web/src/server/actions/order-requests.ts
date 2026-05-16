@@ -399,3 +399,21 @@ export async function assignDeliveryAction(
     return toResult(e);
   }
 }
+
+const markInTransitSchema = z.object({ id: z.string().uuid() });
+
+export async function markInTransitAction(
+  input: z.input<typeof markInTransitSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = markInTransitSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.markInTransit(parsed.data.id);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
