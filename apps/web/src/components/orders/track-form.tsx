@@ -20,9 +20,11 @@ interface TrackResult {
   }>;
   createdAt: string;
   approvedAt: string | null;
-  packagingAt: string | null;
-  readyAt: string | null;
-  deliveredAt: string | null;
+  packingSlipGeneratedAt: string | null;
+  stagedAt: string | null;
+  inTransitAt: string | null;
+  signedAt: string | null;
+  completedAt: string | null;
   cancelledAt: string | null;
   deniedReason: string | null;
   notes: string | null;
@@ -37,15 +39,21 @@ interface Props {
 const TIMELINE: Array<{
   key: keyof Pick<
     TrackResult,
-    'createdAt' | 'approvedAt' | 'packagingAt' | 'readyAt' | 'deliveredAt'
+    | 'createdAt'
+    | 'approvedAt'
+    | 'packingSlipGeneratedAt'
+    | 'stagedAt'
+    | 'inTransitAt'
+    | 'completedAt'
   >;
   label: string;
 }> = [
   { key: 'createdAt', label: 'Submitted' },
   { key: 'approvedAt', label: 'Approved' },
-  { key: 'packagingAt', label: 'Packaging' },
-  { key: 'readyAt', label: 'Ready' },
-  { key: 'deliveredAt', label: 'Delivered' },
+  { key: 'packingSlipGeneratedAt', label: 'Packed' },
+  { key: 'stagedAt', label: 'Staged' },
+  { key: 'inTransitAt', label: 'In transit' },
+  { key: 'completedAt', label: 'Delivered' },
 ];
 
 const STATUS_LABELS: Record<string, string> = {

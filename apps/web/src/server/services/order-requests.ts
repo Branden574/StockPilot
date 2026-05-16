@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { isManagerOrAbove } from '@stockpilot/core';
+
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { audit } from './audit';
@@ -133,6 +135,12 @@ export interface OrderRequestSummary {
   updatedAt: string;
   approvedAt: string | null;
   deliveredAt: string | null;
+  // Phase-2 list-page surface: passed through from list() so future
+  // list-page enhancements (driver column, fulfillment-type filter)
+  // don't require another schema sweep.
+  fulfillmentType: 'pickup' | 'delivery';
+  assignedPickerId: string | null;
+  assignedDeliveryUserId: string | null;
 }
 
 export interface OrderRequestDetail {
@@ -204,6 +212,7 @@ export class OrderRequestsService {
         `id, status, warehouse_id, requester_user_id, requester_email,
          requester_name, requester_org_label, source, notes,
          created_at, updated_at, approved_at, delivered_at,
+         fulfillment_type, assigned_picker_id, assigned_delivery_user_id,
          warehouse:warehouses!warehouse_id (name),
          lines:order_request_lines (quantity_requested),
          requester:user_profiles!requester_user_id (full_name, email)`,
@@ -283,6 +292,11 @@ export class OrderRequestsService {
         updatedAt: r.updated_at as string,
         approvedAt: (r.approved_at as string | null) ?? null,
         deliveredAt: (r.delivered_at as string | null) ?? null,
+        fulfillmentType:
+          (r.fulfillment_type as 'pickup' | 'delivery' | null) ?? 'pickup',
+        assignedPickerId: (r.assigned_picker_id as string | null) ?? null,
+        assignedDeliveryUserId:
+          (r.assigned_delivery_user_id as string | null) ?? null,
       } satisfies OrderRequestSummary;
     });
   }
@@ -665,8 +679,15 @@ export class OrderRequestsService {
     return updated as OrderRequestRow;
   }
 
-  async recordPickedLine(lineId: string, qty: number): Promise<void> {
+  async recordPickedLine(orderId: string, lineId: string, qty: number): Promise<void> {
     assertPermission(this.ctx, 'items:update');
+    // C3: warehouse-scope gate. Without this, a staff user scoped to
+    // Warehouse A could pick lines on a Warehouse B order if they
+    // knew the lineId. The order id is the canonical entity we
+    // permission-check against; the RPC itself does an internal
+    // lookup so the lineId still has to belong to the order, but
+    // that's a defensive backstop rather than the primary gate.
+    await this.requireWarehouseAccess(orderId, 'write');
     const { error } = await this.ctx.supabase.rpc('partial_pick_line', {
       p_line_id: lineId,
       p_qty: qty,
@@ -718,7 +739,7 @@ export class OrderRequestsService {
 
     const { data: row, error } = await this.ctx.supabase
       .from('order_requests')
-      .select('status, signature_token')
+      .select('status, signature_token, signed_at')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
@@ -735,6 +756,18 @@ export class OrderRequestsService {
       throw new ServiceError(
         'validation_error',
         'Packing slips can only be generated after picking is complete.',
+      );
+    }
+
+    // Block silent-QR-invalidation: once an order is signed, regenerating
+    // the packing slip would mint a fresh signature_token and orphan the
+    // signed record (the QR on the customer's slip would still point at
+    // the now-stale token). The signed copy is the audit anchor — refuse
+    // to regenerate after the fact.
+    if ((row as { signed_at: string | null }).signed_at !== null) {
+      throw new ServiceError(
+        'validation_error',
+        'This order has already been signed and completed. Re-generating packing slips would invalidate the signed record.',
       );
     }
 
@@ -926,7 +959,7 @@ export class OrderRequestsService {
     // The action layer permits assigned-driver OR manager+. Check role
     // here only if the caller is NOT the assigned driver.
     if (r.assigned_delivery_user_id !== this.ctx.userId) {
-      if (!['owner', 'admin', 'manager'].includes(this.ctx.role)) {
+      if (!isManagerOrAbove(this.ctx.role)) {
         throw new ServiceError(
           'forbidden',
           'Only the assigned driver or a manager can mark in transit.',
@@ -952,7 +985,7 @@ export class OrderRequestsService {
       this.ctx,
     );
     // Best-effort: notify requester the order is on the way.
-    void this.notifyEmail(finalRow, 'staged_for_delivery');
+    void this.notifyEmail(finalRow, 'in_transit');
     return finalRow;
   }
 
@@ -1125,6 +1158,7 @@ export class OrderRequestsService {
       | 'denied'
       | 'packing_slip_generated'
       | 'staged_for_delivery'
+      | 'in_transit'
       | 'completed'
       | 'cancelled',
   ): Promise<void> {

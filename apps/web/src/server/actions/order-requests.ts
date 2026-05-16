@@ -201,7 +201,11 @@ export async function recordPickedLineAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.recordPickedLine(parsed.data.lineId, parsed.data.quantity);
+    await svc.recordPickedLine(
+      parsed.data.orderId,
+      parsed.data.lineId,
+      parsed.data.quantity,
+    );
     revalidatePath(`/dashboard/orders/${parsed.data.orderId}`);
     revalidatePath(`/dashboard/orders/${parsed.data.orderId}/pick`);
     return ok(undefined);
