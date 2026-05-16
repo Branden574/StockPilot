@@ -107,6 +107,13 @@ export interface OrderRequestLineWithItem extends OrderRequestLineRow {
     sku: string;
     quantity_on_hand: number;
     barcode: string | null;
+    /** "product" | "book" | "asset" | "consumable" — drives the
+     *  pick-slip PDF's rack vs rack+crate column rendering. */
+    item_type: string | null;
+    /** Holds rack_number / rack_row for items and the parallel
+     *  book_rack_* / book_crate_* keys for books. Pick-slip and
+     *  packing-slip renderers read this. */
+    custom_fields: Record<string, unknown> | null;
   } | null;
 }
 
@@ -353,7 +360,9 @@ export class OrderRequestsService {
         .select(
           `id, order_request_id, item_id, quantity_requested,
            quantity_fulfilled, quantity_picked, unit_cost_at_request, notes,
-           item:inventory_items!item_id (id, name, sku, quantity_on_hand, barcode)`,
+           item:inventory_items!item_id (
+             id, name, sku, quantity_on_hand, barcode, item_type, custom_fields
+           )`,
         )
         .eq('order_request_id', id),
       this.ctx.supabase
@@ -370,12 +379,18 @@ export class OrderRequestsService {
     const { data: lines, error: lErr } = linesRes;
     if (lErr) throw new ServiceError('internal_error', lErr.message);
 
+    type RawItem = {
+      id: string;
+      name: string;
+      sku: string;
+      quantity_on_hand: number;
+      barcode: string | null;
+      item_type: string | null;
+      custom_fields: Record<string, unknown> | null;
+    };
     const flatLines: OrderRequestLineWithItem[] = (lines ?? []).map((row) => {
       const r = row as Record<string, unknown>;
-      const itemField = r.item as
-        | { id: string; name: string; sku: string; quantity_on_hand: number; barcode: string | null }
-        | { id: string; name: string; sku: string; quantity_on_hand: number; barcode: string | null }[]
-        | null;
+      const itemField = r.item as RawItem | RawItem[] | null;
       const item = Array.isArray(itemField) ? (itemField[0] ?? null) : (itemField ?? null);
       const rawPicked = r.quantity_picked as number | null | undefined;
       return {

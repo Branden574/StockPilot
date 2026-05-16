@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { renderPickSlipPdf } from '@/lib/pdf/pick-slip';
+import { ItemImagesService } from '@/server/services/item-images';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 // @react-pdf/renderer needs Node APIs (Buffer, fs-style streams) — Edge
@@ -36,7 +37,18 @@ export async function GET(
         { status: 400 },
       );
     }
-    const pdf = await renderPickSlipPdf(detail);
+
+    // Primary image per item, served via 7-day signed URLs. One
+    // item_images IN(...) query + one createSignedUrls call regardless
+    // of how many lines the order has. @react-pdf/renderer fetches the
+    // URL server-side at render time and embeds the bytes in the PDF.
+    const itemIds = detail.lines
+      .map((l) => l.item?.id)
+      .filter((x): x is string => typeof x === 'string');
+    const imagesSvc = new ItemImagesService(ctx);
+    const imageUrlByItemId = await imagesSvc.primaryImagesForItems(itemIds);
+
+    const pdf = await renderPickSlipPdf(detail, { imageUrlByItemId });
     const body = new Uint8Array(pdf.byteLength);
     body.set(pdf);
     return new NextResponse(body, {
