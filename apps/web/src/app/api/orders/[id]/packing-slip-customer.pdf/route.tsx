@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { OrderRequestsService } from '@/server/services/order-requests';
+import { withApiContext } from '@/lib/auth/api-context';
 import { renderCustomerPackingSlipPdf } from '@/lib/pdf/packing-slip-customer';
+import { OrderRequestsService } from '@/server/services/order-requests';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,12 +17,16 @@ const VISIBLE_STATUSES = [
 ];
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const ctx = await withApiContext(req);
+  if (!ctx) {
+    return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
   try {
-    const svc = await OrderRequestsService.forCurrentUser();
+    const svc = new OrderRequestsService(ctx);
     const detail = await svc.get(id);
     if (!VISIBLE_STATUSES.includes(detail.request.status)) {
       return NextResponse.json(

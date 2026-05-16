@@ -1,4 +1,3 @@
-import { Printer } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
@@ -7,9 +6,7 @@ import { CancelOrderButton } from '@/components/orders/cancel-order-button';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
-import { GeneratePackingSlipDialog } from '@/components/shipments/generate-packing-slip-dialog';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -20,15 +17,11 @@ import {
 } from '@/components/ui/table';
 import { hasPermission } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
-import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { createClient } from '@/lib/supabase/server';
-import { ChartersService } from '@/server/services/charters';
 import {
   OrderRequestsService,
   type OrderRequestRow,
 } from '@/server/services/order-requests';
-import { WarehouseChartersService } from '@/server/services/warehouse-charters';
-import { WarehousesService } from '@/server/services/warehouses';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
 const TIMELINE_FIELDS: Array<{
@@ -88,49 +81,6 @@ export default async function OrderDetailPage({
 
   // Phase 2A — packing slip generation. Manager+ only, and only while the
   // request is at a status where the service actually accepts the call.
-  // The 'approved' status used to be allowed pre-refactor; with the new
-  // workflow the service requires picking_complete (or already
-  // packing_slip_generated for re-generation), so showing the dialog on
-  // 'approved' would surface the dialog only to have the service reject
-  // it. Restrict to the real accept set here so the affordance matches
-  // the rule.
-  const canPack =
-    canApprove &&
-    ['picking_complete', 'packing_slip_generated'].includes(request.status);
-  const remainingToShip = lines.reduce(
-    (s, l) =>
-      s +
-      Math.max(
-        0,
-        (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
-      ),
-    0,
-  );
-  let writableSourceWarehouses: Array<{ id: string; name: string }> = [];
-  let packingSlipCharters: Array<{ id: string; name: string; code: string | null }> = [];
-  let warehouseCharterPairs: Array<{ warehouse_id: string; charter_id: string }> = [];
-  if (canPack && remainingToShip > 0) {
-    const [access, whSvc, chSvc, whChSvc] = await Promise.all([
-      getWarehouseAccess(),
-      WarehousesService.forCurrentUser(),
-      ChartersService.forCurrentUser(),
-      WarehouseChartersService.forCurrentUser(),
-    ]);
-    const [allWarehouses, allCharters, pairs] = await Promise.all([
-      whSvc.list(),
-      chSvc.list(),
-      whChSvc.listPairs(),
-    ]);
-    writableSourceWarehouses = (
-      access.hasAllAccess
-        ? allWarehouses
-        : allWarehouses.filter((w) => access.writableIds.includes(w.id))
-    ).map((w) => ({ id: w.id, name: w.name }));
-    packingSlipCharters = allCharters
-      .filter((c) => c.status === 'active')
-      .map((c) => ({ id: c.id, name: c.name, code: c.code }));
-    warehouseCharterPairs = pairs;
-  }
   const totalQty = lines.reduce(
     (s, l) => s + (Number(l.quantity_requested) || 0),
     0,
@@ -201,20 +151,6 @@ export default async function OrderDetailPage({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button asChild variant="outline">
-              <Link href={`/dashboard/orders/${id}/print`}>
-                <Printer className="h-3.5 w-3.5" />
-                Print pick list
-              </Link>
-            </Button>
-            {canPack && remainingToShip > 0 && (
-              <GeneratePackingSlipDialog
-                orderRequestId={id}
-                sourceWarehouses={writableSourceWarehouses}
-                charters={packingSlipCharters}
-                warehouseCharterPairs={warehouseCharterPairs}
-              />
-            )}
             {(canApprove || isOwnRequest) && (
               <CancelOrderButton orderId={id} status={request.status} />
             )}
