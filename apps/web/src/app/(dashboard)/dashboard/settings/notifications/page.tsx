@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { DesktopNotificationsOptIn } from '@/components/settings/desktop-notifications-opt-in';
 import { DigestControls } from '@/components/settings/digest-controls';
 import { NotificationPreferencesForm } from '@/components/settings/notification-preferences-form';
+import { NotificationSoundToggle } from '@/components/settings/notification-sound-toggle';
 import {
   Card,
   CardContent,
@@ -71,6 +72,20 @@ export default async function NotificationsSettingsPage() {
           </CardHeader>
           <CardContent>
             <DesktopNotificationsOptIn />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Notification sound</CardTitle>
+            <CardDescription>
+              A short chime plays whenever an in-app notification toast
+              appears. Stored per-device so a noisy workstation can mute
+              without affecting your phone.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <NotificationSoundToggle />
           </CardContent>
         </Card>
 
