@@ -1,6 +1,4 @@
-'use server';
-
-import { revalidatePath } from 'next/cache';
+import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
@@ -8,30 +6,16 @@ import { env } from '@/lib/env';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 
-import { err, ok, type ActionResult } from '@stockpilot/core';
-
-/**
- * Public signature submission for `/orders/sign/<token>`.
- *
- * The page has NO Supabase JWT — the URL token IS the auth. We:
- *   1. Validate the token shape + signer details with zod.
- *   2. Rate-limit per token (10/hr, closed-mode — a DB outage denies
- *      rather than unlocks). The bucket key is the token itself so a
- *      single bad link can't burn rate budget on a different order.
- *   3. Look up the order via the service-role admin client so we can
- *      bypass RLS.
- *   4. Call the `confirm_order_signature` RPC (migration 0112) — that
- *      RPC's WHERE clause owns the replay-protection (signed_at IS
- *      NULL), expiry check, and status gate atomically. Returns the
- *      org id on success, null on any failure.
- *   5. On success, send a completion email to BOTH the original
- *      requester (if any) AND the signer (in case the signer is a
- *      different person — common when a school secretary signs for a
- *      teacher's order). Email failure is non-fatal.
- *
- * Ambiguous-failure UI is enforced at the page level — this action
- * still returns specific error codes for client toasts.
- */
+// Why a route handler instead of a Server Action: the public sign page
+// renders <SignatureCollector /> only while `signed_at IS NULL`. A
+// Server Action automatically triggers an RSC re-fetch of the calling
+// route after returning — that re-render sees the row is now signed
+// and swaps the collector for the "already signed" panel, unmounting
+// the client component and obliterating its success state. A regular
+// fetch() to this route handler is silent on the page tree, so the
+// client component keeps showing its "Thank you" panel.
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 const TOKEN_RE = /^[0-9a-f]{64}$/i;
 const DATA_URL_RE = /^data:image\/(png|jpe?g);base64,[A-Za-z0-9+/=]+$/;
@@ -47,16 +31,33 @@ const submitSchema = z.object({
     .regex(DATA_URL_RE, 'Invalid signature image'),
 });
 
-export async function submitOrderSignatureAction(
-  input: z.input<typeof submitSchema>,
-): Promise<ActionResult<{ id: string }>> {
-  const parsed = submitSchema.safeParse(input);
-  if (!parsed.success) {
-    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+export async function POST(req: NextRequest) {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: { code: 'validation_error', message: 'Invalid request body' } },
+      { status: 400 },
+    );
   }
 
-  // Rate-limit per token. Closed mode: a DB outage denies the request
-  // rather than unlocking unlimited submissions on a public endpoint.
+  const parsed = submitSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: {
+          code: 'validation_error',
+          message: parsed.error.issues[0]?.message ?? 'Invalid input',
+        },
+      },
+      { status: 400 },
+    );
+  }
+
+  // Rate-limit per token. Closed mode: a DB outage denies rather than
+  // unlocks unlimited submissions on a public endpoint.
   const rl = await checkRateLimit(
     `order-sign:${parsed.data.token}`,
     10,
@@ -64,16 +65,31 @@ export async function submitOrderSignatureAction(
     'closed',
   );
   if (!rl.allowed) {
-    return err('rate_limited', 'Too many attempts. Try again in a few minutes.');
+    return NextResponse.json(
+      {
+        ok: false,
+        error: {
+          code: 'rate_limited',
+          message: 'Too many attempts. Try again in a few minutes.',
+        },
+      },
+      { status: 429 },
+    );
   }
 
   let admin;
   try {
     admin = createAdminClient();
   } catch {
-    return err(
-      'internal_error',
-      'Server is missing SUPABASE_SERVICE_ROLE_KEY. Try again in a few minutes.',
+    return NextResponse.json(
+      {
+        ok: false,
+        error: {
+          code: 'internal_error',
+          message: 'Server is missing SUPABASE_SERVICE_ROLE_KEY. Try again in a few minutes.',
+        },
+      },
+      { status: 500 },
     );
   }
 
@@ -83,7 +99,13 @@ export async function submitOrderSignatureAction(
     .eq('signature_token', parsed.data.token)
     .maybeSingle();
   if (!row) {
-    return err('not_found', 'This signature link is invalid or expired.');
+    return NextResponse.json(
+      {
+        ok: false,
+        error: { code: 'not_found', message: 'This signature link is invalid or expired.' },
+      },
+      { status: 404 },
+    );
   }
   const order = row as {
     id: string;
@@ -100,9 +122,23 @@ export async function submitOrderSignatureAction(
     p_signer_email: parsed.data.signerEmail,
     p_signature_data_url: parsed.data.signatureDataUrl,
   });
-  if (error) return err('internal_error', error.message);
+  if (error) {
+    return NextResponse.json(
+      { ok: false, error: { code: 'internal_error', message: error.message } },
+      { status: 500 },
+    );
+  }
   if (!confirmed) {
-    return err('not_found', 'This order is already signed, expired, or cannot be signed.');
+    return NextResponse.json(
+      {
+        ok: false,
+        error: {
+          code: 'not_found',
+          message: 'This order is already signed, expired, or cannot be signed.',
+        },
+      },
+      { status: 409 },
+    );
   }
 
   // Fetch the full row for the completion email payload. Done AFTER
@@ -134,6 +170,5 @@ export async function submitOrderSignatureAction(
     }
   }
 
-  revalidatePath(`/dashboard/orders/${order.id}`);
-  return ok({ id: order.id });
+  return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
 }
