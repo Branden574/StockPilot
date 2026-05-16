@@ -138,6 +138,34 @@ export default async function PublicOrderRequestPage({
   if (!activeWarehouse) notFound();
   const books = await loadBooks(admin, org.id, activeWarehouse.id);
 
+  // Charters serviced by the active warehouse — restricted to status=
+  // 'active' so the dropdown never shows archived/inactive sites. The
+  // warehouse switcher does a hard reload, so this list refreshes for
+  // free on warehouse change (no client-side refetch needed).
+  const { data: charterPairs } = await admin
+    .from('warehouse_charters')
+    .select('charter:charters!inner (id, name, code, status)')
+    .eq('warehouse_id', activeWarehouse.id);
+  const chartersForWarehouse = (charterPairs ?? [])
+    .map((p) => {
+      const c = Array.isArray((p as { charter?: unknown }).charter)
+        ? ((p as { charter: unknown[] }).charter[0] as Record<string, unknown>)
+        : ((p as { charter: unknown }).charter as Record<string, unknown> | null);
+      return c
+        ? {
+            id: c.id as string,
+            name: c.name as string,
+            code: (c.code as string | null) ?? null,
+            status: c.status as string,
+          }
+        : null;
+    })
+    .filter(
+      (c): c is { id: string; name: string; code: string | null; status: string } =>
+        c !== null && c.status === 'active',
+    )
+    .map(({ id, name, code }) => ({ id, name, code }));
+
   return (
     <div>
       <Header org={org} />
@@ -147,6 +175,7 @@ export default async function PublicOrderRequestPage({
         warehouses={warehouses}
         initialWarehouseId={activeWarehouse.id}
         initialBooks={books}
+        chartersForWarehouse={chartersForWarehouse}
       />
       <p className="text-muted-foreground mt-10 text-center text-xs">
         <a className="underline" href="/r/track">

@@ -4,7 +4,6 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
-import { isDeliveryAddressComplete } from '@/lib/orders/delivery-address';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -51,16 +50,7 @@ const bodySchema = z.object({
   // tabs left open across the deploy boundary.
   fulfillmentType: z.enum(['pickup', 'delivery']).default('pickup'),
   requesterPhone: z.string().trim().max(40).nullish(),
-  deliveryAddress: z
-    .object({
-      line1: z.string().trim().min(1).max(200),
-      line2: z.string().trim().max(200).nullish(),
-      city: z.string().trim().min(1).max(120),
-      region: z.string().trim().max(120).nullish(),
-      postal: z.string().trim().max(40).nullish(),
-      instructions: z.string().trim().max(1000).nullish(),
-    })
-    .nullish(),
+  deliveryCharterId: z.string().uuid().nullish(),
   pickupLocationNotes: z.string().trim().max(2000).nullish(),
   // I13: hidden honeypot field. Real submitters never fill it in
   // (it's not visible to humans); naive form-fillers fill every
@@ -127,12 +117,9 @@ export async function POST(req: NextRequest) {
   }
   const body: Body = parsed.data;
 
-  if (
-    body.fulfillmentType === 'delivery' &&
-    !isDeliveryAddressComplete(body.deliveryAddress)
-  ) {
+  if (body.fulfillmentType === 'delivery' && !body.deliveryCharterId) {
     return NextResponse.json(
-      { error: 'delivery_address_required', message: 'Delivery orders need a shipping address.' },
+      { error: 'delivery_charter_required', message: 'Delivery orders need a site.' },
       { status: 400 },
     );
   }
@@ -316,6 +303,25 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 4b. For delivery orders, verify the picked charter is one this
+  // warehouse actually services. The FK + CHECK constraint enforce this
+  // at the DB level, but a friendlier 400 here saves a generic 23-error.
+  if (body.fulfillmentType === 'delivery' && body.deliveryCharterId) {
+    const { data: pair } = await admin
+      .from('warehouse_charters')
+      .select('charter_id')
+      .eq('organization_id', organizationId)
+      .eq('warehouse_id', body.warehouseId)
+      .eq('charter_id', body.deliveryCharterId)
+      .maybeSingle();
+    if (!pair) {
+      return NextResponse.json(
+        { error: 'invalid_charter', message: 'That site is not serviced by the chosen warehouse.' },
+        { status: 400 },
+      );
+    }
+  }
+
   // 5. Validate every line item: belongs to this org + warehouse,
   // item_type='book', not soft-deleted, status='active'. Snapshot
   // unit_cost from each item. Operates on `dedupedLines` so the
@@ -400,7 +406,7 @@ export async function POST(req: NextRequest) {
       notes: body.notes ?? null,
       fulfillment_type: body.fulfillmentType,
       requester_phone: body.requesterPhone ?? null,
-      delivery_address: body.deliveryAddress ?? null,
+      delivery_charter_id: body.deliveryCharterId ?? null,
       pickup_location_notes: body.pickupLocationNotes ?? null,
       confirmation_token_hash: tokenHash,
       confirmation_token_expires_at: expiresAt,
