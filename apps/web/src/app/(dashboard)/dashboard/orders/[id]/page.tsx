@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
+import { OrderTimeline } from '@/components/orders/order-timeline';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
 import { GeneratePackingSlipDialog } from '@/components/shipments/generate-packing-slip-dialog';
 import { Badge } from '@/components/ui/badge';
@@ -294,12 +295,17 @@ export default async function OrderDetailPage({
               </p>
             </section>
           )}
+
+          <section className="bg-card rounded-xl border p-4">
+            <h2 className="font-display mb-3 text-base font-medium">Timeline</h2>
+            <OrderTimeline orderId={request.id} organizationId={ctx.organizationId} />
+          </section>
         </div>
 
         <aside className="space-y-4">
           <section className="bg-card rounded-xl border p-4 text-xs">
             <h2 className="text-muted-foreground mb-2 text-[10.5px] uppercase tracking-[0.08em]">
-              Timeline
+              Dates
             </h2>
             <dl className="space-y-1.5 text-[11.5px]">
               {TIMELINE_FIELDS.map(({ key, label }) => {
