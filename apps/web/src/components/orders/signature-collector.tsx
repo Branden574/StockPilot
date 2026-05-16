@@ -1,6 +1,7 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -10,6 +11,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 import type { OrderSignSummary } from '@/app/orders/sign/[token]/page';
+
+const REDIRECT_SECONDS = 5;
+const REDIRECT_DESTINATION = '/dashboard/orders?status=completed';
 
 /**
  * Public signature surface for `/orders/sign/<token>`.
@@ -33,12 +37,30 @@ export function SignatureCollector({
   token: string;
   summary: OrderSignSummary;
 }) {
+  const router = useRouter();
   const padRef = React.useRef<SignaturePadHandle>(null);
   const [padEmpty, setPadEmpty] = React.useState(true);
   const [signerName, setSignerName] = React.useState(summary.requesterName ?? '');
   const [signerEmail, setSignerEmail] = React.useState(summary.requesterEmail ?? '');
   const [submitting, setSubmitting] = React.useState(false);
   const [submitted, setSubmitted] = React.useState(false);
+  const [countdown, setCountdown] = React.useState(REDIRECT_SECONDS);
+
+  // After the success state mounts, count down once per second and
+  // navigate to /dashboard/orders?status=completed when we hit 0. The
+  // redirect lands a logged-in dashboard user on the completed list
+  // so they can see the order they just signed off on. A public
+  // (anonymous) signer hits the login page — which is fine: the order
+  // is already completed and the email receipt is on its way.
+  React.useEffect(() => {
+    if (!submitted) return;
+    if (countdown <= 0) {
+      router.push(REDIRECT_DESTINATION);
+      return;
+    }
+    const timer = setTimeout(() => setCountdown((n) => n - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [submitted, countdown, router]);
 
   async function submit() {
     if (!signerName.trim()) {
@@ -95,12 +117,18 @@ export function SignatureCollector({
   }
 
   if (submitted) {
+    const display = Math.max(0, countdown);
     return (
       <div className="border-border bg-card rounded-2xl border p-6 text-center">
         <h2 className="font-display text-xl">Thank you</h2>
         <p className="text-muted-foreground mt-2 text-sm">
           The order is marked completed. A digital receipt is on its way to{' '}
           <span className="text-foreground font-medium">{signerEmail.trim()}</span>.
+        </p>
+        <p className="text-muted-foreground mt-4 text-xs">
+          Returning to orders in{' '}
+          <span className="text-foreground font-mono tabular-nums">{display}</span>
+          {display === 1 ? ' second' : ' seconds'}…
         </p>
       </div>
     );
