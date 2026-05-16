@@ -1,10 +1,10 @@
-import { Plus, Send } from 'lucide-react';
+import { Send } from 'lucide-react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { EmptyState } from '@/components/ui/empty-state';
+import { ShipmentsDeprecatedBanner } from '@/components/shipments/shipments-deprecated-banner';
 import { ShipmentStatusBadge } from '@/components/shipments/shipment-status-badge';
-import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -33,29 +33,24 @@ export default async function ShipmentsPage() {
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
+      <ShipmentsDeprecatedBanner />
+      <div className="mt-6 flex flex-wrap items-end justify-between gap-3 sm:gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Shipments</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Outbound packing slips between warehouses. Print, deliver, and
-            collect a signature on paper — Phase 2B will add the digital
-            signature flow.
+            Historical outbound packing slips. Read-only — new outbound work
+            lives under Orders.
           </p>
         </div>
-        <Button asChild variant="gradient">
-          <Link href="/dashboard/shipments/new">
-            <Plus className="h-4 w-4" /> New shipment
-          </Link>
-        </Button>
       </div>
 
       <div className="mt-8">
         {shipments.length === 0 ? (
           <EmptyState
             icon={Send}
-            title="No shipments yet"
-            description="Generate a packing slip from an order request and it'll show up here, ready to print, deliver, and collect a signature on."
-            cta={{ label: 'New shipment', href: '/dashboard/shipments/new' }}
+            title="No shipments"
+            description="Historical shipments will appear here. New outbound work is tracked under Orders."
+            cta={{ label: 'Go to Orders', href: '/dashboard/orders' }}
           />
         ) : (
           <div className="bg-card overflow-x-auto rounded-xl border">
