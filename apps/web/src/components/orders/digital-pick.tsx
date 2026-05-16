@@ -43,6 +43,36 @@ export function DigitalPick({ orderId, initialLines }: DigitalPickProps) {
 
   async function complete() {
     setCompleting(true);
+
+    // Flush any unsaved line quantities BEFORE calling
+    // complete_picking. The RPC reads quantity_picked off each line
+    // row and skips adjust_stock when it's null/0 — so if the user
+    // typed a quantity into the input but never clicked Save, the
+    // status would flip to picking_complete without any stock
+    // decrement. We persist the local state first to guarantee the
+    // RPC has accurate per-line numbers to deduct from.
+    const flushes = initialLines
+      .map((line) => {
+        const localQty = picked[line.id] ?? 0;
+        const serverQty = Number(line.quantity_picked ?? 0);
+        if (localQty === serverQty) return null;
+        return { lineId: line.id, qty: localQty };
+      })
+      .filter((x): x is { lineId: string; qty: number } => x !== null);
+
+    for (const f of flushes) {
+      const res = await recordPickedLineAction({
+        orderId,
+        lineId: f.lineId,
+        quantity: f.qty,
+      });
+      if (!res.ok) {
+        setCompleting(false);
+        toast.error(`Couldn't save line before completing: ${res.error.message}`);
+        return;
+      }
+    }
+
     const res = await completePickingAction({ id: orderId });
     setCompleting(false);
     if (!res.ok) {
