@@ -53,8 +53,9 @@ export async function GET(
     .from('order_requests')
     .select(
       `id, status, requester_email, requester_name, notes, denied_reason,
-       created_at, approved_at, packaging_at, ready_at, delivered_at,
-       cancelled_at, organization_id, warehouse_id`,
+       created_at, approved_at, packing_slip_generated_at, staged_at,
+       in_transit_at, signed_at, completed_at, cancelled_at,
+       organization_id, warehouse_id`,
     )
     .eq('id', id)
     .eq('organization_id', orgId)
@@ -71,9 +72,11 @@ export async function GET(
     denied_reason: string | null;
     created_at: string;
     approved_at: string | null;
-    packaging_at: string | null;
-    ready_at: string | null;
-    delivered_at: string | null;
+    packing_slip_generated_at: string | null;
+    staged_at: string | null;
+    in_transit_at: string | null;
+    signed_at: string | null;
+    completed_at: string | null;
     cancelled_at: string | null;
     organization_id: string;
     warehouse_id: string;
@@ -139,9 +142,11 @@ export async function GET(
     lines,
     createdAt: h.created_at,
     approvedAt: h.approved_at,
-    packagingAt: h.packaging_at,
-    readyAt: h.ready_at,
-    deliveredAt: h.delivered_at,
+    packingSlipGeneratedAt: h.packing_slip_generated_at,
+    stagedAt: h.staged_at,
+    inTransitAt: h.in_transit_at,
+    signedAt: h.signed_at,
+    completedAt: h.completed_at,
     cancelledAt: h.cancelled_at,
     deniedReason: sanitizedDeniedReason,
     notes: h.notes,

@@ -37,9 +37,13 @@ const TIMELINE_FIELDS: Array<{
 }> = [
   { key: 'created_at', label: 'Submitted' },
   { key: 'approved_at', label: 'Approved' },
-  { key: 'packaging_at', label: 'Packaging' },
-  { key: 'ready_at', label: 'Ready for delivery' },
-  { key: 'delivered_at', label: 'Delivered' },
+  { key: 'pick_slip_generated_at', label: 'Pick slip generated' },
+  { key: 'picking_completed_at', label: 'Picking complete' },
+  { key: 'packing_slip_generated_at', label: 'Packing slip generated' },
+  { key: 'staged_at', label: 'Staged' },
+  { key: 'in_transit_at', label: 'In transit' },
+  { key: 'signed_at', label: 'Signed' },
+  { key: 'completed_at', label: 'Completed' },
   { key: 'cancelled_at', label: 'Cancelled' },
 ];
 
@@ -63,12 +67,36 @@ export default async function OrderDetailPage({
   const { request, lines, reservations, warehouseName, requesterDisplay } = detail;
   const isOwnRequest =
     request.requester_user_id !== null && request.requester_user_id === ctx.userId;
+  // Phase 4 — the assigned delivery driver may be a staff user who lacks
+  // orders:approve. They still need the actions panel on the statuses
+  // where their permitted actions live (mark-in-transit, collect
+  // signature). The panel's internal logic already filters which
+  // buttons render based on assignedDeliveryUserId === viewerUserId, so
+  // an assigned-driver staff user will only see their own affordances —
+  // not Approve / Deny / Generate-pack-slip. We also suppress the panel
+  // entirely on pending_confirmation since nothing in the panel applies.
+  const isAssignedDriver =
+    request.assigned_delivery_user_id !== null &&
+    request.assigned_delivery_user_id === ctx.userId;
+  const showActionsPanel =
+    request.status !== 'pending_confirmation' &&
+    (canApprove ||
+      (isAssignedDriver &&
+        ['staged_for_delivery', 'in_transit', 'signature_requested'].includes(
+          request.status,
+        )));
 
   // Phase 2A — packing slip generation. Manager+ only, and only while the
-  // request still has unfulfilled lines that could ship.
+  // request is at a status where the service actually accepts the call.
+  // The 'approved' status used to be allowed pre-refactor; with the new
+  // workflow the service requires picking_complete (or already
+  // packing_slip_generated for re-generation), so showing the dialog on
+  // 'approved' would surface the dialog only to have the service reject
+  // it. Restrict to the real accept set here so the affordance matches
+  // the rule.
   const canPack =
     canApprove &&
-    ['approved', 'packing_slip_generated', 'staged_for_delivery'].includes(request.status);
+    ['picking_complete', 'packing_slip_generated'].includes(request.status);
   const remainingToShip = lines.reduce(
     (s, l) =>
       s +
@@ -275,7 +303,7 @@ export default async function OrderDetailPage({
             </section>
           )}
 
-          {canApprove && (
+          {showActionsPanel && (
             <ManagerActionsPanel
               orderId={id}
               status={request.status}

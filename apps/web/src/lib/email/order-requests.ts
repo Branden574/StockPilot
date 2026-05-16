@@ -11,6 +11,7 @@ export type OrderRequestEmailKind =
   | 'denied'
   | 'packing_slip_generated'
   | 'staged_for_delivery'
+  | 'in_transit'
   | 'completed'
   | 'cancelled';
 
@@ -47,6 +48,7 @@ const SUBJECTS: Record<OrderRequestEmailKind, string> = {
   denied: 'Your order request was denied',
   packing_slip_generated: 'Your order is being packaged',
   staged_for_delivery: 'Your order is ready',
+  in_transit: 'Your order is on the way',
   completed: 'Your order was delivered',
   cancelled: 'Your order was cancelled',
 };
@@ -58,6 +60,7 @@ const HEADLINES: Record<OrderRequestEmailKind, string> = {
   denied: 'Request denied',
   packing_slip_generated: 'Now being packaged',
   staged_for_delivery: 'Ready to deliver',
+  in_transit: 'On the way',
   completed: 'Delivered',
   cancelled: 'Cancelled',
 };
@@ -216,6 +219,8 @@ function bodyParagraph(
       return isPickup
         ? 'Your order is packed and ready for pickup.'
         : 'Your order is packed and ready to head out for delivery.';
+    case 'in_transit':
+      return "Your order is now in transit. We'll email you again when it's delivered.";
     case 'completed':
       return 'Your order was delivered. Thanks!';
     case 'cancelled':

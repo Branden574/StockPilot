@@ -417,7 +417,7 @@ export function ManagerActionsPanel({
             <Button
               variant="gradient"
               onClick={collectSignature}
-              disabled={busy !== null}
+              disabled={busy !== null || !signatureToken}
             >
               <ClipboardCheck className="h-3.5 w-3.5" />
               Collect signature
