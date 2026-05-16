@@ -65,14 +65,36 @@ const HEADLINES: Record<OrderRequestEmailKind, string> = {
   cancelled: 'Cancelled',
 };
 
+/** Status pill color tokens — picks the visual tone of the headline. */
+type StatusTone = 'info' | 'success' | 'warning' | 'danger' | 'neutral';
+const TONES: Record<OrderRequestEmailKind, StatusTone> = {
+  submitted: 'info',
+  confirm_request: 'warning',
+  approved: 'success',
+  denied: 'danger',
+  packing_slip_generated: 'info',
+  staged_for_delivery: 'info',
+  in_transit: 'info',
+  completed: 'success',
+  cancelled: 'neutral',
+};
+
+const TONE_COLORS: Record<StatusTone, { bg: string; fg: string; border: string }> = {
+  info: { bg: '#eef2ff', fg: '#3730a3', border: '#c7d2fe' },
+  success: { bg: '#ecfdf5', fg: '#065f46', border: '#a7f3d0' },
+  warning: { bg: '#fff7ed', fg: '#9a3412', border: '#fed7aa' },
+  danger: { bg: '#fef2f2', fg: '#991b1b', border: '#fecaca' },
+  neutral: { bg: '#f1f5f9', fg: '#334155', border: '#cbd5e1' },
+};
+
 /**
  * Sends a transactional email about an order-request status change.
  *
- * v1 ships a clean, simple HTML body — title + status block + a CTA link
- * back to the request page. Public-link requesters get a `/r/<token>/track`
- * link; signed-in users get the dashboard URL. The email-templates work
- * later swaps this for richer React-Email components without changing
- * the call site.
+ * Templates are email-client-safe (table layout, inline styles, no
+ * external CSS, system-font stack). Public requesters get a CTA to
+ * the /r/track page AND a "Tracking details" card with the Request
+ * ID + tracking key spelled out so the email survives clients that
+ * strip query strings on link rewrites.
  */
 export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
   const {
@@ -84,11 +106,7 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
     publicRequestToken,
     confirmationToken,
   } = input;
-  // staged_for_delivery is sent for BOTH pickup and delivery rows
-  // (the kind name is historical). The body already branches on
-  // fulfillment_type via bodyParagraph(); subject + headline get the
-  // same treatment so a pickup customer doesn't see "Ready to deliver"
-  // on a row that's actually ready to pick up.
+
   const isPickup = request.fulfillment_type === 'pickup';
   const subject =
     kind === 'staged_for_delivery' && isPickup
@@ -98,28 +116,14 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
     kind === 'staged_for_delivery' && isPickup
       ? 'Ready for pickup'
       : HEADLINES[kind];
-  const reasonLine =
-    (kind === 'denied' || kind === 'cancelled') && request.denied_reason
-      ? `<p style="color:#666;">Reason: ${escapeHtml(request.denied_reason)}</p>`
-      : '';
+  const tone = TONES[kind];
 
-  // F2: public-link recipients need `&t=<token>` in the track URL —
-  // the GET /api/v1/public/order-requests/[id] handler scopes lookups
-  // by org token and silently 404s without it. If a caller forgot to
-  // pass the token, fall back to the tokenless URL so the email still
-  // sends; the user lands on a clean "we couldn't find that order"
-  // state and can re-enter the token on /r/track manually.
   const publicTrackUrl = publicRequestToken
     ? `${appUrl}/r/track?id=${request.id}` +
       `&email=${encodeURIComponent(recipientEmail)}` +
       `&t=${encodeURIComponent(publicRequestToken)}`
     : `${appUrl}/r/track?id=${request.id}&email=${encodeURIComponent(recipientEmail)}`;
 
-  // confirm_request emails get a dedicated `/r/confirm` link instead
-  // of the "View request" track URL — the recipient must click it to
-  // promote the row from pending_confirmation to pending_approval. We
-  // refuse to send if the confirmation token is missing, so an empty
-  // call never produces a useless email.
   if (kind === 'confirm_request' && !confirmationToken) {
     throw new Error(
       'confirm_request email requires a confirmationToken — refusing to send empty CTA.',
@@ -130,64 +134,286 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
       ? `${appUrl}/r/confirm?id=${request.id}&t=${encodeURIComponent(confirmationToken)}`
       : null;
 
+  const isPublicRequester = request.requester_user_id === null;
   const link = confirmUrl
     ? confirmUrl
-    : request.requester_user_id
-      ? `${appUrl}/dashboard/orders/${request.id}`
-      : publicTrackUrl;
-  const ctaLabel = kind === 'confirm_request' ? 'Confirm request' : 'View request';
+    : isPublicRequester
+      ? publicTrackUrl
+      : `${appUrl}/dashboard/orders/${request.id}`;
+  const ctaLabel = kind === 'confirm_request' ? 'Confirm request' : 'View order';
 
   const greeting = recipientName
-    ? `Hi ${escapeHtml(recipientName)},`
+    ? `Hi ${escapeHtml(recipientName.split(' ')[0] ?? recipientName)},`
     : 'Hello,';
 
-  const expiryNote =
-    kind === 'confirm_request'
-      ? `<p style="margin:8px 0 0;color:#888;font-size:12px;">This confirmation link expires in 24 hours. If you didn't request this, you can safely ignore this email — nothing else happens until you click.</p>`
-      : '';
+  const html = renderHtml({
+    headline,
+    tone,
+    greeting,
+    bodyHtml: bodyParagraph(kind, request),
+    reasonHtml:
+      (kind === 'denied' || kind === 'cancelled') && request.denied_reason
+        ? escapeHtml(request.denied_reason)
+        : null,
+    ctaLabel,
+    ctaUrl: link,
+    showTrackingCard: isPublicRequester && kind !== 'confirm_request',
+    requestId: request.id,
+    recipientEmail,
+    trackingKey: publicRequestToken ?? null,
+    trackingUrl: publicTrackUrl,
+    expiryNote:
+      kind === 'confirm_request'
+        ? "This confirmation link expires in 24 hours. If you didn't request this, you can safely ignore this email — nothing else happens until you click."
+        : null,
+    appUrl,
+  });
 
-  const html = `<!doctype html>
-<html><body style="font-family:-apple-system,Segoe UI,sans-serif;background:#f6f6f6;margin:0;padding:24px;">
-  <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:12px;padding:32px;">
-    <p style="margin:0 0 8px;color:#888;font-size:12px;letter-spacing:0.05em;text-transform:uppercase;">StockPilot</p>
-    <h1 style="margin:0 0 16px;font-size:22px;">${escapeHtml(headline)}</h1>
-    <p style="margin:0 0 12px;font-size:14px;color:#333;">${greeting}</p>
-    <p style="margin:0 0 16px;font-size:14px;color:#333;line-height:1.5;">
-      ${bodyParagraph(kind, request)}
-    </p>
-    ${reasonLine}
-    <p style="margin:24px 0;">
-      <a href="${link}" style="background:#0a66ff;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;">${escapeHtml(ctaLabel)}</a>
-    </p>
-    ${expiryNote}
-    <p style="margin:24px 0 0;color:#999;font-size:11px;">
-      Request ID: ${request.id}
-    </p>
-  </div>
-</body></html>`;
-
-  const text = `${headline}
-
-${greeting}
-
-${bodyParagraphPlain(kind, request)}
-${request.denied_reason ? '\nReason: ' + sanitizePlainText(request.denied_reason) : ''}
-
-${ctaLabel}: ${link}
-${kind === 'confirm_request' ? '\nThis link expires in 24 hours. If you didn\'t request this, you can safely ignore this email.\n' : ''}
-Request ID: ${request.id}`;
+  const text = renderText({
+    headline,
+    greeting,
+    body: bodyParagraphPlain(kind, request),
+    reason:
+      (kind === 'denied' || kind === 'cancelled') && request.denied_reason
+        ? sanitizePlainText(request.denied_reason)
+        : null,
+    ctaLabel,
+    ctaUrl: link,
+    showTrackingCard: isPublicRequester && kind !== 'confirm_request',
+    requestId: request.id,
+    recipientEmail,
+    trackingKey: publicRequestToken ?? null,
+    trackingUrl: publicTrackUrl,
+    expiryNote:
+      kind === 'confirm_request'
+        ? "This confirmation link expires in 24 hours. If you didn't request this, you can safely ignore this email."
+        : null,
+  });
 
   await sendEmail({ to: recipientEmail, subject, html, text });
 }
 
+// ─── HTML renderer ────────────────────────────────────────────────────
+
+interface RenderArgs {
+  headline: string;
+  tone: StatusTone;
+  greeting: string;
+  bodyHtml: string;
+  reasonHtml: string | null;
+  ctaLabel: string;
+  ctaUrl: string;
+  showTrackingCard: boolean;
+  requestId: string;
+  recipientEmail: string;
+  trackingKey: string | null;
+  trackingUrl: string;
+  expiryNote: string | null;
+  appUrl: string;
+}
+
 /**
- * Strip CR/LF from user-controlled text before pasting into the
- * plain-text email body. The HTML body already calls escapeHtml(); this
- * is the matching guard for the text/plain part. Without it, a denial
- * reason containing `\r\nX-Injected: foo` could in theory smuggle a
- * header into the MIME message that Resend builds. Trailing whitespace
- * is also collapsed so the email reads cleanly.
+ * Email-client-safe HTML. Table-based outer layout for Outlook, inline
+ * styles for everything (Gmail, Outlook, Apple Mail all strip <style>
+ * tags inconsistently), system-font stack with web-safe fallbacks.
+ * Preview text injected via `display:none` div so inbox previews show
+ * a useful snippet instead of "Hi Branden,".
  */
+function renderHtml(a: RenderArgs): string {
+  const tc = TONE_COLORS[a.tone];
+  const previewText = stripTags(a.bodyHtml).slice(0, 110);
+
+  const reasonBlock = a.reasonHtml
+    ? `
+      <tr>
+        <td style="padding:0 32px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:16px;background:#fef2f2;border:1px solid #fecaca;border-radius:10px;">
+            <tr>
+              <td style="padding:14px 16px;">
+                <p style="margin:0;font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#991b1b;">Reason</p>
+                <p style="margin:6px 0 0;font-size:14px;line-height:1.5;color:#7f1d1d;">${a.reasonHtml}</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>`
+    : '';
+
+  const trackingCard = a.showTrackingCard
+    ? `
+      <tr>
+        <td style="padding:0 32px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:24px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
+            <tr>
+              <td style="padding:18px 20px;">
+                <p style="margin:0 0 12px;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Tracking details</p>
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="font-size:13px;line-height:1.5;color:#0f172a;">
+                  <tr>
+                    <td style="padding:6px 0;color:#64748b;width:120px;vertical-align:top;">Request ID</td>
+                    <td style="padding:6px 0;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:12px;color:#0f172a;word-break:break-all;">${escapeHtml(a.requestId)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px 0;color:#64748b;vertical-align:top;">Email</td>
+                    <td style="padding:6px 0;color:#0f172a;word-break:break-all;">${escapeHtml(a.recipientEmail)}</td>
+                  </tr>
+                  ${
+                    a.trackingKey
+                      ? `<tr>
+                    <td style="padding:6px 0;color:#64748b;vertical-align:top;">Tracking key</td>
+                    <td style="padding:6px 0;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:12px;color:#0f172a;word-break:break-all;">${escapeHtml(a.trackingKey)}</td>
+                  </tr>`
+                      : ''
+                  }
+                </table>
+                <p style="margin:14px 0 0;font-size:11.5px;color:#64748b;line-height:1.5;">
+                  Save this info. If the button above doesn't work, copy these into the form at
+                  <a href="${escapeHtml(a.appUrl)}/r/track" style="color:#4f46e5;text-decoration:none;">${escapeHtml(stripProtocol(a.appUrl))}/r/track</a>.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>`
+    : '';
+
+  const expiryBlock = a.expiryNote
+    ? `
+      <tr>
+        <td style="padding:0 32px;">
+          <p style="margin:18px 0 0;font-size:11.5px;color:#64748b;line-height:1.55;">${escapeHtml(a.expiryNote)}</p>
+        </td>
+      </tr>`
+    : '';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="color-scheme" content="light only">
+  <meta name="supported-color-schemes" content="light only">
+  <title>${escapeHtml(a.headline)}</title>
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:#0f172a;">
+  <div style="display:none;max-height:0;overflow:hidden;color:transparent;font-size:1px;line-height:1px;opacity:0;">${escapeHtml(previewText)}</div>
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f1f5f9;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;background:#ffffff;border-radius:16px;box-shadow:0 1px 2px rgba(15,23,42,0.04),0 8px 24px -8px rgba(15,23,42,0.12);overflow:hidden;">
+          <!-- Brand band -->
+          <tr>
+            <td style="padding:24px 32px 0;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td style="vertical-align:middle;">
+                    <span style="display:inline-block;width:28px;height:28px;border-radius:7px;background:linear-gradient(135deg,#4f46e5,#7c3aed);vertical-align:middle;"></span>
+                    <span style="display:inline-block;margin-left:10px;vertical-align:middle;font-size:14px;font-weight:700;letter-spacing:-0.01em;color:#0f172a;">StockPilot</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <!-- Status pill -->
+          <tr>
+            <td style="padding:24px 32px 0;">
+              <span style="display:inline-block;padding:5px 12px;border-radius:999px;background:${tc.bg};color:${tc.fg};border:1px solid ${tc.border};font-size:11.5px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;">${escapeHtml(a.headline)}</span>
+            </td>
+          </tr>
+          <!-- Body -->
+          <tr>
+            <td style="padding:14px 32px 0;">
+              <p style="margin:0 0 8px;font-size:15px;line-height:1.55;color:#334155;">${a.greeting}</p>
+              <p style="margin:0;font-size:15.5px;line-height:1.6;color:#0f172a;">${a.bodyHtml}</p>
+            </td>
+          </tr>
+          ${reasonBlock}
+          <!-- CTA -->
+          <tr>
+            <td style="padding:24px 32px 4px;" align="left">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="border-radius:10px;background:#4f46e5;">
+                    <a href="${escapeHtml(a.ctaUrl)}" style="display:inline-block;padding:12px 22px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:10px;letter-spacing:0.01em;">${escapeHtml(a.ctaLabel)} →</a>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:10px 0 0;font-size:11px;color:#94a3b8;line-height:1.5;">Or paste this link in your browser:<br><span style="color:#475569;word-break:break-all;">${escapeHtml(a.ctaUrl)}</span></p>
+            </td>
+          </tr>
+          ${trackingCard}
+          ${expiryBlock}
+          <!-- Divider -->
+          <tr>
+            <td style="padding:32px 32px 0;">
+              <hr style="border:none;border-top:1px solid #e2e8f0;margin:0;">
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding:18px 32px 28px;">
+              <p style="margin:0;font-size:11px;line-height:1.55;color:#94a3b8;">
+                You're receiving this because a request linked to <strong style="color:#64748b;font-weight:600;">${escapeHtml(a.recipientEmail)}</strong> moved through StockPilot.<br>
+                StockPilot · Inventory + order management
+              </p>
+            </td>
+          </tr>
+        </table>
+        <p style="margin:20px 0 0;font-size:10.5px;color:#94a3b8;">© StockPilot. All rights reserved.</p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+// ─── Plaintext renderer ───────────────────────────────────────────────
+
+interface RenderTextArgs {
+  headline: string;
+  greeting: string;
+  body: string;
+  reason: string | null;
+  ctaLabel: string;
+  ctaUrl: string;
+  showTrackingCard: boolean;
+  requestId: string;
+  recipientEmail: string;
+  trackingKey: string | null;
+  trackingUrl: string;
+  expiryNote: string | null;
+}
+
+function renderText(a: RenderTextArgs): string {
+  const lines: string[] = [];
+  lines.push(`StockPilot — ${a.headline}`);
+  lines.push('');
+  lines.push(a.greeting);
+  lines.push('');
+  lines.push(a.body);
+  if (a.reason) {
+    lines.push('');
+    lines.push(`Reason: ${a.reason}`);
+  }
+  lines.push('');
+  lines.push(`${a.ctaLabel}: ${a.ctaUrl}`);
+  if (a.showTrackingCard) {
+    lines.push('');
+    lines.push('— Tracking details —');
+    lines.push(`Request ID: ${a.requestId}`);
+    lines.push(`Email: ${a.recipientEmail}`);
+    if (a.trackingKey) lines.push(`Tracking key: ${a.trackingKey}`);
+  }
+  if (a.expiryNote) {
+    lines.push('');
+    lines.push(a.expiryNote);
+  }
+  lines.push('');
+  lines.push('—');
+  lines.push('StockPilot · Inventory + order management');
+  return lines.join('\n');
+}
+
 function sanitizePlainText(s: string): string {
   return s.replace(/[\r\n]+/g, ' ').trim();
 }
@@ -196,11 +422,6 @@ function bodyParagraph(
   kind: OrderRequestEmailKind,
   request?: OrderRequestRow,
 ): string {
-  // Branch copy on fulfillment_type so a pickup-style requester doesn't
-  // see "we'll let you know when it ships" and vice versa. `request` is
-  // optional so legacy callers that haven't been migrated still compile;
-  // missing context falls back to the delivery-flavored wording (the
-  // historical default before phase 2).
   const isPickup = request?.fulfillment_type === 'pickup';
   switch (kind) {
     case 'submitted':
@@ -242,4 +463,12 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function stripTags(s: string): string {
+  return s.replace(/<[^>]+>/g, '');
+}
+
+function stripProtocol(s: string): string {
+  return s.replace(/^https?:\/\//, '');
 }
