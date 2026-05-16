@@ -693,7 +693,7 @@ export function InventoryTable({
                 </td>
               </tr>
             )}
-            {displayed.map((item) => {
+            {displayed.map((item, rowIdx) => {
               const category = item.category_id ? lookups.categories.get(item.category_id) : null;
               const location = item.primary_location_id
                 ? lookups.locations.get(item.primary_location_id)
@@ -743,6 +743,11 @@ export function InventoryTable({
                             width={56}
                             height={56}
                             sizes="28px"
+                            // First ~12 rows are above the fold on a
+                            // typical 1080p screen — bypass lazy
+                            // loading so they start fetching with the
+                            // initial HTML instead of after JS paints.
+                            priority={rowIdx < 12}
                             className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
                           />
                         ) : (

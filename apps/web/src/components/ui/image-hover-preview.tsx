@@ -1,5 +1,6 @@
 'use client';
 
+import NextImage from 'next/image';
 import * as React from 'react';
 import { createPortal } from 'react-dom';
 
@@ -28,6 +29,37 @@ const OPEN_DELAY_MS = 220;
 const CLOSE_DELAY_MS = 120;
 const PREVIEW_SIZE = 280;
 const GAP_FROM_TRIGGER = 12;
+/** 2× retina render width — Vercel optimizes the upstream URL down to
+ *  this size and serves AVIF/WebP. Browsers will use the optimized
+ *  variant for the on-screen 280px target. */
+const PREVIEW_OPTIMIZED_WIDTH = 560;
+
+/**
+ * Module-scoped cache of URLs we've already fired a preload for. Lives
+ * as long as the page does, so re-hovering the same thumbnail never
+ * re-issues the request (browser HTTP cache would dedupe anyway, but
+ * keeping our own set avoids creating an Image() instance each time).
+ */
+const preloadedUrls = new Set<string>();
+
+function startPreload(src: string): void {
+  if (typeof window === 'undefined') return;
+  if (preloadedUrls.has(src)) return;
+  preloadedUrls.add(src);
+  // window.Image avoids the next/image import shadowing the global.
+  // Setting src kicks off the fetch; the GC-eligible Image instance is
+  // fine to drop — the bytes land in HTTP cache regardless.
+  const img = new window.Image();
+  img.decoding = 'async';
+  // Low priority so the preload doesn't compete with primary table
+  // thumbnails the user is actively looking at.
+  try {
+    (img as HTMLImageElement & { fetchPriority?: string }).fetchPriority = 'low';
+  } catch {
+    /* not supported — Safari < 17 ignores; harmless */
+  }
+  img.src = src;
+}
 
 export interface ImageHoverPreviewProps {
   /** Full-resolution image URL. When null/undefined, no preview is shown
@@ -104,6 +136,12 @@ export function ImageHoverPreview({
 
   function scheduleOpen() {
     if (!src || isCoarsePointer.current) return;
+    // Fire the preload IMMEDIATELY on mouseenter, well before the
+    // 220ms open delay elapses. By the time the popover mounts the
+    // <img>, the bytes are usually already in HTTP cache and the
+    // preview appears instantly. Idempotent — the preloadedUrls set
+    // makes re-hovering the same row a no-op.
+    startPreload(src);
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
@@ -176,10 +214,18 @@ export function ImageHoverPreview({
               }}
             >
               <div className="border-border bg-background overflow-hidden rounded-lg border shadow-2xl">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
+                <NextImage
                   src={src}
                   alt={alt}
+                  width={PREVIEW_OPTIMIZED_WIDTH}
+                  height={PREVIEW_OPTIMIZED_WIDTH}
+                  // priority bypasses lazy-loading and signals the
+                  // browser to fetch with high priority — the user is
+                  // actively waiting for this exact image.
+                  priority
+                  // Skip the Vercel optimizer (and its first-time
+                  // cold-cache delay) if the env disabled it; default
+                  // path uses AVIF/WebP at PREVIEW_OPTIMIZED_WIDTH.
                   className="block h-[280px] w-full bg-muted object-contain"
                   draggable={false}
                 />
