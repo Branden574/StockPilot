@@ -623,6 +623,89 @@ export class OrderRequestsService {
     return row;
   }
 
+  async generatePickSlip(id: string): Promise<OrderRequestRow> {
+    assertPermission(this.ctx, 'orders:approve');
+    await this.requireWarehouseAccess(id, 'write');
+    const { data: row, error } = await this.ctx.supabase
+      .from('order_requests')
+      .select('*')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Order not found');
+    if ((row as OrderRequestRow).status !== 'approved') {
+      throw new ServiceError(
+        'validation_error',
+        'Pick slip can only be generated from an approved order.',
+      );
+    }
+    const { data: updated, error: updErr } = await this.ctx.supabase
+      .from('order_requests')
+      .update({
+        status: 'pick_slip_generated',
+        pick_slip_generated_at: new Date().toISOString(),
+        pick_slip_generated_by: this.ctx.userId,
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (updErr) throw new ServiceError('internal_error', updErr.message);
+    await audit(
+      { event: 'order.pick_slip_generated', entityType: 'order_request', entityId: id },
+      this.ctx,
+    );
+    return updated as OrderRequestRow;
+  }
+
+  async recordPickedLine(lineId: string, qty: number): Promise<void> {
+    assertPermission(this.ctx, 'items:update');
+    const { error } = await this.ctx.supabase.rpc('partial_pick_line', {
+      p_line_id: lineId,
+      p_qty: qty,
+    });
+    if (error) {
+      const msg = error.message ?? '';
+      if (msg.includes('over_pick'))
+        throw new ServiceError('validation_error', 'Picked quantity exceeds requested.');
+      if (msg.includes('order_request_line_not_found'))
+        throw new ServiceError('not_found', 'Line not found.');
+      if (msg.includes('forbidden'))
+        throw new ServiceError('forbidden', 'Not allowed to pick on this order.');
+      if (msg.includes('invalid_status_transition'))
+        throw new ServiceError('validation_error', 'Order is not in a pickable status.');
+      throw new ServiceError('internal_error', msg);
+    }
+  }
+
+  async completePicking(id: string): Promise<OrderRequestRow> {
+    assertPermission(this.ctx, 'items:update');
+    await this.requireWarehouseAccess(id, 'write');
+    const { data, error } = await this.ctx.supabase.rpc('complete_picking', {
+      p_order_id: id,
+    });
+    if (error) {
+      const msg = error.message ?? '';
+      if (msg.includes('insufficient_stock'))
+        throw new ServiceError(
+          'validation_error',
+          'Not enough stock to complete picking. Reduce picked quantities or top up the short items.',
+        );
+      if (msg.includes('invalid_status_transition'))
+        throw new ServiceError('validation_error', 'Order is no longer being picked.');
+      if (msg.includes('forbidden'))
+        throw new ServiceError('forbidden', 'Not allowed to complete picking on this order.');
+      throw new ServiceError('internal_error', msg);
+    }
+    const row = data as OrderRequestRow;
+    await audit(
+      { event: 'order.picking_complete', entityType: 'order_request', entityId: id },
+      this.ctx,
+    );
+    return row;
+  }
+
   async deny(id: string, reason: string): Promise<OrderRequestRow> {
     assertPermission(this.ctx, 'orders:approve');
     // C3: warehouse-scope gate before any mutation.

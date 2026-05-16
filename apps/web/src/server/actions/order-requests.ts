@@ -207,6 +207,65 @@ export async function markOrderRequestDeliveredAction(
   }
 }
 
+const generatePickSlipSchema = z.object({ id: z.string().uuid() });
+
+export async function generatePickSlipAction(
+  input: z.input<typeof generatePickSlipSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = generatePickSlipSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.generatePickSlip(parsed.data.id);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const recordPickedLineSchema = z.object({
+  orderId: z.string().uuid(),
+  lineId: z.string().uuid(),
+  quantity: z.coerce.number().min(0).max(10_000),
+});
+
+export async function recordPickedLineAction(
+  input: z.input<typeof recordPickedLineSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = recordPickedLineSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.recordPickedLine(parsed.data.lineId, parsed.data.quantity);
+    revalidatePath(`/dashboard/orders/${parsed.data.orderId}`);
+    revalidatePath(`/dashboard/orders/${parsed.data.orderId}/pick`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const completePickingSchema = z.object({ id: z.string().uuid() });
+
+export async function completePickingAction(
+  input: z.input<typeof completePickingSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = completePickingSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.completePicking(parsed.data.id);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 const internalNotesSchema = z.object({
   id: z.string().uuid(),
   notes: z.string().max(2000).nullable(),
