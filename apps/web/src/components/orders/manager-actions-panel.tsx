@@ -1,6 +1,20 @@
 'use client';
 
-import { Check, CheckCircle2, Loader2, PackageCheck, PackageOpen, Save, Truck, X } from 'lucide-react';
+import {
+  Check,
+  CheckCircle2,
+  ClipboardCheck,
+  ClipboardList,
+  Loader2,
+  PackageCheck,
+  PackageOpen,
+  Printer,
+  Save,
+  ScanLine,
+  Truck,
+  X,
+} from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -11,7 +25,9 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
   approveOrderRequestAction,
+  completePickingAction,
   denyOrderRequestAction,
+  generatePickSlipAction,
   markOrderRequestDeliveredAction,
   setOrderInternalNotesAction,
   setOrderRequestStatusAction,
@@ -28,6 +44,8 @@ interface Props {
 type BusyKey =
   | 'approve'
   | 'deny'
+  | 'generate-pick-slip'
+  | 'complete-picking'
   | 'packing_slip_generated'
   | 'staged_for_delivery'
   | 'completed'
@@ -65,6 +83,34 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
     }
     toast.success('Request denied.');
     router.refresh();
+  }
+
+  async function generatePickSlip() {
+    setBusy('generate-pick-slip');
+    const res = await generatePickSlipAction({ id: orderId });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Pick slip generated.');
+    router.refresh();
+  }
+
+  async function completePicking() {
+    setBusy('complete-picking');
+    const res = await completePickingAction({ id: orderId });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Picking complete.');
+    router.refresh();
+  }
+
+  function printPickSlip() {
+    window.open(`/api/orders/${orderId}/pick-slip.pdf`, '_blank', 'noopener,noreferrer');
   }
 
   async function moveTo(next: 'packing_slip_generated' | 'staged_for_delivery') {
@@ -147,17 +193,73 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
           )}
 
           {status === 'approved' && (
+            <>
+              <Button
+                variant="gradient"
+                onClick={generatePickSlip}
+                disabled={busy !== null}
+              >
+                {busy === 'generate-pick-slip' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ClipboardList className="h-3.5 w-3.5" />
+                )}
+                Generate pick slip
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => moveTo('packing_slip_generated')}
+                disabled={busy !== null}
+              >
+                {busy === 'packing_slip_generated' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <PackageOpen className="h-3.5 w-3.5" />
+                )}
+                Mark packaging
+              </Button>
+            </>
+          )}
+
+          {(status === 'pick_slip_generated' || status === 'picking_in_progress') && (
+            <>
+              <Button variant="gradient" asChild disabled={busy !== null}>
+                <Link href={`/dashboard/orders/${orderId}/pick`}>
+                  <ScanLine className="h-3.5 w-3.5" />
+                  Open digital pick
+                </Link>
+              </Button>
+              <Button
+                variant="outline"
+                onClick={printPickSlip}
+                disabled={busy !== null}
+              >
+                <Printer className="h-3.5 w-3.5" />
+                Print pick slip
+              </Button>
+              <Button
+                variant="outline"
+                onClick={completePicking}
+                disabled={busy !== null}
+              >
+                {busy === 'complete-picking' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ClipboardCheck className="h-3.5 w-3.5" />
+                )}
+                Mark picking complete
+              </Button>
+            </>
+          )}
+
+          {status === 'picking_complete' && (
             <Button
-              variant="gradient"
-              onClick={() => moveTo('packing_slip_generated')}
+              variant="outline"
+              onClick={printPickSlip}
               disabled={busy !== null}
             >
-              {busy === 'packing_slip_generated' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <PackageOpen className="h-3.5 w-3.5" />
-              )}
-              Mark packaging
+              <Printer className="h-3.5 w-3.5" />
+              Print pick slip
             </Button>
           )}
 
