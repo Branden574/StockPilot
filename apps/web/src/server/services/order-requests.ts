@@ -140,7 +140,9 @@ export interface OrderRequestSummary {
   // don't require another schema sweep.
   fulfillmentType: 'pickup' | 'delivery';
   assignedPickerId: string | null;
+  assignedPickerName: string | null;
   assignedDeliveryUserId: string | null;
+  assignedDeliveryUserName: string | null;
 }
 
 export interface OrderRequestDetail {
@@ -215,7 +217,9 @@ export class OrderRequestsService {
          fulfillment_type, assigned_picker_id, assigned_delivery_user_id,
          warehouse:warehouses!warehouse_id (name),
          lines:order_request_lines (quantity_requested),
-         requester:user_profiles!requester_user_id (full_name, email)`,
+         requester:user_profiles!requester_user_id (full_name, email),
+         picker:user_profiles!assigned_picker_id (full_name, email),
+         driver:user_profiles!assigned_delivery_user_id (full_name, email)`,
       )
       .eq('organization_id', this.ctx.organizationId)
       // M1: secondary `id desc` sort gives a stable order when two rows
@@ -260,17 +264,31 @@ export class OrderRequestsService {
       // own requester_name / requester_email columns are null — that's
       // the internal-in-app case (only public-link external requests
       // populate those columns at create time).
-      const reqJoin = r.requester as
-        | { full_name?: string | null; email?: string | null }
-        | { full_name?: string | null; email?: string | null }[]
-        | null;
-      const reqProfile = Array.isArray(reqJoin) ? reqJoin[0] ?? null : reqJoin;
+      type ProfileShape = {
+        full_name?: string | null;
+        email?: string | null;
+      };
+      const flattenProfile = (
+        field: unknown,
+      ): ProfileShape | null => {
+        if (!field) return null;
+        return Array.isArray(field)
+          ? ((field[0] as ProfileShape | undefined) ?? null)
+          : (field as ProfileShape);
+      };
+      const reqProfile = flattenProfile(r.requester);
+      const pickerProfile = flattenProfile(r.picker);
+      const driverProfile = flattenProfile(r.driver);
       const requesterName =
         ((r.requester_name as string | null) ?? null) ||
         (reqProfile?.full_name?.trim() || null);
       const requesterEmail =
         ((r.requester_email as string | null) ?? null) ||
         (reqProfile?.email?.trim() || null);
+      const displayProfile = (p: ProfileShape | null): string | null => {
+        if (!p) return null;
+        return p.full_name?.trim() || p.email?.trim() || null;
+      };
 
       return {
         id: r.id as string,
@@ -295,8 +313,10 @@ export class OrderRequestsService {
         fulfillmentType:
           (r.fulfillment_type as 'pickup' | 'delivery' | null) ?? 'pickup',
         assignedPickerId: (r.assigned_picker_id as string | null) ?? null,
+        assignedPickerName: displayProfile(pickerProfile),
         assignedDeliveryUserId:
           (r.assigned_delivery_user_id as string | null) ?? null,
+        assignedDeliveryUserName: displayProfile(driverProfile),
       } satisfies OrderRequestSummary;
     });
   }
