@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { ItemThumb } from '@/components/items/item-thumb';
-import { ShipmentActions } from '@/components/shipments/shipment-actions';
+import { ShipmentsDeprecatedBanner } from '@/components/shipments/shipments-deprecated-banner';
 import { ShipmentStatusBadge } from '@/components/shipments/shipment-status-badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -44,7 +44,8 @@ export default async function ShipmentDetailPage({
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
+      <ShipmentsDeprecatedBanner />
+      <div className="mt-6 mb-6">
         <Link
           href="/dashboard/shipments"
           className="text-muted-foreground hover:text-foreground text-sm"
@@ -78,11 +79,6 @@ export default async function ShipmentDetailPage({
               <Download className="h-4 w-4" /> Download PDF
             </a>
           </Button>
-          <ShipmentActions
-            shipmentId={id}
-            status={detail.status}
-            attentionToName={detail.attentionToName}
-          />
         </div>
       </div>
 
