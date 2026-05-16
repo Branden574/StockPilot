@@ -14,6 +14,12 @@ export const NOTIFICATION_PREF_KEYS = [
   'push_low_stock',
   'push_po_status',
   'push_stock_transfer',
+  // Phase-6 order events:
+  'email_order_received',
+  'email_order_status_changed',
+  'email_order_in_transit',
+  'email_order_completed',
+  'push_order_assigned_to_me',
 ] as const;
 
 export type NotificationPrefKey = (typeof NOTIFICATION_PREF_KEYS)[number];

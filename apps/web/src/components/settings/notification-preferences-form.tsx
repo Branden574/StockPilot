@@ -62,6 +62,36 @@ const TOGGLE_DEFS: ToggleDef[] = [
     hint: 'In-app notification when stock is transferred between warehouses you can see.',
     group: 'push',
   },
+  {
+    key: 'email_order_received',
+    label: 'Order received',
+    hint: 'Email when your order request lands in the queue.',
+    group: 'email',
+  },
+  {
+    key: 'email_order_status_changed',
+    label: 'Order status changes',
+    hint: 'Email when your order is approved, denied, packaged, or staged.',
+    group: 'email',
+  },
+  {
+    key: 'email_order_in_transit',
+    label: 'Order in transit',
+    hint: 'Email when a delivery order is on the way.',
+    group: 'email',
+  },
+  {
+    key: 'email_order_completed',
+    label: 'Order completed',
+    hint: 'Email when your order is signed for and finalized.',
+    group: 'email',
+  },
+  {
+    key: 'push_order_assigned_to_me',
+    label: 'Order assigned to me',
+    hint: 'In-app notification when you\'re assigned as picker or driver.',
+    group: 'push',
+  },
 ];
 
 interface NotificationPreferencesFormProps {
