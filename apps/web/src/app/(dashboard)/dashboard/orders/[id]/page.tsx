@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
+import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -127,6 +128,7 @@ export default async function OrderDetailPage({
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
+      <OrderRealtimeRefresh orderId={id} />
       <div className="mb-6">
         <Link
           href="/dashboard/orders"

@@ -1,7 +1,6 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -35,7 +34,6 @@ export function SignatureCollector({
   token: string;
   summary: OrderSignSummary;
 }) {
-  const router = useRouter();
   const padRef = React.useRef<SignaturePadHandle>(null);
   const [padEmpty, setPadEmpty] = React.useState(true);
   const [signerName, setSignerName] = React.useState(summary.requesterName ?? '');
@@ -74,8 +72,15 @@ export function SignatureCollector({
       toast.error(res.error.message);
       return;
     }
+    // Intentionally NOT calling router.refresh() here. The server
+    // component for /orders/sign/<token> would re-render and, seeing
+    // signed_at IS NOT NULL, switch to the "already signed" panel —
+    // overwriting this client component's success state with a
+    // confusing "you can't sign this" message right after a
+    // successful sign. The client-side "Thank you" panel is the
+    // correct terminal UX; the row is already completed server-side
+    // and the requester gets the completion email.
     setSubmitted(true);
-    router.refresh();
   }
 
   if (submitted) {
