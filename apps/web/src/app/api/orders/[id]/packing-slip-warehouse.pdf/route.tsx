@@ -1,10 +1,10 @@
 import QRCode from 'qrcode';
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { OrderRequestsService } from '@/server/services/order-requests';
-import { renderWarehousePackingSlipPdf } from '@/lib/pdf/packing-slip-warehouse';
+import { withApiContext } from '@/lib/auth/api-context';
 import { env } from '@/lib/env';
-import { createClient } from '@/lib/supabase/server';
+import { renderWarehousePackingSlipPdf } from '@/lib/pdf/packing-slip-warehouse';
+import { OrderRequestsService } from '@/server/services/order-requests';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,12 +19,16 @@ const VISIBLE_STATUSES = [
 ];
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const ctx = await withApiContext(req);
+  if (!ctx) {
+    return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
   try {
-    const svc = await OrderRequestsService.forCurrentUser();
+    const svc = new OrderRequestsService(ctx);
     const detail = await svc.get(id);
     if (!VISIBLE_STATUSES.includes(detail.request.status)) {
       return NextResponse.json(
@@ -46,10 +50,10 @@ export async function GET(
     }
 
     // Pull charter name when present, for the warehouse-slip header.
+    // Reuse the API-context's supabase client so RLS applies cleanly.
     let charterName: string | null = null;
     if (detail.request.delivery_charter_id) {
-      const supabase = await createClient();
-      const { data } = await supabase
+      const { data } = await ctx.supabase
         .from('charters')
         .select('name')
         .eq('id', detail.request.delivery_charter_id)

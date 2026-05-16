@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { withApiContext } from '@/lib/auth/api-context';
 import { renderPickSlipPdf } from '@/lib/pdf/pick-slip';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
@@ -10,12 +11,20 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  // API routes bypass the (dashboard) middleware that powers
+  // requireOrgContext() — using withApiContext here means the auth
+  // failure path returns a clean 401 instead of throwing NEXT_REDIRECT
+  // (which the try/catch below would mis-classify as internal_error).
+  const ctx = await withApiContext(req);
+  if (!ctx) {
+    return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
   try {
-    const svc = await OrderRequestsService.forCurrentUser();
+    const svc = new OrderRequestsService(ctx);
     const detail = await svc.get(id);
     if (
       detail.request.status !== 'pick_slip_generated' &&
@@ -28,9 +37,6 @@ export async function GET(
       );
     }
     const pdf = await renderPickSlipPdf(detail);
-    // Node's `Buffer` doesn't satisfy `BodyInit` in TS — copy its bytes
-    // into a fresh ArrayBuffer-backed Uint8Array, which is structurally
-    // a valid web Response body.
     const body = new Uint8Array(pdf.byteLength);
     body.set(pdf);
     return new NextResponse(body, {
