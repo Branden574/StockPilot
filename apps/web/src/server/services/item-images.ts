@@ -1,6 +1,54 @@
 import 'server-only';
 
+import { unstable_cache } from 'next/cache';
+
+import { createAdminClient } from '@/lib/supabase/admin';
+
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+
+/**
+ * Long-lived signed URL per storage path. The signed URL itself is
+ * valid for 30 days; we cache the value via Vercel's data cache for
+ * 25 days so every page load returns the SAME URL for the same image
+ * for ~25 days.
+ *
+ * Why this matters for perceived load speed:
+ *   The current code path mints a fresh signed URL on every request.
+ *   Each fresh URL has a different `sig` + `exp` query, so Vercel's
+ *   image optimizer (which keys on the full URL) sees a brand-new
+ *   entry every refresh and re-encodes from scratch. That's the
+ *   200-500ms-per-thumbnail tax users were feeling on revisits.
+ *   Stable URL ⇒ optimizer cache hit ⇒ near-zero latency thumbs.
+ *
+ * Why service-role: signing a path is org-agnostic — the resulting
+ * URL is identical regardless of who minted it, so caching across
+ * users is safe. Authorization already happened in the outer
+ * primaryImagesForItems / list call (the storage_path was selected
+ * via the user's RLS-scoped query). The admin client just performs
+ * the signing op without needing a per-request supabase instance.
+ */
+const SIGNED_URL_TTL_SEC = 30 * 24 * 60 * 60;
+const SIGNED_URL_CACHE_SEC = 25 * 24 * 60 * 60;
+
+const getCachedItemImageSignedUrl = unstable_cache(
+  async (storagePath: string): Promise<string | null> => {
+    try {
+      const admin = createAdminClient();
+      const { data, error } = await admin.storage
+        .from('item-images')
+        .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC);
+      if (error || !data?.signedUrl) return null;
+      return data.signedUrl;
+    } catch {
+      return null;
+    }
+  },
+  // Cache key prefix + the function arg(s) form the full key.
+  // Bump the version suffix when the URL shape changes (e.g. when
+  // moving to image-transformation URLs) to bust all stale entries.
+  ['item-image-signed-url-v1'],
+  { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
+);
 
 export class ItemImagesService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -22,13 +70,21 @@ export class ItemImagesService {
 
   async signedUrls(paths: string[]): Promise<Map<string, string>> {
     if (paths.length === 0) return new Map();
-    const { data, error } = await this.ctx.supabase.storage
-      .from('item-images')
-      .createSignedUrls(paths, 7 * 24 * 60 * 60); // 7 days — keeps browser + Vercel image cache warm
-    if (error) throw new ServiceError('internal_error', error.message);
+    // Each path is looked up through Vercel's data cache (25-day TTL).
+    // Same path → same URL across requests for ~25 days, which is what
+    // lets the downstream Vercel image optimizer cache hit instead of
+    // re-encoding every page refresh. Parallel resolution keeps the
+    // first-request fan-out cheap (one createSignedUrl per uncached
+    // path) and amortizes the cost across the deployment lifetime.
+    const entries = await Promise.all(
+      paths.map(async (path) => {
+        const url = await getCachedItemImageSignedUrl(path);
+        return url ? ([path, url] as const) : null;
+      }),
+    );
     const map = new Map<string, string>();
-    for (const entry of data ?? []) {
-      if (entry.signedUrl && entry.path) map.set(entry.path, entry.signedUrl);
+    for (const entry of entries) {
+      if (entry) map.set(entry[0], entry[1]);
     }
     return map;
   }
