@@ -2,6 +2,7 @@ import { Printer } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
@@ -19,6 +20,7 @@ import {
 import { hasPermission } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { createClient } from '@/lib/supabase/server';
 import { ChartersService } from '@/server/services/charters';
 import {
   OrderRequestsService,
@@ -108,6 +110,41 @@ export default async function OrderDetailPage({
     (s, r) => s + (Number(r.quantity) || 0),
     0,
   );
+
+  // Phase 4 — load active org members as candidate drivers for the
+  // AssignDeliveryDialog. Only fetched when the viewer can act on the
+  // panel (manager+), since staff/viewers never see the assign button.
+  let drivers: DriverOption[] = [];
+  if (canApprove) {
+    const supabase = await createClient();
+    const { data: members } = await supabase
+      .from('organization_members')
+      .select('user_id, user:user_profiles!user_id (id, full_name, email)')
+      .eq('organization_id', ctx.organizationId)
+      .not('accepted_at', 'is', null);
+    type MemberRow = {
+      user_id: string;
+      user:
+        | { id: string; full_name: string | null; email: string }
+        | { id: string; full_name: string | null; email: string }[]
+        | null;
+    };
+    drivers = ((members ?? []) as MemberRow[])
+      .flatMap((m) => {
+        const u = Array.isArray(m.user) ? m.user[0] : m.user;
+        if (!u || typeof u.email !== 'string') return [];
+        return [
+          {
+            userId: u.id,
+            fullName: u.full_name ?? null,
+            email: u.email,
+          },
+        ];
+      })
+      .sort((a, b) =>
+        (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
+      );
+  }
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -242,6 +279,9 @@ export default async function OrderDetailPage({
               orderId={id}
               status={request.status}
               internalNotes={request.internal_notes}
+              fulfillmentType={request.fulfillment_type}
+              assignedDeliveryUserId={request.assigned_delivery_user_id}
+              drivers={drivers}
             />
           )}
 
