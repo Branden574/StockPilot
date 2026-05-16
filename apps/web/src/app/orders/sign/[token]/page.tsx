@@ -48,8 +48,9 @@ export default async function OrderSignPage({
   const { data: orderRow } = await admin
     .from('order_requests')
     .select(
-      'id, status, requester_name, requester_email, fulfillment_type, ' +
-        'warehouse_id, delivery_charter_id, signature_token_expires_at, signed_at',
+      'id, status, requester_name, requester_email, requester_user_id, ' +
+        'fulfillment_type, warehouse_id, delivery_charter_id, ' +
+        'signature_token_expires_at, signed_at',
     )
     .eq('signature_token', token)
     .maybeSingle();
@@ -60,6 +61,7 @@ export default async function OrderSignPage({
     status: string;
     requester_name: string | null;
     requester_email: string | null;
+    requester_user_id: string | null;
     fulfillment_type: 'pickup' | 'delivery';
     warehouse_id: string;
     delivery_charter_id: string | null;
@@ -77,6 +79,23 @@ export default async function OrderSignPage({
 
   if (expired || wrongStatus || alreadySigned) {
     return <InvalidPanel reason={alreadySigned ? 'already' : 'invalid'} />;
+  }
+
+  // Internal-user orders carry name/email in user_profiles, not on the
+  // row — so when requester_user_id is set and the row columns are
+  // blank, hydrate from the profile so the signature page can pre-fill.
+  let resolvedRequesterName = order.requester_name;
+  let resolvedRequesterEmail = order.requester_email;
+
+  if (order.requester_user_id && (!resolvedRequesterName || !resolvedRequesterEmail)) {
+    const { data: profile } = await admin
+      .from('user_profiles')
+      .select('full_name, email')
+      .eq('id', order.requester_user_id)
+      .maybeSingle();
+    const p = profile as { full_name?: string | null; email?: string | null } | null;
+    if (!resolvedRequesterName && p?.full_name) resolvedRequesterName = p.full_name;
+    if (!resolvedRequesterEmail && p?.email) resolvedRequesterEmail = p.email;
   }
 
   // Parallel: warehouse name + charter name + lines.
@@ -116,8 +135,8 @@ export default async function OrderSignPage({
   const summary: OrderSignSummary = {
     id: order.id,
     status: order.status,
-    requesterName: order.requester_name,
-    requesterEmail: order.requester_email,
+    requesterName: resolvedRequesterName,
+    requesterEmail: resolvedRequesterEmail,
     fulfillmentType: order.fulfillment_type,
     warehouseName: (whRes.data as { name?: string } | null)?.name ?? null,
     charterName: (charterRes.data as { name?: string } | null)?.name ?? null,

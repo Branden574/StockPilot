@@ -1,4 +1,4 @@
-import { ShoppingCart } from 'lucide-react';
+import { Package, ShoppingCart, Truck } from 'lucide-react';
 import Link from 'next/link';
 
 import { EmptyState } from '@/components/ui/empty-state';
@@ -180,6 +180,7 @@ export default async function OrdersPage({
                   <TableHead className="text-right">Lines</TableHead>
                   <TableHead className="text-right">Total qty</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Type</TableHead>
                   <TableHead>Requested</TableHead>
                   <TableHead className="text-right">Last update</TableHead>
                 </TableRow>
@@ -211,6 +212,21 @@ export default async function OrdersPage({
                     </TableCell>
                     <TableCell>
                       <OrderStatusBadge status={r.status} />
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      <span className="border-border bg-muted/40 inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px]">
+                        {r.fulfillmentType === 'pickup' ? (
+                          <>
+                            <Package className="h-3 w-3" />
+                            Pickup
+                          </>
+                        ) : (
+                          <>
+                            <Truck className="h-3 w-3" />
+                            Delivery
+                          </>
+                        )}
+                      </span>
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
                       {formatRelative(r.createdAt)}
