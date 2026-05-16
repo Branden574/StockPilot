@@ -340,3 +340,62 @@ export async function setWarehousePublicOrderableAction(
     return toResult(e);
   }
 }
+
+const generatePackingSlipsSchema = z.object({ id: z.string().uuid() });
+
+export async function generatePackingSlipsAction(
+  input: z.input<typeof generatePackingSlipsSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = generatePackingSlipsSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.generatePackingSlips(parsed.data.id);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const stageOrderSchema = z.object({
+  id: z.string().uuid(),
+  target: z.enum(['staged_for_pickup', 'staged_for_delivery']),
+});
+
+export async function stageOrderAction(
+  input: z.input<typeof stageOrderSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = stageOrderSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.stageOrder(parsed.data.id, parsed.data.target);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const assignDeliverySchema = z.object({
+  id: z.string().uuid(),
+  deliveryUserId: z.string().uuid(),
+});
+
+export async function assignDeliveryAction(
+  input: z.input<typeof assignDeliverySchema>,
+): Promise<ActionResult<void>> {
+  const parsed = assignDeliverySchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.assignDelivery(parsed.data.id, parsed.data.deliveryUserId);
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
