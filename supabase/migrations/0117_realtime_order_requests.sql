@@ -17,4 +17,18 @@ begin
   end if;
 end$$;
 
-alter publication supabase_realtime add table public.order_requests;
+-- Idempotent: alter publication ... add table errors with 42710 if
+-- the table is already a member. Guard with a membership check so
+-- re-running this migration is harmless.
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname    = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename  = 'order_requests'
+  ) then
+    alter publication supabase_realtime add table public.order_requests;
+  end if;
+end$$;
