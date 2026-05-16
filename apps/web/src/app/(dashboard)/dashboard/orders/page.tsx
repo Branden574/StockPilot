@@ -25,38 +25,57 @@ import { formatNumber, formatRelative } from '@/lib/utils';
 const PAGE_SIZE = 50;
 
 type StatusTab =
-  | 'pending_approval'
-  | 'approved'
-  | 'packing_slip_generated'
-  | 'staged_for_delivery'
+  | 'all_active'
+  | 'needs_approval'
+  | 'picking'
+  | 'packing'
+  | 'staged'
+  | 'in_transit'
   | 'completed'
-  | 'closed';
+  | 'denied_cancelled';
 
 const TAB_LABELS: Record<StatusTab, string> = {
-  pending_approval: 'Pending',
-  approved: 'Approved',
-  packing_slip_generated: 'Packaging',
-  staged_for_delivery: 'Ready',
-  completed: 'Delivered',
-  closed: 'Cancelled / Denied',
+  all_active: 'All active',
+  needs_approval: 'Needs approval',
+  picking: 'Picking',
+  packing: 'Packing',
+  staged: 'Staged',
+  in_transit: 'In transit',
+  completed: 'Completed',
+  denied_cancelled: 'Denied/Cancelled',
 };
 
 const TAB_FILTERS: Record<StatusTab, OrderRequestStatus | OrderRequestStatus[]> = {
-  pending_approval: 'pending_approval',
-  approved: 'approved',
-  packing_slip_generated: 'packing_slip_generated',
-  staged_for_delivery: 'staged_for_delivery',
+  all_active: [
+    'pending_approval',
+    'approved',
+    'pick_slip_generated',
+    'picking_in_progress',
+    'picking_complete',
+    'packing_slip_generated',
+    'staged_for_pickup',
+    'staged_for_delivery',
+    'in_transit',
+    'signature_requested',
+  ],
+  needs_approval: 'pending_approval',
+  picking: ['pick_slip_generated', 'picking_in_progress', 'picking_complete'],
+  packing: 'packing_slip_generated',
+  staged: ['staged_for_pickup', 'staged_for_delivery'],
+  in_transit: ['in_transit', 'signature_requested'],
   completed: 'completed',
-  closed: ['cancelled', 'denied'],
+  denied_cancelled: ['denied', 'cancelled'],
 };
 
 const TAB_ORDER: StatusTab[] = [
-  'pending_approval',
-  'approved',
-  'packing_slip_generated',
-  'staged_for_delivery',
+  'all_active',
+  'needs_approval',
+  'picking',
+  'packing',
+  'staged',
+  'in_transit',
   'completed',
-  'closed',
+  'denied_cancelled',
 ];
 
 function isStatusTab(value: string | undefined): value is StatusTab {
@@ -72,7 +91,7 @@ export default async function OrdersPage({
   const ctx = await requireOrgContext();
   const canApprove = hasPermission(ctx.role, 'orders:approve');
 
-  const tab: StatusTab = isStatusTab(params.status) ? params.status : 'pending_approval';
+  const tab: StatusTab = isStatusTab(params.status) ? params.status : 'needs_approval';
   const page = clampPage(params.page);
   const offset = (page - 1) * PAGE_SIZE;
 
