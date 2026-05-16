@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  Box,
   Check,
   CheckCircle2,
   ClipboardCheck,
@@ -19,6 +20,10 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import {
+  AssignDeliveryDialog,
+  type DriverOption,
+} from '@/components/orders/assign-delivery-dialog';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Label } from '@/components/ui/label';
@@ -27,10 +32,12 @@ import {
   approveOrderRequestAction,
   completePickingAction,
   denyOrderRequestAction,
+  generatePackingSlipsAction,
   generatePickSlipAction,
   markOrderRequestDeliveredAction,
   setOrderInternalNotesAction,
   setOrderRequestStatusAction,
+  stageOrderAction,
 } from '@/server/actions/order-requests';
 
 import type { OrderRequestStatus } from '@/server/services/order-requests';
@@ -39,6 +46,9 @@ interface Props {
   orderId: string;
   status: OrderRequestStatus;
   internalNotes: string | null;
+  fulfillmentType: 'pickup' | 'delivery';
+  assignedDeliveryUserId: string | null;
+  drivers: DriverOption[];
 }
 
 type BusyKey =
@@ -46,13 +56,32 @@ type BusyKey =
   | 'deny'
   | 'generate-pick-slip'
   | 'complete-picking'
+  | 'generate-packing-slips'
+  | 'stage-pickup'
+  | 'stage-delivery'
   | 'packing_slip_generated'
   | 'staged_for_delivery'
   | 'completed'
   | 'notes'
   | null;
 
-export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
+const DOWNSTREAM_PACKING_STATUSES: OrderRequestStatus[] = [
+  'packing_slip_generated',
+  'staged_for_pickup',
+  'staged_for_delivery',
+  'in_transit',
+  'signature_requested',
+  'completed',
+];
+
+export function ManagerActionsPanel({
+  orderId,
+  status,
+  internalNotes,
+  fulfillmentType,
+  assignedDeliveryUserId,
+  drivers,
+}: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
   const [notes, setNotes] = React.useState(internalNotes ?? '');
@@ -109,8 +138,60 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
     router.refresh();
   }
 
+  async function generatePackingSlips() {
+    setBusy('generate-packing-slips');
+    const res = await generatePackingSlipsAction({ id: orderId });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Packing slips ready.');
+    router.refresh();
+  }
+
+  async function stagePickup() {
+    setBusy('stage-pickup');
+    const res = await stageOrderAction({ id: orderId, target: 'staged_for_pickup' });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Order staged for pickup.');
+    router.refresh();
+  }
+
+  async function stageDelivery() {
+    setBusy('stage-delivery');
+    const res = await stageOrderAction({ id: orderId, target: 'staged_for_delivery' });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Order staged for delivery.');
+    router.refresh();
+  }
+
   function printPickSlip() {
     window.open(`/api/orders/${orderId}/pick-slip.pdf`, '_blank', 'noopener,noreferrer');
+  }
+
+  function printCustomerSlip() {
+    window.open(
+      `/api/orders/${orderId}/packing-slip-customer.pdf`,
+      '_blank',
+      'noopener,noreferrer',
+    );
+  }
+
+  function printWarehouseSlip() {
+    window.open(
+      `/api/orders/${orderId}/packing-slip-warehouse.pdf`,
+      '_blank',
+      'noopener,noreferrer',
+    );
   }
 
   async function moveTo(next: 'packing_slip_generated' | 'staged_for_delivery') {
@@ -253,29 +334,93 @@ export function ManagerActionsPanel({ orderId, status, internalNotes }: Props) {
           )}
 
           {status === 'picking_complete' && (
-            <Button
-              variant="outline"
-              onClick={printPickSlip}
-              disabled={busy !== null}
-            >
-              <Printer className="h-3.5 w-3.5" />
-              Print pick slip
-            </Button>
+            <>
+              <Button
+                variant="gradient"
+                onClick={generatePackingSlips}
+                disabled={busy !== null}
+              >
+                {busy === 'generate-packing-slips' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Box className="h-3.5 w-3.5" />
+                )}
+                Generate packing slips
+              </Button>
+              <Button
+                variant="outline"
+                onClick={printPickSlip}
+                disabled={busy !== null}
+              >
+                <Printer className="h-3.5 w-3.5" />
+                Print pick slip
+              </Button>
+            </>
           )}
 
-          {status === 'packing_slip_generated' && (
+          {DOWNSTREAM_PACKING_STATUSES.includes(status) && (
+            <>
+              <Button
+                variant="outline"
+                onClick={printCustomerSlip}
+                disabled={busy !== null}
+              >
+                <Printer className="h-3.5 w-3.5" />
+                Print customer slip
+              </Button>
+              <Button
+                variant="outline"
+                onClick={printWarehouseSlip}
+                disabled={busy !== null}
+              >
+                <Printer className="h-3.5 w-3.5" />
+                Print warehouse slip
+              </Button>
+            </>
+          )}
+
+          {status === 'packing_slip_generated' && fulfillmentType === 'pickup' && (
             <Button
-              variant="gradient"
-              onClick={() => moveTo('staged_for_delivery')}
+              variant="default"
+              onClick={stagePickup}
               disabled={busy !== null}
             >
-              {busy === 'staged_for_delivery' ? (
+              {busy === 'stage-pickup' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <PackageCheck className="h-3.5 w-3.5" />
               )}
-              Mark ready
+              Mark staged for pickup
             </Button>
+          )}
+
+          {status === 'packing_slip_generated' && fulfillmentType === 'delivery' && (
+            <Button
+              variant="default"
+              onClick={stageDelivery}
+              disabled={busy !== null}
+            >
+              {busy === 'stage-delivery' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <PackageCheck className="h-3.5 w-3.5" />
+              )}
+              Mark staged for delivery
+            </Button>
+          )}
+
+          {status === 'staged_for_delivery' && (
+            <AssignDeliveryDialog
+              orderId={orderId}
+              drivers={drivers}
+              currentDriverId={assignedDeliveryUserId}
+              trigger={
+                <Button variant="default" disabled={busy !== null}>
+                  <Truck className="h-3.5 w-3.5" />
+                  {assignedDeliveryUserId ? 'Reassign delivery' : 'Assign delivery'}
+                </Button>
+              }
+            />
           )}
 
           {(status === 'approved' ||
