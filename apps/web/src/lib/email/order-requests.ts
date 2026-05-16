@@ -138,7 +138,7 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
     <h1 style="margin:0 0 16px;font-size:22px;">${escapeHtml(headline)}</h1>
     <p style="margin:0 0 12px;font-size:14px;color:#333;">${greeting}</p>
     <p style="margin:0 0 16px;font-size:14px;color:#333;line-height:1.5;">
-      ${bodyParagraph(kind)}
+      ${bodyParagraph(kind, request)}
     </p>
     ${reasonLine}
     <p style="margin:24px 0;">
@@ -155,7 +155,7 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
 
 ${greeting}
 
-${bodyParagraphPlain(kind)}
+${bodyParagraphPlain(kind, request)}
 ${request.denied_reason ? '\nReason: ' + sanitizePlainText(request.denied_reason) : ''}
 
 ${ctaLabel}: ${link}
@@ -177,10 +177,21 @@ function sanitizePlainText(s: string): string {
   return s.replace(/[\r\n]+/g, ' ').trim();
 }
 
-function bodyParagraph(kind: OrderRequestEmailKind): string {
+function bodyParagraph(
+  kind: OrderRequestEmailKind,
+  request?: OrderRequestRow,
+): string {
+  // Branch copy on fulfillment_type so a pickup-style requester doesn't
+  // see "we'll let you know when it ships" and vice versa. `request` is
+  // optional so legacy callers that haven't been migrated still compile;
+  // missing context falls back to the delivery-flavored wording (the
+  // historical default before phase 2).
+  const isPickup = request?.fulfillment_type === 'pickup';
   switch (kind) {
     case 'submitted':
-      return "We've received your order request. A manager will review it shortly.";
+      return isPickup
+        ? "We've received your order request. We'll email you when it's ready to pick up."
+        : "We've received your order request. We'll email you when it ships.";
     case 'confirm_request':
       return "Please confirm your order request by clicking the button below. Until you confirm, your request is on hold and won't be sent to a manager for review.";
     case 'approved':
@@ -190,7 +201,9 @@ function bodyParagraph(kind: OrderRequestEmailKind): string {
     case 'packing_slip_generated':
       return 'Your order is being packaged right now.';
     case 'staged_for_delivery':
-      return 'Your order is packed and ready for pickup or delivery.';
+      return isPickup
+        ? 'Your order is packed and ready for pickup.'
+        : 'Your order is packed and ready to head out for delivery.';
     case 'completed':
       return 'Your order was delivered. Thanks!';
     case 'cancelled':
@@ -198,8 +211,11 @@ function bodyParagraph(kind: OrderRequestEmailKind): string {
   }
 }
 
-function bodyParagraphPlain(kind: OrderRequestEmailKind): string {
-  return bodyParagraph(kind).replace(/<[^>]+>/g, '');
+function bodyParagraphPlain(
+  kind: OrderRequestEmailKind,
+  request?: OrderRequestRow,
+): string {
+  return bodyParagraph(kind, request).replace(/<[^>]+>/g, '');
 }
 
 function escapeHtml(s: string): string {
