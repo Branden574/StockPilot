@@ -60,6 +60,7 @@ export default async function NewOrderPage({
     warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
 
   const items = await loadOrderableItems(ctx.organizationId, warehouseId);
+  const chartersForWarehouse = await loadChartersForWarehouse(warehouseId);
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -82,10 +83,35 @@ export default async function NewOrderPage({
         warehouses={warehouses}
         warehouseId={warehouseId}
         items={items}
+        chartersForWarehouse={chartersForWarehouse}
         viewerRole={ctx.role}
       />
     </div>
   );
+}
+
+async function loadChartersForWarehouse(
+  warehouseId: string,
+): Promise<Array<{ id: string; name: string; code: string | null }>> {
+  const supabase = await createClient();
+  const { data: pairs } = await supabase
+    .from('warehouse_charters')
+    .select('charter:charters!inner (id, name, code, status)')
+    .eq('warehouse_id', warehouseId);
+  return (pairs ?? []).flatMap((p) => {
+    const c = Array.isArray((p as { charter?: unknown }).charter)
+      ? ((p as { charter: unknown[] }).charter[0] as Record<string, unknown>)
+      : ((p as { charter: unknown }).charter as Record<string, unknown> | null);
+    return c && (c.status as string) === 'active'
+      ? [
+          {
+            id: c.id as string,
+            name: c.name as string,
+            code: (c.code as string | null) ?? null,
+          },
+        ]
+      : [];
+  });
 }
 
 async function loadOrderableItems(

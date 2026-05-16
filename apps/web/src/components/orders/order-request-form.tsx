@@ -25,7 +25,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { isDeliveryAddressComplete } from '@/lib/orders/delivery-address';
 import { cn, formatNumber } from '@/lib/utils';
 import { createOrderRequestAction } from '@/server/actions/order-requests';
 
@@ -58,6 +57,11 @@ interface Props {
       warehouse triggers a navigation so the server reloads the correct
       slice — keeps the form simple, no per-warehouse client cache. */
   items: OrderItemOption[];
+  /** Sites the active warehouse services — populates the delivery
+      dropdown. Server-fetched against `warehouse_charters` so the
+      requester can only point a delivery at a site this warehouse
+      actually covers. */
+  chartersForWarehouse: Array<{ id: string; name: string; code: string | null }>;
   /** Caller's role — needed to gate the "Create on behalf of" manager
       affordance. Passed from the server component so we don't have to
       re-fetch it client-side. */
@@ -68,6 +72,7 @@ export function OrderRequestForm({
   warehouses,
   warehouseId,
   items,
+  chartersForWarehouse,
   viewerRole,
 }: Props) {
   const router = useRouter();
@@ -81,12 +86,7 @@ export function OrderRequestForm({
     'pickup' | 'delivery'
   >('delivery');
   const [phone, setPhone] = React.useState('');
-  const [addrLine1, setAddrLine1] = React.useState('');
-  const [addrLine2, setAddrLine2] = React.useState('');
-  const [addrCity, setAddrCity] = React.useState('');
-  const [addrRegion, setAddrRegion] = React.useState('');
-  const [addrPostal, setAddrPostal] = React.useState('');
-  const [addrInstructions, setAddrInstructions] = React.useState('');
+  const [deliveryCharterId, setDeliveryCharterId] = React.useState<string>('');
   const [pickupNotes, setPickupNotes] = React.useState('');
   const [onBehalfOf, setOnBehalfOf] = React.useState<
     { name: string; email: string } | null
@@ -189,11 +189,8 @@ export function OrderRequestForm({
       toast.error('Add at least one item to your request before submitting.');
       return;
     }
-    if (
-      fulfillmentType === 'delivery' &&
-      !isDeliveryAddressComplete({ line1: addrLine1, city: addrCity })
-    ) {
-      toast.error('Please fill in the street address and city for delivery.');
+    if (fulfillmentType === 'delivery' && !deliveryCharterId) {
+      toast.error('Pick a delivery site.');
       return;
     }
     if (onBehalfOf) {
@@ -208,17 +205,8 @@ export function OrderRequestForm({
       notes: notes.trim() || null,
       fulfillmentType,
       requesterPhone: phone.trim() || null,
-      deliveryAddress:
-        fulfillmentType === 'delivery'
-          ? {
-              line1: addrLine1.trim(),
-              line2: addrLine2.trim() || null,
-              city: addrCity.trim(),
-              region: addrRegion.trim() || null,
-              postal: addrPostal.trim() || null,
-              instructions: addrInstructions.trim() || null,
-            }
-          : null,
+      deliveryCharterId:
+        fulfillmentType === 'delivery' ? deliveryCharterId : null,
       pickupLocationNotes:
         fulfillmentType === 'pickup' ? pickupNotes.trim() || null : null,
       onBehalfOf: onBehalfOf
@@ -412,88 +400,36 @@ export function OrderRequestForm({
 
           {fulfillmentType === 'delivery' ? (
             <div className="bg-muted/40 space-y-3 rounded-xl p-4">
-              <p className="text-muted-foreground text-xs">Delivery address</p>
               <div className="space-y-1.5">
-                <Label htmlFor="ior-addr-line1">Street address</Label>
-                <Input
-                  id="ior-addr-line1"
-                  value={addrLine1}
-                  onChange={(e) => setAddrLine1(e.target.value)}
-                  placeholder="123 Main St"
-                  required
-                  autoComplete="address-line1"
-                  maxLength={200}
-                  disabled={submitting}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ior-addr-line2">
-                  Apt / suite / room
-                  <span className="text-muted-foreground ml-1 font-normal">
-                    (optional)
-                  </span>
-                </Label>
-                <Input
-                  id="ior-addr-line2"
-                  value={addrLine2}
-                  onChange={(e) => setAddrLine2(e.target.value)}
-                  autoComplete="address-line2"
-                  maxLength={200}
-                  disabled={submitting}
-                />
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <div className="space-y-1.5 sm:col-span-2">
-                  <Label htmlFor="ior-addr-city">City</Label>
-                  <Input
-                    id="ior-addr-city"
-                    value={addrCity}
-                    onChange={(e) => setAddrCity(e.target.value)}
-                    required
-                    autoComplete="address-level2"
-                    maxLength={120}
+                <Label htmlFor="ior-delivery-site">Deliver to which site?</Label>
+                {chartersForWarehouse.length === 0 ? (
+                  <p className="text-muted-foreground text-xs">
+                    No delivery sites are configured for this warehouse yet. Ask the
+                    warehouse to add some, or choose Pickup instead.
+                  </p>
+                ) : (
+                  <Select
+                    value={deliveryCharterId}
+                    onValueChange={setDeliveryCharterId}
                     disabled={submitting}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="ior-addr-region">State / region</Label>
-                  <Input
-                    id="ior-addr-region"
-                    value={addrRegion}
-                    onChange={(e) => setAddrRegion(e.target.value)}
-                    autoComplete="address-level1"
-                    maxLength={120}
-                    disabled={submitting}
-                  />
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ior-addr-postal">ZIP / postal code</Label>
-                <Input
-                  id="ior-addr-postal"
-                  value={addrPostal}
-                  onChange={(e) => setAddrPostal(e.target.value)}
-                  autoComplete="postal-code"
-                  maxLength={40}
-                  disabled={submitting}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ior-addr-instructions">
-                  Delivery instructions
-                  <span className="text-muted-foreground ml-1 font-normal">
-                    (optional)
-                  </span>
-                </Label>
-                <Textarea
-                  id="ior-addr-instructions"
-                  value={addrInstructions}
-                  onChange={(e) => setAddrInstructions(e.target.value)}
-                  placeholder="Gate code, where to leave the box, who to ask for"
-                  rows={2}
-                  maxLength={1000}
-                  disabled={submitting}
-                />
+                  >
+                    <SelectTrigger id="ior-delivery-site">
+                      <SelectValue placeholder="Pick a site" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {chartersForWarehouse.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.name}
+                          {c.code ? ` (${c.code})` : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <p className="text-muted-foreground text-xs">
+                  We&apos;ll bring the order to this site. Your contact info above (name,
+                  email, phone) is how we&apos;ll reach you about the delivery.
+                </p>
               </div>
             </div>
           ) : (

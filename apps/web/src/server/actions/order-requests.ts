@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { isDeliveryAddressComplete } from '@/lib/orders/delivery-address';
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
@@ -29,16 +28,7 @@ const createSchema = z
     // so behavior stays consistent across both create surfaces.
     fulfillmentType: z.enum(['pickup', 'delivery']).default('pickup'),
     requesterPhone: z.string().trim().max(40).nullish(),
-    deliveryAddress: z
-      .object({
-        line1: z.string().trim().min(1).max(200),
-        line2: z.string().trim().max(200).nullish(),
-        city: z.string().trim().min(1).max(120),
-        region: z.string().trim().max(120).nullish(),
-        postal: z.string().trim().max(40).nullish(),
-        instructions: z.string().trim().max(1000).nullish(),
-      })
-      .nullish(),
+    deliveryCharterId: z.string().uuid().nullish(),
     pickupLocationNotes: z.string().trim().max(2000).nullish(),
     onBehalfOf: z
       .object({
@@ -77,12 +67,9 @@ export async function createOrderRequestAction(
   if (!parsed.success)
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   // Cross-field check shared with the public POST route: a delivery
-  // fulfillment is meaningless without at least line1 + city.
-  if (
-    parsed.data.fulfillmentType === 'delivery' &&
-    !isDeliveryAddressComplete(parsed.data.deliveryAddress ?? null)
-  ) {
-    return err('validation_error', 'Delivery orders need a shipping address.');
+  // fulfillment is meaningless without a site (charter) to ship to.
+  if (parsed.data.fulfillmentType === 'delivery' && !parsed.data.deliveryCharterId) {
+    return err('validation_error', 'Delivery orders need a site.');
   }
   try {
     // Gate `onBehalfOf` to manager+. The service itself doesn't know
@@ -103,7 +90,7 @@ export async function createOrderRequestAction(
       notes: parsed.data.notes ?? null,
       fulfillmentType: parsed.data.fulfillmentType,
       requesterPhone: parsed.data.requesterPhone ?? null,
-      deliveryAddress: parsed.data.deliveryAddress ?? null,
+      deliveryCharterId: parsed.data.deliveryCharterId ?? null,
       pickupLocationNotes: parsed.data.pickupLocationNotes ?? null,
       onBehalfOf: parsed.data.onBehalfOf ?? null,
       lines: parsed.data.lines.map((l) => ({

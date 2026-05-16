@@ -15,7 +15,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { isDeliveryAddressComplete } from '@/lib/orders/delivery-address';
 import { cn } from '@/lib/utils';
 
 interface BookSummary {
@@ -31,12 +30,19 @@ interface WarehouseSummary {
   name: string;
 }
 
+interface CharterSummary {
+  id: string;
+  name: string;
+  code: string | null;
+}
+
 interface Props {
   token: string;
   orgName: string;
   warehouses: WarehouseSummary[];
   initialWarehouseId: string;
   initialBooks: BookSummary[];
+  chartersForWarehouse: CharterSummary[];
 }
 
 interface SubmittedState {
@@ -59,6 +65,7 @@ export function PublicOrderForm({
   warehouses,
   initialWarehouseId,
   initialBooks,
+  chartersForWarehouse,
 }: Props) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -70,12 +77,7 @@ export function PublicOrderForm({
   const [submitted, setSubmitted] = useState<SubmittedState | null>(null);
   const [fulfillmentType, setFulfillmentType] = useState<'pickup' | 'delivery'>('delivery');
   const [phone, setPhone] = useState('');
-  const [addrLine1, setAddrLine1] = useState('');
-  const [addrLine2, setAddrLine2] = useState('');
-  const [addrCity, setAddrCity] = useState('');
-  const [addrRegion, setAddrRegion] = useState('');
-  const [addrPostal, setAddrPostal] = useState('');
-  const [addrInstructions, setAddrInstructions] = useState('');
+  const [deliveryCharterId, setDeliveryCharterId] = useState<string>('');
   const [pickupNotes, setPickupNotes] = useState('');
   // I13: honeypot. A hidden field labeled "website" that real
   // submitters never see / fill, but naive form-bots will. The
@@ -123,14 +125,8 @@ export function PublicOrderForm({
       toast.error('Add at least one book to your request.');
       return;
     }
-    if (
-      fulfillmentType === 'delivery' &&
-      !isDeliveryAddressComplete({
-        line1: addrLine1,
-        city: addrCity,
-      })
-    ) {
-      toast.error('Please fill in the street address and city for delivery.');
+    if (fulfillmentType === 'delivery' && !deliveryCharterId) {
+      toast.error('Pick a delivery site.');
       return;
     }
 
@@ -153,17 +149,8 @@ export function PublicOrderForm({
           lines,
           fulfillmentType,
           requesterPhone: phone.trim() || null,
-          deliveryAddress:
-            fulfillmentType === 'delivery'
-              ? {
-                  line1: addrLine1.trim(),
-                  line2: addrLine2.trim() || null,
-                  city: addrCity.trim(),
-                  region: addrRegion.trim() || null,
-                  postal: addrPostal.trim() || null,
-                  instructions: addrInstructions.trim() || null,
-                }
-              : null,
+          deliveryCharterId:
+            fulfillmentType === 'delivery' ? deliveryCharterId : null,
           pickupLocationNotes:
             fulfillmentType === 'pickup'
               ? pickupNotes.trim() || null
@@ -357,78 +344,35 @@ export function PublicOrderForm({
 
         {fulfillmentType === 'delivery' ? (
           <div className="space-y-3 rounded-xl bg-muted/40 p-4">
-            <p className="text-muted-foreground text-xs">Delivery address</p>
             <div className="space-y-2">
-              <Label htmlFor="por-addr-line1">Street address</Label>
-              <Input
-                id="por-addr-line1"
-                value={addrLine1}
-                onChange={(e) => setAddrLine1(e.target.value)}
-                placeholder="123 Main St"
-                required
-                autoComplete="address-line1"
-                maxLength={200}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="por-addr-line2">
-                Apt / suite / room
-                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
-              </Label>
-              <Input
-                id="por-addr-line2"
-                value={addrLine2}
-                onChange={(e) => setAddrLine2(e.target.value)}
-                autoComplete="address-line2"
-                maxLength={200}
-              />
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="por-addr-city">City</Label>
-                <Input
-                  id="por-addr-city"
-                  value={addrCity}
-                  onChange={(e) => setAddrCity(e.target.value)}
-                  required
-                  autoComplete="address-level2"
-                  maxLength={120}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="por-addr-region">State / region</Label>
-                <Input
-                  id="por-addr-region"
-                  value={addrRegion}
-                  onChange={(e) => setAddrRegion(e.target.value)}
-                  autoComplete="address-level1"
-                  maxLength={120}
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="por-addr-postal">ZIP / postal code</Label>
-              <Input
-                id="por-addr-postal"
-                value={addrPostal}
-                onChange={(e) => setAddrPostal(e.target.value)}
-                autoComplete="postal-code"
-                maxLength={40}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="por-addr-instructions">
-                Delivery instructions
-                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
-              </Label>
-              <Textarea
-                id="por-addr-instructions"
-                value={addrInstructions}
-                onChange={(e) => setAddrInstructions(e.target.value)}
-                placeholder="Gate code, where to leave the box, who to ask for"
-                rows={2}
-                maxLength={1000}
-              />
+              <Label htmlFor="por-delivery-site">Deliver to which site?</Label>
+              {chartersForWarehouse.length === 0 ? (
+                <p className="text-muted-foreground text-xs">
+                  No delivery sites are configured for this warehouse yet. Ask the
+                  warehouse to add some, or choose Pickup instead.
+                </p>
+              ) : (
+                <Select
+                  value={deliveryCharterId}
+                  onValueChange={setDeliveryCharterId}
+                >
+                  <SelectTrigger id="por-delivery-site">
+                    <SelectValue placeholder="Pick a site" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {chartersForWarehouse.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}
+                        {c.code ? ` (${c.code})` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              <p className="text-muted-foreground text-xs">
+                We&apos;ll bring the order to this site. Your contact info above (name,
+                email, phone) is how we&apos;ll reach you about the delivery.
+              </p>
             </div>
           </div>
         ) : (

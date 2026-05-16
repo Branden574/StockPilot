@@ -58,14 +58,7 @@ export interface OrderRequestRow {
   // downstream code (email branching, detail pages, audit consumers)
   // can read them without further refactors.
   fulfillment_type: 'pickup' | 'delivery';
-  delivery_address: {
-    line1: string;
-    line2: string | null;
-    city: string;
-    region: string | null;
-    postal: string | null;
-    instructions: string | null;
-  } | null;
+  delivery_charter_id: string | null;
   pickup_location_notes: string | null;
   requester_phone: string | null;
   assigned_picker_id: string | null;
@@ -152,14 +145,7 @@ export interface CreateOrderRequestInput {
   notes?: string | null;
   fulfillmentType: 'pickup' | 'delivery';
   requesterPhone?: string | null;
-  deliveryAddress?: {
-    line1: string;
-    line2?: string | null;
-    city: string;
-    region?: string | null;
-    postal?: string | null;
-    instructions?: string | null;
-  } | null;
+  deliveryCharterId?: string | null;
   pickupLocationNotes?: string | null;
   /**
    * Manager-only: when set, the row is recorded as if a public-style
@@ -434,6 +420,26 @@ export class OrderRequestsService {
       }
     }
 
+    // Defense-in-depth — the FK + CHECK constraint already enforce that
+    // the (warehouse_id, charter_id) pair is one this warehouse services,
+    // but a friendlier error here saves the user from a generic 23-error.
+    // Mirrors the inventory.ts charter pairing check.
+    if (input.deliveryCharterId) {
+      const { data: pair } = await this.ctx.supabase
+        .from('warehouse_charters')
+        .select('charter_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('warehouse_id', input.warehouseId)
+        .eq('charter_id', input.deliveryCharterId)
+        .maybeSingle();
+      if (!pair) {
+        throw new ServiceError(
+          'validation_error',
+          'That site is not serviced by the chosen warehouse.',
+        );
+      }
+    }
+
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('order_requests')
       .insert({
@@ -452,7 +458,7 @@ export class OrderRequestsService {
         notes: input.notes ?? null,
         fulfillment_type: input.fulfillmentType,
         requester_phone: input.requesterPhone ?? null,
-        delivery_address: input.deliveryAddress ?? null,
+        delivery_charter_id: input.deliveryCharterId ?? null,
         pickup_location_notes: input.pickupLocationNotes ?? null,
         source: 'internal' as OrderRequestSource,
         status: 'pending_approval' as OrderRequestStatus,
