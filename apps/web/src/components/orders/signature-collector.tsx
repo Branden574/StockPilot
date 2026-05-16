@@ -8,7 +8,6 @@ import { SignaturePad, type SignaturePadHandle } from '@/components/shipments/si
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { submitOrderSignatureAction } from '@/server/actions/order-signature';
 
 import type { OrderSignSummary } from '@/app/orders/sign/[token]/page';
 
@@ -61,25 +60,37 @@ export function SignatureCollector({
       return;
     }
     setSubmitting(true);
-    const res = await submitOrderSignatureAction({
-      token,
-      signerName: signerName.trim(),
-      signerEmail: signerEmail.trim(),
-      signatureDataUrl: dataUrl,
-    });
+    // Why fetch(POST) instead of the Server Action: Server Actions
+    // automatically trigger an RSC re-fetch of the calling route after
+    // returning. The server component for /orders/sign/<token>
+    // re-renders, sees signed_at IS NOT NULL, and replaces this
+    // SignatureCollector with the "already signed" InvalidPanel —
+    // unmounting us mid-success-state. A plain route handler call
+    // never refreshes the page tree, so the "Thank you" panel below
+    // stays put.
+    let res: { ok: true; data: { id: string } } | { ok: false; error: { code: string; message: string } };
+    try {
+      const httpRes = await fetch('/api/orders/sign', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          signerName: signerName.trim(),
+          signerEmail: signerEmail.trim(),
+          signatureDataUrl: dataUrl,
+        }),
+      });
+      res = (await httpRes.json()) as typeof res;
+    } catch {
+      setSubmitting(false);
+      toast.error("Couldn't reach the server. Check your connection and try again.");
+      return;
+    }
     setSubmitting(false);
     if (!res.ok) {
       toast.error(res.error.message);
       return;
     }
-    // Intentionally NOT calling router.refresh() here. The server
-    // component for /orders/sign/<token> would re-render and, seeing
-    // signed_at IS NOT NULL, switch to the "already signed" panel —
-    // overwriting this client component's success state with a
-    // confusing "you can't sign this" message right after a
-    // successful sign. The client-side "Thank you" panel is the
-    // correct terminal UX; the row is already completed server-side
-    // and the requester gets the completion email.
     setSubmitted(true);
   }
 
