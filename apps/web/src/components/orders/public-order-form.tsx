@@ -1,6 +1,6 @@
 'use client';
 
-import { Minus, Plus, ShoppingCart } from 'lucide-react';
+import { Minus, Package, Plus, ShoppingCart, Truck } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { isDeliveryAddressComplete } from '@/lib/orders/delivery-address';
 import { cn } from '@/lib/utils';
 
 interface BookSummary {
@@ -122,11 +123,15 @@ export function PublicOrderForm({
       toast.error('Add at least one book to your request.');
       return;
     }
-    if (fulfillmentType === 'delivery') {
-      if (!addrLine1.trim() || !addrCity.trim()) {
-        toast.error('Please fill in the street address and city for delivery.');
-        return;
-      }
+    if (
+      fulfillmentType === 'delivery' &&
+      !isDeliveryAddressComplete({
+        line1: addrLine1,
+        city: addrCity,
+      })
+    ) {
+      toast.error('Please fill in the street address and city for delivery.');
+      return;
     }
 
     const lines = Array.from(cart.entries())
@@ -295,39 +300,52 @@ export function PublicOrderForm({
       {/* Fulfillment type — pickup vs. delivery + contact / address details. */}
       <section className="border-border bg-card space-y-4 rounded-2xl border p-5">
         <h2 className="font-display text-lg">How should we get this to you?</h2>
-        <div className="flex gap-3">
+        <div role="radiogroup" aria-label="Fulfillment type" className="flex gap-3">
           <button
             type="button"
+            role="radio"
+            aria-checked={fulfillmentType === 'pickup'}
             onClick={() => setFulfillmentType('pickup')}
             className={cn(
-              'border-border flex-1 rounded-xl border p-4 text-left transition-colors',
+              'border-border focus-visible:ring-ring flex flex-1 items-start gap-3 rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2',
               fulfillmentType === 'pickup' && 'border-primary bg-primary/5',
             )}
           >
-            <div className="font-medium">📦 Pickup</div>
-            <div className="text-muted-foreground text-xs mt-1">
-              I&apos;ll come to the warehouse.
+            <Package className="text-muted-foreground mt-0.5 h-5 w-5 shrink-0" aria-hidden />
+            <div>
+              <div className="font-medium">Pickup</div>
+              <div className="text-muted-foreground mt-1 text-xs">
+                I&apos;ll come to the warehouse.
+              </div>
             </div>
           </button>
           <button
             type="button"
+            role="radio"
+            aria-checked={fulfillmentType === 'delivery'}
             onClick={() => setFulfillmentType('delivery')}
             className={cn(
-              'border-border flex-1 rounded-xl border p-4 text-left transition-colors',
+              'border-border focus-visible:ring-ring flex flex-1 items-start gap-3 rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2',
               fulfillmentType === 'delivery' && 'border-primary bg-primary/5',
             )}
           >
-            <div className="font-medium">🚚 Delivery</div>
-            <div className="text-muted-foreground text-xs mt-1">
-              Bring it to me.
+            <Truck className="text-muted-foreground mt-0.5 h-5 w-5 shrink-0" aria-hidden />
+            <div>
+              <div className="font-medium">Delivery</div>
+              <div className="text-muted-foreground mt-1 text-xs">
+                Bring it to me.
+              </div>
             </div>
           </button>
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="phone">Phone (optional)</Label>
+          <Label htmlFor="por-phone">
+            Phone
+            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+          </Label>
           <Input
-            id="phone"
+            id="por-phone"
             type="tel"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
@@ -341,9 +359,9 @@ export function PublicOrderForm({
           <div className="space-y-3 rounded-xl bg-muted/40 p-4">
             <p className="text-muted-foreground text-xs">Delivery address</p>
             <div className="space-y-2">
-              <Label htmlFor="addr-line1">Street address</Label>
+              <Label htmlFor="por-addr-line1">Street address</Label>
               <Input
-                id="addr-line1"
+                id="por-addr-line1"
                 value={addrLine1}
                 onChange={(e) => setAddrLine1(e.target.value)}
                 placeholder="123 Main St"
@@ -353,9 +371,12 @@ export function PublicOrderForm({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="addr-line2">Apt / suite / room (optional)</Label>
+              <Label htmlFor="por-addr-line2">
+                Apt / suite / room
+                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              </Label>
               <Input
-                id="addr-line2"
+                id="por-addr-line2"
                 value={addrLine2}
                 onChange={(e) => setAddrLine2(e.target.value)}
                 autoComplete="address-line2"
@@ -364,9 +385,9 @@ export function PublicOrderForm({
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="addr-city">City</Label>
+                <Label htmlFor="por-addr-city">City</Label>
                 <Input
-                  id="addr-city"
+                  id="por-addr-city"
                   value={addrCity}
                   onChange={(e) => setAddrCity(e.target.value)}
                   required
@@ -375,9 +396,9 @@ export function PublicOrderForm({
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="addr-region">State / region</Label>
+                <Label htmlFor="por-addr-region">State / region</Label>
                 <Input
-                  id="addr-region"
+                  id="por-addr-region"
                   value={addrRegion}
                   onChange={(e) => setAddrRegion(e.target.value)}
                   autoComplete="address-level1"
@@ -386,9 +407,9 @@ export function PublicOrderForm({
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="addr-postal">ZIP / postal code</Label>
+              <Label htmlFor="por-addr-postal">ZIP / postal code</Label>
               <Input
-                id="addr-postal"
+                id="por-addr-postal"
                 value={addrPostal}
                 onChange={(e) => setAddrPostal(e.target.value)}
                 autoComplete="postal-code"
@@ -396,9 +417,12 @@ export function PublicOrderForm({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="addr-instructions">Delivery instructions (optional)</Label>
+              <Label htmlFor="por-addr-instructions">
+                Delivery instructions
+                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              </Label>
               <Textarea
-                id="addr-instructions"
+                id="por-addr-instructions"
                 value={addrInstructions}
                 onChange={(e) => setAddrInstructions(e.target.value)}
                 placeholder="Gate code, where to leave the box, who to ask for"
@@ -409,9 +433,12 @@ export function PublicOrderForm({
           </div>
         ) : (
           <div className="space-y-2">
-            <Label htmlFor="pickup-notes">Pickup notes (optional)</Label>
+            <Label htmlFor="por-pickup-notes">
+              Pickup notes
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Textarea
-              id="pickup-notes"
+              id="por-pickup-notes"
               value={pickupNotes}
               onChange={(e) => setPickupNotes(e.target.value)}
               placeholder="When you'll come by, who's picking up, etc."
