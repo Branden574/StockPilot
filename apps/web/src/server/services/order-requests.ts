@@ -52,6 +52,44 @@ export interface OrderRequestRow {
   source: OrderRequestSource;
   created_at: string;
   updated_at: string;
+  // Migration 0109 columns. Most are forward-looking — phases 3-5 will
+  // populate them as the order moves through pick / pack / stage /
+  // deliver / sign workflows. Listing them on the type now means
+  // downstream code (email branching, detail pages, audit consumers)
+  // can read them without further refactors.
+  fulfillment_type: 'pickup' | 'delivery';
+  delivery_address: {
+    line1: string;
+    line2: string | null;
+    city: string;
+    region: string | null;
+    postal: string | null;
+    instructions: string | null;
+  } | null;
+  pickup_location_notes: string | null;
+  requester_phone: string | null;
+  assigned_picker_id: string | null;
+  pick_slip_generated_at: string | null;
+  pick_slip_generated_by: string | null;
+  picking_completed_at: string | null;
+  picking_completed_by: string | null;
+  packing_slip_generated_at: string | null;
+  packing_slip_generated_by: string | null;
+  staged_at: string | null;
+  staged_by: string | null;
+  assigned_delivery_user_id: string | null;
+  assigned_delivery_by: string | null;
+  assigned_delivery_at: string | null;
+  in_transit_at: string | null;
+  in_transit_by: string | null;
+  signature_token: string | null;
+  signature_token_expires_at: string | null;
+  signed_by_name: string | null;
+  signed_by_email: string | null;
+  signature_data_url: string | null;
+  signed_at: string | null;
+  completed_at: string | null;
+  completed_by: string | null;
 }
 
 export interface OrderRequestLineRow {
