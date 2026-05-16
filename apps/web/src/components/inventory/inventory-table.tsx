@@ -17,7 +17,10 @@ import {
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
-import { ImageHoverPreview } from '@/components/ui/image-hover-preview';
+import {
+  ImageHoverPreview,
+  prewarmPreviewImages,
+} from '@/components/ui/image-hover-preview';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Sparkline } from '@/components/ui/sparkline';
@@ -486,6 +489,21 @@ export function InventoryTable({
   // synchronous local filter (covers in-page matches with zero
   // latency). On no search, both reduce to `items`.
   const displayed = serverHits ?? localMatches;
+
+  // Idle-prewarm the Vercel-optimized hover-preview URLs for every
+  // visible row. Runs via requestIdleCallback so it never competes
+  // with the initial paint; by the time the user mouses over any
+  // thumbnail, the bigger preview variant is already in HTTP cache
+  // and the popover paints in the same frame as the open delay.
+  // De-duped internally by the preloader, so re-renders are free.
+  const displayedImageSrcs = displayed.map((i) => i.image_url ?? null);
+  const prewarmKey = displayedImageSrcs.filter(Boolean).join('|');
+  React.useEffect(() => {
+    prewarmPreviewImages(displayedImageSrcs);
+    // The string-joined key is the cheap stable dep — the array would
+    // be a fresh reference every render and re-fire on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prewarmKey]);
 
   return (
     <div className="space-y-4">
