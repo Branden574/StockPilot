@@ -181,6 +181,8 @@ export default async function OrdersPage({
                   <TableHead className="text-right">Total qty</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Type</TableHead>
+                  <TableHead>Picker</TableHead>
+                  <TableHead>Driver</TableHead>
                   <TableHead>Requested</TableHead>
                   <TableHead className="text-right">Last update</TableHead>
                 </TableRow>
@@ -227,6 +229,14 @@ export default async function OrdersPage({
                           </>
                         )}
                       </span>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {r.assignedPickerName ?? '—'}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {r.fulfillmentType === 'delivery'
+                        ? (r.assignedDeliveryUserName ?? '—')
+                        : '—'}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
                       {formatRelative(r.createdAt)}
