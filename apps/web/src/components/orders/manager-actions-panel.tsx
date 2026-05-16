@@ -65,8 +65,6 @@ const DOWNSTREAM_PACKING_STATUSES: OrderRequestStatus[] = [
   'packing_slip_generated',
   'staged_for_pickup',
   'staged_for_delivery',
-  'in_transit',
-  'signature_requested',
   'completed',
 ];
 
