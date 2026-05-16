@@ -82,6 +82,7 @@ export default async function NewOrderPage({
         warehouses={warehouses}
         warehouseId={warehouseId}
         items={items}
+        viewerRole={ctx.role}
       />
     </div>
   );

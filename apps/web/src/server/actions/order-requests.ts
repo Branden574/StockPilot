@@ -3,7 +3,8 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { ServiceError } from '@/server/services/context';
+import { isDeliveryAddressComplete } from '@/lib/orders/delivery-address';
+import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -23,6 +24,28 @@ const createSchema = z
   .object({
     warehouseId: z.string().uuid(),
     notes: z.string().max(2000).nullable().optional(),
+    // Rolling-deploy safety: default to 'pickup' when an older client
+    // bundle submits without the field. Mirrors the public POST schema
+    // so behavior stays consistent across both create surfaces.
+    fulfillmentType: z.enum(['pickup', 'delivery']).default('pickup'),
+    requesterPhone: z.string().trim().max(40).nullish(),
+    deliveryAddress: z
+      .object({
+        line1: z.string().trim().min(1).max(200),
+        line2: z.string().trim().max(200).nullish(),
+        city: z.string().trim().min(1).max(120),
+        region: z.string().trim().max(120).nullish(),
+        postal: z.string().trim().max(40).nullish(),
+        instructions: z.string().trim().max(1000).nullish(),
+      })
+      .nullish(),
+    pickupLocationNotes: z.string().trim().max(2000).nullish(),
+    onBehalfOf: z
+      .object({
+        name: z.string().trim().min(1).max(120),
+        email: z.string().trim().email().max(254),
+      })
+      .nullish(),
     lines: z
       .array(
         z.object({
@@ -53,11 +76,40 @@ export async function createOrderRequestAction(
   const parsed = createSchema.safeParse(input);
   if (!parsed.success)
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  // Cross-field check shared with the public POST route: a delivery
+  // fulfillment is meaningless without at least line1 + city.
+  if (
+    parsed.data.fulfillmentType === 'delivery' &&
+    !isDeliveryAddressComplete(parsed.data.deliveryAddress ?? null)
+  ) {
+    return err('validation_error', 'Delivery orders need a shipping address.');
+  }
   try {
+    // Gate `onBehalfOf` to manager+. The service itself doesn't know
+    // who's calling; building the ServiceContext here gives us the
+    // caller's role before we even touch the DB.
+    if (parsed.data.onBehalfOf) {
+      const ctx = await withContext();
+      if (
+        ctx.role !== 'manager' &&
+        ctx.role !== 'admin' &&
+        ctx.role !== 'owner'
+      ) {
+        return err(
+          'forbidden',
+          'Only managers can create orders on behalf of others.',
+        );
+      }
+    }
     const svc = await OrderRequestsService.forCurrentUser();
     const row = await svc.create({
       warehouseId: parsed.data.warehouseId,
       notes: parsed.data.notes ?? null,
+      fulfillmentType: parsed.data.fulfillmentType,
+      requesterPhone: parsed.data.requesterPhone ?? null,
+      deliveryAddress: parsed.data.deliveryAddress ?? null,
+      pickupLocationNotes: parsed.data.pickupLocationNotes ?? null,
+      onBehalfOf: parsed.data.onBehalfOf ?? null,
       lines: parsed.data.lines.map((l) => ({
         itemId: l.itemId,
         quantity: l.quantity,

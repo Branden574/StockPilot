@@ -112,6 +112,31 @@ export interface OrderRequestDetail {
 export interface CreateOrderRequestInput {
   warehouseId: string;
   notes?: string | null;
+  fulfillmentType: 'pickup' | 'delivery';
+  requesterPhone?: string | null;
+  deliveryAddress?: {
+    line1: string;
+    line2?: string | null;
+    city: string;
+    region?: string | null;
+    postal?: string | null;
+    instructions?: string | null;
+  } | null;
+  pickupLocationNotes?: string | null;
+  /**
+   * Manager-only: when set, the row is recorded as if a public-style
+   * external requester filed it — `requester_user_id` stays null and
+   * the name/email columns carry the on-behalf identity. The email
+   * pipeline keys off `requester_user_id IS NULL`, so this path
+   * automatically gets the external-recipient track-link emails.
+   *
+   * `source` stays `'internal'` either way; this is still a manager-
+   * initiated order, just routed to a different recipient.
+   */
+  onBehalfOf?: {
+    name: string;
+    email: string;
+  } | null;
   lines: Array<{
     itemId: string;
     quantity: number;
@@ -376,8 +401,21 @@ export class OrderRequestsService {
       .insert({
         organization_id: this.ctx.organizationId,
         warehouse_id: input.warehouseId,
-        requester_user_id: this.ctx.userId,
+        // When `onBehalfOf` is set, treat the row as public-style for
+        // email purposes: requester_user_id stays null, the name+email
+        // columns carry the on-behalf identity, and the email pipeline
+        // (which keys off `requester_user_id IS NULL`) routes the
+        // confirmation / status emails to that external address.
+        // `source` remains 'internal' — this is still a manager-
+        // initiated order.
+        requester_user_id: input.onBehalfOf ? null : this.ctx.userId,
+        requester_name: input.onBehalfOf?.name ?? null,
+        requester_email: input.onBehalfOf?.email ?? null,
         notes: input.notes ?? null,
+        fulfillment_type: input.fulfillmentType,
+        requester_phone: input.requesterPhone ?? null,
+        delivery_address: input.deliveryAddress ?? null,
+        pickup_location_notes: input.pickupLocationNotes ?? null,
         source: 'internal' as OrderRequestSource,
         status: 'pending_approval' as OrderRequestStatus,
       })
