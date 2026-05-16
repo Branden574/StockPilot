@@ -884,6 +884,78 @@ export class OrderRequestsService {
     return updated as OrderRequestRow;
   }
 
+  async markInTransit(id: string): Promise<OrderRequestRow> {
+    // Permission gate: assigned driver OR manager+. The internal
+    // check below enforces driver-OR-manager; this assertPermission
+    // call gates anyone without the broader orders:approve permission
+    // out (staff who aren't on the order can't even reach this).
+    assertPermission(this.ctx, 'orders:approve');
+    await this.requireWarehouseAccess(id, 'write');
+
+    const { data: row } = await this.ctx.supabase
+      .from('order_requests')
+      .select('status, assigned_delivery_user_id, fulfillment_type')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (!row) throw new ServiceError('not_found', 'Order not found');
+    const r = row as {
+      status: string;
+      assigned_delivery_user_id: string | null;
+      fulfillment_type: 'pickup' | 'delivery';
+    };
+    if (r.fulfillment_type !== 'delivery') {
+      throw new ServiceError(
+        'validation_error',
+        'Only delivery orders can be marked in transit.',
+      );
+    }
+    if (r.status !== 'staged_for_delivery') {
+      throw new ServiceError(
+        'validation_error',
+        'Order must be staged for delivery first.',
+      );
+    }
+    if (!r.assigned_delivery_user_id) {
+      throw new ServiceError(
+        'validation_error',
+        'Assign a driver before marking in transit.',
+      );
+    }
+
+    // The action layer permits assigned-driver OR manager+. Check role
+    // here only if the caller is NOT the assigned driver.
+    if (r.assigned_delivery_user_id !== this.ctx.userId) {
+      if (!['owner', 'admin', 'manager'].includes(this.ctx.role)) {
+        throw new ServiceError(
+          'forbidden',
+          'Only the assigned driver or a manager can mark in transit.',
+        );
+      }
+    }
+
+    const { data: updated, error } = await this.ctx.supabase
+      .from('order_requests')
+      .update({
+        status: 'in_transit',
+        in_transit_at: new Date().toISOString(),
+        in_transit_by: this.ctx.userId,
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw new ServiceError('internal_error', error.message);
+    const finalRow = updated as OrderRequestRow;
+    await audit(
+      { event: 'order.in_transit', entityType: 'order_request', entityId: id },
+      this.ctx,
+    );
+    // Best-effort: notify requester the order is on the way.
+    void this.notifyEmail(finalRow, 'staged_for_delivery');
+    return finalRow;
+  }
+
   async deny(id: string, reason: string): Promise<OrderRequestRow> {
     assertPermission(this.ctx, 'orders:approve');
     // C3: warehouse-scope gate before any mutation.
