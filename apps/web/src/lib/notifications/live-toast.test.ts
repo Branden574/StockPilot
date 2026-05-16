@@ -223,7 +223,7 @@ describe('cross-tab leader election (Web Locks)', () => {
 
   afterEach(() => clearLockManager());
 
-  it('fires the toast when this tab WINS the per-notification lock', async () => {
+  it('single-event toasts bypass the Web Lock entirely (no request issued)', async () => {
     const { requests } = installLockManager('won');
     queueLiveNotification(
       { id: 'win-1', type: 't', title: 'Hello', body: null, link: '/dashboard' },
@@ -231,16 +231,19 @@ describe('cross-tab leader election (Web Locks)', () => {
     );
     await vi.advanceTimersByTimeAsync(0);
     expect(toastInfoFn).toHaveBeenCalledTimes(1);
-    expect(requests).toEqual([{ name: 'stockpilot-toast-win-1' }]);
+    // Lock was meant to dedupe across two visible tabs of the
+    // dashboard — a rare edge case we deliberately accept after it
+    // was suppressing toasts in the common single-tab case.
+    expect(requests).toEqual([]);
   });
 
-  it('SUPPRESSES the toast when another tab already holds the lock', async () => {
+  it('a denied lock cannot suppress single-event toasts now', async () => {
     installLockManager('denied');
     queueLiveNotification(
       { id: 'lose-1', type: 't', title: 'Hello', body: null, link: '/dashboard' },
       navigate,
     );
     await vi.advanceTimersByTimeAsync(0);
-    expect(toastInfoFn).not.toHaveBeenCalled();
+    expect(toastInfoFn).toHaveBeenCalledTimes(1);
   });
 });

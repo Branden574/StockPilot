@@ -213,11 +213,13 @@ async function fireOne(
   const link = safeRedirect(payload.link);
 
   if (isTabVisible()) {
-    const won = await acquireToastLock(payload.id);
-    if (!won) return;
-    // toast.info instead of toast() so richColors gives the message
-    // a distinct blue tint — easier to spot mid-task than a neutral
-    // gray toast.
+    // No Web Lock on the single-event path. The lock was meant to
+    // suppress duplicate toasts when the user has two visible tabs
+    // of the dashboard open at once — a rare edge case that was
+    // suppressing toasts even in the common single-tab case
+    // whenever the lock acquisition raced funny. We accept "two
+    // tabs both beep" as the lesser bug versus "the bell badge
+    // ticks but no toast appears."
     toast.info(payload.title, {
       description: payload.body ?? undefined,
       duration: 6000,
@@ -228,8 +230,6 @@ async function fireOne(
           }
         : undefined,
     });
-    // Only ring on the leader tab — the lock above already enforces
-    // one beep per event across tabs.
     playNotificationSound();
     return;
   }
