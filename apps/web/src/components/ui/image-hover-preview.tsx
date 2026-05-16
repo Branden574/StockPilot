@@ -35,6 +35,39 @@ const GAP_FROM_TRIGGER = 12;
 const PREVIEW_OPTIMIZED_WIDTH = 560;
 
 /**
+ * Next.js Image Optimization picks one of these `deviceSizes` widths
+ * for any `<Image>` based on the requested `width` * DPR. Default
+ * config (no override in next.config.mjs). Smallest entry >= target
+ * pixel width wins.
+ */
+const NEXT_DEVICE_SIZES = [640, 750, 828, 1080, 1200, 1920, 2048, 3840] as const;
+
+/**
+ * Reproduces the URL `next/image` would request for our hover preview.
+ * The preload MUST hit this exact URL — if the preload warms
+ * /_next/image?url=…&w=640 but the popover renders w=1200, they're
+ * two separate cache entries and the preload was wasted (the bug we
+ * had before this fix).
+ *
+ * For a fixed-size <Image width={560} height={560}>, next/image emits
+ * a srcset `[1x, 2x]`. The browser picks the entry matching the
+ * device's DPR — 2x on retina (most modern displays), 1x on standard
+ * monitors. Compute the target pixel width and pick the smallest
+ * deviceSize that satisfies it.
+ */
+function nextImageOptimizedUrl(src: string, quality = 75): string {
+  const dpr =
+    typeof window !== 'undefined' && window.devicePixelRatio
+      ? window.devicePixelRatio
+      : 2; // server-side / unknown: assume retina (worst case = slightly bigger image)
+  const targetPx = PREVIEW_OPTIMIZED_WIDTH * dpr;
+  const target =
+    NEXT_DEVICE_SIZES.find((s) => s >= targetPx) ??
+    NEXT_DEVICE_SIZES[NEXT_DEVICE_SIZES.length - 1];
+  return `/_next/image?url=${encodeURIComponent(src)}&w=${target}&q=${quality}`;
+}
+
+/**
  * Module-scoped cache of URLs we've already fired a preload for. Lives
  * as long as the page does, so re-hovering the same thumbnail never
  * re-issues the request (browser HTTP cache would dedupe anyway, but
@@ -42,23 +75,56 @@ const PREVIEW_OPTIMIZED_WIDTH = 560;
  */
 const preloadedUrls = new Set<string>();
 
-function startPreload(src: string): void {
+function fireImagePreload(url: string, priority: 'high' | 'low' = 'low'): void {
   if (typeof window === 'undefined') return;
-  if (preloadedUrls.has(src)) return;
-  preloadedUrls.add(src);
+  if (preloadedUrls.has(url)) return;
+  preloadedUrls.add(url);
   // window.Image avoids the next/image import shadowing the global.
   // Setting src kicks off the fetch; the GC-eligible Image instance is
   // fine to drop — the bytes land in HTTP cache regardless.
   const img = new window.Image();
   img.decoding = 'async';
-  // Low priority so the preload doesn't compete with primary table
-  // thumbnails the user is actively looking at.
   try {
-    (img as HTMLImageElement & { fetchPriority?: string }).fetchPriority = 'low';
+    (img as HTMLImageElement & { fetchPriority?: string }).fetchPriority = priority;
   } catch {
     /* not supported — Safari < 17 ignores; harmless */
   }
-  img.src = src;
+  img.src = url;
+}
+
+/**
+ * Idle-prewarm: queue up the Vercel-optimized preview URL for every
+ * visible item so by the time the user hovers anything, the bytes
+ * are already in HTTP cache. Called from list pages on mount.
+ *
+ * Scheduled via requestIdleCallback so it never competes with the
+ * initial page paint. Falls back to a delayed setTimeout in browsers
+ * without rIC (Safari).
+ */
+export function prewarmPreviewImages(srcs: Array<string | null | undefined>): void {
+  if (typeof window === 'undefined') return;
+  const targets = srcs
+    .filter((s): s is string => typeof s === 'string' && s.length > 0)
+    .map((s) => nextImageOptimizedUrl(s));
+  if (targets.length === 0) return;
+
+  const run = () => {
+    // Spread the preloads slightly so we don't open 50 simultaneous
+    // sockets to Vercel — the optimizer can only chew so fast and
+    // we'd starve the main-thread image fetches.
+    targets.forEach((url, i) => {
+      window.setTimeout(() => fireImagePreload(url, 'low'), i * 25);
+    });
+  };
+
+  const rIC = (window as typeof window & {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+  }).requestIdleCallback;
+  if (rIC) {
+    rIC(run, { timeout: 2000 });
+  } else {
+    window.setTimeout(run, 600);
+  }
 }
 
 export interface ImageHoverPreviewProps {
@@ -137,11 +203,12 @@ export function ImageHoverPreview({
   function scheduleOpen() {
     if (!src || isCoarsePointer.current) return;
     // Fire the preload IMMEDIATELY on mouseenter, well before the
-    // 220ms open delay elapses. By the time the popover mounts the
-    // <img>, the bytes are usually already in HTTP cache and the
-    // preview appears instantly. Idempotent — the preloadedUrls set
-    // makes re-hovering the same row a no-op.
-    startPreload(src);
+    // 220ms open delay elapses. CRITICAL: preload the EXACT URL
+    // next/image will request (/_next/image?...&w=1200&q=75), not the
+    // bare Supabase signed URL. Otherwise we'd warm the wrong cache
+    // entry and the popover render would still wait on Vercel.
+    // Promoted to high priority because the user is signaling intent.
+    fireImagePreload(nextImageOptimizedUrl(src), 'high');
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
