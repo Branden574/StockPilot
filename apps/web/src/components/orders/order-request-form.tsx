@@ -29,7 +29,7 @@ import { isDeliveryAddressComplete } from '@/lib/orders/delivery-address';
 import { cn, formatNumber } from '@/lib/utils';
 import { createOrderRequestAction } from '@/server/actions/order-requests';
 
-import type { Role } from '@stockpilot/core';
+import { isManagerOrAbove, type Role } from '@stockpilot/core';
 
 export interface OrderItemOption {
   id: string;
@@ -91,10 +91,7 @@ export function OrderRequestForm({
   const [onBehalfOf, setOnBehalfOf] = React.useState<
     { name: string; email: string } | null
   >(null);
-  const canActOnBehalf =
-    viewerRole === 'manager' ||
-    viewerRole === 'admin' ||
-    viewerRole === 'owner';
+  const canActOnBehalf = isManagerOrAbove(viewerRole);
 
   function changeWarehouse(nextId: string) {
     if (nextId === warehouseId) return;

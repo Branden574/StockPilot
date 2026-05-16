@@ -81,8 +81,20 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
     publicRequestToken,
     confirmationToken,
   } = input;
-  const subject = SUBJECTS[kind];
-  const headline = HEADLINES[kind];
+  // staged_for_delivery is sent for BOTH pickup and delivery rows
+  // (the kind name is historical). The body already branches on
+  // fulfillment_type via bodyParagraph(); subject + headline get the
+  // same treatment so a pickup customer doesn't see "Ready to deliver"
+  // on a row that's actually ready to pick up.
+  const isPickup = request.fulfillment_type === 'pickup';
+  const subject =
+    kind === 'staged_for_delivery' && isPickup
+      ? 'Your order is ready for pickup'
+      : SUBJECTS[kind];
+  const headline =
+    kind === 'staged_for_delivery' && isPickup
+      ? 'Ready for pickup'
+      : HEADLINES[kind];
   const reasonLine =
     (kind === 'denied' || kind === 'cancelled') && request.denied_reason
       ? `<p style="color:#666;">Reason: ${escapeHtml(request.denied_reason)}</p>`
