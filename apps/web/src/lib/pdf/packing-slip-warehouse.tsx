@@ -1,102 +1,135 @@
-import { renderToStream, Document, Page, Text, View, Image, StyleSheet } from '@react-pdf/renderer';
+import {
+  renderToStream,
+  Document,
+  Image as PdfImage,
+  Page,
+  Text,
+  View,
+} from '@react-pdf/renderer';
 
-import type { OrderRequestDetail } from '@/server/services/order-requests';
-
-const styles = StyleSheet.create({
-  page: { padding: 36, fontSize: 11, fontFamily: 'Helvetica' },
-  topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  h1: { fontSize: 18, fontWeight: 700 },
-  subtle: { color: '#666', fontSize: 10 },
-  section: { marginTop: 14 },
-  row: { flexDirection: 'row', borderBottom: '1pt solid #ddd', paddingVertical: 6 },
-  th: { fontWeight: 700, backgroundColor: '#f5f5f5' },
-  cellSku: { width: 100, fontFamily: 'Courier' },
-  cellName: { flex: 1 },
-  cellQty: { width: 60, textAlign: 'right' },
-  qr: { width: 110, height: 110 },
-  qrLabel: { fontSize: 9, color: '#666', textAlign: 'center', marginTop: 4 },
-});
+import {
+  Addresses,
+  BrandBand,
+  FooterCode,
+  FooterContact,
+  LinesTable,
+  MetaGrid,
+  formatOrderCode,
+  styles,
+  type PackingSlipInputCore,
+} from './packing-slip-shared';
 
 async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  for await (const chunk of stream)
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   return Buffer.concat(chunks);
 }
 
-interface WarehouseInput {
-  detail: OrderRequestDetail;
+export interface WarehousePackingSlipInput extends PackingSlipInputCore {
+  /** PNG data URL of the signature-collection QR. Null when the order
+   *  has no signature_token (legacy rows or odd state). */
   qrDataUrl: string | null;
-  charterName: string | null;
 }
 
+/**
+ * Warehouse-facing packing slip. Same brand band, meta grid, address
+ * blocks, and line-item table as the customer variant, plus:
+ *   * A Location column on each line showing rack (and crate for
+ *     books) so the picker / packer can verify the bin at hand-off.
+ *   * A QR code that, when scanned by the recipient on a phone,
+ *     opens `/orders/sign/<token>` for the signature flow. Includes
+ *     pickup_location_notes + internal_notes for the team.
+ */
 export async function renderWarehousePackingSlipPdf(
-  input: WarehouseInput,
+  input: WarehousePackingSlipInput,
 ): Promise<Buffer> {
-  const { detail, qrDataUrl, charterName } = input;
-  const { request, lines, warehouseName } = detail;
+  const { detail, warehouse, charterName, imageUrlByItemId, qrDataUrl } = input;
+  const { request, lines } = detail;
+  const isPickup = request.fulfillment_type === 'pickup';
+  const orderCode = formatOrderCode(request.id);
+  const shipToName = request.requester_name ?? null;
+
   const stream = await renderToStream(
     <Document>
       <Page size="LETTER" style={styles.page}>
-        <View style={styles.topRow}>
-          <View>
-            <Text style={styles.h1}>Packing slip (warehouse)</Text>
-            <Text style={styles.subtle}>
-              Order #{request.id.slice(0, 8).toUpperCase()} ·{' '}
-              {request.fulfillment_type === 'pickup' ? 'Pickup' : 'Delivery'}
+        <BrandBand
+          tag="WAREHOUSE PACKING SLIP"
+          whenIso={request.packing_slip_generated_at}
+        />
+
+        <MetaGrid request={request} totalLines={lines.length} />
+
+        <Addresses
+          warehouse={warehouse}
+          shipToName={
+            charterName && !isPickup ? charterName : shipToName ?? '—'
+          }
+          shipToEmail={request.requester_email}
+          shipToPhone={request.requester_phone}
+          attention={
+            charterName && !isPickup && shipToName
+              ? `Attention · ${shipToName}`
+              : null
+          }
+          pickupNote={request.pickup_location_notes}
+          isPickup={isPickup}
+        />
+
+        {request.internal_notes ? (
+          <View
+            style={{
+              marginTop: 14,
+              paddingVertical: 10,
+              paddingHorizontal: 12,
+              borderTop: '1pt solid #e2e8f0',
+              borderBottom: '1pt solid #e2e8f0',
+              borderLeft: '1pt solid #e2e8f0',
+              borderRight: '1pt solid #e2e8f0',
+              backgroundColor: '#fffbeb',
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 8,
+                fontFamily: 'Helvetica-Bold',
+                letterSpacing: 1.2,
+                color: '#92400e',
+                marginBottom: 4,
+              }}
+            >
+              INTERNAL NOTES
             </Text>
-            <Text style={styles.subtle}>
-              From: {warehouseName ?? '—'}
-              {request.fulfillment_type === 'delivery' && charterName
-                ? ` → ${charterName}`
-                : ''}
+            <Text style={{ fontSize: 10, color: '#78350f', lineHeight: 1.45 }}>
+              {request.internal_notes}
+            </Text>
+          </View>
+        ) : null}
+
+        <LinesTable
+          lines={lines}
+          options={{ showLocation: true, imageUrlByItemId }}
+        />
+
+        <View style={styles.footer}>
+          <View>
+            <FooterCode code={`ORD-${orderCode}`} />
+            <Text style={{ fontSize: 8.5, color: '#94a3b8', marginTop: 4 }}>
+              For warehouse use · verify each line at hand-off
             </Text>
           </View>
           {qrDataUrl ? (
-            <View>
-              <Image src={qrDataUrl} style={styles.qr} />
-              <Text style={styles.qrLabel}>Scan to collect signature</Text>
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.section}>
-          <Text>
-            Requester:{' '}
-            {request.requester_name ?? '—'}
-            {request.requester_email ? ` · ${request.requester_email}` : ''}
-            {request.requester_phone ? ` · ${request.requester_phone}` : ''}
-          </Text>
-          {request.fulfillment_type === 'pickup' && request.pickup_location_notes ? (
-            <Text style={styles.subtle}>
-              Pickup notes: {request.pickup_location_notes}
-            </Text>
-          ) : null}
-          <Text style={styles.subtle}>
-            Packed:{' '}
-            {request.packing_slip_generated_at
-              ? new Date(request.packing_slip_generated_at).toLocaleString()
-              : '—'}
-          </Text>
-          {request.internal_notes ? (
-            <Text style={styles.subtle}>Internal: {request.internal_notes}</Text>
-          ) : null}
-        </View>
-
-        <View style={styles.section}>
-          <View style={[styles.row, styles.th]}>
-            <Text style={styles.cellSku}>SKU</Text>
-            <Text style={styles.cellName}>Item</Text>
-            <Text style={styles.cellQty}>Qty</Text>
-          </View>
-          {lines.map((l) => (
-            <View key={l.id} style={styles.row}>
-              <Text style={styles.cellSku}>{l.item?.sku ?? '—'}</Text>
-              <Text style={styles.cellName}>{l.item?.name ?? '—'}</Text>
-              <Text style={styles.cellQty}>
-                {String(l.quantity_picked ?? l.quantity_requested)}
+            <View style={styles.qrBlock}>
+              <PdfImage src={qrDataUrl} style={styles.qr} />
+              <Text style={styles.qrCaption}>SCAN TO SIGN</Text>
+              <Text style={styles.qrSub}>
+                Recipient scans on phone to confirm delivery and complete the
+                order.
               </Text>
             </View>
-          ))}
+          ) : (
+            <FooterContact warehouse={warehouse} />
+          )}
         </View>
       </Page>
     </Document>,
