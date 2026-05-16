@@ -91,6 +91,9 @@ export interface OrderRequestLineRow {
   item_id: string;
   quantity_requested: number;
   quantity_fulfilled: number;
+  /** Migration 0109: per-line picked qty, populated by partial_pick_line
+   * RPC during the digital pick flow. Null = not yet touched. */
+  quantity_picked: number | null;
   unit_cost_at_request: number;
   notes: string | null;
 }
@@ -315,7 +318,7 @@ export class OrderRequestsService {
         .from('order_request_lines')
         .select(
           `id, order_request_id, item_id, quantity_requested,
-           quantity_fulfilled, unit_cost_at_request, notes,
+           quantity_fulfilled, quantity_picked, unit_cost_at_request, notes,
            item:inventory_items!item_id (id, name, sku, quantity_on_hand, barcode)`,
         )
         .eq('order_request_id', id),
@@ -340,12 +343,15 @@ export class OrderRequestsService {
         | { id: string; name: string; sku: string; quantity_on_hand: number; barcode: string | null }[]
         | null;
       const item = Array.isArray(itemField) ? (itemField[0] ?? null) : (itemField ?? null);
+      const rawPicked = r.quantity_picked as number | null | undefined;
       return {
         id: r.id as string,
         order_request_id: r.order_request_id as string,
         item_id: r.item_id as string,
         quantity_requested: Number(r.quantity_requested) || 0,
         quantity_fulfilled: Number(r.quantity_fulfilled) || 0,
+        quantity_picked:
+          rawPicked === null || rawPicked === undefined ? null : Number(rawPicked),
         unit_cost_at_request: Number(r.unit_cost_at_request) || 0,
         notes: (r.notes as string | null) ?? null,
         item,
