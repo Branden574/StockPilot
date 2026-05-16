@@ -17,6 +17,7 @@ import {
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
+import { ImageHoverPreview } from '@/components/ui/image-hover-preview';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Sparkline } from '@/components/ui/sparkline';
@@ -720,25 +721,41 @@ export function InventoryTable({
                   </td>
                   <td className="py-2.5 pr-3">
                     <div className="flex items-center gap-2.5">
-                      {item.image_url ? (
-                        <Image
-                          src={item.image_url}
-                          alt=""
-                          width={56}
-                          height={56}
-                          sizes="28px"
-                          className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
-                        />
-                      ) : (
-                        <span
-                          aria-hidden
-                          className="h-7 w-7 shrink-0 rounded-[5px] border border-border"
-                          style={{
-                            background:
-                              'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
-                          }}
-                        />
-                      )}
+                      <ImageHoverPreview
+                        src={item.image_url ?? null}
+                        alt={item.name}
+                        title={item.name}
+                        subtitle={item.sku}
+                        meta={
+                          <span>
+                            On hand{' '}
+                            <span className="text-foreground font-medium tabular-nums">
+                              {formatNumber(item.quantity_on_hand)}
+                            </span>
+                          </span>
+                        }
+                        className="shrink-0"
+                      >
+                        {item.image_url ? (
+                          <Image
+                            src={item.image_url}
+                            alt=""
+                            width={56}
+                            height={56}
+                            sizes="28px"
+                            className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
+                          />
+                        ) : (
+                          <span
+                            aria-hidden
+                            className="h-7 w-7 shrink-0 rounded-[5px] border border-border"
+                            style={{
+                              background:
+                                'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
+                            }}
+                          />
+                        )}
+                      </ImageHoverPreview>
                       <Link
                         href={`${rowLinkPrefix}/${item.id}?return=${encodeURIComponent(currentListUrl)}`}
                         className="font-medium hover:underline"
