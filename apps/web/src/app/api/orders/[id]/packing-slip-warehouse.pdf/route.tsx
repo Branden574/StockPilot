@@ -4,6 +4,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { env } from '@/lib/env';
 import { renderWarehousePackingSlipPdf } from '@/lib/pdf/packing-slip-warehouse';
+import type { WarehouseInfo } from '@/lib/pdf/packing-slip-shared';
+import { ItemImagesService } from '@/server/services/item-images';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 export const runtime = 'nodejs';
@@ -49,19 +51,52 @@ export async function GET(
       }
     }
 
-    // Pull charter name when present, for the warehouse-slip header.
-    // Reuse the API-context's supabase client so RLS applies cleanly.
-    let charterName: string | null = null;
-    if (detail.request.delivery_charter_id) {
-      const { data } = await ctx.supabase
-        .from('charters')
-        .select('name')
-        .eq('id', detail.request.delivery_charter_id)
-        .maybeSingle();
-      charterName = (data as { name?: string } | null)?.name ?? null;
-    }
+    const [whRes, charterRes] = await Promise.all([
+      ctx.supabase
+        .from('warehouses')
+        .select('name, code, address, contact_name, contact_email, contact_phone')
+        .eq('id', detail.request.warehouse_id)
+        .maybeSingle(),
+      detail.request.delivery_charter_id
+        ? ctx.supabase
+            .from('charters')
+            .select('name')
+            .eq('id', detail.request.delivery_charter_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+    ]);
+    const wh = (whRes.data ?? null) as
+      | {
+          name?: string;
+          code?: string;
+          address?: WarehouseInfo['address'];
+          contact_name?: string;
+          contact_email?: string;
+          contact_phone?: string;
+        }
+      | null;
+    const warehouse: WarehouseInfo = {
+      name: wh?.name ?? null,
+      code: wh?.code ?? null,
+      address: wh?.address ?? null,
+      contactName: wh?.contact_name ?? null,
+      contactEmail: wh?.contact_email ?? null,
+      contactPhone: wh?.contact_phone ?? null,
+    };
+    const charterName = ((charterRes.data ?? null) as { name?: string } | null)?.name ?? null;
 
-    const pdf = await renderWarehousePackingSlipPdf({ detail, qrDataUrl, charterName });
+    const itemIds = detail.lines
+      .map((l) => l.item?.id)
+      .filter((x): x is string => typeof x === 'string');
+    const imageUrlByItemId = await new ItemImagesService(ctx).primaryImagesForItems(itemIds);
+
+    const pdf = await renderWarehousePackingSlipPdf({
+      detail,
+      warehouse,
+      charterName,
+      imageUrlByItemId,
+      qrDataUrl,
+    });
     const bytes = new Uint8Array(pdf);
     return new NextResponse(bytes, {
       status: 200,
