@@ -34,6 +34,7 @@ import {
   denyOrderRequestAction,
   generatePackingSlipsAction,
   generatePickSlipAction,
+  markInTransitAction,
   markOrderRequestDeliveredAction,
   setOrderInternalNotesAction,
   setOrderRequestStatusAction,
@@ -48,6 +49,7 @@ interface Props {
   internalNotes: string | null;
   fulfillmentType: 'pickup' | 'delivery';
   assignedDeliveryUserId: string | null;
+  signatureToken: string | null;
   drivers: DriverOption[];
 }
 
@@ -59,6 +61,7 @@ type BusyKey =
   | 'generate-packing-slips'
   | 'stage-pickup'
   | 'stage-delivery'
+  | 'mark-in-transit'
   | 'packing_slip_generated'
   | 'staged_for_delivery'
   | 'completed'
@@ -80,6 +83,7 @@ export function ManagerActionsPanel({
   internalNotes,
   fulfillmentType,
   assignedDeliveryUserId,
+  signatureToken,
   drivers,
 }: Props) {
   const router = useRouter();
@@ -172,6 +176,26 @@ export function ManagerActionsPanel({
     }
     toast.success('Order staged for delivery.');
     router.refresh();
+  }
+
+  async function markInTransit() {
+    setBusy('mark-in-transit');
+    const res = await markInTransitAction({ id: orderId });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Order is on the way.');
+    router.refresh();
+  }
+
+  function collectSignature() {
+    if (!signatureToken) {
+      toast.error('No signature token on this order — regenerate the packing slip.');
+      return;
+    }
+    window.open(`/orders/sign/${signatureToken}`, '_blank', 'noopener,noreferrer');
   }
 
   function printPickSlip() {
@@ -421,6 +445,34 @@ export function ManagerActionsPanel({
                 </Button>
               }
             />
+          )}
+
+          {status === 'staged_for_delivery' && assignedDeliveryUserId && (
+            <Button
+              variant="default"
+              onClick={markInTransit}
+              disabled={busy !== null}
+            >
+              {busy === 'mark-in-transit' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Truck className="h-3.5 w-3.5" />
+              )}
+              Mark in transit
+            </Button>
+          )}
+
+          {(status === 'staged_for_pickup' ||
+            status === 'in_transit' ||
+            status === 'signature_requested') && (
+            <Button
+              variant="gradient"
+              onClick={collectSignature}
+              disabled={busy !== null}
+            >
+              <ClipboardCheck className="h-3.5 w-3.5" />
+              Collect signature
+            </Button>
           )}
 
           {(status === 'approved' ||
