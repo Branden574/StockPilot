@@ -712,6 +712,178 @@ export class OrderRequestsService {
     return row;
   }
 
+  async generatePackingSlips(id: string): Promise<OrderRequestRow> {
+    assertPermission(this.ctx, 'orders:approve');
+    await this.requireWarehouseAccess(id, 'write');
+
+    const { data: row, error } = await this.ctx.supabase
+      .from('order_requests')
+      .select('status, signature_token')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Order not found');
+
+    // Accept BOTH first-time generation (picking_complete) AND re-
+    // generation (packing_slip_generated). Regenerating mints a new
+    // signature_token, which invalidates any QR already printed.
+    if (
+      (row as { status: OrderRequestStatus }).status !== 'picking_complete' &&
+      (row as { status: OrderRequestStatus }).status !== 'packing_slip_generated'
+    ) {
+      throw new ServiceError(
+        'validation_error',
+        'Packing slips can only be generated after picking is complete.',
+      );
+    }
+
+    // 256-bit hex token, distinct from the public-request token
+    // namespace (those live on organizations.public_request_token).
+    const token = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: updated, error: updErr } = await this.ctx.supabase
+      .from('order_requests')
+      .update({
+        status: 'packing_slip_generated',
+        packing_slip_generated_at: new Date().toISOString(),
+        packing_slip_generated_by: this.ctx.userId,
+        signature_token: token,
+        signature_token_expires_at: expiresAt,
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (updErr) throw new ServiceError('internal_error', updErr.message);
+    await audit(
+      { event: 'order.packing_slip_generated', entityType: 'order_request', entityId: id },
+      this.ctx,
+    );
+    return updated as OrderRequestRow;
+  }
+
+  async stageOrder(
+    id: string,
+    target: 'staged_for_pickup' | 'staged_for_delivery',
+  ): Promise<OrderRequestRow> {
+    assertPermission(this.ctx, 'orders:approve');
+    await this.requireWarehouseAccess(id, 'write');
+
+    const { data: row, error } = await this.ctx.supabase
+      .from('order_requests')
+      .select('status, fulfillment_type')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Order not found');
+    const r = row as { status: OrderRequestStatus; fulfillment_type: 'pickup' | 'delivery' };
+    if (r.status !== 'packing_slip_generated') {
+      throw new ServiceError(
+        'validation_error',
+        'Order must be packing-slip-generated before staging.',
+      );
+    }
+    if (target === 'staged_for_pickup' && r.fulfillment_type !== 'pickup') {
+      throw new ServiceError(
+        'validation_error',
+        'Only pickup orders can be staged for pickup.',
+      );
+    }
+    if (target === 'staged_for_delivery' && r.fulfillment_type !== 'delivery') {
+      throw new ServiceError(
+        'validation_error',
+        'Only delivery orders can be staged for delivery.',
+      );
+    }
+
+    const { data: updated, error: updErr } = await this.ctx.supabase
+      .from('order_requests')
+      .update({
+        status: target,
+        staged_at: new Date().toISOString(),
+        staged_by: this.ctx.userId,
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (updErr) throw new ServiceError('internal_error', updErr.message);
+    await audit(
+      {
+        event:
+          target === 'staged_for_pickup'
+            ? 'order.staged_for_pickup'
+            : 'order.staged_for_delivery',
+        entityType: 'order_request',
+        entityId: id,
+      },
+      this.ctx,
+    );
+    return updated as OrderRequestRow;
+  }
+
+  async assignDelivery(id: string, deliveryUserId: string): Promise<OrderRequestRow> {
+    assertPermission(this.ctx, 'orders:assign_delivery');
+    await this.requireWarehouseAccess(id, 'write');
+
+    // Defense-in-depth: assignee must be an active org member.
+    const { data: member } = await this.ctx.supabase
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('user_id', deliveryUserId)
+      .not('accepted_at', 'is', null)
+      .maybeSingle();
+    if (!member) {
+      throw new ServiceError(
+        'validation_error',
+        'That user is not an active member of this organization.',
+      );
+    }
+
+    const { data: row } = await this.ctx.supabase
+      .from('order_requests')
+      .select('status')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (!row) throw new ServiceError('not_found', 'Order not found');
+    if ((row as { status: OrderRequestStatus }).status !== 'staged_for_delivery') {
+      throw new ServiceError(
+        'validation_error',
+        'Delivery can only be assigned to staged-for-delivery orders.',
+      );
+    }
+
+    const { data: updated, error } = await this.ctx.supabase
+      .from('order_requests')
+      .update({
+        assigned_delivery_user_id: deliveryUserId,
+        assigned_delivery_by: this.ctx.userId,
+        assigned_delivery_at: new Date().toISOString(),
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw new ServiceError('internal_error', error.message);
+    await audit(
+      {
+        event: 'order.delivery_assigned',
+        entityType: 'order_request',
+        entityId: id,
+        extra: { assigned_delivery_user_id: deliveryUserId },
+      },
+      this.ctx,
+    );
+    return updated as OrderRequestRow;
+  }
+
   async deny(id: string, reason: string): Promise<OrderRequestRow> {
     assertPermission(this.ctx, 'orders:approve');
     // C3: warehouse-scope gate before any mutation.
