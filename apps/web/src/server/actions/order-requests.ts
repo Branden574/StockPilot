@@ -7,7 +7,7 @@ import { isDeliveryAddressComplete } from '@/lib/orders/delivery-address';
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
-import { err, ok, type ActionResult } from '@stockpilot/core';
+import { err, isManagerOrAbove, ok, type ActionResult } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
   if (error instanceof ServiceError) return err(error.code, error.message);
@@ -90,11 +90,7 @@ export async function createOrderRequestAction(
     // caller's role before we even touch the DB.
     if (parsed.data.onBehalfOf) {
       const ctx = await withContext();
-      if (
-        ctx.role !== 'manager' &&
-        ctx.role !== 'admin' &&
-        ctx.role !== 'owner'
-      ) {
+      if (!isManagerOrAbove(ctx.role)) {
         return err(
           'forbidden',
           'Only managers can create orders on behalf of others.',
