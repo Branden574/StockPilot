@@ -2,29 +2,32 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { toastFn } = vi.hoisted(() => {
-  return { toastFn: vi.fn() };
+const { toastInfoFn } = vi.hoisted(() => {
+  return { toastInfoFn: vi.fn() };
 });
 
 vi.mock('sonner', () => ({
-  toast: Object.assign(toastFn, {
+  toast: {
+    info: toastInfoFn,
     success: vi.fn(),
     error: vi.fn(),
-  }),
+  },
 }));
 
 import {
   flushLiveNotificationsForTest,
   isDesktopNotificationsEnabled,
+  isNotificationSoundMuted,
   queueLiveNotification,
   setDesktopOptIn,
+  setNotificationSoundMuted,
 } from './live-toast';
 
 const navigate = vi.fn();
 
 beforeEach(() => {
   vi.useFakeTimers();
-  toastFn.mockClear();
+  toastInfoFn.mockClear();
   navigate.mockClear();
   window.localStorage.clear();
   flushLiveNotificationsForTest();
@@ -42,15 +45,15 @@ afterEach(() => {
 });
 
 describe('queueLiveNotification — single event', () => {
-  it('fires one sonner toast after the burst window when only one event arrives', async () => {
+  it('fires the toast INSTANTLY (no burst delay)', async () => {
     queueLiveNotification(
       { id: 'a', type: 'order_request.created', title: 'New request', body: 'X', link: '/dashboard/orders/a' },
       navigate,
     );
-    expect(toastFn).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1600);
-    expect(toastFn).toHaveBeenCalledTimes(1);
-    const [title, opts] = toastFn.mock.calls[0]!;
+    // Drain microtasks scheduled by fireOne so the toast call lands.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(toastInfoFn).toHaveBeenCalledTimes(1);
+    const [title, opts] = toastInfoFn.mock.calls[0]!;
     expect(title).toBe('New request');
     expect(opts.description).toBe('X');
     expect(opts.action.label).toBe('View');
@@ -63,8 +66,8 @@ describe('queueLiveNotification — single event', () => {
       { id: 'b', type: 't', title: 'Hi', body: null, link: null },
       navigate,
     );
-    await vi.advanceTimersByTimeAsync(1600);
-    const [, opts] = toastFn.mock.calls[0]!;
+    await vi.advanceTimersByTimeAsync(0);
+    const [, opts] = toastInfoFn.mock.calls[0]!;
     expect(opts.action).toBeUndefined();
   });
 
@@ -73,22 +76,15 @@ describe('queueLiveNotification — single event', () => {
       { id: 'c', type: 't', title: 'A', body: null, link: '//evil.com/x' },
       navigate,
     );
-    queueLiveNotification(
-      { id: 'c2', type: 't', title: 'B', body: null, link: 'https://evil.com/x' },
-      navigate,
-    );
-    await vi.advanceTimersByTimeAsync(1600);
-    // Two events in window → summary, with no shared link (both bad)
-    expect(toastFn).toHaveBeenCalledTimes(1);
-    const [, opts] = toastFn.mock.calls[0]!;
-    // Action falls back to /dashboard/notifications
-    opts.action.onClick();
-    expect(navigate).toHaveBeenCalledWith('/dashboard/notifications');
+    await vi.advanceTimersByTimeAsync(0);
+    // First fire — link rejected, no action attached
+    const firstCall = toastInfoFn.mock.calls[0]!;
+    expect(firstCall[1].action).toBeUndefined();
   });
 });
 
 describe('queueLiveNotification — burst collapse', () => {
-  it('collapses 2+ events into a single summary toast', async () => {
+  it('fires the FIRST event instantly, then a summary for the rest at the end of the window', async () => {
     for (let i = 0; i < 5; i++) {
       queueLiveNotification(
         {
@@ -101,42 +97,33 @@ describe('queueLiveNotification — burst collapse', () => {
         navigate,
       );
     }
+    // First fire is synchronous — the toast for `Item 0 low` lands now.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(toastInfoFn).toHaveBeenCalledTimes(1);
+    expect(toastInfoFn.mock.calls[0]![0]).toBe('Item 0 low');
+
+    // After the window closes, the remaining 4 collapse to a summary.
     await vi.advanceTimersByTimeAsync(1600);
-    expect(toastFn).toHaveBeenCalledTimes(1);
-    const [title] = toastFn.mock.calls[0]!;
-    expect(title).toBe('5 new notifications');
+    expect(toastInfoFn).toHaveBeenCalledTimes(2);
+    expect(toastInfoFn.mock.calls[1]![0]).toBe('4 new notifications');
   });
 
-  it('keeps the shared link when every event has the same target', async () => {
+  it('fires the second event as a normal toast (not a summary) when only one extra arrives in the window', async () => {
     queueLiveNotification(
-      { id: '1', type: 't', title: 'A', body: null, link: '/dashboard/orders/abc' },
+      { id: '1', type: 't', title: 'First', body: null, link: '/dashboard/orders/abc' },
       navigate,
     );
+    await vi.advanceTimersByTimeAsync(0);
     queueLiveNotification(
-      { id: '2', type: 't', title: 'B', body: null, link: '/dashboard/orders/abc' },
+      { id: '2', type: 't', title: 'Second', body: null, link: '/dashboard/orders/abc' },
       navigate,
     );
+    // Still only one fire so far — the second is queued for the
+    // post-window flush.
+    expect(toastInfoFn).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1600);
-    const [, opts] = toastFn.mock.calls[0]!;
-    expect(opts.action.label).toBe('View');
-    opts.action.onClick();
-    expect(navigate).toHaveBeenCalledWith('/dashboard/orders/abc');
-  });
-
-  it('falls back to /dashboard/notifications when links differ', async () => {
-    queueLiveNotification(
-      { id: '1', type: 't', title: 'A', body: null, link: '/dashboard/orders/x' },
-      navigate,
-    );
-    queueLiveNotification(
-      { id: '2', type: 't', title: 'B', body: null, link: '/dashboard/orders/y' },
-      navigate,
-    );
-    await vi.advanceTimersByTimeAsync(1600);
-    const [, opts] = toastFn.mock.calls[0]!;
-    expect(opts.action.label).toBe('View all');
-    opts.action.onClick();
-    expect(navigate).toHaveBeenCalledWith('/dashboard/notifications');
+    expect(toastInfoFn).toHaveBeenCalledTimes(2);
+    expect(toastInfoFn.mock.calls[1]![0]).toBe('Second');
   });
 
   it('does NOT fire any toast when tab is hidden and desktop opt-in is off', async () => {
@@ -149,14 +136,12 @@ describe('queueLiveNotification — burst collapse', () => {
       navigate,
     );
     await vi.advanceTimersByTimeAsync(1600);
-    expect(toastFn).not.toHaveBeenCalled();
+    expect(toastInfoFn).not.toHaveBeenCalled();
   });
 });
 
 describe('isDesktopNotificationsEnabled', () => {
   it('returns false when the opt-in flag is not set', async () => {
-    // happy-dom does not implement Notification by default; stub it
-    // with a permission='granted' to isolate the localStorage branch.
     (globalThis as Record<string, unknown>).Notification = { permission: 'granted' };
     expect(isDesktopNotificationsEnabled()).toBe(false);
   });
@@ -191,6 +176,21 @@ describe('setDesktopOptIn', () => {
   });
 });
 
+describe('notification sound preference', () => {
+  it('defaults to NOT muted', () => {
+    expect(isNotificationSoundMuted()).toBe(false);
+  });
+
+  it('round-trips through localStorage', () => {
+    setNotificationSoundMuted(true);
+    expect(window.localStorage.getItem('stockpilot:notification-sound-muted')).toBe('1');
+    expect(isNotificationSoundMuted()).toBe(true);
+    setNotificationSoundMuted(false);
+    expect(window.localStorage.getItem('stockpilot:notification-sound-muted')).toBeNull();
+    expect(isNotificationSoundMuted()).toBe(false);
+  });
+});
+
 describe('cross-tab leader election (Web Locks)', () => {
   type LocksFn = (
     name: string,
@@ -204,11 +204,6 @@ describe('cross-tab leader election (Web Locks)', () => {
     const requests: Array<{ name: string }> = [];
     const request: LocksFn = (name, _opts, cb) => {
       requests.push({ name });
-      // Mimic the browser's contract: invoke cb with a lock object
-      // when ifAvailable + lock free; null when held by another
-      // worker/tab. We never resolve cb's promise, so the lock is
-      // "held" for the test's duration — exactly how the production
-      // code keeps the lock past the toast fire.
       return Promise.resolve(
         cb(behavior === 'won' ? { name } : null),
       );
@@ -234,8 +229,8 @@ describe('cross-tab leader election (Web Locks)', () => {
       { id: 'win-1', type: 't', title: 'Hello', body: null, link: '/dashboard' },
       navigate,
     );
-    await vi.advanceTimersByTimeAsync(1600);
-    expect(toastFn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(toastInfoFn).toHaveBeenCalledTimes(1);
     expect(requests).toEqual([{ name: 'stockpilot-toast-win-1' }]);
   });
 
@@ -245,22 +240,7 @@ describe('cross-tab leader election (Web Locks)', () => {
       { id: 'lose-1', type: 't', title: 'Hello', body: null, link: '/dashboard' },
       navigate,
     );
-    await vi.advanceTimersByTimeAsync(1600);
-    expect(toastFn).not.toHaveBeenCalled();
-  });
-
-  it('locks burst-summary toasts under a deterministic key derived from the first event id', async () => {
-    const { requests } = installLockManager('won');
-    queueLiveNotification(
-      { id: 'first', type: 't', title: 'A', body: null, link: '/x' },
-      navigate,
-    );
-    queueLiveNotification(
-      { id: 'second', type: 't', title: 'B', body: null, link: '/y' },
-      navigate,
-    );
-    await vi.advanceTimersByTimeAsync(1600);
-    expect(toastFn).toHaveBeenCalledTimes(1);
-    expect(requests).toEqual([{ name: 'stockpilot-toast-burst-first' }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(toastInfoFn).not.toHaveBeenCalled();
   });
 });

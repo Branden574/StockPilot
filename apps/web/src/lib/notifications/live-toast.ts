@@ -7,7 +7,7 @@ import { toast } from 'sonner';
  * granted desktop-notification permission).
  *
  * Why this lives in lib/ instead of inline on the bell component:
- *   * The dedupe state must survive the channel callback closure, but
+ *   * The burst state must survive the channel callback closure, but
  *     a single module-scoped buffer makes the burst-collapse logic
  *     much easier to reason about than a ref in the bell.
  *   * The desktop-notification opt-in tile on /settings/notifications
@@ -25,6 +25,7 @@ export interface LiveNotificationPayload {
 }
 
 const DESKTOP_OPT_IN_KEY = 'stockpilot:desktop-notifications-opt-in';
+const SOUND_OPT_OUT_KEY = 'stockpilot:notification-sound-muted';
 
 /**
  * Returns true when the user has explicitly opted into desktop
@@ -59,19 +60,89 @@ export function setDesktopOptIn(value: boolean): void {
   }
 }
 
-/**
- * Burst collapse: incoming notifications within this window collapse
- * to a single "+N more" toast so a bulk-import fan-out (low-stock
- * crossings for 50 items at once) doesn't paper the screen.
- */
-const BURST_WINDOW_MS = 1500;
-
-interface BurstState {
-  timer: ReturnType<typeof setTimeout> | null;
-  queue: LiveNotificationPayload[];
+/** Notification-sound preference. Defaults to ON; persist the OFF state. */
+export function isNotificationSoundMuted(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(SOUND_OPT_OUT_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
-const burst: BurstState = { timer: null, queue: [] };
+export function setNotificationSoundMuted(muted: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (muted) window.localStorage.setItem(SOUND_OPT_OUT_KEY, '1');
+    else window.localStorage.removeItem(SOUND_OPT_OUT_KEY);
+  } catch {
+    /* noop */
+  }
+}
+
+/**
+ * Single-tab AudioContext cached lazily — browsers limit how many you
+ * can have, and creating one before a user gesture leaves it suspended.
+ * The first toast fire after the user clicks anything in the dashboard
+ * will resume it implicitly.
+ */
+let audioCtx: AudioContext | null = null;
+
+function getAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  const w = window as typeof window & {
+    AudioContext?: typeof AudioContext;
+    webkitAudioContext?: typeof AudioContext;
+  };
+  const Ctor = w.AudioContext ?? w.webkitAudioContext;
+  if (!Ctor) return null;
+  if (!audioCtx) {
+    try {
+      audioCtx = new Ctor();
+    } catch {
+      audioCtx = null;
+    }
+  }
+  return audioCtx;
+}
+
+/**
+ * Brief two-note "ding" synthesized on the fly so we don't ship an
+ * audio asset. Two sine pulses (E5 → A5) with a quick exponential
+ * decay. Silently no-ops in environments without Web Audio (SSR,
+ * tests) and when the user has muted notification sounds.
+ */
+function playNotificationSound(): void {
+  if (isNotificationSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    // Chrome auto-suspends the context until a user gesture. resume()
+    // is safe to call repeatedly and a no-op when already running.
+    if (ctx.state === 'suspended') void ctx.resume();
+    const now = ctx.currentTime;
+    const tones: Array<{ freq: number; start: number; dur: number }> = [
+      { freq: 659.25, start: 0, dur: 0.18 }, // E5
+      { freq: 880.0, start: 0.12, dur: 0.28 }, // A5
+    ];
+    for (const t of tones) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = t.freq;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      const startAt = now + t.start;
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.exponentialRampToValueAtTime(0.18, startAt + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + t.dur);
+      osc.start(startAt);
+      osc.stop(startAt + t.dur + 0.02);
+    }
+  } catch {
+    /* audio refused mid-session — silently no-op */
+  }
+}
 
 function safeRedirect(path: string | null): string | null {
   if (!path) return null;
@@ -83,20 +154,6 @@ function safeRedirect(path: string | null): string | null {
   return path;
 }
 
-/**
- * At fire time (NOT queue time) pick the surface that actually makes
- * sense for the user's current tab state:
- *   - visible → in-app sonner toast.
- *   - hidden + desktop opt-in granted → OS Notification.
- *   - hidden + no opt-in → drop the toast entirely; the bell badge
- *     already updated, the user will see the unread count when they
- *     come back to the tab.
- *
- * The previous version fired the sonner toast unconditionally even
- * while hidden, which caused a stack of stale toasts to appear when
- * the user refocused the tab (sonner keeps undismissed toasts in the
- * DOM until their duration elapses).
- */
 function isTabVisible(): boolean {
   return typeof document !== 'undefined' && document.visibilityState === 'visible';
 }
@@ -108,19 +165,6 @@ function isTabVisible(): boolean {
  * each pop their own toast for the same row. We don't lock the OS
  * Notification path — the browser's per-tag dedup already collapses
  * those to a single OS popup.
- *
- * Strategy: try to acquire a per-notification Web Lock with
- * `ifAvailable: true`. Whichever tab wins fires the toast and HOLDS
- * the lock for `LOCK_HOLD_MS`, so even tabs whose realtime event
- * arrives a few seconds later can't double-fire. On unsupported
- * browsers (no `navigator.locks`) we fall back to the prior
- * fire-anyway behavior — the cost is "duplicate toasts on Safari
- * <15.4 across two tabs," which we accept rather than skipping the
- * toast entirely.
- *
- * The lock auto-releases when the tab closes (browser cleans up the
- * lock manager), so a leader tab being closed lets the next event
- * land on a sibling tab as normal.
  */
 const LOCK_HOLD_MS = 60_000;
 
@@ -138,12 +182,6 @@ function getLockManager(): LockManagerLike | null {
   return nav.locks ?? null;
 }
 
-/**
- * Returns a Promise<boolean>. Resolves true if THIS tab won the
- * right to fire the toast for `key`; false if another tab already
- * holds the lock for it. Independent of the actual fire — caller
- * checks the result and only fires when true.
- */
 function acquireToastLock(key: string): Promise<boolean> {
   const locks = getLockManager();
   if (!locks) return Promise.resolve(true); // fail-open on unsupported browsers
@@ -159,14 +197,10 @@ function acquireToastLock(key: string): Promise<boolean> {
             return;
           }
           resolve(true);
-          // Hold the lock for a window long enough that any sibling
-          // tab whose realtime event arrives late still finds it
-          // taken. The callback's promise pending = lock held.
           await new Promise<void>((r) => setTimeout(r, LOCK_HOLD_MS));
         },
       );
     } catch {
-      // Lock manager threw (unusual) — fail-open.
       resolve(true);
     }
   });
@@ -179,13 +213,14 @@ async function fireOne(
   const link = safeRedirect(payload.link);
 
   if (isTabVisible()) {
-    // Cross-tab dedup: only one visible tab actually pops the toast.
-    // OS notifications below dedupe via the `tag` attribute, so they
-    // don't need the lock.
     const won = await acquireToastLock(payload.id);
     if (!won) return;
-    toast(payload.title, {
+    // toast.info instead of toast() so richColors gives the message
+    // a distinct blue tint — easier to spot mid-task than a neutral
+    // gray toast.
+    toast.info(payload.title, {
       description: payload.body ?? undefined,
+      duration: 6000,
       action: link
         ? {
             label: 'View',
@@ -193,11 +228,14 @@ async function fireOne(
           }
         : undefined,
     });
+    // Only ring on the leader tab — the lock above already enforces
+    // one beep per event across tabs.
+    playNotificationSound();
     return;
   }
 
-  // Tab hidden — try OS notification if the user opted in. Keep
-  // title + body short; some browsers truncate aggressively.
+  // Tab hidden — try OS notification if the user opted in. The OS
+  // surface plays its own default sound, so no Web Audio call here.
   if (!isDesktopNotificationsEnabled()) return;
   try {
     const n = new Notification(payload.title, {
@@ -220,32 +258,23 @@ async function fireBurstSummary(
   payloads: LiveNotificationPayload[],
   navigate: (link: string) => void,
 ): Promise<void> {
-  // Try to surface a useful link — most fan-outs share the same link
-  // shape (e.g. /dashboard/orders/<id>). If all links match, route
-  // there; otherwise route to the notifications inbox.
   const links = new Set(payloads.map((p) => p.link ?? ''));
   const sharedLink =
     links.size === 1 && payloads[0]?.link ? safeRedirect(payloads[0].link) : null;
   const fallback = '/dashboard/notifications';
 
   if (isTabVisible()) {
-    // Lock key derived from the first event's id. Sibling tabs that
-    // batch the same realtime events into a burst will compute the
-    // same key (events arrive in the same order over the WebSocket),
-    // so they race for the same lock — only one wins and shows the
-    // summary toast.
     const lockKey = payloads[0] ? `burst-${payloads[0].id}` : 'burst';
     const won = await acquireToastLock(lockKey);
     if (!won) return;
-    toast(`${payloads.length} new notifications`, {
+    toast.info(`${payloads.length} new notifications`, {
       description: 'Open the bell to review them.',
+      duration: 6000,
       action: sharedLink
-        ? {
-            label: 'View',
-            onClick: () => navigate(sharedLink),
-          }
+        ? { label: 'View', onClick: () => navigate(sharedLink) }
         : { label: 'View all', onClick: () => navigate(fallback) },
     });
+    playNotificationSound();
     return;
   }
 
@@ -253,7 +282,7 @@ async function fireBurstSummary(
   try {
     const n = new Notification('New notifications', {
       body: `${payloads.length} new updates in StockPilot.`,
-      tag: 'stockpilot-burst', // single burst notification only
+      tag: 'stockpilot-burst',
     });
     n.onclick = () => {
       window.focus();
@@ -266,29 +295,56 @@ async function fireBurstSummary(
 }
 
 /**
- * Public entry: queue a notification for live surfacing. Within the
- * burst window we collect events; once it elapses we emit either one
- * toast (1 event) or a summary toast (2+ events). `navigate` is
- * passed in instead of imported so the caller can use its own
- * `useRouter().push` and we don't pull `next/navigation` into a
- * non-component module.
+ * Burst behavior:
+ *   * First event arrives → fire it INSTANTLY. The user sees the
+ *     popup and hears the chime within the same tick as the row
+ *     landing — no 1.5s lag.
+ *   * A backoff window opens. Any additional event landing within
+ *     the window collects into a queue.
+ *   * At end of window: if 2+ events queued, fire a summary toast
+ *     ("3 new notifications"). Single follow-ups just stay in the
+ *     bell — the first popup was enough surface for them.
+ *
+ * This shape gives "instant for the common case, group-summarize the
+ * spam case" — replacing the prior wait-1500ms-then-fire behavior
+ * which made every notification feel laggy.
  */
+const BURST_WINDOW_MS = 1500;
+
+interface BurstState {
+  timer: ReturnType<typeof setTimeout> | null;
+  queue: LiveNotificationPayload[];
+  firstFiredAt: number;
+}
+
+const burst: BurstState = { timer: null, queue: [], firstFiredAt: 0 };
+
 export function queueLiveNotification(
   payload: LiveNotificationPayload,
   navigate: (link: string) => void,
 ): void {
+  if (burst.timer === null) {
+    // First event — fire immediately, open the suppression window.
+    burst.firstFiredAt = Date.now();
+    void fireOne(payload, navigate);
+    burst.timer = setTimeout(() => {
+      const drained = burst.queue;
+      burst.queue = [];
+      burst.timer = null;
+      if (drained.length === 1 && drained[0]) {
+        // Exactly one follow-up landed during the window — surface
+        // it too. Pairs of unrelated notifications shouldn't get
+        // silently demoted to "the bell knows."
+        void fireOne(drained[0], navigate);
+      } else if (drained.length > 1) {
+        void fireBurstSummary(drained, navigate);
+      }
+    }, BURST_WINDOW_MS);
+    return;
+  }
+  // Inside the window — queue for the summary that fires when the
+  // timer elapses.
   burst.queue.push(payload);
-  if (burst.timer) return;
-  burst.timer = setTimeout(() => {
-    const drained = burst.queue;
-    burst.queue = [];
-    burst.timer = null;
-    if (drained.length === 1 && drained[0]) {
-      void fireOne(drained[0], navigate);
-    } else if (drained.length > 1) {
-      void fireBurstSummary(drained, navigate);
-    }
-  }, BURST_WINDOW_MS);
 }
 
 /**
@@ -301,5 +357,6 @@ export function flushLiveNotificationsForTest(): LiveNotificationPayload[] {
   }
   const drained = burst.queue;
   burst.queue = [];
+  burst.firstFiredAt = 0;
   return drained;
 }
