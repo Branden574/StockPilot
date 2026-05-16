@@ -3,6 +3,7 @@
 import { Package } from 'lucide-react';
 import * as React from 'react';
 
+import { ImageHoverPreview } from '@/components/ui/image-hover-preview';
 import { cn } from '@/lib/utils';
 
 /**
@@ -17,6 +18,11 @@ import { cn } from '@/lib/utils';
  *   • shipment detail line table (md)
  *   • PO detail line table (sm)
  *   • ⌘K command palette item rows (sm)
+ *
+ * Every instance wraps in an <ImageHoverPreview> so hovering the small
+ * thumbnail surfaces a 280px floating preview of the actual image — the
+ * signed URL serves the original upload, not a crop, so the preview is
+ * genuinely sharp rather than a stretched 28px frame.
  */
 interface Props {
   imageUrl: string | null | undefined;
@@ -29,9 +35,21 @@ interface Props {
    * the same component instance for different items.
    */
   itemId?: string;
+  /** Optional rich preview metadata. Title defaults to `alt`. */
+  previewTitle?: string | null;
+  previewSubtitle?: string | null;
+  previewMeta?: React.ReactNode;
 }
 
-export function ItemThumb({ imageUrl, alt, size = 'md', itemId }: Props) {
+export function ItemThumb({
+  imageUrl,
+  alt,
+  size = 'md',
+  itemId,
+  previewTitle,
+  previewSubtitle,
+  previewMeta,
+}: Props) {
   // Track failures so swapping back/forth in pagination doesn't
   // re-fetch a known-broken URL each time.
   const [failed, setFailed] = React.useState(false);
@@ -41,12 +59,11 @@ export function ItemThumb({ imageUrl, alt, size = 'md', itemId }: Props) {
     setFailed(false);
   }, [imageUrl, itemId]);
 
-  const sizeClass =
-    size === 'sm' ? 'h-7 w-7' : 'h-10 w-10';
+  const sizeClass = size === 'sm' ? 'h-7 w-7' : 'h-10 w-10';
   const iconClass = size === 'sm' ? 'h-3.5 w-3.5' : 'h-4 w-4';
 
-  if (imageUrl && !failed) {
-    return (
+  const inner =
+    imageUrl && !failed ? (
       // eslint-disable-next-line @next/next/no-img-element
       <img
         src={imageUrl}
@@ -59,17 +76,28 @@ export function ItemThumb({ imageUrl, alt, size = 'md', itemId }: Props) {
           sizeClass,
         )}
       />
+    ) : (
+      <div
+        className={cn(
+          'bg-muted text-muted-foreground/70 flex flex-shrink-0 items-center justify-center rounded-md',
+          sizeClass,
+        )}
+        aria-hidden="true"
+      >
+        <Package className={iconClass} />
+      </div>
     );
-  }
+
   return (
-    <div
-      className={cn(
-        'bg-muted text-muted-foreground/70 flex flex-shrink-0 items-center justify-center rounded-md',
-        sizeClass,
-      )}
-      aria-hidden="true"
+    <ImageHoverPreview
+      src={imageUrl && !failed ? imageUrl : null}
+      alt={alt}
+      title={previewTitle ?? alt}
+      subtitle={previewSubtitle ?? null}
+      meta={previewMeta ?? null}
+      className="shrink-0"
     >
-      <Package className={iconClass} />
-    </div>
+      {inner}
+    </ImageHoverPreview>
   );
 }
