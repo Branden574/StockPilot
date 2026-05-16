@@ -281,6 +281,7 @@ export default async function OrderDetailPage({
               internalNotes={request.internal_notes}
               fulfillmentType={request.fulfillment_type}
               assignedDeliveryUserId={request.assigned_delivery_user_id}
+              signatureToken={request.signature_token}
               drivers={drivers}
             />
           )}
