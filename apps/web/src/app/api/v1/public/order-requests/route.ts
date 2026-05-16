@@ -4,6 +4,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
+import { isDeliveryAddressComplete } from '@/lib/orders/delivery-address';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -43,7 +44,12 @@ const bodySchema = z.object({
   requesterOrgLabel: z.string().trim().max(160).nullish(),
   notes: z.string().max(2000).nullish(),
   lines: z.array(lineSchema).min(1).max(100),
-  fulfillmentType: z.enum(['pickup', 'delivery']),
+  // Rolling-deploy safety: default to 'pickup' when an old-bundle
+  // client posts without the field. The DB column also defaults to
+  // 'delivery' (migration 0109), so worst case a legacy submission
+  // lands as 'pickup' here and gets recorded faithfully — no 400 on
+  // tabs left open across the deploy boundary.
+  fulfillmentType: z.enum(['pickup', 'delivery']).default('pickup'),
   requesterPhone: z.string().trim().max(40).nullish(),
   deliveryAddress: z
     .object({
@@ -121,7 +127,10 @@ export async function POST(req: NextRequest) {
   }
   const body: Body = parsed.data;
 
-  if (body.fulfillmentType === 'delivery' && !body.deliveryAddress) {
+  if (
+    body.fulfillmentType === 'delivery' &&
+    !isDeliveryAddressComplete(body.deliveryAddress)
+  ) {
     return NextResponse.json(
       { error: 'delivery_address_required', message: 'Delivery orders need a shipping address.' },
       { status: 400 },
