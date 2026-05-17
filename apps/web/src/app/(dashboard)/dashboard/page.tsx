@@ -36,7 +36,6 @@ import {
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
-import { ShipmentsService } from '@/server/services/shipments';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
@@ -88,8 +87,8 @@ interface AttentionItem {
   href: string;
   /**
    * Priority rank — lower wins. Encodes the spec order: low-stock,
-   * overdue POs, pending approvals, in-progress cycle counts, unsigned
-   * shipments. When multiple categories have non-zero counts the list
+   * overdue POs, pending approvals, in-progress cycle counts, orders
+   * awaiting signature. When multiple categories have non-zero counts the list
    * sorts by this rank, so the lead row is always the most urgent
    * surface (stockouts first, paperwork last).
    */
@@ -141,7 +140,9 @@ export default async function DashboardHome() {
     isManagerPlus
       ? OrderRequestsService.forCurrentUser().then((svc) => svc.pendingCount())
       : Promise.resolve(0),
-    ShipmentsService.forCurrentUser().then((svc) => svc.awaitingSignatureCount()),
+    OrderRequestsService.forCurrentUser().then((svc) =>
+      svc.awaitingSignatureCount(),
+    ),
   ]);
 
   // Get-started checklist signals + the org's timezone for the greeting.
@@ -375,11 +376,12 @@ export default async function DashboardHome() {
   }
   if (awaitingSignature > 0) {
     attentionItems.push({
-      id: 'shipments-signature',
+      id: 'orders-awaiting-signature',
       icon: PenLine,
-      title: `${awaitingSignature} shipment${awaitingSignature === 1 ? '' : 's'} waiting for signature`,
-      detail: 'Shipped more than 7 days ago and still unsigned. Confirm delivery on paper or in the portal.',
-      href: '/dashboard/shipments?status=shipped',
+      title: `${awaitingSignature} order${awaitingSignature === 1 ? '' : 's'} waiting for signature`,
+      detail:
+        'Staged for pickup or out for delivery. Confirm the QR-scan signature on arrival or hand-off.',
+      href: '/dashboard/orders?tab=in_transit',
       rank: 5,
       tone: 'neutral',
     });
@@ -857,7 +859,7 @@ function NeedsAttentionHero({ items }: { items: AttentionItem[] }) {
           </div>
           <p className="text-[12.5px] text-[var(--ed-ink-3)]">
             No low stock, no overdue POs, no pending approvals, no open counts, no
-            unsigned shipments. The numbers below are just context.
+            orders awaiting signature. The numbers below are just context.
           </p>
         </div>
       </div>

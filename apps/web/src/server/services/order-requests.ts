@@ -341,6 +341,24 @@ export class OrderRequestsService {
     return count ?? 0;
   }
 
+  /**
+   * Orders that have reached the signable stage but not yet been signed.
+   * Powers the dashboard "N orders waiting for signature" attention card
+   * (replacing the legacy ShipmentsService.awaitingSignatureCount path).
+   *
+   * staged_for_pickup → waiting on the customer to come in and sign.
+   * in_transit         → out for delivery, waiting for sign-on-arrival.
+   */
+  async awaitingSignatureCount(): Promise<number> {
+    const { count, error } = await this.ctx.supabase
+      .from('order_requests')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId)
+      .in('status', ['staged_for_pickup', 'in_transit']);
+    if (error) throw new ServiceError('internal_error', error.message);
+    return count ?? 0;
+  }
+
   async get(id: string): Promise<OrderRequestDetail> {
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('order_requests')
