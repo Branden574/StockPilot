@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { PublicOrderForm } from '@/components/orders/public-order-form';
@@ -178,9 +179,9 @@ export default async function PublicOrderRequestPage({
         chartersForWarehouse={chartersForWarehouse}
       />
       <p className="text-muted-foreground mt-10 text-center text-xs">
-        <a className="underline" href="/r/track">
+        <Link className="underline" href="/r/track">
           Track an order you&apos;ve already submitted
-        </a>
+        </Link>
       </p>
     </div>
   );
