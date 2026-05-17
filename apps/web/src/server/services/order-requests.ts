@@ -3,6 +3,7 @@ import 'server-only';
 import { isManagerOrAbove } from '@stockpilot/core';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import {
@@ -984,6 +985,12 @@ export class OrderRequestsService {
       },
       this.ctx,
     );
+    // Bell/toast for the assignee (gated by their push pref).
+    void this.notifyAssignment(
+      deliveryUserId,
+      id,
+      (updated as OrderRequestRow).requester_name,
+    );
     return updated as OrderRequestRow;
   }
 
@@ -1235,6 +1242,10 @@ export class OrderRequestsService {
     try {
       const { recipientEmail, recipientName } = await this.resolveRecipient(row);
       if (!recipientEmail) return;
+      // Phase 6 prefs (migration 0113): internal requesters can opt out
+      // per-event. Public-link requesters (no requester_user_id) are
+      // treated as transactional and always emailed.
+      if (!(await this.wantsEmail(kind, row))) return;
       // M3: public-link requesters (no requester_user_id) get a
       // /r/track link in the email — that route's GET requires the
       // org's public_request_token, so load it here and pass through.
@@ -1262,6 +1273,106 @@ export class OrderRequestsService {
       });
     } catch (e) {
       console.warn('[order-requests] email send failed', e);
+    }
+  }
+
+  /**
+   * Returns true if we should send the given email kind to the
+   * order's requester. Public-link requesters (no requester_user_id)
+   * always get the email — they're transactional and have no profile
+   * row to read a preference from. Internal requesters can opt out
+   * per-event via notification_preferences (migration 0113).
+   *
+   * Reads the prefs row via the admin client because RLS on
+   * notification_preferences restricts to `user_id = auth.uid()` and
+   * the order's actor is usually a different user than the requester.
+   * Fail-open on any infra error: dropping a notification silently is
+   * worse than sending one the user opted out of.
+   */
+  private async wantsEmail(
+    kind:
+      | 'submitted'
+      | 'approved'
+      | 'denied'
+      | 'packing_slip_generated'
+      | 'staged_for_delivery'
+      | 'in_transit'
+      | 'completed'
+      | 'cancelled',
+    row: OrderRequestRow,
+  ): Promise<boolean> {
+    if (!row.requester_user_id) return true;
+
+    const col = (() => {
+      switch (kind) {
+        case 'submitted':
+          return 'email_order_received';
+        case 'in_transit':
+          return 'email_order_in_transit';
+        case 'completed':
+          return 'email_order_completed';
+        case 'approved':
+        case 'denied':
+        case 'packing_slip_generated':
+        case 'staged_for_delivery':
+        case 'cancelled':
+          return 'email_order_status_changed';
+      }
+    })();
+
+    try {
+      const admin = createAdminClient();
+      const { data } = await admin
+        .from('notification_preferences')
+        .select(col)
+        .eq('user_id', row.requester_user_id)
+        .maybeSingle();
+      const val = (data as Record<string, boolean | null> | null)?.[col];
+      return val !== false;
+    } catch (e) {
+      console.warn('[order-requests] wantsEmail pref lookup failed', e);
+      return true;
+    }
+  }
+
+  /**
+   * Bell + live-toast notification for a user just assigned to a
+   * delivery. Gated by their push_order_assigned_to_me pref (0113).
+   * Uses the admin client because the RLS policy on the
+   * notifications table only permits inserts via service role
+   * (per 0003_rls.sql:225). Fire-and-forget; the assignment itself
+   * has already committed.
+   */
+  private async notifyAssignment(
+    assigneeUserId: string,
+    orderId: string,
+    requesterName: string | null,
+  ): Promise<void> {
+    try {
+      const admin = createAdminClient();
+      const { data: pref } = await admin
+        .from('notification_preferences')
+        .select('push_order_assigned_to_me')
+        .eq('user_id', assigneeUserId)
+        .maybeSingle();
+      const wantsPush =
+        (pref as { push_order_assigned_to_me?: boolean | null } | null)
+          ?.push_order_assigned_to_me !== false;
+      if (!wantsPush) return;
+      const body = requesterName
+        ? `Delivery for ${requesterName} is assigned to you.`
+        : 'A delivery has been assigned to you.';
+      await admin.from('notifications').insert({
+        organization_id: this.ctx.organizationId,
+        user_id: assigneeUserId,
+        type: 'order_request.delivery_assigned',
+        title: 'New delivery assignment',
+        body,
+        link: `/dashboard/orders/${orderId}`,
+        metadata: { order_request_id: orderId },
+      });
+    } catch (e) {
+      console.warn('[order-requests] assignment notification failed', e);
     }
   }
 
