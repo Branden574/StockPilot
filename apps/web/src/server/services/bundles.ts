@@ -287,16 +287,17 @@ export class BundlesService {
    * included in the preview but their `shortage` count is informational
    * only — distribution won't fail because an optional is short.
    */
-  // FIXME: preview should validate that components live in the given
-  // warehouseId — today the component-side check is global (item
-  // `quantity_on_hand` is org-wide), so cross-warehouse stock can
-  // mask a real shortage. The distribution-side check lands in
-  // migration 0070_bundle_distribute_warehouse_scope.sql; this
-  // service-side preview will be brought in line in a follow-up.
+  // The preview math mirrors `distribute_bundle()` (0070) which scopes
+  // component stock to the target warehouse: a component that lives in
+  // warehouse A doesn't count toward a distribution from warehouse B.
+  // detail.components carries the bundle_components rows joined to the
+  // item's global header; we re-query warehouse-scoped inventory_items
+  // rows below to get an accurate per-warehouse `available` count for
+  // each component, matching what the RPC will actually find.
   async preview(
     id: string,
     quantity: number,
-    _warehouseId: string,
+    warehouseId: string,
   ): Promise<DistributionPreview> {
     // Reads bundle components + stock levels; viewer+ already see inventory
     // counts, so use `items:read` as the consistent read gate. Without
@@ -311,11 +312,35 @@ export class BundlesService {
     const fromPhantom = Math.min(quantity, phantomQty);
     const fromComponents = quantity - fromPhantom;
 
+    // Warehouse-scoped component stock lookup. The RPC's join
+    // (0070) uses `inventory_items.warehouse_id = p_warehouse_id`,
+    // so components whose item row is in a different warehouse
+    // contribute 0 here — accurately surfacing the shortage the
+    // RPC would raise.
+    const componentItemIds = detail.components
+      .map((c) => c.itemId)
+      .filter((v): v is string => Boolean(v));
+    const warehouseStock = new Map<string, number>();
+    if (componentItemIds.length > 0) {
+      const { data: stockRows, error: stockErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, quantity_on_hand')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('warehouse_id', warehouseId)
+        .in('id', componentItemIds);
+      if (stockErr) throw new ServiceError('internal_error', stockErr.message);
+      for (const row of (stockRows as Array<{ id: string; quantity_on_hand: number }>) ?? []) {
+        warehouseStock.set(row.id, Number(row.quantity_on_hand) || 0);
+      }
+    }
+
     let totalShortageItems = 0;
     let totalShortageUnits = 0;
     const componentRows: DistributionPreviewComponent[] = detail.components.map((c) => {
       const needed = c.quantity * fromComponents;
-      const available = Math.max(0, c.itemQuantityOnHand);
+      // Falls back to 0 when the component's inventory row isn't in
+      // the target warehouse — matches the RPC's LEFT JOIN behavior.
+      const available = Math.max(0, warehouseStock.get(c.itemId) ?? 0);
       const drawn = Math.min(needed, available);
       const shortage = needed - drawn;
       if (shortage > 0 && !c.isOptional) {

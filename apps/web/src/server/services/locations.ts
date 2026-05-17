@@ -91,12 +91,16 @@ export class LocationsService {
   /**
    * Restore an archived location — flips `deleted_at` back to null so it
    * reappears in the active list. Same permission gate as archive().
+   *
+   * `deleted_by` is intentionally preserved: it's the historical fact of
+   * who archived the record. The restore action itself is logged via the
+   * audit pipeline below, so we never lose the chain of custody.
    */
   async restore(id: string) {
     assertPermission(this.ctx, 'locations:manage');
     const { error } = await this.ctx.supabase
       .from('locations')
-      .update({ deleted_at: null, deleted_by: null })
+      .update({ deleted_at: null })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);

@@ -886,6 +886,24 @@ export class OrderRequestsService {
       );
     }
 
+    // Defense-in-depth: complete_picking (after 0121) codifies any
+    // remaining NULL quantity_picked lines to 0, so staging should
+    // never see ambiguous state. Guard here anyway — orders predating
+    // 0121 may still have NULL lines, and a fresh service-layer check
+    // gives a clearer error than letting a downstream consumer crash.
+    const { count: unpickedCount, error: unpickedErr } = await this.ctx.supabase
+      .from('order_request_lines')
+      .select('id', { count: 'exact', head: true })
+      .eq('order_request_id', id)
+      .is('quantity_picked', null);
+    if (unpickedErr) throw new ServiceError('internal_error', unpickedErr.message);
+    if ((unpickedCount ?? 0) > 0) {
+      throw new ServiceError(
+        'validation_error',
+        'Some lines were never resolved during picking. Re-open picking and complete it before staging.',
+      );
+    }
+
     const { data: updated, error: updErr } = await this.ctx.supabase
       .from('order_requests')
       .update({
