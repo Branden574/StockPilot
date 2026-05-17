@@ -25,7 +25,6 @@ export type OrderRequestStatus =
   | 'staged_for_pickup'
   | 'staged_for_delivery'
   | 'in_transit'
-  | 'signature_requested'
   | 'completed'
   | 'denied'
   | 'cancelled';

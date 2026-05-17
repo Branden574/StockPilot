@@ -67,7 +67,6 @@ const STATUS_LABELS: Record<string, string> = {
   staged_for_pickup: 'Staged for pickup',
   staged_for_delivery: 'Ready for delivery',
   in_transit: 'In transit',
-  signature_requested: 'Awaiting signature',
   completed: 'Delivered',
   denied: 'Denied',
   cancelled: 'Cancelled',

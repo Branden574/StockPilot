@@ -76,9 +76,7 @@ export default async function OrderDetailPage({
     request.status !== 'pending_confirmation' &&
     (canApprove ||
       (isAssignedDriver &&
-        ['staged_for_delivery', 'in_transit', 'signature_requested'].includes(
-          request.status,
-        )));
+        ['staged_for_delivery', 'in_transit'].includes(request.status)));
 
   // Phase 2A — packing slip generation. Manager+ only, and only while the
   // request is at a status where the service actually accepts the call.

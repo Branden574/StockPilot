@@ -19,7 +19,6 @@ export type OrderStatus =
   | 'staged_for_pickup'
   | 'staged_for_delivery'
   | 'in_transit'
-  | 'signature_requested'
   | 'completed'
   | 'denied'
   | 'cancelled';
@@ -39,10 +38,9 @@ export const ALLOWED_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = 
   picking_in_progress: ['picking_complete', 'cancelled'],
   picking_complete: ['packing_slip_generated', 'cancelled'],
   packing_slip_generated: ['staged_for_pickup', 'staged_for_delivery', 'cancelled'],
-  staged_for_pickup: ['signature_requested', 'completed', 'cancelled'],
+  staged_for_pickup: ['completed', 'cancelled'],
   staged_for_delivery: ['in_transit', 'cancelled'],
-  in_transit: ['signature_requested', 'completed', 'cancelled'],
-  signature_requested: ['completed', 'cancelled'],
+  in_transit: ['completed', 'cancelled'],
   denied: [],
   cancelled: [],
   completed: [],
@@ -224,7 +222,6 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
       if (isManagerOrAbove) actions.push('cancel');
       break;
     case 'in_transit':
-    case 'signature_requested':
       actions.push('collect_signature');
       if (isManagerOrAbove) actions.push('cancel');
       break;
