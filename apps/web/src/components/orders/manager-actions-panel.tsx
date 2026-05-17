@@ -409,9 +409,7 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
-          {(status === 'staged_for_pickup' ||
-            status === 'in_transit' ||
-            status === 'signature_requested') && (
+          {(status === 'staged_for_pickup' || status === 'in_transit') && (
             <Button
               variant="gradient"
               onClick={collectSignature}

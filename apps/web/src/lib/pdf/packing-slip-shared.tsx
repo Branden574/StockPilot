@@ -333,8 +333,6 @@ export function statusLabel(status: OrderRequestRow['status']): string {
       return 'Staged · Delivery';
     case 'in_transit':
       return 'In transit';
-    case 'signature_requested':
-      return 'Awaiting signature';
     case 'completed':
       return 'Completed';
     default:
@@ -357,8 +355,6 @@ export function statusSubLabel(
       return 'Ready to dispatch';
     case 'in_transit':
       return 'En route';
-    case 'signature_requested':
-      return 'Signature pending';
     case 'completed':
       return 'Signed for';
     default:

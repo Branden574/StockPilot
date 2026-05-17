@@ -24,8 +24,6 @@ export function OrderStatusBadge({ status }: { status: OrderRequestStatus }) {
       return <Badge variant="secondary">Ready</Badge>;
     case 'in_transit':
       return <Badge variant="secondary">In transit</Badge>;
-    case 'signature_requested':
-      return <Badge variant="secondary">Awaiting signature</Badge>;
     case 'completed':
       return <Badge variant="success">Delivered</Badge>;
     case 'denied':

@@ -72,9 +72,7 @@ export default async function OrderSignPage({
   const expired =
     order.signature_token_expires_at !== null &&
     new Date(order.signature_token_expires_at).getTime() < Date.now();
-  const wrongStatus = !['staged_for_pickup', 'in_transit', 'signature_requested'].includes(
-    order.status,
-  );
+  const wrongStatus = !['staged_for_pickup', 'in_transit'].includes(order.status);
   const alreadySigned = order.signed_at !== null;
 
   if (expired || wrongStatus || alreadySigned) {

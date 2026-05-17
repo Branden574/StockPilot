@@ -21,7 +21,6 @@ describe('ALLOWED_TRANSITIONS', () => {
       'staged_for_pickup',
       'staged_for_delivery',
       'in_transit',
-      'signature_requested',
       'completed',
       'denied',
       'cancelled',
@@ -61,9 +60,8 @@ describe('ALLOWED_TRANSITIONS', () => {
   });
 
   it('staged_for_pickup can go straight to completed (no transit step)', () => {
-    expect(ALLOWED_TRANSITIONS.staged_for_pickup).toEqual(
-      expect.arrayContaining(['signature_requested', 'completed']),
-    );
+    expect(ALLOWED_TRANSITIONS.staged_for_pickup).toContain('completed');
+    expect(ALLOWED_TRANSITIONS.staged_for_pickup).not.toContain('in_transit');
   });
 });
 
