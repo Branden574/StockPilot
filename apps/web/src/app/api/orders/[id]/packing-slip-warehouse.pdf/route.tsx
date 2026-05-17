@@ -41,13 +41,28 @@ export async function GET(
     const token = detail.request.signature_token;
     let qrDataUrl: string | null = null;
     if (token) {
-      const appUrl = env.NEXT_PUBLIC_APP_URL ?? '';
-      const url = `${appUrl}/orders/sign/${token}`;
+      const url = `${env.NEXT_PUBLIC_APP_URL}/orders/sign/${token}`;
       try {
         qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 220 });
-      } catch {
+      } catch (err) {
+        // PDF still renders without QR, but log so this isn't silent —
+        // a warehouse packing slip without a scannable code is a real
+        // problem and we want it in Vercel logs.
+        console.error('[packing-slip-warehouse] QR generation failed', {
+          orderId: id,
+          error: err instanceof Error ? err.message : String(err),
+        });
         qrDataUrl = null;
       }
+    } else {
+      // packing_slip_generated and later all have signature_token minted
+      // by the workflow RPCs. Hitting this branch means the token was
+      // wiped out-of-band — surface it instead of silently producing a
+      // packing slip with no scannable QR.
+      console.warn('[packing-slip-warehouse] missing signature_token', {
+        orderId: id,
+        status: detail.request.status,
+      });
     }
 
     const [whRes, charterRes] = await Promise.all([

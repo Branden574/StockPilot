@@ -95,7 +95,9 @@ export async function POST(req: NextRequest) {
 
   const { data: row } = await admin
     .from('order_requests')
-    .select('id, organization_id, requester_name, requester_email, fulfillment_type')
+    .select(
+      'id, organization_id, requester_user_id, requester_name, requester_email, fulfillment_type',
+    )
     .eq('signature_token', parsed.data.token)
     .maybeSingle();
   if (!row) {
@@ -110,6 +112,7 @@ export async function POST(req: NextRequest) {
   const order = row as {
     id: string;
     organization_id: string;
+    requester_user_id: string | null;
     requester_name: string | null;
     requester_email: string | null;
     fulfillment_type: 'pickup' | 'delivery';
@@ -150,8 +153,29 @@ export async function POST(req: NextRequest) {
     .single();
   if (fullRow) {
     try {
+      // Respect notification_preferences.email_order_completed for the
+      // internal requester (column added in 0113). External public-link
+      // requesters and the physical signer always get the email —
+      // there's no profile row to opt out of, and the signer needs a
+      // transactional receipt of the signature they just submitted.
+      let requesterOptedOut = false;
+      if (order.requester_user_id && order.requester_email) {
+        const { data: prefRow } = await admin
+          .from('notification_preferences')
+          .select('email_order_completed')
+          .eq('user_id', order.requester_user_id)
+          .maybeSingle();
+        // Default true (matches table default) when the row is missing.
+        const wantsEmail =
+          (prefRow as { email_order_completed?: boolean } | null)
+            ?.email_order_completed ?? true;
+        requesterOptedOut = !wantsEmail;
+      }
+
       const recipients = new Set<string>();
-      if (order.requester_email) recipients.add(order.requester_email);
+      if (order.requester_email && !requesterOptedOut) {
+        recipients.add(order.requester_email);
+      }
       recipients.add(parsed.data.signerEmail);
       for (const recipient of recipients) {
         await sendOrderRequestEmail({
