@@ -155,7 +155,7 @@ async function resolveDefaultOrgAndRole(
  * without import errors during the migration. Returns a forbidden error
  * if anything actually invokes it.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+ 
 export async function signUpAction(
   _input: SignUpInput,
 ): Promise<ActionResult<{ requiresEmailConfirm: boolean }>> {

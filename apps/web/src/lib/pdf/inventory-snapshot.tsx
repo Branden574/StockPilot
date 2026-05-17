@@ -119,7 +119,7 @@ export function InventorySnapshotPdf({
                 ) : (
                   g.rows.map((r, i) => (
                     <View
-                      // eslint-disable-next-line react/no-array-index-key
+                       
                       key={`${r.sku}-${i}`}
                       style={pdfStyles.tRow}
                       wrap={false}

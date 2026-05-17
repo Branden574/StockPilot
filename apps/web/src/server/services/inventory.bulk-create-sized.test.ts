@@ -50,7 +50,7 @@ function buildStub() {
   return {
     insertedItems,
     insertedMovements,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     from(table: string): any {
       if (table === 'inventory_items') {
         return {
@@ -58,7 +58,7 @@ function buildStub() {
             insertedItems.push(...rows);
             return {
               select: () => ({
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                 
                 then: (cb: any) =>
                   cb({
                     data: rows.map((r, i) => ({ ...r, id: `i-${i}` })),
@@ -97,13 +97,13 @@ function buildStub() {
 
 function makeSvc(stub: ReturnType<typeof buildStub>) {
   return new InventoryService({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     supabase: stub as any,
     organizationId: 'org-1',
     userId: 'u1',
     email: 'a@b.c',
     role: 'admin',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any);
 }
 

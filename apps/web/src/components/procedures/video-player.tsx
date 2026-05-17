@@ -61,7 +61,7 @@ export function VideoPlayer({ videos }: VideoPlayerProps) {
       )}
       <div className="overflow-hidden rounded-xl border bg-black">
         {active.signed_url ? (
-          // eslint-disable-next-line jsx-a11y/media-has-caption
+           
           <video
             key={active.id}
             src={active.signed_url}

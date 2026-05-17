@@ -35,7 +35,7 @@ describe('GET /api/items/search', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     withApiContextMock.mockResolvedValue({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       supabase: {} as any,
       organizationId: 'org-1',
       userId: 'u-1',

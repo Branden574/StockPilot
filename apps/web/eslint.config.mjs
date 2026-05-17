@@ -11,10 +11,12 @@
 // @next/next). TypeScript-aware rules are owned by the typescript-eslint
 // plugin which the Next preset wires up inline.
 //
-// Downgrades below are pragmatic: ESLint is being introduced into a
-// codebase that's never had it, so we surface issues as warnings
-// instead of failing the script on day one. As surveys land, we'll
-// crank specific rules back up to 'error'.
+// Rule choices below are post-triage (see commits leading up to the
+// rule downgrades): the React 19 react-hooks plugin landed several
+// extremely strict checks that flag valid patterns in this codebase.
+// Three of them are pure-false-positive factories here and are
+// disabled. The others stay as warn so they keep surfacing for
+// triage as new code lands.
 //
 // The shared legacy preset in packages/config/eslint-preset.js is
 // .eslintrc-style and NOT used here — migrating it to flat config is a
@@ -37,22 +39,33 @@ const ignores = {
 
 const projectOverrides = {
   rules: {
-    // Core rule: console.warn/error/info are intentional telemetry on
-    // server actions + API routes. Block only bare console.log.
+    // Core: console.warn/error/info are intentional telemetry on server
+    // actions + API routes. Block only bare console.log.
     'no-console': ['warn', { allow: ['warn', 'error', 'info'] }],
 
-    // Cosmetic: 62 occurrences in JSX. React handles raw apostrophes
-    // fine; the rule exists for very-old browsers + a11y purity.
-    'react/no-unescaped-entities': 'warn',
+    // Cosmetic: 62 occurrences across JSX text. React renders raw
+    // apostrophes / quotes correctly; the rule exists for older
+    // browsers + screen-reader purity. We don't ship to those targets
+    // and the rule's noise drowns real findings.
+    'react/no-unescaped-entities': 'off',
 
-    // The react-hooks v7 strictness landed alongside React 19. These
-    // rules catch real bugs but also fire on entirely valid patterns
-    // (data-fetch effects that setState on success, third-party libs
-    // that haven't been audited yet). Demote to warn for now; survey
-    // and re-tighten rule-by-rule as we triage.
+    // The React 19 react-hooks plugin's strict purity rule flags
+    // server components (async functions, Date.now() during a one-shot
+    // server render) as impure. The rule can't tell client from server
+    // and there's no per-file scoping that works reliably. Turning off
+    // — server-component date math is by definition NOT a render
+    // purity issue.
+    'react-hooks/purity': 'off',
+
+    // Flags every React Hook Form `watch(...)` use in JSX. RHF is the
+    // form lib used throughout — this rule is fundamentally
+    // incompatible with the library and produces zero true positives
+    // in this codebase.
+    'react-hooks/incompatible-library': 'off',
+
+    // Remaining strict rules stay as warn so they surface for future
+    // triage but don't fail the script today.
     'react-hooks/set-state-in-effect': 'warn',
-    'react-hooks/purity': 'warn',
-    'react-hooks/incompatible-library': 'warn',
     'react-hooks/refs': 'warn',
     'react-hooks/preserve-manual-memoization': 'warn',
     'react-hooks/error-boundaries': 'warn',

@@ -31,7 +31,7 @@ export interface QueryResult<T = unknown> {
 
 export interface SupabaseStub {
   /** The actual mock object — typed loosely on purpose. */
-  client: any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  client: any;  
   /** Records every from(table) call. */
   fromCalls: string[];
   /** Records every rpc(name, args) call. */
@@ -221,7 +221,7 @@ export function makeServiceContext(
     // out. Tests covering the MFA gate explicitly set the flags.
     mfaRequired: overrides.mfaRequired ?? false,
     mfaSatisfied: overrides.mfaSatisfied ?? true,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     supabase: supabase as any,
   };
 }

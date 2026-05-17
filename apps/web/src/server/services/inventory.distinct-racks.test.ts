@@ -27,7 +27,7 @@ import { InventoryService } from './inventory';
  */
 function makeSvc(rpcResult: { data: string[] | null; error: unknown }) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const supabase: any = {
     rpc: (name: string, args: Record<string, unknown>) => {
       rpcCalls.push([name, args]);
@@ -40,7 +40,7 @@ function makeSvc(rpcResult: { data: string[] | null; error: unknown }) {
     userId: 'u1',
     email: 'a@b.c',
     role: 'admin',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any);
   return { svc, rpcCalls };
 }
