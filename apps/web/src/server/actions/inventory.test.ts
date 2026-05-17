@@ -30,7 +30,7 @@ describe('bulkUpdateInventoryAction', () => {
 
   it('returns validation_error when ids contains a non-string entry', async () => {
     const result = await bulkUpdateInventoryAction({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       ids: ['ok-id', 42 as any],
       op: { kind: 'archive' },
     });
@@ -52,7 +52,7 @@ describe('bulkUpdateInventoryAction', () => {
     const bulkUpdate = vi.fn(async () => ({ ok: 3, skipped: 1 }));
     vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({
       bulkUpdate,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
 
     const result = await bulkUpdateInventoryAction({
@@ -77,7 +77,7 @@ describe('bulkUpdateInventoryAction', () => {
     });
     vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({
       bulkUpdate,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
 
     const result = await bulkUpdateInventoryAction({

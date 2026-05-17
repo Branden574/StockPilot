@@ -1750,7 +1750,7 @@ const getRecentOrdersTool: ToolExecutor = {
     const list = await svc.list({
       since: resolveSince(args),
       until: resolveUntil(args),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       status: (typeof args.status === 'string' && args.status ? args.status : undefined) as any,
       warehouseId:
         typeof args.warehouseId === 'string' && args.warehouseId.length > 0
@@ -1796,7 +1796,7 @@ const getRecentShipmentsTool: ToolExecutor = {
     const list = await svc.list({
       since: resolveSince(args),
       until: resolveUntil(args),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       status: (typeof args.status === 'string' && args.status ? args.status : undefined) as any,
       sourceWarehouseId:
         typeof args.sourceWarehouseId === 'string' && args.sourceWarehouseId.length > 0

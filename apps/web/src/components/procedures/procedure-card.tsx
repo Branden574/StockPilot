@@ -34,7 +34,7 @@ export function ProcedureCard({ procedure }: ProcedureCardProps) {
           }
         >
           {procedure.thumbnail_url ? (
-            // eslint-disable-next-line jsx-a11y/media-has-caption
+             
             <video
               src={procedure.thumbnail_url}
               preload="metadata"

@@ -545,7 +545,7 @@ export class InventoryService {
     // create on a Gemini hiccup.
     void (async () => {
       const { embedInventoryItem } = await import('@/lib/ai/embeddings');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       await embedInventoryItem(data.id as string, this.ctx as any);
     })();
 
@@ -1063,7 +1063,7 @@ export class InventoryService {
     if (changedKeys.some((k) => EMBED_RELEVANT_KEYS.has(k))) {
       void (async () => {
         const { embedInventoryItem } = await import('@/lib/ai/embeddings');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         await embedInventoryItem(id, this.ctx as any);
       })();
     }

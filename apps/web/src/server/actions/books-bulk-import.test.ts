@@ -69,7 +69,7 @@ describe('bulkCreateBooksAction', () => {
     }));
     vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({
       bulkCreate,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
 
     const result = await bulkCreateBooksAction({
@@ -110,7 +110,7 @@ describe('bulkCreateBooksAction', () => {
     }));
     vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({
       bulkCreate,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
 
     const result = await bulkCreateBooksAction({
@@ -137,7 +137,7 @@ describe('bulkCreateBooksAction', () => {
     }));
     vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({
       bulkCreate,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
 
     const result = await bulkCreateBooksAction({
@@ -164,7 +164,7 @@ describe('bulkCreateBooksAction', () => {
       );
     vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({
       bulkCreate,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
 
     const result = await bulkCreateBooksAction({

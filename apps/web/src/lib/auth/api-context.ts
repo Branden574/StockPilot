@@ -16,7 +16,7 @@ import { isAdminRole } from '@stockpilot/core';
  * gets via withContext().
  */
 async function resolveApiMfaState(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: any,
   organizationId: string,
   role: Role,
@@ -65,7 +65,7 @@ async function resolveApiMfaState(
  *   3. Last resort: any active membership.
  */
 async function pickActiveMembership(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   supabase: any,
   userId: string,
   requestedOrgId: string | null,

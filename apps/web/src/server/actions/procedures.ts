@@ -41,7 +41,7 @@ export type { ProcedureDetailRow, ProcedureListRow, ProcedureVideoRow };
 
 function toResult<T>(error: unknown): ActionResult<T> {
   if (error instanceof ServiceError) return err(error.code, error.message);
-  // eslint-disable-next-line no-console
+   
   console.error(error);
   return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
 }

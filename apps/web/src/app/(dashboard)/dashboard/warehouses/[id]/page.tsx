@@ -194,7 +194,7 @@ export default async function WarehouseDetailPage({
               {addressLines.length > 0 && (
                 <div className="space-y-0.5">
                   {addressLines.map((line, i) => (
-                    // eslint-disable-next-line react/no-array-index-key
+                     
                     <p key={`addr-${i}`}>{line}</p>
                   ))}
                 </div>

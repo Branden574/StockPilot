@@ -200,7 +200,7 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
     systemInstruction: SYSTEM_PROMPT,
     generationConfig: {
       responseMimeType: 'application/json',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       responseSchema: PO_SCHEMA as any,
       temperature: 0.05,
     },

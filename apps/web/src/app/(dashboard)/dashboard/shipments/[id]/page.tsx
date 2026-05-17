@@ -188,7 +188,7 @@ export default async function ShipmentDetailPage({
             <p className="font-medium">{detail.source?.name ?? '—'}</p>
             <div className="text-muted-foreground mt-2 space-y-0.5 text-xs">
               {sourceAddrLines.map((l, i) => (
-                // eslint-disable-next-line react/no-array-index-key
+                 
                 <p key={`s-${i}`}>{l}</p>
               ))}
               {detail.source?.contactPhone && <p>{detail.source.contactPhone}</p>}

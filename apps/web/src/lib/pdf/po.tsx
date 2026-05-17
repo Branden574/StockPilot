@@ -207,7 +207,7 @@ export function PurchaseOrderPdf({
                 // 2 lines we'd rather page-break the row than overflow
                 // the page bottom.
                 <View
-                  // eslint-disable-next-line react/no-array-index-key
+                   
                   key={`${l.sku}-${i}`}
                   style={pdfStyles.tRow}
                 >

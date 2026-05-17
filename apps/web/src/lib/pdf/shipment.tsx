@@ -361,7 +361,7 @@ export function ShipmentPdf({
               {source.name}
             </Text>
             {source.addressLines.map((l, i) => (
-              // eslint-disable-next-line react/no-array-index-key
+               
               <Text key={`from-${i}`} style={{ fontSize: 8.5, color: PDF_COLORS.ink3, marginTop: 2 }}>
                 {l}
               </Text>
@@ -486,7 +486,7 @@ export function ShipmentPdf({
               const boZero = !l.qtyBackOrdered;
               return (
                 <View
-                  // eslint-disable-next-line react/no-array-index-key
+                   
                   key={`${l.isbn}-${i}`}
                   wrap={false}
                   style={{

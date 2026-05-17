@@ -184,7 +184,7 @@ export class ProceduresService {
       if (tsRes.error) {
         // Fallback: ilike on title only. Logs (but does not throw) so we
         // can see how often this branch fires.
-        // eslint-disable-next-line no-console
+         
         console.warn('[procedures] tsquery parse failed, falling back to ilike', tsRes.error.message);
         const ilikeRes = await buildBase()
           .ilike('title', `%${escapeIlike(trimmed)}%`)

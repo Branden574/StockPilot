@@ -67,10 +67,10 @@ export async function embedText(text: string): Promise<number[]> {
   // should use RETRIEVAL_QUERY when embedding the user's question.
   const res = await model.embedContent({
     content: { role: 'user', parts: [{ text }] },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     outputDimensionality: EMBEDDING_DIM,
     taskType: 'RETRIEVAL_DOCUMENT',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any);
   const vec = res.embedding?.values;
   if (!Array.isArray(vec) || vec.length !== EMBEDDING_DIM) {
@@ -97,10 +97,10 @@ export async function embedQuery(text: string): Promise<number[]> {
   const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
   const res = await model.embedContent({
     content: { role: 'user', parts: [{ text }] },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     outputDimensionality: EMBEDDING_DIM,
     taskType: 'RETRIEVAL_QUERY',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any);
   const vec = res.embedding?.values;
   if (!Array.isArray(vec) || vec.length !== EMBEDDING_DIM) {
@@ -178,7 +178,7 @@ export async function embedInventoryItem(
       .eq('organization_id', ctx.organizationId)
       .eq('id', itemId);
   } catch (err) {
-    // eslint-disable-next-line no-console
+     
     console.warn('[embeddings] item embed failed:', err);
   }
 }
@@ -195,7 +195,7 @@ export async function embedInventoryItem(
 export async function embedItemsBatch(
   // Keep the type loose so this stays compatible with both the
   // service-context shape and the cached withContext() result.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   ctx: { supabase: any; organizationId: string },
   opts: { limit?: number } = {},
 ): Promise<{ embedded: number; failed: number; remaining: number }> {
@@ -235,14 +235,14 @@ export async function embedItemsBatch(
         .eq('id', row.id);
       if (updateErr) {
         failed += 1;
-        // eslint-disable-next-line no-console
+         
         console.warn('[embedItemsBatch] write failed:', row.id, updateErr.message);
         continue;
       }
       embedded += 1;
     } catch (e) {
       failed += 1;
-      // eslint-disable-next-line no-console
+       
       console.warn('[embedItemsBatch] embed failed:', row.id, e);
     }
     // Light pacing to stay below Gemini's burst limit on tier 0.

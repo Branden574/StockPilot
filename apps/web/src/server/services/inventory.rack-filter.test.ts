@@ -70,13 +70,13 @@ describe('InventoryService.list rack filter', () => {
   it('matches custom_fields.rack_number + rack_row for non-book items', async () => {
     const stub = makeStub();
     const svc = new InventoryService({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       supabase: stub as any,
       organizationId: 'org-1',
       userId: 'u1',
       email: 'a@b.c',
       role: 'admin',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
     await svc.list({ rack: '20-A', itemType: 'product' });
     const numCall = stub._filterCalls.find(
@@ -92,13 +92,13 @@ describe('InventoryService.list rack filter', () => {
   it('matches book_rack_number on custom_fields for books', async () => {
     const stub = makeStub();
     const svc = new InventoryService({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       supabase: stub as any,
       organizationId: 'org-1',
       userId: 'u1',
       email: 'a@b.c',
       role: 'admin',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
     await svc.list({ rack: '38-A', itemType: 'book' });
     const numCall = stub._filterCalls.find(
@@ -114,13 +114,13 @@ describe('InventoryService.list rack filter', () => {
   it('matches bare book number when no row suffix is given', async () => {
     const stub = makeStub();
     const svc = new InventoryService({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       supabase: stub as any,
       organizationId: 'org-1',
       userId: 'u1',
       email: 'a@b.c',
       role: 'admin',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
     await svc.list({ rack: '12', itemType: 'book' });
     const numCall = stub._filterCalls.find(

@@ -131,7 +131,7 @@ export function CycleCountSheetPdf({
                   counted == null ? null : counted - l.expectedQuantity;
                 return (
                   <View
-                    // eslint-disable-next-line react/no-array-index-key
+                     
                     key={`${l.sku}-${i}`}
                     style={[pdfStyles.tRow, { minHeight: 22 }]}
                     // Allow row wrap so long descriptions don't truncate

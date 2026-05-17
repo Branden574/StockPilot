@@ -36,7 +36,7 @@ beforeEach(() => {
 function makeService(client: unknown): ActivityService {
   // The constructor is `private` at the type level only; we still reach it
   // via `new` here because TypeScript private is structural at runtime.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   return new (ActivityService as any)(makeServiceContext(client));
 }
 
