@@ -76,19 +76,39 @@ export default async function Image() {
             Stock<span style={{ fontWeight: 500, opacity: 0.6 }}>Pilot</span>
           </span>
         </div>
+        {/*
+          Satori (next/og) renders mixed-style inline text unreliably
+          when an italic span shares a line with non-italic neighbors —
+          unregistered italic gets faked by glyph skew, which collapses
+          adjacent text into the same baseline and produces the
+          overlap. Two fixes layered:
+            1. Switch to flex-wrap: each word group is its own flex
+               item with its own baseline, no inline-mix collapsing.
+            2. Replace italic with weight + opacity to dim "actually"
+               without depending on a font variant we never loaded.
+        */}
         <h1
           style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'baseline',
+            margin: 0,
             fontSize: 88,
             fontWeight: 600,
-            margin: 0,
             lineHeight: 1.04,
             letterSpacing: -2.2,
             maxWidth: '92%',
+            // Replaces the inter-word spaces we lost by splitting into
+            // separate flex items. Tuned to match the visual rhythm
+            // of a regular space at 88px.
+            columnGap: 24,
+            rowGap: 8,
           }}
         >
-          Inventory you&apos;ll{' '}
-          <span style={{ fontStyle: 'italic', opacity: 0.7 }}>actually</span>{' '}
-          enjoy using.
+          <span>Inventory</span>
+          <span>you&apos;ll</span>
+          <span style={{ fontWeight: 400, opacity: 0.55 }}>actually</span>
+          <span>enjoy using.</span>
         </h1>
         <p
           style={{
