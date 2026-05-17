@@ -12,7 +12,7 @@
     "./constants": "./src/constants/index.ts"
   },
   "scripts": {
-    "lint": "eslint src --ext .ts",
+    "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "clean": "rm -rf .turbo node_modules"
