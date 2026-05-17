@@ -162,7 +162,7 @@ export async function POST(req: NextRequest) {
             recipient === order.requester_email
               ? order.requester_name
               : parsed.data.signerName,
-          appUrl: env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
+          appUrl: env.NEXT_PUBLIC_APP_URL,
         });
       }
     } catch {

@@ -52,10 +52,9 @@ export async function GET(req: Request) {
   // Resend on the org's account. See cron/purge-ai-chat-history for
   // the matching pattern.
   if (!env.CRON_SECRET) {
-    return NextResponse.json(
-      { error: 'cron_secret_not_configured' },
-      { status: 503 },
-    );
+    // Match cron/purge-ai-chat-history: fail-closed with 401 so the
+    // endpoint's existence isn't differentiable from "wrong secret".
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
   const auth = req.headers.get('authorization') ?? '';
   if (!secretsEqual(auth, `Bearer ${env.CRON_SECRET}`)) {

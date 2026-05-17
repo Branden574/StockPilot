@@ -37,7 +37,7 @@ export async function GET(
   const { slug } = await params;
   const url = new URL(request.url);
   try {
-    const ctx = await withApiContext();
+    const ctx = await withApiContext(request);
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
