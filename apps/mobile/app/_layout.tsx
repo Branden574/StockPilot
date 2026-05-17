@@ -57,14 +57,19 @@ function RootGate() {
     if (!session && !inAuthGroup) {
       router.replace('/(auth)/sign-in');
     } else if (session && inAuthGroup) {
-      router.replace('/(tabs)');
+      router.replace('/');
     }
   }, [session, loading, segments, router]);
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#0a0f1f' } }}>
       <Stack.Screen name="(auth)" />
-      <Stack.Screen name="(tabs)" />
+      {/*
+        The (drawer) group hosts the bottom tabs inside a drawer
+        navigator (see app/(drawer)/_layout.tsx). Modal screens below
+        stay at the root Stack so their back-swipe still works.
+      */}
+      <Stack.Screen name="(drawer)" />
       <Stack.Screen name="item/[id]" options={{ presentation: 'card' }} />
       <Stack.Screen name="scan-po/index" options={{ presentation: 'card' }} />
       <Stack.Screen
