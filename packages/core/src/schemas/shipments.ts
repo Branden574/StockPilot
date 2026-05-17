@@ -1,67 +1,24 @@
 import { z } from 'zod';
 
-import { uuidSchema, emailSchema } from './common';
+import { emailSchema } from './common';
 
 /**
- * Phase 2A — print-and-paper-sign packing slip path. The signature_token
- * is generated server-side at create time but is not yet exercised by any
- * client; the public /s/[token] route + Resend integration are Phase 2B.
- */
-
-const trimmedNullable = z
-  .string()
-  .max(200)
-  .trim()
-  .optional()
-  .nullable()
-  .transform((v) => (v && v.length > 0 ? v : null));
-
-const ccEmailsSchema = z.array(emailSchema).max(20).optional();
-
-const lineInputSchema = z.object({
-  itemId: uuidSchema,
-  qtyShipped: z.coerce.number().nonnegative().max(1_000_000),
-  qtyBackOrdered: z.coerce.number().nonnegative().max(1_000_000).default(0),
-});
-
-export const createShipmentFromOrderRequestSchema = z.object({
-  orderRequestId: uuidSchema,
-  sourceWarehouseId: uuidSchema,
-  // Destination is now a CHARTER (the receiving site/school), not a
-  // warehouse. The source warehouse ships TO the charter; the charter
-  // must be in `warehouse_charters` for the chosen source.
-  destinationCharterId: uuidSchema,
-  attentionToName: trimmedNullable,
-  notes: z.string().max(2000).optional().nullable().transform((v) => v ?? null),
-  ccEmails: ccEmailsSchema,
-});
-export type CreateShipmentFromOrderRequestInput = z.infer<
-  typeof createShipmentFromOrderRequestSchema
->;
-
-export const manualCreateShipmentSchema = z.object({
-  sourceWarehouseId: uuidSchema,
-  // Destination is a CHARTER (see note on createShipmentFromOrderRequest).
-  destinationCharterId: uuidSchema,
-  attentionToName: trimmedNullable,
-  notes: z.string().max(2000).optional().nullable().transform((v) => v ?? null),
-  ccEmails: ccEmailsSchema,
-  lines: z.array(lineInputSchema).min(1, 'Add at least one line item'),
-});
-export type ManualCreateShipmentInput = z.infer<typeof manualCreateShipmentSchema>;
-
-/**
- * Phase 2B — public signature submission.
+ * Public signature submission for the historical /s/[token] route.
+ *
+ * The shipments workflow is deprecated (orders workflow replaces it),
+ * but the public signature page must keep accepting submissions on
+ * already-issued tokens — warehouses may have paper packing slips in
+ * the field with QR codes pointing here. The create / manual-create /
+ * mark-shipped / mark-cancelled / mark-delivered action schemas were
+ * removed alongside the orphaned components that called them.
  *
  * The signature token is a 48-character hex string (24 bytes — see
- * ShipmentsService.insertShipmentWithLines). F10: tightened min to 48
- * (down from 32) so the schema matches the generator exactly — there's
- * no legitimate path that produces a shorter token, and accepting
- * shorter values just expanded the attacker's search space at the
- * action edge. 96 max still leaves room to widen the generator later
- * without a coordinated schema rollout. The signatureDataUrl must look
- * like a PNG data URL; we cap it at ~1MB (1.3M chars after base64
- * inflation) so a malicious caller can't post a multi-MB blob.
+ * ShipmentsService.insertShipmentWithLines). F10: min is 48 (down from
+ * 32) so the schema matches the generator exactly; 96 max leaves room
+ * to widen the generator later without a coordinated schema rollout.
+ * The signatureDataUrl must look like a PNG data URL; we cap it at
+ * ~1MB (1.3M chars after base64 inflation) so a malicious caller
+ * can't post a multi-MB blob.
  */
 export const submitShipmentSignatureSchema = z.object({
   token: z
