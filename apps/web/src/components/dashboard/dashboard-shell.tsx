@@ -3,6 +3,7 @@
 import * as React from 'react';
 
 import { CommandPalette } from '@/components/dashboard/command-palette';
+import { EdgeSwipeOpener } from '@/components/dashboard/edge-swipe-opener';
 import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { Topbar } from '@/components/dashboard/topbar';
@@ -166,6 +167,13 @@ export function DashboardShell({
             />
           </SheetContent>
         </Sheet>
+      )}
+
+      {mounted && (
+        <EdgeSwipeOpener
+          onOpen={() => setMobileNavOpen(true)}
+          disabled={mobileNavOpen}
+        />
       )}
 
       <VersionNotifier />
