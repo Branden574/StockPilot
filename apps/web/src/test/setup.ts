@@ -3,6 +3,17 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
 
+// Silence the `audit.write_failed` stderr that floods tests not running
+// inside a Next request scope. audit() calls `next/headers#headers()`,
+// which throws outside a request, then routes the error to reportError
+// (loud stderr). This default no-op stub keeps every test green and
+// quiet; the few tests that ASSERT on audit (profile.test.ts,
+// shipments.test.ts) provide their own per-file vi.mock which Vitest
+// hoists ahead of this setup, so their assertions still work.
+vi.mock('@/server/services/audit', () => ({
+  audit: vi.fn(async () => undefined),
+}));
+
 // Most React tests use happy-dom via the environmentMatchGlobs in vitest.config.
 // Only land DOM-flavoured polyfills when a window exists.
 if (typeof window !== 'undefined') {
