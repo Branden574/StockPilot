@@ -71,7 +71,7 @@ const BASE_NAV: NavSection[] = [
       { href: '/dashboard/movements', label: 'Movements', icon: ArrowLeftRight, requires: 'activity_logs:read' },
       { href: '/dashboard/bundles', label: 'Bundles', icon: Package, requires: 'bundles:distribute' },
       { href: '/dashboard/orders', label: 'Orders', icon: ShoppingCart, requires: 'orders:request' },
-      { href: '/dashboard/shipments', label: 'Shipments', icon: Send, requires: 'purchase_orders:manage' },
+      { href: '/dashboard/shipments', label: 'Shipments (Archive)', icon: Send, requires: 'purchase_orders:manage' },
       { href: '/dashboard/cycle-counts', label: 'Cycle counts', icon: ClipboardCheck, requires: 'stock:adjust' },
       { href: '/dashboard/procedures', label: 'Procedures', icon: BookOpen, requires: 'items:update' },
       { href: '/dashboard/purchase-orders', label: 'Purchase orders', icon: ClipboardList, requires: 'purchase_orders:read' },

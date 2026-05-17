@@ -134,6 +134,14 @@ export async function GET(
   const sanitizedDeniedReason =
     h.status === 'denied' ? 'Your request was not approved.' : null;
 
+  // Same reasoning as denied_reason: the `notes` field is a
+  // requester-typed message at submission time, but staff may
+  // overwrite it from the manager panel with internal context
+  // ("backorder this week", "swap with cheaper SKU"). The public
+  // tracker is the wrong audience for that — return null until/unless
+  // we add a dedicated "shareable to requester" notes field.
+  // Their original requester-typed notes still live in the DB and the
+  // confirmation email they got at submit time.
   return NextResponse.json({
     id: h.id,
     status: h.status,
@@ -149,6 +157,6 @@ export async function GET(
     completedAt: h.completed_at,
     cancelledAt: h.cancelled_at,
     deniedReason: sanitizedDeniedReason,
-    notes: h.notes,
+    notes: null,
   });
 }

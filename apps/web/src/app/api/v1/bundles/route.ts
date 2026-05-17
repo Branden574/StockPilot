@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 
@@ -16,6 +17,19 @@ export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
+  // Per-user rate limit matches the cycle-count-record pattern: 120/min
+  // covers normal-paced refresh + reasonable burst, hard-limits a
+  // runaway client polling the bundle list.
+  const rl = await checkRateLimit(`v1-bundles-list:${ctx.userId}`, 120, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: 'rate_limited', retryAt: rl.resetAt },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
+      },
+    );
   }
   const url = new URL(req.url);
   const search = url.searchParams.get('q') ?? undefined;
