@@ -22,6 +22,11 @@ const ACCEPT_TYPES = new Set([
 
 const MAX_BYTES_PER_FILE = 8 * 1024 * 1024; // 8 MB
 const MAX_FILES = 5;
+// Cumulative cap across all attached files. Per-file × max-files yields
+// 40 MB which can overflow the Gemini Flash request budget on multi-page
+// PDFs even when each file is within its individual cap. 24 MB leaves
+// comfortable headroom under Gemini's payload ceiling.
+const MAX_TOTAL_BYTES = 24 * 1024 * 1024;
 
 /**
  * Phone-scanned PO endpoint.
@@ -81,6 +86,7 @@ export async function POST(req: Request) {
     );
   }
 
+  let totalBytes = 0;
   for (const f of fileEntries) {
     if (!ACCEPT_TYPES.has(f.type)) {
       return NextResponse.json(
@@ -100,6 +106,16 @@ export async function POST(req: Request) {
         { status: 413 },
       );
     }
+    totalBytes += f.size;
+  }
+  if (totalBytes > MAX_TOTAL_BYTES) {
+    return NextResponse.json(
+      {
+        error: 'payload_too_large',
+        message: `Combined upload is ${(totalBytes / 1024 / 1024).toFixed(1)}MB; max is ${MAX_TOTAL_BYTES / 1024 / 1024}MB across all files.`,
+      },
+      { status: 413 },
+    );
   }
 
   const vendorId =
