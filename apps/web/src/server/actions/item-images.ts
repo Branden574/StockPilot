@@ -21,7 +21,15 @@ const createUploadSchema = z.object({
 
 export async function createImageUploadAction(
   input: z.infer<typeof createUploadSchema>,
-): Promise<ActionResult<{ path: string; signedUrl: string; token: string }>> {
+): Promise<
+  ActionResult<{
+    path: string;
+    signedUrl: string;
+    token: string;
+    thumbPath: string;
+    thumbSignedUrl: string;
+  }>
+> {
   const parsed = createUploadSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
@@ -37,6 +45,11 @@ const recordSchema = z.object({
   itemId: z.string().uuid(),
   storagePath: z.string(),
   isFirst: z.boolean().default(false),
+  // Both optional + nullable for backward compatibility with any
+  // callers that pre-date the L1/L2 thumb+LQIP work. The service
+  // re-validates the prefix + LQIP length defensively.
+  thumbPath: z.string().nullish(),
+  lqip: z.string().max(2000).nullish(),
 });
 
 export async function recordImageAction(input: z.infer<typeof recordSchema>): Promise<ActionResult<{ id: string }>> {
@@ -44,7 +57,15 @@ export async function recordImageAction(input: z.infer<typeof recordSchema>): Pr
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await ItemImagesService.forCurrentUser();
-    const row = await svc.record(parsed.data.itemId, parsed.data.storagePath, parsed.data.isFirst);
+    const row = await svc.record(
+      parsed.data.itemId,
+      parsed.data.storagePath,
+      parsed.data.isFirst,
+      {
+        thumbPath: parsed.data.thumbPath ?? null,
+        lqip: parsed.data.lqip ?? null,
+      },
+    );
     revalidatePath(`/dashboard/inventory/${parsed.data.itemId}`);
     return ok({ id: row.id as string });
   } catch (e) {

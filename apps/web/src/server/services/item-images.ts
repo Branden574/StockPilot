@@ -90,17 +90,19 @@ export class ItemImagesService {
   }
 
   /**
-   * Returns a Map<itemId, signedUrl> for the primary (or first) image
-   * per item across the given list. Two round trips total: one
+   * Returns a Map<itemId, masterSignedUrl> for the primary (or first)
+   * image per item across the given list. Two round trips total: one
    * `item_images IN (...)` query, one `createSignedUrls` for all
-   * matched paths. Used by the inventory + books list pages so each
-   * row can show its actual photo instead of a placeholder.
+   * matched paths. Used by PDF + JSON-API surfaces that want the full
+   * image URL.
+   *
+   * For list-page row thumbnails — which want the 200px pre-resized
+   * thumb + LQIP blur placeholder — use {@link primaryImagesWithThumbsForItems}
+   * instead.
    */
   async primaryImagesForItems(itemIds: string[]): Promise<Map<string, string>> {
     if (itemIds.length === 0) return new Map();
 
-    // Order so the first row per item is the one we want to keep:
-    // primary first, then earliest sort_order.
     const { data, error } = await this.ctx.supabase
       .from('item_images')
       .select('item_id, storage_path, is_primary, sort_order')
@@ -129,7 +131,78 @@ export class ItemImagesService {
     return result;
   }
 
-  async record(itemId: string, storagePath: string, isFirst: boolean) {
+  /**
+   * Like {@link primaryImagesForItems} but returns the richer shape
+   * the list pages need:
+   *   • `url`       — signed URL of the master (2048px) — used by the
+   *                   hover-preview prefetch + lightbox.
+   *   • `thumbUrl`  — signed URL of the pre-resized ~200px thumb when
+   *                   the row has one (uploads after 0122); null
+   *                   otherwise so the caller falls back to `url`.
+   *   • `lqip`      — base64 data URL of the 16x16 blur placeholder
+   *                   for use as next/image's blurDataURL; null when
+   *                   the row pre-dates the LQIP column.
+   *
+   * Same two-round-trip cost as primaryImagesForItems — one query for
+   * the rows, one batched signed-URLs call covering master + thumb
+   * paths together.
+   */
+  async primaryImagesWithThumbsForItems(
+    itemIds: string[],
+  ): Promise<
+    Map<string, { url: string; thumbUrl: string | null; lqip: string | null }>
+  > {
+    if (itemIds.length === 0) return new Map();
+
+    const { data, error } = await this.ctx.supabase
+      .from('item_images')
+      .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', itemIds)
+      .order('is_primary', { ascending: false })
+      .order('sort_order', { ascending: true });
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    type Row = {
+      item_id: string;
+      storage_path: string;
+      thumb_path: string | null;
+      lqip: string | null;
+    };
+    const pickByItem = new Map<string, Row>();
+    for (const row of (data ?? []) as Row[]) {
+      if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
+    }
+
+    // Batch every distinct path (master + thumb) into one signed-URL
+    // resolution. The unstable_cache layer keys per path so multiple
+    // items sharing a thumb path are a single cache hit either way.
+    const paths = new Set<string>();
+    for (const row of pickByItem.values()) {
+      paths.add(row.storage_path);
+      if (row.thumb_path) paths.add(row.thumb_path);
+    }
+    const urlByPath = await this.signedUrls([...paths]);
+
+    const result = new Map<
+      string,
+      { url: string; thumbUrl: string | null; lqip: string | null }
+    >();
+    for (const [itemId, row] of pickByItem) {
+      const url = urlByPath.get(row.storage_path);
+      if (!url) continue;
+      const thumbUrl = row.thumb_path ? urlByPath.get(row.thumb_path) ?? null : null;
+      result.set(itemId, { url, thumbUrl, lqip: row.lqip });
+    }
+    return result;
+  }
+
+  async record(
+    itemId: string,
+    storagePath: string,
+    isFirst: boolean,
+    opts: { thumbPath?: string | null; lqip?: string | null } = {},
+  ) {
     assertPermission(this.ctx, 'items:update');
     // Defense-in-depth: the action schema validates `storagePath` as a
     // bare string, so a hostile client could send another org's path
@@ -144,6 +217,21 @@ export class ItemImagesService {
         'validation_error',
         'Invalid storage path — wrong org prefix.',
       );
+    }
+    // Same prefix gate on the thumb path — a thumb path pointing at a
+    // different org's folder would never resolve to a real upload, but
+    // an inserted pointer is still a row we don't want.
+    if (opts.thumbPath && !opts.thumbPath.startsWith(requiredPrefix)) {
+      throw new ServiceError(
+        'validation_error',
+        'Invalid thumb path — wrong org prefix.',
+      );
+    }
+    // The 0122 CHECK constraint enforces this on the DB side too, but
+    // failing here gives a friendly error instead of a generic
+    // internal_error if a client ever sends an oversize blob.
+    if (opts.lqip && opts.lqip.length > 2000) {
+      throw new ServiceError('validation_error', 'LQIP blob too large.');
     }
 
     // Verify the target item exists in this org. Without this, a forged
@@ -165,6 +253,8 @@ export class ItemImagesService {
         organization_id: this.ctx.organizationId,
         item_id: itemId,
         storage_path: storagePath,
+        thumb_path: opts.thumbPath ?? null,
+        lqip: opts.lqip ?? null,
         is_primary: isFirst,
       })
       .select('id, storage_path, sort_order, is_primary')
@@ -214,12 +304,30 @@ export class ItemImagesService {
     if (!itemRow) throw new ServiceError('not_found', 'Item not found');
 
     const safeExt = fileExt.replace(/[^a-z0-9]/gi, '').slice(0, 5).toLowerCase() || 'jpg';
-    const fileName = `${crypto.randomUUID()}.${safeExt}`;
+    const uuid = crypto.randomUUID();
+    const fileName = `${uuid}.${safeExt}`;
     const path = `${this.ctx.organizationId}/items/${itemId}/${fileName}`;
-    const { data, error } = await this.ctx.supabase.storage
-      .from('item-images')
-      .createSignedUploadUrl(path);
-    if (error) throw new ServiceError('internal_error', error.message);
-    return { path, signedUrl: data.signedUrl, token: data.token };
+    // Sister path for the 200px pre-resized thumbnail. Always WebP
+    // because the uploader transcodes deterministically. Stored next
+    // to the master so a future "rm by item folder" cleans both.
+    const thumbPath = `${this.ctx.organizationId}/items/${itemId}/${uuid}-thumb.webp`;
+
+    const [masterRes, thumbRes] = await Promise.all([
+      this.ctx.supabase.storage.from('item-images').createSignedUploadUrl(path),
+      this.ctx.supabase.storage
+        .from('item-images')
+        .createSignedUploadUrl(thumbPath),
+    ]);
+    if (masterRes.error)
+      throw new ServiceError('internal_error', masterRes.error.message);
+    if (thumbRes.error)
+      throw new ServiceError('internal_error', thumbRes.error.message);
+    return {
+      path,
+      signedUrl: masterRes.data.signedUrl,
+      token: masterRes.data.token,
+      thumbPath,
+      thumbSignedUrl: thumbRes.data.signedUrl,
+    };
   }
 }
