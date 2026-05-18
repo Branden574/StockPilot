@@ -34,7 +34,17 @@ export const createProcedureSchema = z.object({
 });
 export type CreateProcedureInput = z.infer<typeof createProcedureSchema>;
 
-export const updateProcedureSchema = createProcedureSchema.partial();
+export const updateProcedureSchema = createProcedureSchema.partial().extend({
+  /**
+   * ISO timestamp of the row's `updated_at` at the time the form was loaded.
+   * When present, the update is guarded by `eq('updated_at', ifMatch)` —
+   * a concurrent edit by another manager invalidates the match and the
+   * service throws `conflict` instead of silently clobbering their work.
+   * Omit for create-mode-style writes where the caller doesn't have a
+   * baseline timestamp.
+   */
+  ifMatch: z.string().datetime().optional(),
+});
 export type UpdateProcedureInput = z.infer<typeof updateProcedureSchema>;
 
 // ---------------------------------------------------------------------------

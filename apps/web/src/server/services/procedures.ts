@@ -344,12 +344,13 @@ export class ProceduresService {
   async update(id: string, patch: UpdateProcedureInput): Promise<{ id: string }> {
     assertPermission(this.ctx, 'categories:manage');
     assertUuid(id, 'procedure id');
-    // NOTE(deferred): no optimistic concurrency control here — two
-    // managers editing the same procedure can clobber each other's
-    // changes (last write wins). Adding it requires a version column
-    // and an If-Match equivalent in the action layer; not worth the
-    // refactor while authoring volume is low. Tracked in the bug-hunt
-    // M3.
+    // Optimistic concurrency: when the caller passes an `ifMatch`
+    // timestamp (the row's updated_at as loaded by the form), gate
+    // the UPDATE on it. A concurrent manager's save will have bumped
+    // updated_at (via the BEFORE-UPDATE trigger), so this caller's
+    // WHERE no longer matches and 0 rows are returned — we surface
+    // that as a `conflict` ServiceError instead of silently overwriting
+    // their changes (last-write-wins).
     const updates: Record<string, unknown> = { updated_by: this.ctx.userId };
     if (patch.title !== undefined) updates.title = patch.title;
     if (patch.description !== undefined) updates.description = patch.description ?? null;
@@ -357,14 +358,35 @@ export class ProceduresService {
     if (patch.categoryId !== undefined) updates.category_id = patch.categoryId ?? null;
     if (patch.authoringWarehouseId !== undefined)
       updates.authoring_warehouse_id = patch.authoringWarehouseId ?? null;
-    const { data, error } = await this.ctx.supabase
+    let query = this.ctx.supabase
       .from('procedures')
       .update(updates)
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id)
-      .select('id')
-      .single();
+      .eq('id', id);
+    if (patch.ifMatch) {
+      query = query.eq('updated_at', patch.ifMatch);
+    }
+    const { data, error } = await query.select('id').maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) {
+      // Either the row doesn't exist, or ifMatch was stale. Disambiguate
+      // with a presence check so the user gets the right error copy.
+      if (patch.ifMatch) {
+        const { data: exists } = await this.ctx.supabase
+          .from('procedures')
+          .select('id')
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('id', id)
+          .maybeSingle();
+        if (exists) {
+          throw new ServiceError(
+            'conflict',
+            'Someone else just saved this procedure. Refresh the page to see their changes before re-saving yours.',
+          );
+        }
+      }
+      throw new ServiceError('not_found', 'Procedure not found.');
+    }
     void audit(
       {
         event: 'procedure.updated',

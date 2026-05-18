@@ -79,6 +79,7 @@ export default async function EditProcedurePage({
             body: procedure.body,
             categoryId: procedure.category_id,
             authoringWarehouseId: procedure.authoring_warehouse_id,
+            updatedAt: procedure.updated_at,
           }}
           videos={videos}
         />
