@@ -275,12 +275,11 @@ export class ItemImagesService {
       if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
     }
 
-    // Sign each chosen image. Stored thumbs go through the plain
-    // signer (no transform). Items without thumb_path go through the
-    // transform signer so Supabase resizes the master on the way out.
-    // Both paths are cached for 25 days via unstable_cache so a
-    // repeat PDF render of the same items is a cache hit.
-    const entries = await Promise.all(
+    // Phase 1 — sign each `item_images` row's preferred URL. Stored
+    // thumbs go through the plain signer (no transform). Masters get
+    // the transform signer so Supabase resizes on the way out. Both
+    // paths cached 25 days via unstable_cache.
+    const signed = await Promise.all(
       [...pickByItem.entries()].map(async ([itemId, row]) => {
         const url = row.thumb_path
           ? await getCachedItemImageSignedUrl(row.thumb_path)
@@ -293,8 +292,39 @@ export class ItemImagesService {
     );
 
     const result = new Map<string, string>();
-    for (const entry of entries) {
+    for (const entry of signed) {
       if (entry) result.set(entry[0], entry[1]);
+    }
+
+    // Phase 2 — fallback to inventory_items.custom_fields.thumbnail_url
+    // for any items NOT already resolved above. Bulk-imported books
+    // (the ISBN importer in apps/web/src/server/actions/books-bulk-import.ts
+    // line 79) store the cover URL there instead of creating an
+    // item_images row. Without this fallback the entire books portion
+    // of every PDF would show placeholder squares.
+    //
+    // These URLs are typically public CDN links (Google Books,
+    // Open Library, archive.org); no signing required.
+    const unresolved = itemIds.filter((id) => !result.has(id));
+    if (unresolved.length > 0) {
+      const { data: cfRows, error: cfErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, custom_fields')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', unresolved);
+      if (cfErr) throw new ServiceError('internal_error', cfErr.message);
+      for (const row of (cfRows ?? []) as Array<{
+        id: string;
+        custom_fields: Record<string, unknown> | null;
+      }>) {
+        const cf = row.custom_fields;
+        if (cf && typeof cf === 'object') {
+          const url = (cf as { thumbnail_url?: unknown }).thumbnail_url;
+          if (typeof url === 'string' && url.length > 0 && url.length < 2000) {
+            result.set(row.id, url);
+          }
+        }
+      }
     }
     return result;
   }
