@@ -39,6 +39,13 @@ declare
   v_new_cf jsonb;
   v_uid uuid := auth.uid();
 begin
+  -- Defense-in-depth: function is only granted to `authenticated`, but
+  -- a service_role/anomalous context would silently produce a NULL
+  -- audit trail otherwise. Surface a clear error instead.
+  if v_uid is null then
+    raise exception 'not_authenticated' using errcode = '28000';
+  end if;
+
   -- Load + lock the original row. RLS scopes this to the caller's
   -- accessible warehouses, so a cross-warehouse caller hits not-found
   -- here rather than ever reading the source row.
@@ -115,11 +122,13 @@ begin
   if v_qty > 0 then
     insert into public.stock_movements (
       organization_id, item_id, movement_type, quantity_change,
-      previous_quantity, new_quantity, user_id, to_location_id, reason
+      previous_quantity, new_quantity, user_id, to_location_id, reason,
+      reference_type, reference_id
     ) values (
       v_original.organization_id, v_new_id, 'initial', v_qty,
       0, v_qty, v_uid, v_original.primary_location_id,
-      'duplicate_initial_count'
+      'duplicate_initial_count',
+      'duplicate', p_original_id
     );
   end if;
 
