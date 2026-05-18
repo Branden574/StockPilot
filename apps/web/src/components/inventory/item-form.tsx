@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
+import { resolveListReturnHref } from '@/lib/last-list-url';
 import { generateSku, cn } from '@/lib/utils';
 import {
   bulkCreateSizedVariantsAction,
@@ -457,7 +458,16 @@ export function ItemForm({
         );
       }
       onDone?.();
-      router.push('/dashboard/inventory');
+      // Honor the live list URL the user came from (page, search,
+      // filters, sort) so they don't get bounced to page 1.
+      // resolveListReturnHref reads sessionStorage written by the
+      // list table on every render.
+      router.push(
+        resolveListReturnHref(
+          isBook ? '/dashboard/books' : '/dashboard/inventory',
+          returnHref,
+        ),
+      );
       return;
     }
 
@@ -561,8 +571,17 @@ export function ItemForm({
       // Edit page passes a `returnHref` so saving bounces the user
       // back to the list URL they came from — preserves the search /
       // filter / sort / page they had typed. Both create + edit
-      // honor the param when it's present.
-      router.push(returnHref);
+      // honor the param when it's present. resolveListReturnHref
+      // upgrades a bare list URL or detail-page returnHref to the
+      // sessionStorage-cached list URL when one is available — fixes
+      // the case where the user enters the edit page without a full
+      // `?return=` chain (direct URL, autocomplete, cmd-click, etc).
+      router.push(
+        resolveListReturnHref(
+          isBook ? '/dashboard/books' : '/dashboard/inventory',
+          returnHref,
+        ),
+      );
     } else if (!isEdit) {
       router.push(`/dashboard/inventory/${res.data.id}`);
     } else {
@@ -1185,7 +1204,14 @@ export function ItemForm({
             type="button"
             variant="outline"
             onClick={() => {
-              if (returnHref) router.push(returnHref);
+              if (returnHref) {
+                router.push(
+                  resolveListReturnHref(
+                    isBook ? '/dashboard/books' : '/dashboard/inventory',
+                    returnHref,
+                  ),
+                );
+              }
               onDone?.();
             }}
             disabled={isSubmitting || uploadingImages}

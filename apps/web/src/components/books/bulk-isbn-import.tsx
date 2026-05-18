@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { resolveListReturnHref } from '@/lib/last-list-url';
 import { cn } from '@/lib/utils';
 import { bulkCreateBooksAction } from '@/server/actions/books-bulk-import';
 
@@ -294,10 +295,10 @@ export function BulkIsbnImport({
       toast.success(
         `Created ${created} · ${skipped} already existed (matched by ISBN/SKU).`,
       );
-      router.push('/dashboard/books');
+      router.push(resolveListReturnHref('/dashboard/books', null));
     } else {
       toast.success(`Created ${created} book${created === 1 ? '' : 's'}.`);
-      router.push('/dashboard/books');
+      router.push(resolveListReturnHref('/dashboard/books', null));
     }
   }
 
