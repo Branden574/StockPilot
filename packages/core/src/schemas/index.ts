@@ -9,3 +9,4 @@ export * from './schedule';
 export * from './shipments';
 export * from './tags';
 export * from './procedures';
+export * from './duplicate-item';
