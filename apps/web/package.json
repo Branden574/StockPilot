@@ -42,6 +42,7 @@
     "cmdk": "^1.0.4",
     "exceljs": "^4.4.0",
     "framer-motion": "^11.11.17",
+    "heic2any": "^0.0.4",
     "jsbarcode": "^3.12.3",
     "lucide-react": "^0.460.0",
     "mammoth": "^1.12.0",

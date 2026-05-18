@@ -50,7 +50,18 @@ type SizeCode = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
 const ALL_SIZES: ReadonlyArray<SizeCode> = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
 
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-const IMAGE_ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'image/avif'];
+// HEIC + HEIF added so iPhone Safari (which ships HEIC by default
+// unless the user has flipped Camera > Format to "Most Compatible")
+// can upload directly. compressImageVariants transcodes via
+// heic2any before the normal canvas pipeline.
+const IMAGE_ACCEPT = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/avif',
+  'image/heic',
+  'image/heif',
+];
 
 interface StagedImage {
   file: File;
