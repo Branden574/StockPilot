@@ -50,6 +50,13 @@ interface Defaults {
   body?: string | null;
   categoryId?: string | null;
   authoringWarehouseId?: string | null;
+  /**
+   * ISO timestamp of the procedure row's `updated_at` at the time this
+   * form was loaded. Passed as `ifMatch` on save so a concurrent edit by
+   * another manager surfaces as a `conflict` rather than silently
+   * overwriting their changes. Omit for create-mode.
+   */
+  updatedAt?: string;
 }
 
 interface ProcedureFormProps {
@@ -204,7 +211,14 @@ export function ProcedureForm({
     };
     try {
       if (isEdit && defaults?.id) {
-        const res = await updateProcedureAction(defaults.id, payload);
+        // Pass the loaded updated_at as ifMatch for optimistic-concurrency
+        // protection. If another manager saved in the meantime, the
+        // service returns a `conflict` error and the toast below tells
+        // the user to refresh.
+        const res = await updateProcedureAction(defaults.id, {
+          ...payload,
+          ...(defaults?.updatedAt ? { ifMatch: defaults.updatedAt } : {}),
+        });
         if (!res.ok) {
           toast.error(res.error.message);
           return;
