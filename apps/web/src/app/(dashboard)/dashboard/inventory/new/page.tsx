@@ -6,8 +6,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
+import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
+import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
@@ -36,7 +38,9 @@ export default async function NewItemPage() {
     warehousesSvc,
     chartersSvc,
     whChartersSvc,
+    inventorySvc,
     forced,
+    activeFilter,
     orgRow,
   ] = await Promise.all([
     CategoriesService.forCurrentUser(),
@@ -46,7 +50,9 @@ export default async function NewItemPage() {
     WarehousesService.forCurrentUser(),
     ChartersService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
+    InventoryService.forCurrentUser(),
     forcedWarehouseId(),
+    getActiveWarehouseFilter(),
     supabase
       .from('organizations')
       .select('terminology')
@@ -54,7 +60,7 @@ export default async function NewItemPage() {
       .maybeSingle(),
   ]);
 
-  const [categories, locations, suppliers, tags, warehouses, charters, warehouseCharters] =
+  const [categories, locations, suppliers, tags, warehouses, charters, warehouseCharters, recent] =
     await Promise.all([
       categoriesSvc.list(),
       locationsSvc.list(),
@@ -63,7 +69,35 @@ export default async function NewItemPage() {
       warehousesSvc.list(),
       chartersSvc.list(),
       whChartersSvc.listPairs(),
+      // Default warehouse + primary location to the user's most-recent
+      // item so the form pre-fills the picker for users who always add
+      // to the same warehouse. Scoped to product items (the books tab
+      // has its own page + scoped lookup).
+      inventorySvc.getRecentDefaults('product'),
     ]);
+
+  // Resolve effective defaults. Precedence:
+  //   1. forcedWarehouseId — warehouse-scoped users are locked here.
+  //   2. activeFilter — manager/admin sidebar warehouse dropdown.
+  //   3. recent.warehouseId — most-recent product this user created.
+  //   4. null — show the placeholder.
+  const warehouseIds = new Set(warehouses.map((w) => w.id));
+  const locationIds = new Set(locations.map((l) => l.id));
+  const defaultWarehouseId =
+    forced ??
+    (activeFilter && warehouseIds.has(activeFilter) ? activeFilter : null) ??
+    (recent?.warehouseId && warehouseIds.has(recent.warehouseId)
+      ? recent.warehouseId
+      : null);
+  // Only carry the recent primary location forward when its parent
+  // warehouse matches the chosen default — picking a bin in another
+  // warehouse would just confuse the user.
+  const defaultPrimaryLocationId =
+    recent?.primaryLocationId &&
+    locationIds.has(recent.primaryLocationId) &&
+    recent.warehouseId === defaultWarehouseId
+      ? recent.primaryLocationId
+      : null;
 
   const terminology = resolveTerminology(
     (orgRow.data?.terminology as Partial<{
@@ -92,6 +126,10 @@ export default async function NewItemPage() {
         </CardHeader>
         <CardContent>
           <ItemForm
+            defaults={{
+              warehouseId: defaultWarehouseId,
+              primaryLocationId: defaultPrimaryLocationId,
+            }}
             categories={categories.map((c) => ({
               id: c.id as string,
               name: c.name as string,

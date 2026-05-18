@@ -6,8 +6,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
+import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
+import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
@@ -34,7 +36,9 @@ export default async function NewBookPage() {
     warehousesSvc,
     chartersSvc,
     whChartersSvc,
+    inventorySvc,
     forced,
+    activeFilter,
     orgRow,
   ] = await Promise.all([
     CategoriesService.forCurrentUser(),
@@ -44,7 +48,9 @@ export default async function NewBookPage() {
     WarehousesService.forCurrentUser(),
     ChartersService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
+    InventoryService.forCurrentUser(),
     forcedWarehouseId(),
+    getActiveWarehouseFilter(),
     supabase
       .from('organizations')
       .select('terminology')
@@ -52,7 +58,7 @@ export default async function NewBookPage() {
       .maybeSingle(),
   ]);
 
-  const [categories, locations, suppliers, tags, warehouses, charters, warehouseCharters] =
+  const [categories, locations, suppliers, tags, warehouses, charters, warehouseCharters, recent] =
     await Promise.all([
       categoriesSvc.list(),
       locationsSvc.list(),
@@ -61,7 +67,28 @@ export default async function NewBookPage() {
       warehousesSvc.list(),
       chartersSvc.list(),
       whChartersSvc.listPairs(),
+      // Default warehouse + primary location to the user's most-recent
+      // book so the form pre-fills the picker. Scoped to itemType='book'
+      // so this doesn't bleed defaults from the products tab.
+      inventorySvc.getRecentDefaults('book'),
     ]);
+
+  // Same defaults resolution as /dashboard/inventory/new — see that
+  // file for the precedence rationale.
+  const warehouseIds = new Set(warehouses.map((w) => w.id));
+  const locationIds = new Set(locations.map((l) => l.id));
+  const defaultWarehouseId =
+    forced ??
+    (activeFilter && warehouseIds.has(activeFilter) ? activeFilter : null) ??
+    (recent?.warehouseId && warehouseIds.has(recent.warehouseId)
+      ? recent.warehouseId
+      : null);
+  const defaultPrimaryLocationId =
+    recent?.primaryLocationId &&
+    locationIds.has(recent.primaryLocationId) &&
+    recent.warehouseId === defaultWarehouseId
+      ? recent.primaryLocationId
+      : null;
 
   const terminology = resolveTerminology(
     (orgRow.data?.terminology as Partial<{
@@ -92,6 +119,10 @@ export default async function NewBookPage() {
         <CardContent>
           <ItemForm
             itemType="book"
+            defaults={{
+              warehouseId: defaultWarehouseId,
+              primaryLocationId: defaultPrimaryLocationId,
+            }}
             categories={categories.map((c) => ({ id: c.id as string, name: c.name as string }))}
             locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}

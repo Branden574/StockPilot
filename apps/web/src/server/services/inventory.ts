@@ -405,6 +405,42 @@ export class InventoryService {
     return Array.from(set).sort(rackCmp);
   }
 
+  /**
+   * Returns the warehouse + primary location of the most recent item
+   * this user created — used to pre-fill the "new item" / "new book"
+   * form so a user who's always adding to the same warehouse + bin
+   * doesn't have to re-pick those fields every time.
+   *
+   * Filters:
+   *   • created_by = current user — the defaults follow each person's
+   *     habits, not the org's.
+   *   • itemType — optional. The books form passes 'book' so the
+   *     defaults don't bleed across the products / books tabs.
+   *
+   * Returns null when the user has never created an item (yet) so the
+   * caller can fall back to the active-warehouse cookie or leave the
+   * fields blank.
+   */
+  async getRecentDefaults(
+    itemType?: 'product' | 'book' | 'asset' | 'consumable',
+  ): Promise<{ warehouseId: string | null; primaryLocationId: string | null } | null> {
+    let q = this.ctx.supabase
+      .from('inventory_items')
+      .select('warehouse_id, primary_location_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('created_by', this.ctx.userId)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (itemType) q = q.eq('item_type', itemType);
+    const { data, error } = await q.maybeSingle();
+    if (error || !data) return null;
+    return {
+      warehouseId: (data.warehouse_id as string | null) ?? null,
+      primaryLocationId: (data.primary_location_id as string | null) ?? null,
+    };
+  }
+
   async get(id: string) {
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
