@@ -38,10 +38,10 @@ begin
     and t.relnamespace = 'public'::regnamespace
     and c.contype = 'u'
     and (
-      select array_agg(a.attname order by a.attname)
+      select array_agg(a.attname::text order by a.attname::text)
       from unnest(c.conkey) k
       join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k
-    ) = array['organization_id', 'sku']
+    ) = array['organization_id', 'sku']::text[]
   limit 1;
 
   if v_conname is not null then
