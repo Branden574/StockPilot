@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable no-console -- developer debug script; console output is the point */
 // Pulls the most recent PO import PDF from Storage and prints what pdf-parse
 // extracts. Used for debugging parser regressions on real-world POs.
 //
