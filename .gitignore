@@ -32,11 +32,21 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# local env files
+# local env files — broadened after 2026-05-17 incident where
+# apps/web/.env.local.prod (a backup of prod credentials) slipped
+# through `.env*.local` because the filename ends in `.prod`, not
+# `.local`. Match every plausible env-file shape regardless of
+# suffix order. .env.example is allowed back via the negation below.
 .env
-.env*.local
-.env.development
-.env.production
+.env.*
+*.env
+.env*
+**/.env
+**/.env.*
+**/*.env
+# Allow committed templates / sample files. NEVER add real secrets.
+!.env.example
+!**/.env.example
 
 # personal secret notebooks — never commit
 secrets.local.md

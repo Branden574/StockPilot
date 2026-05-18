@@ -286,11 +286,36 @@ comment on function public.complete_picking(uuid) is
 -- 4. Try to VALIDATE the delivery_charter_id coherence constraint
 --    that 0110 added as NOT VALID. If the table has legacy rows that
 --    don't satisfy it, log them and leave the constraint NOT VALID.
+--
+-- Bug history: the original version of this DO block referenced the
+-- constraint as "order_requests_delivery_charter_chk", but 0110
+-- actually named it "order_requests_delivery_target_chk". On prod the
+-- v_offenders > 0 branch hid the bug; on a fresh-DB replay (no rows
+-- means v_offenders = 0) the wrong name surfaced as a hard error.
+-- Fix: use the correct name + guard with an existence check so any
+-- future name drift can't crash a fresh-DB boot.
 -- ─────────────────────────────────────────────────────────────────────
 do $$
 declare
   v_offenders int;
+  v_has_constraint boolean;
 begin
+  select exists (
+    select 1
+      from pg_constraint c
+      join pg_class t on t.oid = c.conrelid
+     where t.relname = 'order_requests'
+       and c.conname = 'order_requests_delivery_target_chk'
+  ) into v_has_constraint;
+
+  if not v_has_constraint then
+    raise notice
+      'Skipping VALIDATE: constraint order_requests_delivery_target_chk '
+      'is not present (fresh DB without 0110, or constraint was renamed). '
+      'Re-run after 0110 establishes the constraint.';
+    return;
+  end if;
+
   select count(*) into v_offenders
     from public.order_requests
    where fulfillment_type = 'delivery'
@@ -299,11 +324,11 @@ begin
   if v_offenders = 0 then
     -- No bad rows — promote the constraint to fully validated.
     alter table public.order_requests
-      validate constraint order_requests_delivery_charter_chk;
+      validate constraint order_requests_delivery_target_chk;
     raise notice 'delivery_charter_id constraint validated successfully.';
   else
     raise notice
-      'Skipping VALIDATE on order_requests_delivery_charter_chk: % legacy '
+      'Skipping VALIDATE on order_requests_delivery_target_chk: % legacy '
       'delivery row(s) still have delivery_charter_id IS NULL. Backfill '
       'or demote them to fulfillment_type=''pickup'' and re-run this DO '
       'block (or just re-run this migration after 0121) to promote the '
