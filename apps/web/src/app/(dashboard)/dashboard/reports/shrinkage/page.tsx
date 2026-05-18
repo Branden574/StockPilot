@@ -1,4 +1,4 @@
-import { Download } from 'lucide-react';
+import { Download, FileText } from 'lucide-react';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
@@ -65,6 +65,11 @@ export default async function ShrinkagePage({
             <Button asChild variant="outline">
               <a href={`/api/reports/shrinkage/csv?days=${days}`}>
                 <Download className="h-4 w-4" /> CSV
+              </a>
+            </Button>
+            <Button asChild variant="outline">
+              <a href={`/api/reports/shrinkage/pdf?days=${days}`}>
+                <FileText className="h-4 w-4" /> PDF
               </a>
             </Button>
           </div>

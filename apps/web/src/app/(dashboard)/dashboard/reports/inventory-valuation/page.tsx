@@ -1,4 +1,4 @@
-import { Download } from 'lucide-react';
+import { Download, FileText } from 'lucide-react';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
@@ -34,11 +34,18 @@ export default async function InventoryValuationPage() {
               Cost basis snapshot. Value = qty on hand × unit cost.
             </p>
           </div>
-          <Button asChild variant="outline">
-            <a href="/api/reports/inventory-valuation/csv">
-              <Download className="h-4 w-4" /> Download CSV
-            </a>
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild variant="outline">
+              <a href="/api/reports/inventory-valuation/csv">
+                <Download className="h-4 w-4" /> CSV
+              </a>
+            </Button>
+            <Button asChild variant="outline">
+              <a href="/api/reports/inventory-valuation/pdf">
+                <FileText className="h-4 w-4" /> PDF
+              </a>
+            </Button>
+          </div>
         </div>
       </div>
 
