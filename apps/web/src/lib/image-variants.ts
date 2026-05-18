@@ -67,7 +67,77 @@ function blobToDataUrl(blob: Blob): Promise<string | null> {
   });
 }
 
-export async function compressImageVariants(file: File): Promise<ImageVariants> {
+/**
+ * Detect runtime support for the Web Worker fast path.
+ * Requires Worker + OffscreenCanvas + the structured-clone path for
+ * Files (universally supported in browsers that have OffscreenCanvas).
+ */
+function canUseWorker(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof Worker !== 'undefined' &&
+    typeof OffscreenCanvas !== 'undefined'
+  );
+}
+
+/**
+ * Try to compress via the Web Worker so the canvas encode happens
+ * off the main thread. Resolves with the worker's variants, OR with
+ * null when the worker fails (caller falls back to the main-thread
+ * path). One worker per call — the Worker is short-lived and the
+ * cleanest way to keep the protocol straightforward; for batch
+ * uploads the parallel-fetch pool in the uploader already governs
+ * concurrency.
+ */
+function compressInWorker(file: File): Promise<ImageVariants | null> {
+  return new Promise<ImageVariants | null>((resolve) => {
+    let worker: Worker;
+    try {
+      worker = new Worker(
+        new URL('./image-variants.worker.ts', import.meta.url),
+        { type: 'module' },
+      );
+    } catch {
+      resolve(null);
+      return;
+    }
+    const cleanup = () => {
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.terminate();
+    };
+    worker.onmessage = (
+      e: MessageEvent<
+        | { ok: true; master: File; thumbBlob: Blob | null; lqip: string | null }
+        | { ok: false; message: string }
+      >,
+    ) => {
+      cleanup();
+      if (e.data.ok) {
+        resolve({
+          master: e.data.master,
+          thumbBlob: e.data.thumbBlob,
+          lqip: e.data.lqip,
+        });
+      } else {
+        resolve(null);
+      }
+    };
+    worker.onerror = () => {
+      cleanup();
+      resolve(null);
+    };
+    worker.postMessage({ file });
+  });
+}
+
+/**
+ * Main-thread fallback. Same canvas operations as the worker; runs
+ * on the UI thread (which is why the worker path is preferred). Used
+ * when the worker fails, or when the browser doesn't support Worker
+ * + OffscreenCanvas.
+ */
+async function compressOnMainThread(file: File): Promise<ImageVariants> {
   if (typeof window === 'undefined' || typeof createImageBitmap !== 'function') {
     return { master: file, thumbBlob: null, lqip: null };
   }
@@ -90,10 +160,6 @@ export async function compressImageVariants(file: File): Promise<ImageVariants> 
       master = file;
     }
 
-    // Thumb + LQIP run from the same bitmap — separate canvas draws,
-    // no extra decode cost. Either may be null on toBlob failure
-    // (very old browser, exotic source format) — the caller falls
-    // back to the master + empty placeholder in that case.
     const thumbBlob = await bitmapToWebpBlob(bitmap, THUMB_DIMENSION, THUMB_QUALITY);
     const lqipBlob = await bitmapToWebpBlob(bitmap, LQIP_DIMENSION, LQIP_QUALITY);
     const lqip = lqipBlob ? await blobToDataUrl(lqipBlob) : null;
@@ -105,4 +171,16 @@ export async function compressImageVariants(file: File): Promise<ImageVariants> 
   } finally {
     bitmap.close();
   }
+}
+
+export async function compressImageVariants(file: File): Promise<ImageVariants> {
+  // Worker path: keeps the UI thread free during a 300-600ms encode.
+  // Falls back to the main thread on any failure so uploads never
+  // get stuck because of a worker hiccup (old browser, blocked
+  // worker URL, postMessage timeout, etc).
+  if (canUseWorker()) {
+    const fromWorker = await compressInWorker(file);
+    if (fromWorker) return fromWorker;
+  }
+  return compressOnMainThread(file);
 }
