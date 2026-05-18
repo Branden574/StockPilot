@@ -43,9 +43,19 @@ interface Item {
   primary_location_id: string | null;
   updated_at: string;
   custom_fields?: Record<string, unknown> | null;
-  /** Signed URL to the primary item image, if any. Page is responsible
-   * for filling this in via ItemImagesService.primaryImagesForItems. */
+  /** Signed URL to the master (2048px) image. Used by hover-preview
+   * prefetch + the lightbox. Falls back to a custom_fields.thumbnail_url
+   * stash for legacy bulk-imported books. */
   image_url?: string | null;
+  /** Signed URL to the pre-resized ~200px WebP thumb (item_images.thumb_path,
+   * populated by uploads after migration 0122). When null the row falls
+   * back to image_url so the Vercel Image Optimizer downscales the master
+   * — same as the pre-thumb behavior. */
+  image_thumb_url?: string | null;
+  /** Base64 data URL of a 16x16 WebP blur placeholder
+   * (item_images.lqip, populated after migration 0122). Threaded into
+   * next/image's blurDataURL when present. */
+  image_lqip?: string | null;
 }
 
 interface Lookups {
@@ -768,7 +778,13 @@ export function InventoryTable({
                       >
                         {item.image_url ? (
                           <Image
-                            src={item.image_url}
+                            // Prefer the pre-resized ~200px thumb
+                            // (item_images.thumb_path, populated by
+                            // uploads after 0122). Falls back to the
+                            // master URL for rows that pre-date the
+                            // thumb column — Vercel Image Optimizer
+                            // downscales it on first hit and caches.
+                            src={item.image_thumb_url ?? item.image_url}
                             alt=""
                             width={56}
                             height={56}
@@ -778,6 +794,13 @@ export function InventoryTable({
                             // loading so they start fetching with the
                             // initial HTML instead of after JS paints.
                             priority={rowIdx < 12}
+                            // 16x16 base64 WebP blur — paints a hint
+                            // of the photo immediately while the
+                            // 28x28 transform resolves. Omitted on
+                            // pre-0122 rows; next/image falls back
+                            // to the empty bg-muted background.
+                            placeholder={item.image_lqip ? 'blur' : 'empty'}
+                            blurDataURL={item.image_lqip ?? undefined}
                             className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
                           />
                         ) : (

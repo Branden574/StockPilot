@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
+import { compressImageVariants } from '@/lib/image-variants';
 import { resolveListReturnHref } from '@/lib/last-list-url';
 import { generateSku, cn } from '@/lib/utils';
 import {
@@ -362,24 +363,41 @@ export function ItemForm({
       for (let i = 0; i < staged.length; i++) {
         const item = staged[i];
         if (!item) continue;
-        const ext = (item.file.name.split('.').pop() ?? 'jpg').toLowerCase();
+        // Generate master + thumb + LQIP from a single decode. Same
+        // helper the item-detail uploader uses so create-flow uploads
+        // populate the same thumb_path + lqip columns and get the
+        // same instant-thumb / blur-placeholder treatment in lists.
+        const { master, thumbBlob, lqip } = await compressImageVariants(item.file);
+        const ext = (master.name.split('.').pop() ?? 'jpg').toLowerCase();
         const presign = await createImageUploadAction({ itemId, fileExt: ext });
         if (!presign.ok) {
           failed++;
           continue;
         }
-        const put = await fetch(presign.data.signedUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': item.file.type, 'x-upsert': 'true' },
-          body: item.file,
-        });
-        if (!put.ok) {
+        const [masterRes, thumbRes] = await Promise.all([
+          fetch(presign.data.signedUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': master.type, 'x-upsert': 'true' },
+            body: master,
+          }),
+          thumbBlob
+            ? fetch(presign.data.thumbSignedUrl, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'image/webp', 'x-upsert': 'true' },
+                body: thumbBlob,
+              })
+            : Promise.resolve(null),
+        ]);
+        if (!masterRes.ok) {
           failed++;
           continue;
         }
+        const thumbOk = thumbRes ? thumbRes.ok : false;
         const record = await recordImageAction({
           itemId,
           storagePath: presign.data.path,
+          thumbPath: thumbOk ? presign.data.thumbPath : null,
+          lqip,
           isFirst: i === 0,
         });
         if (record.ok) uploaded++;

@@ -121,13 +121,14 @@ export default async function BooksPage({
 
   // Trends + primary images are independent — run in parallel.
   // trends: 14-day sparkline series.
-  // imagesById: signed URL from item_images bucket → fallback to
-  // custom_fields.thumbnail_url stashed by the bulk-ISBN importer.
+  // imagesById: signed URLs (master + 200px thumb when available) +
+  //   inline LQIP base64. Pre-0122 rows render the master with no
+  //   blur placeholder via the fallbacks below.
   const [trends, imagesById] = await Promise.all([
     getItemTrends(
       inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
     ),
-    imagesSvc.primaryImagesForItems(inventory.items.map((i) => i.id)),
+    imagesSvc.primaryImagesWithThumbsForItems(inventory.items.map((i) => i.id)),
   ]);
   const itemsWithImages = inventory.items.map((i) => {
     const cf = (i as { custom_fields?: Record<string, unknown> | null })
@@ -136,9 +137,12 @@ export default async function BooksPage({
       cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
         ? (cf.thumbnail_url as string)
         : null;
+    const img = imagesById.get(i.id);
     return {
       ...i,
-      image_url: imagesById.get(i.id) ?? cfThumb ?? null,
+      image_url: img?.url ?? cfThumb ?? null,
+      image_thumb_url: img?.thumbUrl ?? null,
+      image_lqip: img?.lqip ?? null,
     };
   });
 

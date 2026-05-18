@@ -170,8 +170,11 @@ export default async function InventoryPage({
       ),
     ),
     tagged(
-      'imagesSvc.primaryImagesForItems',
-      imagesSvc.primaryImagesForItems(itemIdList),
+      'imagesSvc.primaryImagesWithThumbsForItems',
+      // Richer shape than primaryImagesForItems — also returns the
+      // 200px thumb signed URL (when the row has one — 0122 onward)
+      // and the inline LQIP base64 for next/image's blurDataURL.
+      imagesSvc.primaryImagesWithThumbsForItems(itemIdList),
     ),
   ]);
   const itemsWithImages = inventory.items.map((i) => {
@@ -181,9 +184,16 @@ export default async function InventoryPage({
       cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
         ? (cf.thumbnail_url as string)
         : null;
+    const img = imagesById.get(i.id);
     return {
       ...i,
-      image_url: imagesById.get(i.id) ?? cfThumb ?? null,
+      // master URL (hover preview prefetch + lightbox still use this)
+      image_url: img?.url ?? cfThumb ?? null,
+      // pre-resized 200px thumb URL when available; rows pre-dating
+      // 0122 fall back to image_url at the rendering site.
+      image_thumb_url: img?.thumbUrl ?? null,
+      // base64 LQIP for next/image's blurDataURL; null pre-0122.
+      image_lqip: img?.lqip ?? null,
     };
   });
 

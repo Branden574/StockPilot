@@ -20,6 +20,7 @@ const ImageLightbox = dynamic(
 );
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
+import { compressImageVariants } from '@/lib/image-variants';
 import {
   createImageUploadAction,
   recordImageAction,
@@ -40,65 +41,6 @@ interface ImageUploaderProps {
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'image/avif'];
-const MAX_DIMENSION = 2048;
-const WEBP_QUALITY = 0.85;
-
-/**
- * Resize + transcode an upload to WebP in the browser before it ever
- * touches the network. Typical 2–10× reduction in bytes uploaded for
- * phone-camera JPEGs (4-12 MB → ~300-1200 KB) and the stored object is
- * already in a format next/image can serve directly.
- *
- * Falls back to the original file when:
- *   - createImageBitmap is unavailable (very old browser)
- *   - decoding fails (e.g. malformed file)
- *   - the WebP output ends up larger than the source (rare but possible
- *     for already-tiny images)
- *
- * Server-side validation still applies; this is just an optimization.
- */
-async function compressImage(file: File): Promise<File> {
-  if (typeof window === 'undefined' || typeof createImageBitmap !== 'function') {
-    return file;
-  }
-  let bitmap: ImageBitmap;
-  try {
-    bitmap = await createImageBitmap(file);
-  } catch {
-    return file;
-  }
-  try {
-    const { width, height } = bitmap;
-    let targetW = width;
-    let targetH = height;
-    if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
-      if (width >= height) {
-        targetW = MAX_DIMENSION;
-        targetH = Math.round((height * MAX_DIMENSION) / width);
-      } else {
-        targetH = MAX_DIMENSION;
-        targetW = Math.round((width * MAX_DIMENSION) / height);
-      }
-    }
-    const canvas = document.createElement('canvas');
-    canvas.width = targetW;
-    canvas.height = targetH;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return file;
-    ctx.drawImage(bitmap, 0, 0, targetW, targetH);
-    const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob((b) => resolve(b), 'image/webp', WEBP_QUALITY);
-    });
-    if (!blob || blob.size >= file.size) return file;
-    const baseName = file.name.replace(/\.[^.]+$/, '') || 'image';
-    return new File([blob], `${baseName}.webp`, {
-      type: 'image/webp',
-      lastModified: file.lastModified,
-    });
-  } finally {
-    bitmap.close();
-  }
-}
 
 export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   const router = useRouter();
@@ -143,8 +85,8 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           toast.error(`"${original.name}" is over 10 MB. Pick a smaller image.`);
           return;
         }
-        const file = await compressImage(original);
-        const ext = file.name.split('.').pop() ?? 'webp';
+        const { master, thumbBlob, lqip } = await compressImageVariants(original);
+        const ext = master.name.split('.').pop() ?? 'webp';
 
         const presign = await createImageUploadAction({ itemId, fileExt: ext });
         if (!presign.ok) {
@@ -152,17 +94,31 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           return;
         }
 
-        const put = await fetch(presign.data.signedUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': file.type, 'x-upsert': 'true' },
-          body: file,
-        });
-        if (!put.ok) {
+        // PUT master + thumb in parallel — the thumb is tiny (~5-15 KB)
+        // so the wall-clock is dominated by the master upload anyway.
+        const [masterRes, thumbRes] = await Promise.all([
+          fetch(presign.data.signedUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': master.type, 'x-upsert': 'true' },
+            body: master,
+          }),
+          thumbBlob
+            ? fetch(presign.data.thumbSignedUrl, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'image/webp', 'x-upsert': 'true' },
+                body: thumbBlob,
+              })
+            : Promise.resolve(null),
+        ]);
+        if (!masterRes.ok) {
           toast.error(
             `Couldn't upload "${original.name}". Check your network and try again.`,
           );
           return;
         }
+        // Thumb failure is non-fatal — the master is up, the row will
+        // just render from the master via the existing fallback path.
+        const thumbOk = thumbRes ? thumbRes.ok : false;
 
         // Only the first file claims isFirst when the gallery started
         // empty. Mirrors the original code which read the same
@@ -172,6 +128,8 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
         const record = await recordImageAction({
           itemId,
           storagePath: presign.data.path,
+          thumbPath: thumbOk ? presign.data.thumbPath : null,
+          lqip,
           isFirst,
         });
         if (!record.ok) {
