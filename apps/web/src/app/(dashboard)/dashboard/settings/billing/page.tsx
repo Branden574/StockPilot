@@ -37,12 +37,25 @@ export default async function BillingSettingsPage() {
             </CardTitle>
             <CardDescription>{plan.description}</CardDescription>
           </div>
-          {org.trial_ends_at && (
-            <div className="text-right text-sm">
-              <p className="text-xs text-muted-foreground">Trial ends</p>
-              <p className="font-medium">{formatRelative(org.trial_ends_at as string)}</p>
-            </div>
-          )}
+          {org.trial_ends_at && (() => {
+            const trialEndsAt = new Date(org.trial_ends_at as string);
+            const trialExpired = trialEndsAt.getTime() < Date.now();
+            return (
+              <div className="text-right text-sm">
+                <p className="text-xs text-muted-foreground">
+                  {trialExpired ? 'Trial ended' : 'Trial ends'}
+                </p>
+                <p className={`font-medium ${trialExpired ? 'text-destructive' : ''}`}>
+                  {formatRelative(org.trial_ends_at as string)}
+                </p>
+                {trialExpired && (
+                  <p className="mt-1 text-xs text-destructive">
+                    Subscribe to keep using paid features.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
         </CardHeader>
         <CardContent className="space-y-4">
           <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">

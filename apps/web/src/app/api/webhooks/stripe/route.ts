@@ -40,17 +40,25 @@ function priceIdToPlanMap(): Record<string, PlanId> {
 function resolvePlanFromStripe(
   metadataPlan: string | undefined,
   priceId: string | undefined,
-): PlanId {
+): PlanId | null {
   if (metadataPlan && metadataPlan in PLANS) return metadataPlan as PlanId;
   if (priceId) {
     const map = priceIdToPlanMap();
     if (map[priceId]) return map[priceId];
   }
-  console.warn(
-    '[stripe webhook] Plan not resolvable from metadata or price id; defaulting to free.',
+  // Used to default to 'free' here, which silently downgraded paying
+  // orgs when Stripe sent us a webhook payload with missing metadata
+  // and a price id outside STRIPE_PRICE_TO_PLAN. Now we return null so
+  // syncSubscriptionFromStripe preserves the org's current plan and
+  // we surface the misconfig via console.error (Sentry/log aggregator
+  // catches this).
+  console.error(
+    '[stripe webhook] Plan not resolvable from metadata or price id; ' +
+      'preserving the org’s current plan in DB. Set subscription.metadata.plan ' +
+      'or update STRIPE_PRICE_TO_PLAN.',
     { metadataPlan, priceId },
   );
-  return 'free';
+  return null;
 }
 
 export async function POST(req: NextRequest) {

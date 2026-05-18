@@ -86,6 +86,22 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
       ctx.lineWidth = STROKE_WIDTH;
     }, []);
 
+    const redrawAll = React.useCallback(() => {
+      const canvas = canvasRef.current;
+      const ctx = getCtx();
+      if (!canvas || !ctx) return;
+      // Clear in *bitmap* pixel space — canvas.width here is the scaled
+      // value so we wipe the whole thing.
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+      configureCtx(ctx);
+      for (const stroke of strokesRef.current) {
+        drawStroke(ctx, stroke);
+      }
+    }, [configureCtx, getCtx]);
+
     /** Re-sync the bitmap dimensions to the current CSS size, then redraw. */
     const resize = React.useCallback(() => {
       const canvas = canvasRef.current;
@@ -104,23 +120,7 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
       ctx.scale(dpr, dpr);
       configureCtx(ctx);
       redrawAll();
-    }, [configureCtx]);
-
-    const redrawAll = React.useCallback(() => {
-      const canvas = canvasRef.current;
-      const ctx = getCtx();
-      if (!canvas || !ctx) return;
-      // Clear in *bitmap* pixel space — canvas.width here is the scaled
-      // value so we wipe the whole thing.
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.restore();
-      configureCtx(ctx);
-      for (const stroke of strokesRef.current) {
-        drawStroke(ctx, stroke);
-      }
-    }, [configureCtx, getCtx]);
+    }, [configureCtx, redrawAll]);
 
     /**
      * Replay a complete stroke with quadratic-curve smoothing. For each
