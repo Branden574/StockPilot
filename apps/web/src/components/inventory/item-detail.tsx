@@ -6,6 +6,7 @@ import { notFound } from 'next/navigation';
 import { ActivityFeed } from '@/components/inventory/activity-feed';
 import { AuditTimeline } from '@/components/audit/audit-timeline';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
+import { DuplicateItemDialog } from '@/components/inventory/duplicate-item-dialog';
 // ImageUploader is heavy (canvas resize/transcode + lazy-loaded
 // ImageLightbox) and only renders on the Photos tab — lazy-load
 // the chunk so it stays out of the initial item-detail bundle.
@@ -135,6 +136,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // Server-layer assertPermission still throws if a request somehow
   // bypasses this — these flags just hide the UI surfaces.
   const canEditItem = hasPermission(ctx.role, 'items:update');
+  const canDuplicateItem = hasPermission(ctx.role, 'items:create');
   const canAdjustStock = hasPermission(ctx.role, 'stock:adjust');
   const canTransferStock = hasPermission(ctx.role, 'stock:transfer');
 
@@ -196,6 +198,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   </Button>
                 );
               })()}
+              {canDuplicateItem && (
+                <DuplicateItemDialog
+                  itemId={id}
+                  itemName={item.name as string}
+                  itemType={(item.item_type as string | null) ?? null}
+                />
+              )}
               <BarcodeDisplay
                 itemId={id}
                 itemName={item.name as string}
