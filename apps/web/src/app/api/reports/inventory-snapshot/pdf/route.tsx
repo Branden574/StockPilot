@@ -30,6 +30,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
 
+    // ?photos=0 (or =false / =no) skips the image phase entirely.
+    // PDF renders ~2x faster and is smaller; useful for archival
+    // exports. Default = photos on.
+    const url = new URL(req.url);
+    const photosParam = url.searchParams.get('photos');
+    const photosDisabled =
+      photosParam === '0' || photosParam === 'false' || photosParam === 'no';
+
     // ReportsService.inventoryValuation() already returns rows enriched
     // with warehouseName + categoryName + value, plus warehouse-access
     // scoping via RLS — exactly the shape we need for the snapshot PDF.
@@ -128,7 +136,7 @@ export async function GET(req: NextRequest) {
         }
       }
     }
-    if (orderedItemIds.length > 0) {
+    if (!photosDisabled && orderedItemIds.length > 0) {
       const imagesSvc = new ItemImagesService(ctx);
       const urlByItem = await imagesSvc.primaryImagesForPdfRendering(
         orderedItemIds,

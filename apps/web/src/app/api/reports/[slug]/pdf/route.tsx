@@ -74,6 +74,14 @@ export async function GET(
     const reportsSvc = new ReportsService(ctx);
     const imagesSvc = new ItemImagesService(ctx);
 
+    // ?photos=0 (or =false / =no) skips the image phase entirely.
+    // The PDF renders ~2x faster and is smaller — useful for archival
+    // exports where photos aren't needed. Defaults to "on": photos
+    // are the richer default and the only reason to skip is speed.
+    const photosParam = url.searchParams.get('photos');
+    const photosDisabled =
+      photosParam === '0' || photosParam === 'false' || photosParam === 'no';
+
     // Org name + logo for the branded header. Same lookup the
     // inventory-snapshot route does; org row is tiny so the extra query
     // is negligible.
@@ -97,7 +105,7 @@ export async function GET(
       const data = await reportsSvc.inventoryValuation();
       title = 'Inventory valuation';
       subtitle = `as of ${formatDateForPdf(new Date())}`;
-      const itemIds = data.rows.map((r) => r.itemId);
+      const itemIds = photosDisabled ? [] : data.rows.map((r) => r.itemId);
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
@@ -133,7 +141,7 @@ export async function GET(
       title = 'Stock movements';
       subtitle = `Last ${days} days`;
       suffix = `${days}d`;
-      const itemIds = data.topMovers.map((r) => r.itemId);
+      const itemIds = photosDisabled ? [] : data.topMovers.map((r) => r.itemId);
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
@@ -180,7 +188,7 @@ export async function GET(
       const data = await reportsSvc.reorderForecast();
       title = 'Reorder forecast';
       subtitle = `as of ${formatDateForPdf(new Date())}`;
-      const itemIds = data.rows.map((r) => r.itemId);
+      const itemIds = photosDisabled ? [] : data.rows.map((r) => r.itemId);
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
@@ -257,7 +265,7 @@ export async function GET(
       title = 'Velocity class';
       subtitle = `Last ${days} days · A=${data.summary.A} B=${data.summary.B} C=${data.summary.C} D=${data.summary.D}`;
       suffix = `${days}d`;
-      const itemIds = data.rows.map((r) => r.itemId);
+      const itemIds = photosDisabled ? [] : data.rows.map((r) => r.itemId);
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
@@ -298,7 +306,7 @@ export async function GET(
       title = 'Dead stock';
       subtitle = `Stagnant ${days}+ days · total carrying ${formatCurrencyForPdf(data.totalCarryingValue)}`;
       suffix = `${days}d`;
-      const itemIds = data.rows.map((r) => r.itemId);
+      const itemIds = photosDisabled ? [] : data.rows.map((r) => r.itemId);
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
@@ -368,7 +376,7 @@ export async function GET(
       title = 'Bundle shortages';
       subtitle = `Last ${days} days`;
       suffix = `${days}d`;
-      const itemIds = data.rows.map((r) => r.itemId);
+      const itemIds = photosDisabled ? [] : data.rows.map((r) => r.itemId);
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {
@@ -399,7 +407,7 @@ export async function GET(
       title = 'Shrinkage';
       subtitle = `Last ${days} days · total units ${formatNumberForPdf(data.totalUnits)} · cost impact ${formatCurrencyForPdf(data.totalCost)}`;
       suffix = `${days}d`;
-      const itemIds = data.rows.map((r) => r.itemId);
+      const itemIds = photosDisabled ? [] : data.rows.map((r) => r.itemId);
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
         {

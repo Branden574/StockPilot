@@ -5,7 +5,6 @@ import {
   ChevronRight,
   Clock,
   DollarSign,
-  Download,
   MinusCircle,
   Package,
   PackageX,
@@ -14,7 +13,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
-import { Button } from '@/components/ui/button';
+import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { requireOrgContext } from '@/lib/auth/session';
 
 interface Report {
@@ -93,15 +92,7 @@ export default async function ReportsPage() {
             {REPORTS.length} pre-baked reports — every one is exportable to CSV.
           </p>
         </div>
-        <Button asChild variant="outline">
-          <a
-            href="/api/reports/inventory-snapshot/pdf"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Download className="h-4 w-4" /> Download PDF snapshot
-          </a>
-        </Button>
+        <PdfDownloadDropdown baseUrl="/api/reports/inventory-snapshot/pdf" />
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

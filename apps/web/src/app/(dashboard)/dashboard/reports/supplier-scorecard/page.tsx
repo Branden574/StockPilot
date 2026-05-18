@@ -1,6 +1,7 @@
-import { Download, FileText } from 'lucide-react';
+import { Download } from 'lucide-react';
 import Link from 'next/link';
 
+import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -75,11 +76,7 @@ export default async function SupplierScorecardPage({
                 <Download className="h-4 w-4" /> CSV
               </a>
             </Button>
-            <Button asChild variant="outline">
-              <a href={`/api/reports/supplier-scorecard/pdf?days=${days}`}>
-                <FileText className="h-4 w-4" /> PDF
-              </a>
-            </Button>
+            <PdfDownloadDropdown baseUrl={`/api/reports/supplier-scorecard/pdf?days=${days}`} />
           </div>
         </div>
       </div>
