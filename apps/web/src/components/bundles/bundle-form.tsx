@@ -57,6 +57,7 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
 
   React.useEffect(() => {
     if (search.trim().length < 2) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
       setSearchResults([]);
       return;
     }

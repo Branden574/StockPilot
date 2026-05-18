@@ -93,6 +93,7 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
 
   React.useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setBaseName(stripSizeSuffix(source.name));
       setBaseSku(stripSkuSuffix(source.sku, source.name) ?? '');
       setSelected([]);

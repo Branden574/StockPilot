@@ -72,6 +72,7 @@ export function ImageLightbox({
   // Reset to caller's start index when (re-)opened.
   React.useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setIndex(startIndex);
       setZoom(1);
       setPan({ x: 0, y: 0 });
@@ -80,6 +81,7 @@ export function ImageLightbox({
 
   // Reset zoom + pan when the active image changes.
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
     setZoom(1);
     setPan({ x: 0, y: 0 });
   }, [index]);
@@ -91,6 +93,7 @@ export function ImageLightbox({
     if (images.length === 0) {
       onClose();
     } else if (index >= images.length) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setIndex(images.length - 1);
     }
   }, [open, images.length, index, onClose]);

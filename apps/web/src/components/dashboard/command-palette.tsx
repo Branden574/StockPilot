@@ -112,6 +112,7 @@ export function CommandPalette() {
   React.useEffect(() => {
     const trimmed = value.trim();
     if (trimmed.length < 2) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
       setResults({ items: [], purchaseOrders: [], suppliers: [], warehouses: [] });
       setLoading(false);
       return;

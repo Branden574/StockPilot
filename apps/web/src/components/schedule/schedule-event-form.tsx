@@ -123,6 +123,7 @@ export function ScheduleEventForm({
 
   // Initial start time: edit → existing, new + initialDate → 9 AM that day,
   // otherwise → next half-hour slot today.
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- manual memo intentional
   const initialStart = React.useMemo(() => {
     if (defaults?.startsAt) return isoToLocalInput(defaults.startsAt);
     if (initialDate) return `${initialDate}T09:00`;
@@ -131,6 +132,7 @@ export function ScheduleEventForm({
     return isoToLocalInput(d.toISOString());
   }, [defaults?.startsAt, initialDate]);
 
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- manual memo intentional
   const initialEnd = React.useMemo(() => {
     if (defaults?.endsAt) return isoToLocalInput(defaults.endsAt);
     return '';

@@ -33,6 +33,7 @@ export function CancelOrderButton({ orderId, status }: Props) {
   // Reset reason whenever the dialog closes — covers both confirm-path
   // and explicit-dismiss.
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
     if (!open) setReason('');
   }, [open]);
 

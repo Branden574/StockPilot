@@ -53,6 +53,7 @@ export function DashboardShell({
   const [mounted, setMounted] = React.useState(false);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
     setMounted(true);
   }, []);
 

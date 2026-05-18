@@ -33,6 +33,7 @@ export function OrderRealtimeRefresh({ orderId }: Props) {
     try {
       supabaseRef.current = createClient();
     } catch {
+      // eslint-disable-next-line react-hooks/refs -- ref init, not setState
       supabaseRef.current = null;
     }
   }

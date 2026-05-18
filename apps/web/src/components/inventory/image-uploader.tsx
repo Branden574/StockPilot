@@ -102,6 +102,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   // Keep local state in sync if the server-passed list changes (e.g. after
   // router.refresh() following an upload).
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
     setImages(initialImages);
   }, [initialImages]);
 

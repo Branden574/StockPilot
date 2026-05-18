@@ -120,6 +120,7 @@ export function IsbnScanner({
   React.useEffect(() => {
     if (!open) {
       stopAll();
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
       setStage('idle');
       setError(null);
       return;

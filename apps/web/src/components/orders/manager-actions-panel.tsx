@@ -224,6 +224,7 @@ export function ManagerActionsPanel({
     router.refresh();
   }
 
+  // eslint-disable-next-line react-hooks/refs -- ref init, not setState
   const dirty = notes !== initialNotes.current;
 
   return (

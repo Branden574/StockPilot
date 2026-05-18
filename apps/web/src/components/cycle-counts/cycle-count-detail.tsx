@@ -398,6 +398,7 @@ function CountRow({
   );
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- derived value, not state
     setDraft(line.counted_quantity != null ? String(line.counted_quantity) : '');
   }, [line.counted_quantity]);
 

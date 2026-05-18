@@ -155,6 +155,7 @@ export function PoImportDetail({
   const canApprove =
     header.status === 'parsed' || header.status === 'needs_review';
 
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- manual memo intentional
   const preview = React.useMemo(
     () => buildPreview(lines, overrides, items),
     [lines, overrides, items],

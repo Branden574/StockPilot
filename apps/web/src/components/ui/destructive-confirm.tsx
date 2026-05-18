@@ -100,6 +100,7 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
   // can't leak state into the next open.
   React.useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setTyped('');
     }
   }, [open]);

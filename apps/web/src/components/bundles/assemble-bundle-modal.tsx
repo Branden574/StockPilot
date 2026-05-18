@@ -51,6 +51,7 @@ export function AssembleBundleModal({
   const [busy, setBusy] = React.useState(false);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
     if (open && lockedWarehouseId) setWarehouseId(lockedWarehouseId);
   }, [open, lockedWarehouseId]);
 
