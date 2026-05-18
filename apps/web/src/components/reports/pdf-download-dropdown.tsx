@@ -39,13 +39,27 @@ export function PdfDownloadDropdown({ baseUrl }: { baseUrl: string }) {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuItem asChild>
-          <a href={baseUrl} className="cursor-pointer">
+          {/* target=_blank keeps the dashboard mounted so the PDF
+              loads in a background tab — the user doesn't sit on a
+              spinner while react-pdf renders. rel=noopener avoids
+              giving the PDF tab a window.opener handle back. */}
+          <a
+            href={baseUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="cursor-pointer"
+          >
             <ImageIcon className="mr-2 h-4 w-4" />
             <span className="flex-1">With images</span>
           </a>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <a href={noPhotosUrl} className="cursor-pointer">
+          <a
+            href={noPhotosUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="cursor-pointer"
+          >
             <FileX2 className="mr-2 h-4 w-4" />
             <div className="flex-1">
               <div>Without images</div>

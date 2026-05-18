@@ -210,7 +210,10 @@ export async function GET(req: NextRequest) {
       headers: {
         'Content-Type': 'application/pdf',
         'Content-Disposition': `inline; filename="${filename}"`,
-        'Cache-Control': 'no-store',
+        // 60s browser cache. Clicking the same snapshot twice
+        // within a minute is instant from the browser disk cache.
+        // private — these PDFs are auth-gated, no shared-cache.
+        'Cache-Control': 'private, max-age=60',
       },
     });
   } catch (e) {
