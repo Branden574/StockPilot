@@ -2,7 +2,7 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
-const PER_IMAGE_TIMEOUT_MS = 3_000;
+const PER_IMAGE_TIMEOUT_MS = 8_000;
 const DATA_URI_CACHE_TTL_SEC = 25 * 24 * 60 * 60; // 25 days
 
 /**
@@ -45,7 +45,11 @@ const getCachedImageDataUri = unstable_cache(
       clearTimeout(timer);
     }
   },
-  ['pdf-image-data-uri-v1'],
+  // v2 (2026-05-18): bumped after Supabase image-transformation quota
+  // cap (107/100) earlier in the cycle returned 429s that this cache
+  // dutifully stored as `null` for 25 days. New version = fresh cache,
+  // poisoned entries no longer reachable.
+  ['pdf-image-data-uri-v2'],
   { revalidate: DATA_URI_CACHE_TTL_SEC, tags: ['pdf-image-data-uri'] },
 );
 
