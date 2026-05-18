@@ -17,6 +17,7 @@ export type AuditEvent =
   | 'user.password.changed'
   | 'inventory.item.created'
   | 'inventory.item.updated'
+  | 'inventory.item.duplicated'
   | 'inventory.item.archived'
   | 'inventory.item.deleted'
   | 'stock.adjusted'

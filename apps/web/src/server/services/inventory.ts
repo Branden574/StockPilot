@@ -621,13 +621,9 @@ export class InventoryService {
     for (let i = 2; i <= 99; i += 1) candidates.push(`${baseSku}-${i}`);
 
     // Single round-trip: pull any taken candidates.
-    // Note: the second .eq() is intentional — it keeps the query-builder
-    // chain depth consistent with the maybeSingle() path so the test mock
-    // (which nests .in() under two .eq() levels) lines up correctly.
     const { data: taken } = await this.ctx.supabase
       .from('inventory_items')
       .select('sku')
-      .eq('organization_id', this.ctx.organizationId)
       .eq('organization_id', this.ctx.organizationId)
       .in('sku', candidates);
     const takenSet = new Set(((taken ?? []) as Array<{ sku: string }>).map((r) => r.sku));
@@ -635,7 +631,7 @@ export class InventoryService {
     if (!newSku) {
       throw new ServiceError(
         'too_many_duplicates',
-        'too_many_duplicates: Too many duplicates of this SKU — please rename the original.',
+        'Too many duplicates of this SKU — please rename the original.',
       );
     }
 

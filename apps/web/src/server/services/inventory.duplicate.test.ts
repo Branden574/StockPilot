@@ -36,26 +36,33 @@ function makeCtx(rpcImpl: (name: string, args: Record<string, unknown>) => unkno
       const data = await rpcImpl(name, args);
       return { data, error: null };
     }),
+    // Mock matches two distinct query shapes used by duplicateItem:
+    //   1) .from('inventory_items').select('sku').eq('organization_id').eq('id').maybeSingle()
+    //      — original-row lookup (two .eq() then maybeSingle).
+    //   2) .from('inventory_items').select('sku').eq('organization_id').in('sku', candidates)
+    //      — collision check (one .eq() then .in() which is awaited directly).
     from(table: string) {
-      if (table === 'inventory_items') {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                maybeSingle: async () => ({ data: { sku: originalSku }, error: null }),
-                in: (_col: string, skus: string[]) => ({
-                  then: (cb: (v: { data: Array<{ sku: string }>; error: null }) => void) =>
-                    cb({
-                      data: skus.filter((s) => existingSkus.has(s)).map((s) => ({ sku: s })),
-                      error: null,
-                    }),
+      if (table !== 'inventory_items') {
+        throw new Error(`unexpected table ${table}`);
+      }
+      return {
+        select: () => ({
+          eq: () => ({
+            // Collision-check branch: .eq() → .in() → awaited
+            in: (_col: string, skus: string[]) => ({
+              then: (cb: (v: { data: Array<{ sku: string }>; error: null }) => void) =>
+                cb({
+                  data: skus.filter((s) => existingSkus.has(s)).map((s) => ({ sku: s })),
+                  error: null,
                 }),
-              }),
+            }),
+            // Original-lookup branch: .eq() → .eq() → .maybeSingle()
+            eq: () => ({
+              maybeSingle: async () => ({ data: { sku: originalSku }, error: null }),
             }),
           }),
-        };
-      }
-      throw new Error(`unexpected table ${table}`);
+        }),
+      };
     },
   } as unknown;
   return {
@@ -87,9 +94,10 @@ describe('InventoryService.duplicateItem', () => {
     });
     expect(newId).toBe('new-item-id');
     expect(rpcCalls).toHaveLength(1);
-    expect(rpcCalls[0].name).toBe('duplicate_inventory_item');
-    expect(rpcCalls[0].args.p_original_id).toBe('00000000-0000-0000-0000-000000000001');
-    const overrides = rpcCalls[0].args.p_overrides as Record<string, unknown>;
+    const call = rpcCalls[0]!;
+    expect(call.name).toBe('duplicate_inventory_item');
+    expect(call.args.p_original_id).toBe('00000000-0000-0000-0000-000000000001');
+    const overrides = call.args.p_overrides as Record<string, unknown>;
     expect(overrides.sku).toBe('SP-ABC-2');
     expect(overrides.quantity).toBe(5);
     expect(overrides.rack_number).toBe('38');
@@ -111,7 +119,7 @@ describe('InventoryService.duplicateItem', () => {
       rackRow: null,
       quantity: 0,
     });
-    expect((rpcCalls[0].args.p_overrides as { sku: string }).sku).toBe('SP-ABC-4');
+    expect((rpcCalls[0]!.args.p_overrides as { sku: string }).sku).toBe('SP-ABC-4');
   });
 
   it('throws too_many_duplicates when -2..-99 are all taken', async () => {
@@ -122,6 +130,9 @@ describe('InventoryService.duplicateItem', () => {
       originalSku: 'SP-ABC',
     });
     const svc = new InventoryService(ctx);
+    // ServiceError carries the machine-readable identifier on .code,
+    // not in .message — assert against the code so the user-facing
+    // message stays free to evolve as plain English.
     await expect(
       svc.duplicateItem({
         originalId: '00000000-0000-0000-0000-000000000001',
@@ -130,7 +141,7 @@ describe('InventoryService.duplicateItem', () => {
         rackRow: null,
         quantity: 0,
       }),
-    ).rejects.toThrow(/too_many_duplicates|conflict/);
+    ).rejects.toMatchObject({ code: 'too_many_duplicates' });
   });
 
   it('book branch sends crate fields and book_ bin label', async () => {
@@ -148,7 +159,7 @@ describe('InventoryService.duplicateItem', () => {
       crateNumber: '4',
       quantity: 0,
     });
-    const overrides = rpcCalls[0].args.p_overrides as Record<string, unknown>;
+    const overrides = rpcCalls[0]!.args.p_overrides as Record<string, unknown>;
     expect(overrides.book_rack_number).toBe('12');
     expect(overrides.book_rack_row).toBe('C');
     expect(overrides.book_crate_color).toBe('red');
