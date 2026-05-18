@@ -16,6 +16,7 @@ export type ActionErrorCode =
   | 'validation_error'
   | 'plan_limit_exceeded'
   | 'conflict'
+  | 'too_many_duplicates'
   | 'rate_limited'
   | 'internal_error';
 

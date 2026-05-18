@@ -88,6 +88,7 @@ export class ServiceError extends Error {
       | 'validation_error'
       | 'plan_limit_exceeded'
       | 'conflict'
+      | 'too_many_duplicates'
       | 'internal_error',
     message: string,
     public details?: Record<string, unknown>,
