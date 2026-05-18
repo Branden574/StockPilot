@@ -56,6 +56,7 @@ export function ItemThumb({
   // Reset when the URL OR the item changes — a fresh signed URL for the
   // same item should retry, and a different item gets its own attempt.
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
     setFailed(false);
   }, [imageUrl, itemId]);
 

@@ -108,6 +108,7 @@ export function NotificationPreferencesForm({
   // Keep local state aligned with refreshed server props so a stale
   // optimistic value can't survive across a revalidatePath cycle.
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
     setPrefs(initial);
   }, [initial]);
 

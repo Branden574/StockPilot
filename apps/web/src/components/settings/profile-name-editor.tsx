@@ -22,6 +22,7 @@ export function ProfileNameEditor({ current }: { current: string }) {
   // incorrectly on subsequent edits. Skip the resync while a save is
   // in flight so the user's typed value isn't clobbered mid-keystroke.
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
     if (!busy) setName(current);
   }, [current, busy]);
 

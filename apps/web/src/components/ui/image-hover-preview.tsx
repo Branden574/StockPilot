@@ -167,6 +167,7 @@ export function ImageHoverPreview({
   const isCoarsePointer = React.useRef(false);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
     setMounted(true);
     if (typeof window !== 'undefined' && window.matchMedia) {
       isCoarsePointer.current = window.matchMedia('(pointer: coarse)').matches;

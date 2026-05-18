@@ -254,6 +254,7 @@ export function InventoryTable({
     if (typeof window === 'undefined') return;
     const stored = window.localStorage.getItem(SPARK_MODE_KEY);
     if (stored === 'moves' && sparkMode !== 'moves') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
       setSparkMode('moves');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -393,6 +394,7 @@ export function InventoryTable({
   React.useEffect(() => {
     const needle = q.trim();
     if (!needle) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
       setServerHits(null);
       setServerLoading(false);
       // Clear the q param from the URL when the user empties the box.
@@ -1454,6 +1456,7 @@ function SaveCurrentViewButton({
     if (open) {
       setTimeout(() => inputRef.current?.focus(), 50);
     } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setName('');
       setShareWithTeam(false);
     }

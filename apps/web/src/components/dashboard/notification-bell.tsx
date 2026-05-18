@@ -40,6 +40,7 @@ export function NotificationBell({ userId, initialUnread }: Props) {
     try {
       supabaseRef.current = createClient();
     } catch {
+      // eslint-disable-next-line react-hooks/refs -- ref init, not setState
       supabaseRef.current = null;
     }
   }

@@ -113,6 +113,7 @@ export function BulkActions({
   const [removeTagIds, setRemoveTagIds] = React.useState<Set<string>>(new Set());
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
     if (dialog?.kind !== 'add_tags') setAddTagIds(new Set());
     if (dialog?.kind !== 'remove_tags') setRemoveTagIds(new Set());
     if (dialog?.kind !== 'set_rack') {

@@ -86,6 +86,7 @@ export function PoReceiveDialog({
 
   React.useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setIdempotencyKey(crypto.randomUUID());
       setEntries(
         Object.fromEntries(

@@ -24,6 +24,7 @@ export function NotificationSoundToggle() {
   const [muted, setMuted] = React.useState<boolean>(false);
 
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
     setMuted(isNotificationSoundMuted());
   }, []);
 

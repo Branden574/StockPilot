@@ -62,6 +62,7 @@ export function SignatureForm({ token, defaultEmail, onSigned }: SignatureFormPr
     },
   });
 
+  // eslint-disable-next-line react-hooks/refs -- ref init, not setState
   const onSubmit = handleSubmit(async (values) => {
     const pad = padRef.current;
     if (!pad || pad.isEmpty()) {

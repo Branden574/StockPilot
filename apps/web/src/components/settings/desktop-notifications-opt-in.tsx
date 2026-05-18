@@ -40,6 +40,7 @@ export function DesktopNotificationsOptIn() {
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     if (typeof Notification === 'undefined') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
       setPerm('unsupported');
       return;
     }

@@ -82,6 +82,7 @@ export function CreateItemsModal({
       seed[l.id] = autoCleanItemName(desc) || desc;
       seedDecisions[l.id] = { mode: 'create' };
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
     setNames(seed);
     setDecisions(seedDecisions);
     setDuplicates({});

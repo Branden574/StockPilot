@@ -54,6 +54,7 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
   React.useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
     setState({ status: 'loading' });
     (async () => {
       try {
