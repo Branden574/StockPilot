@@ -2,13 +2,24 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { ImagePlus, Loader2, ScanLine, Upload, X } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
-import { IsbnScanner } from '@/components/inventory/isbn-scanner';
+// Dynamic import + conditional render: IsbnScanner pulls in the
+// Dialog tree and BarcodeDetector usage; only ships in the bundle
+// when the user actually opens the scanner. ssr:false because the
+// scanner relies on browser APIs.
+const IsbnScanner = dynamic(
+  () =>
+    import('@/components/inventory/isbn-scanner').then((m) => ({
+      default: m.IsbnScanner,
+    })),
+  { ssr: false },
+);
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -1234,12 +1245,14 @@ export function ItemForm({
           )}
         </Button>
       </div>
-      <IsbnScanner
-        open={scannerOpen}
-        onOpenChange={setScannerOpen}
-        onDetected={handleIsbnDetected}
-        mode={isBook ? 'isbn' : 'barcode'}
-      />
+      {scannerOpen && (
+        <IsbnScanner
+          open={scannerOpen}
+          onOpenChange={setScannerOpen}
+          onDetected={handleIsbnDetected}
+          mode={isBook ? 'isbn' : 'barcode'}
+        />
+      )}
     </form>
   );
 }
