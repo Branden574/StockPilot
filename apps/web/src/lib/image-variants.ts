@@ -173,14 +173,61 @@ async function compressOnMainThread(file: File): Promise<ImageVariants> {
   }
 }
 
+/**
+ * Detect a HEIC/HEIF source. iPhone Safari decodes these via canvas
+ * natively (no transcode needed), but other browsers — and Safari
+ * through canvas+OffscreenCanvas in some versions — cannot. Transcode
+ * to JPEG via heic2any BEFORE the normal pipeline so the rest of the
+ * code path stays browser-agnostic.
+ *
+ * The MIME check covers both the canonical types and the common
+ * file-extension fallback (some uploaders strip the type metadata).
+ */
+function isHeicLike(file: File): boolean {
+  const t = file.type.toLowerCase();
+  if (t === 'image/heic' || t === 'image/heif') return true;
+  const name = file.name.toLowerCase();
+  return name.endsWith('.heic') || name.endsWith('.heif');
+}
+
+async function transcodeHeicToJpeg(file: File): Promise<File> {
+  // Dynamic import keeps the ~700 KB libheif WASM out of the initial
+  // bundle — only iPhone-Safari users actually need it, and only on
+  // first HEIC upload of the session.
+  const { default: heic2any } = await import('heic2any');
+  const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+  const blob = Array.isArray(result) ? result[0]! : result;
+  const baseName = file.name.replace(/\.[^.]+$/, '') || 'image';
+  return new File([blob], `${baseName}.jpg`, {
+    type: 'image/jpeg',
+    lastModified: file.lastModified,
+  });
+}
+
 export async function compressImageVariants(file: File): Promise<ImageVariants> {
+  // HEIC pre-step: turn the source into JPEG so the rest of the
+  // pipeline (createImageBitmap → canvas) works across all browsers.
+  // On native-HEIC browsers (current Safari) heic2any is harmless;
+  // we just spend a couple extra hundred ms on the decode.
+  let source = file;
+  if (isHeicLike(file)) {
+    try {
+      source = await transcodeHeicToJpeg(file);
+    } catch {
+      // heic2any failure (typically very old browser without
+      // WebAssembly) — let the downstream path try the original
+      // file, which will fail decode and return the unmodified file
+      // as `master` with no thumb/lqip. That at least preserves the
+      // upload instead of dropping it on the floor.
+    }
+  }
   // Worker path: keeps the UI thread free during a 300-600ms encode.
   // Falls back to the main thread on any failure so uploads never
   // get stuck because of a worker hiccup (old browser, blocked
   // worker URL, postMessage timeout, etc).
   if (canUseWorker()) {
-    const fromWorker = await compressInWorker(file);
+    const fromWorker = await compressInWorker(source);
     if (fromWorker) return fromWorker;
   }
-  return compressOnMainThread(file);
+  return compressOnMainThread(source);
 }
