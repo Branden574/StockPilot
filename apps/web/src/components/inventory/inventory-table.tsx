@@ -793,6 +793,14 @@ export function InventoryTable({
                       </ImageHoverPreview>
                       <Link
                         href={`${rowLinkPrefix}/${item.id}?return=${encodeURIComponent(currentListUrl)}`}
+                        // prefetch={true} forces eager RSC prefetch on
+                        // render (Next default is viewport-on-visible).
+                        // Each detail page is ~10-30 KB of payload; for
+                        // a 50-row list that's at most ~1.5 MB, but
+                        // the user's typical next click IS a row, so
+                        // the bandwidth is well-spent on perceived
+                        // navigation speed.
+                        prefetch
                         className="font-medium hover:underline"
                       >
                         {item.name}
