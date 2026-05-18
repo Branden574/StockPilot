@@ -475,7 +475,12 @@ export async function GET(
       headers: {
         'Content-Type': 'application/pdf',
         'Content-Disposition': `inline; filename="${filename}"`,
-        'Cache-Control': 'no-store',
+        // 60s browser cache. Clicking the same PDF a second time
+        // within a minute is instant from the browser disk cache.
+        // private so shared caches (CDN edges) don't store per-user
+        // PDFs — these are auth-gated and shouldn't be cached
+        // outside the user's browser.
+        'Cache-Control': 'private, max-age=60',
       },
     });
   } catch (e) {
