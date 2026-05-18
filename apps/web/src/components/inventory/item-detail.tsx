@@ -1,11 +1,23 @@
 import { Box, Boxes, DollarSign, GraduationCap, Hash, History, MapPin, Printer, Tag, Truck } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { ActivityFeed } from '@/components/inventory/activity-feed';
 import { AuditTimeline } from '@/components/audit/audit-timeline';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
-import { ImageUploader } from '@/components/inventory/image-uploader';
+// ImageUploader is heavy (canvas resize/transcode + lazy-loaded
+// ImageLightbox) and only renders on the Photos tab — lazy-load
+// the chunk so it stays out of the initial item-detail bundle.
+// item-detail is a server component, so ssr:false isn't valid;
+// the Photos tab is already conditionally rendered (activeTab ===
+// 'photos') so the chunk only downloads when the user opens the
+// tab regardless.
+const ImageUploader = dynamic(() =>
+  import('@/components/inventory/image-uploader').then((m) => ({
+    default: m.ImageUploader,
+  })),
+);
 import { ItemDetailTabs } from '@/components/inventory/item-detail-tabs';
 import {
   parseDetailTab,

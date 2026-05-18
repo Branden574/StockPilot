@@ -1,12 +1,23 @@
 'use client';
 
 import { ImagePlus, Loader2, Maximize2, Trash2, Upload } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { ImageLightbox } from '@/components/inventory/image-lightbox';
+// Dynamic + conditional render — the lightbox carousel is 450+
+// lines including image-zoom math + transition state. Only opens
+// when the user clicks the maximize affordance; ship the chunk
+// then, not on uploader mount.
+const ImageLightbox = dynamic(
+  () =>
+    import('@/components/inventory/image-lightbox').then((m) => ({
+      default: m.ImageLightbox,
+    })),
+  { ssr: false },
+);
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import {
