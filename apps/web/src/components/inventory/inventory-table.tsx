@@ -26,6 +26,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
 import { getCrateColor, readBookStorage, readItemRack } from '@/lib/book-storage';
+import { rememberLastListUrl } from '@/lib/last-list-url';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 
@@ -340,6 +341,15 @@ export function InventoryTable({
     const qs = next.toString();
     return qs ? `${basePath}?${qs}` : basePath;
   }, [params, basePath, q]);
+
+  // Persist the live list URL to sessionStorage so the edit / variant
+  // / bulk-create flows can bounce the user back to the exact page +
+  // filter state they were on — even when the `?return=` chain breaks
+  // (direct URL entry, mid-flight cmd-click, autocomplete, etc).
+  // Cheap (a single sessionStorage write per param change).
+  React.useEffect(() => {
+    rememberLastListUrl(basePath, currentListUrl);
+  }, [basePath, currentListUrl]);
 
   function navigateWith(mutator: (p: URLSearchParams) => void) {
     const next = new URLSearchParams(params.toString());

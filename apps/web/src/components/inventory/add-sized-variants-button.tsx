@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { resolveListReturnHref } from '@/lib/last-list-url';
 import { cn } from '@/lib/utils';
 import { bulkCreateSizedVariantsAction } from '@/server/actions/inventory';
 
@@ -137,10 +138,14 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
         `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`,
       );
       setOpen(false);
-      // Route back to the tab the source item lives on. Books have
-      // their own /dashboard/books page; everything else funnels to
-      // /dashboard/inventory.
-      router.push(source.itemType === 'book' ? '/dashboard/books' : '/dashboard/inventory');
+      // Route back to the tab the source item lives on, preserving
+      // the page / search / filter state the user was on (read from
+      // sessionStorage, written by the list table on every render).
+      // Books have their own /dashboard/books page; everything else
+      // funnels to /dashboard/inventory.
+      const basePath =
+        source.itemType === 'book' ? '/dashboard/books' : '/dashboard/inventory';
+      router.push(resolveListReturnHref(basePath, null));
     } finally {
       setBusy(false);
     }
