@@ -1,4 +1,4 @@
-import { Download } from 'lucide-react';
+import { Download, FileText } from 'lucide-react';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
@@ -46,7 +46,12 @@ export default async function DeadStockPage({
             <DaysPicker current={days} />
             <Button asChild variant="outline">
               <a href={`/api/reports/dead-stock/csv?days=${days}`}>
-                <Download className="h-4 w-4" /> Download CSV
+                <Download className="h-4 w-4" /> CSV
+              </a>
+            </Button>
+            <Button asChild variant="outline">
+              <a href={`/api/reports/dead-stock/pdf?days=${days}`}>
+                <FileText className="h-4 w-4" /> PDF
               </a>
             </Button>
           </div>
