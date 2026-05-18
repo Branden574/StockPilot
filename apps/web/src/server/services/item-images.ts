@@ -50,6 +50,38 @@ const getCachedItemImageSignedUrl = unstable_cache(
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
 );
 
+/**
+ * Signed URL that points at a server-side resized variant of the
+ * master via Supabase Storage's transform option. Used as a fallback
+ * when the row has no pre-resized `thumb_path` (items uploaded
+ * before migration 0122). Supabase resizes on demand (Pro plan
+ * feature) so we still get ~20-50 KB instead of the 2048px master,
+ * which is critical for PDF rendering: react-pdf fetches each
+ * `<Image>` src at render time and the master would balloon a PDF
+ * to hundreds of MB.
+ *
+ * Cached separately from the plain signed URL because the
+ * transform params are part of the URL signature.
+ */
+const getCachedItemImageTransformedSignedUrl = unstable_cache(
+  async (storagePath: string, width: number): Promise<string | null> => {
+    try {
+      const admin = createAdminClient();
+      const { data, error } = await admin.storage
+        .from('item-images')
+        .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
+          transform: { width, height: width, resize: 'cover' },
+        });
+      if (error || !data?.signedUrl) return null;
+      return data.signedUrl;
+    } catch {
+      return null;
+    }
+  },
+  ['item-image-signed-url-transform-v1'],
+  { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
+);
+
 export class ItemImagesService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -193,6 +225,76 @@ export class ItemImagesService {
       if (!url) continue;
       const thumbUrl = row.thumb_path ? urlByPath.get(row.thumb_path) ?? null : null;
       result.set(itemId, { url, thumbUrl, lqip: row.lqip });
+    }
+    return result;
+  }
+
+  /**
+   * Returns a Map<itemId, smallSignedUrl> sized for PDF rendering.
+   *
+   * Per-item resolution order:
+   *   1. If the row has `thumb_path` (uploads after 0122) — sign the
+   *      stored 200px WebP directly. Fastest path.
+   *   2. Otherwise — sign the master path WITH Supabase Storage's
+   *      transform option (width: targetWidth, resize: cover). This
+   *      asks Supabase's image-transformations service to resize on
+   *      the fly so the fetched bytes are still small even though
+   *      no pre-resized variant exists in storage.
+   *
+   * Either way the caller receives a URL that, when fetched, returns
+   * a ~20-50 KB image — small enough to embed in a PDF without
+   * blowing up the request. Rows whose item has no `item_images` row
+   * at all simply don't appear in the result map; the caller renders
+   * a placeholder.
+   *
+   * `targetWidth` defaults to 200 to match the stored thumb_path
+   * dimension and the typical PDF thumbnail cell (22pt × ~2x density).
+   */
+  async primaryImagesForPdfRendering(
+    itemIds: string[],
+    targetWidth = 200,
+  ): Promise<Map<string, string>> {
+    if (itemIds.length === 0) return new Map();
+
+    const { data, error } = await this.ctx.supabase
+      .from('item_images')
+      .select('item_id, storage_path, thumb_path, is_primary, sort_order')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', itemIds)
+      .order('is_primary', { ascending: false })
+      .order('sort_order', { ascending: true });
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    type Row = {
+      item_id: string;
+      storage_path: string;
+      thumb_path: string | null;
+    };
+    const pickByItem = new Map<string, Row>();
+    for (const row of (data ?? []) as Row[]) {
+      if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
+    }
+
+    // Sign each chosen image. Stored thumbs go through the plain
+    // signer (no transform). Items without thumb_path go through the
+    // transform signer so Supabase resizes the master on the way out.
+    // Both paths are cached for 25 days via unstable_cache so a
+    // repeat PDF render of the same items is a cache hit.
+    const entries = await Promise.all(
+      [...pickByItem.entries()].map(async ([itemId, row]) => {
+        const url = row.thumb_path
+          ? await getCachedItemImageSignedUrl(row.thumb_path)
+          : await getCachedItemImageTransformedSignedUrl(
+              row.storage_path,
+              targetWidth,
+            );
+        return url ? ([itemId, url] as const) : null;
+      }),
+    );
+
+    const result = new Map<string, string>();
+    for (const entry of entries) {
+      if (entry) result.set(entry[0], entry[1]);
     }
     return result;
   }

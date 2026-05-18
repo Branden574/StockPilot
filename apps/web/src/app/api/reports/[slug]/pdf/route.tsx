@@ -4,6 +4,7 @@ import { renderToStream } from '@react-pdf/renderer';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import {
   ReportTablePdf,
   type ReportSection,
@@ -481,44 +482,49 @@ export async function GET(
 
 /**
  * Hard cap on how many rows per section get inline thumbnails. Beyond
- * this, rows render the placeholder square. Keeps the PDF generation
- * bounded — react-pdf fetches each <Image src> over HTTP at render
- * time, and a 500-row report with thumbs would otherwise take 30+
- * seconds (and risk hitting the Vercel function timeout).
- *
- * 100 covers a normal page of "top items" reading; beyond it, the PDF
- * is for archival / spreadsheet-y consumption where row thumbs add
- * less value anyway.
+ * this, rows render the placeholder square. Keeps total PDF size and
+ * fetch volume bounded even with very long reports.
  */
 const PDF_IMAGE_ROW_CAP = 100;
 
 /**
- * One signed-URL batch lookup that returns a Map<itemId, thumbUrl>.
- * Empty input → empty map.
+ * Resolves item ids → small (200px) image bytes encoded as data:URIs,
+ * ready to embed in react-pdf <Image src>. Two phases:
  *
- * Important: we ONLY return entries for items that actually have a
- * pre-resized thumb_path (item_images.thumb_path, populated after
- * migration 0122). Items uploaded before 0122 — the bulk of any
- * legacy catalog — have no thumb and would otherwise fall back to
- * the 2048px master URL; react-pdf then tries to fetch + embed the
- * full image, which adds hundreds of MB to the render and hangs the
- * route on long reports. Better to render a clean placeholder than
- * to risk a stuck PDF.
+ *   1. Sign a small image URL per item. Items with thumb_path get
+ *      the stored 200px WebP; items without get the master URL with
+ *      Supabase Storage's resize transform applied so we still
+ *      fetch ~20-50 KB instead of the 2048px master.
+ *   2. Pre-fetch all signed URLs in parallel and convert to base64
+ *      data: URIs. react-pdf can then embed the bytes directly
+ *      without any per-image HTTP at render time — the difference
+ *      between a 30s render and a 2s render on long reports.
+ *
+ * Failures along the way (signing error, network blip, transform
+ * disabled on the project) leave the item OUT of the result map; the
+ * PDF row then renders the placeholder square. The PDF always finishes.
  */
 async function primaryThumbsByItemId(
   imagesSvc: ItemImagesService,
   itemIds: string[],
 ): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
   const unique = Array.from(new Set(itemIds.filter((v): v is string => Boolean(v))));
-  if (unique.length === 0) return out;
-  // Respect the row cap. Take the FIRST N unique ids so the order
-  // matches the report's row order — items at the top of the report
-  // are the ones the reader is most likely focused on.
+  if (unique.length === 0) return new Map();
+
+  // Respect the row cap — first N items in report order get photos.
   const capped = unique.slice(0, PDF_IMAGE_ROW_CAP);
-  const byId = await imagesSvc.primaryImagesWithThumbsForItems(capped);
-  for (const [itemId, img] of byId) {
-    if (img.thumbUrl) out.set(itemId, img.thumbUrl);
+
+  // Phase 1: sign per-item URLs (thumb path OR transformed master).
+  const urlByItem = await imagesSvc.primaryImagesForPdfRendering(capped, 200);
+  if (urlByItem.size === 0) return new Map();
+
+  // Phase 2: parallel-fetch into base64 data URIs. Failed fetches
+  // are simply omitted from the prefetched map; the row falls back
+  // to the placeholder square in the PDF.
+  const dataUriByItem = await prefetchImagesAsDataUris(urlByItem.entries());
+  const out = new Map<string, string>();
+  for (const [itemId, dataUri] of dataUriByItem) {
+    if (dataUri) out.set(itemId, dataUri);
   }
   return out;
 }

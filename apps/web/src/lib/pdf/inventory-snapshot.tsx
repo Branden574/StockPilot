@@ -1,4 +1,4 @@
-import { Document, Page, Text, View } from '@react-pdf/renderer';
+import { Document, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
 
 import { BrandedHeader } from './branding';
 import {
@@ -6,9 +6,13 @@ import {
   formatDateForPdf,
   formatNumberForPdf,
   pdfStyles,
+  PDF_COLORS,
 } from './styles';
 
 export interface SnapshotPdfRow {
+  /** Internal — used by the route to attach imageDataUri after the
+   *  row is built. Not rendered. */
+  itemId?: string;
   sku: string;
   name: string;
   categoryName: string | null;
@@ -17,6 +21,10 @@ export interface SnapshotPdfRow {
   quantityOnHand: number;
   unitCost: number;
   value: number;
+  /** Optional pre-fetched data: URI for the item's primary thumb.
+   *  Rows without an image render a placeholder square so column
+   *  alignment stays consistent across pages. */
+  imageDataUri?: string | null;
 }
 
 export interface SnapshotPdfWarehouseGroup {
@@ -49,6 +57,31 @@ const SNAP_COLS = {
   unit: 8,
   value: 10,
 } as const;
+
+const SNAP_IMAGE_WIDTH = 22; // pt
+
+const snapImageStyles = StyleSheet.create({
+  imageCell: {
+    width: SNAP_IMAGE_WIDTH,
+    marginRight: 4,
+    flexShrink: 0,
+  },
+  thumb: {
+    width: SNAP_IMAGE_WIDTH,
+    height: SNAP_IMAGE_WIDTH,
+    objectFit: 'cover',
+    borderRadius: 2,
+  },
+  thumbPlaceholder: {
+    width: SNAP_IMAGE_WIDTH,
+    height: SNAP_IMAGE_WIDTH,
+    backgroundColor: PDF_COLORS.bgSunk,
+    borderRadius: 2,
+    borderWidth: 0.5,
+    borderColor: PDF_COLORS.line,
+    borderStyle: 'solid',
+  },
+});
 
 export function InventorySnapshotPdf({
   org,
@@ -89,13 +122,22 @@ export function InventorySnapshotPdf({
             <Text style={pdfStyles.muted}>No active inventory to report.</Text>
           </View>
         ) : (
-          groups.map((g) => (
+          groups.map((g) => {
+            // Render the image column for this warehouse only when at
+            // least one row has a pre-fetched thumb. Orgs with zero
+            // thumbnails get the previous look exactly (no orphan
+            // empty column).
+            const showImages = g.rows.some((r) => r.imageDataUri);
+            return (
             <View key={g.warehouseName} style={pdfStyles.section}>
               <Text style={pdfStyles.sectionTitle}>
                 Warehouse: {g.warehouseName}
               </Text>
               <View style={pdfStyles.table}>
                 <View style={pdfStyles.tHeadRow} fixed>
+                  {showImages ? (
+                    <View style={snapImageStyles.imageCell} />
+                  ) : null}
                   <Text style={[pdfStyles.tHeadCell, { flex: SNAP_COLS.sku }]}>SKU</Text>
                   <Text style={[pdfStyles.tHeadCell, { flex: SNAP_COLS.name }]}>Name</Text>
                   <Text style={[pdfStyles.tHeadCell, { flex: SNAP_COLS.cat }]}>Category</Text>
@@ -119,11 +161,21 @@ export function InventorySnapshotPdf({
                 ) : (
                   g.rows.map((r, i) => (
                     <View
-                       
+
                       key={`${r.sku}-${i}`}
                       style={pdfStyles.tRow}
                       wrap={false}
                     >
+                      {showImages ? (
+                        <View style={snapImageStyles.imageCell}>
+                          {r.imageDataUri ? (
+                            // eslint-disable-next-line jsx-a11y/alt-text
+                            <Image src={r.imageDataUri} style={snapImageStyles.thumb} />
+                          ) : (
+                            <View style={snapImageStyles.thumbPlaceholder} />
+                          )}
+                        </View>
+                      ) : null}
                       <Text style={[pdfStyles.tCell, pdfStyles.tCellMono, { flex: SNAP_COLS.sku }]}>
                         {r.sku || '—'}
                       </Text>
@@ -151,6 +203,9 @@ export function InventorySnapshotPdf({
                 style={[pdfStyles.tHeadRow, { backgroundColor: pdfStyles.page.backgroundColor }]}
                 wrap={false}
               >
+                {showImages ? (
+                  <View style={snapImageStyles.imageCell} />
+                ) : null}
                 <Text style={[pdfStyles.tCell, pdfStyles.bold, { flex: SNAP_COLS.sku + SNAP_COLS.name + SNAP_COLS.cat + SNAP_COLS.loc }]}>
                   Subtotal · {g.warehouseName}
                 </Text>
@@ -163,7 +218,8 @@ export function InventorySnapshotPdf({
                 </Text>
               </View>
             </View>
-          ))
+            );
+          })
         )}
 
         <View style={pdfStyles.totalsWrap} wrap={false}>
