@@ -186,10 +186,20 @@ export async function listMessages(
   // still gets chronological (oldest-first) order. Doing it this way
   // means we never materialize a 1000-row history just to throw most
   // of it away — the LIMIT is applied at the DB layer.
+  //
+  // Defense-in-depth: callers pre-validate session ownership via
+  // getSession (which enforces .eq('user_id', ctx.userId)), and RLS
+  // on ai_chat_messages also enforces it. The inner join here gives
+  // a third gate at the query layer so a future caller that forgets
+  // to call getSession first still can't read another user's messages.
   const { data, error } = await ctx.supabase
     .from('ai_chat_messages')
-    .select('id, role, content, tool_calls, created_at')
+    .select(
+      'id, role, content, tool_calls, created_at, ai_chat_sessions!inner(user_id, organization_id)',
+    )
     .eq('session_id', sessionId)
+    .eq('ai_chat_sessions.user_id', ctx.userId)
+    .eq('ai_chat_sessions.organization_id', ctx.organizationId)
     .order('created_at', { ascending: false })
     .limit(MAX_LOADED_MESSAGES);
   if (error) throw new Error(error.message);

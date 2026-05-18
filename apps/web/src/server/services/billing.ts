@@ -99,21 +99,34 @@ export class BillingService {
 /**
  * Webhook-side: looks up an org by its Stripe customer ID and updates plan
  * + subscription metadata. Uses the admin client (bypasses RLS).
+ *
+ * `plan` may be null when the webhook payload didn't carry recognizable
+ * plan info (missing metadata + price id not in STRIPE_PRICE_TO_PLAN).
+ * In that case we update objective Stripe state (subscription id, trial
+ * end) but leave the org's plan column untouched — preventing a silent
+ * downgrade of a paying customer. Cancellations still force plan=free
+ * (that's a definitive Stripe state, not a missing-data case).
  */
 export async function syncSubscriptionFromStripe(params: {
   stripeCustomerId: string;
   stripeSubscriptionId: string | null;
   status: string;
-  plan: PlanId;
+  plan: PlanId | null;
   trialEndsAt: string | null;
 }) {
   const admin = createAdminClient();
+  const updates: Record<string, unknown> = {
+    stripe_subscription_id: params.stripeSubscriptionId,
+    trial_ends_at: params.trialEndsAt,
+  };
+  if (params.status === 'canceled') {
+    updates.plan = 'free';
+  } else if (params.plan !== null) {
+    updates.plan = params.plan;
+  }
+  // else: leave plan column unchanged
   await admin
     .from('organizations')
-    .update({
-      stripe_subscription_id: params.stripeSubscriptionId,
-      plan: params.status === 'canceled' ? 'free' : params.plan,
-      trial_ends_at: params.trialEndsAt,
-    })
+    .update(updates)
     .eq('stripe_customer_id', params.stripeCustomerId);
 }
