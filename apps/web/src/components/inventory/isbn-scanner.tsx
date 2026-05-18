@@ -231,7 +231,12 @@ export function IsbnScanner({
       cancelled = true;
       stopAll();
     };
-  }, [open, handleHit, stopAll]);
+    // Real-bug fix from the 2026-05-17 audit: `isIsbn` was missing from
+    // the deps array, so toggling between ISBN-only and general-barcode
+    // mode while the scanner is open left the detector configured with
+    // the previous format set. Now the effect tears down + re-initializes
+    // when isIsbn flips.
+  }, [open, handleHit, stopAll, isIsbn]);
 
   function submitManual() {
     const cleaned = manualIsbn.trim();

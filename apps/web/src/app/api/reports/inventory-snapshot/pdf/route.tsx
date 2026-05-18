@@ -118,6 +118,7 @@ export async function GET(req: NextRequest) {
     const now = new Date();
     const asOf = now.toISOString();
     const stream = await renderToStream(
+      // eslint-disable-next-line react-hooks/error-boundaries -- RSC + react-pdf renderToStream; rule targets client error boundaries which don't apply here
       <InventorySnapshotPdf
         org={{ name: orgName, logoUrl: orgLogoUrl }}
         groups={groups}
