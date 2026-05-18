@@ -365,12 +365,20 @@ export default function CycleCountDetail() {
             </Text>
           </View>
           {header && (
-            <Pressable
-              onPress={() => router.push(`/cycle-count/scan/${header.id}`)}
-              style={styles.scanBtn}
-            >
-              <Text style={styles.scanBtnLabel}>Scan to count</Text>
-            </Pressable>
+            <View style={{ flexDirection: 'row', gap: space.xs }}>
+              <Pressable
+                onPress={() => router.push(`/cycle-count/ai-scan/${header.id}`)}
+                style={[styles.scanBtn, styles.aiScanBtn]}
+              >
+                <Text style={styles.scanBtnLabel}>AI Scan</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => router.push(`/cycle-count/scan/${header.id}`)}
+                style={styles.scanBtn}
+              >
+                <Text style={styles.scanBtnLabel}>Scan</Text>
+              </Pressable>
+            </View>
           )}
         </View>
         <View style={styles.badgeRow}>
@@ -498,9 +506,14 @@ const styles = StyleSheet.create({
   badgeRow: { marginTop: space.sm, flexDirection: 'row', alignItems: 'center' },
   scanBtn: {
     paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     borderRadius: radius.md,
     backgroundColor: theme.primary,
+  },
+  aiScanBtn: {
+    // Slight purple tint so the AI button is visually distinct from
+    // the regular Scan button — same hierarchy, different affordance.
+    backgroundColor: '#7c3aed',
   },
   scanBtnLabel: { color: '#fff', fontSize: 13, fontWeight: '700' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xl },
