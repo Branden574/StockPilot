@@ -436,13 +436,17 @@ export class CycleCountsService {
     if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
   }
 
-  /** Records a counted quantity for a single line. */
+  /** Records a counted quantity for a single line. When `aiScanId` is
+   *  set, the line's `ai_scan_id` FK is also written so the audit
+   *  trail traces the count back to the AI Shelf Scan that proposed
+   *  it. NULL on the existing manual + barcode paths. */
   async recordCount(input: {
     cycleCountId: string;
     lineId: string;
     countedQuantity: number;
     reason?: string | null;
     notes?: string | null;
+    aiScanId?: string | null;
   }): Promise<void> {
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(input.cycleCountId);
@@ -451,15 +455,22 @@ export class CycleCountsService {
     // returned ok=true when RLS denied a staff record, which made the
     // mobile app look like it had recorded a count even though the DB
     // had ignored it. See hunter findings #3 + #13.
+    const update: Record<string, unknown> = {
+      counted_quantity: input.countedQuantity,
+      reason: input.reason ?? null,
+      notes: input.notes ?? null,
+      counted_by: this.ctx.userId,
+      counted_at: new Date().toISOString(),
+    };
+    // Only include ai_scan_id when the caller provides one — leaving
+    // the column untouched on manual recounts preserves any prior AI
+    // trace instead of nulling it out on a manual override.
+    if (input.aiScanId !== undefined) {
+      update.ai_scan_id = input.aiScanId;
+    }
     const { data, error } = await this.ctx.supabase
       .from('cycle_count_lines')
-      .update({
-        counted_quantity: input.countedQuantity,
-        reason: input.reason ?? null,
-        notes: input.notes ?? null,
-        counted_by: this.ctx.userId,
-        counted_at: new Date().toISOString(),
-      })
+      .update(update)
       .eq('cycle_count_id', input.cycleCountId)
       .eq('id', input.lineId)
       .select('id')
@@ -473,6 +484,152 @@ export class CycleCountsService {
       throw new ServiceError(
         'not_found',
         'Line not found or no longer editable. Reload the count.',
+      );
+    }
+  }
+
+  /**
+   * AI Shelf Scan v1 — returns the cycle count's line set in the
+   * minimal shape the Gemini prompt needs: lineId, sku, name, isbn,
+   * author. The prompt assembler in `lib/ai/shelf-scan.ts` builds the
+   * model input from this; the parser uses the lineIds to map matched
+   * SKUs back to rows for the review screen.
+   *
+   * Books-only filter — v1 only scans books. Non-book items in the
+   * count are simply omitted from the line set (Gemini wouldn't
+   * match them anyway given the prompt's book-focused rules).
+   */
+  async getLineSetForAiScan(cycleCountId: string): Promise<
+    Array<{
+      lineId: string;
+      sku: string;
+      name: string;
+      isbn: string | null;
+      author: string | null;
+    }>
+  > {
+    // Reuse the existing session-access gate — same RBAC + warehouse
+    // scope as recordCount. Throws not_found / forbidden which the
+    // route handler maps to 404 / 403.
+    await this.assertSessionAccess(cycleCountId);
+
+    const { data, error } = await this.ctx.supabase
+      .from('cycle_count_lines')
+      .select(
+        `id,
+         item:inventory_items!item_id (
+           sku, name, barcode, item_type, custom_fields
+         )`,
+      )
+      .eq('cycle_count_id', cycleCountId);
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    const out: Array<{
+      lineId: string;
+      sku: string;
+      name: string;
+      isbn: string | null;
+      author: string | null;
+    }> = [];
+    for (const row of (data ?? []) as Array<{
+      id: string;
+      item:
+        | {
+            sku: string;
+            name: string;
+            barcode: string | null;
+            item_type: string | null;
+            custom_fields: Record<string, unknown> | null;
+          }
+        | Array<{
+            sku: string;
+            name: string;
+            barcode: string | null;
+            item_type: string | null;
+            custom_fields: Record<string, unknown> | null;
+          }>
+        | null;
+    }>) {
+      const item = Array.isArray(row.item) ? row.item[0] : row.item;
+      if (!item) continue;
+      // Books-only filter for v1.
+      if (item.item_type !== 'book') continue;
+      const cf = (item.custom_fields ?? {}) as Record<string, unknown>;
+      const author = typeof cf.author === 'string' ? cf.author : null;
+      out.push({
+        lineId: row.id,
+        sku: item.sku,
+        name: item.name,
+        isbn: item.barcode ?? null,
+        author,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * AI Shelf Scan v1 — inserts the audit row representing one scan
+   * attempt. Called from the route handler AFTER the Gemini call
+   * returns (we record the response even when the user later
+   * abandons the review) so the response data is preserved for
+   * tuning the model / thresholds.
+   */
+  async insertAiScan(input: {
+    cycleCountId: string;
+    photoStoragePath: string;
+    geminiResponse: unknown;
+    modelVersion: string;
+  }): Promise<{ id: string }> {
+    assertPermission(this.ctx, 'stock:adjust');
+    await this.assertSessionAccess(input.cycleCountId);
+    // Look up org_id from the parent count — we don't want to trust
+    // a request param when the value is derivable.
+    const { data: cc, error: ccErr } = await this.ctx.supabase
+      .from('cycle_counts')
+      .select('organization_id')
+      .eq('id', input.cycleCountId)
+      .maybeSingle();
+    if (ccErr) throw new ServiceError('internal_error', ccErr.message);
+    if (!cc) throw new ServiceError('not_found', 'Cycle count not found');
+
+    const { data, error } = await this.ctx.supabase
+      .from('cycle_count_ai_scans')
+      .insert({
+        organization_id: (cc as { organization_id: string }).organization_id,
+        cycle_count_id: input.cycleCountId,
+        created_by: this.ctx.userId,
+        photo_storage_path: input.photoStoragePath,
+        gemini_response: input.geminiResponse,
+        model_version: input.modelVersion,
+      })
+      .select('id')
+      .single();
+    if (error) throw new ServiceError('internal_error', error.message);
+    return { id: (data as { id: string }).id };
+  }
+
+  /**
+   * AI Shelf Scan v1 — marks a scan confirmed when the user has
+   * reviewed + saved the proposed counts. confirmed_at + confirmed_by
+   * are filled in via the existing RLS policy (created_by or
+   * manager+).
+   */
+  async markAiScanConfirmed(scanId: string): Promise<void> {
+    assertPermission(this.ctx, 'stock:adjust');
+    const { data, error } = await this.ctx.supabase
+      .from('cycle_count_ai_scans')
+      .update({
+        confirmed_at: new Date().toISOString(),
+        confirmed_by: this.ctx.userId,
+      })
+      .eq('id', scanId)
+      .select('id')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) {
+      throw new ServiceError(
+        'not_found',
+        'Scan not found or no longer editable.',
       );
     }
   }

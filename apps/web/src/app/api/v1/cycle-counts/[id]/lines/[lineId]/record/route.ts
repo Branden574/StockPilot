@@ -13,6 +13,11 @@ const bodySchema = z.object({
   countedQuantity: z.coerce.number().min(0).max(1_000_000_000),
   reason: z.string().max(200).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
+  // AI Shelf Scan v1 — when the count came from an AI proposal that
+  // the user confirmed on the review screen, this points at the
+  // cycle_count_ai_scans row. NULL/omitted for manual + barcode
+  // entries (unchanged existing behavior).
+  aiScanId: z.string().uuid().nullable().optional(),
 });
 
 /**
@@ -71,6 +76,7 @@ export async function POST(
       countedQuantity: parsed.data.countedQuantity,
       reason: parsed.data.reason ?? null,
       notes: parsed.data.notes ?? null,
+      aiScanId: parsed.data.aiScanId ?? null,
     });
     return NextResponse.json({ ok: true });
   } catch (e) {
