@@ -4,6 +4,7 @@ import { renderToStream } from '@react-pdf/renderer';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import {
   InventorySnapshotPdf,
   type SnapshotPdfRow,
@@ -11,6 +12,7 @@ import {
 } from '@/lib/pdf/inventory-snapshot';
 import { audit } from '@/server/services/audit';
 import { ServiceError } from '@/server/services/context';
+import { ItemImagesService } from '@/server/services/item-images';
 import { ReportsService } from '@/server/services/reports';
 
 import { hasPermission } from '@stockpilot/core';
@@ -81,6 +83,9 @@ export async function GET(req: NextRequest) {
       const key = r.warehouseName ?? 'Unassigned';
       const list = groupsByWarehouse.get(key) ?? [];
       list.push({
+        // Internal field — used below to attach imageDataUri after
+        // the groups are sorted. Not rendered.
+        itemId: r.itemId,
         sku: r.sku,
         name: r.name,
         categoryName: r.categoryName,
@@ -102,6 +107,45 @@ export async function GET(req: NextRequest) {
         return { warehouseName, rows: sorted, subtotalUnits, subtotalValue };
       })
       .sort((a, b) => b.subtotalValue - a.subtotalValue);
+
+    // ── Attach item photos ─────────────────────────────────────────
+    // Walk the groups in display order, collect itemIds up to the
+    // image-row cap, resolve each to a small (200px) signed URL —
+    // pre-resized thumb_path when available, transformed master
+    // otherwise — then parallel-fetch them into base64 data URIs so
+    // react-pdf can embed without any per-image HTTP at render time.
+    //
+    // Top-N policy: the FIRST N items in display order (highest-value
+    // warehouses first, highest-value items within each warehouse)
+    // get photos. Beyond N, rows render the placeholder square. Keeps
+    // PDF size + render time bounded on large catalogs.
+    const PDF_SNAPSHOT_IMAGE_CAP = 100;
+    const orderedItemIds: string[] = [];
+    for (const g of groups) {
+      for (const row of g.rows) {
+        if (row.itemId && orderedItemIds.length < PDF_SNAPSHOT_IMAGE_CAP) {
+          orderedItemIds.push(row.itemId);
+        }
+      }
+    }
+    if (orderedItemIds.length > 0) {
+      const imagesSvc = new ItemImagesService(ctx);
+      const urlByItem = await imagesSvc.primaryImagesForPdfRendering(
+        orderedItemIds,
+        200,
+      );
+      const dataUriByItem = await prefetchImagesAsDataUris(urlByItem.entries());
+      // Mutate rows in place — attaches imageDataUri where one
+      // resolved. Rows without an entry stay with imageDataUri
+      // undefined, which renders the placeholder.
+      for (const g of groups) {
+        for (const row of g.rows) {
+          if (!row.itemId) continue;
+          const dataUri = dataUriByItem.get(row.itemId);
+          if (dataUri) row.imageDataUri = dataUri;
+        }
+      }
+    }
 
     const { data: org } = await ctx.supabase
       .from('organizations')
