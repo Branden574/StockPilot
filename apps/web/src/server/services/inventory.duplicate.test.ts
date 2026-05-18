@@ -23,24 +23,26 @@ vi.mock('./audit', () => ({
 
 import { InventoryService } from './inventory';
 
-function makeCtx(rpcImpl: (name: string, args: Record<string, unknown>) => unknown, opts?: {
-  existingSkus?: Set<string>;
-  originalSku?: string;
-}) {
-  const existingSkus = opts?.existingSkus ?? new Set<string>();
+function makeCtx(
+  rpcImpl: (name: string, args: Record<string, unknown>) => unknown,
+  opts?: { originalSku?: string; rpcError?: { code: string; message: string } | null },
+) {
   const originalSku = opts?.originalSku ?? 'SP-ABC';
+  const rpcError = opts?.rpcError ?? null;
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const supabase = {
     rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
       rpcCalls.push({ name, args });
+      if (rpcError) return { data: null, error: rpcError };
       const data = await rpcImpl(name, args);
       return { data, error: null };
     }),
-    // Mock matches two distinct query shapes used by duplicateItem:
-    //   1) .from('inventory_items').select('sku').eq('organization_id').eq('id').maybeSingle()
-    //      — original-row lookup (two .eq() then maybeSingle).
-    //   2) .from('inventory_items').select('sku').eq('organization_id').in('sku', candidates)
-    //      — collision check (one .eq() then .in() which is awaited directly).
+    // Mock matches a single query shape used by duplicateItem:
+    //   .from('inventory_items').select('sku').eq('organization_id').eq('id').maybeSingle()
+    // The (org, sku, bin_location) constraint from migration 0126 means
+    // we no longer need a collision-check round-trip — the RPC's insert
+    // either succeeds or 23505s, and the service maps the latter to a
+    // user-friendly ServiceError.
     from(table: string) {
       if (table !== 'inventory_items') {
         throw new Error(`unexpected table ${table}`);
@@ -48,15 +50,6 @@ function makeCtx(rpcImpl: (name: string, args: Record<string, unknown>) => unkno
       return {
         select: () => ({
           eq: () => ({
-            // Collision-check branch: .eq() → .in() → awaited
-            in: (_col: string, skus: string[]) => ({
-              then: (cb: (v: { data: Array<{ sku: string }>; error: null }) => void) =>
-                cb({
-                  data: skus.filter((s) => existingSkus.has(s)).map((s) => ({ sku: s })),
-                  error: null,
-                }),
-            }),
-            // Original-lookup branch: .eq() → .eq() → .maybeSingle()
             eq: () => ({
               maybeSingle: async () => ({ data: { sku: originalSku }, error: null }),
             }),
@@ -79,9 +72,8 @@ function makeCtx(rpcImpl: (name: string, args: Record<string, unknown>) => unkno
 describe('InventoryService.duplicateItem', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('suffixes the SKU and calls duplicate_inventory_item RPC', async () => {
+  it('passes the original SKU through and forwards rack overrides', async () => {
     const { ctx, rpcCalls } = makeCtx(async () => 'new-item-id', {
-      existingSkus: new Set(),
       originalSku: 'SP-ABC',
     });
     const svc = new InventoryService(ctx);
@@ -98,41 +90,19 @@ describe('InventoryService.duplicateItem', () => {
     expect(call.name).toBe('duplicate_inventory_item');
     expect(call.args.p_original_id).toBe('00000000-0000-0000-0000-000000000001');
     const overrides = call.args.p_overrides as Record<string, unknown>;
-    expect(overrides.sku).toBe('SP-ABC-2');
+    expect(overrides.sku).toBe('SP-ABC');
     expect(overrides.quantity).toBe(5);
     expect(overrides.rack_number).toBe('38');
     expect(overrides.rack_row).toBe('A');
     expect(overrides.bin_location).toBe('38-A');
   });
 
-  it('bumps suffix past collisions until -99, then throws', async () => {
-    // -2 and -3 are taken; -4 should be chosen.
-    const { ctx, rpcCalls } = makeCtx(async () => 'new-id', {
-      existingSkus: new Set(['SP-ABC-2', 'SP-ABC-3']),
+  it('maps 23505 from the RPC to a friendly "already at this rack" error', async () => {
+    const { ctx } = makeCtx(async () => null, {
       originalSku: 'SP-ABC',
+      rpcError: { code: '23505', message: 'duplicate key' },
     });
     const svc = new InventoryService(ctx);
-    await svc.duplicateItem({
-      originalId: '00000000-0000-0000-0000-000000000001',
-      itemType: 'product',
-      rackNumber: '38',
-      rackRow: null,
-      quantity: 0,
-    });
-    expect((rpcCalls[0]!.args.p_overrides as { sku: string }).sku).toBe('SP-ABC-4');
-  });
-
-  it('throws too_many_duplicates when -2..-99 are all taken', async () => {
-    const all = new Set<string>();
-    for (let i = 2; i <= 99; i += 1) all.add(`SP-ABC-${i}`);
-    const { ctx } = makeCtx(async () => 'new-id', {
-      existingSkus: all,
-      originalSku: 'SP-ABC',
-    });
-    const svc = new InventoryService(ctx);
-    // ServiceError carries the machine-readable identifier on .code,
-    // not in .message — assert against the code so the user-facing
-    // message stays free to evolve as plain English.
     await expect(
       svc.duplicateItem({
         originalId: '00000000-0000-0000-0000-000000000001',
@@ -141,12 +111,11 @@ describe('InventoryService.duplicateItem', () => {
         rackRow: null,
         quantity: 0,
       }),
-    ).rejects.toMatchObject({ code: 'too_many_duplicates' });
+    ).rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('book branch sends crate fields and book_ bin label', async () => {
     const { ctx, rpcCalls } = makeCtx(async () => 'new-id', {
-      existingSkus: new Set(),
       originalSku: 'BK-XYZ',
     });
     const svc = new InventoryService(ctx);
@@ -160,6 +129,7 @@ describe('InventoryService.duplicateItem', () => {
       quantity: 0,
     });
     const overrides = rpcCalls[0]!.args.p_overrides as Record<string, unknown>;
+    expect(overrides.sku).toBe('BK-XYZ');
     expect(overrides.book_rack_number).toBe('12');
     expect(overrides.book_rack_row).toBe('C');
     expect(overrides.book_crate_color).toBe('red');

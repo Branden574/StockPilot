@@ -590,21 +590,17 @@ export class InventoryService {
   }
 
   /**
-   * Clone an existing item to a new physical location. Pre-computes a
-   * unique SKU by suffixing the original (-2, -3, …, -99), then calls
-   * the duplicate_inventory_item RPC which atomically inserts the item
-   * row + tag rows + image rows + optional initial movement.
-   *
-   * Why we compute the SKU here (vs in-RPC):
-   *   - We already scope to organization_id via Supabase client, so the
-   *     collision query is RLS-safe.
-   *   - Keeping retry logic in TS lets us throw a typed ServiceError
-   *     ('too_many_duplicates') instead of a generic 23505.
+   * Clone an existing item to a new physical location. Passes the
+   * original SKU straight through — the (org, sku, bin_location)
+   * partial unique index from migration 0126 lets the same SKU live
+   * at multiple racks, so we don't need to mangle it with a suffix.
+   * Same SKU at the SAME bin_location still 23505s (rendered to the
+   * user as a friendly "already exists at this rack" error).
    */
   async duplicateItem(input: DuplicateItemInput): Promise<string> {
     assertPermission(this.ctx, 'items:create');
 
-    // Load the original SKU so we can compute the suffix.
+    // Load the original SKU so we can pass it through to the RPC.
     const { data: original, error: origErr } = await this.ctx.supabase
       .from('inventory_items')
       .select('sku')
@@ -614,30 +610,11 @@ export class InventoryService {
     if (origErr || !original) {
       throw new ServiceError('not_found', 'Original item no longer exists.');
     }
-
-    // Build candidate suffix list -2 through -99.
-    const baseSku = (original as { sku: string }).sku;
-    const candidates: string[] = [];
-    for (let i = 2; i <= 99; i += 1) candidates.push(`${baseSku}-${i}`);
-
-    // Single round-trip: pull any taken candidates.
-    const { data: taken } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('sku')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('sku', candidates);
-    const takenSet = new Set(((taken ?? []) as Array<{ sku: string }>).map((r) => r.sku));
-    const newSku = candidates.find((c) => !takenSet.has(c));
-    if (!newSku) {
-      throw new ServiceError(
-        'too_many_duplicates',
-        'Too many duplicates of this SKU — please rename the original.',
-      );
-    }
+    const sku = (original as { sku: string }).sku;
 
     // Compose bin_location label + RPC overrides per branch.
     const overrides: Record<string, unknown> = {
-      sku: newSku,
+      sku,
       quantity: input.quantity,
     };
     if (input.itemType === 'book') {
@@ -669,7 +646,7 @@ export class InventoryService {
       if (rpcErr.code === '23505') {
         throw new ServiceError(
           'conflict',
-          'A different request just used that SKU — please retry.',
+          'This SKU already exists at the chosen rack. Pick a different rack or row.',
         );
       }
       throw new ServiceError('internal_error', rpcErr.message);
@@ -680,7 +657,7 @@ export class InventoryService {
         event: 'inventory.item.duplicated',
         entityType: 'inventory_item',
         entityId: newId as string,
-        extra: { source_item_id: input.originalId, sku_suffix_used: newSku },
+        extra: { source_item_id: input.originalId, sku },
       },
       this.ctx,
     );

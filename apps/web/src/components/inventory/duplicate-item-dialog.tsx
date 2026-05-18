@@ -17,6 +17,14 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { CRATE_COLORS } from '@/lib/book-storage';
 import { duplicateItemAction } from '@/server/actions/duplicate-item';
 
 interface Props {
@@ -147,23 +155,40 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
 
           {isBook && (
             <div className="grid grid-cols-2 gap-3">
-              <div>
+              <div className="space-y-1.5">
                 <Label htmlFor="dup-crate-color">Crate color</Label>
-                <Input
-                  id="dup-crate-color"
-                  value={crateColor}
-                  onChange={(e) => setCrateColor(e.target.value)}
-                  placeholder="red"
+                <Select
+                  value={crateColor || undefined}
+                  onValueChange={setCrateColor}
                   disabled={pending}
-                />
+                >
+                  <SelectTrigger id="dup-crate-color">
+                    <SelectValue placeholder="Pick a color" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CRATE_COLORS.map((c) => (
+                      <SelectItem key={c.slug} value={c.slug}>
+                        <span className="flex items-center gap-2">
+                          <span
+                            aria-hidden
+                            className="border-border inline-block h-3 w-3 rounded-full border"
+                            style={{ backgroundColor: c.hex }}
+                          />
+                          {c.label}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-              <div>
+              <div className="space-y-1.5">
                 <Label htmlFor="dup-crate-number">Crate number</Label>
                 <Input
                   id="dup-crate-number"
                   value={crateNumber}
                   onChange={(e) => setCrateNumber(e.target.value)}
                   placeholder="4"
+                  inputMode="numeric"
                   disabled={pending}
                 />
               </div>
