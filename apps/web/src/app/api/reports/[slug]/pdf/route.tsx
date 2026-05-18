@@ -480,10 +480,30 @@ export async function GET(
 }
 
 /**
- * One signed-URL batch lookup that returns a Map<itemId, thumbUrl|null>.
- * Empty input → empty map. Falls back to the master URL when the item
- * has no pre-resized thumbnail (rows uploaded before migration 0122) so
- * legacy items still show *some* image instead of a blank placeholder.
+ * Hard cap on how many rows per section get inline thumbnails. Beyond
+ * this, rows render the placeholder square. Keeps the PDF generation
+ * bounded — react-pdf fetches each <Image src> over HTTP at render
+ * time, and a 500-row report with thumbs would otherwise take 30+
+ * seconds (and risk hitting the Vercel function timeout).
+ *
+ * 100 covers a normal page of "top items" reading; beyond it, the PDF
+ * is for archival / spreadsheet-y consumption where row thumbs add
+ * less value anyway.
+ */
+const PDF_IMAGE_ROW_CAP = 100;
+
+/**
+ * One signed-URL batch lookup that returns a Map<itemId, thumbUrl>.
+ * Empty input → empty map.
+ *
+ * Important: we ONLY return entries for items that actually have a
+ * pre-resized thumb_path (item_images.thumb_path, populated after
+ * migration 0122). Items uploaded before 0122 — the bulk of any
+ * legacy catalog — have no thumb and would otherwise fall back to
+ * the 2048px master URL; react-pdf then tries to fetch + embed the
+ * full image, which adds hundreds of MB to the render and hangs the
+ * route on long reports. Better to render a clean placeholder than
+ * to risk a stuck PDF.
  */
 async function primaryThumbsByItemId(
   imagesSvc: ItemImagesService,
@@ -492,9 +512,13 @@ async function primaryThumbsByItemId(
   const out = new Map<string, string>();
   const unique = Array.from(new Set(itemIds.filter((v): v is string => Boolean(v))));
   if (unique.length === 0) return out;
-  const byId = await imagesSvc.primaryImagesWithThumbsForItems(unique);
+  // Respect the row cap. Take the FIRST N unique ids so the order
+  // matches the report's row order — items at the top of the report
+  // are the ones the reader is most likely focused on.
+  const capped = unique.slice(0, PDF_IMAGE_ROW_CAP);
+  const byId = await imagesSvc.primaryImagesWithThumbsForItems(capped);
   for (const [itemId, img] of byId) {
-    out.set(itemId, img.thumbUrl ?? img.url);
+    if (img.thumbUrl) out.set(itemId, img.thumbUrl);
   }
   return out;
 }
