@@ -172,6 +172,10 @@ export class ReportsService {
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
       .eq('status', 'active')
+      // Rentals (canopies, supplies) circulate rather than sell —
+      // excluded from every report so valuations and forecasts
+      // reflect only sellable inventory.
+      .eq('is_rental', false)
       .order('quantity_on_hand', { ascending: false })
       // Explicit cap — relying on PostgREST's default 1000-row limit
       // is implicit and inconsistent across versions; safer to declare.
@@ -363,6 +367,7 @@ export class ReportsService {
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
       .eq('status', 'active')
+      .eq('is_rental', false)
       .gt('reorder_point', 0)
       .order('quantity_on_hand', { ascending: true })
       .limit(5_000);
@@ -689,6 +694,7 @@ export class ReportsService {
         .eq('organization_id', this.ctx.organizationId)
         .is('deleted_at', null)
         .eq('status', 'active')
+        .eq('is_rental', false)
         .or('is_bundle.is.null,is_bundle.eq.false')
         .limit(50_000),
     ]);
@@ -799,6 +805,7 @@ export class ReportsService {
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
       .eq('status', 'active')
+      .eq('is_rental', false)
       .gt('quantity_on_hand', 0)
       .or('is_bundle.is.null,is_bundle.eq.false');
     if (itemsErr) throw new ServiceError('internal_error', itemsErr.message);

@@ -28,10 +28,14 @@ export async function GET(req: Request) {
   const access = await getWarehouseAccess(ctx);
 
   // Items: name OR sku OR barcode match.
+  // Rentals are a separate inventory class — global search is for
+  // sellable/regular items. Rental items are findable via the
+  // /dashboard/rentals/items catalog.
   const itemsQ = ctx.supabase
     .from('inventory_items')
     .select('id, name, sku, quantity_on_hand, warehouse_id')
     .eq('organization_id', ctx.organizationId)
+    .eq('is_rental', false)
     .or(`name.ilike.${like},sku.ilike.${like},barcode.ilike.${like}`)
     .order('updated_at', { ascending: false })
     .limit(5);

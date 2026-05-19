@@ -238,6 +238,7 @@ const listCategoriesTool: ToolExecutor = {
       .eq('organization_id', ctx.organizationId)
       .is('deleted_at', null)
       .eq('status', 'active')
+      .eq('is_rental', false)
       .limit(50_000);
     const countByCat = new Map<string, number>();
     for (const row of (itemRows ?? []) as Array<{ category_id: string | null }>) {
@@ -364,6 +365,7 @@ const inventoryByWarehouseTool: ToolExecutor = {
       .eq('organization_id', ctx.organizationId)
       .is('deleted_at', null)
       .eq('status', 'active')
+      .eq('is_rental', false)
       // Explicit cap. The aggregation is computed in JS so the row
       // count drives the payload size and Lambda memory directly.
       // 50k is enough headroom for the biggest realistic single-org
@@ -440,6 +442,7 @@ const inventoryByCategoryTool: ToolExecutor = {
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
         .eq('status', 'active')
+        .eq('is_rental', false)
         // Explicit cap — same rationale as inventoryByWarehouse above.
         .limit(50_000),
       ctx.supabase
