@@ -40,11 +40,27 @@ export function SignatureCollector({
   const router = useRouter();
   const padRef = React.useRef<SignaturePadHandle>(null);
   const [padEmpty, setPadEmpty] = React.useState(true);
+  // Default-off: the most common case is the original requester
+  // receiving the order, so prefill their name + email. Toggling the
+  // checkbox below clears both fields so the actual recipient types
+  // their own name without having to first wipe a stale default.
+  const [onBehalfOf, setOnBehalfOf] = React.useState(false);
   const [signerName, setSignerName] = React.useState(summary.requesterName ?? '');
   const [signerEmail, setSignerEmail] = React.useState(summary.requesterEmail ?? '');
   const [submitting, setSubmitting] = React.useState(false);
   const [submitted, setSubmitted] = React.useState(false);
   const [countdown, setCountdown] = React.useState(REDIRECT_SECONDS);
+
+  function toggleOnBehalfOf(next: boolean) {
+    setOnBehalfOf(next);
+    if (next) {
+      setSignerName('');
+      setSignerEmail('');
+    } else {
+      setSignerName(summary.requesterName ?? '');
+      setSignerEmail(summary.requesterEmail ?? '');
+    }
+  }
 
   // After the success state mounts, count down once per second and
   // navigate to /dashboard/orders?status=completed when we hit 0. The
@@ -162,8 +178,31 @@ export function SignatureCollector({
       </section>
 
       <section className="border-border bg-card space-y-3 rounded-2xl border p-4">
+        {summary.requesterName ? (
+          <label className="border-border hover:bg-muted/40 flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm">
+            <input
+              type="checkbox"
+              checked={onBehalfOf}
+              onChange={(e) => toggleOnBehalfOf(e.target.checked)}
+              className="mt-0.5 h-4 w-4 cursor-pointer"
+            />
+            <span className="flex-1">
+              <span className="font-medium">Someone else is receiving</span>
+              <span className="text-muted-foreground mt-0.5 block text-xs">
+                Check this if you&apos;re picking up on behalf of{' '}
+                <span className="text-foreground font-medium">
+                  {summary.requesterName}
+                </span>
+                . The order will be marked completed and they&apos;ll be
+                notified by email.
+              </span>
+            </span>
+          </label>
+        ) : null}
         <div className="space-y-2">
-          <Label htmlFor="signer-name">Your name</Label>
+          <Label htmlFor="signer-name">
+            {onBehalfOf ? 'Your name (the person picking up)' : 'Your name'}
+          </Label>
           <Input
             id="signer-name"
             value={signerName}
@@ -171,10 +210,19 @@ export function SignatureCollector({
             placeholder="Full name"
             maxLength={120}
             autoComplete="name"
+            autoFocus={onBehalfOf}
           />
+          {onBehalfOf && summary.requesterName ? (
+            <p className="text-muted-foreground text-[11px]">
+              Signing on behalf of{' '}
+              <span className="text-foreground">{summary.requesterName}</span>.
+            </p>
+          ) : null}
         </div>
         <div className="space-y-2">
-          <Label htmlFor="signer-email">Email</Label>
+          <Label htmlFor="signer-email">
+            {onBehalfOf ? 'Your email (for the receipt)' : 'Email'}
+          </Label>
           <Input
             id="signer-email"
             type="email"

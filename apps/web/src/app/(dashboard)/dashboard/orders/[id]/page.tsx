@@ -300,6 +300,33 @@ export default async function OrderDetailPage({
                   <dd className="truncate text-right">{request.requester_email}</dd>
                 </div>
               )}
+              {request.signed_by_name && (
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">Signed by</dt>
+                  <dd className="text-right">
+                    {request.signed_by_name}
+                    {/* Only call out "on behalf of" when the actual
+                        signer is a DIFFERENT person from the requester.
+                        Trim + lowercase comparison so trailing-space or
+                        casing differences don't render a confusing
+                        "John on behalf of John" row. */}
+                    {request.requester_name &&
+                    request.signed_by_name.trim().toLowerCase() !==
+                      request.requester_name.trim().toLowerCase() ? (
+                      <span className="text-muted-foreground block text-[10.5px]">
+                        on behalf of {request.requester_name}
+                      </span>
+                    ) : null}
+                  </dd>
+                </div>
+              )}
+              {request.signed_by_email &&
+                request.signed_by_email !== request.requester_email && (
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-muted-foreground">Signer email</dt>
+                    <dd className="truncate text-right">{request.signed_by_email}</dd>
+                  </div>
+                )}
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Source</dt>
                 <dd className="text-right capitalize">
