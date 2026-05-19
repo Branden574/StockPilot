@@ -68,8 +68,44 @@ export function ItemCard({ item }: ItemCardProps) {
           'border-emerald-500 shadow-[inset_0_0_0_1px_rgb(16_185_129)]',
       )}
     >
-      {/* Thumbnail area */}
+      {/* Thumbnail area.
+          Layer order (bottom → top):
+            1. Pinstripe + serif-letter placeholder (always there)
+            2. LQIP blur (when item has any item_images row)
+            3. Real photo (once /api/orders/catalog-thumbnails resolves)
+          The crossfade is `transition-opacity duration-300` — by the
+          time the real photo decodes, the blur underneath has already
+          painted, so the swap looks like a gentle focus-in instead of
+          a stark placeholder-to-photo pop. */}
       <div className="relative aspect-square w-full bg-muted overflow-hidden">
+        {/* Layer 1 — always: serif glyph over pinstripes */}
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          style={{
+            backgroundImage:
+              'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,.04) 3px, rgba(0,0,0,.04) 6px)',
+          }}
+        >
+          <span className="text-4xl font-serif text-muted-foreground/40 select-none">
+            {item.name.slice(0, 1).toUpperCase()}
+          </span>
+        </div>
+
+        {/* Layer 2 — LQIP blur (covers the letter the moment the card
+            paints, so items WITH a photo never show the stark letter).
+            scale-110 prevents the bilinear-upscale edges from peeking
+            past the card border. */}
+        {item.lqip ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={item.lqip}
+            alt=""
+            aria-hidden="true"
+            className="absolute inset-0 h-full w-full object-cover scale-110"
+          />
+        ) : null}
+
+        {/* Layer 3 — real photo; fades in once URL arrives */}
         {item.imageUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -77,22 +113,10 @@ export function ItemCard({ item }: ItemCardProps) {
             alt=""
             loading="lazy"
             decoding="async"
-            className="h-full w-full object-cover"
+            className="absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-300 [&.loaded]:opacity-100"
+            onLoad={(e) => e.currentTarget.classList.add('loaded')}
           />
-        ) : (
-          // Placeholder: serif glyph over CSS pinstripes
-          <div
-            className="h-full w-full flex items-center justify-center"
-            style={{
-              backgroundImage:
-                'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,.04) 3px, rgba(0,0,0,.04) 6px)',
-            }}
-          >
-            <span className="text-4xl font-serif text-muted-foreground/40 select-none">
-              {item.name.slice(0, 1).toUpperCase()}
-            </span>
-          </div>
-        )}
+        ) : null}
 
         {/* Ink price tag — notched left edge via pseudo-element */}
         <div

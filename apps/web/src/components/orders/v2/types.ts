@@ -12,6 +12,13 @@ export interface CatalogItem {
   categoryName: string | null;
   rackLabel: string | null;
   imageUrl: string | null;
+  /**
+   * Tiny base64 WebP blur (16x16, ≤2KB) from item_images.lqip. Renders
+   * instantly as a backdrop while imageUrl resolves client-side, so
+   * cards never flash a stark placeholder for items that DO have a
+   * photo. null = no item_images row, fall back to letter glyph.
+   */
+  lqip: string | null;
   /** retail_price preferred, else unit_cost, else null. */
   price: number | null;
   reorderPoint: number;

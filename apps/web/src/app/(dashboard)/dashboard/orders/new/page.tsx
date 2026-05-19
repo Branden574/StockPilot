@@ -202,12 +202,15 @@ async function loadCatalogItemsUncached(
   const itemIds = items.map((i) => i.id);
   const categoryIds = [...new Set(items.map((i) => i.category_id).filter((v): v is string => Boolean(v)))];
 
-  // Reservations + category names in parallel. Image URLs are NOT
-  // fetched here — signing 272 transformed Supabase storage URLs
-  // serially blocked first paint by ~5 seconds. Client-side fetch
-  // to /api/orders/catalog-thumbnails takes over after hydration so
-  // the page paints immediately and thumbnails stream in.
-  const [rsRes, categoriesRes] = await Promise.all([
+  // Reservations + category names + LQIP blurs in parallel. Full
+  // signed-URL thumbnails are NOT fetched here — signing 272
+  // transformed Supabase storage URLs blocked first paint by ~5s.
+  // The client fetches /api/orders/catalog-thumbnails after
+  // hydration. LQIP blurs are tiny base64 data URIs (≤2KB each)
+  // already stored on item_images.lqip, so we ship them inline:
+  // cards render a blurry preview immediately and crossfade to the
+  // real photo when the URL arrives.
+  const [rsRes, categoriesRes, lqipRes] = await Promise.all([
     supabase
       .from('stock_reservations')
       .select('item_id, quantity')
@@ -221,6 +224,14 @@ async function loadCatalogItemsUncached(
           .eq('organization_id', organizationId)
           .in('id', categoryIds)
       : Promise.resolve({ data: [] as Array<{ id: string; name: string }> }),
+    supabase
+      .from('item_images')
+      .select('item_id, lqip, is_primary, sort_order')
+      .eq('organization_id', organizationId)
+      .in('item_id', itemIds)
+      .not('lqip', 'is', null)
+      .order('is_primary', { ascending: false })
+      .order('sort_order', { ascending: true }),
   ]);
 
   const reservedByItem = new Map<string, number>();
@@ -234,6 +245,15 @@ async function loadCatalogItemsUncached(
   const categoryNameById = new Map<string, string>();
   for (const c of (categoriesRes.data ?? []) as Array<{ id: string; name: string }>) {
     categoryNameById.set(c.id, c.name);
+  }
+
+  // Pick one LQIP per item (the query is_primary DESC + sort_order ASC
+  // so the first row per item is the canonical primary image).
+  const lqipByItem = new Map<string, string>();
+  for (const row of (lqipRes.data ?? []) as Array<{ item_id: string; lqip: string | null }>) {
+    if (!lqipByItem.has(row.item_id) && row.lqip) {
+      lqipByItem.set(row.item_id, row.lqip);
+    }
   }
 
   function rackLabelFor(it: typeof items[number]): string | null {
@@ -262,6 +282,7 @@ async function loadCatalogItemsUncached(
     rackLabel: rackLabelFor(it),
     // Client fetches /api/orders/catalog-thumbnails after hydration.
     imageUrl: null,
+    lqip: lqipByItem.get(it.id) ?? null,
     // Price: retail first, then cost, then null. The v2 picker shows
     // "—" for null, and the cart estimated total excludes them.
     price:
