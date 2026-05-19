@@ -14,6 +14,29 @@ L4L Fresno (a charter school) lends out physical items — canopies, supplies, e
 
 **No money is involved.** This is purely accountability.
 
+## Rental items are a SEPARATE inventory class
+
+A canopy is fundamentally different from a t-shirt or a textbook: it's meant to circulate. A circulating asset doesn't belong in the regular inventory list (which is for things you give away / sell / consume). It also doesn't make sense to "order" a canopy through the order-request flow — you rent it, you don't take it.
+
+**Mechanism:** add a boolean `is_rental` column on `inventory_items`. The column partitions every item into one of two inventory classes:
+
+| Surface | Filter |
+| --- | --- |
+| `/dashboard/inventory` (items) | `is_rental = false` |
+| `/dashboard/books` | `is_rental = false` (always — books aren't rentals) |
+| `/dashboard/orders/new` picker | `is_rental = false` (can't order a circulating asset) |
+| `/dashboard/rentals/items` | `is_rental = true` |
+| `/dashboard/rentals/new` item picker | `is_rental = true` (only rental items can be rented) |
+| Reports (valuation, dead-stock, etc.) | Existing behavior preserved by default — these reports include EVERYTHING; if a rental shouldn't be in valuation, filter at report-time per report. |
+
+Rentals reuse the rest of `inventory_items`: name, sku, photos, rack location, quantity_on_hand, warehouse_id, category_id all work the same. Fields that don't apply (retail_price, unit_cost, reorder_point) stay null on rental rows — harmless. This keeps one CRUD pipeline, one image pipeline, one set of RLS policies.
+
+**Why a flag, not a separate table:**
+- Reuses every existing query path (photos, rack management, search, RLS).
+- A migration is trivial (one column add).
+- We can introduce the flag without touching the orders/inventory surfaces other than adding the filter.
+- Future: if "rental" becomes more complex (rental-specific fields like "needs_inspection", "next_service_date") those can go into `inventory_items.custom_fields.rental_*` keys — same pattern as the book_rack_* keys.
+
 ## Goals
 
 - One rental record = one borrower + many items + a checkout date + an expected return date.
@@ -160,11 +183,19 @@ Viewer reads `rentals:read` (implicit — any org member with warehouse access c
 
 New nav entry **"Rentals"** in the Inventory section of the dashboard sidebar (between Movements and Bundles, since it's a stock-flow concept).
 
+The Rentals section has TWO top-level tabs (mirroring the items-vs-books split that already exists at the workspace nav level):
+
+- **Items tab** = the rental catalog (what CAN be rented). The rental-equivalent of `/dashboard/inventory`.
+- **Activity tab** = the rental transactions (what IS currently rented). The rental-equivalent of `/dashboard/orders`.
+
 ### Pages
 
-- `/dashboard/rentals` — list view: tabs for **Out** (default, badge with count) · **Overdue** (red badge) · **Returned** · **All**. Columns: borrower · items (1-line truncate) · checkout date · expected return · status pill. Search by borrower or item name. Per-row: View / Mark returned (staff+) / Cancel (manager+, only when status='out').
-- `/dashboard/rentals/new` — create form: setup strip (warehouse, borrower, expected_return_at) + item picker (reuses ItemCard / CatalogGrid from orders v2) + line list + Notes + Submit.
-- `/dashboard/rentals/[id]` — detail page: header (borrower, dates, status), lines table, audit timeline (created / returned / cancelled), actions panel (Mark returned · Cancel · Print rental slip — defer slip to follow-up).
+- `/dashboard/rentals` (default = Activity tab) — list view: sub-tabs for **Out** (default, badge with count) · **Overdue** (red badge) · **Returned** · **All**. Columns: borrower · items (1-line truncate) · checkout date · expected return · status pill. Search by borrower or item name. Per-row: View / Mark returned (staff+) / Cancel (manager+, only when status='out').
+- `/dashboard/rentals/new` — create rental form: setup strip (warehouse, borrower, expected_return_at) + item picker (reuses ItemCard / CatalogGrid from orders v2 BUT filtered to `is_rental = true`) + line list + Notes + Submit.
+- `/dashboard/rentals/[id]` — rental detail: header (borrower, dates, status), lines table, audit timeline (created / returned / cancelled), actions panel (Mark returned · Cancel · Print rental slip — defer slip to follow-up).
+- `/dashboard/rentals/items` (Items tab) — the rental catalog. Looks identical to `/dashboard/inventory` (same `<InventoryTable>` component) but filtered to `is_rental = true`. Includes Create / Edit / Adjust / Archive flows that already exist for regular items.
+- `/dashboard/rentals/items/new` — add a new rental item. Reuses the existing item-create form (`<ItemForm>`) with `is_rental` defaulted to `true` and hidden / disabled. On save, redirects back to `/dashboard/rentals/items`.
+- `/dashboard/rentals/items/[id]` — rental item detail. Reuses `<ItemDetail>`. The "Order" / "Add to PO" buttons are hidden since rental items aren't orderable.
 
 ### Components
 
@@ -179,9 +210,11 @@ New components:
 ## Files to add
 
 ### DB
-- `supabase/migrations/0131_rentals.sql` — tables + RLS + grants
+
+- `supabase/migrations/0131_rentals.sql` — add `is_rental` column to `inventory_items` (default false) + `rentals` + `rental_lines` tables + RLS + grants
 
 ### Server
+
 - `apps/web/src/server/services/rentals.ts` — `RentalsService`: list / get / create / markReturned / cancel
 - `apps/web/src/server/services/rentals.test.ts` — service tests
 - `apps/web/src/server/actions/rentals.ts` — create / markReturned / cancel actions
@@ -190,29 +223,41 @@ New components:
 - `apps/web/src/server/services/audit.ts` — add `rental.created`, `rental.returned`, `rental.cancelled`
 
 ### Pages
-- `apps/web/src/app/(dashboard)/dashboard/rentals/page.tsx` (list)
-- `apps/web/src/app/(dashboard)/dashboard/rentals/new/page.tsx` (create form)
-- `apps/web/src/app/(dashboard)/dashboard/rentals/[id]/page.tsx` (detail)
+
+- `apps/web/src/app/(dashboard)/dashboard/rentals/page.tsx` (activity list)
+- `apps/web/src/app/(dashboard)/dashboard/rentals/new/page.tsx` (create rental)
+- `apps/web/src/app/(dashboard)/dashboard/rentals/[id]/page.tsx` (rental detail)
+- `apps/web/src/app/(dashboard)/dashboard/rentals/items/page.tsx` (rental catalog list)
+- `apps/web/src/app/(dashboard)/dashboard/rentals/items/new/page.tsx` (add rental item)
+- `apps/web/src/app/(dashboard)/dashboard/rentals/items/[id]/page.tsx` (rental item detail — thin wrapper around `<ItemDetail>`)
 
 ### Components
+
 - `apps/web/src/components/rentals/rentals-list-table.tsx`
 - `apps/web/src/components/rentals/rental-create-form.tsx`
 - `apps/web/src/components/rentals/rental-detail-header.tsx`
 - `apps/web/src/components/rentals/rental-actions-panel.tsx`
 - `apps/web/src/components/rentals/borrower-picker.tsx`
+- `apps/web/src/components/rentals/rentals-tabs.tsx` — Activity / Items toggle at the section top
 
 ### Modify
-- `apps/web/src/components/dashboard/nav.ts` — add Rentals nav item
+
+- `apps/web/src/components/dashboard/nav.ts` — add Rentals nav item (visible to `rentals:create`)
+- `apps/web/src/server/services/inventory.ts` — `list()` adds an `includeRentals` flag (default false). All existing callers (regular inventory, orders/new picker, AI search, reports) inherit `false`. The rentals catalog page passes `true`.
 - `apps/web/src/server/services/inventory.ts` — `availableToPromise` already subtracts reservations; no change needed (reservation rows with `reference_type='rental'` are transparent to the existing math).
+- `apps/web/src/app/(dashboard)/dashboard/orders/new/page.tsx` — the catalog loader filters `is_rental = false` so canopies don't show up as orderable.
+- `apps/web/src/components/inventory/item-form.tsx` — optional `isRentalFixed` prop. When true, the form sets `is_rental=true` and hides the toggle. The rental-items create page passes `true`; the regular inventory create page leaves it false.
 
 ## Acceptance criteria
 
-1. Staff member creates a rental from `/dashboard/rentals/new`, picks 3 items + a borrower + a return date 3 days from now → rental appears in the **Out** tab. Items show as reduced-availability on `/dashboard/orders/new`.
-2. The list shows the borrower's name (with "(member)" suffix when linked) and a relative due date ("Due in 3 days" / "Overdue by 2 days").
-3. Marking a rental returned moves it to **Returned** tab + releases reservations + items reappear as available on the order picker.
-4. Cancelling (manager+) works the same as return but lands in **Cancelled** tab + requires a reason.
-5. A viewer (read-only) can see the list but NO Create / Return / Cancel buttons appear for them.
-6. The nav entry **"Rentals"** is visible to anyone with `rentals:create` (i.e. staff+).
+1. Staff member creates a rental item via `/dashboard/rentals/items/new` → it appears ONLY on the rental catalog list, NOT on `/dashboard/inventory` and NOT in the order-create picker.
+2. Staff member creates a rental from `/dashboard/rentals/new`, picks 3 rental items + a borrower + a return date 3 days from now → rental appears in the **Out** tab. Those items show as reduced-availability on the rental-create picker (you can't double-book).
+3. The activity list shows the borrower's name (with "(member)" suffix when linked) and a relative due date ("Due in 3 days" / "Overdue by 2 days").
+4. Marking a rental returned moves it to **Returned** tab + releases reservations + items reappear as available on the rental-create picker.
+5. Cancelling (manager+) works the same as return but lands in **Cancelled** tab + requires a reason.
+6. A viewer (read-only) can see both rental tabs but NO Create / Return / Cancel buttons appear for them.
+7. The nav entry **"Rentals"** is visible to anyone with `rentals:create` (i.e. staff+).
+8. Existing regular inventory and books surfaces are unchanged — the `is_rental` filter is added to every existing query path but defaults to "non-rental only" so the user perceives zero behavior change on those pages.
 
 ## Edge cases
 
