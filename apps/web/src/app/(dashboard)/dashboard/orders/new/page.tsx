@@ -1,3 +1,4 @@
+import { unstable_cache } from 'next/cache';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
@@ -5,7 +6,7 @@ import { OrdersNewV2 } from '@/components/orders/v2/orders-new-v2';
 import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { hasPermission } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
-import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { ItemImagesService } from '@/server/services/item-images';
 import { WarehousesService } from '@/server/services/warehouses';
 
@@ -93,28 +94,42 @@ export default async function NewOrderPage({
   );
 }
 
+/**
+ * Charters per warehouse change rarely — cache for 5 minutes. Same
+ * admin-client + page-perimeter argument as the catalog cache.
+ */
+const loadChartersForWarehouseCached = unstable_cache(
+  async (
+    warehouseId: string,
+  ): Promise<Array<{ id: string; name: string; code: string | null }>> => {
+    const supabase = createAdminClient();
+    const { data: pairs } = await supabase
+      .from('warehouse_charters')
+      .select('charter:charters!inner (id, name, code, status)')
+      .eq('warehouse_id', warehouseId);
+    return (pairs ?? []).flatMap((p) => {
+      const c = Array.isArray((p as { charter?: unknown }).charter)
+        ? ((p as { charter: unknown[] }).charter[0] as Record<string, unknown>)
+        : ((p as { charter: unknown }).charter as Record<string, unknown> | null);
+      return c && (c.status as string) === 'active'
+        ? [
+            {
+              id: c.id as string,
+              name: c.name as string,
+              code: (c.code as string | null) ?? null,
+            },
+          ]
+        : [];
+    });
+  },
+  ['orders-new-v2-charters-v1'],
+  { revalidate: 300, tags: ['orders-new-v2-charters'] },
+);
+
 async function loadChartersForWarehouse(
   warehouseId: string,
 ): Promise<Array<{ id: string; name: string; code: string | null }>> {
-  const supabase = await createClient();
-  const { data: pairs } = await supabase
-    .from('warehouse_charters')
-    .select('charter:charters!inner (id, name, code, status)')
-    .eq('warehouse_id', warehouseId);
-  return (pairs ?? []).flatMap((p) => {
-    const c = Array.isArray((p as { charter?: unknown }).charter)
-      ? ((p as { charter: unknown[] }).charter[0] as Record<string, unknown>)
-      : ((p as { charter: unknown }).charter as Record<string, unknown> | null);
-    return c && (c.status as string) === 'active'
-      ? [
-          {
-            id: c.id as string,
-            name: c.name as string,
-            code: (c.code as string | null) ?? null,
-          },
-        ]
-      : [];
-  });
+  return loadChartersForWarehouseCached(warehouseId);
 }
 
 /**
@@ -123,14 +138,38 @@ async function loadChartersForWarehouse(
  * available-to-promise, rack label, category name. Bundles are
  * filtered out (phantom rows).
  *
- * Powers /dashboard/orders/new v2. The legacy OrderItemOption shape
- * is now obsolete — keep this single fetch path going forward.
+ * Wrapped in unstable_cache (30s TTL, keyed by orgId + warehouseId).
+ * Subsequent visits to the page within 30s skip every Supabase
+ * roundtrip — items, reservations, categories, image-URL minting all
+ * served from Vercel's data cache. This is the difference between
+ * "feels instant" and "few seconds of waiting".
+ *
+ * Admin client is used inside the cache so the cached value doesn't
+ * capture per-user cookies. The page-level perimeter (requireOrgContext
+ * + warehousesSvc.list scoping) guarantees only warehouseIds the user
+ * is authorized to see ever get passed in — so bypassing RLS inside
+ * the cache is safe.
  */
+const loadCatalogItemsCached = unstable_cache(
+  async (organizationId: string, warehouseId: string): Promise<CatalogItem[]> => {
+    return loadCatalogItemsUncached(organizationId, warehouseId);
+  },
+  ['orders-new-v2-catalog-v1'],
+  { revalidate: 30, tags: ['orders-new-v2-catalog'] },
+);
+
 async function loadCatalogItems(
   organizationId: string,
   warehouseId: string,
 ): Promise<CatalogItem[]> {
-  const supabase = await createClient();
+  return loadCatalogItemsCached(organizationId, warehouseId);
+}
+
+async function loadCatalogItemsUncached(
+  organizationId: string,
+  warehouseId: string,
+): Promise<CatalogItem[]> {
+  const supabase = createAdminClient();
 
   const { data: itemsData } = await supabase
     .from('inventory_items')
@@ -165,7 +204,19 @@ async function loadCatalogItems(
   const categoryIds = [...new Set(items.map((i) => i.category_id).filter((v): v is string => Boolean(v)))];
 
   // Reservations + images + category names in parallel.
-  const imagesSvc = await ItemImagesService.forCurrentUser();
+  // ItemImagesService normally builds via forCurrentUser() which
+  // depends on cookies — but we're inside an unstable_cache where
+  // cookies aren't available. Construct directly with the admin
+  // client; orgId scoping inside the service's queries keeps the
+  // result correct.
+  const imagesSvc = new ItemImagesService({
+    supabase,
+    organizationId,
+    userId: 'system',
+    role: 'admin',
+    mfaRequired: false,
+    mfaSatisfied: true,
+  });
   const [rsRes, imageUrlByItem, categoriesRes] = await Promise.all([
     supabase
       .from('stock_reservations')
