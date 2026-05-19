@@ -233,6 +233,10 @@ async function loadCatalogItemsUncached(
     .eq('organization_id', organizationId)
     .eq('warehouse_id', warehouseId)
     .eq('status', 'active')
+    // Rental items (canopies, supplies for school events) are a
+    // separate inventory class — they circulate via /dashboard/rentals,
+    // not the order request flow. Never show them in the order picker.
+    .eq('is_rental', false)
     .is('deleted_at', null)
     .or('is_bundle.is.null,is_bundle.eq.false')
     .order('name', { ascending: true })

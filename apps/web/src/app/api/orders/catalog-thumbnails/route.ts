@@ -38,13 +38,14 @@ export async function GET(req: NextRequest) {
   }
 
   // Item IDs to resolve thumbnails for — same filter the picker uses
-  // (active, non-bundle, in this warehouse).
+  // (active, non-bundle, non-rental, in this warehouse).
   const { data: items } = await ctx.supabase
     .from('inventory_items')
     .select('id')
     .eq('organization_id', ctx.organizationId)
     .eq('warehouse_id', warehouseId)
     .eq('status', 'active')
+    .eq('is_rental', false)
     .is('deleted_at', null)
     .or('is_bundle.is.null,is_bundle.eq.false')
     .limit(500);

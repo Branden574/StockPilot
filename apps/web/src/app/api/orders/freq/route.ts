@@ -67,7 +67,9 @@ export async function GET(req: NextRequest) {
       .eq('organization_id', ctx.organizationId)
       .in('id', itemIds)
       .is('deleted_at', null)
-      .eq('status', 'active'),
+      .eq('status', 'active')
+      // Rentals are a separate inventory class and never orderable.
+      .eq('is_rental', false),
     ctx.supabase
       .from('stock_reservations')
       .select('item_id, quantity')

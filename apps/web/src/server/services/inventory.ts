@@ -94,6 +94,14 @@ export interface ItemListFilters {
   createdUntil?: string;
   updatedSince?: string;
   updatedUntil?: string;
+  /**
+   * Include rental items in the result. Default false — every regular
+   * inventory surface (/dashboard/inventory, /dashboard/books, the
+   * order picker, AI search, reports) should leave this off so
+   * circulating assets (canopies, supplies) don't show up alongside
+   * sellable items. /dashboard/rentals/items passes true.
+   */
+  includeRentals?: boolean;
 }
 
 const SORT_MAP: Record<ItemListSort, { col: string; asc: boolean }> = {
@@ -304,6 +312,17 @@ export class InventoryService {
       query = query.eq('item_type', 'product');
     } else if (filters.itemType !== 'all') {
       query = query.eq('item_type', filters.itemType);
+    }
+
+    // Rentals (circulating assets like canopies) are a separate
+    // inventory class. Every regular surface (this list method is
+    // used by /dashboard/inventory, /dashboard/books, the orders
+    // picker, AI search, etc.) leaves includeRentals undefined,
+    // which means is_rental=false — rental items never leak in.
+    // Only /dashboard/rentals/items explicitly opts in by passing
+    // includeRentals: true.
+    if (!filters.includeRentals) {
+      query = query.eq('is_rental', false);
     }
 
     if (filters.createdSince) query = query.gte('created_at', filters.createdSince);
