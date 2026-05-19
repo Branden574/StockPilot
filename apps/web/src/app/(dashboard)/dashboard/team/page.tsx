@@ -1,3 +1,5 @@
+import { redirect } from 'next/navigation';
+
 import { TeamManager } from '@/components/team/team-manager';
 import { requireOrgContext } from '@/lib/auth/session';
 import { ChartersService } from '@/server/services/charters';
@@ -7,10 +9,21 @@ import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 import { createClient } from '@/lib/supabase/server';
 import { env } from '@/lib/env';
 
-import { resolveTerminology, type Role } from '@stockpilot/core';
+import { hasPermission, resolveTerminology, type Role } from '@stockpilot/core';
 
 export default async function TeamPage() {
   const ctx = await requireOrgContext();
+
+  // The team page renders pending invites, which TeamService gates on
+  // members:invite. Viewers without that permission used to hit a
+  // server-component error mid-render (the assertPermission throws
+  // during loadPendingInvites and React surfaces a generic
+  // "something broke" panel). Redirect early so viewers go back to
+  // the dashboard instead of seeing a crash.
+  if (!hasPermission(ctx.role, 'members:invite')) {
+    redirect('/dashboard');
+  }
+
   const supabase = await createClient();
 
   const [team, charterSvc, warehouseSvc, whCharterSvc, orgRow] = await Promise.all([
