@@ -24,12 +24,23 @@ interface InventoryRealtimeProps {
  * RLS applies to realtime subscriptions, so events for rows the user
  * can't read are filtered out by Postgres before they reach the client.
  */
+const THROTTLE_MS = 250;
+
 export function InventoryRealtime({
   organizationId,
   tables = ['inventory_items', 'stock_movements', 'purchase_orders'],
 }: InventoryRealtimeProps) {
   const router = useRouter();
-  const refreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Leading-edge throttle: the FIRST event fires router.refresh()
+  // immediately so single inserts (e.g. mobile → web) feel instant;
+  // subsequent events within the throttle window collapse into one
+  // trailing refresh so bulk imports don't trigger N refreshes.
+  //
+  // Previously this was a 750ms trailing debounce, which meant every
+  // single insert paid the full 750ms before the UI updated — the
+  // dominant latency in the "phone → computer feels slow" complaint.
+  const lastRefreshRef = React.useRef(0);
+  const pendingRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
     // Wrap the entire realtime setup in try/catch. If a browser blocks
@@ -44,12 +55,19 @@ export function InventoryRealtime({
       const channel = supabase.channel(`org:${organizationId}:inventory`);
 
       function nudge() {
-        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-        // 750ms debounce: a burst of updates from a CSV import shouldn't
-        // produce 100 router.refresh() calls; collapse to one.
-        refreshTimerRef.current = setTimeout(() => {
+        const now = Date.now();
+        const since = now - lastRefreshRef.current;
+        if (since >= THROTTLE_MS) {
+          lastRefreshRef.current = now;
           router.refresh();
-        }, 750);
+          return;
+        }
+        if (pendingRef.current) return;
+        pendingRef.current = setTimeout(() => {
+          pendingRef.current = null;
+          lastRefreshRef.current = Date.now();
+          router.refresh();
+        }, THROTTLE_MS - since);
       }
 
       for (const table of tables) {
@@ -78,7 +96,10 @@ export function InventoryRealtime({
     }
 
     return () => {
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      if (pendingRef.current) {
+        clearTimeout(pendingRef.current);
+        pendingRef.current = null;
+      }
       for (const fn of cleanup) fn();
     };
   }, [organizationId, router, tables]);
