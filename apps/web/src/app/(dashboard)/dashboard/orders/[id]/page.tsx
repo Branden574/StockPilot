@@ -240,7 +240,13 @@ export default async function OrderDetailPage({
           )}
 
           {showActionsPanel && (
+            // canApprove drives the manage-only sections inside the
+            // panel (Approve/Deny, AssignDelivery, Internal notes).
+            // A staff driver who only sees the panel for in-transit
+            // actions still gets MarkInTransit + CollectSignature but
+            // none of the manager-only controls.
             <ManagerActionsPanel
+              canApprove={canApprove}
               orderId={id}
               status={request.status}
               internalNotes={request.internal_notes}
