@@ -24,6 +24,14 @@ import {
   type DriverOption,
 } from '@/components/orders/assign-delivery-dialog';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -47,6 +55,11 @@ interface Props {
   assignedDeliveryUserId: string | null;
   signatureToken: string | null;
   drivers: DriverOption[];
+  /** Whether the viewer has orders:approve. Drives which manage-only
+   *  sections render. False = staff driver assigned to this delivery
+   *  who sees the panel ONLY for in-transit actions; they shouldn't
+   *  see Approve / Deny / Reassign / Internal-Notes. */
+  canApprove: boolean;
 }
 
 type BusyKey =
@@ -76,11 +89,19 @@ export function ManagerActionsPanel({
   assignedDeliveryUserId,
   signatureToken,
   drivers,
+  canApprove,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
   const [notes, setNotes] = React.useState(internalNotes ?? '');
   const initialNotes = React.useRef(internalNotes ?? '');
+
+  // Replaces the native window.prompt() that used to collect the
+  // denial reason. Native prompt is blocked in iOS Safari webviews,
+  // can't be styled, and doesn't handle cancel cleanly. The dialog
+  // also captures focus so screen readers announce the action.
+  const [denyOpen, setDenyOpen] = React.useState(false);
+  const [denyReason, setDenyReason] = React.useState('');
 
   async function approve() {
     setBusy('approve');
@@ -95,8 +116,11 @@ export function ManagerActionsPanel({
   }
 
   async function deny() {
-    const reason = window.prompt('Reason for denial?')?.trim();
-    if (!reason) return;
+    const reason = denyReason.trim();
+    if (!reason) {
+      toast.error('Enter a reason before denying.');
+      return;
+    }
     setBusy('deny');
     const res = await denyOrderRequestAction({ id: orderId, reason });
     setBusy(null);
@@ -104,6 +128,8 @@ export function ManagerActionsPanel({
       toast.error(res.error.message);
       return;
     }
+    setDenyOpen(false);
+    setDenyReason('');
     toast.success('Request denied.');
     router.refresh();
   }
@@ -238,7 +264,7 @@ export function ManagerActionsPanel({
 
       <div className="space-y-3 p-4">
         <div className="flex flex-wrap gap-2">
-          {status === 'pending_approval' && (
+          {status === 'pending_approval' && canApprove && (
             <>
               <Button variant="gradient" onClick={approve} disabled={busy !== null}>
                 {busy === 'approve' ? (
@@ -248,12 +274,12 @@ export function ManagerActionsPanel({
                 )}
                 Approve
               </Button>
-              <Button variant="destructive" onClick={deny} disabled={busy !== null}>
-                {busy === 'deny' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <X className="h-3.5 w-3.5" />
-                )}
+              <Button
+                variant="destructive"
+                onClick={() => setDenyOpen(true)}
+                disabled={busy !== null}
+              >
+                <X className="h-3.5 w-3.5" />
                 Deny
               </Button>
             </>
@@ -381,7 +407,7 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
-          {status === 'staged_for_delivery' && (
+          {status === 'staged_for_delivery' && canApprove && (
             <AssignDeliveryDialog
               orderId={orderId}
               drivers={drivers}
@@ -429,37 +455,90 @@ export function ManagerActionsPanel({
           )}
         </div>
 
-        <div className="space-y-1.5 pt-2">
-          <Label htmlFor="internal-notes" className="text-xs">
-            Internal notes
-          </Label>
-          <Textarea
-            id="internal-notes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={3}
-            maxLength={2000}
-            placeholder="Notes only managers can see"
-            disabled={busy === 'notes'}
-          />
-          <div className="flex justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={saveNotes}
-              disabled={!dirty || busy !== null}
-            >
-              {busy === 'notes' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="h-3.5 w-3.5" />
-              )}
-              Save notes
-            </Button>
+        {canApprove && (
+          <div className="space-y-1.5 pt-2">
+            <Label htmlFor="internal-notes" className="text-xs">
+              Internal notes
+            </Label>
+            <Textarea
+              id="internal-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              maxLength={2000}
+              placeholder="Notes only managers can see"
+              disabled={busy === 'notes'}
+            />
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={saveNotes}
+                disabled={!dirty || busy !== null}
+              >
+                {busy === 'notes' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Save className="h-3.5 w-3.5" />
+                )}
+                Save notes
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
+      {/* Deny-reason dialog. Replaces the old window.prompt() which
+          was blocked in iOS Safari webviews and couldn't be styled. */}
+      <Dialog
+        open={denyOpen}
+        onOpenChange={(v) => {
+          if (busy === 'deny') return;
+          setDenyOpen(v);
+          if (!v) setDenyReason('');
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Deny this request?</DialogTitle>
+            <DialogDescription>
+              The requester will be notified with the reason you provide.
+              This action can&apos;t be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="deny-reason">Reason</Label>
+            <Textarea
+              id="deny-reason"
+              value={denyReason}
+              onChange={(e) => setDenyReason(e.target.value)}
+              rows={3}
+              maxLength={500}
+              placeholder="Brief explanation the requester will see"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDenyOpen(false)}
+              disabled={busy === 'deny'}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={deny}
+              disabled={busy === 'deny' || !denyReason.trim()}
+            >
+              {busy === 'deny' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Deny request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

@@ -223,26 +223,33 @@ const listCategoriesTool: ToolExecutor = {
     const truncated = all.length > CATEGORY_CAP;
     const cats = truncated ? all.slice(0, CATEGORY_CAP) : all;
 
-    // Cheap counts via PostgREST head queries — one per category, but
-    // there are typically <30 of these, so the round trip cost is fine.
-    // Run in parallel.
-    const counts = await Promise.all(
-      cats.map(async (c) => {
-        const { count } = await ctx.supabase
-          .from('inventory_items')
-          .select('id', { count: 'estimated', head: true })
-          .eq('organization_id', ctx.organizationId)
-          .eq('category_id', (c as { id: string }).id)
-          .is('deleted_at', null);
-        return count ?? 0;
-      }),
-    );
+    // Single round-trip aggregate: pull all (id, category_id) for the
+    // org, then tally in JS. Replaces the prior N HEAD-count queries
+    // (one per category, up to 100 in parallel) — at the upper bound
+    // that was 100 HTTPS calls per AI turn just to count items.
+    //
+    // PostgREST doesn't expose a true GROUP BY, but this payload is
+    // tiny (~40 bytes/row, ≤500 rows max = 20KB) and the network cost
+    // of one query is dramatically lower than 100 round-trips even
+    // when parallelized through the Supabase connection pool.
+    const { data: itemRows } = await ctx.supabase
+      .from('inventory_items')
+      .select('category_id')
+      .eq('organization_id', ctx.organizationId)
+      .is('deleted_at', null)
+      .eq('status', 'active')
+      .limit(50_000);
+    const countByCat = new Map<string, number>();
+    for (const row of (itemRows ?? []) as Array<{ category_id: string | null }>) {
+      if (!row.category_id) continue;
+      countByCat.set(row.category_id, (countByCat.get(row.category_id) ?? 0) + 1);
+    }
 
     return {
-      categories: cats.map((c, i) => ({
+      categories: cats.map((c) => ({
         id: (c as { id: string }).id,
         name: dataTag((c as { name: string }).name),
-        itemCount: counts[i] ?? 0,
+        itemCount: countByCat.get((c as { id: string }).id) ?? 0,
       })),
       total: all.length,
       truncated,
@@ -356,7 +363,12 @@ const inventoryByWarehouseTool: ToolExecutor = {
       .select('warehouse_id, quantity_on_hand, unit_cost')
       .eq('organization_id', ctx.organizationId)
       .is('deleted_at', null)
-      .eq('status', 'active');
+      .eq('status', 'active')
+      // Explicit cap. The aggregation is computed in JS so the row
+      // count drives the payload size and Lambda memory directly.
+      // 50k is enough headroom for the biggest realistic single-org
+      // catalogs; anything larger and we'd want a Postgres GROUP BY.
+      .limit(50_000);
     if (itemType) q = q.eq('item_type', itemType);
     const { data: items, error } = await q;
     if (error) throw new Error(error.message);
@@ -427,7 +439,9 @@ const inventoryByCategoryTool: ToolExecutor = {
         .select('category_id, quantity_on_hand, unit_cost')
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
-        .eq('status', 'active'),
+        .eq('status', 'active')
+        // Explicit cap — same rationale as inventoryByWarehouse above.
+        .limit(50_000),
       ctx.supabase
         .from('categories')
         .select('id, name')

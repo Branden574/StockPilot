@@ -2,6 +2,13 @@
 
 import * as React from 'react';
 
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -78,6 +85,16 @@ function PublicOrdersV2Inner({
 
   // Success state
   const [submitted, setSubmitted] = React.useState<SubmittedState | null>(null);
+
+  // Warehouse-switch confirm dialog state. Replaces window.confirm()
+  // which iOS Safari blocks in webviews and can't be styled.
+  const [pendingSwitchTo, setPendingSwitchTo] = React.useState<string | null>(null);
+
+  function commitWarehouseSwitch(v: string) {
+    const params = new URLSearchParams(window.location.search);
+    params.set('w', v);
+    window.location.search = params.toString();
+  }
 
   // Catalog UI state
   const [activeAisleId, setActiveAisleId] = React.useState<string | 'all'>('all');
@@ -246,17 +263,10 @@ function PublicOrdersV2Inner({
               onValueChange={(v) => {
                 if (v === initialWarehouseId) return;
                 if (cartState.lines.length > 0) {
-                  if (
-                    !window.confirm(
-                      'Switching locations will clear your cart. Continue?',
-                    )
-                  ) {
-                    return;
-                  }
+                  setPendingSwitchTo(v);
+                  return;
                 }
-                const params = new URLSearchParams(window.location.search);
-                params.set('w', v);
-                window.location.search = params.toString();
+                commitWarehouseSwitch(v);
               }}
             >
               <SelectTrigger id="public-warehouse">
@@ -316,6 +326,42 @@ function PublicOrdersV2Inner({
         honeypot={hp}
         onSubmitted={setSubmitted}
       />
+
+      {/* Warehouse-switch confirm. */}
+      <Dialog
+        open={pendingSwitchTo !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingSwitchTo(null);
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Switch location?</DialogTitle>
+          </DialogHeader>
+          <p className="text-muted-foreground text-sm">
+            Your cart has items in it. Switching locations will clear
+            them so the new location&apos;s catalog can load.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPendingSwitchTo(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                if (pendingSwitchTo) commitWarehouseSwitch(pendingSwitchTo);
+                setPendingSwitchTo(null);
+              }}
+            >
+              Switch and clear cart
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

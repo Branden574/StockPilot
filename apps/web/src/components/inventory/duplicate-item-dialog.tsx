@@ -131,7 +131,9 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
         <div className="space-y-3 py-2">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label htmlFor="dup-rack-number">Rack number</Label>
+              <Label htmlFor="dup-rack-number">
+                Rack number <span className="text-destructive">*</span>
+              </Label>
               <Input
                 id="dup-rack-number"
                 value={rackNumber}
@@ -156,7 +158,9 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
           {isBook && (
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="dup-crate-color">Crate color</Label>
+                <Label htmlFor="dup-crate-color">
+                  Crate color <span className="text-destructive">*</span>
+                </Label>
                 <Select
                   value={crateColor || undefined}
                   onValueChange={setCrateColor}
@@ -182,7 +186,9 @@ export function DuplicateItemDialog({ itemId, itemName, itemType }: Props) {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="dup-crate-number">Crate number</Label>
+                <Label htmlFor="dup-crate-number">
+                  Crate number <span className="text-destructive">*</span>
+                </Label>
                 <Input
                   id="dup-crate-number"
                   value={crateNumber}

@@ -285,6 +285,17 @@ export default async function InventoryPage({
             description="No active items have a quantity of zero. Clear the filter to see all items."
             cta={{ label: 'Show all items', href: '/dashboard/inventory' }}
           />
+        ) : inventory.total === 0 && params.q ? (
+          // Search returned zero results. Without this branch the page
+          // fell through to InventoryTable rendering a single bare cell
+          // ("No items match your filters.") — the only empty state on
+          // the page that wasn't using the rich <EmptyState> component.
+          <EmptyState
+            icon={Boxes}
+            title="No items match your search"
+            description={`Nothing matched "${params.q.slice(0, 40)}". Try a different SKU, name, or barcode.`}
+            cta={{ label: 'Clear search', href: '/dashboard/inventory' }}
+          />
         ) : (
           <InventoryTable
             items={itemsWithImages}

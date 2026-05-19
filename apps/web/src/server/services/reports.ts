@@ -172,7 +172,10 @@ export class ReportsService {
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
       .eq('status', 'active')
-      .order('quantity_on_hand', { ascending: false });
+      .order('quantity_on_hand', { ascending: false })
+      // Explicit cap — relying on PostgREST's default 1000-row limit
+      // is implicit and inconsistent across versions; safer to declare.
+      .limit(10_000);
     if (error) throw new ServiceError('internal_error', error.message);
 
     // Hold each raw row alongside the warehouse_id / category_id needed to
@@ -361,7 +364,8 @@ export class ReportsService {
       .is('deleted_at', null)
       .eq('status', 'active')
       .gt('reorder_point', 0)
-      .order('quantity_on_hand', { ascending: true });
+      .order('quantity_on_hand', { ascending: true })
+      .limit(5_000);
     if (error) throw new ServiceError('internal_error', error.message);
 
     const rows: ReorderRow[] = [];
@@ -889,7 +893,8 @@ export class ReportsService {
       )
       .eq('organization_id', this.ctx.organizationId)
       .gte('distributed_at', since)
-      .order('distributed_at', { ascending: false });
+      .order('distributed_at', { ascending: false })
+      .limit(10_000);
     if (distErr) throw new ServiceError('internal_error', distErr.message);
 
     type DistRow = {
@@ -1029,7 +1034,8 @@ export class ReportsService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('movement_type', 'bundle_shortage')
       .gte('created_at', since)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(5_000);
     if (error) throw new ServiceError('internal_error', error.message);
 
     type MoveRow = {

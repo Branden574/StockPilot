@@ -48,15 +48,24 @@ export function SetupStrip({
 
   const canActOnBehalf = isManagerOrAbove(viewerRole as Parameters<typeof isManagerOrAbove>[0]);
 
+  // Two-step warehouse-switch with optional confirm dialog. window
+  // .confirm() is blocked in iOS Safari webviews and can't be styled,
+  // so we hold the pending target in state and prompt via Dialog
+  // when the cart has lines. Empty cart = switch immediately.
+  const [pendingWarehouseId, setPendingWarehouseId] = React.useState<string | null>(null);
+
   function handleWarehouseChange(nextId: string) {
     if (nextId === warehouseId) return;
     if (state.lines.length > 0) {
-      const ok = window.confirm('Switch warehouse? Your current cart will be cleared.');
-      if (!ok) return;
+      setPendingWarehouseId(nextId);
+      return;
     }
+    commitWarehouseChange(nextId);
+  }
+
+  function commitWarehouseChange(nextId: string) {
     const params = new URLSearchParams(searchParams?.toString() ?? '');
     params.set('warehouseId', nextId);
-    // The page server-renders the new item list on navigation
     router.push(`/dashboard/orders/new?${params.toString()}`);
   }
 
@@ -232,6 +241,43 @@ export function SetupStrip({
                 Save
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Warehouse-switch confirm — replaces window.confirm() which
+          is blocked in iOS Safari webviews. */}
+      <Dialog
+        open={pendingWarehouseId !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingWarehouseId(null);
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Switch warehouse?</DialogTitle>
+          </DialogHeader>
+          <p className="text-muted-foreground text-sm">
+            Your cart has items in it. Switching warehouses will clear
+            them so the new warehouse&apos;s catalog can load.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPendingWarehouseId(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                if (pendingWarehouseId) commitWarehouseChange(pendingWarehouseId);
+                setPendingWarehouseId(null);
+              }}
+            >
+              Switch and clear cart
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
