@@ -115,7 +115,6 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'categories:read',
     'suppliers:read',
     'purchase_orders:read',
-    'reports:read',
     'orders:request',
   ],
 };

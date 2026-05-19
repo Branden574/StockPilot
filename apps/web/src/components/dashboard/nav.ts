@@ -94,7 +94,13 @@ const BASE_NAV: NavSection[] = [
       // sees their own notifications, the team roster (members:read), and
       // their own profile/settings.
       { href: '/dashboard/notifications', label: 'Notifications', icon: Bell },
-      { href: '/dashboard/team', label: 'Team', icon: Users, requires: 'members:read' },
+      // Viewers can technically read members via members:read, but the
+      // team page loads pending invites which require members:invite —
+      // and viewers have no manage actions there anyway. Gate the nav
+      // entry on the stronger permission so viewers don't see a button
+      // that lands on a forbidden page. Direct-URL access is blocked
+      // server-side at apps/web/src/app/(dashboard)/dashboard/team/page.tsx.
+      { href: '/dashboard/team', label: 'Team', icon: Users, requires: 'members:invite' },
       { href: '/dashboard/settings', label: 'Settings', icon: Cog },
     ],
   },
