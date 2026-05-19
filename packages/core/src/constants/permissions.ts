@@ -8,6 +8,7 @@ export const PERMISSIONS = [
   'members:invite',
   'members:remove',
   'members:update_role',
+  'members:assign_categories',
   'items:read',
   'items:create',
   'items:update',
@@ -64,6 +65,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   admin: ALL_PERMISSIONS.filter((p) => p !== 'billing:manage'),
   manager: [
     'members:read',
+    'members:assign_categories',
     'items:read',
     'items:create',
     'items:update',
@@ -180,6 +182,12 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     group: 'Members',
     label: 'Change member roles',
     description: 'Promote, demote, or reassign team members.',
+  },
+  'members:assign_categories': {
+    group: 'Members',
+    label: 'Restrict viewer category access',
+    description:
+      'Grant or revoke a viewer’s access to specific inventory categories.',
   },
 
   'items:read': {

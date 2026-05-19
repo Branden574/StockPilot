@@ -12,6 +12,7 @@ export type AuditEvent =
   | 'user.invite.revoked'
   | 'user.role.changed'
   | 'user.warehouse.changed'
+  | 'user.category_access.updated'
   | 'user.deactivated'
   | 'user.reactivated'
   | 'user.password.changed'
