@@ -51,7 +51,7 @@ export function OrdersNewV2(props: OrdersNewV2Props) {
 function OrdersNewV2Inner({
   warehouses,
   warehouseId,
-  items,
+  items: rawItems,
   aisles,
   chartersForWarehouse,
   viewerRole,
@@ -61,6 +61,41 @@ function OrdersNewV2Inner({
   const [searchQuery, setSearchQuery] = React.useState('');
   const [availabilityFilter, setAvailabilityFilter] = React.useState<AvailabilityFilter>('any');
   const [sortKey, setSortKey] = React.useState<SortKey>('name');
+
+  // Deferred thumbnail URLs — fetched client-side after first paint
+  // so the page renders instantly instead of waiting on Supabase's
+  // signed-URL service for hundreds of items. While the map is
+  // empty, cards render with their placeholder; once URLs arrive,
+  // the same cards swap to real thumbnails.
+  const [thumbUrls, setThumbUrls] = React.useState<Record<string, string>>({});
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/orders/catalog-thumbnails?warehouseId=${encodeURIComponent(warehouseId)}`,
+          { credentials: 'same-origin' },
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as { urls?: Record<string, string> };
+        if (!cancelled && data.urls) setThumbUrls(data.urls);
+      } catch {
+        /* network blip — placeholders stay; not blocking */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [warehouseId]);
+
+  // Merge fetched thumbnail URLs onto the server-rendered items.
+  const items = React.useMemo<CatalogItem[]>(() => {
+    if (Object.keys(thumbUrls).length === 0) return rawItems;
+    return rawItems.map((it) =>
+      thumbUrls[it.id] ? { ...it, imageUrl: thumbUrls[it.id]! } : it,
+    );
+  }, [rawItems, thumbUrls]);
 
   // Persisted prefs (hydrated from localStorage after mount)
   const [prefs, setPrefs] = React.useState<Prefs>(DEFAULT_PREFS);
