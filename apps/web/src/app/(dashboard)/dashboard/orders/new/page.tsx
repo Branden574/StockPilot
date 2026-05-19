@@ -1,11 +1,8 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
-import {
-  OrderRequestForm,
-  type OrderItemOption,
-} from '@/components/orders/order-request-form';
-import type { CatalogItem } from '@/components/orders/v2/types';
+import { OrdersNewV2 } from '@/components/orders/v2/orders-new-v2';
+import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { hasPermission } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
@@ -61,11 +58,14 @@ export default async function NewOrderPage({
   const warehouseId =
     warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
 
-  const items = await loadOrderableItems(ctx.organizationId, warehouseId);
-  const chartersForWarehouse = await loadChartersForWarehouse(warehouseId);
+  const [items, chartersForWarehouse] = await Promise.all([
+    loadCatalogItems(ctx.organizationId, warehouseId),
+    loadChartersForWarehouse(warehouseId),
+  ]);
+  const aisles = buildAisles(items);
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
+    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
       <div className="mb-6">
         <Link
           href="/dashboard/orders"
@@ -77,14 +77,15 @@ export default async function NewOrderPage({
           Place an order
         </h1>
         <p className="text-muted-foreground mt-1 text-sm">
-          Pick a warehouse, add items to your cart, and submit. A manager will
+          Browse the catalog, add items to your cart, and submit. A manager will
           approve before stock is reserved.
         </p>
       </div>
-      <OrderRequestForm
+      <OrdersNewV2
         warehouses={warehouses}
         warehouseId={warehouseId}
         items={items}
+        aisles={aisles}
         chartersForWarehouse={chartersForWarehouse}
         viewerRole={ctx.role}
       />
@@ -233,24 +234,35 @@ async function loadCatalogItems(
 }
 
 /**
- * Legacy data loader kept so the existing OrderRequestForm import
- * keeps compiling until Task 5 swaps it out. Maps the CatalogItem
- * shape down to OrderItemOption.
+ * Derives the aisle summary list from the loaded catalog items.
+ * Named aisles are sorted alphabetically; the synthetic "Uncategorized"
+ * bucket appears last if any items have no category.
  */
-async function loadOrderableItems(
-  organizationId: string,
-  warehouseId: string,
-): Promise<OrderItemOption[]> {
-  const items = await loadCatalogItems(organizationId, warehouseId);
-  return items.map((it) => ({
-    id: it.id,
-    name: it.name,
-    sku: it.sku,
-    warehouseId: it.warehouseId,
-    quantityOnHand: it.quantityOnHand,
-    reservedQuantity: it.reservedQuantity,
-    itemType: it.itemType,
-    rackLabel: it.rackLabel,
-    imageUrl: it.imageUrl,
-  }));
+function buildAisles(items: CatalogItem[]): AisleSummary[] {
+  const countById = new Map<string, number>();
+  let uncategorizedCount = 0;
+  const nameById = new Map<string, string>();
+
+  for (const it of items) {
+    if (it.categoryId === null) {
+      uncategorizedCount++;
+    } else {
+      countById.set(it.categoryId, (countById.get(it.categoryId) ?? 0) + 1);
+      if (it.categoryName) nameById.set(it.categoryId, it.categoryName);
+    }
+  }
+
+  const named: AisleSummary[] = Array.from(countById.entries())
+    .map(([id, itemCount]) => ({
+      id,
+      name: nameById.get(id) ?? id,
+      itemCount,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  if (uncategorizedCount > 0) {
+    named.push({ id: null, name: 'Uncategorized', itemCount: uncategorizedCount });
+  }
+
+  return named;
 }
