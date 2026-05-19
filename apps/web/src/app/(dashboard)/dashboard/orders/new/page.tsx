@@ -7,7 +7,6 @@ import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { hasPermission } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { ItemImagesService } from '@/server/services/item-images';
 import { WarehousesService } from '@/server/services/warehouses';
 
 export default async function NewOrderPage({
@@ -203,28 +202,18 @@ async function loadCatalogItemsUncached(
   const itemIds = items.map((i) => i.id);
   const categoryIds = [...new Set(items.map((i) => i.category_id).filter((v): v is string => Boolean(v)))];
 
-  // Reservations + images + category names in parallel.
-  // ItemImagesService normally builds via forCurrentUser() which
-  // depends on cookies — but we're inside an unstable_cache where
-  // cookies aren't available. Construct directly with the admin
-  // client; orgId scoping inside the service's queries keeps the
-  // result correct.
-  const imagesSvc = new ItemImagesService({
-    supabase,
-    organizationId,
-    userId: 'system',
-    role: 'admin',
-    mfaRequired: false,
-    mfaSatisfied: true,
-  });
-  const [rsRes, imageUrlByItem, categoriesRes] = await Promise.all([
+  // Reservations + category names in parallel. Image URLs are NOT
+  // fetched here — signing 272 transformed Supabase storage URLs
+  // serially blocked first paint by ~5 seconds. Client-side fetch
+  // to /api/orders/catalog-thumbnails takes over after hydration so
+  // the page paints immediately and thumbnails stream in.
+  const [rsRes, categoriesRes] = await Promise.all([
     supabase
       .from('stock_reservations')
       .select('item_id, quantity')
       .eq('organization_id', organizationId)
       .in('item_id', itemIds)
       .is('released_at', null),
-    imagesSvc.primaryImagesForPdfRendering(itemIds, 200),
     categoryIds.length > 0
       ? supabase
           .from('categories')
@@ -271,7 +260,8 @@ async function loadCatalogItemsUncached(
     categoryId: it.category_id ?? null,
     categoryName: it.category_id ? categoryNameById.get(it.category_id) ?? null : null,
     rackLabel: rackLabelFor(it),
-    imageUrl: imageUrlByItem.get(it.id) ?? null,
+    // Client fetches /api/orders/catalog-thumbnails after hydration.
+    imageUrl: null,
     // Price: retail first, then cost, then null. The v2 picker shows
     // "—" for null, and the cart estimated total excludes them.
     price:
