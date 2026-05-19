@@ -113,21 +113,21 @@ export function SetupStrip({
 
       {/* On behalf of (manager+ only) */}
       {canActOnBehalf && (
-        <div className="space-y-1">
+        <div className="space-y-1 min-w-[180px]">
           <Label className="text-xs">Requester</Label>
           <Button
             type="button"
             variant={state.onBehalfOf ? 'default' : 'outline'}
             size="sm"
-            className="h-8 gap-1.5 text-xs"
+            className="h-8 w-full justify-start gap-1.5 text-xs"
             onClick={() => {
               setPendingName(state.onBehalfOf?.name ?? '');
               setPendingEmail(state.onBehalfOf?.email ?? '');
               setOnBehalfOfOpen(true);
             }}
           >
-            <UserCircle2 className="h-3.5 w-3.5" />
-            {onBehalfLabel}
+            <UserCircle2 className="h-3.5 w-3.5 flex-none" />
+            <span className="truncate">{onBehalfLabel}</span>
           </Button>
         </div>
       )}

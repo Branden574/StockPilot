@@ -72,11 +72,15 @@ export function AisleBar({
       aria-label="Aisles"
       className="sticky top-0 z-10 -mx-4 border-b bg-card/95 backdrop-blur px-4 py-2"
     >
+      {/* scrollbar-hide isn't a real Tailwind class without the plugin —
+          spell out the cross-browser hides with arbitrary selectors so
+          the scroll bar doesn't appear UNDER the pills (which made the
+          last pill look truncated and added a doubled-bar effect). */}
       <div
         ref={containerRef}
         role="tablist"
         aria-label="Filter by aisle"
-        className="flex items-center gap-1.5 overflow-x-auto scrollbar-hide pb-0.5"
+        className="flex items-center gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {pills.map((pill, idx) => {
           const isActive = pill.key === active;
