@@ -10,3 +10,4 @@ export * from './shipments';
 export * from './tags';
 export * from './procedures';
 export * from './duplicate-item';
+export * from './rentals';

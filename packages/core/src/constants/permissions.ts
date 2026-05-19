@@ -9,6 +9,8 @@ export const PERMISSIONS = [
   'members:remove',
   'members:update_role',
   'members:assign_categories',
+  'rentals:create',
+  'rentals:manage',
   'items:read',
   'items:create',
   'items:update',
@@ -91,6 +93,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'orders:approve',
     'orders:assign_delivery',
     'schedule:manage',
+    'rentals:create',
+    'rentals:manage',
   ],
   staff: [
     'members:read',
@@ -107,6 +111,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'reports:read',
     'bundles:distribute',
     'orders:request',
+    'rentals:create',
   ],
   viewer: [
     'members:read',
@@ -329,6 +334,19 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     group: 'Organization',
     label: 'Manage AI assistant',
     description: 'Run semantic-search embeddings backfill and configure AI features.',
+  },
+
+  'rentals:create': {
+    group: 'Rentals',
+    label: 'Check items out and back in',
+    description:
+      'Create a rental (check out circulating assets like canopies) and mark them returned.',
+  },
+  'rentals:manage': {
+    group: 'Rentals',
+    label: 'Cancel and edit rentals',
+    description:
+      'Cancel an active rental, edit lines on an active rental. Manager+ only.',
   },
 };
 
