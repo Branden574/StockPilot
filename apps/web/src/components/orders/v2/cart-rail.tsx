@@ -7,8 +7,6 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { cn, formatCurrency } from '@/lib/utils';
-
 import { createOrderRequestAction } from '@/server/actions/order-requests';
 
 import { clearCartDraft, useCart } from './cart-context';
@@ -28,17 +26,6 @@ export function CartRail({ itemMap, warehouseId }: CartRailProps) {
 
   const lines = state.lines;
   const totalQty = lines.reduce((s, l) => s + l.quantity, 0);
-
-  const estimatedValue = lines.reduce((s, l) => {
-    const item = itemMap.get(l.itemId);
-    if (!item || item.price === null) return s;
-    return s + item.price * l.quantity;
-  }, 0);
-
-  const hasValue = lines.some((l) => {
-    const item = itemMap.get(l.itemId);
-    return item?.price !== null && item?.price !== undefined;
-  });
 
   // Announce cart changes to screen readers
   const [announcement, setAnnouncement] = React.useState('');
@@ -215,23 +202,6 @@ export function CartRail({ itemMap, warehouseId }: CartRailProps) {
               <span className="text-muted-foreground">Total qty</span>
               <span className="tabular-nums font-semibold">{totalQty}</span>
             </div>
-            {hasValue && (
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Est. value</span>
-                <span
-                  className={cn(
-                    'tabular-nums font-semibold',
-                    lines.some((l) => (itemMap.get(l.itemId)?.price ?? null) === null) &&
-                      'text-muted-foreground',
-                  )}
-                >
-                  {formatCurrency(estimatedValue)}
-                  {lines.some((l) => (itemMap.get(l.itemId)?.price ?? null) === null) && (
-                    <span className="text-[10px] ml-1 font-normal">partial</span>
-                  )}
-                </span>
-              </div>
-            )}
           </div>
         )}
 

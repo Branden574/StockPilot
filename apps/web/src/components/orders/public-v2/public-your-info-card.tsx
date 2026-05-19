@@ -22,8 +22,6 @@ interface PublicYourInfoCardProps {
   onNameChange: (v: string) => void;
   email: string;
   onEmailChange: (v: string) => void;
-  orgLabel: string;
-  onOrgLabelChange: (v: string) => void;
   phone: string;
   onPhoneChange: (v: string) => void;
   pickupNotes: string;
@@ -45,8 +43,6 @@ export function PublicYourInfoCard({
   onNameChange,
   email,
   onEmailChange,
-  orgLabel,
-  onOrgLabelChange,
   phone,
   onPhoneChange,
   pickupNotes,
@@ -125,37 +121,21 @@ export function PublicYourInfoCard({
         </div>
       </div>
 
-      {/* Org + Phone row */}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label htmlFor="pub-v2-org">
-            School or organization
-            <span className="ml-1 text-xs font-normal text-muted-foreground">(optional)</span>
-          </Label>
-          <Input
-            id="pub-v2-org"
-            value={orgLabel}
-            onChange={(e) => onOrgLabelChange(e.target.value)}
-            autoComplete="organization"
-            maxLength={160}
-            placeholder="e.g. Lincoln Elementary"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="pub-v2-phone">
-            Phone
-            <span className="ml-1 text-xs font-normal text-muted-foreground">(optional)</span>
-          </Label>
-          <Input
-            id="pub-v2-phone"
-            type="tel"
-            value={phone}
-            onChange={(e) => onPhoneChange(e.target.value)}
-            placeholder="(555) 123-4567"
-            autoComplete="tel"
-            maxLength={40}
-          />
-        </div>
+      {/* Phone */}
+      <div className="space-y-1.5 sm:max-w-xs">
+        <Label htmlFor="pub-v2-phone">
+          Phone
+          <span className="ml-1 text-xs font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Input
+          id="pub-v2-phone"
+          type="tel"
+          value={phone}
+          onChange={(e) => onPhoneChange(e.target.value)}
+          placeholder="(555) 123-4567"
+          autoComplete="tel"
+          maxLength={40}
+        />
       </div>
 
       {/* Fulfillment type */}
