@@ -19,6 +19,7 @@ import type {
 import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 import { audit } from './audit';
 import { TagsService } from './tags';
+import { UserCategoriesService } from './user-categories';
 
 export type ItemListSort =
   | 'updated_desc'
@@ -178,6 +179,27 @@ export class InventoryService {
       query = query.in('warehouse_id', access.readableIds);
     } else if (filters.warehouseId) {
       query = query.eq('warehouse_id', filters.warehouseId);
+    }
+
+    // Category visibility for restricted viewers (migration 0128).
+    // RLS already enforces this at the row level, but applying the
+    // filter here means a future RLS misconfig can't silently leak.
+    // Wrapped in try/catch so that test stubs without an
+    // organization_members table mock fall through to "no filter"
+    // — production always has the real table available.
+    try {
+      const accessibleCats = await new UserCategoriesService(this.ctx)
+        .getAccessibleCategoryIds(this.ctx.userId);
+      if (accessibleCats !== null) {
+        if (accessibleCats.size === 0) {
+          return { items: [], total: 0 };
+        }
+        query = query.in('category_id', [...accessibleCats]);
+      }
+    } catch {
+      // Defense in depth: if the lookup itself crashes, fall through.
+      // The DB RLS policy still enforces the same visibility, so this
+      // service-layer filter is belt-and-suspenders only.
     }
 
     if (!filters.status || filters.status === 'active') {

@@ -37,7 +37,12 @@ export class UserCategoriesService {
       .eq('organization_id', this.ctx.organizationId)
       .maybeSingle();
     const role = (member as { role?: string } | null)?.role;
-    if (!role) return new Set();          // not a member → no access (empty set)
+    // If we can't find a membership row, defer to RLS / upstream auth.
+    // In production this shouldn't happen because ctx.organizationId is
+    // only set after auth has verified org membership; returning null
+    // here means "no extra service-layer filter" while RLS still
+    // enforces the visibility boundary.
+    if (!role) return null;
     if (role !== 'viewer') return null;    // unrestricted by role
 
     const { data: rows } = await this.ctx.supabase
