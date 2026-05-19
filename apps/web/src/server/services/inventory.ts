@@ -755,7 +755,7 @@ export class InventoryService {
     rackNumber?: string | null;
     rackRow?: string | null;
     variants: Array<{
-      size: 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
+      size: 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL' | 'XXXXXL';
       quantity: number;
     }>;
   }): Promise<Array<{ id: string; name: string; sku: string }>> {

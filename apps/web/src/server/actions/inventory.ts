@@ -117,7 +117,7 @@ const bulkCreateSizedSchema = z.object({
   variants: z
     .array(
       z.object({
-        size: z.enum(['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL']),
+        size: z.enum(['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL']),
         quantity: z.coerce.number().int().min(0),
       }),
     )

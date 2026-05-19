@@ -20,14 +20,14 @@ import { resolveListReturnHref } from '@/lib/last-list-url';
 import { cn } from '@/lib/utils';
 import { bulkCreateSizedVariantsAction } from '@/server/actions/inventory';
 
-type SizeCode = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL';
-const ALL_SIZES: ReadonlyArray<SizeCode> = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
+type SizeCode = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL' | 'XXXXXL';
+const ALL_SIZES: ReadonlyArray<SizeCode> = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL'];
 
 // Note: alternation order matters — list longest-first so the engine
-// prefers `XXXXL` over `XXXL`, etc., and `XS` over `S` (otherwise
+// prefers `XXXXXL` over `XXXXL`, etc., and `XS` over `S` (otherwise
 // "L4L Tee XS" would match `S` and leave a trailing `X` on the base).
-const SIZE_NAME_REGEX = /(?:\s*-\s*|\s+)(?:XXXXL|XXXL|XXL|XL|XS|L|M|S)\s*$/i;
-const SIZE_SKU_REGEX = /-(?:XXXXL|XXXL|XXL|XL|XS|L|M|S)$/i;
+const SIZE_NAME_REGEX = /(?:\s*-\s*|\s+)(?:XXXXXL|XXXXL|XXXL|XXL|XL|XS|L|M|S)\s*$/i;
+const SIZE_SKU_REGEX = /-(?:XXXXXL|XXXXL|XXXL|XXL|XL|XS|L|M|S)$/i;
 
 /**
  * Strip a trailing size suffix from a name so we can pre-fill the base
