@@ -41,14 +41,20 @@ export class UserCategoriesService {
     // In production this shouldn't happen because ctx.organizationId is
     // only set after auth has verified org membership; returning null
     // here means "no extra service-layer filter" while RLS still
-    // enforces the visibility boundary.
+    // enforces the visibility boundary (user_can_see_item_category
+    // returns false when no role row exists in the requested org).
     if (!role) return null;
     if (role !== 'viewer') return null;    // unrestricted by role
 
+    // org-scoped — a user may be a viewer here AND in another org;
+    // we MUST only consider grants for THIS org. Mirrors the
+    // organization_id filter applied inside user_can_see_item_category
+    // in migration 0129.
     const { data: rows } = await this.ctx.supabase
       .from('user_category_assignments')
       .select('category_id')
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .eq('organization_id', this.ctx.organizationId);
     const list = ((rows ?? []) as Array<{ category_id: string }>).map((r) => r.category_id);
     if (list.length === 0) return null;    // viewer with no grants = unrestricted
     return new Set(list);
@@ -61,6 +67,13 @@ export class UserCategoriesService {
    * organization.
    *
    * Empty array = remove all grants → viewer becomes unrestricted.
+   *
+   * Delegates to the `set_user_category_access` RPC (migration 0129)
+   * which performs the DELETE+INSERT in a single transaction. The
+   * previous two-step JS implementation had a window where a failed
+   * INSERT after a successful DELETE would silently elevate the
+   * viewer from restricted to unrestricted (zero rows = unrestricted
+   * per the truth table).
    */
   async setUserCategoryAccess(
     targetUserId: string,
@@ -68,11 +81,11 @@ export class UserCategoriesService {
   ): Promise<void> {
     assertPermission(this.ctx, 'members:assign_categories');
 
-    // Verify target user is in OUR org (defense in depth — RLS on
-    // user_category_assignments also enforces this).
+    // Verify target user is in OUR org (defense in depth — the RPC
+    // checks again, but a friendlier error message is nice).
     const { data: member } = await this.ctx.supabase
       .from('organization_members')
-      .select('organization_id, role')
+      .select('organization_id')
       .eq('user_id', targetUserId)
       .eq('organization_id', this.ctx.organizationId)
       .maybeSingle();
@@ -83,35 +96,54 @@ export class UserCategoriesService {
       );
     }
 
-    // Atomic-replace: clear all existing rows, then insert the new set.
-    // Two operations rather than upsert because we want anything missing
-    // from the new set to be REMOVED, not preserved.
-    await this.ctx.supabase
+    // Capture the previous set BEFORE replacing so the audit can
+    // record the delta — useful when an auditor needs to know which
+    // categories were granted vs revoked, not just the final count.
+    const { data: priorRows } = await this.ctx.supabase
       .from('user_category_assignments')
-      .delete()
-      .eq('user_id', targetUserId);
+      .select('category_id')
+      .eq('user_id', targetUserId)
+      .eq('organization_id', this.ctx.organizationId);
+    const prior = new Set(
+      ((priorRows ?? []) as Array<{ category_id: string }>).map((r) => r.category_id),
+    );
+    const next = new Set(categoryIds);
 
-    if (categoryIds.length > 0) {
-      const rows = categoryIds.map((category_id) => ({
-        organization_id: this.ctx.organizationId,
-        user_id: targetUserId,
-        category_id,
-        assigned_by: this.ctx.userId,
-      }));
-      const { error } = await this.ctx.supabase
-        .from('user_category_assignments')
-        .insert(rows);
-      if (error) {
-        throw new ServiceError('internal_error', error.message);
-      }
+    // No-op short-circuit: identical sets = skip the RPC + audit so
+    // accidental double-clicks don't pollute the audit log.
+    if (prior.size === next.size && [...prior].every((id) => next.has(id))) {
+      return;
     }
+
+    const { error } = await this.ctx.supabase.rpc('set_user_category_access', {
+      p_org_id: this.ctx.organizationId,
+      p_user_id: targetUserId,
+      p_caller_id: this.ctx.userId,
+      p_category_ids: categoryIds,
+    });
+    if (error) {
+      if (error.code === 'P0002') {
+        throw new ServiceError('not_found', 'User is not a member of this organization.');
+      }
+      if (error.code === '42501') {
+        throw new ServiceError('forbidden', 'Manager role required to assign categories.');
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
+
+    const granted = [...next].filter((id) => !prior.has(id));
+    const revoked = [...prior].filter((id) => !next.has(id));
 
     void audit(
       {
         event: 'user.category_access.updated',
         entityType: 'user_profile',
         entityId: targetUserId,
-        extra: { category_count: categoryIds.length },
+        extra: {
+          category_count: categoryIds.length,
+          granted_ids: granted,
+          revoked_ids: revoked,
+        },
       },
       this.ctx,
     );

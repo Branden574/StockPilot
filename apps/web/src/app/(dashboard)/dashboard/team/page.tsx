@@ -25,20 +25,24 @@ export default async function TeamPage() {
       .maybeSingle(),
   ]);
 
-  const [
-    members,
-    invites,
-    chartersList,
-    warehousesList,
-    warehouseCharters,
-    categoriesRes,
-    grantsRes,
-  ] = await Promise.all([
-    team.listMembers(),
-    team.listPendingInvites(),
-    charterSvc.list(),
-    warehouseSvc.list(),
-    whCharterSvc.listPairs(),
+  const [members, invites, chartersList, warehousesList, warehouseCharters] =
+    await Promise.all([
+      team.listMembers(),
+      team.listPendingInvites(),
+      charterSvc.list(),
+      warehouseSvc.list(),
+      whCharterSvc.listPairs(),
+    ]);
+
+  // Load categories + grants in a second wave so the grants query can
+  // scope to ACTUAL viewer user_ids (avoiding orphan rows for users
+  // who were once viewers, since RLS only deletes assignments when
+  // the user is removed from the org).
+  const viewerUserIds = members
+    .filter((m) => m.role === 'viewer')
+    .map((m) => m.user_id);
+
+  const [categoriesRes, grantsRes] = await Promise.all([
     // All active categories in this org — populates the viewer
     // category-access dialog. Sorted alphabetically for predictable UI.
     supabase
@@ -47,14 +51,18 @@ export default async function TeamPage() {
       .eq('organization_id', ctx.organizationId)
       .is('deleted_at', null)
       .order('name', { ascending: true }),
-    // All current grant rows for this org — keyed by user_id in the
-    // map below so each viewer-row's dialog hydrates with its existing
-    // selection. RLS-scoped on user_category_assignments restricts this
-    // read to manager+ (which is the only role that gets to this page).
-    supabase
-      .from('user_category_assignments')
-      .select('user_id, category_id')
-      .eq('organization_id', ctx.organizationId),
+    // Grants ONLY for current viewers. Filtering by user_id keeps the
+    // payload small on orgs with many ex-viewers; the org_id filter
+    // is defense in depth (RLS also enforces).
+    viewerUserIds.length > 0
+      ? supabase
+          .from('user_category_assignments')
+          .select('user_id, category_id')
+          .eq('organization_id', ctx.organizationId)
+          .in('user_id', viewerUserIds)
+      : Promise.resolve({
+          data: [] as Array<{ user_id: string; category_id: string }>,
+        }),
   ]);
 
   const allCategories = ((categoriesRes.data ?? []) as Array<{
