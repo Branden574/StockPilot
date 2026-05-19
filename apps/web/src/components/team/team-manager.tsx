@@ -6,6 +6,7 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { CategoryAccessCard } from '@/components/team/category-access-card';
 import { RoleBadge } from '@/components/team/role-badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -57,6 +58,10 @@ import { ROLES, ROLE_LABELS, type InviteableRole, type Role } from '@stockpilot/
 
 interface Member {
   id: string;
+  /** user_profile.id — distinct from organization_members.id. Needed for
+   *  per-user grants like category access (which live on the user, not the
+   *  membership row). */
+  userId: string;
   role: Role;
   invitedAt: string | null;
   acceptedAt: string | null;
@@ -80,6 +85,12 @@ interface TeamManagerProps {
   charters: Array<{ id: string; name: string }>;
   warehouses: Array<{ id: string; name: string }>;
   warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
+  /** All active categories in the org. Drives the viewer category-access
+   *  picker on the member-row dropdown. */
+  allCategories: Array<{ id: string; name: string }>;
+  /** Map of user_id → granted category_ids for all viewers in the org.
+   *  Empty list (or missing) = unrestricted. */
+  grantsByUser: Record<string, string[]>;
   charterSingular: string;
   warehouseSingular: string;
 }
@@ -93,6 +104,8 @@ export function TeamManager({
   charters,
   warehouses,
   warehouseCharters,
+  allCategories,
+  grantsByUser,
   charterSingular,
   warehouseSingular,
 }: TeamManagerProps) {
@@ -123,7 +136,13 @@ export function TeamManager({
             </TableHeader>
             <TableBody>
               {members.map((m) => (
-                <MemberRow key={m.id} member={m} currentUserRole={currentUserRole} />
+                <MemberRow
+                  key={m.id}
+                  member={m}
+                  currentUserRole={currentUserRole}
+                  allCategories={allCategories}
+                  initiallyGranted={grantsByUser[m.userId] ?? []}
+                />
               ))}
             </TableBody>
           </Table>
@@ -168,7 +187,17 @@ export function TeamManager({
   );
 }
 
-function MemberRow({ member, currentUserRole }: { member: Member; currentUserRole: Role }) {
+function MemberRow({
+  member,
+  currentUserRole,
+  allCategories,
+  initiallyGranted,
+}: {
+  member: Member;
+  currentUserRole: Role;
+  allCategories: Array<{ id: string; name: string }>;
+  initiallyGranted: string[];
+}) {
   const router = useRouter();
   const [removeOpen, setRemoveOpen] = React.useState(false);
   const [removeBusy, setRemoveBusy] = React.useState(false);
@@ -176,6 +205,7 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
   const [transferPassword, setTransferPassword] = React.useState('');
   const [transferAck, setTransferAck] = React.useState(false);
   const [transferBusy, setTransferBusy] = React.useState(false);
+  const [categoryAccessOpen, setCategoryAccessOpen] = React.useState(false);
   const initials = (member.fullName || member.email)
     .split(/\s+/)
     .map((s) => s[0])
@@ -285,6 +315,11 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
                 </DropdownMenuItem>
               ))}
               <DropdownMenuSeparator />
+              {member.role === 'viewer' && (
+                <DropdownMenuItem onClick={() => setCategoryAccessOpen(true)}>
+                  Category access…
+                </DropdownMenuItem>
+              )}
               {canTransferOwnership && (
                 <DropdownMenuItem onClick={() => setTransferOpen(true)}>
                   Transfer ownership…
@@ -308,6 +343,24 @@ function MemberRow({ member, currentUserRole }: { member: Member; currentUserRol
           pending={removeBusy}
           onConfirm={confirmRemove}
         />
+        <Dialog open={categoryAccessOpen} onOpenChange={setCategoryAccessOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Category access — {displayName}</DialogTitle>
+              <DialogDescription>
+                Restrict which inventory categories this viewer can see. New
+                categories appear here automatically — re-open this dialog
+                later to grant access to them.
+              </DialogDescription>
+            </DialogHeader>
+            <CategoryAccessCard
+              targetUserId={member.userId}
+              targetUserName={displayName}
+              allCategories={allCategories}
+              initiallyGranted={initiallyGranted}
+            />
+          </DialogContent>
+        </Dialog>
         <Dialog
           open={transferOpen}
           onOpenChange={(v) => {

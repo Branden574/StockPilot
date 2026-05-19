@@ -25,13 +25,52 @@ export default async function TeamPage() {
       .maybeSingle(),
   ]);
 
-  const [members, invites, chartersList, warehousesList, warehouseCharters] = await Promise.all([
+  const [
+    members,
+    invites,
+    chartersList,
+    warehousesList,
+    warehouseCharters,
+    categoriesRes,
+    grantsRes,
+  ] = await Promise.all([
     team.listMembers(),
     team.listPendingInvites(),
     charterSvc.list(),
     warehouseSvc.list(),
     whCharterSvc.listPairs(),
+    // All active categories in this org — populates the viewer
+    // category-access dialog. Sorted alphabetically for predictable UI.
+    supabase
+      .from('categories')
+      .select('id, name')
+      .eq('organization_id', ctx.organizationId)
+      .is('deleted_at', null)
+      .order('name', { ascending: true }),
+    // All current grant rows for this org — keyed by user_id in the
+    // map below so each viewer-row's dialog hydrates with its existing
+    // selection. RLS-scoped on user_category_assignments restricts this
+    // read to manager+ (which is the only role that gets to this page).
+    supabase
+      .from('user_category_assignments')
+      .select('user_id, category_id')
+      .eq('organization_id', ctx.organizationId),
   ]);
+
+  const allCategories = ((categoriesRes.data ?? []) as Array<{
+    id: string;
+    name: string;
+  }>).map((c) => ({ id: c.id, name: c.name }));
+
+  const grantsByUser: Record<string, string[]> = {};
+  for (const row of (grantsRes.data ?? []) as Array<{
+    user_id: string;
+    category_id: string;
+  }>) {
+    const list = grantsByUser[row.user_id] ?? [];
+    list.push(row.category_id);
+    grantsByUser[row.user_id] = list;
+  }
 
   const terminology = resolveTerminology(
     (orgRow.data?.terminology as Partial<{
@@ -52,6 +91,7 @@ export default async function TeamPage() {
         currentUserRole={ctx.role}
         members={members.map((m) => ({
           id: m.id,
+          userId: m.user_id,
           role: m.role as Role,
           invitedAt: m.invited_at,
           acceptedAt: m.accepted_at,
@@ -72,6 +112,8 @@ export default async function TeamPage() {
         charters={chartersList.map((c) => ({ id: c.id, name: c.name }))}
         warehouses={warehousesList.map((w) => ({ id: w.id, name: w.name }))}
         warehouseCharters={warehouseCharters}
+        allCategories={allCategories}
+        grantsByUser={grantsByUser}
         charterSingular={terminology.charter_singular}
         warehouseSingular={terminology.warehouse_singular}
       />
