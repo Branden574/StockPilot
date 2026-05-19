@@ -8,6 +8,7 @@ import {
 import { hasPermission } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
+import { ItemImagesService } from '@/server/services/item-images';
 import { WarehousesService } from '@/server/services/warehouses';
 
 export default async function NewOrderPage({
@@ -152,22 +153,26 @@ async function loadOrderableItems(
 
   const itemIds = items.map((i) => i.id);
 
-  // Reservations + uploaded-image rows in parallel — they're
-  // independent reads so two-round-trip cost stays one network hop.
-  const [rsRes, imgRes] = await Promise.all([
+  // Reservations + image thumbs in parallel — independent reads.
+  // ItemImagesService.primaryImagesForPdfRendering does the heavy
+  // lifting for thumbs: prefers the pre-resized thumb_path (≈30-50 KB)
+  // from migration 0122, falls back to a transformed 200px master via
+  // Supabase's image-transformation service, falls back to
+  // custom_fields.thumbnail_url for bulk-imported books that never had
+  // an item_images row written. URLs are cached via unstable_cache
+  // (25-day TTL) so subsequent page loads are near-instant.
+  //
+  // Service is named "ForPdfRendering" historically — same behavior
+  // is what an order picker thumbnail needs, so we reuse it as-is.
+  const imagesSvc = await ItemImagesService.forCurrentUser();
+  const [rsRes, imageUrlByItem] = await Promise.all([
     supabase
       .from('stock_reservations')
       .select('item_id, quantity')
       .eq('organization_id', organizationId)
       .in('item_id', itemIds)
       .is('released_at', null),
-    supabase
-      .from('item_images')
-      .select('item_id, storage_path, is_primary, sort_order')
-      .eq('organization_id', organizationId)
-      .in('item_id', itemIds)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true }),
+    imagesSvc.primaryImagesForPdfRendering(itemIds, 200),
   ]);
 
   const reservedByItem = new Map<string, number>();
@@ -176,25 +181,6 @@ async function loadOrderableItems(
       row.item_id,
       (reservedByItem.get(row.item_id) ?? 0) + Number(row.quantity),
     );
-  }
-
-  // Pick one primary storage_path per item (the order_by above puts
-  // is_primary=true first, then lowest sort_order).
-  const pathByItem = new Map<string, string>();
-  for (const r of (imgRes.data ?? []) as Array<{ item_id: string; storage_path: string }>) {
-    if (!pathByItem.has(r.item_id)) pathByItem.set(r.item_id, r.storage_path);
-  }
-  const urlByPath = new Map<string, string>();
-  if (pathByItem.size > 0) {
-    // 1h TTL — enough to ride out the form session (browse + add to
-    // cart + submit) without baking long-lived item-photo URLs into
-    // the page that linger in screenshots / shared links.
-    const { data: signed } = await supabase.storage
-      .from('item-images')
-      .createSignedUrls([...pathByItem.values()], 60 * 60);
-    for (const entry of signed ?? []) {
-      if (entry.signedUrl && entry.path) urlByPath.set(entry.path, entry.signedUrl);
-    }
   }
 
   function rackLabelFor(it: typeof items[number]): string | null {
@@ -210,22 +196,6 @@ async function loadOrderableItems(
     return row ? `${num}-${row}` : String(num);
   }
 
-  function imageUrlFor(it: typeof items[number]): string | null {
-    const path = pathByItem.get(it.id);
-    const uploaded = path ? urlByPath.get(path) ?? null : null;
-    if (uploaded) return uploaded;
-    // Bulk-imported books (ISBN importer at apps/web/src/server/actions/
-    // books-bulk-import.ts:79) stash the cover URL on custom_fields
-    // instead of inserting an item_images row. Length-cap is the same
-    // sanity bound used elsewhere in the codebase.
-    const cf = it.custom_fields ?? {};
-    const thumb = (cf as { thumbnail_url?: unknown }).thumbnail_url;
-    if (typeof thumb === 'string' && thumb.length > 0 && thumb.length < 2000) {
-      return thumb;
-    }
-    return null;
-  }
-
   return items.map((it) => ({
     id: it.id,
     name: it.name,
@@ -235,6 +205,6 @@ async function loadOrderableItems(
     reservedQuantity: reservedByItem.get(it.id) ?? 0,
     itemType: it.item_type ?? null,
     rackLabel: rackLabelFor(it),
-    imageUrl: imageUrlFor(it),
+    imageUrl: imageUrlByItem.get(it.id) ?? null,
   }));
 }
