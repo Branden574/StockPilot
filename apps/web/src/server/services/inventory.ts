@@ -582,6 +582,7 @@ export class InventoryService {
         item_type: input.itemType,
         custom_fields: input.customFields,
         status: input.status,
+        is_rental: input.isRental ?? false,
         created_by: this.ctx.userId,
         updated_by: this.ctx.userId,
       })

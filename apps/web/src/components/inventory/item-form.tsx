@@ -108,6 +108,14 @@ interface ItemFormProps {
    */
   returnHref?: string;
   onDone?: () => void;
+  /**
+   * When true, the form includes `is_rental: true` in the submit payload
+   * so the created item is classified as a rental asset. The rental
+   * toggle (if any) is hidden from the UI. Used by
+   * /dashboard/rentals/items/new to ensure items created there always
+   * belong to the rental catalog. Default: undefined (behaves as false).
+   */
+  isRentalFixed?: boolean;
 }
 
 export function ItemForm({
@@ -126,6 +134,7 @@ export function ItemForm({
   itemType = 'product',
   returnHref,
   onDone,
+  isRentalFixed = false,
 }: ItemFormProps) {
   const router = useRouter();
   const isEdit = Boolean(defaults?.id);
@@ -567,10 +576,15 @@ export function ItemForm({
             },
           };
         })();
+    // When isRentalFixed is true, inject is_rental=true into the payload
+    // so the item is classified as a rental asset regardless of form state.
+    const finalValues = isRentalFixed
+      ? { ...mergedValues, isRental: true }
+      : mergedValues;
     const action =
       isEdit && defaults?.id
-        ? updateItemAction(defaults.id, mergedValues as UpdateItemInput)
-        : createItemAction(mergedValues as CreateItemInput);
+        ? updateItemAction(defaults.id, finalValues as UpdateItemInput)
+        : createItemAction(finalValues as CreateItemInput);
     const res = await action;
     if (!res.ok) {
       toast.error(res.error.message);
@@ -623,7 +637,12 @@ export function ItemForm({
         ),
       );
     } else if (!isEdit) {
-      router.push(`/dashboard/inventory/${res.data.id}`);
+      // Rental items redirect to the rental-catalog item detail; regular
+      // items redirect to the inventory item detail.
+      const detailBase = isRentalFixed
+        ? '/dashboard/rentals/items'
+        : '/dashboard/inventory';
+      router.push(`${detailBase}/${res.data.id}`);
     } else {
       router.refresh();
     }

@@ -56,6 +56,12 @@ export const createItemSchema = z.object({
   itemType: z.enum(['product', 'book', 'asset', 'consumable']).default('product'),
   customFields: z.record(z.string(), z.unknown()).default({}),
   status: itemStatusSchema.default('active'),
+  /**
+   * When true, marks the item as a rental asset (canopy, equipment, etc.).
+   * Rental items appear ONLY on /dashboard/rentals/items — they are hidden
+   * from the regular inventory list and order picker. Default false.
+   */
+  isRental: z.boolean().optional(),
 });
 export type CreateItemInput = z.infer<typeof createItemSchema>;
 
