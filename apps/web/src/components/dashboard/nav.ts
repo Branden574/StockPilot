@@ -15,6 +15,7 @@ import {
   MapPin,
   Network,
   Package,
+  PackageOpen,
   Send,
   ShoppingCart,
   Sparkles,
@@ -69,6 +70,11 @@ const BASE_NAV: NavSection[] = [
       // activity_logs:read (managers+ only).
       { href: '/dashboard/tags', label: 'Tags', icon: Tags, requires: 'items:update' },
       { href: '/dashboard/movements', label: 'Movements', icon: ArrowLeftRight, requires: 'activity_logs:read' },
+      // Rentals: circulating-asset checkout/return for staff (canopies,
+      // supplies). Staff+ creates rentals via rentals:create. The Rentals
+      // section itself is two-tab: Activity (transactions) + Items
+      // (rental catalog).
+      { href: '/dashboard/rentals', label: 'Rentals', icon: PackageOpen, requires: 'rentals:create' },
       { href: '/dashboard/bundles', label: 'Bundles', icon: Package, requires: 'bundles:distribute' },
       { href: '/dashboard/orders', label: 'Orders', icon: ShoppingCart, requires: 'orders:request' },
       { href: '/dashboard/shipments', label: 'Shipments (Archive)', icon: Send, requires: 'purchase_orders:manage' },

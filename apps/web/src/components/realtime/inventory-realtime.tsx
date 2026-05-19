@@ -12,7 +12,7 @@ interface InventoryRealtimeProps {
    * pages that only care about a subset can pass a narrower list to keep
    * subscriptions cheap.
    */
-  tables?: Array<'inventory_items' | 'stock_movements' | 'purchase_orders'>;
+  tables?: Array<'inventory_items' | 'stock_movements' | 'purchase_orders' | 'rentals'>;
 }
 
 /**
@@ -28,7 +28,7 @@ const THROTTLE_MS = 250;
 
 export function InventoryRealtime({
   organizationId,
-  tables = ['inventory_items', 'stock_movements', 'purchase_orders'],
+  tables = ['inventory_items', 'stock_movements', 'purchase_orders', 'rentals'],
 }: InventoryRealtimeProps) {
   const router = useRouter();
   // Leading-edge throttle: the FIRST event fires router.refresh()
