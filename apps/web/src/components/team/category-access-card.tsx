@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { toast } from 'sonner';
 
@@ -30,6 +31,7 @@ export function CategoryAccessCard({
   allCategories,
   initiallyGranted,
 }: Props) {
+  const router = useRouter();
   const [granted, setGranted] = useState<Set<string>>(new Set(initiallyGranted));
   const [pending, startTransition] = useTransition();
 
@@ -65,6 +67,9 @@ export function CategoryAccessCard({
           ? `${targetUserName} can now see all categories.`
           : `${targetUserName} can now see ${n} categor${n === 1 ? 'y' : 'ies'}.`,
       );
+      // Refresh the server component so `initiallyGranted` reflects
+      // the new state if the dialog is closed and reopened.
+      router.refresh();
     });
   }
 

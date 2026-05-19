@@ -22,36 +22,33 @@ function makeCtx(opts: {
   targetUserRole?: string;
   /** category_ids currently in user_category_assignments for the target user */
   existingAssignments?: string[];
-  /** simulate an insert failure */
-  insertError?: { code: string; message: string };
+  /** simulate an RPC failure */
+  rpcError?: { code: string; message: string };
 }) {
-  const inserted: Array<Record<string, unknown>> = [];
-  let deleteCalled = false;
+  const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const supabase = {
+    rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+      rpcCalls.push({ name, args });
+      if (opts.rpcError) return { data: null, error: opts.rpcError };
+      return { data: null, error: null };
+    }),
     from(table: string) {
       if (table === 'user_category_assignments') {
+        // The service now reads assignments with two .eq() filters
+        // (user_id + organization_id). Mock that chain shape.
         return {
           select: () => ({
             eq: () => ({
-              then: (cb: (v: { data: Array<{ category_id: string }>; error: null }) => void) =>
-                cb({
-                  data: (opts.existingAssignments ?? []).map((c) => ({ category_id: c })),
-                  error: null,
-                }),
+              eq: () => ({
+                then: (
+                  cb: (v: { data: Array<{ category_id: string }>; error: null }) => void,
+                ) =>
+                  cb({
+                    data: (opts.existingAssignments ?? []).map((c) => ({ category_id: c })),
+                    error: null,
+                  }),
+              }),
             }),
-          }),
-          insert: (rows: Array<Record<string, unknown>>) => {
-            if (opts.insertError) {
-              return Promise.resolve({ data: null, error: opts.insertError });
-            }
-            inserted.push(...rows);
-            return Promise.resolve({ data: rows, error: null });
-          },
-          delete: () => ({
-            eq: () => {
-              deleteCalled = true;
-              return Promise.resolve({ error: null });
-            },
           }),
         };
       }
@@ -84,56 +81,80 @@ function makeCtx(opts: {
       userId: 'caller-1',
       role: 'admin',
     } as unknown as ConstructorParameters<typeof UserCategoriesService>[0],
-    inserted,
-    wasDeleted: () => deleteCalled,
+    rpcCalls,
   };
 }
 
 describe('UserCategoriesService.setUserCategoryAccess', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('inserts assignment rows for granted categories', async () => {
-    const { ctx, inserted } = makeCtx({
+  it('calls set_user_category_access RPC with granted categories', async () => {
+    const { ctx, rpcCalls } = makeCtx({
       targetUserOrgId: 'org-1',
       existingAssignments: [],
     });
     const svc = new UserCategoriesService(ctx);
     await svc.setUserCategoryAccess('user-2', ['cat-a', 'cat-b']);
-    expect(inserted).toHaveLength(2);
-    expect(inserted.map((r) => r.category_id).sort()).toEqual(['cat-a', 'cat-b']);
-    expect(inserted.every((r) => r.user_id === 'user-2')).toBe(true);
-    expect(inserted.every((r) => r.organization_id === 'org-1')).toBe(true);
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0]!.name).toBe('set_user_category_access');
+    expect(rpcCalls[0]!.args.p_user_id).toBe('user-2');
+    expect(rpcCalls[0]!.args.p_org_id).toBe('org-1');
+    expect((rpcCalls[0]!.args.p_category_ids as string[]).sort()).toEqual([
+      'cat-a',
+      'cat-b',
+    ]);
   });
 
   it('rejects when target user is not in the calling user’s organization', async () => {
-    const { ctx } = makeCtx({ targetUserOrgId: undefined });
+    const { ctx, rpcCalls } = makeCtx({ targetUserOrgId: undefined });
+    const svc = new UserCategoriesService(ctx);
+    await expect(
+      svc.setUserCategoryAccess('user-2', ['cat-a']),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    expect(rpcCalls).toHaveLength(0); // never reached the RPC
+  });
+
+  it('passes empty array to RPC when called with empty grants (clears)', async () => {
+    const { ctx, rpcCalls } = makeCtx({
+      targetUserOrgId: 'org-1',
+      existingAssignments: ['cat-a', 'cat-b'],
+    });
+    const svc = new UserCategoriesService(ctx);
+    await svc.setUserCategoryAccess('user-2', []);
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0]!.args.p_category_ids).toEqual([]);
+  });
+
+  it('no-op short-circuits when new set equals existing set', async () => {
+    const { ctx, rpcCalls } = makeCtx({
+      targetUserOrgId: 'org-1',
+      existingAssignments: ['cat-a', 'cat-b'],
+    });
+    const svc = new UserCategoriesService(ctx);
+    await svc.setUserCategoryAccess('user-2', ['cat-b', 'cat-a']); // same set, different order
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it('maps RPC P0002 to ServiceError(not_found)', async () => {
+    const { ctx } = makeCtx({
+      targetUserOrgId: 'org-1',
+      rpcError: { code: 'P0002', message: 'not_found' },
+    });
     const svc = new UserCategoriesService(ctx);
     await expect(
       svc.setUserCategoryAccess('user-2', ['cat-a']),
     ).rejects.toMatchObject({ code: 'not_found' });
   });
 
-  it('clears all assignments when called with empty array', async () => {
-    const { ctx, inserted, wasDeleted } = makeCtx({
+  it('maps RPC 42501 to ServiceError(forbidden)', async () => {
+    const { ctx } = makeCtx({
       targetUserOrgId: 'org-1',
-      existingAssignments: ['cat-a', 'cat-b'],
+      rpcError: { code: '42501', message: 'forbidden' },
     });
     const svc = new UserCategoriesService(ctx);
-    await svc.setUserCategoryAccess('user-2', []);
-    expect(inserted).toHaveLength(0);
-    expect(wasDeleted()).toBe(true);
-  });
-
-  it('atomic-replace: deletes existing AND inserts new in same call', async () => {
-    const { ctx, inserted, wasDeleted } = makeCtx({
-      targetUserOrgId: 'org-1',
-      existingAssignments: ['cat-old'],
-    });
-    const svc = new UserCategoriesService(ctx);
-    await svc.setUserCategoryAccess('user-2', ['cat-new']);
-    expect(wasDeleted()).toBe(true);
-    expect(inserted).toHaveLength(1);
-    expect((inserted[0] as { category_id: string }).category_id).toBe('cat-new');
+    await expect(
+      svc.setUserCategoryAccess('user-2', ['cat-a']),
+    ).rejects.toMatchObject({ code: 'forbidden' });
   });
 });
 
