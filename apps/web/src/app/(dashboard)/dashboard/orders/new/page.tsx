@@ -59,7 +59,7 @@ export default async function NewOrderPage({
     warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
 
   const [items, chartersForWarehouse] = await Promise.all([
-    loadCatalogItems(ctx.organizationId, warehouseId),
+    loadCatalogItems(ctx.organizationId, warehouseId, ctx.userId),
     loadChartersForWarehouse(warehouseId),
   ]);
   const aisles = buildAisles(items);
@@ -132,45 +132,100 @@ async function loadChartersForWarehouse(
 }
 
 /**
+ * Returns a stable string that uniquely identifies a user's
+ * category-access pattern. Used as a cache-key component so a
+ * restricted viewer's payload doesn't get served to other users
+ * (or vice versa). Truth table mirrors
+ * `user_can_see_item_category` from migration 0128:
+ *
+ *   role = manager/admin/owner/staff               → 'ALL'
+ *   role = viewer + 0 grants                        → 'ALL' (unrestricted default)
+ *   role = viewer + N grants                        → 'v:c1,c2,c3...' (sorted)
+ *   no membership                                   → 'NONE'
+ */
+async function loadAccessibleCategoryKey(
+  organizationId: string,
+  userId: string,
+): Promise<string> {
+  const admin = createAdminClient();
+  const { data: member } = await admin
+    .from('organization_members')
+    .select('role')
+    .eq('user_id', userId)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  const role = (member as { role?: string } | null)?.role;
+  if (!role) return 'NONE';
+  if (role !== 'viewer') return 'ALL';
+
+  const { data: rows } = await admin
+    .from('user_category_assignments')
+    .select('category_id')
+    .eq('user_id', userId)
+    .eq('organization_id', organizationId);
+  const ids = ((rows ?? []) as Array<{ category_id: string }>)
+    .map((r) => r.category_id)
+    .sort();
+  if (ids.length === 0) return 'ALL';
+  return 'v:' + ids.join(',');
+}
+
+/**
  * Loads catalog items for the v2 picker. Returns CatalogItem[] with
  * everything the new card grid needs to render: thumbnail, price,
  * available-to-promise, rack label, category name. Bundles are
  * filtered out (phantom rows).
  *
- * Wrapped in unstable_cache (30s TTL, keyed by orgId + warehouseId).
- * Subsequent visits to the page within 30s skip every Supabase
- * roundtrip — items, reservations, categories, image-URL minting all
- * served from Vercel's data cache. This is the difference between
- * "feels instant" and "few seconds of waiting".
+ * Wrapped in unstable_cache (30s TTL, keyed by orgId + warehouseId +
+ * accessKey). The accessKey is critical: without it a manager's
+ * full-catalog payload would be served to a restricted viewer
+ * hitting the same warehouse (RLS is bypassed in here because the
+ * admin client is used to dodge cookies). Bumped to v2 prefix when
+ * the access-key component was added — cold cache forced.
  *
  * Admin client is used inside the cache so the cached value doesn't
  * capture per-user cookies. The page-level perimeter (requireOrgContext
  * + warehousesSvc.list scoping) guarantees only warehouseIds the user
- * is authorized to see ever get passed in — so bypassing RLS inside
- * the cache is safe.
+ * is authorized to see ever get passed in.
  */
 const loadCatalogItemsCached = unstable_cache(
-  async (organizationId: string, warehouseId: string): Promise<CatalogItem[]> => {
-    return loadCatalogItemsUncached(organizationId, warehouseId);
+  async (
+    organizationId: string,
+    warehouseId: string,
+    accessKey: string,
+  ): Promise<CatalogItem[]> => {
+    return loadCatalogItemsUncached(organizationId, warehouseId, accessKey);
   },
-  ['orders-new-v2-catalog-v1'],
+  ['orders-new-v2-catalog-v2'],
   { revalidate: 30, tags: ['orders-new-v2-catalog'] },
 );
 
 async function loadCatalogItems(
   organizationId: string,
   warehouseId: string,
+  userId: string,
 ): Promise<CatalogItem[]> {
-  return loadCatalogItemsCached(organizationId, warehouseId);
+  const accessKey = await loadAccessibleCategoryKey(organizationId, userId);
+  return loadCatalogItemsCached(organizationId, warehouseId, accessKey);
 }
 
 async function loadCatalogItemsUncached(
   organizationId: string,
   warehouseId: string,
+  accessKey: string,
 ): Promise<CatalogItem[]> {
   const supabase = createAdminClient();
 
-  const { data: itemsData } = await supabase
+  // Parse the allow-list (if any) from the access key. NONE = no
+  // memberships, return empty payload defensively. ALL = unrestricted,
+  // skip the filter entirely.
+  let allowedCategoryIds: Set<string> | null = null;
+  if (accessKey === 'NONE') return [];
+  if (accessKey.startsWith('v:')) {
+    allowedCategoryIds = new Set(accessKey.slice(2).split(',').filter(Boolean));
+  }
+
+  let itemsQuery = supabase
     .from('inventory_items')
     .select(
       'id, name, sku, quantity_on_hand, warehouse_id, item_type, is_bundle, custom_fields, bin_location, category_id, retail_price, unit_cost, reorder_point',
@@ -182,6 +237,17 @@ async function loadCatalogItemsUncached(
     .or('is_bundle.is.null,is_bundle.eq.false')
     .order('name', { ascending: true })
     .limit(500);
+
+  // Defense-in-depth: filter by the user's category allow-list at the
+  // admin-client query level too. Restricted viewers never see
+  // null-category items (matches the RLS truth table). Unrestricted
+  // (ALL) callers skip this filter entirely.
+  if (allowedCategoryIds !== null) {
+    if (allowedCategoryIds.size === 0) return [];
+    itemsQuery = itemsQuery.in('category_id', [...allowedCategoryIds]);
+  }
+
+  const { data: itemsData } = await itemsQuery;
 
   const items = (itemsData ?? []) as Array<{
     id: string;
