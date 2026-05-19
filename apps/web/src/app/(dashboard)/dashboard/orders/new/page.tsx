@@ -5,6 +5,7 @@ import {
   OrderRequestForm,
   type OrderItemOption,
 } from '@/components/orders/order-request-form';
+import type { CatalogItem } from '@/components/orders/v2/types';
 import { hasPermission } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
@@ -115,21 +116,25 @@ async function loadChartersForWarehouse(
   });
 }
 
-async function loadOrderableItems(
+/**
+ * Loads catalog items for the v2 picker. Returns CatalogItem[] with
+ * everything the new card grid needs to render: thumbnail, price,
+ * available-to-promise, rack label, category name. Bundles are
+ * filtered out (phantom rows).
+ *
+ * Powers /dashboard/orders/new v2. The legacy OrderItemOption shape
+ * is now obsolete — keep this single fetch path going forward.
+ */
+async function loadCatalogItems(
   organizationId: string,
   warehouseId: string,
-): Promise<OrderItemOption[]> {
+): Promise<CatalogItem[]> {
   const supabase = await createClient();
 
-  // Active items in the chosen warehouse — keep the column set tight
-  // since this list can be a few hundred rows for the order form.
-  // Bundle phantom rows (is_bundle=true) are excluded so they don't
-  // pollute the orderable list. custom_fields + bin_location drive
-  // the per-row rack label + bulk-import thumbnail fallback.
   const { data: itemsData } = await supabase
     .from('inventory_items')
     .select(
-      'id, name, sku, quantity_on_hand, warehouse_id, item_type, is_bundle, custom_fields, bin_location',
+      'id, name, sku, quantity_on_hand, warehouse_id, item_type, is_bundle, custom_fields, bin_location, category_id, retail_price, unit_cost, reorder_point',
     )
     .eq('organization_id', organizationId)
     .eq('warehouse_id', warehouseId)
@@ -148,24 +153,19 @@ async function loadOrderableItems(
     item_type: string | null;
     custom_fields: Record<string, unknown> | null;
     bin_location: string | null;
+    category_id: string | null;
+    retail_price: number | null;
+    unit_cost: number | null;
+    reorder_point: number | null;
   }>;
   if (items.length === 0) return [];
 
   const itemIds = items.map((i) => i.id);
+  const categoryIds = [...new Set(items.map((i) => i.category_id).filter((v): v is string => Boolean(v)))];
 
-  // Reservations + image thumbs in parallel — independent reads.
-  // ItemImagesService.primaryImagesForPdfRendering does the heavy
-  // lifting for thumbs: prefers the pre-resized thumb_path (≈30-50 KB)
-  // from migration 0122, falls back to a transformed 200px master via
-  // Supabase's image-transformation service, falls back to
-  // custom_fields.thumbnail_url for bulk-imported books that never had
-  // an item_images row written. URLs are cached via unstable_cache
-  // (25-day TTL) so subsequent page loads are near-instant.
-  //
-  // Service is named "ForPdfRendering" historically — same behavior
-  // is what an order picker thumbnail needs, so we reuse it as-is.
+  // Reservations + images + category names in parallel.
   const imagesSvc = await ItemImagesService.forCurrentUser();
-  const [rsRes, imageUrlByItem] = await Promise.all([
+  const [rsRes, imageUrlByItem, categoriesRes] = await Promise.all([
     supabase
       .from('stock_reservations')
       .select('item_id, quantity')
@@ -173,6 +173,13 @@ async function loadOrderableItems(
       .in('item_id', itemIds)
       .is('released_at', null),
     imagesSvc.primaryImagesForPdfRendering(itemIds, 200),
+    categoryIds.length > 0
+      ? supabase
+          .from('categories')
+          .select('id, name')
+          .eq('organization_id', organizationId)
+          .in('id', categoryIds)
+      : Promise.resolve({ data: [] as Array<{ id: string; name: string }> }),
   ]);
 
   const reservedByItem = new Map<string, number>();
@@ -181,6 +188,11 @@ async function loadOrderableItems(
       row.item_id,
       (reservedByItem.get(row.item_id) ?? 0) + Number(row.quantity),
     );
+  }
+
+  const categoryNameById = new Map<string, string>();
+  for (const c of (categoriesRes.data ?? []) as Array<{ id: string; name: string }>) {
+    categoryNameById.set(c.id, c.name);
   }
 
   function rackLabelFor(it: typeof items[number]): string | null {
@@ -198,13 +210,47 @@ async function loadOrderableItems(
 
   return items.map((it) => ({
     id: it.id,
-    name: it.name,
     sku: it.sku,
+    name: it.name,
     warehouseId: it.warehouse_id,
     quantityOnHand: Number(it.quantity_on_hand) || 0,
     reservedQuantity: reservedByItem.get(it.id) ?? 0,
     itemType: it.item_type ?? null,
+    categoryId: it.category_id ?? null,
+    categoryName: it.category_id ? categoryNameById.get(it.category_id) ?? null : null,
     rackLabel: rackLabelFor(it),
     imageUrl: imageUrlByItem.get(it.id) ?? null,
+    // Price: retail first, then cost, then null. The v2 picker shows
+    // "—" for null, and the cart estimated total excludes them.
+    price:
+      typeof it.retail_price === 'number'
+        ? it.retail_price
+        : typeof it.unit_cost === 'number'
+        ? it.unit_cost
+        : null,
+    reorderPoint: Number(it.reorder_point) || 0,
+  }));
+}
+
+/**
+ * Legacy data loader kept so the existing OrderRequestForm import
+ * keeps compiling until Task 5 swaps it out. Maps the CatalogItem
+ * shape down to OrderItemOption.
+ */
+async function loadOrderableItems(
+  organizationId: string,
+  warehouseId: string,
+): Promise<OrderItemOption[]> {
+  const items = await loadCatalogItems(organizationId, warehouseId);
+  return items.map((it) => ({
+    id: it.id,
+    name: it.name,
+    sku: it.sku,
+    warehouseId: it.warehouseId,
+    quantityOnHand: it.quantityOnHand,
+    reservedQuantity: it.reservedQuantity,
+    itemType: it.itemType,
+    rackLabel: it.rackLabel,
+    imageUrl: it.imageUrl,
   }));
 }
