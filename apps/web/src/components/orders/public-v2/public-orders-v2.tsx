@@ -2,8 +2,20 @@
 
 import * as React from 'react';
 
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { AisleBar } from '@/components/orders/v2/aisle-bar';
-import { CartProvider, initialCartState } from '@/components/orders/v2/cart-context';
+import {
+  CartProvider,
+  initialCartState,
+  useCart,
+} from '@/components/orders/v2/cart-context';
 import { CatalogGrid } from '@/components/orders/v2/catalog-grid';
 import { Toolbar } from '@/components/orders/v2/toolbar';
 import type { AvailabilityFilter, SortKey } from '@/components/orders/v2/toolbar';
@@ -50,11 +62,13 @@ export function PublicOrdersV2(props: PublicOrdersV2Props) {
 function PublicOrdersV2Inner({
   token,
   orgName,
+  warehouses,
   items: rawItems,
   aisles,
   initialWarehouseId,
   chartersForWarehouse,
 }: PublicOrdersV2Props & { publicWarehouseId: string }) {
+  const { state: cartState } = useCart();
   // Requester info — owned here and passed down to card + rail
   const [name, setName] = React.useState('');
   const [email, setEmail] = React.useState('');
@@ -221,6 +235,46 @@ function PublicOrdersV2Inner({
           onHpChange={setHp}
           chartersForWarehouse={chartersForWarehouse}
         />
+
+        {/* Multi-warehouse picker — only when more than one warehouse
+            is publicly orderable. Switching reloads the page so the
+            server re-fetches the right book catalog for the new
+            warehouse. Confirms first when the cart has items (matches
+            the staff-side warehouse-switch behavior). */}
+        {warehouses.length > 1 ? (
+          <section className="bg-card space-y-2 rounded-2xl border p-4">
+            <Label htmlFor="public-warehouse">Pickup location</Label>
+            <Select
+              value={initialWarehouseId}
+              onValueChange={(v) => {
+                if (v === initialWarehouseId) return;
+                if (cartState.lines.length > 0) {
+                  if (
+                    !window.confirm(
+                      'Switching locations will clear your cart. Continue?',
+                    )
+                  ) {
+                    return;
+                  }
+                }
+                const params = new URLSearchParams(window.location.search);
+                params.set('w', v);
+                window.location.search = params.toString();
+              }}
+            >
+              <SelectTrigger id="public-warehouse">
+                <SelectValue placeholder="Pick a location" />
+              </SelectTrigger>
+              <SelectContent>
+                {warehouses.map((w) => (
+                  <SelectItem key={w.id} value={w.id}>
+                    {w.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </section>
+        ) : null}
 
         {/* Aisle bar (sticky) */}
         <AisleBar
