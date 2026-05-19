@@ -4,7 +4,7 @@ import { MapPin, Minus, Plus } from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
-import { cn, formatCurrency } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 
 import { useCart } from './cart-context';
 import type { CatalogItem } from './types';
@@ -42,9 +42,6 @@ export function ItemCard({ item }: ItemCardProps) {
   function handleDec() {
     dispatch({ type: 'dec', itemId: item.id });
   }
-
-  const priceDisplay =
-    item.price !== null ? formatCurrency(item.price) : '—';
 
   const stockLabel =
     status === 'out'
@@ -117,25 +114,6 @@ export function ItemCard({ item }: ItemCardProps) {
             onLoad={(e) => e.currentTarget.classList.add('loaded')}
           />
         ) : null}
-
-        {/* Ink price tag — notched left edge via pseudo-element */}
-        <div
-          className={cn(
-            'absolute top-2 right-0 flex items-center',
-            'bg-foreground text-background text-[11px] font-semibold leading-none',
-            'pl-2 pr-2 py-1 rounded-l-sm',
-            // The notch: a triangle cut out of the left side
-            'before:content-[""] before:absolute before:left-[-6px] before:top-0 before:bottom-0 before:w-[6px]',
-            'before:bg-[linear-gradient(135deg,transparent_50%,var(--tw-bg-foreground,hsl(var(--foreground)))_50%)]',
-          )}
-          style={
-            {
-              '--tw-bg-foreground': 'hsl(var(--foreground))',
-            } as React.CSSProperties
-          }
-        >
-          {priceDisplay}
-        </div>
 
         {/* In-cart badge on thumbnail */}
         {inCart && (

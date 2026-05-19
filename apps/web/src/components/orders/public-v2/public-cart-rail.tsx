@@ -6,8 +6,6 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { cn, formatCurrency } from '@/lib/utils';
-
 import { clearCartDraft, useCart } from '@/components/orders/v2/cart-context';
 import type { CatalogItem } from '@/components/orders/v2/types';
 
@@ -26,7 +24,6 @@ interface PublicCartRailProps {
    *  can include them in the submit payload without duplicating state. */
   name: string;
   email: string;
-  orgLabel: string;
   phone: string;
   pickupNotes: string;
   honeypot: string;
@@ -47,7 +44,6 @@ export function PublicCartRail({
   itemMap,
   name,
   email,
-  orgLabel,
   phone,
   pickupNotes,
   honeypot,
@@ -58,17 +54,6 @@ export function PublicCartRail({
 
   const lines = state.lines;
   const totalQty = lines.reduce((s, l) => s + l.quantity, 0);
-
-  const estimatedValue = lines.reduce((s, l) => {
-    const item = itemMap.get(l.itemId);
-    if (!item || item.price === null) return s;
-    return s + item.price * l.quantity;
-  }, 0);
-
-  const hasValue = lines.some((l) => {
-    const item = itemMap.get(l.itemId);
-    return item?.price !== null && item?.price !== undefined;
-  });
 
   // Screen-reader live region for cart changes
   const [announcement, setAnnouncement] = React.useState('');
@@ -106,7 +91,6 @@ export function PublicCartRail({
           warehouseId,
           requesterName: name.trim(),
           requesterEmail: email.trim(),
-          requesterOrgLabel: orgLabel.trim() || undefined,
           notes: state.notes.trim() || undefined,
           lines: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
           fulfillmentType: state.fulfillmentType,
@@ -266,23 +250,6 @@ export function PublicCartRail({
               <span className="text-muted-foreground">Total qty</span>
               <span className="tabular-nums font-semibold">{totalQty}</span>
             </div>
-            {hasValue && (
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Est. value</span>
-                <span
-                  className={cn(
-                    'tabular-nums font-semibold',
-                    lines.some((l) => (itemMap.get(l.itemId)?.price ?? null) === null) &&
-                      'text-muted-foreground',
-                  )}
-                >
-                  {formatCurrency(estimatedValue)}
-                  {lines.some((l) => (itemMap.get(l.itemId)?.price ?? null) === null) && (
-                    <span className="text-[10px] ml-1 font-normal">partial</span>
-                  )}
-                </span>
-              </div>
-            )}
           </div>
         )}
 

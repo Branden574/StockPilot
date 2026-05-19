@@ -72,7 +72,6 @@ function PublicOrdersV2Inner({
   // Requester info — owned here and passed down to card + rail
   const [name, setName] = React.useState('');
   const [email, setEmail] = React.useState('');
-  const [orgLabel, setOrgLabel] = React.useState('');
   const [phone, setPhone] = React.useState('');
   const [pickupNotes, setPickupNotes] = React.useState('');
   const [hp, setHp] = React.useState('');
@@ -225,8 +224,6 @@ function PublicOrdersV2Inner({
           onNameChange={setName}
           email={email}
           onEmailChange={setEmail}
-          orgLabel={orgLabel}
-          onOrgLabelChange={setOrgLabel}
           phone={phone}
           onPhoneChange={setPhone}
           pickupNotes={pickupNotes}
@@ -314,7 +311,6 @@ function PublicOrdersV2Inner({
         itemMap={itemMap}
         name={name}
         email={email}
-        orgLabel={orgLabel}
         phone={phone}
         pickupNotes={pickupNotes}
         honeypot={hp}
