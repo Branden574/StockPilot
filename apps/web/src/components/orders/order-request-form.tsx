@@ -38,6 +38,14 @@ export interface OrderItemOption {
   quantityOnHand: number;
   reservedQuantity: number;
   itemType: string | null;
+  /** Pre-rendered rack label (e.g. "38-A" or "12-C · red4"). null when
+      the item has no rack assigned. Helps disambiguate duplicates that
+      share name + SKU but live at different racks. */
+  rackLabel: string | null;
+  /** Primary thumbnail URL. Either a signed item_images URL (uploaded
+      via the dashboard) or a custom_fields.thumbnail_url (bulk-imported
+      books from the ISBN importer). null = no photo on file. */
+  imageUrl: string | null;
 }
 
 type TypeFilter = 'all' | 'book' | 'product';
@@ -500,10 +508,31 @@ export function OrderRequestForm({
                     key={it.id}
                     className="flex items-center gap-3 px-4 py-2.5 text-sm"
                   >
+                    {/* Thumbnail. Plain <img> rather than next/image:
+                        signed URLs and arbitrary public CDN (bulk-import)
+                        sources don't pass through the image optimizer,
+                        and the list can be 500+ rows so a 40×40 raw img
+                        is the right cost profile. lazy = browser only
+                        decodes rows scrolled into view. */}
+                    <div className="border-border bg-muted h-10 w-10 flex-none overflow-hidden rounded-md border">
+                      {it.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={it.imageUrl}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          className="h-full w-full object-cover"
+                        />
+                      ) : null}
+                    </div>
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-medium">{it.name}</div>
                       <div className="text-muted-foreground truncate font-mono text-[11px]">
                         {it.sku}
+                        {it.rackLabel ? (
+                          <span className="ml-2 font-sans">· Rack {it.rackLabel}</span>
+                        ) : null}
                       </div>
                     </div>
                     <div className="text-right">
