@@ -33,6 +33,18 @@ interface SendResult {
 }
 
 /**
+ * Pull the bare email address out of an RFC-5322 `Name <addr>` value,
+ * or pass through a bare address. Used for the Reply-To default.
+ */
+function extractAddress(fromValue: string | null | undefined): string | null {
+  if (!fromValue) return null;
+  const match = fromValue.match(/<([^>]+)>/);
+  if (match && match[1]) return match[1].trim();
+  const bare = fromValue.trim();
+  return bare.includes('@') ? bare : null;
+}
+
+/**
  * Sends transactional email via Resend if RESEND_API_KEY is set.
  * If not, logs to console and returns ok=true so dev flows still work
  * end-to-end even before email is wired up.
@@ -64,6 +76,18 @@ export async function sendEmail({
   }
 
   try {
+    // Reply-To is a small but real deliverability signal — Microsoft 365
+    // and Google Workspace both score messages slightly higher when
+    // Reply-To is set to a deliverable address on the sending domain.
+    // We extract the address out of "Name <email>" if present, else
+    // use the from value as-is. Tests / dev envs without a real FROM
+    // just skip the header.
+    const fromAddress = extractAddress(env.RESEND_FROM_EMAIL);
+    const finalHeaders: Record<string, string> = { ...(headers ?? {}) };
+    if (fromAddress && !finalHeaders['Reply-To'] && !finalHeaders['reply-to']) {
+      finalHeaders['Reply-To'] = fromAddress;
+    }
+
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -77,7 +101,7 @@ export async function sendEmail({
         html,
         text,
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
-        ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+        ...(Object.keys(finalHeaders).length > 0 ? { headers: finalHeaders } : {}),
       }),
     });
 
