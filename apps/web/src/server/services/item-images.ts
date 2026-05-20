@@ -46,7 +46,11 @@ const getCachedItemImageSignedUrl = unstable_cache(
   // Cache key prefix + the function arg(s) form the full key.
   // Bump the version suffix when the URL shape changes (e.g. when
   // moving to image-transformation URLs) to bust all stale entries.
-  ['item-image-signed-url-v1'],
+  // v2 (2026-05-20): bumped to bust any cached null entries from
+  // earlier failed signing attempts (e.g. before thumb_path was
+  // populated, or transient storage errors). Cache values are 25-day
+  // sticky, so version-bumping is the only reliable way to evict.
+  ['item-image-signed-url-v2'],
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
 );
 
@@ -78,7 +82,10 @@ const getCachedItemImageTransformedSignedUrl = unstable_cache(
       return null;
     }
   },
-  ['item-image-signed-url-transform-v1'],
+  // v2 (2026-05-20): companion bump to the plain signer above —
+  // any poisoned-null entries from quota hits / transient errors
+  // get evicted at the same time.
+  ['item-image-signed-url-transform-v2'],
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
 );
 
