@@ -38,15 +38,21 @@ export async function GET(
       );
     }
 
-    // Primary image per item, served via 7-day signed URLs. One
-    // item_images IN(...) query + one createSignedUrls call regardless
-    // of how many lines the order has. @react-pdf/renderer fetches the
-    // URL server-side at render time and embeds the bytes in the PDF.
+    // Primary image per item, served as small (~200px) PDF-optimized
+    // signed URLs. The PDF-rendering variant resizes via Supabase
+    // transform on the way out so @react-pdf can actually fetch the
+    // bytes at render time — the 2048px master that primaryImagesForItems
+    // returns is too big for serverless render to embed reliably. Also
+    // falls back to custom_fields.thumbnail_url so bulk-imported books
+    // (Google Books / Open Library covers) show up too.
     const itemIds = detail.lines
       .map((l) => l.item?.id)
       .filter((x): x is string => typeof x === 'string');
     const imagesSvc = new ItemImagesService(ctx);
-    const imageUrlByItemId = await imagesSvc.primaryImagesForItems(itemIds);
+    const imageUrlByItemId = await imagesSvc.primaryImagesForPdfRendering(
+      itemIds,
+      200,
+    );
 
     const pdf = await renderPickSlipPdf(detail, { imageUrlByItemId });
     const body = new Uint8Array(pdf.byteLength);
