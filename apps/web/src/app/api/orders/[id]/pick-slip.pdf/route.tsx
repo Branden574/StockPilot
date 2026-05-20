@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import { renderPickSlipPdf } from '@/lib/pdf/pick-slip';
 import { ItemImagesService } from '@/server/services/item-images';
 import { OrderRequestsService } from '@/server/services/order-requests';
@@ -38,21 +39,29 @@ export async function GET(
       );
     }
 
-    // Primary image per item, served as small (~200px) PDF-optimized
-    // signed URLs. The PDF-rendering variant resizes via Supabase
-    // transform on the way out so @react-pdf can actually fetch the
-    // bytes at render time — the 2048px master that primaryImagesForItems
-    // returns is too big for serverless render to embed reliably. Also
-    // falls back to custom_fields.thumbnail_url so bulk-imported books
-    // (Google Books / Open Library covers) show up too.
+    // PDF image pipeline (the version that actually works):
+    //   1. primaryImagesForPdfRendering — small (~200px) signed URLs
+    //   2. prefetchImagesAsDataUris — pre-fetches each URL server-side
+    //      and converts to a base64 data URI
+    //
+    // @react-pdf/renderer fetches `<Image src>` synchronously at render
+    // time and is unreliable with arbitrary URLs in a serverless
+    // function (timeouts, missing Node fetch globals, etc.). Pre-
+    // resolving to data URIs side-steps all of that — the bytes are
+    // already in memory by the time the Document tree starts rendering.
+    // Both the inventory-snapshot and reports/* PDFs already use this
+    // pattern; we were skipping it here. Two cache layers (signed URL
+    // 25d + data URI 25d) mean warm renders are near-instant.
     const itemIds = detail.lines
       .map((l) => l.item?.id)
       .filter((x): x is string => typeof x === 'string');
     const imagesSvc = new ItemImagesService(ctx);
-    const imageUrlByItemId = await imagesSvc.primaryImagesForPdfRendering(
-      itemIds,
-      200,
-    );
+    const urlByItem = await imagesSvc.primaryImagesForPdfRendering(itemIds, 200);
+    const dataUriByItem = await prefetchImagesAsDataUris(urlByItem.entries());
+    const imageUrlByItemId = new Map<string, string>();
+    for (const [itemId, dataUri] of dataUriByItem) {
+      if (dataUri) imageUrlByItemId.set(itemId, dataUri);
+    }
 
     const pdf = await renderPickSlipPdf(detail, { imageUrlByItemId });
     const body = new Uint8Array(pdf.byteLength);

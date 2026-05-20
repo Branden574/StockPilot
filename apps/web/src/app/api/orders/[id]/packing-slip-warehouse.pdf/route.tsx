@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { env } from '@/lib/env';
+import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import { renderWarehousePackingSlipPdf } from '@/lib/pdf/packing-slip-warehouse';
 import type { WarehouseInfo } from '@/lib/pdf/packing-slip-shared';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -102,14 +103,18 @@ export async function GET(
     const itemIds = detail.lines
       .map((l) => l.item?.id)
       .filter((x): x is string => typeof x === 'string');
-    // PDF-optimized signed URLs (~200px transformed) — @react-pdf can't
-    // reliably embed the 2048px master that primaryImagesForItems
-    // returns, and this path also covers the custom_fields.thumbnail_url
-    // fallback used by bulk-imported books.
-    const imageUrlByItemId = await new ItemImagesService(ctx).primaryImagesForPdfRendering(
+    // PDF image pipeline — small signed URLs → prefetch to base64
+    // data URIs. @react-pdf can't reliably fetch URLs at render time
+    // in a serverless function, so we pre-resolve them.
+    const urlByItem = await new ItemImagesService(ctx).primaryImagesForPdfRendering(
       itemIds,
       200,
     );
+    const dataUriByItem = await prefetchImagesAsDataUris(urlByItem.entries());
+    const imageUrlByItemId = new Map<string, string>();
+    for (const [itemId, dataUri] of dataUriByItem) {
+      if (dataUri) imageUrlByItemId.set(itemId, dataUri);
+    }
 
     const pdf = await renderWarehousePackingSlipPdf({
       detail,
