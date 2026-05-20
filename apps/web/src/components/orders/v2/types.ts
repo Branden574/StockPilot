@@ -50,6 +50,9 @@ export type CartAction =
   | { type: 'add'; itemId: string; quantity?: number }
   | { type: 'inc'; itemId: string }
   | { type: 'dec'; itemId: string }
+  /** Set exact qty for a line. Quantity <= 0 removes the line entirely
+   *  so the same action handles "type 0 to clear" + "type 5 to set". */
+  | { type: 'set-qty'; itemId: string; quantity: number }
   | { type: 'remove'; itemId: string }
   | { type: 'clear' }
   | {

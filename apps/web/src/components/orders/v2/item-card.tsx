@@ -43,6 +43,17 @@ export function ItemCard({ item }: ItemCardProps) {
     dispatch({ type: 'dec', itemId: item.id });
   }
 
+  function handleSetQty(raw: string) {
+    // Empty string while typing — leave the line at its current qty
+    // until the user commits a real number. Saves us from yanking the
+    // line out from under the user mid-edit.
+    if (raw === '') return;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const clamped = Math.max(0, Math.min(item.quantityOnHand, Math.floor(n)));
+    dispatch({ type: 'set-qty', itemId: item.id, quantity: clamped });
+  }
+
   const stockLabel =
     status === 'out'
       ? 'Out'
@@ -178,9 +189,18 @@ export function ItemCard({ item }: ItemCardProps) {
                   >
                     <Minus className="h-3 w-3" />
                   </button>
-                  <span className="w-7 text-center text-xs font-semibold tabular-nums">
-                    {qty}
-                  </span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={item.quantityOnHand}
+                    step={1}
+                    value={qty}
+                    onChange={(e) => handleSetQty(e.target.value)}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="w-7 h-7 bg-transparent text-center text-xs font-semibold tabular-nums focus:outline-none focus:ring-1 focus:ring-emerald-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    aria-label="Quantity"
+                  />
                   <button
                     type="button"
                     onClick={handleInc}

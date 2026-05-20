@@ -146,9 +146,29 @@ export function CartRail({ itemMap, warehouseId }: CartRailProps) {
                       >
                         <Minus className="h-3 w-3" />
                       </button>
-                      <span className="w-6 text-center tabular-nums font-semibold">
-                        {line.quantity}
-                      </span>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        max={maxQty}
+                        step={1}
+                        value={line.quantity}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          if (raw === '') return;
+                          const n = Number(raw);
+                          if (!Number.isFinite(n)) return;
+                          const clamped = Math.max(0, Math.min(maxQty, Math.floor(n)));
+                          dispatch({
+                            type: 'set-qty',
+                            itemId: line.itemId,
+                            quantity: clamped,
+                          });
+                        }}
+                        onFocus={(e) => e.currentTarget.select()}
+                        className="w-9 h-6 bg-transparent text-center tabular-nums font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 rounded [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        aria-label="Quantity"
+                      />
                       <button
                         type="button"
                         onClick={() => dispatch({ type: 'inc', itemId: line.itemId })}
