@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -190,22 +191,22 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
                   </div>
                   <div className="col-span-2 space-y-1">
                     <Label className="text-[11px] text-muted-foreground">Qty</Label>
-                    <Input
-                      type="number"
-                      min="1"
-                      step="1"
+                    <BlankZeroNumberInput
+                      min={1}
+                      step={1}
                       value={line.quantityOrdered}
-                      onChange={(e) => updateLine(idx, { quantityOrdered: Number(e.target.value) || 0 })}
+                      onValueChange={(n) => updateLine(idx, { quantityOrdered: n })}
+                      placeholder="Qty"
                     />
                   </div>
                   <div className="col-span-2 space-y-1">
                     <Label className="text-[11px] text-muted-foreground">Unit cost</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
+                    <BlankZeroNumberInput
+                      min={0}
+                      step={0.01}
                       value={line.unitCost}
-                      onChange={(e) => updateLine(idx, { unitCost: Number(e.target.value) || 0 })}
+                      onValueChange={(n) => updateLine(idx, { unitCost: n })}
+                      placeholder="0.00"
                     />
                   </div>
                   <div className="col-span-2 space-y-1">

@@ -5,7 +5,7 @@ import { ImagePlus, Loader2, ScanLine, Upload, X } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
@@ -22,6 +22,7 @@ const IsbnScanner = dynamic(
 );
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { Button } from '@/components/ui/button';
+import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -181,6 +182,7 @@ export function ItemForm({
     handleSubmit,
     setValue,
     watch,
+    control,
     formState: { errors, isSubmitting },
   } = useForm<CreateItemInput>({
     resolver: zodResolver(createItemSchema),
@@ -1173,10 +1175,34 @@ export function ItemForm({
       <Section title="Pricing & stock">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Unit cost" error={errors.unitCost?.message}>
-            <Input type="number" step="0.01" min="0" {...register('unitCost', { valueAsNumber: true })} />
+            <Controller
+              control={control}
+              name="unitCost"
+              render={({ field }) => (
+                <BlankZeroNumberInput
+                  step={0.01}
+                  min={0}
+                  value={field.value}
+                  onValueChange={field.onChange}
+                  placeholder="0.00"
+                />
+              )}
+            />
           </Field>
           <Field label="Retail price" error={errors.retailPrice?.message}>
-            <Input type="number" step="0.01" min="0" {...register('retailPrice', { valueAsNumber: true })} />
+            <Controller
+              control={control}
+              name="retailPrice"
+              render={({ field }) => (
+                <BlankZeroNumberInput
+                  step={0.01}
+                  min={0}
+                  value={field.value}
+                  onValueChange={field.onChange}
+                  placeholder="0.00"
+                />
+              )}
+            />
           </Field>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -1223,20 +1249,51 @@ export function ItemForm({
                     )}
                   </div>
                 ) : (
-                  <Input
-                    type="number"
-                    step="1"
-                    {...register('quantityOnHand', { valueAsNumber: true })}
+                  <Controller
+                    control={control}
+                    name="quantityOnHand"
+                    render={({ field }) => (
+                      <BlankZeroNumberInput
+                        step={1}
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder="0"
+                      />
+                    )}
                   />
                 )}
               </Field>
             );
           })()}
           <Field label="Reorder at" error={errors.reorderPoint?.message}>
-            <Input type="number" step="1" min="0" {...register('reorderPoint', { valueAsNumber: true })} />
+            <Controller
+              control={control}
+              name="reorderPoint"
+              render={({ field }) => (
+                <BlankZeroNumberInput
+                  step={1}
+                  min={0}
+                  value={field.value}
+                  onValueChange={field.onChange}
+                  placeholder="0"
+                />
+              )}
+            />
           </Field>
           <Field label="Reorder qty" error={errors.reorderQuantity?.message}>
-            <Input type="number" step="1" min="0" {...register('reorderQuantity', { valueAsNumber: true })} />
+            <Controller
+              control={control}
+              name="reorderQuantity"
+              render={({ field }) => (
+                <BlankZeroNumberInput
+                  step={1}
+                  min={0}
+                  value={field.value}
+                  onValueChange={field.onChange}
+                  placeholder="0"
+                />
+              )}
+            />
           </Field>
         </div>
         <Field label="Unit of measure">

@@ -5,8 +5,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   completePickingAction,
   recordPickedLineAction,
@@ -109,18 +109,17 @@ export function DigitalPick({ orderId, initialLines }: DigitalPickProps) {
               </div>
             </div>
             <div className="mt-3 flex items-center gap-2">
-              <Input
-                type="number"
-                inputMode="numeric"
+              <BlankZeroNumberInput
                 min={0}
                 max={requested}
                 value={current}
-                onChange={(e) =>
+                onValueChange={(n) =>
                   setPicked((p) => ({
                     ...p,
-                    [line.id]: Math.max(0, Math.min(requested, Number(e.target.value) || 0)),
+                    [line.id]: Math.max(0, Math.min(requested, n)),
                   }))
                 }
+                placeholder={String(requested)}
                 className="w-24"
               />
               <Button
