@@ -452,9 +452,13 @@ export function BrandBand({
 export function MetaGrid({
   request,
   totalLines,
+  showStatus = true,
 }: {
   request: OrderRequestRow;
   totalLines: number;
+  /** Customer-facing receipts hide the internal status pill — "Ready /
+   *  Awaiting carrier" is ops state and isn't useful to the recipient. */
+  showStatus?: boolean;
 }) {
   const packed = formatPackedDate(request.packing_slip_generated_at);
   const label = statusLabel(request.status);
@@ -480,11 +484,13 @@ export function MetaGrid({
           {request.fulfillment_type === 'pickup' ? 'Customer arrives' : 'Carrier out'}
         </Text>
       </View>
-      <View style={styles.metaCell}>
-        <Text style={styles.metaLabel}>STATUS</Text>
-        <Text style={styles.metaPill}>{label}</Text>
-        <Text style={styles.metaSub}>{sub || '—'}</Text>
-      </View>
+      {showStatus && (
+        <View style={styles.metaCell}>
+          <Text style={styles.metaLabel}>STATUS</Text>
+          <Text style={styles.metaPill}>{label}</Text>
+          <Text style={styles.metaSub}>{sub || '—'}</Text>
+        </View>
+      )}
     </View>
   );
 }

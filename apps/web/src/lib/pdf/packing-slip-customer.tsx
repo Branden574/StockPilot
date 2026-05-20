@@ -50,7 +50,7 @@ export async function renderCustomerPackingSlipPdf(
           whenIso={request.packing_slip_generated_at}
         />
 
-        <MetaGrid request={request} totalLines={lines.length} />
+        <MetaGrid request={request} totalLines={lines.length} showStatus={false} />
 
         <Addresses
           warehouse={warehouse}
