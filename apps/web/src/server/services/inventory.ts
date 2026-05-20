@@ -160,7 +160,7 @@ export class InventoryService {
     let query = this.ctx.supabase
       .from('inventory_items')
       .select(
-        'id, sku, barcode, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, custom_fields, created_at, updated_at, created_by, updated_by',
+        'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, custom_fields, created_at, updated_at, created_by, updated_by',
         // Exact count: pagination needs precise totals so "Page X of Y"
         // math doesn't lie, and the empty-state heuristics
         // (`inventory.total === 0`) don't false-fire on stale
@@ -227,7 +227,7 @@ export class InventoryService {
         .replace(/[,()%*]/g, ' ');
       if (term) {
         query = query.or(
-          `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%`,
+          `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%,model_number.ilike.%${term}%`,
         );
       }
     }
@@ -352,6 +352,7 @@ export class InventoryService {
         id: string;
         sku: string;
         barcode: string | null;
+        model_number: string | null;
         name: string;
         description: string | null;
         status: 'active' | 'archived' | 'discontinued';
@@ -566,6 +567,7 @@ export class InventoryService {
         charter_id: resolvedCharterId,
         sku,
         barcode: input.barcode ?? null,
+        model_number: input.modelNumber ?? null,
         name: input.name,
         description: input.description ?? null,
         category_id: input.categoryId ?? null,
@@ -1130,6 +1132,7 @@ export class InventoryService {
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.sku !== undefined) updates.sku = patch.sku;
     if (patch.barcode !== undefined) updates.barcode = patch.barcode ?? null;
+    if (patch.modelNumber !== undefined) updates.model_number = patch.modelNumber ?? null;
     if (patch.description !== undefined) updates.description = patch.description ?? null;
     if (patch.categoryId !== undefined) updates.category_id = patch.categoryId ?? null;
     if (patch.supplierId !== undefined) updates.supplier_id = patch.supplierId ?? null;

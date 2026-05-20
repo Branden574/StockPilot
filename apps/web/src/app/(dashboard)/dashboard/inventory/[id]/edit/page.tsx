@@ -124,6 +124,7 @@ export default async function EditItemPage({
               name: item.name as string,
               sku: item.sku as string,
               barcode: (item.barcode as string | null) ?? '',
+              modelNumber: (item.model_number as string | null) ?? '',
               description: (item.description as string | null) ?? '',
               categoryId: (item.category_id as string | null) ?? null,
               supplierId: (item.supplier_id as string | null) ?? null,

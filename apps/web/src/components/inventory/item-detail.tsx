@@ -294,6 +294,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     </span>
                   )}
                 </DetailRow>
+                {item.item_type !== 'book' && item.model_number ? (
+                  <DetailRow icon={Hash} label="Model #">
+                    <span className="font-mono tabular-nums">
+                      {item.model_number as string}
+                    </span>
+                  </DetailRow>
+                ) : null}
                 {(() => {
                   const storage = readBookStorage(
                     item.custom_fields as Record<string, unknown> | null,

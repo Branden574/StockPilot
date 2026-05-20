@@ -36,6 +36,7 @@ export const createItemSchema = z.object({
   name: z.string().min(1).max(200).trim(),
   sku: z.preprocess(emptyToUndefined, z.string().min(1).max(64).trim().nullable().optional()),
   barcode: z.preprocess(emptyToUndefined, z.string().max(128).trim().nullable().optional()),
+  modelNumber: z.preprocess(emptyToUndefined, z.string().max(120).trim().nullable().optional()),
   description: z.string().max(5000).nullable().optional(),
   categoryId: uuidSchema.nullable().optional(),
   supplierId: uuidSchema.nullable().optional(),
