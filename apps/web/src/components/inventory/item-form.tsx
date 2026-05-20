@@ -190,6 +190,7 @@ export function ItemForm({
       name: defaults?.name ?? '',
       sku: defaults?.sku ?? '',
       barcode: defaults?.barcode ?? '',
+      modelNumber: defaults?.modelNumber ?? '',
       description: defaults?.description ?? '',
       categoryId: defaults?.categoryId ?? null,
       supplierId: defaults?.supplierId ?? null,
@@ -337,6 +338,67 @@ export function ItemForm({
       toast.success('Book details filled in from ISBN lookup.');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Couldn't look up this ISBN. Check your network and try again.");
+    } finally {
+      setLookingUp(false);
+    }
+  }
+
+  // Non-book UPC enrichment — fills name/description/modelNumber from
+  // the upc-lookup chain (UPCitemdb + Gemini description-only). Books
+  // already have their own ISBN flow via handleIsbnDetected above; this
+  // is purely for the "regular product" path.
+  async function handleUpcLookup() {
+    const code = (watch('barcode') ?? '').trim();
+    if (!code) {
+      toast.error('Type or scan a barcode first, then click Lookup.');
+      return;
+    }
+    setLookingUp(true);
+    try {
+      const res = await fetch(`/api/v1/items/upc-lookup?upc=${encodeURIComponent(code)}`);
+      if (res.status === 404) {
+        toast.message(`UPC ${code} not found`, {
+          description:
+            "We couldn't find this product in our external sources. Fill the rest in by hand.",
+        });
+        return;
+      }
+      if (!res.ok) {
+        toast.error("Lookup failed. Check your network and try again.");
+        return;
+      }
+      const data = (await res.json()) as {
+        source: string;
+        existsInInventory: boolean;
+        itemId?: string;
+        enrichment: {
+          name: string;
+          description: string | null;
+          brand: string | null;
+          modelNumber: string | null;
+          imageUrl: string | null;
+        };
+      };
+      if (data.existsInInventory) {
+        toast.message('Already in inventory', {
+          description: `This barcode is already on "${data.enrichment.name}". Open that item to edit it.`,
+        });
+        return;
+      }
+      if (data.enrichment.name) setValue('name', data.enrichment.name, { shouldDirty: true });
+      if (data.enrichment.description)
+        setValue('description', data.enrichment.description.slice(0, 5000), {
+          shouldDirty: true,
+        });
+      if (data.enrichment.modelNumber)
+        setValue('modelNumber', data.enrichment.modelNumber, { shouldDirty: true });
+      toast.success(
+        data.source === 'ai-fallback'
+          ? 'Found it. Description was AI-generated — review before saving.'
+          : 'Product details filled in.',
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't look up that UPC.");
     } finally {
       setLookingUp(false);
     }
@@ -760,9 +822,37 @@ export function ItemForm({
                 )}
                 Scan
               </Button>
+              {!isBook && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleUpcLookup}
+                  disabled={lookingUp}
+                  title="Fetch product info from UPC"
+                >
+                  {lookingUp ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    'Lookup'
+                  )}
+                </Button>
+              )}
             </div>
           </Field>
         </div>
+        {!isBook && (
+          <Field
+            label="Model number"
+            error={errors.modelNumber?.message}
+            optional
+          >
+            <Input
+              placeholder="e.g. MX432LL/A (manufacturer's per-SKU code)"
+              {...register('modelNumber')}
+            />
+          </Field>
+        )}
         {isBook && (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label="Author" optional>

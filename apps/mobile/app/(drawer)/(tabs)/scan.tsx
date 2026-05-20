@@ -14,6 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddBookCard, type IsbnLookupResult } from '@/components/AddBookCard';
+import { AddItemCard, type UpcLookupResult } from '@/components/AddItemCard';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
@@ -98,6 +99,7 @@ export default function Scan() {
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const [item, setItem] = React.useState<FoundItem | null>(null);
   const [addBook, setAddBook] = React.useState<IsbnLookupResult | null>(null);
+  const [addItem, setAddItem] = React.useState<UpcLookupResult | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [lastCode, setLastCode] = React.useState<string | null>(null);
 
@@ -214,7 +216,49 @@ export default function Scan() {
           );
         }
       } else {
-        Alert.alert('Not found', `No item matches ${data}.`, [{ text: 'OK', onPress: reset }]);
+        // Not an ISBN — try the UPC enrichment chain so we can offer
+        // one-tap add for non-book products too. The endpoint handles
+        // local-DB short-circuit + UPCitemdb + Gemini description-only.
+        try {
+          const res = await api<{
+            source: 'local' | 'upcitemdb' | 'ai-fallback';
+            existsInInventory: boolean;
+            itemId?: string;
+            enrichment: {
+              name: string;
+              description: string | null;
+              brand: string | null;
+              modelNumber: string | null;
+              imageUrl: string | null;
+            };
+          }>(`/api/v1/items/upc-lookup?upc=${encodeURIComponent(data)}`);
+          setAddItem({
+            upc: data,
+            source: res.source,
+            existingItem: res.existsInInventory && res.itemId
+              ? { id: res.itemId, name: res.enrichment.name }
+              : null,
+            enrichment: res.enrichment,
+          });
+        } catch (e) {
+          // 404 / network — offer the manual-entry path with just the
+          // barcode pre-populated.
+          const is404 = e instanceof Error && /404|not_found/i.test(e.message);
+          if (is404) {
+            setAddItem({
+              upc: data,
+              source: 'not_found',
+              existingItem: null,
+              enrichment: null,
+            });
+          } else {
+            Alert.alert(
+              'Lookup failed',
+              e instanceof Error ? e.message : 'Network error',
+              [{ text: 'OK', onPress: reset }],
+            );
+          }
+        }
       }
       setBusy(false);
       return;
@@ -226,6 +270,7 @@ export default function Scan() {
   function reset() {
     setItem(null);
     setAddBook(null);
+    setAddItem(null);
     setLastCode(null);
     setScanning(true);
   }
@@ -616,7 +661,27 @@ export default function Scan() {
         </View>
       )}
 
-      {busy && !item && !addBook && (
+      {addItem && (
+        <View style={styles.addBookWrap}>
+          <ScrollView contentContainerStyle={{ paddingBottom: space.lg }}>
+            <AddItemCard
+              user={user}
+              result={addItem}
+              onCancel={reset}
+              onCreated={(id) => {
+                setAddItem(null);
+                void (async () => {
+                  const found = await loadItemById(id);
+                  if (found) setItem(found);
+                  else reset();
+                })();
+              }}
+            />
+          </ScrollView>
+        </View>
+      )}
+
+      {busy && !item && !addBook && !addItem && (
         <ActivityIndicator style={styles.spinner} color={theme.primary} size="large" />
       )}
     </SafeAreaView>
