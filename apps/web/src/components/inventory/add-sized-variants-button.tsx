@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { resolveListReturnHref } from '@/lib/last-list-url';
@@ -232,17 +233,13 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
                 {selected.map((entry, i) => (
                   <div key={entry.size} className="flex items-center gap-2">
                     <span className="w-10 text-xs font-medium">{entry.size}</span>
-                    <Input
-                      type="number"
+                    <BlankZeroNumberInput
                       min={0}
                       value={entry.quantity}
-                      onChange={(e) =>
+                      onValueChange={(n) =>
                         setSelected((prev) => {
                           const next = [...prev];
-                          next[i] = {
-                            ...entry,
-                            quantity: Number(e.target.value) || 0,
-                          };
+                          next[i] = { ...entry, quantity: n };
                           return next;
                         })
                       }

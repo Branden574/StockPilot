@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -299,16 +300,14 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
                       </div>
                     </td>
                     <td className="px-3 py-2 text-right">
-                      <Input
-                        type="number"
+                      <BlankZeroNumberInput
                         min={0.0001}
                         step="any"
                         value={c.quantity}
-                        onChange={(e) =>
-                          updateComponent(c.itemId, {
-                            quantity: Number(e.target.value) || 0,
-                          })
+                        onValueChange={(n) =>
+                          updateComponent(c.itemId, { quantity: n })
                         }
+                        placeholder="1"
                         className="ml-auto h-8 w-24 text-right tabular-nums"
                       />
                     </td>
