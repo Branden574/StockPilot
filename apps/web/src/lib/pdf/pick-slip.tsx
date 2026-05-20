@@ -26,6 +26,7 @@ const INK_4 = '#8b887f';
 const PAPER = '#f6f4ef';
 const SUNK = '#eeece5';
 const HAIR = '#dcd9cf';
+const ACCENT = '#2f6a4a';
 
 const styles = StyleSheet.create({
   page: {
@@ -130,6 +131,39 @@ const styles = StyleSheet.create({
     paddingLeft: 8,
     borderLeftWidth: 0.5,
     borderLeftColor: HAIR,
+    borderLeftStyle: 'solid',
+  },
+  // Green-pill variants used when the order has reached
+  // picking_complete. Same shape as the gray pill so the layout
+  // doesn't shift; just darker background + paper-colored text.
+  pillDone: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 5,
+    paddingHorizontal: 11,
+    borderRadius: 999,
+    backgroundColor: ACCENT,
+  },
+  pillDotDone: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: PAPER,
+    marginRight: 6,
+  },
+  pillLabelDone: {
+    fontFamily: 'Helvetica-Bold',
+    fontSize: 9,
+    color: PAPER,
+  },
+  pillFractionDone: {
+    fontFamily: 'Courier',
+    fontSize: 9,
+    color: PAPER,
+    marginLeft: 8,
+    paddingLeft: 8,
+    borderLeftWidth: 0.5,
+    borderLeftColor: 'rgba(246,244,239,0.35)',
     borderLeftStyle: 'solid',
   },
 
@@ -296,6 +330,14 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     marginTop: 4,
   },
+  qtyFractionDone: {
+    fontFamily: 'Courier',
+    fontSize: 7,
+    color: ACCENT,
+    textAlign: 'right',
+    marginTop: 4,
+    fontWeight: 700,
+  },
 
   // ── Tally grid (numbered, printable boxes) ─────────────────────
   tallyWrap: {
@@ -331,6 +373,27 @@ const styles = StyleSheet.create({
     fontFamily: 'Courier',
     fontSize: 7,
     color: INK_2,
+  },
+  // Filled-state tally — used when the picker has confirmed this unit
+  // was pulled. Mirrors the accent color used by the on-screen mockup
+  // so the printed slip reads like the digital pick UI.
+  tallyBoxFilled: {
+    width: 16,
+    height: 16,
+    borderWidth: 0.5,
+    borderColor: ACCENT,
+    borderStyle: 'solid',
+    borderRadius: 2,
+    marginRight: 3,
+    marginBottom: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: ACCENT,
+  },
+  tallyLabelFilled: {
+    fontFamily: 'Courier',
+    fontSize: 7,
+    color: PAPER,
   },
 
   // ── Totals row (dark) ──────────────────────────────────────────
@@ -464,14 +527,17 @@ function BrandMark({ size = 22 }: { size?: number }) {
  * well under 30 units; the rare big-qty line (e.g., 100 batteries) gets
  * a manual count line instead of a wall of checkboxes.
  */
-function TallyGrid({ qty }: { qty: number }) {
+function TallyGrid({ qty, picked }: { qty: number; picked: number }) {
   const MAX_INDIVIDUAL = 30;
   if (qty <= 0) return null;
+  const safePicked = Math.max(0, Math.min(qty, picked));
   if (qty > MAX_INDIVIDUAL) {
     return (
       <View style={styles.tallyWrap}>
         <View style={styles.tallyBoxOverflow}>
-          <Text style={styles.tallyLabel}>1–{qty}</Text>
+          <Text style={styles.tallyLabel}>
+            {safePicked > 0 ? `${safePicked}/${qty} picked` : `1–${qty}`}
+          </Text>
         </View>
       </View>
     );
@@ -479,11 +545,21 @@ function TallyGrid({ qty }: { qty: number }) {
   const boxes = Array.from({ length: qty }, (_, i) => i + 1);
   return (
     <View style={styles.tallyWrap}>
-      {boxes.map((n) => (
-        <View key={n} style={styles.tallyBox}>
-          <Text style={styles.tallyLabel}>{n}</Text>
-        </View>
-      ))}
+      {boxes.map((n) => {
+        const filled = n <= safePicked;
+        return (
+          <View
+            key={n}
+            style={filled ? styles.tallyBoxFilled : styles.tallyBox}
+          >
+            <Text
+              style={filled ? styles.tallyLabelFilled : styles.tallyLabel}
+            >
+              {n}
+            </Text>
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -512,6 +588,29 @@ export async function renderPickSlipPdf(
 
   const totalLines = lines.length;
   const totalUnits = lines.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
+
+  // Effective picked count per line. When the order has been
+  // completed, complete_picking RPC writes the final qty into
+  // quantity_fulfilled and zeroes quantity_picked. While in progress,
+  // quantity_picked carries the per-line tally. Falling through both
+  // covers all three statuses (generated / in_progress / complete).
+  const pickedByLineId = new Map<string, number>();
+  for (const l of lines) {
+    const picked =
+      l.quantity_fulfilled > 0
+        ? Number(l.quantity_fulfilled)
+        : Number(l.quantity_picked ?? 0);
+    pickedByLineId.set(l.id, Math.max(0, picked));
+  }
+  const pickedUnits = Array.from(pickedByLineId.values()).reduce((s, n) => s + n, 0);
+  const status = request.status as string;
+  const isComplete = status === 'picking_complete';
+  const isInProgress = status === 'picking_in_progress' || pickedUnits > 0;
+  const pillLabel = isComplete
+    ? 'Picked'
+    : isInProgress
+      ? 'In progress'
+      : 'To pick';
   const shortId = request.id.slice(0, 8).toUpperCase();
   const generatedAt = request.pick_slip_generated_at
     ? new Date(request.pick_slip_generated_at).toLocaleString('en-US', {
@@ -548,11 +647,13 @@ export async function renderPickSlipPdf(
             <Text style={styles.orderId}>#{shortId}</Text>
             <Text style={styles.fullId}>{request.id}</Text>
           </View>
-          <View style={styles.pill}>
-            <View style={styles.pillDot} />
-            <Text style={styles.pillLabel}>To pick</Text>
-            <Text style={styles.pillFraction}>
-              0 / {totalUnits}
+          <View style={isComplete ? styles.pillDone : styles.pill}>
+            <View style={isComplete ? styles.pillDotDone : styles.pillDot} />
+            <Text style={isComplete ? styles.pillLabelDone : styles.pillLabel}>
+              {pillLabel}
+            </Text>
+            <Text style={isComplete ? styles.pillFractionDone : styles.pillFraction}>
+              {pickedUnits} / {totalUnits}
             </Text>
           </View>
         </View>
@@ -650,12 +751,21 @@ export async function renderPickSlipPdf(
                 </View>
                 <View style={styles.colQty}>
                   <Text style={styles.qtyValue}>{l.quantity_requested}</Text>
-                  <Text style={styles.qtyFraction}>
-                    0/{l.quantity_requested}
+                  <Text
+                    style={
+                      (pickedByLineId.get(l.id) ?? 0) >= l.quantity_requested
+                        ? styles.qtyFractionDone
+                        : styles.qtyFraction
+                    }
+                  >
+                    {pickedByLineId.get(l.id) ?? 0}/{l.quantity_requested}
                   </Text>
                 </View>
                 <View style={styles.colTally}>
-                  <TallyGrid qty={l.quantity_requested} />
+                  <TallyGrid
+                    qty={l.quantity_requested}
+                    picked={pickedByLineId.get(l.id) ?? 0}
+                  />
                 </View>
               </View>
             );
@@ -674,7 +784,8 @@ export async function renderPickSlipPdf(
             </View>
             <View style={[styles.colTally, { justifyContent: 'center' }]}>
               <Text style={styles.totalsCaption}>
-                0 of {totalUnits} verified
+                {pickedUnits} of {totalUnits} verified
+                {isComplete ? ' · complete' : ''}
               </Text>
             </View>
           </View>
