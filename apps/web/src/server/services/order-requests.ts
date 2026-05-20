@@ -107,6 +107,10 @@ export interface OrderRequestLineWithItem extends OrderRequestLineRow {
     sku: string;
     quantity_on_hand: number;
     barcode: string | null;
+    /** Manufacturer's per-SKU code (e.g. "MX432LL/A"). Surfaces in
+     *  the pick-slip "Item" cell so the picker can verify they're
+     *  pulling the right product variant. */
+    model_number: string | null;
     /** "product" | "book" | "asset" | "consumable" — drives the
      *  pick-slip PDF's rack vs rack+crate column rendering. */
     item_type: string | null;
@@ -379,7 +383,7 @@ export class OrderRequestsService {
           `id, order_request_id, item_id, quantity_requested,
            quantity_fulfilled, quantity_picked, unit_cost_at_request, notes,
            item:inventory_items!item_id (
-             id, name, sku, quantity_on_hand, barcode, item_type, custom_fields
+             id, name, sku, quantity_on_hand, barcode, model_number, item_type, custom_fields
            )`,
         )
         .eq('order_request_id', id),
@@ -403,6 +407,7 @@ export class OrderRequestsService {
       sku: string;
       quantity_on_hand: number;
       barcode: string | null;
+      model_number: string | null;
       item_type: string | null;
       custom_fields: Record<string, unknown> | null;
     };
