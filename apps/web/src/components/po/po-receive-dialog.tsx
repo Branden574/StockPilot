@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -368,14 +369,13 @@ function LotCapture({
               value={row.expirationDate}
               onChange={(e) => update(i, { expirationDate: e.target.value })}
             />
-            <Input
+            <BlankZeroNumberInput
               className="col-span-3"
-              type="number"
-              min="0"
-              step="1"
+              min={0}
+              step={1}
               placeholder="Qty"
               value={row.qtyBase}
-              onChange={(e) => update(i, { qtyBase: Number(e.target.value) || 0 })}
+              onValueChange={(n) => update(i, { qtyBase: n })}
             />
             <Button type="button" variant="ghost" size="icon" onClick={() => remove(i)} aria-label="Remove lot">
               ×
