@@ -3,6 +3,7 @@ import {
   Document,
   Image as PdfImage,
   Page,
+  StyleSheet,
   Text,
   View,
 } from '@react-pdf/renderer';
@@ -111,6 +112,35 @@ export async function renderWarehousePackingSlipPdf(
           options={{ showLocation: true, imageUrlByItemId }}
         />
 
+        {/* Manual signature block — fallback for when the QR/digital
+            flow isn't usable (no phone on hand, network down, etc.).
+            The digital QR in the footer remains the preferred path;
+            this is the ink-on-paper backup. */}
+        <View style={signatureStyles.wrap}>
+          <View style={signatureStyles.headerRow}>
+            <Text style={signatureStyles.eyebrow}>RECEIVED BY</Text>
+            <Text style={signatureStyles.hint}>
+              {qrDataUrl
+                ? 'Sign below OR scan the QR to sign digitally.'
+                : 'Sign below to confirm receipt.'}
+            </Text>
+          </View>
+          <View style={signatureStyles.row}>
+            <View style={signatureStyles.col}>
+              <View style={signatureStyles.line} />
+              <Text style={signatureStyles.caption}>NAME (PRINT)</Text>
+            </View>
+            <View style={signatureStyles.col}>
+              <View style={signatureStyles.line} />
+              <Text style={signatureStyles.caption}>SIGNATURE</Text>
+            </View>
+            <View style={signatureStyles.colLast}>
+              <View style={signatureStyles.line} />
+              <Text style={signatureStyles.caption}>DATE / TIME</Text>
+            </View>
+          </View>
+        </View>
+
         <View style={styles.footer}>
           <View>
             <FooterCode code={`ORD-${orderCode}`} />
@@ -136,3 +166,49 @@ export async function renderWarehousePackingSlipPdf(
   );
   return streamToBuffer(stream as NodeJS.ReadableStream);
 }
+
+// Manual signature block — used as a paper fallback when the QR /
+// digital signature flow can't be used. Kept local to the warehouse
+// slip since the customer slip (which is a receipt) doesn't need it.
+const signatureStyles = StyleSheet.create({
+  wrap: {
+    marginTop: 16,
+    paddingTop: 10,
+    borderTopWidth: 0.5,
+    borderTopColor: '#dcd9cf',
+    borderTopStyle: 'solid',
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  eyebrow: {
+    fontFamily: 'Helvetica-Bold',
+    fontSize: 8,
+    letterSpacing: 2,
+    color: '#5a5853',
+  },
+  hint: {
+    fontSize: 8.5,
+    color: '#8b887f',
+    fontStyle: 'italic',
+  },
+  row: { flexDirection: 'row' },
+  col: { flex: 1, marginRight: 16 },
+  colLast: { flex: 1 },
+  line: {
+    borderBottomWidth: 0.8,
+    borderBottomColor: '#0c0c0e',
+    borderBottomStyle: 'solid',
+    height: 26,
+  },
+  caption: {
+    fontFamily: 'Helvetica-Bold',
+    fontSize: 7,
+    letterSpacing: 1.8,
+    color: '#8b887f',
+    marginTop: 4,
+  },
+});
