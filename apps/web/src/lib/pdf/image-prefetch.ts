@@ -6,6 +6,48 @@ const PER_IMAGE_TIMEOUT_MS = 8_000;
 const DATA_URI_CACHE_TTL_SEC = 25 * 24 * 60 * 60; // 25 days
 
 /**
+ * @react-pdf/image@3.x supports JPEG, PNG, and SVG ONLY — no WebP, no
+ * AVIF, no GIF. The codebase stores item thumbnails as WebP (see
+ * migration 0122), so for the PDF path we transcode unsupported
+ * formats to JPEG using `sharp` (already in the dep graph via Next).
+ *
+ * Bytes-in/bytes-out, no IO. Failure returns null so the consumer
+ * falls back to a placeholder instead of crashing the document.
+ */
+async function ensurePdfCompatibleBytes(
+  rawBytes: Buffer,
+  declaredContentType: string,
+): Promise<{ bytes: Buffer; contentType: string } | null> {
+  // Sniff the leading magic bytes — content-type headers from
+  // Supabase transformed URLs can lie (return `image/webp` when the
+  // bytes are PNG, or vice versa).
+  const isPng =
+    rawBytes.length > 8 &&
+    rawBytes[0] === 0x89 &&
+    rawBytes[1] === 0x50 &&
+    rawBytes[2] === 0x4e &&
+    rawBytes[3] === 0x47;
+  const isJpeg =
+    rawBytes.length > 2 && rawBytes[0] === 0xff && rawBytes[1] === 0xd8;
+  if (isPng) return { bytes: rawBytes, contentType: 'image/png' };
+  if (isJpeg) return { bytes: rawBytes, contentType: 'image/jpeg' };
+
+  // Anything else (WebP, AVIF, GIF, etc.) gets transcoded to JPEG.
+  try {
+    const { default: sharp } = await import('sharp');
+    const jpegBytes = await sharp(rawBytes)
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toBuffer();
+    return { bytes: jpegBytes, contentType: 'image/jpeg' };
+  } catch {
+    // sharp failed — log via the declaredContentType so we know which
+    // format tripped it. Caller treats null as "no image".
+    void declaredContentType;
+    return null;
+  }
+}
+
+/**
  * Cached per-URL image fetch → base64 data URI. Same URL across
  * requests resolves to the same data URI (Vercel data cache, 25-day
  * TTL). For PDF rendering this means: first request pays the image
@@ -34,10 +76,12 @@ const getCachedImageDataUri = unstable_cache(
     try {
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) return null;
-      const buf = await res.arrayBuffer();
-      const contentType = res.headers.get('content-type') ?? 'image/webp';
-      const b64 = Buffer.from(buf).toString('base64');
-      return `data:${contentType};base64,${b64}`;
+      const rawBuf = Buffer.from(await res.arrayBuffer());
+      const declaredCt = res.headers.get('content-type') ?? 'image/webp';
+      const compat = await ensurePdfCompatibleBytes(rawBuf, declaredCt);
+      if (!compat) return null;
+      const b64 = compat.bytes.toString('base64');
+      return `data:${compat.contentType};base64,${b64}`;
     } catch {
       // Timeout / network blip / aborted — treat as no image.
       return null;
@@ -45,14 +89,12 @@ const getCachedImageDataUri = unstable_cache(
       clearTimeout(timer);
     }
   },
-  // v3 (2026-05-20): bumped again — the pick/packing-slip routes
-  // were previously passing master URLs to @react-pdf (no prefetch).
-  // When we switched to data-URI prefetch, any URL that had ALREADY
-  // been signed (and failed for an unrelated reason like the routes
-  // not calling prefetch yet) would still be cached as null here from
-  // the inventory-snapshot / reports paths that DO call prefetch.
-  // Fresh version = fresh fetches across the board.
-  ['pdf-image-data-uri-v3'],
+  // v4 (2026-05-20): bumped after adding WebP→JPEG transcoding via
+  // sharp. @react-pdf/image only decodes JPEG/PNG/SVG; any cache
+  // entries from v3 hold raw WebP bytes that @react-pdf can't read,
+  // which is why pick + packing slips were rendering empty image
+  // boxes with "invalid" src strings.
+  ['pdf-image-data-uri-v4'],
   { revalidate: DATA_URI_CACHE_TTL_SEC, tags: ['pdf-image-data-uri'] },
 );
 
