@@ -76,7 +76,14 @@ export async function GET(
     const itemIds = detail.lines
       .map((l) => l.item?.id)
       .filter((x): x is string => typeof x === 'string');
-    const imageUrlByItemId = await new ItemImagesService(ctx).primaryImagesForItems(itemIds);
+    // PDF-optimized signed URLs (~200px transformed) — @react-pdf can't
+    // reliably embed the 2048px master that primaryImagesForItems
+    // returns, and this path also covers the custom_fields.thumbnail_url
+    // fallback used by bulk-imported books.
+    const imageUrlByItemId = await new ItemImagesService(ctx).primaryImagesForPdfRendering(
+      itemIds,
+      200,
+    );
 
     const pdf = await renderCustomerPackingSlipPdf({
       detail,
