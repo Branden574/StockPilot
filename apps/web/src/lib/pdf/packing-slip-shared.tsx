@@ -145,6 +145,29 @@ export const styles = StyleSheet.create({
     color: colors.muted,
     marginBottom: 8,
   },
+  // Layout when the FROM block also carries the signature QR — split
+  // into a left text column and a right QR column so the address copy
+  // doesn't reflow under the code.
+  addressFromRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  addressFromCol: { flex: 1, paddingRight: 10 },
+  addressFromQr: {
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    width: 78,
+  },
+  addressQrImg: { width: 72, height: 72 },
+  addressQrCaption: {
+    fontSize: 7,
+    fontFamily: 'Helvetica-Bold',
+    letterSpacing: 1.4,
+    color: colors.muted,
+    marginTop: 4,
+    textAlign: 'center',
+  },
   addressName: {
     fontSize: 12.5,
     fontFamily: 'Helvetica-Bold',
@@ -503,6 +526,7 @@ export function Addresses({
   attention,
   pickupNote,
   isPickup,
+  qrDataUrl,
 }: {
   warehouse: WarehouseInfo;
   shipToName: string | null;
@@ -511,29 +535,43 @@ export function Addresses({
   attention: string | null;
   pickupNote: string | null;
   isPickup: boolean;
+  /** Optional signature QR — renders in the FROM block (warehouse slip).
+   *  Keeps the QR adjacent to the from address so the picker has all
+   *  hand-off info in one visual cluster. */
+  qrDataUrl?: string | null;
 }) {
   const fromLines = addressLines(warehouse.address);
   return (
     <View style={styles.addresses}>
       <View style={styles.addressBlock}>
-        <Text style={styles.addressLabel}>FROM</Text>
-        <Text style={styles.addressName}>
-          {warehouse.name ?? '—'}
-          {warehouse.code ? ` · ${warehouse.code}` : ''}
-        </Text>
-        {fromLines.map((line, i) => (
-          <Text key={i} style={styles.addressLine}>
-            {line}
-          </Text>
-        ))}
-        {fromLines.length === 0 ? (
-          <Text style={styles.addressLine}>Address on file</Text>
-        ) : null}
-        {warehouse.contactName ? (
-          <Text style={styles.addressAttention}>
-            Contact · {warehouse.contactName}
-          </Text>
-        ) : null}
+        <View style={qrDataUrl ? styles.addressFromRow : undefined}>
+          <View style={qrDataUrl ? styles.addressFromCol : undefined}>
+            <Text style={styles.addressLabel}>FROM</Text>
+            <Text style={styles.addressName}>
+              {warehouse.name ?? '—'}
+              {warehouse.code ? ` · ${warehouse.code}` : ''}
+            </Text>
+            {fromLines.map((line, i) => (
+              <Text key={i} style={styles.addressLine}>
+                {line}
+              </Text>
+            ))}
+            {fromLines.length === 0 ? (
+              <Text style={styles.addressLine}>Address on file</Text>
+            ) : null}
+            {warehouse.contactName ? (
+              <Text style={styles.addressAttention}>
+                Contact · {warehouse.contactName}
+              </Text>
+            ) : null}
+          </View>
+          {qrDataUrl ? (
+            <View style={styles.addressFromQr}>
+              <PdfImage src={qrDataUrl} style={styles.addressQrImg} />
+              <Text style={styles.addressQrCaption}>SCAN TO SIGN</Text>
+            </View>
+          ) : null}
+        </View>
       </View>
       <View style={styles.addressBlockRight}>
         <Text style={styles.addressLabel}>
