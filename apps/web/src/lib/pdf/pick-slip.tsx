@@ -200,11 +200,13 @@ const styles = StyleSheet.create({
   },
 
   // Column widths sum to 540pt printable width (Letter 612 - 72 padding).
-  colIdx: { width: 22 },
-  colItem: { width: 180, paddingRight: 6 },
-  colLocation: { width: 78, paddingRight: 6 },
-  colQty: { width: 36, textAlign: 'right' },
-  colTally: { flex: 1 },
+  // paddingRight on every column except the last creates breathing room
+  // between cells (gap on flex isn't supported in @react-pdf).
+  colIdx: { width: 22, paddingRight: 6 },
+  colItem: { width: 170, paddingRight: 10 },
+  colLocation: { width: 78, paddingRight: 10 },
+  colQty: { width: 40, paddingRight: 14, textAlign: 'right' },
+  colTally: { flex: 1, paddingLeft: 6 },
 
   row: {
     flexDirection: 'row',
@@ -229,20 +231,20 @@ const styles = StyleSheet.create({
   },
   itemCell: { flexDirection: 'row', alignItems: 'flex-start' },
   thumb: {
-    width: 32,
-    height: 32,
+    width: 38,
+    height: 38,
     objectFit: 'cover',
     borderRadius: 3,
-    marginRight: 8,
+    marginRight: 10,
     borderWidth: 0.5,
     borderColor: HAIR,
     borderStyle: 'solid',
   },
   thumbPlaceholder: {
-    width: 32,
-    height: 32,
+    width: 38,
+    height: 38,
     borderRadius: 3,
-    marginRight: 8,
+    marginRight: 10,
     backgroundColor: SUNK,
     borderWidth: 0.5,
     borderColor: HAIR,
@@ -252,8 +254,9 @@ const styles = StyleSheet.create({
   },
   thumbPlaceholderText: {
     fontFamily: 'Helvetica-Bold',
-    fontSize: 9,
-    color: INK_4,
+    fontSize: 11,
+    color: INK_3,
+    letterSpacing: 1,
   },
   itemName: {
     fontFamily: 'Helvetica-Bold',
@@ -281,16 +284,17 @@ const styles = StyleSheet.create({
   locationMuted: { fontSize: 9, color: INK_4 },
   qtyValue: {
     fontFamily: 'Helvetica-Bold',
-    fontSize: 16,
+    fontSize: 15,
     color: INK,
     textAlign: 'right',
+    lineHeight: 1,
   },
   qtyFraction: {
     fontFamily: 'Courier',
-    fontSize: 7.5,
+    fontSize: 7,
     color: INK_4,
     textAlign: 'right',
-    marginTop: 3,
+    marginTop: 4,
   },
 
   // ── Tally grid (numbered, printable boxes) ─────────────────────
