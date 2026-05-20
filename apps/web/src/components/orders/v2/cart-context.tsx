@@ -64,6 +64,29 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
           return [{ ...l, quantity: l.quantity - 1 }];
         }),
       };
+    case 'set-qty': {
+      // Quantity ≤ 0 drops the line so the same action covers
+      // "clear by typing 0" and "set to N".
+      if (action.quantity <= 0) {
+        return {
+          ...state,
+          lines: state.lines.filter((l) => l.itemId !== action.itemId),
+        };
+      }
+      const exists = state.lines.some((l) => l.itemId === action.itemId);
+      if (!exists) {
+        return {
+          ...state,
+          lines: [...state.lines, { itemId: action.itemId, quantity: action.quantity }],
+        };
+      }
+      return {
+        ...state,
+        lines: state.lines.map((l) =>
+          l.itemId === action.itemId ? { ...l, quantity: action.quantity } : l,
+        ),
+      };
+    }
     case 'remove':
       return {
         ...state,
