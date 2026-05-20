@@ -1,7 +1,6 @@
 import {
   renderToStream,
   Document,
-  Image as PdfImage,
   Page,
   StyleSheet,
   Text,
@@ -59,7 +58,11 @@ export async function renderWarehousePackingSlipPdf(
           whenIso={request.packing_slip_generated_at}
         />
 
-        <MetaGrid request={request} totalLines={lines.length} />
+        <MetaGrid
+          request={request}
+          totalLines={lines.length}
+          showStatus={false}
+        />
 
         <Addresses
           warehouse={warehouse}
@@ -75,6 +78,7 @@ export async function renderWarehousePackingSlipPdf(
           }
           pickupNote={request.pickup_location_notes}
           isPickup={isPickup}
+          qrDataUrl={qrDataUrl}
         />
 
         {request.internal_notes ? (
@@ -148,18 +152,7 @@ export async function renderWarehousePackingSlipPdf(
               For warehouse use · verify each line at hand-off
             </Text>
           </View>
-          {qrDataUrl ? (
-            <View style={styles.qrBlock}>
-              <PdfImage src={qrDataUrl} style={styles.qr} />
-              <Text style={styles.qrCaption}>SCAN TO SIGN</Text>
-              <Text style={styles.qrSub}>
-                Recipient scans on phone to confirm delivery and complete the
-                order.
-              </Text>
-            </View>
-          ) : (
-            <FooterContact warehouse={warehouse} />
-          )}
+          <FooterContact warehouse={warehouse} />
         </View>
       </Page>
     </Document>,
