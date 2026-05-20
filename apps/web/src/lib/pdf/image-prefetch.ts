@@ -45,11 +45,14 @@ const getCachedImageDataUri = unstable_cache(
       clearTimeout(timer);
     }
   },
-  // v2 (2026-05-18): bumped after Supabase image-transformation quota
-  // cap (107/100) earlier in the cycle returned 429s that this cache
-  // dutifully stored as `null` for 25 days. New version = fresh cache,
-  // poisoned entries no longer reachable.
-  ['pdf-image-data-uri-v2'],
+  // v3 (2026-05-20): bumped again — the pick/packing-slip routes
+  // were previously passing master URLs to @react-pdf (no prefetch).
+  // When we switched to data-URI prefetch, any URL that had ALREADY
+  // been signed (and failed for an unrelated reason like the routes
+  // not calling prefetch yet) would still be cached as null here from
+  // the inventory-snapshot / reports paths that DO call prefetch.
+  // Fresh version = fresh fetches across the board.
+  ['pdf-image-data-uri-v3'],
   { revalidate: DATA_URI_CACHE_TTL_SEC, tags: ['pdf-image-data-uri'] },
 );
 

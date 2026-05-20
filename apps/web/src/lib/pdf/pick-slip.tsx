@@ -597,7 +597,18 @@ export async function renderPickSlipPdf(
             </Text>
           </View>
           {lines.map((l, i) => {
-            const imgUrl = l.item ? imageUrlByItemId.get(l.item.id) : undefined;
+            const rawImgUrl = l.item ? imageUrlByItemId.get(l.item.id) : undefined;
+            // Only pass a src to PdfImage when it looks like a real
+            // data URI or absolute https URL. A truthy-but-malformed
+            // value (e.g. an empty data:; or a literal "invalid")
+            // makes @react-pdf write a placeholder src that the PDF
+            // viewer then fails to load — better to fall through to
+            // the SKU-initials box.
+            const imgUrl =
+              typeof rawImgUrl === 'string' &&
+              (rawImgUrl.startsWith('data:image/') || rawImgUrl.startsWith('https://'))
+                ? rawImgUrl
+                : undefined;
             const loc = locationFor(l);
             const isLast = i === lines.length - 1;
             return (
