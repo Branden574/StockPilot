@@ -141,7 +141,14 @@ export function Sidebar({
                   <Link
                     key={item.href}
                     href={item.href}
-                    prefetch
+                    // Disabled eager prefetch — the sidebar renders
+                    // ~25 links, and eager prefetch fired an RSC
+                    // fetch for every one on mount, adding measurable
+                    // initial-load drag on every dashboard page.
+                    // warmRoute() below already prefetches on hover /
+                    // focus / pointer-down, which is what the user
+                    // actually clicks.
+                    prefetch={false}
                     onFocus={() => warmRoute(item.href)}
                     onPointerEnter={() => warmRoute(item.href)}
                     onPointerDown={() => warmRoute(item.href)}

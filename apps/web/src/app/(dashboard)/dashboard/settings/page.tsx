@@ -1,6 +1,9 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+
+export const metadata: Metadata = { title: 'Settings' };
 import { requireOrgContext } from '@/lib/auth/session';
 
 import { hasPermission } from '@stockpilot/core';

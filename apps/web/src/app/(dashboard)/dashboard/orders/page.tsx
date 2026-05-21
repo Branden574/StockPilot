@@ -1,5 +1,8 @@
+import type { Metadata } from 'next';
 import { Package, ShoppingCart, Truck } from 'lucide-react';
 import Link from 'next/link';
+
+export const metadata: Metadata = { title: 'Orders' };
 
 import { EmptyState } from '@/components/ui/empty-state';
 import { OrderStatusBadge, summaryRequesterLabel } from '@/components/orders/status-badge';

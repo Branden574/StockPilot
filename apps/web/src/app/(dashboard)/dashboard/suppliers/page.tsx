@@ -1,5 +1,9 @@
+import type { Metadata } from 'next';
+
 import { SuppliersManager } from '@/components/suppliers/suppliers-manager';
 import { requireOrgContext } from '@/lib/auth/session';
+
+export const metadata: Metadata = { title: 'Suppliers' };
 import { SuppliersService } from '@/server/services/suppliers';
 
 import { hasPermission } from '@stockpilot/core';
