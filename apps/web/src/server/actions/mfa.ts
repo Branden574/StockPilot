@@ -1,6 +1,6 @@
 'use server';
 
-import { revalidatePath } from 'next/cache';
+import { revalidatePath, updateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { audit } from '@/server/services/audit';
@@ -286,6 +286,10 @@ export async function setOrgMfaPolicyAction(input: {
       before: { mfa_policy: prev?.mfa_policy ?? null },
       after: { mfa_policy: parsed.data.policy },
     });
+    // Invalidate the cached org row (lib/dashboard/cached-org.ts) so
+    // the new policy takes effect immediately for the MFA banner +
+    // hard-gate on the next dashboard nav.
+    updateTag(`dashboard-org:${ctx.organizationId}`);
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
