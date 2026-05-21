@@ -47,7 +47,12 @@ export class ActivityService {
         .from('audit_logs')
         .select('id, event, metadata, created_at, user_id')
         .eq('organization_id', this.ctx.organizationId)
-        .contains('metadata', { entity_id: itemId })
+        // Extracted-text equality so Postgres can use the
+        // audit_logs_org_entity_created_idx expression index added in
+        // migration 0135. The previous `.contains(metadata, …)` form
+        // forced a sequential scan because @> can't use a BTREE on
+        // the extracted text path.
+        .eq('metadata->>entity_id', itemId)
         .order('created_at', { ascending: false })
         .limit(halfLimit),
     ]);

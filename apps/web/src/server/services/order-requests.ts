@@ -222,15 +222,20 @@ export class OrderRequestsService {
         // requesters populate the requester_name / requester_email cols
         // at create time). RLS on user_profiles already lets org members
         // read each other, so this join is safe and cheap.
+        //
+        // picker + driver names are resolved in a separate batch query
+        // below — PostgREST embeds become LATERAL joins, which multiply
+        // cost per row even when assigned_picker_id / assigned_delivery_user_id
+        // are NULL (the common case for not-yet-picked orders). Splitting
+        // those two joins out and batching the lookup keeps the main
+        // query lean.
         `id, status, warehouse_id, requester_user_id, requester_email,
          requester_name, requester_org_label, source, notes,
          created_at, updated_at, approved_at, delivered_at,
          fulfillment_type, assigned_picker_id, assigned_delivery_user_id,
          warehouse:warehouses!warehouse_id (name),
          lines:order_request_lines (quantity_requested),
-         requester:user_profiles!requester_user_id (full_name, email),
-         picker:user_profiles!assigned_picker_id (full_name, email),
-         driver:user_profiles!assigned_delivery_user_id (full_name, email)`,
+         requester:user_profiles!requester_user_id (full_name, email)`,
       )
       .eq('organization_id', this.ctx.organizationId)
       // M1: secondary `id desc` sort gives a stable order when two rows
@@ -265,16 +270,44 @@ export class OrderRequestsService {
     const { data, error } = await q;
     if (error) throw new ServiceError('internal_error', error.message);
 
-    return (data ?? []).map((row) => {
+    // Batch-fetch picker + driver display names for the IDs that
+    // actually appear on this page. PostgREST embeds (`picker:...`,
+    // `driver:...`) generate LATERAL joins that cost a lookup PER ROW
+    // even when the FK is NULL — most order rows have NO picker yet
+    // and NO driver, so the join cost was pure waste. One indexed
+    // batch query on user_profiles.id is faster than 100 LATERAL hits.
+    const rows = data ?? [];
+    const assignedIds = new Set<string>();
+    for (const row of rows) {
+      const r = row as Record<string, unknown>;
+      const pid = r.assigned_picker_id as string | null | undefined;
+      const did = r.assigned_delivery_user_id as string | null | undefined;
+      if (pid) assignedIds.add(pid);
+      if (did) assignedIds.add(did);
+    }
+    type ProfileRow = { id: string; full_name: string | null; email: string | null };
+    const profilesById = new Map<string, ProfileRow>();
+    if (assignedIds.size > 0) {
+      const { data: profs, error: profErr } = await this.ctx.supabase
+        .from('user_profiles')
+        .select('id, full_name, email')
+        .in('id', [...assignedIds]);
+      if (profErr) throw new ServiceError('internal_error', profErr.message);
+      for (const p of (profs ?? []) as ProfileRow[]) {
+        profilesById.set(p.id, p);
+      }
+    }
+
+    return rows.map((row) => {
       const r = row as Record<string, unknown>;
       const wh = r.warehouse as { name?: string } | { name?: string }[] | null;
       const warehouseName = Array.isArray(wh) ? (wh[0]?.name ?? null) : (wh?.name ?? null);
       const lines = (r.lines as Array<{ quantity_requested: number }> | null) ?? [];
 
-      // Resolve the requester display from user_profiles when the row's
-      // own requester_name / requester_email columns are null — that's
-      // the internal-in-app case (only public-link external requests
-      // populate those columns at create time).
+      // Resolve the requester display from the embedded user_profiles
+      // join when the row's own requester_name / requester_email cols
+      // are null — internal in-app requests don't populate those at
+      // create time (only public-link external requesters do).
       type ProfileShape = {
         full_name?: string | null;
         email?: string | null;
@@ -288,8 +321,10 @@ export class OrderRequestsService {
           : (field as ProfileShape);
       };
       const reqProfile = flattenProfile(r.requester);
-      const pickerProfile = flattenProfile(r.picker);
-      const driverProfile = flattenProfile(r.driver);
+      const pickerId = (r.assigned_picker_id as string | null) ?? null;
+      const driverId = (r.assigned_delivery_user_id as string | null) ?? null;
+      const pickerProfile = pickerId ? profilesById.get(pickerId) ?? null : null;
+      const driverProfile = driverId ? profilesById.get(driverId) ?? null : null;
       const requesterName =
         ((r.requester_name as string | null) ?? null) ||
         (reqProfile?.full_name?.trim() || null);

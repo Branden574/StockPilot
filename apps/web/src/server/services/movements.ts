@@ -207,9 +207,9 @@ export interface ThirtyDayMetrics {
  * render. Single round trip to stock_movements.
  */
 export async function getThirtyDayMetrics(
-  options: { warehouseId?: string | null } = {},
+  options: { warehouseId?: string | null; ctx?: ServiceContext } = {},
 ): Promise<ThirtyDayMetrics> {
-  const ctx = await withContext();
+  const ctx = options.ctx ?? (await withContext());
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   // Always inner-join inventory_items so we can filter out movements whose
   // parent item has been soft-deleted. Without this the 30-day series
@@ -295,7 +295,18 @@ export async function getDashboardHistory(
   const now = Date.now();
   const startMs = now - 30 * dayMs;
 
-  // 1. Active items in scope.
+  // 1 & 2. Items in scope + 30-day movements. These are independent —
+  // run them concurrently to halve the wall-clock for this function.
+  // Previously they were sequential, costing ~1 RTT extra per dashboard
+  // render.
+  type ItemRow = {
+    id: string;
+    created_at: string;
+    quantity_on_hand: number | null;
+    unit_cost: number | null;
+    reorder_point: number | null;
+  };
+
   let itemsQ = ctx.supabase
     .from('inventory_items')
     .select('id, created_at, quantity_on_hand, unit_cost, reorder_point')
@@ -305,19 +316,27 @@ export async function getDashboardHistory(
   if (options.warehouseId) {
     itemsQ = itemsQ.eq('warehouse_id', options.warehouseId);
   }
-  const { data: itemsData, error: itemsErr } = await itemsQ;
-  if (itemsErr) throw new ServiceError('internal_error', itemsErr.message);
 
-  type ItemRow = {
-    id: string;
-    created_at: string;
-    quantity_on_hand: number | null;
-    unit_cost: number | null;
-    reorder_point: number | null;
-  };
-  const items = (itemsData ?? []) as ItemRow[];
+  let movQ = ctx.supabase
+    .from('stock_movements')
+    .select(
+      options.warehouseId
+        ? 'item_id, quantity_change, created_at, item:inventory_items!item_id!inner (warehouse_id)'
+        : 'item_id, quantity_change, created_at',
+    )
+    .eq('organization_id', ctx.organizationId)
+    .gte('created_at', new Date(startMs).toISOString());
+  if (options.warehouseId) {
+    movQ = movQ.eq('item.warehouse_id', options.warehouseId);
+  }
 
-  // Mutable per-item state (reverse-walked through movements).
+  const [itemsRes, movRes] = await Promise.all([itemsQ, movQ]);
+  if (itemsRes.error) throw new ServiceError('internal_error', itemsRes.error.message);
+  if (movRes.error) throw new ServiceError('internal_error', movRes.error.message);
+  const items = (itemsRes.data ?? []) as ItemRow[];
+  const movData = movRes.data;
+
+  // Mutable per-item state (reverse-walked through movements below).
   const qtyById = new Map<string, number>();
   const costById = new Map<string, number>();
   const reorderById = new Map<string, number>();
@@ -333,22 +352,6 @@ export async function getDashboardHistory(
     createdAtTimes.push(new Date(r.created_at).getTime());
     valueToday += qty * cost;
   }
-
-  // 2. Movements in window, scoped by warehouse if requested.
-  let movQ = ctx.supabase
-    .from('stock_movements')
-    .select(
-      options.warehouseId
-        ? 'item_id, quantity_change, created_at, item:inventory_items!item_id!inner (warehouse_id)'
-        : 'item_id, quantity_change, created_at',
-    )
-    .eq('organization_id', ctx.organizationId)
-    .gte('created_at', new Date(startMs).toISOString());
-  if (options.warehouseId) {
-    movQ = movQ.eq('item.warehouse_id', options.warehouseId);
-  }
-  const { data: movData, error: movErr } = await movQ;
-  if (movErr) throw new ServiceError('internal_error', movErr.message);
 
   // Bucket movements by day so we can replay them in reverse order.
   type Move = { item_id: string; quantity_change: number };

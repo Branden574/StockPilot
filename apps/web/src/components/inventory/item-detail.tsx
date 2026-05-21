@@ -31,12 +31,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { ActivityService } from '@/server/services/activity';
-import { CategoriesService } from '@/server/services/categories';
 import { ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
-import { SuppliersService } from '@/server/services/suppliers';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
@@ -71,15 +69,13 @@ interface ItemDetailProps {
 export async function ItemDetail({ id, backHref, backLabel, editHref, tab, returnParam }: ItemDetailProps) {
   const activeTab: DetailTabId = parseDetailTab(tab);
 
-  const [ctx, inventorySvc, activitySvc, imagesSvc, categoriesSvc, locationsSvc, suppliersSvc] =
+  const [ctx, inventorySvc, activitySvc, imagesSvc, locationsSvc] =
     await Promise.all([
       withContext(),
       InventoryService.forCurrentUser(),
       ActivityService.forCurrentUser(),
       ItemImagesService.forCurrentUser(),
-      CategoriesService.forCurrentUser(),
       LocationsService.forCurrentUser(),
-      SuppliersService.forCurrentUser(),
     ]);
 
   let item;
@@ -90,10 +86,33 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
     throw e;
   }
 
-  const [categories, locations, suppliers, activity, imageRows] = await Promise.all([
-    categoriesSvc.list(),
+  // Targeted by-id fetches for the single category + supplier this item
+  // belongs to (used only by .find() lookups below). Locations stays as a
+  // full list because the StockTransferDialog needs every location for
+  // its destination dropdown. Activity + image rows are unrelated and
+  // fan out alongside.
+  const categoryIdForFetch = (item.category_id as string | null) ?? null;
+  const supplierIdForFetch = (item.supplier_id as string | null) ?? null;
+  const [categoryRow, supplierRow, locations, activity, imageRows] = await Promise.all([
+    categoryIdForFetch
+      ? ctx.supabase
+          .from('categories')
+          .select('id, name, color')
+          .eq('organization_id', ctx.organizationId)
+          .eq('id', categoryIdForFetch)
+          .maybeSingle()
+          .then((r) => r.data)
+      : Promise.resolve(null),
+    supplierIdForFetch
+      ? ctx.supabase
+          .from('suppliers')
+          .select('id, name')
+          .eq('organization_id', ctx.organizationId)
+          .eq('id', supplierIdForFetch)
+          .maybeSingle()
+          .then((r) => r.data)
+      : Promise.resolve(null),
     locationsSvc.list(),
-    suppliersSvc.list(),
     activitySvc.forItem(id, 50),
     imagesSvc.list(id),
   ]);
@@ -104,9 +123,9 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
     isPrimary: Boolean(r.is_primary),
   }));
 
-  const category = categories.find((c) => c.id === item.category_id);
+  const category = categoryRow ?? null;
   const location = locations.find((l) => l.id === item.primary_location_id);
-  const supplier = suppliers.find((s) => s.id === item.supplier_id);
+  const supplier = supplierRow ?? null;
 
   const value = (item.quantity_on_hand as number) * (item.unit_cost as number);
 
