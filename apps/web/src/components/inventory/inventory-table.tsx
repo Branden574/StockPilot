@@ -40,6 +40,7 @@ interface Item {
   unit_cost: number;
   retail_price: number;
   category_id: string | null;
+  charter_id: string | null;
   primary_location_id: string | null;
   updated_at: string;
   custom_fields?: Record<string, unknown> | null;
@@ -61,6 +62,9 @@ interface Item {
 interface Lookups {
   categories: Map<string, { name: string; color: string | null }>;
   locations: Map<string, { name: string }>;
+  /** Charter id → display name + short code. Missing-key rows render
+   *  the "Generic" pill (any charter the warehouse services can use). */
+  charters?: Map<string, { name: string; code: string | null }>;
 }
 
 export interface InventoryTableProps {
@@ -72,6 +76,8 @@ export interface InventoryTableProps {
   categories?: Array<{ id: string; name: string }>;
   /** Locations available for the filter dropdown. */
   locations?: Array<{ id: string; name: string }>;
+  /** Charters available for the filter dropdown. */
+  charters?: Array<{ id: string; name: string; code: string | null }>;
   suppliers?: Array<{ id: string; name: string }>;
   /** Org tag list — forwarded to BulkActions for the Add/Remove tags
       dialogs. Defaults to [] so older callers don't crash. */
@@ -233,6 +239,7 @@ export function InventoryTable({
   lookups,
   categories = [],
   locations = [],
+  charters = [],
   suppliers = [],
   tags = [],
   total,
@@ -315,6 +322,10 @@ export function InventoryTable({
     () => paramsToIdSet(new URLSearchParams(params.toString()), 'loc'),
     [params],
   );
+  const charterIds = React.useMemo(
+    () => paramsToIdSet(new URLSearchParams(params.toString()), 'charter'),
+    [params],
+  );
 
   function hrefForView(v: View): string {
     const next = new URLSearchParams(params.toString());
@@ -378,18 +389,19 @@ export function InventoryTable({
     });
   }
 
-  function setMultiParam(key: 'cat' | 'loc', ids: Set<string>) {
+  function setMultiParam(key: 'cat' | 'loc' | 'charter', ids: Set<string>) {
     navigateWith((next) => {
       next.delete(key);
       for (const id of ids) next.append(key, id);
     });
   }
 
-  const activeFilterCount = categoryIds.size + locationIds.size;
+  const activeFilterCount = categoryIds.size + locationIds.size + charterIds.size;
   function clearAllFilters() {
     navigateWith((next) => {
       next.delete('cat');
       next.delete('loc');
+      next.delete('charter');
       next.delete('sort');
       next.delete('q');
       setQ('');
@@ -607,6 +619,25 @@ export function InventoryTable({
           />
         )}
 
+        {charters.length > 0 && (
+          <MultiSelectFilter
+            label="Charter"
+            // "Generic" is the sentinel for items with charter_id IS NULL
+            // — stock that any charter the warehouse services can use.
+            // Sits at the top so the most common pick is immediately
+            // reachable; real charters follow in their natural order.
+            options={[
+              { id: 'generic', name: 'Generic (any charter)' },
+              ...charters.map((c) => ({
+                id: c.id,
+                name: c.code ? `${c.name} · ${c.code}` : c.name,
+              })),
+            ]}
+            selected={charterIds}
+            onChange={(ids) => setMultiParam('charter', ids)}
+          />
+        )}
+
         {(activeFilterCount > 0 || params.get('sort') || q.trim()) && (
           <button
             type="button"
@@ -691,6 +722,7 @@ export function InventoryTable({
                   ['Item', 'left'],
                   ['SKU', 'left'],
                   ['Category', 'left'],
+                  ['Charter', 'left'],
                   ['Location', 'left'],
                   ...(showBookFields
                     ? ([
@@ -726,7 +758,7 @@ export function InventoryTable({
             {displayed.length === 0 && (
               <tr>
                 <td
-                  colSpan={showBookFields ? 13 : 11}
+                  colSpan={showBookFields ? 14 : 12}
                   className="py-12 text-center text-[12.5px] text-[var(--ed-ink-4)]"
                 >
                   No items match your filters.
@@ -851,6 +883,30 @@ export function InventoryTable({
                     ) : (
                       <span className="text-[12px] text-[var(--ed-ink-4)]">—</span>
                     )}
+                  </td>
+                  <td className="px-3 text-[12px]">
+                    {(() => {
+                      const charter = item.charter_id
+                        ? lookups.charters?.get(item.charter_id) ?? null
+                        : null;
+                      if (charter) {
+                        return (
+                          <span className="text-[var(--ed-ink-2)]" title={charter.name}>
+                            {charter.code ?? charter.name}
+                          </span>
+                        );
+                      }
+                      // charter_id IS NULL = generic stock (any charter
+                      // serviced by the warehouse can pull from it).
+                      return (
+                        <span
+                          className="text-[11px] text-[var(--ed-ink-4)] italic"
+                          title="Generic stock — any charter serviced by this warehouse can use it"
+                        >
+                          Generic
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">{location?.name ?? '—'}</td>
                   {!showBookFields && (
