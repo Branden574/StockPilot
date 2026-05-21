@@ -397,7 +397,17 @@ export async function* streamChat(
     assembledReply += roundText;
 
     if (roundToolCalls.length === 0) {
-      // Final text answer — done.
+      // Final hop — the model produced text and no further tool
+      // calls. If it returned ZERO text we still need to send the
+      // client something visible so the chat doesn't leave an empty
+      // bubble. Most common cause: Gemini's safety filter swallows
+      // the response without raising an error.
+      if (!assembledReply) {
+        const empty =
+          "I didn't get back any usable text for that one. Try rephrasing the question or being more specific.";
+        assembledReply = empty;
+        yield { type: 'text', delta: empty };
+      }
       return { reply: assembledReply, toolCallsUsed };
     }
 

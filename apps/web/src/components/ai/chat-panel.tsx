@@ -302,6 +302,13 @@ export function ChatPanel() {
       const decoder = new TextDecoder();
       let buf = '';
       let streamErrored = false;
+      // Track whether the stream actually produced visible content.
+      // If it didn't and didn't error either (e.g. model emitted only
+      // tool calls and finished with empty text, or Gemini returned
+      // zero parts), we still need to put SOMETHING in the bubble so
+      // the user isn't staring at a blank reply.
+      let receivedText = false;
+      let receivedTool = false;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -326,8 +333,10 @@ export function ChatPanel() {
             continue;
           }
           if (event.type === 'text' && typeof event.delta === 'string') {
+            if (event.delta.length > 0) receivedText = true;
             appendAssistantDelta(event.delta);
           } else if (event.type === 'tool' && typeof event.name === 'string') {
+            receivedTool = true;
             pushAssistantTool(event.name, Boolean(event.ok));
           } else if (event.type === 'done' && typeof event.sessionId === 'string') {
             const newSessionId = event.sessionId;
@@ -346,6 +355,18 @@ export function ChatPanel() {
             replaceAssistantWithError(friendly);
           }
         }
+      }
+
+      // Failsafe: stream finished cleanly but the assistant turn is
+      // still empty. Most often this means Gemini called one or more
+      // tools and then produced a zero-length final answer (silent
+      // tool-loop dead-end). Fill the bubble with a clear "no answer"
+      // message so the UI doesn't leave an empty turn hanging.
+      if (!streamErrored && !receivedText) {
+        const fallback = receivedTool
+          ? "I ran the lookups for that but didn't get back a clean answer to share. Try rephrasing or asking for something more specific."
+          : "I didn't get a response that time. Try sending the message again.";
+        replaceAssistantWithError(fallback);
       }
 
       if (!streamErrored) void refreshSessions();
