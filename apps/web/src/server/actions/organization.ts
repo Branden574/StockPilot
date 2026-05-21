@@ -1,6 +1,6 @@
 'use server';
 
-import { revalidatePath } from 'next/cache';
+import { revalidatePath, updateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
@@ -143,6 +143,12 @@ export async function updateTerminologyAction(
       after: { terminology: parsed.data },
     });
 
+    // Invalidate the cached org row that the dashboard layout reads
+    // (lib/dashboard/cached-org.ts). Without this, the cached
+    // terminology would stick for up to 60s after a terminology save.
+    // updateTag is the Next 16 server-action equivalent of
+    // revalidateTag with read-your-own-writes semantics.
+    updateTag(`dashboard-org:${ctx.organizationId}`);
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {

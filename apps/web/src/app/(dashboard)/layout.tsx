@@ -8,6 +8,10 @@ import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
 import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import {
+  getCachedOrgDashboardRow,
+  getCachedOrgWarehouses,
+} from '@/lib/dashboard/cached-org';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
 
@@ -39,14 +43,25 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const ctx = await requireOrgContext();
   const supabase = await createClient();
 
-  const [access, activeWarehouseId, orgRow, factorsRes, membershipsRes, unreadRes] = await Promise.all([
+  // Layout-blocking parallel fan-out. orgRow + warehousesList come
+  // from unstable_cache (lib/dashboard/cached-org.ts) so they're
+  // ~free on warm nav; the other 4 queries are per-user / per-moment
+  // and run fresh every time. We include the warehouses list in the
+  // same Promise.all so even the cold path is parallel — previously
+  // it was awaited sequentially after this block, adding ~50-100ms
+  // to every dashboard nav for managers/admins.
+  const [
+    access,
+    activeWarehouseId,
+    orgRow,
+    factorsRes,
+    membershipsRes,
+    unreadRes,
+    warehousesList,
+  ] = await Promise.all([
     getWarehouseAccess(),
     getActiveWarehouseFilter(),
-    supabase
-      .from('organizations')
-      .select('terminology, mfa_policy, logo_url')
-      .eq('id', ctx.organizationId)
-      .maybeSingle(),
+    getCachedOrgDashboardRow(ctx.organizationId),
     supabase.auth.mfa.listFactors(),
     supabase
       .from('organization_members')
@@ -59,6 +74,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       .eq('user_id', ctx.userId)
       .eq('organization_id', ctx.organizationId)
       .is('read_at', null),
+    getCachedOrgWarehouses(ctx.organizationId),
   ]);
   const initialUnreadNotifications = unreadRes.count ?? 0;
 
@@ -90,7 +106,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // Chrome, no MFA enrolled). The banner is always visible above the
   // page content until the user enrolls; can't loop, can't throttle,
   // and behaves the same across browsers.
-  const policy = (orgRow.data?.mfa_policy as
+  const policy = (orgRow?.mfa_policy as
     | 'optional'
     | 'admins_required'
     | 'all_required'
@@ -119,31 +135,20 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   }
 
   const term = resolveTerminology(
-    (orgRow.data?.terminology as Partial<ReturnType<typeof resolveTerminology>>) ?? null,
+    (orgRow?.terminology as Partial<ReturnType<typeof resolveTerminology>>) ?? null,
   );
 
-  // Only managers/admins get the topbar filter — warehouse-scoped users have
-  // a forced warehouse and the filter would be a UX dead-end for them.
-  let warehouseFilter:
-    | {
-        warehouses: Array<{ id: string; name: string }>;
-        activeId: string | null;
-        warehouseLabel: string;
+  // Only managers/admins get the topbar filter — warehouse-scoped users
+  // have a forced warehouse and the filter would be a UX dead-end for
+  // them. Warehouses list itself comes from the cached helper in the
+  // Promise.all above, so this branch is just a no-DB shape mapping.
+  const warehouseFilter = access.hasAllAccess
+    ? {
+        warehouses: warehousesList,
+        activeId: activeWarehouseId,
+        warehouseLabel: term.warehouse_singular,
       }
-    | undefined;
-  if (access.hasAllAccess) {
-    const { data } = await supabase
-      .from('warehouses')
-      .select('id, name')
-      .eq('organization_id', ctx.organizationId)
-      .neq('status', 'archived')
-      .order('name', { ascending: true });
-    warehouseFilter = {
-      warehouses: (data ?? []) as Array<{ id: string; name: string }>,
-      activeId: activeWarehouseId,
-      warehouseLabel: term.warehouse_singular,
-    };
-  }
+    : undefined;
 
   return (
     <>
@@ -156,7 +161,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         initialUnreadNotifications={initialUnreadNotifications}
         organizationId={ctx.organizationId}
         organizationName={ctx.organizationName}
-        organizationLogoUrl={(orgRow.data?.logo_url as string | null) ?? null}
+        organizationLogoUrl={orgRow?.logo_url ?? null}
         memberships={memberships}
         userName={ctx.fullName ?? ctx.email}
         userRole={`${ROLE_LABELS[ctx.role].label} · ${ctx.organizationName}`}
