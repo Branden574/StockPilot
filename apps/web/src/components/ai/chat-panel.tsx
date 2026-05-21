@@ -128,6 +128,55 @@ function pickSuggestions(referrerPath: string | null): string[] {
   return DEFAULT_SUGGESTIONS;
 }
 
+/**
+ * Map a tool name to a "jump to dashboard" link the user can click
+ * after the assistant answers. Only surfaces when the tool succeeded
+ * and the destination genuinely matches what the tool reported on —
+ * keeps the action area uncluttered with stale links.
+ *
+ * Returns at most one link per turn (the most relevant tool wins).
+ * Order matters: writes > specific lists > broad lists.
+ */
+function jumpLinkFor(
+  toolCalls: ReadonlyArray<{ name: string; ok: boolean }> | undefined,
+): { label: string; href: string } | null {
+  if (!toolCalls || toolCalls.length === 0) return null;
+  const ok = toolCalls.filter((t) => t.ok).map((t) => t.name);
+  const names = new Set(ok);
+  // Most actionable first. The first match wins.
+  if (names.has('approveOrder') || names.has('denyOrder') || names.has('cancelOrder'))
+    return { label: 'Open orders dashboard', href: '/dashboard/orders' };
+  if (names.has('adjustStock'))
+    return { label: 'Open movements log', href: '/dashboard/movements' };
+  if (names.has('executeBulkBookImport') || names.has('previewBulkBookImport'))
+    return { label: 'Open books', href: '/dashboard/books' };
+  if (names.has('getOrderRequestSummary') || names.has('listOrderRequests'))
+    return { label: 'Open orders', href: '/dashboard/orders' };
+  if (names.has('listLowStock'))
+    return { label: 'Open low-stock list', href: '/dashboard/inventory?filter=low_stock' };
+  if (names.has('inventoryByWarehouse'))
+    return { label: 'Open warehouses', href: '/dashboard/admin/warehouses' };
+  if (names.has('inventoryByCategory'))
+    return { label: 'Open categories', href: '/dashboard/categories' };
+  if (names.has('listBundles') || names.has('previewBundleDistribution'))
+    return { label: 'Open bundles', href: '/dashboard/bundles' };
+  if (names.has('listSuppliers'))
+    return { label: 'Open suppliers', href: '/dashboard/suppliers' };
+  if (names.has('listWarehouses'))
+    return { label: 'Open warehouses', href: '/dashboard/admin/warehouses' };
+  if (names.has('searchInventorySemantic') || names.has('searchInventory'))
+    return { label: 'Open inventory', href: '/dashboard/inventory' };
+  if (names.has('getRecentOrders'))
+    return { label: 'Open orders', href: '/dashboard/orders' };
+  if (names.has('getMovements') || names.has('getRecentItems') || names.has('getDailyMovementCounts'))
+    return { label: 'Open movements log', href: '/dashboard/movements' };
+  if (names.has('getTopMovers') || names.has('getStaleItems'))
+    return { label: 'Open reports', href: '/dashboard/reports' };
+  if (names.has('getDashboardSummary'))
+    return { label: 'Open dashboard', href: '/dashboard' };
+  return null;
+}
+
 const ACTIVE_SESSION_KEY = 'stockpilot.ai.activeSession';
 
 function formatRelative(iso: string): string {
@@ -694,6 +743,29 @@ export function ChatPanel() {
                           </button>
                         </div>
                       )}
+                    {/* Quick-jump action link — when the tool the AI
+                        called has a natural dashboard counterpart,
+                        show a "Open in dashboard" link under the
+                        bubble. Suppresses while the turn is in flight
+                        and on confirm-prompt turns (the Confirm/Cancel
+                        actions above take priority). */}
+                    {(() => {
+                      if (t.role !== 'assistant') return null;
+                      if (busy && i === turns.length - 1) return null;
+                      if (/confirm\?\s*$/i.test(t.content)) return null;
+                      const link = jumpLinkFor(t.toolCalls);
+                      if (!link) return null;
+                      return (
+                        <div className="mt-2">
+                          <a
+                            href={link.href}
+                            className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[11px] underline-offset-2 hover:underline"
+                          >
+                            {link.label} →
+                          </a>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </li>
               ))}

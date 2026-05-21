@@ -219,6 +219,7 @@ export async function POST(req: Request) {
   // the stream — the client uses it as the terminator. Errors are
   // sent as `error` events, then `done` follows.
   const finalSessionId = resolvedSessionId;
+  const turnStartMs = Date.now();
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -237,6 +238,10 @@ export async function POST(req: Request) {
       let assembledReply = '';
       const toolCallsUsed: ToolCallRecord[] = [];
       let errorEvent: Record<string, unknown> | null = null;
+      // Captured by the snapshot-building block below so the finally
+      // log can include it. Default to 'general' if classification
+      // fails for any reason — we still want a metric line per turn.
+      let intentForObservability: string = 'general';
 
       try {
         // Thread the request's AbortSignal into the chat loop so a
@@ -281,6 +286,7 @@ export async function POST(req: Request) {
         // the nudge is just a hint, the full tool catalog is still
         // available.
         const intent = classifyIntent(payload.message);
+        intentForObservability = intent;
         const intentBlock = intentNudge(intent);
         const snapshot = [orgSnapshot, userBlock, pageBlock, intentBlock]
           .filter(Boolean)
@@ -349,6 +355,46 @@ export async function POST(req: Request) {
           reply: assembledReply,
           toolCallsUsed: toolCallsUsed.map((t) => ({ name: t.name, ok: t.ok })),
         });
+        // Structured per-turn observability log — picked up by Vercel
+        // logs and any log aggregator that ingests them. One line per
+        // turn so it's grep-friendly. Don't write to a DB table here:
+        // adds latency + an extra failure mode, and stdout is enough
+        // for the kinds of analysis we'd run (latency distributions,
+        // error rates, intent coverage, tool-call cardinality).
+        try {
+          const durationMs = Date.now() - turnStartMs;
+          const okCalls = toolCallsUsed.filter((t) => t.ok).length;
+          const failCalls = toolCallsUsed.length - okCalls;
+          const failedTools = toolCallsUsed
+            .filter((t) => !t.ok)
+            .map((t) => t.name);
+          // eslint-disable-next-line no-console
+          console.log(
+            JSON.stringify({
+              level: 'info',
+              tag: 'ai.chat.turn',
+              organizationId: ctx.organizationId,
+              userId: ctx.userId,
+              sessionId: finalSessionId,
+              intent: intentForObservability,
+              durationMs,
+              toolCallCount: toolCallsUsed.length,
+              toolCallsOk: okCalls,
+              toolCallsFailed: failCalls,
+              failedTools: failedTools.length > 0 ? failedTools : undefined,
+              toolNames: toolCallsUsed.map((t) => t.name),
+              replyLen: assembledReply.length,
+              errored: !!errorEvent,
+              errorCode:
+                errorEvent && typeof errorEvent.code === 'string'
+                  ? errorEvent.code
+                  : undefined,
+            }),
+          );
+        } catch {
+          // Logging must never break the response — swallow any
+          // accidental JSON.stringify cycle errors.
+        }
         try {
           controller.close();
         } catch {
