@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import * as React from 'react';
 
 import { DASHBOARD_NAV_HREFS, navForRole, type NavSection } from '@/components/dashboard/nav';
+import { NavLinkPending } from '@/components/dashboard/nav-link-pending';
 import { OrgSwitcher } from '@/components/dashboard/org-switcher';
 import { IconMark } from '@/components/ui/icon-mark';
 import { cn } from '@/lib/utils';
@@ -177,6 +178,12 @@ export function Sidebar({
                       )}
                     />
                     <span className="flex-1">{item.label}</span>
+                    {/* Pending indicator — turns on at click time via
+                        useLinkStatus(), turns off when the new route
+                        finishes rendering. Without this, a cold-cache
+                        first click sat silent for ~1.2s before the URL
+                        even changed. */}
+                    <NavLinkPending />
                     {item.badge != null && (
                       <span
                         className={cn(

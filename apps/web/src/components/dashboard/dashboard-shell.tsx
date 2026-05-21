@@ -5,6 +5,7 @@ import * as React from 'react';
 import { CommandPalette } from '@/components/dashboard/command-palette';
 import { EdgeSwipeOpener } from '@/components/dashboard/edge-swipe-opener';
 import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
+import { NavProgressBar } from '@/components/dashboard/nav-progress-bar';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -96,6 +97,10 @@ export function DashboardShell({
 
   return (
     <div className="bg-background flex h-dvh overflow-hidden">
+      {/* Top progress bar — fires at click time on every internal nav,
+          covers links the per-link useLinkStatus indicator can't see
+          (topbar, dashboard cards, table rows, breadcrumbs, etc). */}
+      <NavProgressBar />
       {/*
         Skip link: hidden until keyboard-focused. Lets keyboard / screen-
         reader users jump past the sidebar + topbar straight into the

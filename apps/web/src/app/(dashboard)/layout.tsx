@@ -24,7 +24,11 @@ import { ROLE_LABELS, resolveTerminology } from '@stockpilot/core';
 // "Dashboard · StockPilot" instead of the marketing string.
 export const metadata: Metadata = {
   title: {
-    default: 'Dashboard · StockPilot',
+    // Just "Dashboard" — the root layout's `%s · StockPilot` template
+    // wraps this into "Dashboard · StockPilot". Putting the full
+    // "Dashboard · StockPilot" here was double-wrapping into
+    // "Dashboard · StockPilot · StockPilot".
+    default: 'Dashboard',
     template: '%s · StockPilot',
   },
 };

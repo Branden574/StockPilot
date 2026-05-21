@@ -35,6 +35,9 @@ vi.mock('next/link', () => ({
       {children}
     </a>
   ),
+  // Sidebar's NavLinkPending uses useLinkStatus(); stub it so the
+  // hook doesn't blow up outside a real Link parent context.
+  useLinkStatus: () => ({ pending: false }),
 }));
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
