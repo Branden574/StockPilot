@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { formatOrgDateTime } from '@/lib/timezone';
 import {
   Select,
   SelectContent,
@@ -313,7 +314,7 @@ export function ScheduleEventForm({
               <li key={c.id}>
                 <span className="font-medium">{c.title}</span>{' '}
                 <span className="opacity-70">
-                  ({new Date(c.startsAt).toLocaleString(undefined, {
+                  ({formatOrgDateTime(c.startsAt, {
                     month: 'short',
                     day: 'numeric',
                     hour: 'numeric',

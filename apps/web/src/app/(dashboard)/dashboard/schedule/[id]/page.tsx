@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
+import { formatOrgDate, formatOrgTime } from '@/lib/timezone';
 import { formatNumber } from '@/lib/utils';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
@@ -35,20 +36,21 @@ function formatRange(startsAt: string, endsAt: string | null, allDay: boolean) {
     minute: '2-digit',
   };
   if (allDay) {
-    return `${start.toLocaleDateString(undefined, dateOpts)} · All day`;
+    return `${formatOrgDate(start, dateOpts)} · All day`;
   }
   if (!endsAt) {
-    return `${start.toLocaleDateString(undefined, dateOpts)} · ${start.toLocaleTimeString(undefined, timeOpts)}`;
+    return `${formatOrgDate(start, dateOpts)} · ${formatOrgTime(start, timeOpts)}`;
   }
   const end = new Date(endsAt);
-  const sameDay =
-    start.getFullYear() === end.getFullYear() &&
-    start.getMonth() === end.getMonth() &&
-    start.getDate() === end.getDate();
+  // Compare PT calendar days (NOT the JS Date getters, which read the
+  // server's local tz) so "same-day" stays true when both timestamps
+  // fall on the same Pacific calendar day even if UTC midnight splits
+  // them.
+  const sameDay = formatOrgDate(start) === formatOrgDate(end);
   if (sameDay) {
-    return `${start.toLocaleDateString(undefined, dateOpts)} · ${start.toLocaleTimeString(undefined, timeOpts)} – ${end.toLocaleTimeString(undefined, timeOpts)}`;
+    return `${formatOrgDate(start, dateOpts)} · ${formatOrgTime(start, timeOpts)} – ${formatOrgTime(end, timeOpts)}`;
   }
-  return `${start.toLocaleDateString(undefined, dateOpts)} ${start.toLocaleTimeString(undefined, timeOpts)} → ${end.toLocaleDateString(undefined, dateOpts)} ${end.toLocaleTimeString(undefined, timeOpts)}`;
+  return `${formatOrgDate(start, dateOpts)} ${formatOrgTime(start, timeOpts)} → ${formatOrgDate(end, dateOpts)} ${formatOrgTime(end, timeOpts)}`;
 }
 
 export default async function ScheduleEventDetailPage({
