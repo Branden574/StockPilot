@@ -165,6 +165,12 @@ export default async function NewRentalPage({
       itemType: it.item_type,
       categoryId: it.category_id,
       categoryName: it.category_id ? (categoryNames.get(it.category_id) ?? null) : null,
+      // Rentals don't track charter assignment — they circulate across
+      // every charter the warehouse services. Leave the charter
+      // fields null so the item card hides the charter ribbon.
+      charterId: null,
+      charterName: null,
+      charterCode: null,
       rackLabel,
       imageUrl: null,
       lqip: null,

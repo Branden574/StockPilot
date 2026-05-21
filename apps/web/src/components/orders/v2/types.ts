@@ -10,6 +10,13 @@ export interface CatalogItem {
   itemType: string | null;
   categoryId: string | null;
   categoryName: string | null;
+  /** Charter the item belongs to (null = generic stock that any
+   *  charter the warehouse services can pull from). Displayed on the
+   *  catalog tile so requesters can see which charter the item is
+   *  earmarked for before adding to cart. */
+  charterId: string | null;
+  charterName: string | null;
+  charterCode: string | null;
   rackLabel: string | null;
   imageUrl: string | null;
   /**
