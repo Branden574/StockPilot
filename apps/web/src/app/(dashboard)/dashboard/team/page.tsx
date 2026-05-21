@@ -1,6 +1,9 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 
 import { TeamManager } from '@/components/team/team-manager';
+
+export const metadata: Metadata = { title: 'Team' };
 import { requireOrgContext } from '@/lib/auth/session';
 import { ChartersService } from '@/server/services/charters';
 import { TeamService } from '@/server/services/team';

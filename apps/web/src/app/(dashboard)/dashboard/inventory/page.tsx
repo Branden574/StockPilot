@@ -1,5 +1,8 @@
+import type { Metadata } from 'next';
 import { Boxes } from 'lucide-react';
 import Link from 'next/link';
+
+export const metadata: Metadata = { title: 'Inventory' };
 
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';

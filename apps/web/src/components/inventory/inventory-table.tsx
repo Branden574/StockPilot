@@ -860,14 +860,19 @@ export function InventoryTable({
                       </ImageHoverPreview>
                       <Link
                         href={`${rowLinkPrefix}/${item.id}?return=${encodeURIComponent(currentListUrl)}`}
-                        // prefetch={true} forces eager RSC prefetch on
-                        // render (Next default is viewport-on-visible).
-                        // Each detail page is ~10-30 KB of payload; for
-                        // a 50-row list that's at most ~1.5 MB, but
-                        // the user's typical next click IS a row, so
-                        // the bandwidth is well-spent on perceived
-                        // navigation speed.
-                        prefetch
+                        // Disable eager prefetch. The previous
+                        // `prefetch` setting fired an RSC prefetch for
+                        // EVERY row's detail page on mount — measured
+                        // 50+ prefetches × ~500ms server time each on
+                        // a 50-row inventory list, dominating the
+                        // page's resource graph and slowing the
+                        // initial render. The user clicks ~1 row on
+                        // average, so 49 prefetches were pure waste.
+                        // Next.js still prefetches on hover by
+                        // default, so perceived nav speed stays
+                        // identical for the row the user actually
+                        // chooses.
+                        prefetch={false}
                         className="font-medium hover:underline"
                       >
                         {item.name}

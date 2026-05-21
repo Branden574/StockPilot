@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
@@ -11,6 +12,22 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
 
 import { ROLE_LABELS, resolveTerminology } from '@stockpilot/core';
+
+// Override the root layout's marketing title for everything under
+// /dashboard. Without this, every dashboard page that doesn't export
+// its own `metadata.title` inherits "StockPilot — Inventory you'll
+// actually enjoy using" — confusing in the browser tab when the user
+// is deep in /dashboard/inventory or /dashboard/orders.
+//
+// Pages that DO export a title still get the root layout's
+// `%s · StockPilot` template; pages that DON'T fall back to
+// "Dashboard · StockPilot" instead of the marketing string.
+export const metadata: Metadata = {
+  title: {
+    default: 'Dashboard · StockPilot',
+    template: '%s · StockPilot',
+  },
+};
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   // Cached: this resolves with the same data the page will use in the

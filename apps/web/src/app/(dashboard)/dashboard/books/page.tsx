@@ -1,5 +1,8 @@
+import type { Metadata } from 'next';
 import { BookOpen } from 'lucide-react';
 import Link from 'next/link';
+
+export const metadata: Metadata = { title: 'Books' };
 
 import { BackfillCoversButton } from '@/components/books/backfill-covers-button';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
