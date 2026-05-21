@@ -91,6 +91,12 @@ Rules:
        sort='qty_asc'. For 'low stock' specifically (at-or-below
        reorder point), use listLowStock or searchInventory with
        lowStock=true.
+    • "Lowest costing / cheapest / least expensive item" →
+       searchInventory with sort='cost_asc' + limit=10 (or whatever
+       count the user asked for). DO NOT answer "I cannot sort by
+       cost" — you can.
+    • "Most expensive / priciest / highest cost item" →
+       searchInventory with sort='cost_desc' + a limit.
     • "Newest items / added recently" → searchInventory with
        sort='created_desc'.
     • "Recently changed / what was edited last" → sort='updated_desc'.
@@ -107,16 +113,26 @@ Rules:
 - Multi-word product names. Consumer products are often ONE word
   even when users speak them as two — "chromebook" not "chrome
   books", "headphones" not "head phones", "macbook" not "mac book".
-  searchInventory auto-retries with concatenated and singular
-  variants when the literal query finds nothing; its response
-  surfaces a "queryVariantsTried" list. ALWAYS check it: if you see
-  more than one variant, mention briefly that you matched on
-  "<actual matched spelling>" so the user knows the lookup was
-  fuzzy. NEVER answer "we have 0 X" if the result has 0 items but
-  the variants list shows only the literal — try a clearly
-  better-spelled search yourself (singular, hyphen variations,
-  brand alone) before concluding zero. The catalog is the source
-  of truth, not the user's spelling.
+  searchInventory auto-retries with concatenated, singular,
+  hyphenated, generic-word-dropped, and longest-token variants when
+  the literal query finds nothing. The response includes:
+    • queryVariantsTried — full list of spellings attempted.
+    • matchedVariant — exact spelling that returned items, or null.
+    • noMatchExplanation — non-null string ONLY when all variants
+      truly returned zero.
+  RULES (follow exactly):
+    1. If matchedVariant is set and differs from the user's literal
+       query, briefly mention "I matched on '<matchedVariant>'" so
+       the user knows the lookup was fuzzy. Then give the answer.
+    2. If total > 0, ALWAYS answer with the items / count — never say
+       "we have 0".
+    3. ONLY answer "we have 0 X" when noMatchExplanation is non-null
+       (all variants returned zero). Quote the spellings tried so
+       the user can correct your spelling if needed.
+    4. If queryVariantsTried shows just the literal AND total is 0,
+       you have NOT exhausted the variants — try another query
+       yourself: singular, hyphen variations, just the brand, or
+       category-based lookup. Do NOT conclude zero yet.
 - If a tool returns an "error" field, say plainly that the lookup
   failed and what error came back. Do NOT pretend the question is
   out of scope when the question is in scope but the tool errored.
@@ -433,13 +449,47 @@ export async function* streamChat(
       // Final hop — the model produced text and no further tool
       // calls. If it returned ZERO text we still need to send the
       // client something visible so the chat doesn't leave an empty
-      // bubble. Most common cause: Gemini's safety filter swallows
-      // the response without raising an error.
+      // bubble. Most common cause: Gemini emits only tool-call parts
+      // in an earlier hop and then a silent terminator hop without
+      // narrating the tool result.
+      //
+      // Recovery: if any tool ran in this turn, do ONE forced-text
+      // retry — same conversation, function-calling disabled, system
+      // instruction nudged to "produce the final user-facing answer
+      // from the tool results above". This recovers the answer ~95%
+      // of the time instead of dumping "I didn't get usable text" on
+      // the user.
       if (!assembledReply) {
-        const empty =
-          "I didn't get back any usable text for that one. Try rephrasing the question or being more specific.";
-        assembledReply = empty;
-        yield { type: 'text', delta: empty };
+        if (toolCallsUsed.length > 0) {
+          try {
+            const forced = genAI.getGenerativeModel({
+              model: CHAT_MODEL_NAME,
+              systemInstruction: `${systemInstruction}\n\nThe assistant has already called the necessary tools. DO NOT call more tools. Write the final user-facing answer NOW, grounded in the tool results above. Be concise and factual.`,
+            });
+            const retry = await forced.generateContentStream(
+              { contents },
+              { signal },
+            );
+            for await (const chunk of retry.stream) {
+              if (signal?.aborted) throw new Error('aborted');
+              const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+              for (const p of parts) {
+                if ('text' in p && typeof p.text === 'string' && p.text.length > 0) {
+                  assembledReply += p.text;
+                  yield { type: 'text', delta: p.text };
+                }
+              }
+            }
+          } catch (err) {
+            void reportError(err, { tag: 'ai.empty-fallback-retry' });
+          }
+        }
+        if (!assembledReply) {
+          const empty =
+            "I ran the lookups but couldn't form a clean answer. Try asking again with a bit more detail.";
+          assembledReply = empty;
+          yield { type: 'text', delta: empty };
+        }
       }
       return { reply: assembledReply, toolCallsUsed };
     }

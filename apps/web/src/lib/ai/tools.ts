@@ -89,7 +89,7 @@ const searchInventoryTool: ToolExecutor = {
   declaration: {
     name: 'searchInventory',
     description:
-      "Search + RANK the inventory. Filter by free-text (name/SKU/barcode), category UUID, status, low-stock, out-of-stock, item type, or warehouse. The result's `total` field is the TRUE count even when only 25 items are returned — use that for 'how many' questions. When the user names a category by label (e.g. \"Swag\", \"Books\"), call listCategories first to resolve the UUID, then re-query with categoryId. Use `sort` to rank: 'qty_desc' = most-stocked first (perfect for 'most stocked items' / 'top 10 by quantity'), 'qty_asc' = lowest first, 'name_asc' = alphabetical, 'updated_desc' = recently changed, 'created_desc' = newest first.",
+      "Search + RANK the inventory. Filter by free-text (name/SKU/barcode), category UUID, status, low-stock, out-of-stock, item type, or warehouse. The result's `total` field is the TRUE count even when only 25 items are returned — use that for 'how many' questions. When the user names a category by label (e.g. \"Swag\", \"Books\"), call listCategories first to resolve the UUID, then re-query with categoryId. Use `sort` to rank: 'qty_desc' = most-stocked first (perfect for 'most stocked items' / 'top 10 by quantity'), 'qty_asc' = lowest first, 'cost_asc' = cheapest unit_cost first (perfect for 'lowest costing items'), 'cost_desc' = most-expensive unit_cost first ('priciest items'), 'name_asc' = alphabetical, 'updated_desc' = recently changed, 'created_desc' = newest first.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {
@@ -127,7 +127,7 @@ const searchInventoryTool: ToolExecutor = {
         sort: {
           type: SchemaType.STRING,
           description:
-            "Sort order. One of: 'qty_desc' (most stocked first), 'qty_asc' (least stocked first), 'name_asc', 'name_desc', 'sku_asc', 'sku_desc', 'updated_desc' (recently changed first), 'updated_asc', 'created_desc' (newest first), 'created_asc'. Default: 'updated_desc'. ALWAYS use 'qty_desc' for 'most stocked' / 'highest quantity' questions; 'qty_asc' for 'lowest stock' (when not specifically asking about reorder-point).",
+            "Sort order. One of: 'qty_desc' (most stocked first), 'qty_asc' (least stocked first), 'cost_asc' (cheapest unit_cost first — for 'lowest costing item' / 'cheapest items'), 'cost_desc' (most expensive first — 'priciest', 'highest cost'), 'name_asc', 'name_desc', 'sku_asc', 'sku_desc', 'updated_desc' (recently changed first), 'updated_asc', 'created_desc' (newest first), 'created_asc'. Default: 'updated_desc'. ALWAYS use 'qty_desc' for 'most stocked' / 'highest quantity' questions; 'qty_asc' for 'lowest stock' (when not specifically asking about reorder-point). ALWAYS use 'cost_asc' for 'lowest cost' / 'cheapest' / 'least expensive' questions and 'cost_desc' for 'highest cost' / 'most expensive' / 'priciest' questions.",
         },
         limit: {
           type: SchemaType.NUMBER,
@@ -142,6 +142,8 @@ const searchInventoryTool: ToolExecutor = {
     const allowedSorts = new Set([
       'qty_desc',
       'qty_asc',
+      'cost_asc',
+      'cost_desc',
       'name_asc',
       'name_desc',
       'sku_asc',
@@ -156,6 +158,8 @@ const searchInventoryTool: ToolExecutor = {
         ? (args.sort as
             | 'qty_desc'
             | 'qty_asc'
+            | 'cost_asc'
+            | 'cost_desc'
             | 'name_asc'
             | 'name_desc'
             | 'sku_asc'
@@ -196,6 +200,29 @@ const searchInventoryTool: ToolExecutor = {
     };
     const rawQuery = (typeof args.query === 'string' ? args.query : '').trim();
 
+    // Generic plurals / category words that on their own match the
+    // entire catalog ("items", "books", "things"). When the user types
+    // "chrome books" we want the singular-of-the-joined-token AND a
+    // version with the generic word stripped — "chrome books" → just
+    // "chrome" — so we still find a "Chrome…" SKU even when the
+    // catalog name is one word with no shared substring.
+    const GENERIC_WORDS = new Set([
+      'item',
+      'items',
+      'thing',
+      'things',
+      'product',
+      'products',
+      'book',
+      'books',
+      'unit',
+      'units',
+      'piece',
+      'pieces',
+    ]);
+    const singularize = (w: string) =>
+      w.length > 4 && w.endsWith('s') ? w.slice(0, -1) : w;
+
     // Try the literal query first.
     const variantsTried: string[] = [];
     async function tryVariant(q: string | undefined) {
@@ -203,39 +230,75 @@ const searchInventoryTool: ToolExecutor = {
       return svc.list({ q: q || undefined, ...filtersBase });
     }
     let result = await tryVariant(rawQuery || undefined);
+    let matchedVariant: string | null =
+      result.total > 0 ? variantsTried[variantsTried.length - 1] ?? null : null;
 
-    // If a multi-word query found nothing, retry with smart variants so
-    // "chrome books" still finds "Chromebook" (one word) and "head
-    // phones" finds "headphones". This is deterministic and runs
-    // server-side so the AI doesn't have to know about every
-    // hyphen/space variation in the catalog.
+    // If the literal query found nothing, exhaustively retry with smart
+    // spelling variants so "chrome books" still finds "Chromebook" (one
+    // word) and "head phones" finds "headphones". Deterministic and
+    // server-side — the AI doesn't have to know every hyphen/space
+    // variation in the catalog.
     if (rawQuery && result.total === 0) {
       const tokens = rawQuery.split(/\s+/).filter(Boolean);
       const tryNext: string[] = [];
       if (tokens.length > 1) {
-        // 1. Words joined (chrome + books -> chromebooks)
-        tryNext.push(tokens.join(''));
-        // 2. Drop trailing 's' on the last token (chromebooks -> chromebook)
         const joined = tokens.join('');
-        if (joined.endsWith('s') && joined.length > 1) {
-          tryNext.push(joined.slice(0, -1));
+        // 1. Joined (chrome + books -> chromebooks)
+        tryNext.push(joined);
+        // 2. Singular of joined (chromebooks -> chromebook)
+        tryNext.push(singularize(joined));
+        // 3. Hyphen-joined (head phones -> head-phones)
+        tryNext.push(tokens.join('-'));
+        // 4. Drop trailing generic words ("chrome books" -> "chrome";
+        //    "yoga chromebook items" -> "yoga chromebook").
+        const nonGeneric = tokens.filter((t) => !GENERIC_WORDS.has(t.toLowerCase()));
+        if (nonGeneric.length > 0 && nonGeneric.length < tokens.length) {
+          tryNext.push(nonGeneric.join(' '));
+          if (nonGeneric.length > 1) tryNext.push(nonGeneric.join(''));
         }
-        // 3. Try just the longest token alone (often the distinctive one)
+        // 5. Longest single token alone (usually the distinctive one)
         const longest = [...tokens].sort((a, b) => b.length - a.length)[0];
-        if (longest && longest.length >= 4) tryNext.push(longest);
-      } else if (tokens.length === 1 && tokens[0]!.endsWith('s') && tokens[0]!.length > 4) {
-        // Single token singular fallback ("books" -> "book")
-        tryNext.push(tokens[0]!.slice(0, -1));
+        if (longest && longest.length >= 4) {
+          tryNext.push(longest);
+          tryNext.push(singularize(longest));
+        }
+      } else if (tokens.length === 1) {
+        const t = tokens[0]!;
+        // Single-token singular ("chromebooks" -> "chromebook",
+        // "books" -> "book"). Fires for any single-word plural so
+        // exact hits like "Chromebooks" don't fail just because the
+        // catalog row says "Chromebook" (no 's').
+        const sing = singularize(t);
+        if (sing !== t) tryNext.push(sing);
       }
+
+      // De-dupe in order, drop already-tried + empties.
+      const seen = new Set(variantsTried);
       for (const variant of tryNext) {
-        if (variantsTried.includes(variant)) continue;
-        const next = await tryVariant(variant);
+        const v = variant.trim();
+        if (!v || seen.has(v)) continue;
+        seen.add(v);
+        const next = await tryVariant(v);
         if (next.total > 0) {
           result = next;
+          matchedVariant = v;
           break;
         }
       }
     }
+
+    // Tell the model VERY clearly when zero is the truth vs when it
+    // should still try harder. Without this Gemini sometimes answers
+    // "we have 0 X" on the literal query without consulting the
+    // variants list. The explanation is short, structured text — much
+    // less likely to be ignored than a buried array field.
+    const variantsTriedDistinct = Array.from(new Set(variantsTried));
+    const noMatchExplanation =
+      result.total === 0 && variantsTriedDistinct.length > 1
+        ? `Tried ${variantsTriedDistinct.length} spellings (${variantsTriedDistinct
+            .map((v) => `"${v}"`)
+            .join(', ')}) — none matched. Likely truly zero unless the user knows a different spelling.`
+        : null;
 
     return {
       total: result.total,
@@ -243,7 +306,9 @@ const searchInventoryTool: ToolExecutor = {
       // Surfaced so the model can mention WHICH spelling matched when
       // the literal query didn't. Keeps answers honest about what was
       // actually queried instead of hiding the fuzzy lookup.
-      queryVariantsTried: variantsTried,
+      queryVariantsTried: variantsTriedDistinct,
+      matchedVariant,
+      noMatchExplanation,
       items: result.items.slice(0, 25).map((i) => compactItem(i as Record<string, unknown>)),
     };
   },

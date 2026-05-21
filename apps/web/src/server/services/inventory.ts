@@ -30,6 +30,8 @@ export type ItemListSort =
   | 'sku_desc'
   | 'qty_desc'
   | 'qty_asc'
+  | 'cost_asc'
+  | 'cost_desc'
   | 'created_desc'
   | 'created_asc';
 
@@ -119,6 +121,8 @@ const SORT_MAP: Record<ItemListSort, { col: string; asc: boolean }> = {
   sku_desc: { col: 'sku', asc: false },
   qty_desc: { col: 'quantity_on_hand', asc: false },
   qty_asc: { col: 'quantity_on_hand', asc: true },
+  cost_desc: { col: 'unit_cost', asc: false },
+  cost_asc: { col: 'unit_cost', asc: true },
   created_desc: { col: 'created_at', asc: false },
   created_asc: { col: 'created_at', asc: true },
 };
