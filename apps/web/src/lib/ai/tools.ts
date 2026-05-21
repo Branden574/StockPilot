@@ -1558,7 +1558,7 @@ const getOrderRequestSummaryTool: ToolExecutor = {
   declaration: {
     name: 'getOrderRequestSummary',
     description:
-      "READ-ONLY — overall order-request stats. Returns pendingCount, overdueCount (pending_approval older than 3 days), and a byStatus breakdown { pending_approval, approved, packing_slip_generated, staged_for_delivery, completed_today }. Use for 'anything overdue', 'how many pending', 'summary of orders'. There is NO execute tool for order writes — direct the user to /dashboard/orders/<id> to approve / deny / change status.",
+      "READ-ONLY — overall order-request stats. Returns pendingCount, overdueCount (pending_approval older than 3 days), and a byStatus breakdown { pending_approval, approved, packing_slip_generated, staged_for_delivery, completed_today }. Use for 'anything overdue', 'how many pending', 'summary of orders'. For order writes use approveOrder / denyOrder / cancelOrder (all require explicit user confirmation in the prior turn).",
     parameters: { type: SchemaType.OBJECT, properties: {} },
   },
   async execute(_args, ctx) {
@@ -1611,6 +1611,149 @@ const getOrderRequestSummaryTool: ToolExecutor = {
         staged_for_delivery: readyRes.count ?? 0,
         completed_today: deliveredTodayRes.count ?? 0,
       },
+    };
+  },
+};
+
+// ──────────────────────────────────────────────────────────────────
+// Order-action write tools — approve, deny, cancel.
+//
+// All three go through OrderRequestsService, which already enforces:
+//   • role permission (orders:approve / orders:request, via
+//     assertPermission)
+//   • warehouse-scope access (requireWarehouseAccess on approve/deny)
+//   • status-transition validity (the underlying RPCs reject invalid
+//     transitions with a ServiceError)
+//   • audit + notification side effects (audit row + requester email)
+//
+// So the tool wrappers stay thin: they translate the AI-arg shape
+// into a service call, surface clean errors, and return a compact
+// confirmation payload the model can echo back.
+//
+// CONFIRM-FIRST RULE: the system prompt requires the AI to echo the
+// proposed action + ask "Confirm?" in the IMMEDIATELY PREVIOUS turn
+// before calling these tools. Same pattern adjustStock and
+// executeBulkBookImport use — see SYSTEM_PROMPT in lib/ai/chat.ts.
+// ──────────────────────────────────────────────────────────────────
+
+const approveOrderTool: ToolExecutor = {
+  declaration: {
+    name: 'approveOrder',
+    description:
+      "WRITE TOOL — approves a pending order request and reserves its stock. Use only AFTER the user has explicitly confirmed in the previous turn. Requires orders:approve permission (manager/admin/owner). The underlying RPC rejects orders that aren't in pending_approval status with a clear validation error. Always echo the order id + new status back so the user has a paper trail.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        orderId: {
+          type: SchemaType.STRING,
+          description:
+            "UUID of the order_request to approve. Resolve via listOrderRequests or use the on-page order id from PAGE CONTEXT if available.",
+        },
+        internalNotes: {
+          type: SchemaType.STRING,
+          description:
+            "Optional internal note attached to the order before approval (not shown to the requester). Leave empty if the user didn't supply one.",
+        },
+      },
+      required: ['orderId'],
+    },
+  },
+  async execute(args, ctx) {
+    const orderId = String(args.orderId ?? '').trim();
+    const internalNotes =
+      typeof args.internalNotes === 'string' && args.internalNotes.trim()
+        ? args.internalNotes.trim()
+        : null;
+    if (!orderId) throw new Error('orderId is required');
+    assertPermission(ctx, 'orders:approve');
+    const svc = new OrderRequestsService(ctx);
+    const row = await svc.approve(orderId, internalNotes);
+    return {
+      ok: true,
+      orderId: row.id,
+      status: row.status,
+      approvedAt: row.approved_at,
+    };
+  },
+};
+
+const denyOrderTool: ToolExecutor = {
+  declaration: {
+    name: 'denyOrder',
+    description:
+      "WRITE TOOL — denies a pending order request and emails the requester with the reason. Use only AFTER the user has explicitly confirmed in the previous turn AND provided a reason. Requires orders:approve permission (manager/admin/owner). The reason is REQUIRED — it shows up in the denial email and is stored on the row. The underlying query rejects orders that aren't in pending_approval status. Always echo the order id + reason back after the call.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        orderId: {
+          type: SchemaType.STRING,
+          description:
+            "UUID of the order_request to deny. Resolve via listOrderRequests or use the on-page order id from PAGE CONTEXT.",
+        },
+        reason: {
+          type: SchemaType.STRING,
+          description:
+            "Required short reason shown in the denial email to the requester (e.g. 'Out of stock for the requested quantity', 'Duplicate of order X'). Do NOT invent — ask the user if they didn't provide one.",
+        },
+      },
+      required: ['orderId', 'reason'],
+    },
+  },
+  async execute(args, ctx) {
+    const orderId = String(args.orderId ?? '').trim();
+    const reason = String(args.reason ?? '').trim();
+    if (!orderId) throw new Error('orderId is required');
+    if (!reason) throw new Error('reason is required and must be non-empty');
+    assertPermission(ctx, 'orders:approve');
+    const svc = new OrderRequestsService(ctx);
+    const row = await svc.deny(orderId, reason);
+    return {
+      ok: true,
+      orderId: row.id,
+      status: row.status,
+      reason,
+    };
+  },
+};
+
+const cancelOrderTool: ToolExecutor = {
+  declaration: {
+    name: 'cancelOrder',
+    description:
+      "WRITE TOOL — cancels an order. Releases any reservations AND restores any stock that picking already pulled (so net inventory effect is zero). Use only AFTER the user has explicitly confirmed in the previous turn. Permission rules: the requester can self-cancel their OWN order while still in pending_approval; managers / admins / owners can cancel any non-terminal order. Terminal states (completed / denied / cancelled) are rejected by the underlying RPC. Always echo the order id + new status + (if stock was restored) which items came back.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        orderId: {
+          type: SchemaType.STRING,
+          description:
+            "UUID of the order_request to cancel. Use the on-page order id from PAGE CONTEXT when available.",
+        },
+        reason: {
+          type: SchemaType.STRING,
+          description:
+            "Optional short reason for the cancellation. Stored on the row's denied_reason field for the audit trail. Leave empty if the user didn't supply one.",
+        },
+      },
+      required: ['orderId'],
+    },
+  },
+  async execute(args, ctx) {
+    const orderId = String(args.orderId ?? '').trim();
+    const reason =
+      typeof args.reason === 'string' && args.reason.trim()
+        ? args.reason.trim()
+        : null;
+    if (!orderId) throw new Error('orderId is required');
+    assertPermission(ctx, 'orders:request');
+    const svc = new OrderRequestsService(ctx);
+    const row = await svc.cancel(orderId, reason);
+    return {
+      ok: true,
+      orderId: row.id,
+      status: row.status,
+      cancelledAt: row.cancelled_at,
+      reason,
     };
   },
 };
@@ -2147,6 +2290,12 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   previewBundleDistribution: previewBundleDistributionTool,
   listOrderRequests: listOrderRequestsTool,
   getOrderRequestSummary: getOrderRequestSummaryTool,
+  // Order-action write tools — approve/deny/cancel via the same
+  // service methods the dashboard uses. Server-side permission +
+  // status-transition gates still apply.
+  approveOrder: approveOrderTool,
+  denyOrder: denyOrderTool,
+  cancelOrder: cancelOrderTool,
   // Wave 1 — time-window tools
   getRecentItems: getRecentItemsTool,
   getMovements: getMovementsTool,
