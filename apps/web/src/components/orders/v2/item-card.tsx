@@ -161,6 +161,20 @@ export function ItemCard({ item }: ItemCardProps) {
             <span className="font-sans"> · {item.categoryName}</span>
           ) : null}
         </p>
+        {/* Charter ribbon — only shown when the item is earmarked for a
+            specific charter so generic stock cards stay clean. Prefers
+            the short charter code; falls back to the full name. */}
+        {item.charterId ? (
+          <p
+            className="font-sans text-[10px] text-muted-foreground/80 truncate"
+            title={item.charterName ?? undefined}
+          >
+            Charter ·{' '}
+            <span className="text-foreground/80">
+              {item.charterCode ?? item.charterName}
+            </span>
+          </p>
+        ) : null}
 
         <div className="mt-auto pt-2 border-t border-border/50">
           <div className="flex items-center justify-between gap-2">

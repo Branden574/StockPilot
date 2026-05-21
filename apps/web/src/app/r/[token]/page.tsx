@@ -232,7 +232,7 @@ async function loadBookCatalog(
   const { data: itemsData } = await admin
     .from('inventory_items')
     .select(
-      'id, name, sku, quantity_on_hand, warehouse_id, item_type, custom_fields, bin_location, category_id, retail_price, unit_cost, reorder_point',
+      'id, name, sku, quantity_on_hand, warehouse_id, item_type, custom_fields, bin_location, category_id, charter_id, retail_price, unit_cost, reorder_point',
     )
     .eq('organization_id', orgId)
     .eq('warehouse_id', warehouseId)
@@ -252,6 +252,7 @@ async function loadBookCatalog(
     custom_fields: Record<string, unknown> | null;
     bin_location: string | null;
     category_id: string | null;
+    charter_id: string | null;
     retail_price: number | null;
     unit_cost: number | null;
     reorder_point: number | null;
@@ -266,10 +267,16 @@ async function loadBookCatalog(
       items.map((i) => i.category_id).filter((v): v is string => Boolean(v)),
     ),
   ];
+  const charterIds = [
+    ...new Set(
+      items.map((i) => i.charter_id).filter((v): v is string => Boolean(v)),
+    ),
+  ];
 
-  // Reservations + category names + LQIP blurs in parallel.
-  // Signed thumbnail URLs are deferred to the client (same pattern as staff).
-  const [rsRes, categoriesRes, lqipRes] = await Promise.all([
+  // Reservations + category names + charter names + LQIP blurs in
+  // parallel. Signed thumbnail URLs are deferred to the client
+  // (same pattern as staff).
+  const [rsRes, categoriesRes, chartersRes, lqipRes] = await Promise.all([
     admin
       .from('stock_reservations')
       .select('item_id, quantity')
@@ -283,6 +290,15 @@ async function loadBookCatalog(
           .eq('organization_id', orgId)
           .in('id', categoryIds)
       : Promise.resolve({ data: [] as Array<{ id: string; name: string }> }),
+    charterIds.length > 0
+      ? admin
+          .from('charters')
+          .select('id, name, code')
+          .eq('organization_id', orgId)
+          .in('id', charterIds)
+      : Promise.resolve({
+          data: [] as Array<{ id: string; name: string; code: string | null }>,
+        }),
     admin
       .from('item_images')
       .select('item_id, lqip, is_primary, sort_order')
@@ -310,6 +326,15 @@ async function loadBookCatalog(
     name: string;
   }>) {
     categoryNameById.set(c.id, c.name);
+  }
+
+  const charterById = new Map<string, { name: string; code: string | null }>();
+  for (const c of (chartersRes.data ?? []) as Array<{
+    id: string;
+    name: string;
+    code: string | null;
+  }>) {
+    charterById.set(c.id, { name: c.name, code: c.code ?? null });
   }
 
   const lqipByItem = new Map<string, string>();
@@ -345,6 +370,9 @@ async function loadBookCatalog(
     itemType: it.item_type ?? null,
     categoryId: it.category_id ?? null,
     categoryName: it.category_id ? (categoryNameById.get(it.category_id) ?? null) : null,
+    charterId: it.charter_id ?? null,
+    charterName: it.charter_id ? charterById.get(it.charter_id)?.name ?? null : null,
+    charterCode: it.charter_id ? charterById.get(it.charter_id)?.code ?? null : null,
     rackLabel: rackLabelFor(it),
     imageUrl: null,
     lqip: lqipByItem.get(it.id) ?? null,

@@ -228,7 +228,7 @@ async function loadCatalogItemsUncached(
   let itemsQuery = supabase
     .from('inventory_items')
     .select(
-      'id, name, sku, quantity_on_hand, warehouse_id, item_type, is_bundle, custom_fields, bin_location, category_id, retail_price, unit_cost, reorder_point',
+      'id, name, sku, quantity_on_hand, warehouse_id, item_type, is_bundle, custom_fields, bin_location, category_id, charter_id, retail_price, unit_cost, reorder_point',
     )
     .eq('organization_id', organizationId)
     .eq('warehouse_id', warehouseId)
@@ -263,6 +263,7 @@ async function loadCatalogItemsUncached(
     custom_fields: Record<string, unknown> | null;
     bin_location: string | null;
     category_id: string | null;
+    charter_id: string | null;
     retail_price: number | null;
     unit_cost: number | null;
     reorder_point: number | null;
@@ -271,16 +272,17 @@ async function loadCatalogItemsUncached(
 
   const itemIds = items.map((i) => i.id);
   const categoryIds = [...new Set(items.map((i) => i.category_id).filter((v): v is string => Boolean(v)))];
+  const charterIds = [...new Set(items.map((i) => i.charter_id).filter((v): v is string => Boolean(v)))];
 
-  // Reservations + category names + LQIP blurs in parallel. Full
-  // signed-URL thumbnails are NOT fetched here — signing 272
-  // transformed Supabase storage URLs blocked first paint by ~5s.
-  // The client fetches /api/orders/catalog-thumbnails after
-  // hydration. LQIP blurs are tiny base64 data URIs (≤2KB each)
-  // already stored on item_images.lqip, so we ship them inline:
-  // cards render a blurry preview immediately and crossfade to the
-  // real photo when the URL arrives.
-  const [rsRes, categoriesRes, lqipRes] = await Promise.all([
+  // Reservations + category names + charter names + LQIP blurs in
+  // parallel. Full signed-URL thumbnails are NOT fetched here —
+  // signing 272 transformed Supabase storage URLs blocked first
+  // paint by ~5s. The client fetches /api/orders/catalog-thumbnails
+  // after hydration. LQIP blurs are tiny base64 data URIs (≤2KB
+  // each) already stored on item_images.lqip, so we ship them
+  // inline: cards render a blurry preview immediately and crossfade
+  // to the real photo when the URL arrives.
+  const [rsRes, categoriesRes, chartersRes, lqipRes] = await Promise.all([
     supabase
       .from('stock_reservations')
       .select('item_id, quantity')
@@ -294,6 +296,15 @@ async function loadCatalogItemsUncached(
           .eq('organization_id', organizationId)
           .in('id', categoryIds)
       : Promise.resolve({ data: [] as Array<{ id: string; name: string }> }),
+    charterIds.length > 0
+      ? supabase
+          .from('charters')
+          .select('id, name, code')
+          .eq('organization_id', organizationId)
+          .in('id', charterIds)
+      : Promise.resolve({
+          data: [] as Array<{ id: string; name: string; code: string | null }>,
+        }),
     supabase
       .from('item_images')
       .select('item_id, lqip, is_primary, sort_order')
@@ -315,6 +326,15 @@ async function loadCatalogItemsUncached(
   const categoryNameById = new Map<string, string>();
   for (const c of (categoriesRes.data ?? []) as Array<{ id: string; name: string }>) {
     categoryNameById.set(c.id, c.name);
+  }
+
+  const charterById = new Map<string, { name: string; code: string | null }>();
+  for (const c of (chartersRes.data ?? []) as Array<{
+    id: string;
+    name: string;
+    code: string | null;
+  }>) {
+    charterById.set(c.id, { name: c.name, code: c.code ?? null });
   }
 
   // Pick one LQIP per item (the query is_primary DESC + sort_order ASC
@@ -349,6 +369,9 @@ async function loadCatalogItemsUncached(
     itemType: it.item_type ?? null,
     categoryId: it.category_id ?? null,
     categoryName: it.category_id ? categoryNameById.get(it.category_id) ?? null : null,
+    charterId: it.charter_id ?? null,
+    charterName: it.charter_id ? charterById.get(it.charter_id)?.name ?? null : null,
+    charterCode: it.charter_id ? charterById.get(it.charter_id)?.code ?? null : null,
     rackLabel: rackLabelFor(it),
     // Client fetches /api/orders/catalog-thumbnails after hydration.
     imageUrl: null,
