@@ -90,10 +90,13 @@ export default async function OrderDetailPage({
   );
 
   // Phase 4 — load active org members as candidate drivers for the
-  // AssignDeliveryDialog. Only fetched when the viewer can act on the
-  // panel (manager+), since staff/viewers never see the assign button.
+  // AssignDeliveryDialog. The dialog only renders when
+  // status === 'staged_for_delivery' AND the viewer can act on the
+  // panel (manager+). For every other status (the common case —
+  // pending_approval / approved / pick / pack / pickup / completed /
+  // etc.) we skip the round-trip entirely.
   let drivers: DriverOption[] = [];
-  if (canApprove) {
+  if (canApprove && request.status === 'staged_for_delivery') {
     const supabase = await createClient();
     const { data: members } = await supabase
       .from('organization_members')
