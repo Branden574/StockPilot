@@ -69,7 +69,7 @@ export function ChartersManager({
 
   return (
     <>
-      <div className="flex items-center justify-between gap-2">
+      <div className="mb-5 flex items-center justify-between gap-2">
         <ArchiveViewToggle view={view} />
         {!isArchivedView && (
           <Button

@@ -80,7 +80,7 @@ export function TagsManager({ initial }: { initial: TagManagerRow[] }) {
 
   return (
     <>
-      <div className="flex items-center justify-end">
+      <div className="mb-5 flex items-center justify-end">
         <Button variant="gradient" onClick={openNew}>
           <Plus className="h-4 w-4" /> New tag
         </Button>
