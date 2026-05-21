@@ -22,7 +22,13 @@ import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
-const PAGE_SIZE = 50;
+// Dropped from 50 → 30 after the Playwright speed sweep showed the
+// inventory list pulling ~3 MB and 6.2s to load on a warm cache. The
+// DB query + row render + per-row image fetch all scale ~linearly
+// with page size; 30 keeps a useful density for power users while
+// shaving roughly 40% off load weight. Pagination still serves users
+// who need to scan further.
+const PAGE_SIZE = 30;
 
 type SortParam =
   | 'updated_desc'

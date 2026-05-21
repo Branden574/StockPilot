@@ -86,6 +86,15 @@ export interface ItemListFilters {
   itemType?: 'product' | 'book' | 'asset' | 'consumable' | 'all';
   lowStock?: boolean;
   outOfStock?: boolean;
+  /**
+   * When true, only return rows with `unit_cost > 0`. Used by the AI
+   * "cheapest item" path to skip rows with no cost recorded (NULL or
+   * 0) — those almost always represent items where the user hasn't
+   * filled in the cost yet, so surfacing them as the "cheapest"
+   * answer is misleading. Defaults false so existing callers see no
+   * change.
+   */
+  hasUnitCost?: boolean;
   cursor?: string | null;
   limit?: number;
   /** Zero-based offset for page-based pagination. Combined with `limit`. */
@@ -319,6 +328,12 @@ export class InventoryService {
       }
     }
     if (filters.outOfStock) query = query.lte('quantity_on_hand', 0);
+    if (filters.hasUnitCost) {
+      // Exclude rows where unit_cost is NULL or 0. Used by AI cost-
+      // ranking so "cheapest" doesn't surface the (typically large)
+      // pool of items whose cost just hasn't been recorded yet.
+      query = query.gt('unit_cost', 0);
+    }
     // PostgREST can't express qty_on_hand <= reorder_point in a single
     // filter, so narrow with an OR pre-filter and do the final
     // cross-column compare in JS below:

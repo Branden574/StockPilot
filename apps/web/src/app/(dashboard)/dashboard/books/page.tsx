@@ -23,7 +23,11 @@ import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
-const PAGE_SIZE = 50;
+// Lowered 50 → 30 in line with the inventory page. Book covers
+// average noticeably larger than item thumbnails (more variety of
+// remote sources, less cached on Vercel's image optimizer), so the
+// load-weight savings are even more pronounced here.
+const PAGE_SIZE = 30;
 
 type SortParam =
   | 'updated_desc'
