@@ -67,6 +67,12 @@ export interface ItemListFilters {
   /** Legacy single-select. New callers should prefer supplierIds. */
   supplierId?: string | null;
   supplierIds?: string[];
+  /**
+   * Charter multi-select. Pass the special string 'generic' (NOT a UUID)
+   * to match items with charter_id IS NULL (generic stock that any
+   * charter the warehouse services can use). Mix freely with UUIDs.
+   */
+  charterIds?: string[];
   /** Optional filter for managers/admins. Ignored for warehouse-scoped users (forced). */
   warehouseId?: string | null;
   /**
@@ -291,6 +297,22 @@ export class InventoryService {
       query = query.in('supplier_id', filters.supplierIds);
     } else if (filters.supplierId) {
       query = query.eq('supplier_id', filters.supplierId);
+    }
+    // Charter filter — UUID list filters charter_id IN (...) and the
+    // sentinel 'generic' translates to charter_id IS NULL (items that
+    // any charter can pull from). When BOTH are present we OR them so
+    // a user can pick "Generic + Acme" together.
+    if (filters.charterIds && filters.charterIds.length > 0) {
+      const includesGeneric = filters.charterIds.includes('generic');
+      const realIds = filters.charterIds.filter((id) => id !== 'generic');
+      if (includesGeneric && realIds.length > 0) {
+        const list = realIds.map((id) => `"${id}"`).join(',');
+        query = query.or(`charter_id.is.null,charter_id.in.(${list})`);
+      } else if (includesGeneric) {
+        query = query.is('charter_id', null);
+      } else if (realIds.length > 0) {
+        query = query.in('charter_id', realIds);
+      }
     }
     if (filters.outOfStock) query = query.lte('quantity_on_hand', 0);
     // PostgREST can't express qty_on_hand <= reorder_point in a single

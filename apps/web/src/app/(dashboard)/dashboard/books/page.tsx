@@ -9,6 +9,7 @@ import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown'
 import { Button } from '@/components/ui/button';
 import { hasPermission } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
+import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
@@ -66,17 +67,19 @@ export default async function BooksPage({
     sort?: string;
     cat?: string | string[];
     loc?: string | string[];
+    charter?: string | string[];
     rack?: string;
   }>;
 }) {
   const params = await searchParams;
   const page = Math.max(1, Number(params.page) || 1);
-  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, imagesSvc, savedViewsSvc, warehouseFilter, sessionCtx] = await Promise.all([
+  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, chartersSvc, imagesSvc, savedViewsSvc, warehouseFilter, sessionCtx] = await Promise.all([
     InventoryService.forCurrentUser(),
     CategoriesService.forCurrentUser(),
     LocationsService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
     TagsService.forCurrentUser(),
+    ChartersService.forCurrentUser(),
     ItemImagesService.forCurrentUser(),
     SavedViewsService.forCurrentUser(),
     getActiveWarehouseFilter(),
@@ -94,9 +97,10 @@ export default async function BooksPage({
   const sort = parseSort(params.sort);
   const categoryIds = parseIdList(params.cat);
   const locationIds = parseIdList(params.loc);
+  const charterIds = parseIdList(params.charter);
   const rack = typeof params.rack === 'string' ? params.rack : undefined;
 
-  const [inventory, categories, locations, suppliers, tags, savedViews, racks] = await Promise.all([
+  const [inventory, categories, locations, suppliers, tags, charters, savedViews, racks] = await Promise.all([
     inventorySvc.list({
       q: params.q,
       status: lifecycleStatus,
@@ -106,6 +110,7 @@ export default async function BooksPage({
       itemType: 'book',
       categoryIds,
       locationIds,
+      charterIds,
       rack,
       sort,
       limit: PAGE_SIZE,
@@ -115,6 +120,7 @@ export default async function BooksPage({
     locationsSvc.list(),
     suppliersSvc.list(),
     tagsSvc.list(),
+    chartersSvc.list(),
     savedViewsSvc.list('books'),
     inventorySvc.listDistinctRacks({ scope: 'books' }),
   ]);
@@ -154,6 +160,9 @@ export default async function BooksPage({
       ]),
     ),
     locations: new Map(locations.map((l) => [l.id as string, { name: l.name as string }])),
+    charters: new Map(
+      charters.map((c) => [c.id, { name: c.name, code: c.code ?? null }]),
+    ),
   };
 
   const canCreate = hasPermission(sessionCtx.role, 'items:create');
@@ -240,6 +249,11 @@ export default async function BooksPage({
             locations={locations.map((l) => ({
               id: l.id as string,
               name: l.name as string,
+            }))}
+            charters={charters.map((c) => ({
+              id: c.id,
+              name: c.name,
+              code: c.code ?? null,
             }))}
             suppliers={suppliers.map((s) => ({
               id: s.id as string,
