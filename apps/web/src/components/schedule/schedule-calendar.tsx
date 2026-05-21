@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
+import { formatOrgDate, formatOrgTime } from '@/lib/timezone';
 import { cn } from '@/lib/utils';
 
 interface CalendarEvent {
@@ -43,7 +44,10 @@ const STATUS_TONE: Record<CalendarEvent['status'], string> = {
 };
 
 function formatHeader(year: number, month: number): string {
-  return new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+  // Use noon UTC on the 15th so neither local-tz nor org-tz shifts
+  // the rendered month (DST transitions can shift a midnight date by
+  // ±1 day; noon-on-15 is safely inside the target calendar month).
+  return formatOrgDate(new Date(Date.UTC(year, month - 1, 15, 12)), {
     month: 'long',
     year: 'numeric',
   });
@@ -205,7 +209,7 @@ export function ScheduleCalendar({ year, month, events }: Props) {
                   {visible.map((ev) => {
                     const time = ev.allDay
                       ? null
-                      : new Date(ev.startsAt).toLocaleTimeString(undefined, {
+                      : formatOrgTime(new Date(ev.startsAt), {
                           hour: 'numeric',
                           minute: '2-digit',
                         });

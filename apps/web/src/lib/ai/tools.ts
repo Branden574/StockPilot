@@ -165,8 +165,7 @@ const searchInventoryTool: ToolExecutor = {
             | 'created_desc'
             | 'created_asc')
         : 'updated_desc';
-    const result = await svc.list({
-      q: (args.query as string) || undefined,
+    const filtersBase: Omit<Parameters<typeof svc.list>[0], 'q'> = {
       categoryId:
         typeof args.categoryId === 'string' && args.categoryId.length > 0
           ? args.categoryId
@@ -188,13 +187,63 @@ const searchInventoryTool: ToolExecutor = {
           : 'all',
       lowStock: Boolean(args.lowStock),
       outOfStock: Boolean(args.outOfStock),
-      warehouseId: typeof args.warehouseId === 'string' && args.warehouseId.length > 0 ? args.warehouseId : null,
+      warehouseId:
+        typeof args.warehouseId === 'string' && args.warehouseId.length > 0
+          ? args.warehouseId
+          : null,
       sort,
       limit: Math.min(25, Math.max(1, Number(args.limit) || 10)),
-    });
+    };
+    const rawQuery = (typeof args.query === 'string' ? args.query : '').trim();
+
+    // Try the literal query first.
+    const variantsTried: string[] = [];
+    async function tryVariant(q: string | undefined) {
+      variantsTried.push(q ?? '<empty>');
+      return svc.list({ q: q || undefined, ...filtersBase });
+    }
+    let result = await tryVariant(rawQuery || undefined);
+
+    // If a multi-word query found nothing, retry with smart variants so
+    // "chrome books" still finds "Chromebook" (one word) and "head
+    // phones" finds "headphones". This is deterministic and runs
+    // server-side so the AI doesn't have to know about every
+    // hyphen/space variation in the catalog.
+    if (rawQuery && result.total === 0) {
+      const tokens = rawQuery.split(/\s+/).filter(Boolean);
+      const tryNext: string[] = [];
+      if (tokens.length > 1) {
+        // 1. Words joined (chrome + books -> chromebooks)
+        tryNext.push(tokens.join(''));
+        // 2. Drop trailing 's' on the last token (chromebooks -> chromebook)
+        const joined = tokens.join('');
+        if (joined.endsWith('s') && joined.length > 1) {
+          tryNext.push(joined.slice(0, -1));
+        }
+        // 3. Try just the longest token alone (often the distinctive one)
+        const longest = [...tokens].sort((a, b) => b.length - a.length)[0];
+        if (longest && longest.length >= 4) tryNext.push(longest);
+      } else if (tokens.length === 1 && tokens[0]!.endsWith('s') && tokens[0]!.length > 4) {
+        // Single token singular fallback ("books" -> "book")
+        tryNext.push(tokens[0]!.slice(0, -1));
+      }
+      for (const variant of tryNext) {
+        if (variantsTried.includes(variant)) continue;
+        const next = await tryVariant(variant);
+        if (next.total > 0) {
+          result = next;
+          break;
+        }
+      }
+    }
+
     return {
       total: result.total,
       sortedBy: sort,
+      // Surfaced so the model can mention WHICH spelling matched when
+      // the literal query didn't. Keeps answers honest about what was
+      // actually queried instead of hiding the fuzzy lookup.
+      queryVariantsTried: variantsTried,
       items: result.items.slice(0, 25).map((i) => compactItem(i as Record<string, unknown>)),
     };
   },
