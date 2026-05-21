@@ -240,6 +240,7 @@ export default async function BooksPage({
           <BooksInventoryTable
             items={itemsWithImages}
             total={inventory.total}
+            valueOnHand={inventory.valueOnHand}
             lookups={lookups}
             canCreate={hasPermission(sessionCtx.role, 'items:create')}
             categories={categories.map((c) => ({

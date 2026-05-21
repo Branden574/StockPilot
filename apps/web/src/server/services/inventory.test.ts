@@ -52,9 +52,13 @@ describe('InventoryService.list', () => {
 
     await svc.list();
 
-    const args = stub.chainArgs.get('inventory_items.select') ?? [];
-    // Flatten to a list of [method, args] for easier assertions.
-    const chain = stub.chains.get('inventory_items.select') ?? [];
+    // list() issues two inventory_items.select queries: the main
+    // paginated one and a parallel skinny sum query for valueOnHand.
+    // chainsAll preserves order; index 0 is the paginated query.
+    const allChains = stub.chainsAll.get('inventory_items.select') ?? [];
+    const allArgs = stub.chainArgsAll.get('inventory_items.select') ?? [];
+    const chain = allChains[0] ?? [];
+    const args = allArgs[0] ?? [];
     expect(chain).toContain('eq');
     expect(chain).toContain('is');
     expect(chain).toContain('order');
@@ -121,7 +125,7 @@ describe('InventoryService.list', () => {
     );
 
     const result = await svc.list();
-    expect(result).toEqual({ items: [], total: 0 });
+    expect(result).toEqual({ items: [], total: 0, valueOnHand: 0 });
   });
 
   it('warehouse-scoped users get an in() on readableIds', async () => {

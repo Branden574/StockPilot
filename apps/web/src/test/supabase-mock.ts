@@ -36,10 +36,23 @@ export interface SupabaseStub {
   fromCalls: string[];
   /** Records every rpc(name, args) call. */
   rpcCalls: Array<{ name: string; args: unknown }>;
-  /** Records the LAST chain of method names per (table, op) — useful to assert filter logic. */
+  /** Records the LAST chain of method names per (table, op) — useful
+   *  to assert filter logic when a service makes a single query. When
+   *  a service issues multiple queries to the same (table, op) within
+   *  one call (e.g. paginated list + parallel aggregate), this only
+   *  reflects the LAST one to finish recording. For multi-query
+   *  assertions, use `chainsAll` below. */
   chains: Map<string, string[]>;
   /** Args passed to each chain method, in order. */
   chainArgs: Map<string, unknown[][]>;
+  /** Every chain ever started against a (table, op), in declaration
+   *  order. The first chain in each list matches the service's first
+   *  `from(table).select(...)` call within a method, the second one
+   *  the next, etc. Use this when a test needs to assert about a
+   *  specific query in a multi-query method. */
+  chainsAll: Map<string, string[][]>;
+  /** Args matching chainsAll, same shape. */
+  chainArgsAll: Map<string, unknown[][][]>;
 }
 
 type ResultMap = Record<string, QueryResult | (() => QueryResult)>;
@@ -65,17 +78,33 @@ export function makeSupabaseStub(results: ResultMap = {}): SupabaseStub {
   const rpcCalls: Array<{ name: string; args: unknown }> = [];
   const chains = new Map<string, string[]>();
   const chainArgs = new Map<string, unknown[][]>();
+  const chainsAll = new Map<string, string[][]>();
+  const chainArgsAll = new Map<string, unknown[][][]>();
 
   function makeChain(table: string): unknown {
     let op: 'select' | 'insert' | 'update' | 'delete' = 'select';
     const chain: string[] = [];
     const args: unknown[][] = [];
+    let registered = false;
 
     function record(method: string, methodArgs: unknown[]) {
       chain.push(method);
       args.push(methodArgs);
       chains.set(`${table}.${op}`, chain);
       chainArgs.set(`${table}.${op}`, args);
+      // Register this chain into chainsAll on first record so callers
+      // that issue multiple queries to the same (table, op) get an
+      // ordered list. The same `chain`/`args` arrays are mutated as
+      // additional methods are recorded, so the entry stays live.
+      if (!registered) {
+        const all = chainsAll.get(`${table}.${op}`) ?? [];
+        all.push(chain);
+        chainsAll.set(`${table}.${op}`, all);
+        const allArgs = chainArgsAll.get(`${table}.${op}`) ?? [];
+        allArgs.push(args);
+        chainArgsAll.set(`${table}.${op}`, allArgs);
+        registered = true;
+      }
     }
 
     const stub: Record<string, unknown> = {};
@@ -195,7 +224,7 @@ export function makeSupabaseStub(results: ResultMap = {}): SupabaseStub {
     removeChannel: vi.fn(),
   };
 
-  return { client, fromCalls, rpcCalls, chains, chainArgs };
+  return { client, fromCalls, rpcCalls, chains, chainArgs, chainsAll, chainArgsAll };
 }
 
 /**
