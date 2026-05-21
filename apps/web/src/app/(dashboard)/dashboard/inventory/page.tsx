@@ -309,6 +309,7 @@ export default async function InventoryPage({
           <InventoryTable
             items={itemsWithImages}
             total={inventory.total}
+            valueOnHand={inventory.valueOnHand}
             lookups={lookups}
             canCreate={canCreate}
             categories={categories.map((c) => ({

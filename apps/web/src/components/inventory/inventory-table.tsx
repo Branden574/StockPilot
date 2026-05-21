@@ -83,6 +83,12 @@ export interface InventoryTableProps {
       dialogs. Defaults to [] so older callers don't crash. */
   tags?: Array<{ id: string; name: string; color: string | null }>;
   total: number;
+  /** Sum of (unit_cost × quantity_on_hand) across the FULL filtered
+   *  result set, not just the current page. Server-computed in
+   *  InventoryService.list so paginating doesn't change the footer
+   *  total. Optional for back-compat; older callers fall back to a
+   *  page-only sum. */
+  valueOnHand?: number;
   initialQuery?: string;
   /**
    * URL prefix for the row click target. Used so the Books tab can
@@ -243,6 +249,7 @@ export function InventoryTable({
   suppliers = [],
   tags = [],
   total,
+  valueOnHand: valueOnHandProp,
   initialQuery = '',
   rowLinkPrefix = '/dashboard/inventory',
   basePath = '/dashboard/inventory',
@@ -516,7 +523,12 @@ export function InventoryTable({
     });
   }
 
-  const valueOnHand = items.reduce((s, it) => s + it.quantity_on_hand * it.unit_cost, 0);
+  // Prefer the server-computed org-wide value (covers ALL pages of
+  // the current filter set). Falls back to a page-only sum for any
+  // legacy caller that doesn't pass the prop yet.
+  const valueOnHand =
+    valueOnHandProp ??
+    items.reduce((s, it) => s + it.quantity_on_hand * it.unit_cost, 0);
 
   // What the table actually renders. Priority: server-authoritative
   // result if we have one (covers cross-page matches), else the

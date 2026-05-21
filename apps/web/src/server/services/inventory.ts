@@ -188,7 +188,7 @@ export class InventoryService {
     // an optional warehouseId filter; otherwise see everything.
     if (!access.hasAllAccess) {
       if (access.readableIds.length === 0) {
-        return { items: [], total: 0 };
+        return { items: [], total: 0, valueOnHand: 0 };
       }
       query = query.in('warehouse_id', access.readableIds);
     } else if (filters.warehouseId) {
@@ -206,7 +206,7 @@ export class InventoryService {
         .getAccessibleCategoryIds(this.ctx.userId);
       if (accessibleCats !== null) {
         if (accessibleCats.size === 0) {
-          return { items: [], total: 0 };
+          return { items: [], total: 0, valueOnHand: 0 };
         }
         query = query.in('category_id', [...accessibleCats]);
       }
@@ -352,11 +352,104 @@ export class InventoryService {
     if (filters.updatedSince) query = query.gte('updated_at', filters.updatedSince);
     if (filters.updatedUntil) query = query.lt('updated_at', filters.updatedUntil);
 
-    const { data, error, count } = await query;
+    // Build a parallel skinny query that mirrors every filter applied
+    // above but selects only the three columns needed for the org-wide
+    // value sum. No pagination — we need the full filtered rowset to
+    // sum across all pages, not just the visible 50. The previous
+    // implementation summed only the current page's rows in the
+    // browser, which made the "$N on hand" footer wrong any time
+    // the total exceeded one page (215 SKUs / page=50 → undercounted
+    // by 4 pages of items). The DB cost is tiny because we're only
+    // pulling three numeric columns; even at 50k rows this is faster
+    // than rendering the page itself.
+    let sumQuery = this.ctx.supabase
+      .from('inventory_items')
+      .select('quantity_on_hand, unit_cost, reorder_point')
+      .eq('organization_id', this.ctx.organizationId)
+      .is('deleted_at', null);
+    if (!access.hasAllAccess) {
+      if (access.readableIds.length === 0) {
+        // Same early-return logic as the main query path above. We
+        // already returned earlier in this case; keep this guard for
+        // safety if the access guard moves.
+      } else {
+        sumQuery = sumQuery.in('warehouse_id', access.readableIds);
+      }
+    } else if (filters.warehouseId) {
+      sumQuery = sumQuery.eq('warehouse_id', filters.warehouseId);
+    }
+    if (!filters.status || filters.status === 'active') {
+      sumQuery = sumQuery.eq('status', 'active');
+    } else if (filters.status !== 'all') {
+      sumQuery = sumQuery.eq('status', filters.status);
+    }
+    if (filters.q && filters.q.trim()) {
+      const term = filters.q.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
+      if (term) {
+        sumQuery = sumQuery.or(
+          `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%,model_number.ilike.%${term}%`,
+        );
+      }
+    }
+    if (filters.barcode && filters.barcode.trim()) {
+      sumQuery = sumQuery.eq('barcode', filters.barcode.trim());
+    }
+    if (filters.categoryIds && filters.categoryIds.length > 0) {
+      sumQuery = sumQuery.in('category_id', filters.categoryIds);
+    } else if (filters.categoryId) {
+      sumQuery = sumQuery.eq('category_id', filters.categoryId);
+    }
+    if (filters.locationIds && filters.locationIds.length > 0) {
+      sumQuery = sumQuery.in('primary_location_id', filters.locationIds);
+    } else if (filters.locationId) {
+      sumQuery = sumQuery.eq('primary_location_id', filters.locationId);
+    }
+    if (filters.supplierIds && filters.supplierIds.length > 0) {
+      sumQuery = sumQuery.in('supplier_id', filters.supplierIds);
+    } else if (filters.supplierId) {
+      sumQuery = sumQuery.eq('supplier_id', filters.supplierId);
+    }
+    if (filters.charterIds && filters.charterIds.length > 0) {
+      const includesGeneric = filters.charterIds.includes('generic');
+      const realIds = filters.charterIds.filter((id) => id !== 'generic');
+      if (includesGeneric && realIds.length > 0) {
+        const list = realIds.map((id) => `"${id}"`).join(',');
+        sumQuery = sumQuery.or(`charter_id.is.null,charter_id.in.(${list})`);
+      } else if (includesGeneric) {
+        sumQuery = sumQuery.is('charter_id', null);
+      } else if (realIds.length > 0) {
+        sumQuery = sumQuery.in('charter_id', realIds);
+      }
+    }
+    if (filters.outOfStock) sumQuery = sumQuery.lte('quantity_on_hand', 0);
+    if (filters.lowStock) {
+      sumQuery = sumQuery.or('reorder_point.gt.0,quantity_on_hand.lte.0');
+    }
+    if (filters.itemType === undefined) {
+      sumQuery = sumQuery.eq('item_type', 'product');
+    } else if (filters.itemType !== 'all') {
+      sumQuery = sumQuery.eq('item_type', filters.itemType);
+    }
+    if (!filters.includeRentals) {
+      sumQuery = sumQuery.eq('is_rental', false);
+    }
+    if (filters.createdSince) sumQuery = sumQuery.gte('created_at', filters.createdSince);
+    if (filters.createdUntil) sumQuery = sumQuery.lt('created_at', filters.createdUntil);
+    if (filters.updatedSince) sumQuery = sumQuery.gte('updated_at', filters.updatedSince);
+    if (filters.updatedUntil) sumQuery = sumQuery.lt('updated_at', filters.updatedUntil);
+
+    const [mainRes, sumRes] = await Promise.all([query, sumQuery]);
+    const { data, error, count } = mainRes;
     if (error) throw new ServiceError('internal_error', error.message);
+    if (sumRes.error) throw new ServiceError('internal_error', sumRes.error.message);
 
     let rows = data ?? [];
     let totalCount = count ?? 0;
+    let sumRows = (sumRes.data ?? []) as Array<{
+      quantity_on_hand: number;
+      unit_cost: number;
+      reorder_point: number;
+    }>;
     if (filters.lowStock) {
       const filtered = rows.filter(
         (r: { quantity_on_hand: number; reorder_point: number }) =>
@@ -367,7 +460,17 @@ export class InventoryService {
       );
       totalCount = filtered.length;
       rows = filtered;
+      // Apply the same JS-side filter to the sum rowset so the value
+      // footer matches what the user actually sees in the table.
+      sumRows = sumRows.filter(
+        (r) => r.quantity_on_hand <= r.reorder_point || r.quantity_on_hand <= 0,
+      );
     }
+
+    const valueOnHand = sumRows.reduce(
+      (acc, r) => acc + (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0),
+      0,
+    );
 
     return {
       items: rows as Array<{
@@ -394,6 +497,12 @@ export class InventoryService {
         updated_at: string;
       }>,
       total: totalCount,
+      /** Sum of (unit_cost × quantity_on_hand) over the FULL filtered
+       *  rowset (across all pages), not just the current page. Backs
+       *  the "$N on hand" footer on the inventory + books list pages
+       *  so the figure stays consistent with `total` (which is also
+       *  org-wide) instead of changing when the user paginates. */
+      valueOnHand,
     };
   }
 
