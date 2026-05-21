@@ -58,6 +58,33 @@ export function ChatPanel() {
   const [dragOver, setDragOver] = React.useState(false);
   const [sessionId, setSessionId] = React.useState<string | null>(null);
   const [sessions, setSessions] = React.useState<SessionRow[]>([]);
+  // Capture the dashboard page the user came from once on mount, then
+  // ship it as `pageContext.referrerPath` on every chat turn. The
+  // server extracts an entity ID from a strict route allowlist
+  // (orders/inventory/books/POs/etc.) and uses it to disambiguate
+  // questions like "what's next for this order?" without making the
+  // user repaste the UUID. Cleared if the user starts a new chat —
+  // a new chat is a fresh intent, the prior page is no longer
+  // necessarily what they want to talk about.
+  const [referrerPath, setReferrerPath] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (typeof document === 'undefined') return;
+    try {
+      const ref = document.referrer;
+      if (!ref) return;
+      const url = new URL(ref);
+      // Only honor same-origin referrers — otherwise a malicious
+      // off-site referer header could try to smuggle paths into the
+      // prompt. window.location.origin matches the current dashboard.
+      if (url.origin !== window.location.origin) return;
+      if (!url.pathname.startsWith('/dashboard/')) return;
+      // Avoid the trivial "came from /dashboard/ai itself" case.
+      if (url.pathname.startsWith('/dashboard/ai')) return;
+      setReferrerPath(url.pathname);
+    } catch {
+      // Ignore — referrer parsing failed, no context will be sent.
+    }
+  }, []);
   const [hydrating, setHydrating] = React.useState(true);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -155,6 +182,11 @@ export function ChatPanel() {
     setSessionId(null);
     setTurns([]);
     setInput('');
+    // A fresh chat is a fresh intent — the page they originally came
+    // from is no longer necessarily what they want to talk about. Drop
+    // the referrer hint so the AI doesn't keep biasing its answers
+    // toward the previous order/item.
+    setReferrerPath(null);
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(ACTIVE_SESSION_KEY);
     }
@@ -280,6 +312,10 @@ export function ChatPanel() {
         body: JSON.stringify({
           message: trimmed,
           sessionId: sessionId ?? undefined,
+          // Page context — only sent when we captured a same-origin
+          // dashboard referrer at mount. Server parses it against an
+          // allowlist; anything outside the allowlist is dropped.
+          pageContext: referrerPath ? { referrerPath } : undefined,
         }),
       });
 
