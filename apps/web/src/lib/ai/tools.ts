@@ -191,6 +191,12 @@ const searchInventoryTool: ToolExecutor = {
           : 'all',
       lowStock: Boolean(args.lowStock),
       outOfStock: Boolean(args.outOfStock),
+      // For cost-based sorts, exclude items with no recorded unit
+      // cost (NULL or $0). Without this, "cheapest items" surfaces
+      // the long tail of un-priced rows and the user never sees the
+      // genuinely cheap real items. AI cost questions almost always
+      // mean "show me the cheapest items that have a real price."
+      hasUnitCost: sort === 'cost_asc' || sort === 'cost_desc',
       warehouseId:
         typeof args.warehouseId === 'string' && args.warehouseId.length > 0
           ? args.warehouseId

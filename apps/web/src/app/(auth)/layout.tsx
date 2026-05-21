@@ -18,17 +18,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
         <div className="w-full max-w-md">{children}</div>
       </main>
       <footer className="container mx-auto max-w-7xl px-4 py-6 text-center text-xs text-muted-foreground sm:px-6">
-        <p>
-          By continuing you agree to our{' '}
-          <Link href="/legal/terms" className="underline hover:text-foreground">
-            Terms
-          </Link>{' '}
-          and{' '}
-          <Link href="/legal/privacy" className="underline hover:text-foreground">
-            Privacy Policy
-          </Link>
-          .
-        </p>
+        <p>StockPilot is an invite-only inventory system.</p>
       </footer>
     </div>
   );
