@@ -479,6 +479,43 @@ export function BulkIsbnImport({
         </div>
       </div>
 
+      {/* Progress bar — only shown while lookups are running. Once the
+          batch finishes (every row resolved or failed) the bar
+          disappears and the row list below carries the final status.
+          Bar position transitions smoothly so partial-batch progress
+          feels alive instead of jumpy. */}
+      {resolved.length > 0 && inFlight.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>
+              Looking up books… {resolved.length - inFlight.length} of{' '}
+              {resolved.length}
+            </span>
+            <span className="tabular-nums">
+              {Math.round(
+                ((resolved.length - inFlight.length) / resolved.length) * 100,
+              )}
+              %
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-foreground/80 transition-[width] duration-300 ease-out"
+              style={{
+                width: `${
+                  ((resolved.length - inFlight.length) / resolved.length) * 100
+                }%`,
+              }}
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={resolved.length}
+              aria-valuenow={resolved.length - inFlight.length}
+              aria-label="Bulk ISBN lookup progress"
+            />
+          </div>
+        </div>
+      )}
+
       {resolved.length > 0 && (
         <ul className="space-y-2">
           {resolved.map((r, i) => (
