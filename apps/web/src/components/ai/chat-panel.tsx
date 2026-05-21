@@ -28,13 +28,105 @@ interface SessionRow {
   updatedAt: string;
 }
 
-const SUGGESTIONS = [
+/** Generic prompts shown when we can't infer a more specific context
+ *  (e.g. user opened the AI assistant directly without coming from a
+ *  detail page). */
+const DEFAULT_SUGGESTIONS = [
   "What's below reorder right now?",
   'Show me total inventory value.',
   'Who adjusted stock today?',
-  "List warehouses we operate.",
+  'List warehouses we operate.',
   'Find Hydrapeak water bottles.',
 ];
+
+/**
+ * Pick the chip prompts to surface in the empty-state. When the user
+ * arrives at the chat from a known dashboard route (the referrerPath
+ * captured in the effect above), we swap the generic chips for ones
+ * tailored to that surface — turns "ask your inventory anything"
+ * from a blank page into "here's what's useful from THIS page."
+ *
+ * The chips are sent verbatim into the chat as the user message, so
+ * the AI's existing PAGE CONTEXT block (Phase 2) takes care of
+ * resolving "this order" / "this item" to the on-page UUID. We don't
+ * need to bake the UUID into the chip text.
+ */
+function pickSuggestions(referrerPath: string | null): string[] {
+  if (!referrerPath) return DEFAULT_SUGGESTIONS;
+  // Order detail
+  if (/^\/dashboard\/orders\/[0-9a-f-]{36}/i.test(referrerPath)) {
+    return [
+      "What's the next action for this order?",
+      'Who is assigned to pick this?',
+      'Show the timeline for this order.',
+      'Why is this order stuck?',
+      'Cancel this order.',
+    ];
+  }
+  // Orders list
+  if (/^\/dashboard\/orders(\/?$|\?)/.test(referrerPath)) {
+    return [
+      "What's pending approval?",
+      'Are any orders overdue?',
+      'Summary of orders today.',
+      'Which orders are staged for delivery?',
+    ];
+  }
+  // Inventory item detail (incl. books detail)
+  if (/^\/dashboard\/(inventory|books)\/[0-9a-f-]{36}/i.test(referrerPath)) {
+    return [
+      "What's the on-hand for this item?",
+      'Show recent movements for this item.',
+      'When was this last received?',
+      'Is this below reorder point?',
+    ];
+  }
+  // Inventory list
+  if (/^\/dashboard\/inventory(\/?$|\?)/.test(referrerPath)) {
+    return [
+      "What's below reorder right now?",
+      'Show the 10 most-stocked items.',
+      'Which items haven\'t moved in 90 days?',
+      'Show me items added this week.',
+    ];
+  }
+  // Books list
+  if (/^\/dashboard\/books(\/?$|\?)/.test(referrerPath)) {
+    return [
+      'How many copies of each book do we have?',
+      'Which books are low stock?',
+      'List books by grade level.',
+      'Show recent book additions.',
+    ];
+  }
+  // Purchase orders
+  if (/^\/dashboard\/purchase-orders/.test(referrerPath)) {
+    return [
+      "What's overdue on POs?",
+      'Show recent receipts.',
+      "Which POs haven't been received yet?",
+      'Summary of open POs.',
+    ];
+  }
+  // Cycle counts
+  if (/^\/dashboard\/cycle-counts/.test(referrerPath)) {
+    return [
+      "What's the variance on the latest count?",
+      'Show counts in progress.',
+      'Which items had discrepancies?',
+    ];
+  }
+  // Dashboard overview
+  if (referrerPath === '/dashboard' || referrerPath === '/dashboard/') {
+    return [
+      'What needs my attention today?',
+      "What's pending approval?",
+      'Show the busiest movement days.',
+      'Top 10 most-stocked items.',
+    ];
+  }
+  return DEFAULT_SUGGESTIONS;
+}
 
 const ACTIVE_SESSION_KEY = 'stockpilot.ai.activeSession';
 
@@ -503,7 +595,7 @@ export function ChatPanel() {
                 you confirm.
               </p>
               <div className="mt-5 flex flex-wrap justify-center gap-2">
-                {SUGGESTIONS.map((s) => (
+                {pickSuggestions(referrerPath).map((s) => (
                   <button
                     key={s}
                     type="button"
