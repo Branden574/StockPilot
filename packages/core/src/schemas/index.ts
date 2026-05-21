@@ -6,7 +6,6 @@ export * from './po-imports';
 export * from './receipts';
 export * from './uom-conversions';
 export * from './schedule';
-export * from './shipments';
 export * from './tags';
 export * from './procedures';
 export * from './duplicate-item';

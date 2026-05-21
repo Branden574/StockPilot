@@ -19,7 +19,7 @@ const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 50;
 
 /**
- * Paginated, warehouse-scoped item list for the new-shipment picker.
+ * Paginated, warehouse-scoped item list for order-line pickers.
  *
  * The form pre-fetched up to 500 items at the org level and filtered
  * client-side. Orgs with broader catalogs silently lost visibility past

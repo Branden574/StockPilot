@@ -184,8 +184,6 @@ Rules:
       sinceDaysAgo=7 and types=['receive_po'].
     - "What orders came in yesterday" → getRecentOrders with
       sinceDaysAgo=1.
-    - "What shipped today" → getRecentShipments with sinceDaysAgo=1
-      and status='shipped'.
     - When the user says "today" use sinceDaysAgo=0; "yesterday"
       use sinceDaysAgo=1; "this week" use sinceDaysAgo=7;
       "this month" use sinceDaysAgo=30.

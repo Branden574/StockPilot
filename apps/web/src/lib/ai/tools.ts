@@ -1789,51 +1789,6 @@ const getRecentOrdersTool: ToolExecutor = {
   },
 };
 
-const getRecentShipmentsTool: ToolExecutor = {
-  declaration: {
-    name: 'getRecentShipments',
-    description:
-      "Shipments (packing slips) created within a time window. Use for 'what shipped yesterday', 'recent slips', 'unsigned slips this week'.",
-    parameters: {
-      type: SchemaType.OBJECT,
-      properties: {
-        since: { type: SchemaType.STRING },
-        until: { type: SchemaType.STRING },
-        sinceDaysAgo: { type: SchemaType.NUMBER },
-        untilDaysAgo: { type: SchemaType.NUMBER },
-        status: { type: SchemaType.STRING, description: "'draft' | 'shipped' | 'delivered' | 'cancelled'" },
-        sourceWarehouseId: { type: SchemaType.STRING },
-        limit: { type: SchemaType.NUMBER, description: 'Max rows (1-100). Default 25.' },
-      },
-    },
-  },
-  async execute(args, ctx) {
-    const { ShipmentsService } = await import('@/server/services/shipments');
-    const svc = new ShipmentsService(ctx);
-    const list = await svc.list({
-      since: resolveSince(args),
-      until: resolveUntil(args),
-       
-      status: (typeof args.status === 'string' && args.status ? args.status : undefined) as any,
-      sourceWarehouseId:
-        typeof args.sourceWarehouseId === 'string' && args.sourceWarehouseId.length > 0
-          ? args.sourceWarehouseId
-          : undefined,
-      limit: Math.min(100, Math.max(1, Number(args.limit) || 25)),
-    });
-    return list.map((s) => ({
-      id: s.id,
-      workOrder: s.workOrderNumber,
-      status: s.status,
-      shipDate: s.shipDate,
-      sourceWarehouse: dataTag(s.sourceWarehouseName),
-      destinationCharter: dataTag(s.destinationCharterName),
-      attentionTo: dataTag(s.attentionToName),
-      createdAt: s.createdAt,
-    }));
-  },
-};
-
 // ──────────────────────────────────────────────────────────────────
 // Analytics tools (Wave 2) — rollups and rankings that would
 // otherwise need the model to fetch + aggregate manually.
@@ -2147,7 +2102,6 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   getRecentItems: getRecentItemsTool,
   getMovements: getMovementsTool,
   getRecentOrders: getRecentOrdersTool,
-  getRecentShipments: getRecentShipmentsTool,
   // Wave 2 — analytics
   getDailyMovementCounts: getDailyMovementCountsTool,
   getTopMovers: getTopMoversTool,

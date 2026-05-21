@@ -94,7 +94,7 @@ export function ChartersManager({
           <EmptyState
             icon={Building2}
             title={`No ${termSingular.toLowerCase()}s yet`}
-            description={`Create your first ${termSingular.toLowerCase()} to start grouping warehouses and routing shipments. Use the New ${termSingular.toLowerCase()} button above to add one.`}
+            description={`Create your first ${termSingular.toLowerCase()} to start grouping warehouses and routing orders. Use the New ${termSingular.toLowerCase()} button above to add one.`}
           />
         )
       ) : (

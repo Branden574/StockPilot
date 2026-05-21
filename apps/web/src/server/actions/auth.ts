@@ -50,8 +50,8 @@ async function getClientIp(): Promise<string> {
  * `withContext()` fallback throws NEXT_REDIRECT for org-less callers —
  * which would corrupt the control flow of a sign-in (no resolved org
  * yet) or a sign-in-failure (no authenticated user). This direct helper
- * mirrors the shipment-signature.tsx pattern: write the event with
- * whatever attribution we have, tag IP/UA from headers, never throw.
+ * writes the event with whatever attribution we have, tags IP/UA from
+ * the request headers, and never throws.
  *
  * organization_id and user_id are both nullable on audit_logs (see
  * migration 0002_inventory.sql), so a sign-in-failure with both null

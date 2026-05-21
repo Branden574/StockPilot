@@ -16,7 +16,6 @@ import {
   Network,
   Package,
   PackageOpen,
-  Send,
   ShoppingCart,
   Sparkles,
   Tag,
@@ -63,8 +62,8 @@ const BASE_NAV: NavSection[] = [
       { href: '/dashboard/inventory', label: 'Items', icon: Boxes, requires: 'items:read' },
       { href: '/dashboard/books', label: 'Books', icon: BookOpen, requires: 'items:read' },
       { href: '/dashboard/categories', label: 'Categories', icon: Tag, requires: 'categories:read' },
-      // Tags / Movements / Bundles / Shipments / Cycle counts / Procedures
-      // / PO imports are all writer-or-better surfaces — viewer doesn't
+      // Tags / Movements / Bundles / Cycle counts / Procedures / PO
+      // imports are all writer-or-better surfaces — viewer doesn't
       // get them. Tags has no dedicated permission so we ride on the
       // closest writer perm (items:update). Movements ride on
       // activity_logs:read (managers+ only).
@@ -77,7 +76,6 @@ const BASE_NAV: NavSection[] = [
       { href: '/dashboard/rentals', label: 'Rentals', icon: PackageOpen, requires: 'rentals:create' },
       { href: '/dashboard/bundles', label: 'Bundles', icon: Package, requires: 'bundles:distribute' },
       { href: '/dashboard/orders', label: 'Orders', icon: ShoppingCart, requires: 'orders:request' },
-      { href: '/dashboard/shipments', label: 'Shipments (Archive)', icon: Send, requires: 'purchase_orders:manage' },
       { href: '/dashboard/cycle-counts', label: 'Cycle counts', icon: ClipboardCheck, requires: 'stock:adjust' },
       { href: '/dashboard/procedures', label: 'Procedures', icon: BookOpen, requires: 'items:update' },
       { href: '/dashboard/purchase-orders', label: 'Purchase orders', icon: ClipboardList, requires: 'purchase_orders:read' },

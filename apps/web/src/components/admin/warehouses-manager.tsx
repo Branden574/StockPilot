@@ -128,7 +128,7 @@ export function WarehousesManager({
           <EmptyState
             icon={Warehouse}
             title={`No ${termSingular.toLowerCase()}s yet`}
-            description={`Create your first ${termSingular.toLowerCase()} to start tracking stock by location, assign managers, and route shipments. Use the New ${termSingular.toLowerCase()} button above to add one.`}
+            description={`Create your first ${termSingular.toLowerCase()} to start tracking stock by location, assign managers, and route orders. Use the New ${termSingular.toLowerCase()} button above to add one.`}
           />
         )
       ) : (

@@ -85,7 +85,7 @@ describe('InventoryService.list', () => {
     const orIdx = chain.indexOf('or');
     expect(orIdx).toBeGreaterThan(-1);
     expect(args[orIdx]![0]).toBe(
-      'name.ilike.%widget%,sku.ilike.%widget%,barcode.ilike.%widget%',
+      'name.ilike.%widget%,sku.ilike.%widget%,barcode.ilike.%widget%,model_number.ilike.%widget%',
     );
   });
 

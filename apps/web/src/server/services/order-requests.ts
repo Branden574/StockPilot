@@ -348,8 +348,7 @@ export class OrderRequestsService {
 
   /**
    * Orders that have reached the signable stage but not yet been signed.
-   * Powers the dashboard "N orders waiting for signature" attention card
-   * (replacing the legacy ShipmentsService.awaitingSignatureCount path).
+   * Powers the dashboard "N orders waiting for signature" attention card.
    *
    * staged_for_pickup → waiting on the customer to come in and sign.
    * in_transit         → out for delivery, waiting for sign-on-arrival.
