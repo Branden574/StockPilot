@@ -28,11 +28,52 @@ const turnSchema = z.object({
 // `history` is bounded to keep prompt tokens predictable; streamChat
 // caps internally too. `sessionId` is a UUID (zod enforces format),
 // which also satisfies the "validate sessionId at route level" item.
+//
+// `pageContext` is a lightweight hint about where the user came from
+// (the dashboard route they opened the AI chat from). We use it to
+// surface the on-page entity ID — order, item, book, PO — to the
+// model so "what's the next step for this order?" doesn't require
+// the user to re-paste the UUID. Strict shape: just a path string,
+// further parsed server-side against a fixed regex allowlist. We
+// never trust free-form text from this field.
+const pageContextSchema = z.object({
+  /** Pathname of the page the user opened the chat from, e.g.
+   *  "/dashboard/orders/abc-uuid". Hard-capped so a malicious tab
+   *  can't smuggle a 1MB payload into the prompt. */
+  referrerPath: z.string().max(200).optional(),
+});
 const bodySchema = z.object({
   message: z.string().min(1).max(2000),
   sessionId: z.string().uuid().optional(),
   history: z.array(turnSchema).max(40).optional(),
+  pageContext: pageContextSchema.optional(),
 });
+
+/**
+ * Pull a known entity reference out of a referrer path. We allowlist
+ * the exact route shapes we know about — anything else is dropped.
+ * The UUID itself is validated against a strict regex, so the model
+ * never sees attacker-controlled text from this code path.
+ */
+function extractEntityHint(
+  referrerPath: string | undefined,
+): { kind: string; id: string; routeLabel: string } | null {
+  if (!referrerPath) return null;
+  const UUID_RE = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+  const matchers: Array<{ kind: string; routeLabel: string; re: RegExp }> = [
+    { kind: 'order_request', routeLabel: 'order detail', re: new RegExp(`^/dashboard/orders/(${UUID_RE})(?:/|$)`) },
+    { kind: 'inventory_item', routeLabel: 'item detail', re: new RegExp(`^/dashboard/inventory/(${UUID_RE})(?:/|$)`) },
+    { kind: 'inventory_item', routeLabel: 'book detail', re: new RegExp(`^/dashboard/books/(${UUID_RE})(?:/|$)`) },
+    { kind: 'purchase_order', routeLabel: 'PO detail', re: new RegExp(`^/dashboard/purchase-orders/(${UUID_RE})(?:/|$)`) },
+    { kind: 'warehouse', routeLabel: 'warehouse detail', re: new RegExp(`^/dashboard/admin/warehouses/(${UUID_RE})(?:/|$)`) },
+    { kind: 'cycle_count', routeLabel: 'cycle count detail', re: new RegExp(`^/dashboard/cycle-counts/(${UUID_RE})(?:/|$)`) },
+  ];
+  for (const m of matchers) {
+    const hit = referrerPath.match(m.re);
+    if (hit) return { kind: m.kind, id: hit[1]!, routeLabel: m.routeLabel };
+  }
+  return null;
+}
 
 // Mirrors the streamChat history cap. Kept here as well so that any
 // DB-loaded history is trimmed before being passed in.
@@ -205,7 +246,37 @@ export async function POST(req: Request) {
         // system prompt so basic stats ("how many active items", "low
         // stock count", "movements today") answer instantly without
         // burning a tool call. Failures are swallowed inside the helper.
-        const snapshot = await buildOrgSnapshot(ctx);
+        const orgSnapshot = await buildOrgSnapshot(ctx);
+        // Build USER + PAGE CONTEXT blocks alongside the org snapshot.
+        // Page context comes from a strict route allowlist
+        // (extractEntityHint) — never free-form text from the client —
+        // so it's safe to drop straight into the system prompt without
+        // the <data> injection-defense wrapper.
+        const entityHint = extractEntityHint(payload.pageContext?.referrerPath);
+        const userBlock = [
+          '— USER —',
+          `Role: ${ctx.role}`,
+          'Permissions follow standard role rules. Write tools enforce',
+          'them server-side; do not assume you can perform actions the',
+          'role cannot. If asked to do something out of scope for this',
+          'role, explain who CAN do it instead.',
+        ].join('\n');
+        const pageBlock = entityHint
+          ? [
+              '— PAGE CONTEXT —',
+              `The user opened this chat from the ${entityHint.routeLabel} page.`,
+              `Entity in focus: ${entityHint.kind} id="${entityHint.id}"`,
+              'When the user asks an ambiguous question that could refer to',
+              "this entity (\"what's next?\", \"is it ready?\", \"show the",
+              'timeline", "who is assigned?"), assume they mean THIS entity',
+              'unless they clearly name a different one. Pass this id to',
+              'the relevant tool (getOrderRequestSummary, getItemDetails,',
+              'etc.) instead of asking the user to repaste it.',
+            ].join('\n')
+          : '';
+        const snapshot = [orgSnapshot, userBlock, pageBlock]
+          .filter(Boolean)
+          .join('\n\n');
         const iter = streamChat(history, payload.message, ctx, {
           signal: req.signal,
           snapshot,
