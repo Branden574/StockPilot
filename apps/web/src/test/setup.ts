@@ -7,9 +7,9 @@ import { afterEach, vi } from 'vitest';
 // inside a Next request scope. audit() calls `next/headers#headers()`,
 // which throws outside a request, then routes the error to reportError
 // (loud stderr). This default no-op stub keeps every test green and
-// quiet; the few tests that ASSERT on audit (profile.test.ts,
-// shipments.test.ts) provide their own per-file vi.mock which Vitest
-// hoists ahead of this setup, so their assertions still work.
+// quiet; the few tests that ASSERT on audit (profile.test.ts) provide
+// their own per-file vi.mock which Vitest hoists ahead of this setup,
+// so their assertions still work.
 vi.mock('@/server/services/audit', () => ({
   audit: vi.fn(async () => undefined),
 }));

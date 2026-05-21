@@ -4,24 +4,13 @@ import { notFound } from 'next/navigation';
 
 import { EmptyState } from '@/components/ui/empty-state';
 import { StatCard } from '@/components/dashboard/stat-card';
-import { ShipmentStatusBadge } from '@/components/shipments/shipment-status-badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { addressJsonToLines } from '@/lib/pdf/shipment';
 import { createClient } from '@/lib/supabase/server';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
-import { ShipmentsService } from '@/server/services/shipments';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 import { WarehousesService } from '@/server/services/warehouses';
 
@@ -33,6 +22,23 @@ const STATUS_VARIANT: Record<
   inactive: 'secondary',
   archived: 'outline',
 };
+
+/** Flattens a Postgres jsonb address into the line list rendered in
+ *  the FROM block. Missing pieces drop out so we never print "null". */
+function formatAddressLines(
+  address: Record<string, unknown> | null,
+): string[] {
+  if (!address) return [];
+  const line1 = (address.line1 as string | null) ?? '';
+  const line2 = (address.line2 as string | null) ?? '';
+  const city = (address.city as string | null) ?? '';
+  const region = (address.region as string | null) ?? '';
+  const postal = (address.postalCode as string | null) ?? '';
+  const country = (address.country as string | null) ?? '';
+  const cityLine = [city, region].filter(Boolean).join(', ');
+  const cityZip = [cityLine, postal].filter(Boolean).join(' ').trim();
+  return [line1, line2, cityZip, country].filter((s) => s.trim().length > 0);
+}
 
 function initials(input: string | null | undefined): string {
   if (!input) return '?';
@@ -59,18 +65,16 @@ export default async function WarehouseDetailPage({
 
   // Everything else loads in parallel — Supabase client is request-scoped
   // (cached via React.cache in withContext), so each service shares it.
-  const [chartersSvc, whChartersSvc, shipmentsSvc, supabase] = await Promise.all([
+  const [chartersSvc, whChartersSvc, supabase] = await Promise.all([
     ChartersService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
-    ShipmentsService.forCurrentUser(),
     createClient(),
   ]);
 
-  const [allCharters, pairs, recentShipments, itemCountResult, pendingOrdersResult, recentShipments30dResult] =
+  const [allCharters, pairs, itemCountResult, pendingOrdersResult, completedOrders30dResult] =
     await Promise.all([
       chartersSvc.list(),
       whChartersSvc.listPairs(),
-      shipmentsSvc.list({ sourceWarehouseId: id, limit: 10 }),
       // Items currently at this warehouse (active, non-deleted).
       supabase
         .from('inventory_items')
@@ -84,14 +88,13 @@ export default async function WarehouseDetailPage({
         .select('id', { count: 'exact', head: true })
         .eq('warehouse_id', id)
         .eq('status', 'pending_approval'),
-      // Shipments from this warehouse in the last 30 days. Counted separately
-      // from `recentShipments` (which is capped at 10) so the stat reflects
-      // actual 30-day volume even when more than 10 have shipped.
+      // Completed order requests from this warehouse in the last 30 days.
       supabase
-        .from('shipments')
+        .from('order_requests')
         .select('id', { count: 'exact', head: true })
-        .eq('source_warehouse_id', id)
-        .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
+        .eq('warehouse_id', id)
+        .eq('status', 'completed')
+        .gte('updated_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
     ]);
 
   const charterIdsForWarehouse = new Set(
@@ -103,9 +106,9 @@ export default async function WarehouseDetailPage({
 
   const itemCount = itemCountResult.count ?? 0;
   const pendingOrderCount = pendingOrdersResult.count ?? 0;
-  const recentShipments30d = recentShipments30dResult.count ?? 0;
+  const completedOrders30d = completedOrders30dResult.count ?? 0;
 
-  const addressLines = addressJsonToLines(
+  const addressLines = formatAddressLines(
     (warehouse.address as Record<string, unknown> | null) ?? null,
   );
 
@@ -141,8 +144,8 @@ export default async function WarehouseDetailPage({
             <Link href="/dashboard/admin/warehouses">Edit</Link>
           </Button>
           <Button asChild>
-            <Link href={`/dashboard/shipments/new?source=${warehouse.id}`}>
-              <Plus className="h-4 w-4" /> New shipment from here
+            <Link href={`/dashboard/orders/new?warehouse=${warehouse.id}`}>
+              <Plus className="h-4 w-4" /> New order from here
             </Link>
           </Button>
         </div>
@@ -163,10 +166,10 @@ export default async function WarehouseDetailPage({
           foot={chartersServiced.length === 0 ? 'None assigned yet' : undefined}
         />
         <StatCard
-          label="Shipments (30d)"
-          value={formatNumber(recentShipments30d)}
+          label="Completed orders (30d)"
+          value={formatNumber(completedOrders30d)}
           icon={Send}
-          foot="Outbound from here"
+          foot="Fulfilled out of here"
         />
         <StatCard
           label="Pending order requests"
@@ -322,81 +325,6 @@ export default async function WarehouseDetailPage({
         )}
       </section>
 
-      {/* Recent shipments */}
-      <section className="bg-card mt-4 rounded-xl border">
-        <div className="border-border flex items-center justify-between border-b px-4 py-3">
-          <h2 className="text-sm font-medium">Recent shipments</h2>
-          <span className="text-muted-foreground text-xs tabular-nums">
-            {recentShipments.length === 0 ? '0' : `last ${recentShipments.length}`}
-          </span>
-        </div>
-        {recentShipments.length === 0 ? (
-          <div className="p-4">
-            <EmptyState
-              icon={Send}
-              title="No shipments yet"
-              description="When you ship from this warehouse, the most recent ten show up here."
-              size="sm"
-              cta={{ label: 'New shipment from here', href: `/dashboard/shipments/new?source=${warehouse.id}` }}
-            />
-          </div>
-        ) : (
-          <>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>WO #</TableHead>
-                  <TableHead>Ship date</TableHead>
-                  <TableHead>To</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {recentShipments.map((s) => (
-                  <TableRow key={s.id}>
-                    <TableCell>
-                      <Link
-                        href={`/dashboard/shipments/${s.id}`}
-                        className="font-mono text-sm font-medium hover:underline"
-                      >
-                        {s.workOrderNumber}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-sm tabular-nums">
-                      {s.shipDate}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-sm">
-                      {s.destinationCharterName ? (
-                        <span className="flex items-center gap-1.5">
-                          <span>{s.destinationCharterName}</span>
-                          {s.destinationCharterCode ? (
-                            <span className="text-muted-foreground/70 font-mono text-[11px]">
-                              {s.destinationCharterCode}
-                            </span>
-                          ) : null}
-                        </span>
-                      ) : (
-                        '—'
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <ShipmentStatusBadge status={s.status} />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            <div className="border-border border-t px-4 py-3 text-right text-xs">
-              <Link
-                href={`/dashboard/shipments?source=${warehouse.id}`}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                See all shipments →
-              </Link>
-            </div>
-          </>
-        )}
-      </section>
     </div>
   );
 }

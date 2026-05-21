@@ -25,7 +25,7 @@ interface BaseProps {
   title: string;
   /** Body copy explaining the consequence. */
   description: React.ReactNode;
-  /** Label on the action button (e.g. "Archive", "Remove", "Cancel shipment"). */
+  /** Label on the action button (e.g. "Archive", "Remove", "Cancel order"). */
   confirmLabel: string;
   /** Label on the cancel button. Defaults to "Cancel". */
   cancelLabel?: string;

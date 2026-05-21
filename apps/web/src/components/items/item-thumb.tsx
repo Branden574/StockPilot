@@ -14,8 +14,8 @@ import { cn } from '@/lib/utils';
  * fetch — better a placeholder than a broken-image glyph.
  *
  * Single source of truth for item thumbnails across the app:
- *   • new-shipment picker rows (md)
- *   • shipment detail line table (md)
+ *   • order line pickers (md)
+ *   • packing slip line table (md)
  *   • PO detail line table (sm)
  *   • ⌘K command palette item rows (sm)
  *

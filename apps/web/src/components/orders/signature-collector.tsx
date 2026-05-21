@@ -5,10 +5,10 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { SignaturePad, type SignaturePadHandle } from '@/components/shipments/signature-pad';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { SignaturePad, type SignaturePadHandle } from '@/components/ui/signature-pad';
 
 import type { OrderSignSummary } from '@/app/orders/sign/[token]/page';
 
@@ -18,10 +18,10 @@ const REDIRECT_DESTINATION = '/dashboard/orders?status=completed';
 /**
  * Public signature surface for `/orders/sign/<token>`.
  *
- * Reuses the canvas-based `<SignaturePad>` from the shipment-signature
- * flow (imperative handle: `isEmpty`, `toDataURL`, `clear`) instead of
- * re-inlining a second canvas implementation. That component already
- * handles DPR scaling, pointer-capture across stroke edges, quadratic-
+ * Uses the shared canvas-based `<SignaturePad>` (imperative handle:
+ * `isEmpty`, `toDataURL`, `clear`) so we don't re-inline a second
+ * canvas implementation. The widget handles DPR scaling, pointer-
+ * capture across stroke edges, quadratic-
  * curve smoothing, ResizeObserver re-init on rotation, and replay-on-
  * resize so a half-drawn signature survives orientation changes.
  *

@@ -29,7 +29,6 @@ const NAV_SHORTCUTS: NavShortcut[] = [
   { prefix: 'g', key: 'i', href: '/dashboard/inventory' },
   { prefix: 'g', key: 'b', href: '/dashboard/books' },
   { prefix: 'g', key: 'p', href: '/dashboard/purchase-orders' },
-  { prefix: 'g', key: 's', href: '/dashboard/shipments' },
   { prefix: 'g', key: 'c', href: '/dashboard/cycle-counts' },
   { prefix: 'g', key: 'o', href: '/dashboard/orders' },
   { prefix: 'g', key: 'r', href: '/dashboard/reports' },
@@ -37,7 +36,6 @@ const NAV_SHORTCUTS: NavShortcut[] = [
   { prefix: 'g', key: ',', href: '/dashboard/settings' },
   { prefix: 'n', key: 'i', href: '/dashboard/inventory/new' },
   { prefix: 'n', key: 'p', href: '/dashboard/purchase-orders/new' },
-  { prefix: 'n', key: 's', href: '/dashboard/shipments/new' },
   { prefix: 'n', key: 'c', href: '/dashboard/cycle-counts/new' },
 ];
 
@@ -46,7 +44,6 @@ const SHORTCUT_ROWS: ShortcutRow[] = [
   { keys: ['g', 'i'], description: 'Inventory items', section: 'Navigation' },
   { keys: ['g', 'b'], description: 'Books', section: 'Navigation' },
   { keys: ['g', 'p'], description: 'Purchase orders', section: 'Navigation' },
-  { keys: ['g', 's'], description: 'Shipments', section: 'Navigation' },
   { keys: ['g', 'c'], description: 'Cycle counts', section: 'Navigation' },
   { keys: ['g', 'o'], description: 'Orders', section: 'Navigation' },
   { keys: ['g', 'r'], description: 'Reports', section: 'Navigation' },
@@ -54,7 +51,6 @@ const SHORTCUT_ROWS: ShortcutRow[] = [
   { keys: ['g', ','], description: 'Settings', section: 'Navigation' },
   { keys: ['n', 'i'], description: 'New item', section: 'New things' },
   { keys: ['n', 'p'], description: 'New purchase order', section: 'New things' },
-  { keys: ['n', 's'], description: 'New shipment', section: 'New things' },
   { keys: ['n', 'c'], description: 'New cycle count', section: 'New things' },
   { keys: ['?'], description: 'Open this keyboard-shortcuts overlay', section: 'Help' },
   { keys: ['Esc'], description: 'Close the overlay', section: 'Help' },
