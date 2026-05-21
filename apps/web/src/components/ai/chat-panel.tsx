@@ -665,6 +665,35 @@ export function ChatPanel() {
                         ))}
                       </div>
                     )}
+                    {/* Inline Confirm button — when the assistant's LAST
+                        turn ends with "Confirm?" we surface a single
+                        action button so the user doesn't have to type
+                        "yes". The detection is purposely conservative:
+                        only the last message, not busy, and only when
+                        text matches the canned phrasing the system
+                        prompt enforces. False positives are harmless
+                        (it just sends "yes, confirm" as a normal turn). */}
+                    {t.role === 'assistant' &&
+                      i === turns.length - 1 &&
+                      !busy &&
+                      /confirm\?\s*$/i.test(t.content) && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void send('yes, confirm')}
+                            className="bg-foreground text-background hover:opacity-90 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void send('cancel')}
+                            className="border-border hover:bg-muted/60 inline-flex items-center gap-1.5 rounded-full border bg-transparent px-3 py-1 text-xs font-medium transition"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
                   </div>
                 </li>
               ))}

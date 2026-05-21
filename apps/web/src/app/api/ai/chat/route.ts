@@ -7,6 +7,7 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { buildOrgSnapshot, streamChat, type ChatTurn, type ToolCallRecord } from '@/lib/ai/chat';
 import { classifyAiError } from '@/lib/ai/errors';
+import { classifyIntent, intentNudge } from '@/lib/ai/intent';
 import {
   appendMessages,
   createSession,
@@ -274,7 +275,14 @@ export async function POST(req: Request) {
               'etc.) instead of asking the user to repaste it.',
             ].join('\n')
           : '';
-        const snapshot = [orgSnapshot, userBlock, pageBlock]
+        // Cheap rule-based intent classifier (zero added latency).
+        // Surfaces a short tool-priority nudge so Gemini picks the
+        // right tool on the first hop. Wrong/general intent is safe —
+        // the nudge is just a hint, the full tool catalog is still
+        // available.
+        const intent = classifyIntent(payload.message);
+        const intentBlock = intentNudge(intent);
+        const snapshot = [orgSnapshot, userBlock, pageBlock, intentBlock]
           .filter(Boolean)
           .join('\n\n');
         const iter = streamChat(history, payload.message, ctx, {
