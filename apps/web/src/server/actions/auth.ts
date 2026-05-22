@@ -194,17 +194,41 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
     password: parsed.data.password,
   });
   if (error) {
-    // Audit failed sign-ins for forensics. NEVER include the supplied
-    // password (even on the wire). `email` is OK on a failure row — an
-    // attacker who can read audit_logs already has tenant admin and
-    // emails are not high-entropy secrets. user_id stays null because
-    // the auth call did not return a user.
+    // Distinguish Supabase's auth rate-limit from a credential
+    // mismatch — they have very different remediation. Supabase
+    // returns HTTP 429 + `code: 'over_*_rate_limit'` when its
+    // per-IP-per-window cap fires (e.g. a whole office signing
+    // in from one NAT'd IP at the same time). Surfacing this
+    // as "Invalid email or password" was actively misleading
+    // and sent users on a wild-goose chase resetting passwords.
+    //
+    // The status check is the canonical signal (Supabase docs);
+    // the code check is belt-and-suspenders for newer SDK
+    // versions that may surface the code without the status.
+    const errAny = error as unknown as {
+      status?: number;
+      code?: string;
+      message?: string;
+    };
+    const isRateLimit =
+      errAny.status === 429 ||
+      (typeof errAny.code === 'string' && /rate.?limit/i.test(errAny.code));
+
     await emitAuthAudit({
       event: 'user.sign_in_failed',
       userId: null,
       organizationId: null,
-      extra: { email: parsed.data.email, reason: 'invalid_credentials' },
+      extra: {
+        email: parsed.data.email,
+        reason: isRateLimit ? 'supabase_rate_limited' : 'invalid_credentials',
+      },
     });
+    if (isRateLimit) {
+      return err(
+        'rate_limited',
+        'Sign-in is temporarily throttled for this network. Wait a couple of minutes and try again.',
+      );
+    }
     return err('unauthenticated', 'Invalid email or password');
   }
 
