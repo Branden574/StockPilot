@@ -9,5 +9,23 @@
       "path": "/api/cron/weekly-digest",
       "schedule": "0 14 * * 1"
     }
-  ]
+  ],
+  "functions": {
+    "src/app/api/orders/**/route.tsx": {
+      "memory": 1769,
+      "maxDuration": 60
+    },
+    "src/app/api/purchase-orders/**/route.tsx": {
+      "memory": 1769,
+      "maxDuration": 60
+    },
+    "src/app/api/reports/**/route.tsx": {
+      "memory": 1769,
+      "maxDuration": 60
+    },
+    "src/app/api/cycle-counts/**/route.tsx": {
+      "memory": 1769,
+      "maxDuration": 60
+    }
+  }
 }

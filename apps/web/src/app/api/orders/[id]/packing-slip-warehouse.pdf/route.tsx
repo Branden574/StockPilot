@@ -104,6 +104,24 @@ export async function GET(
     const itemIds = detail.lines
       .map((l) => l.item?.id)
       .filter((x): x is string => typeof x === 'string');
+    // Telemetry-only warning so we can spot mega-orders in Vercel logs
+    // before they OOM. 100+ lines with photos is the worst-case shape
+    // for @react-pdf memory (we measured 300-500MB on full 200-line
+    // orders). Doesn't bail — vercel.json gives this route 1769MB and
+    // we'd rather render a giant slip than refuse a real workflow.
+    if (detail.lines.length >= 100) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[packing-slip-warehouse] large order',
+        JSON.stringify({
+          tag: 'pdf.large_order',
+          orderId: detail.request.id,
+          lineCount: detail.lines.length,
+          imageCount: itemIds.length,
+          organizationId: ctx.organizationId,
+        }),
+      );
+    }
     // PDF image pipeline — small signed URLs → prefetch to base64
     // data URIs. @react-pdf can't reliably fetch URLs at render time
     // in a serverless function, so we pre-resolve them.

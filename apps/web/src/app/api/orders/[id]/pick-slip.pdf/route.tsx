@@ -56,6 +56,19 @@ export async function GET(
     const itemIds = detail.lines
       .map((l) => l.item?.id)
       .filter((x): x is string => typeof x === 'string');
+    if (detail.lines.length >= 100) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[pick-slip] large order',
+        JSON.stringify({
+          tag: 'pdf.large_order',
+          orderId: detail.request.id,
+          lineCount: detail.lines.length,
+          imageCount: itemIds.length,
+          organizationId: ctx.organizationId,
+        }),
+      );
+    }
     const imagesSvc = new ItemImagesService(ctx);
     const urlByItem = await imagesSvc.primaryImagesForPdfRendering(itemIds, 200);
     const dataUriByItem = await prefetchImagesAsDataUris(urlByItem.entries());
