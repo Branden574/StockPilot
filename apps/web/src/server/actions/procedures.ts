@@ -2,7 +2,6 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
 import {
   ProceduresService,
@@ -54,56 +53,15 @@ function toResult<T>(error: unknown): ActionResult<T> {
 export async function createProcedureAction(
   input: CreateProcedureInput,
 ): Promise<ActionResult<{ id: string }>> {
-  // Verbose error capture to chase down a production-only 500 (digest
-  // 358861019). Logs at every step so Vercel function logs show
-  // exactly which step throws. Drop the extra logging once root cause
-  // is identified.
+  const parsed = createProcedureSchema.safeParse(input);
+  if (!parsed.success)
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   try {
-    console.log('[createProcedureAction] enter', {
-      titleLen: input.title?.length,
-      hasDescription: !!input.description,
-      hasBody: !!input.body,
-      categoryId: input.categoryId ?? null,
-      authoringWarehouseId: input.authoringWarehouseId ?? null,
-    });
-    const parsed = createProcedureSchema.safeParse(input);
-    if (!parsed.success) {
-      console.log('[createProcedureAction] validation_error', parsed.error.issues);
-      return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
-    }
-    let svc: ProceduresService;
-    try {
-      svc = await ProceduresService.forCurrentUser();
-      console.log('[createProcedureAction] got service');
-    } catch (e) {
-      console.error('[createProcedureAction] forCurrentUser threw', e);
-      void reportError(e, { tag: 'procedures.create.forCurrentUser' });
-      return toResult(e);
-    }
-    let res;
-    try {
-      res = await svc.create(parsed.data);
-      console.log('[createProcedureAction] created', res.id);
-    } catch (e) {
-      console.error('[createProcedureAction] svc.create threw', e);
-      void reportError(e, { tag: 'procedures.create.service' });
-      return toResult(e);
-    }
-    try {
-      revalidatePath('/dashboard/procedures');
-      console.log('[createProcedureAction] revalidatePath ok');
-    } catch (e) {
-      console.error('[createProcedureAction] revalidatePath threw', e);
-      void reportError(e, { tag: 'procedures.create.revalidate' });
-      // Don't fail the action over a revalidate hiccup — the row is
-      // already created. The client redirects to the new procedure
-      // detail page and that'll fetch fresh data.
-    }
-    console.log('[createProcedureAction] returning ok');
+    const svc = await ProceduresService.forCurrentUser();
+    const res = await svc.create(parsed.data);
+    revalidatePath('/dashboard/procedures');
     return ok(res);
   } catch (e) {
-    console.error('[createProcedureAction] outer catch', e);
-    void reportError(e, { tag: 'procedures.create.outer' });
     return toResult(e);
   }
 }
