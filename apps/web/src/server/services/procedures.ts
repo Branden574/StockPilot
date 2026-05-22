@@ -329,7 +329,10 @@ export class ProceduresService {
       .select('id')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
-    void audit(
+    // Awaited (not void-fired) so an unhandled rejection from inside
+    // audit() can't crash the Server Action's response render. audit's
+    // own try/catch will keep it from blocking us on a failed write.
+    await audit(
       {
         event: 'procedure.created',
         entityType: 'procedure',
