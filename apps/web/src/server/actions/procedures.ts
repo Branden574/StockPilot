@@ -3,11 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { ServiceError } from '@/server/services/context';
-import {
-  ProceduresService,
-  type ProcedureDetailRow,
-  type ProcedureListRow,
-} from '@/server/services/procedures';
+import { ProceduresService } from '@/server/services/procedures';
 import { ProcedureCategoriesService } from '@/server/services/procedure-categories';
 import {
   ProcedureVideosService,
@@ -35,9 +31,14 @@ import {
   type RecordProcedureVideoInput,
 } from '@stockpilot/core';
 
-// Re-export types so the client form / pages can pull them without
-// importing a server-only services file.
-export type { ProcedureDetailRow, ProcedureListRow, ProcedureVideoRow };
+// NOTE: type re-exports REMOVED from this 'use server' module — the
+// `export type { ProcedureDetailRow, ProcedureListRow, ProcedureVideoRow }`
+// here caused Turbopack on Vercel to emit a runtime
+// `ReferenceError: ProcedureDetailRow is not defined at module
+// evaluation` every time the action POST tried to load. Client
+// components now import types directly from the services files;
+// `import type` erases at compile time so the 'server-only' runtime
+// guard inside the services never actually executes on the client.
 
 function toResult<T>(error: unknown): ActionResult<T> {
   if (error instanceof ServiceError) return err(error.code, error.message);
@@ -53,52 +54,17 @@ function toResult<T>(error: unknown): ActionResult<T> {
 export async function createProcedureAction(
   input: CreateProcedureInput,
 ): Promise<ActionResult<{ id: string }>> {
-  // Aggressive logging to chase a 500 that throws inside 47ms with no
-  // Supabase queries visible in Vercel logs (the action errors before
-  // reaching the DB). Every line below logs to stdout so the function
-  // log shows the exact step that fails. Strip once root cause found.
-  console.log('[procedures.create] ENTER', {
-    titleLen: input?.title?.length ?? 0,
-    hasDescription: !!input?.description,
-    hasBody: !!input?.body,
-    categoryId: input?.categoryId ?? null,
-    authoringWarehouseId: input?.authoringWarehouseId ?? null,
-  });
-
-  let parsed;
-  try {
-    parsed = createProcedureSchema.safeParse(input);
-    console.log('[procedures.create] safeParse OK', { ok: parsed.success });
-  } catch (e) {
-    console.error('[procedures.create] safeParse THREW', e);
-    return err('validation_error', 'Schema parse threw');
-  }
-
-  if (!parsed.success) {
-    console.log('[procedures.create] validation_error', parsed.error.issues);
+  const parsed = createProcedureSchema.safeParse(input);
+  if (!parsed.success)
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
-  }
-
-  let svc: ProceduresService;
   try {
-    svc = await ProceduresService.forCurrentUser();
-    console.log('[procedures.create] forCurrentUser OK');
+    const svc = await ProceduresService.forCurrentUser();
+    const res = await svc.create(parsed.data);
+    revalidatePath('/dashboard/procedures');
+    return ok(res);
   } catch (e) {
-    console.error('[procedures.create] forCurrentUser THREW', e);
     return toResult(e);
   }
-
-  let res: { id: string };
-  try {
-    res = await svc.create(parsed.data);
-    console.log('[procedures.create] svc.create OK', res.id);
-  } catch (e) {
-    console.error('[procedures.create] svc.create THREW', e);
-    return toResult(e);
-  }
-
-  console.log('[procedures.create] returning ok', res.id);
-  return ok(res);
 }
 
 export async function updateProcedureAction(
