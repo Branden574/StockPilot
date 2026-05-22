@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { formatRelative } from '@/lib/utils';
-import type { ProcedureListRow } from '@/server/actions/procedures';
+import type { ProcedureListRow } from '@/server/services/procedures';
 
 interface ProcedureCardProps {
   procedure: ProcedureListRow;
