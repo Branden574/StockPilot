@@ -2,7 +2,7 @@
 
 A printable plain-English walkthrough of the entire inventory system, written for someone who isn't a developer but wants to understand how their own product works.
 
-**Last updated:** 2026-05-19
+**Last updated:** 2026-05-22
 
 ---
 
@@ -630,6 +630,18 @@ A starter list of concepts that recur. Worth a sticky note above your monitor.
 
 15. **Cache keys must include user-scoped fragments for per-user data.** If two users with different visibility hit the same cached key, the wrong one gets the other's payload. The fix is to bake a hash of "who is the user and what can they see" into the key.
 
+16. **`'use server'` modules can only export async functions.** Plain `const` arrays, `export type { ... }` re-exports, type-only re-exports — anything that isn't an async function — build clean locally but break on Vercel. Symptoms are misleading: sometimes a path-undefined error during `modifyConfig`, sometimes a `ReferenceError: X is not defined at module evaluation` only visible in Vercel function-stdout logs. Fix: move the const/type to a plain module (e.g. `lib/timezone-options.ts`) and have both the server action and the client component import from there. Burned twice (commits 9c51bf9, b44e749).
+
+17. **Two ISO-8601 timestamps can be identical instants but different strings.** Postgres `timestamptz` serializes as `2026-05-22T10:43:00+00:00` (offset notation), zod's default `.datetime()` requires the `Z` suffix (`2026-05-22T10:43:00Z`). Both mean the exact same moment. The fix is one option: `z.string().datetime({ offset: true })`. When you see "Invalid datetime" on a field that obviously came from your own database, suspect the validator before suspecting the data.
+
+18. **Server-side `toLocaleString` MUST pass `timeZone` explicitly.** Vercel containers default to UTC, so a bare `new Date().toLocaleString()` renders 9:30 AM PT as "4:30 PM" on the PDF. Always either pass `timeZone: getCachedOrgTimezone(orgId)` (server) or use `lib/timezone.ts`'s helpers. The org's saved timezone lives in `organizations.timezone` and is settable from /dashboard/settings/organization.
+
+19. **Click-to-feedback latency is what the user actually feels.** Next.js App Router doesn't change the URL until the server's RSC response starts streaming — that can be 600-1200ms on a cold cache, and during that window the click looks dead. Fix: give immediate visual feedback at click time via `useLinkStatus()` (per-link spinner) + a global top progress bar. The actual server roundtrip is unchanged; the perceived nav goes from 1170ms → 13ms. See `components/dashboard/nav-link-pending.tsx` and `components/dashboard/nav-progress-bar.tsx`.
+
+20. **Eager prefetch on every link in a list is a footgun.** `<Link prefetch>` on a 50-row table fires 50 server-rendered RSC fetches the moment the page paints — most for rows the user never clicks. Sidebar nav links (~25, stable destinations, high click-through) are the only place eager prefetch pays off, and even there we let `requestIdleCallback` warm them after the critical paint instead of blocking it. Row links: `prefetch={false}` + hover-based prefetch is the right shape.
+
+21. **CSP directives are independent — `img-src` is not `media-src`.** Adding `https://*.supabase.co` to `img-src` doesn't allow `<video>` to load from there too. Each media type (img, media, connect, script, frame, font, etc.) needs its own allowlist entry. When a remote URL gets blocked, the browser console names the exact directive that rejected it — read it carefully before guessing.
+
 ---
 
 ## Chapter 16 — How to keep learning
@@ -746,7 +758,12 @@ For context — these are the major shipped features in the last ~6 weeks:
 | Mid-May 2026 | Public link v2 (same aisle picker for `/r/[token]`) |
 | Late May 2026 | "Someone else is receiving" toggle on signatures |
 | Late May 2026 | Viewer category visibility (restrict viewers to certain categories) |
-| **2026-05-19** | **Rentals feature** (this one — circulating-asset checkout/return) |
+| 2026-05-19 | Rentals feature (circulating-asset checkout/return) |
+| 2026-05-21 | Full-system AI overhaul — intent classifier, fuzzy retry on multi-word product names, cost-sort (`cheapest item`), jump-link cards, per-turn telemetry, `<data>` injection-tag scrubbing |
+| 2026-05-21 | Full-system speed sweep + first-click navigation overhaul — `useLinkStatus` pending UI on sidebar links, global top progress bar, 13 missing `loading.tsx` files, fast-path 401 on `/api/*`, smaller list pages (50 → 30), prefetch-storm fix, idle-prefetch tightened (1600ms → 600ms) |
+| 2026-05-22 | Org timezone settings + PDFs render in org local time end-to-end (was UTC) |
+| 2026-05-22 | Procedures Create flow fixed — `'use server'` type re-export gotcha (5 wrong-direction commits before Vercel function-stdout logs surfaced the actual `ReferenceError`) |
+| **2026-05-22** | **Procedures edit save fixed** — zod `.datetime()` was rejecting Postgres `+00:00` offset format, now accepts both `Z` and offset notation. CSP `media-src` also extended to allow Supabase storage signed URLs so procedure videos play. |
 
 ---
 

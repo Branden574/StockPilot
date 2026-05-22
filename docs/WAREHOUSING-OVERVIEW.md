@@ -3,7 +3,7 @@
 A briefing for warehouse operations leaders evaluating the system as an operating platform for distribution work.
 
 **Prepared for:** A partner warehousing expert
-**Last updated:** 2026-05-20
+**Last updated:** 2026-05-22
 
 ---
 
@@ -142,6 +142,18 @@ On the activity list, overdue rentals surface in red ("Overdue by 3 days"). Mark
 
 Rental items live in a separate catalog from regular inventory — a canopy never accidentally shows up on an order picker, and a textbook never accidentally shows up on a rental form.
 
+### Procedures (SOP knowledge base)
+
+A cross-warehouse standard-operating-procedure library lives inside the app. Field managers capture "how we replace a ceiling tile" or "how to receive a pallet from XYZ supplier" once, with a markdown writeup and short phone-camera videos attached, and every warehouse can search + watch it.
+
+- Categorized (Plumbing, Lighting, HVAC, Doors, Electrical, Safety, General — editable per org)
+- Inline video walkthroughs (up to 500MB per file, MP4/MOV/WEBM)
+- Authored-at warehouse tag so a process specific to DC4's loading dock is filterable
+- Single-level threaded discussion under each SOP — staff add corrections, managers reply, history preserved
+- Read-everywhere / write-by-manager: every org member can browse and comment, managers and above can author and edit
+
+Replaces the "where did Kim email that PDF six months ago?" problem with a searchable, versioned knowledge base that lives next to the inventory it's about.
+
 ### Cycle counts + AI shelf scan
 
 Standard cycle count: manager defines scope (warehouse, categories, locations), staff counts on a phone, system computes variance against system stock, variances become `stock_movement` adjustments.
@@ -209,6 +221,16 @@ Order events trigger transactional email:
 - Weekly digest → summary of stock movements, top requests, overdue rentals
 
 All emails are deliverable (SPF/DKIM/DMARC properly configured at the domain level) and bounce-tracked via Resend.
+
+### Workspace settings — your warehouse, your conventions
+
+Each workspace can configure itself to match its own operations:
+
+- **Workspace name + logo** — appears in the sidebar, on every PDF, on every email
+- **Timezone** — every date and time the system renders (pick slips, packing slips, reports, schedule, dashboard, emails) is pinned to the warehouse's local clock, not the server's UTC
+- **Terminology** — rename "charters" and "warehouses" to match the language your org actually uses ("districts" + "sites", "regions" + "depots", etc.). The change ripples through every menu, label, and report
+- **MFA policy** — optional, admins-required, or all-required for everyone
+- **Purchase-order terms** — free-form text that prints at the bottom of every PO PDF sent to suppliers
 
 ### Permissions — five roles, three layers
 
