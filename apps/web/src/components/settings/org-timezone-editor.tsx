@@ -16,10 +16,11 @@ import {
 } from '@/components/ui/select';
 import {
   ORG_TIMEZONE_OPTIONS,
-  updateOrgTimezoneAction,
-} from '@/server/actions/organization';
+  type OrgTimezoneOption,
+} from '@/lib/timezone-options';
+import { updateOrgTimezoneAction } from '@/server/actions/organization';
 
-type Timezone = (typeof ORG_TIMEZONE_OPTIONS)[number];
+type Timezone = OrgTimezoneOption;
 
 /**
  * Human-readable labels for the curated timezone list. Order matches

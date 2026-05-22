@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { ORG_TIMEZONE_OPTIONS } from '@/lib/timezone-options';
 import { audit } from '@/server/services/audit';
 import { ServiceError } from '@/server/services/context';
 import { slugify } from '@/lib/utils';
@@ -224,42 +225,8 @@ export async function updateOrgPoTermsAction(
   }
 }
 
-/**
- * Allow-list of IANA timezones the user can pick in settings. The full
- * tzdata catalog is hundreds of entries; this curated subset covers
- * every region StockPilot is realistically deployed in (mainland US +
- * Hawaii/AK, plus the common international ones) without overwhelming
- * the dropdown. New entries here flow through naturally — the server
- * just stores whatever the client sent (validated against this
- * allow-list).
- */
-const ALLOWED_TIMEZONES = [
-  'UTC',
-  'America/New_York',
-  'America/Chicago',
-  'America/Denver',
-  'America/Phoenix',
-  'America/Los_Angeles',
-  'America/Anchorage',
-  'Pacific/Honolulu',
-  'America/Toronto',
-  'America/Vancouver',
-  'America/Mexico_City',
-  'Europe/London',
-  'Europe/Paris',
-  'Europe/Berlin',
-  'Europe/Madrid',
-  'Asia/Tokyo',
-  'Asia/Singapore',
-  'Asia/Hong_Kong',
-  'Asia/Manila',
-  'Australia/Sydney',
-] as const;
-
-export const ORG_TIMEZONE_OPTIONS = ALLOWED_TIMEZONES;
-
 const timezoneSchema = z.object({
-  timezone: z.enum(ALLOWED_TIMEZONES),
+  timezone: z.enum(ORG_TIMEZONE_OPTIONS),
 });
 
 export type UpdateTimezoneInput = z.infer<typeof timezoneSchema>;
