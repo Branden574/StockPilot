@@ -327,10 +327,17 @@ export function formatOrderCode(id: string): string {
   return id.slice(0, 8).toUpperCase();
 }
 
-export function formatPackedDate(iso: string | null): {
-  date: string;
-  time: string;
-} {
+export function formatPackedDate(
+  iso: string | null,
+  // IANA timezone string (e.g. 'America/Los_Angeles'). Defaults to
+  // 'UTC' so callers that haven't been updated yet keep their
+  // previous behavior. Server-side callers pass the org's saved tz
+  // (getCachedOrgTimezone from lib/dashboard/cached-org.ts) so PDFs
+  // render in local time — without this arg the packing slip showed
+  // UTC time on a PT-org generation (e.g. "4:30 PM" instead of
+  // "9:30 AM").
+  timeZone: string = 'UTC',
+): { date: string; time: string } {
   if (!iso) return { date: '—', time: '' };
   const d = new Date(iso);
   return {
@@ -338,10 +345,12 @@ export function formatPackedDate(iso: string | null): {
       month: 'short',
       day: '2-digit',
       year: 'numeric',
+      timeZone,
     }),
     time: d.toLocaleTimeString('en-US', {
       hour: '2-digit',
       minute: '2-digit',
+      timeZone,
     }),
   };
 }
@@ -449,11 +458,13 @@ export function BrandMark({ size = 22 }: { size?: number }) {
 export function BrandBand({
   tag,
   whenIso,
+  orgTimezone = 'UTC',
 }: {
   tag: string;
   whenIso: string | null;
+  orgTimezone?: string;
 }) {
-  const { date, time } = formatPackedDate(whenIso);
+  const { date, time } = formatPackedDate(whenIso, orgTimezone);
   return (
     <View style={styles.brandRow}>
       <View style={styles.brandLeft}>
@@ -476,14 +487,16 @@ export function MetaGrid({
   request,
   totalLines,
   showStatus = true,
+  orgTimezone = 'UTC',
 }: {
   request: OrderRequestRow;
   totalLines: number;
   /** Customer-facing receipts hide the internal status pill — "Ready /
    *  Awaiting carrier" is ops state and isn't useful to the recipient. */
   showStatus?: boolean;
+  orgTimezone?: string;
 }) {
-  const packed = formatPackedDate(request.packing_slip_generated_at);
+  const packed = formatPackedDate(request.packing_slip_generated_at, orgTimezone);
   const label = statusLabel(request.status);
   const sub = statusSubLabel(request.status, request.fulfillment_type);
   return (
@@ -739,4 +752,10 @@ export interface PackingSlipInputCore {
   warehouse: WarehouseInfo;
   charterName: string | null;
   imageUrlByItemId: Map<string, string>;
+  /**
+   * IANA timezone string for the org. Used to render the BrandBand
+   * date/time and the PACKED meta cell in the org's local time. Falls
+   * back to 'UTC' if the caller can't resolve it.
+   */
+  orgTimezone?: string;
 }

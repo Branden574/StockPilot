@@ -27,7 +27,7 @@ async function fetchOrgDashboardRowImpl(organizationId: string) {
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from('organizations')
-    .select('terminology, mfa_policy, logo_url')
+    .select('terminology, mfa_policy, logo_url, timezone')
     .eq('id', organizationId)
     .maybeSingle();
   if (error) {
@@ -40,6 +40,7 @@ async function fetchOrgDashboardRowImpl(organizationId: string) {
     terminology: unknown;
     mfa_policy: 'optional' | 'admins_required' | 'all_required' | null;
     logo_url: string | null;
+    timezone: string | null;
   } | null;
 }
 
@@ -86,3 +87,16 @@ export const getCachedOrgWarehouses = (organizationId: string) =>
       tags: [`dashboard-org:${organizationId}`, `dashboard-warehouses:${organizationId}`],
     },
   )();
+
+/**
+ * Resolve the org's IANA timezone string, falling back to UTC when
+ * nothing is set. Used by every server-side date/time formatter so
+ * PDFs, emails, and SSR'd pages render in the org's local time.
+ *
+ * Goes through the cached org-row fetch so it pays no extra DB cost
+ * — same 60s TTL, same revalidate tag.
+ */
+export async function getCachedOrgTimezone(organizationId: string): Promise<string> {
+  const row = await getCachedOrgDashboardRow(organizationId);
+  return row?.timezone || 'UTC';
+}

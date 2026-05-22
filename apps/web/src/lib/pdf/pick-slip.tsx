@@ -577,6 +577,10 @@ export interface RenderPickSlipOptions {
    *  an image fall back to a neutral placeholder square so the row
    *  stays vertically aligned with the rest. */
   imageUrlByItemId?: Map<string, string>;
+  /** IANA timezone string (e.g. 'America/Los_Angeles'). Used to render
+   *  pick_slip_generated_at in the org's local time. Defaults to
+   *  'UTC' if the caller can't resolve it. */
+  orgTimezone?: string;
 }
 
 export async function renderPickSlipPdf(
@@ -614,7 +618,7 @@ export async function renderPickSlipPdf(
   const shortId = request.id.slice(0, 8).toUpperCase();
   const generatedAt = request.pick_slip_generated_at
     ? new Date(request.pick_slip_generated_at).toLocaleString('en-US', {
-        timeZone: 'America/Los_Angeles',
+        timeZone: opts.orgTimezone ?? 'UTC',
         year: 'numeric',
         month: 'numeric',
         day: 'numeric',

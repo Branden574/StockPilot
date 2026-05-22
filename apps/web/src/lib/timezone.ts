@@ -2,47 +2,58 @@
  * Org timezone helper.
  *
  * The app stores all timestamps as UTC in Postgres (timestamptz).
- * When rendering for staff users we need to pin the locale-aware
- * formatters to the org's operational timezone so a user in
- * California sees PT, not whatever the serverless container picked.
- * Without a `timeZone` option Node/Edge defaults to UTC (Vercel) or
- * the user's browser tz (client) — neither is acceptable for
- * staff-facing schedule / detail pages where 10am PT was getting
- * rendered as "5pm UTC".
+ * When rendering we pin the locale-aware formatters to the org's
+ * operational timezone so a workspace in California sees PT, not the
+ * serverless container's UTC or the visiting user's browser zone.
  *
- * Single source of truth — the PDF code path uses the same default
- * (see lib/pdf/styles.ts). When per-org timezones ship as a settings
- * column, swap this default for a runtime lookup and every consumer
- * picks it up automatically.
+ * Source of truth is the `organizations.timezone` column — settable
+ * via /dashboard/settings/organization. Server code reads it through
+ * `getCachedOrgTimezone(orgId)` (lib/dashboard/cached-org.ts) and
+ * passes the string to the `tz` argument on these helpers. Client
+ * components that can't async-fetch fall back to ORG_TIMEZONE_DEFAULT.
+ *
+ * Why LA as the default fallback: this app shipped against a single
+ * California-based pilot org before the per-org tz column was wired
+ * up. Defaulting to LA preserves the existing behavior for any caller
+ * that hasn't been migrated yet, instead of silently flipping to UTC
+ * and rendering "yesterday" dates for late-night exports.
  */
-export const ORG_TIMEZONE = 'America/Los_Angeles';
+export const ORG_TIMEZONE_DEFAULT = 'America/Los_Angeles';
 
-/** Locale-aware date formatter pinned to the org timezone. */
+/** @deprecated Use ORG_TIMEZONE_DEFAULT. Kept as an alias so older
+ *  callers don't break in one migration. */
+export const ORG_TIMEZONE = ORG_TIMEZONE_DEFAULT;
+
+/** Locale-aware date formatter. Pass the org's tz explicitly via
+ *  the third argument when available; falls back to the default. */
 export function formatOrgDate(
   input: Date | string | number,
   opts: Intl.DateTimeFormatOptions = {},
+  tz: string = ORG_TIMEZONE_DEFAULT,
 ): string {
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('en-US', { timeZone: ORG_TIMEZONE, ...opts });
+  return d.toLocaleDateString('en-US', { timeZone: tz, ...opts });
 }
 
-/** Locale-aware time formatter pinned to the org timezone. */
+/** Locale-aware time formatter. */
 export function formatOrgTime(
   input: Date | string | number,
   opts: Intl.DateTimeFormatOptions = {},
+  tz: string = ORG_TIMEZONE_DEFAULT,
 ): string {
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString('en-US', { timeZone: ORG_TIMEZONE, ...opts });
+  return d.toLocaleTimeString('en-US', { timeZone: tz, ...opts });
 }
 
-/** Combined date + time, locale-aware, pinned to the org timezone. */
+/** Combined date + time, locale-aware. */
 export function formatOrgDateTime(
   input: Date | string | number,
   opts: Intl.DateTimeFormatOptions = {},
+  tz: string = ORG_TIMEZONE_DEFAULT,
 ): string {
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('en-US', { timeZone: ORG_TIMEZONE, ...opts });
+  return d.toLocaleString('en-US', { timeZone: tz, ...opts });
 }

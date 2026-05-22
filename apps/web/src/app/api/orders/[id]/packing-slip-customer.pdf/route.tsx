@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import { renderCustomerPackingSlipPdf } from '@/lib/pdf/packing-slip-customer';
 import type { WarehouseInfo } from '@/lib/pdf/packing-slip-shared';
@@ -90,11 +91,13 @@ export async function GET(
       if (dataUri) imageUrlByItemId.set(itemId, dataUri);
     }
 
+    const orgTimezone = await getCachedOrgTimezone(ctx.organizationId);
     const pdf = await renderCustomerPackingSlipPdf({
       detail,
       warehouse,
       charterName,
       imageUrlByItemId,
+      orgTimezone,
     });
     const bytes = new Uint8Array(pdf);
     return new NextResponse(bytes, {

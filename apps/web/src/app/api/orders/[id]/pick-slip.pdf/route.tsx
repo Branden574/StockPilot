@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import { renderPickSlipPdf } from '@/lib/pdf/pick-slip';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -63,7 +64,8 @@ export async function GET(
       if (dataUri) imageUrlByItemId.set(itemId, dataUri);
     }
 
-    const pdf = await renderPickSlipPdf(detail, { imageUrlByItemId });
+    const orgTimezone = await getCachedOrgTimezone(ctx.organizationId);
+    const pdf = await renderPickSlipPdf(detail, { imageUrlByItemId, orgTimezone });
     const body = new Uint8Array(pdf.byteLength);
     body.set(pdf);
     return new NextResponse(body, {

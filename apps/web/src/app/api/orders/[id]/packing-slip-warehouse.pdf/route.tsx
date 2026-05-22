@@ -2,6 +2,7 @@ import QRCode from 'qrcode';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { env } from '@/lib/env';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import { renderWarehousePackingSlipPdf } from '@/lib/pdf/packing-slip-warehouse';
@@ -116,12 +117,14 @@ export async function GET(
       if (dataUri) imageUrlByItemId.set(itemId, dataUri);
     }
 
+    const orgTimezone = await getCachedOrgTimezone(ctx.organizationId);
     const pdf = await renderWarehousePackingSlipPdf({
       detail,
       warehouse,
       charterName,
       imageUrlByItemId,
       qrDataUrl,
+      orgTimezone,
     });
     const bytes = new Uint8Array(pdf);
     return new NextResponse(bytes, {
