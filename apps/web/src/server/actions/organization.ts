@@ -144,12 +144,12 @@ export async function updateTerminologyAction(
       after: { terminology: parsed.data },
     });
 
-    // Invalidate the cached org row that the dashboard layout reads
-    // (lib/dashboard/cached-org.ts). Without this, the cached
-    // terminology would stick for up to 60s after a terminology save.
-    // updateTag is the Next 16 server-action equivalent of
-    // revalidateTag with read-your-own-writes semantics.
-    updateTag(`dashboard-org:${ctx.organizationId}`);
+    // Bust the cached-org row (lib/dashboard/cached-org.ts). Tag is
+    // static cross-org — invalidates every org's cache, but org
+    // settings change rarely so the cost of refreshing siblings is
+    // negligible. Was per-org (`dashboard-org:<id>`) until that
+    // pattern broke Server Action POSTs in Next.js 16.
+    updateTag('dashboard-org');
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
@@ -273,7 +273,7 @@ export async function updateOrgTimezoneAction(
 
     // Bust the cached org row so PDFs / server pages pick up the new
     // tz on the next request (lib/dashboard/cached-org.ts).
-    updateTag(`dashboard-org:${ctx.organizationId}`);
+    updateTag('dashboard-org');
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {

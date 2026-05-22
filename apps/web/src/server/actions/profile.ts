@@ -262,8 +262,8 @@ export async function setOrgLogoUrlAction(input: {
     });
     // Invalidate the cached org row in lib/dashboard/cached-org.ts so
     // the new logo appears in the dashboard shell on next nav instead
-    // of being stale for up to 60s.
-    updateTag(`dashboard-org:${ctx.organizationId}`);
+    // of being stale for up to 60s. Static cross-org tag.
+    updateTag('dashboard-org');
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
