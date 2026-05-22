@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 
 import { OrgLogoUploader } from '@/components/settings/org-logo-uploader';
 import { OrgNameEditor } from '@/components/settings/org-name-editor';
+import { OrgTimezoneEditor } from '@/components/settings/org-timezone-editor';
 import { PoTermsEditor } from '@/components/settings/po-terms-editor';
 import { TerminologyEditor } from '@/components/settings/terminology-editor';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -20,7 +21,7 @@ export default async function OrganizationSettingsPage() {
   const supabase = await createClient();
   const { data } = await supabase
     .from('organizations')
-    .select('terminology, name, logo_url, po_terms')
+    .select('terminology, name, logo_url, po_terms, timezone')
     .eq('id', ctx.organizationId)
     .maybeSingle();
 
@@ -71,6 +72,20 @@ export default async function OrganizationSettingsPage() {
           </CardHeader>
           <CardContent>
             <OrgNameEditor current={(data?.name as string | null) ?? ''} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Timezone</CardTitle>
+            <CardDescription>
+              Pin every date and time the system renders — pick slips,
+              packing slips, reports, schedule, dashboard — to your
+              warehouse&apos;s local time.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OrgTimezoneEditor current={(data?.timezone as string | null) ?? null} />
           </CardContent>
         </Card>
 

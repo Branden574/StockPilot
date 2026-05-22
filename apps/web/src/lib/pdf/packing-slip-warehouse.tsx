@@ -44,7 +44,8 @@ export interface WarehousePackingSlipInput extends PackingSlipInputCore {
 export async function renderWarehousePackingSlipPdf(
   input: WarehousePackingSlipInput,
 ): Promise<Buffer> {
-  const { detail, warehouse, charterName, imageUrlByItemId, qrDataUrl } = input;
+  const { detail, warehouse, charterName, imageUrlByItemId, qrDataUrl, orgTimezone } = input;
+  const tz = orgTimezone ?? 'UTC';
   const { request, lines } = detail;
   const isPickup = request.fulfillment_type === 'pickup';
   const orderCode = formatOrderCode(request.id);
@@ -56,12 +57,14 @@ export async function renderWarehousePackingSlipPdf(
         <BrandBand
           tag="WAREHOUSE PACKING SLIP"
           whenIso={request.packing_slip_generated_at}
+          orgTimezone={tz}
         />
 
         <MetaGrid
           request={request}
           totalLines={lines.length}
           showStatus={false}
+          orgTimezone={tz}
         />
 
         <Addresses

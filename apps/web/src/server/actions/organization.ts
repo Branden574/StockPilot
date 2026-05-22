@@ -224,6 +224,98 @@ export async function updateOrgPoTermsAction(
   }
 }
 
+/**
+ * Allow-list of IANA timezones the user can pick in settings. The full
+ * tzdata catalog is hundreds of entries; this curated subset covers
+ * every region StockPilot is realistically deployed in (mainland US +
+ * Hawaii/AK, plus the common international ones) without overwhelming
+ * the dropdown. New entries here flow through naturally — the server
+ * just stores whatever the client sent (validated against this
+ * allow-list).
+ */
+const ALLOWED_TIMEZONES = [
+  'UTC',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Phoenix',
+  'America/Los_Angeles',
+  'America/Anchorage',
+  'Pacific/Honolulu',
+  'America/Toronto',
+  'America/Vancouver',
+  'America/Mexico_City',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Europe/Madrid',
+  'Asia/Tokyo',
+  'Asia/Singapore',
+  'Asia/Hong_Kong',
+  'Asia/Manila',
+  'Australia/Sydney',
+] as const;
+
+export const ORG_TIMEZONE_OPTIONS = ALLOWED_TIMEZONES;
+
+const timezoneSchema = z.object({
+  timezone: z.enum(ALLOWED_TIMEZONES),
+});
+
+export type UpdateTimezoneInput = z.infer<typeof timezoneSchema>;
+
+export async function updateOrgTimezoneAction(
+  input: UpdateTimezoneInput,
+): Promise<ActionResult<void>> {
+  const parsed = timezoneSchema.safeParse(input);
+  if (!parsed.success) {
+    return err(
+      'validation_error',
+      parsed.error.issues[0]?.message ?? 'Invalid timezone',
+    );
+  }
+  try {
+    const ctx = await requireOrgContext();
+    if (ctx.role !== 'owner' && ctx.role !== 'admin') {
+      return err('forbidden', 'Only owners and admins can change the timezone.');
+    }
+    const supabase = await createClient();
+    const { data: prev } = await supabase
+      .from('organizations')
+      .select('timezone')
+      .eq('id', ctx.organizationId)
+      .maybeSingle();
+
+    if ((prev as { timezone?: string | null } | null)?.timezone === parsed.data.timezone) {
+      return ok(undefined);
+    }
+
+    const { error } = await supabase
+      .from('organizations')
+      .update({ timezone: parsed.data.timezone })
+      .eq('id', ctx.organizationId);
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    await audit({
+      event: 'organization.updated',
+      entityType: 'organization',
+      entityId: ctx.organizationId,
+      before: { timezone: (prev as { timezone?: string | null } | null)?.timezone ?? null },
+      after: { timezone: parsed.data.timezone },
+    });
+
+    // Bust the cached org row so PDFs / server pages pick up the new
+    // tz on the next request (lib/dashboard/cached-org.ts).
+    updateTag(`dashboard-org:${ctx.organizationId}`);
+    revalidatePath('/dashboard', 'layout');
+    return ok(undefined);
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    console.error(e);
+    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  }
+}
+
 const renameSchema = z.object({ name: z.string().min(1).max(80).trim() });
 
 export async function renameOrganizationAction(input: {

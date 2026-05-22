@@ -333,11 +333,12 @@ export function formatNumberForPdf(value: number, locale = 'en-US'): string {
 /**
  * Format a date for the PDF body.
  *
- * Defaults to the en-US locale + America/Los_Angeles tz so PDFs render
- * the same date regardless of where the serverless container is
- * scheduled (Vercel runs in UTC; that surfaced as "yesterday" dates
- * for late-night PT exports). Callers can pass an explicit timezone
- * once org-level tz settings ship.
+ * Pass the org's IANA timezone explicitly — server callers should pull
+ * it from `getCachedOrgTimezone(ctx.organizationId)` so PDFs render in
+ * the org's local time. Falls back to America/Los_Angeles when
+ * unspecified (this app's incumbent default) so any unconverted call
+ * site keeps its previous behavior instead of silently flipping to
+ * UTC.
  */
 export function formatDateForPdf(
   input: Date | string | null | undefined,

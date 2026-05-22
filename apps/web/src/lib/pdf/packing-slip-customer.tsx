@@ -36,7 +36,8 @@ async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
 export async function renderCustomerPackingSlipPdf(
   input: PackingSlipInputCore,
 ): Promise<Buffer> {
-  const { detail, warehouse, charterName, imageUrlByItemId } = input;
+  const { detail, warehouse, charterName, imageUrlByItemId, orgTimezone } = input;
+  const tz = orgTimezone ?? 'UTC';
   const { request, lines } = detail;
   const isPickup = request.fulfillment_type === 'pickup';
   const orderCode = formatOrderCode(request.id);
@@ -48,9 +49,15 @@ export async function renderCustomerPackingSlipPdf(
         <BrandBand
           tag="PACKING SLIP"
           whenIso={request.packing_slip_generated_at}
+          orgTimezone={tz}
         />
 
-        <MetaGrid request={request} totalLines={lines.length} showStatus={false} />
+        <MetaGrid
+          request={request}
+          totalLines={lines.length}
+          showStatus={false}
+          orgTimezone={tz}
+        />
 
         <Addresses
           warehouse={warehouse}
