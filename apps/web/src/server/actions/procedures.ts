@@ -59,7 +59,14 @@ export async function createProcedureAction(
   try {
     const svc = await ProceduresService.forCurrentUser();
     const res = await svc.create(parsed.data);
-    revalidatePath('/dashboard/procedures');
+    // revalidatePath intentionally OMITTED — the client redirects to
+    // /dashboard/procedures/<newId> after this returns and the list
+    // page re-fetches on next visit. Including revalidatePath here
+    // was a likely cause of a digest-only 500 we couldn't trace
+    // (Next.js 16 action-response render of the invalidated route
+    // can throw under certain layouts). Worst case: the list page
+    // shows up to ~30s old data before its own dynamic fetch
+    // refreshes — acceptable trade for a working Create.
     return ok(res);
   } catch (e) {
     return toResult(e);
