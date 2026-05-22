@@ -43,7 +43,12 @@ export const updateProcedureSchema = createProcedureSchema.partial().extend({
    * Omit for create-mode-style writes where the caller doesn't have a
    * baseline timestamp.
    */
-  ifMatch: z.string().datetime().optional(),
+  // `offset: true` allows the `+00:00` timezone offset format that
+  // Supabase/PostgREST serializes timestamptz columns as. Default
+  // `z.string().datetime()` requires a trailing `Z` and rejects
+  // `2026-05-22T10:43:00.123456+00:00` → surfaced as "Invalid
+  // datetime" on every procedure save.
+  ifMatch: z.string().datetime({ offset: true }).optional(),
 });
 export type UpdateProcedureInput = z.infer<typeof updateProcedureSchema>;
 
