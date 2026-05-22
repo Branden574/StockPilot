@@ -288,8 +288,8 @@ export async function setOrgMfaPolicyAction(input: {
     });
     // Invalidate the cached org row (lib/dashboard/cached-org.ts) so
     // the new policy takes effect immediately for the MFA banner +
-    // hard-gate on the next dashboard nav.
-    updateTag(`dashboard-org:${ctx.organizationId}`);
+    // hard-gate on the next dashboard nav. Static cross-org tag.
+    updateTag('dashboard-org');
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {

@@ -5,96 +5,77 @@ import { unstable_cache } from 'next/cache';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 /**
- * Cached lookup of the org-level dashboard layout data.
+ * Cached lookups for org-level data the (dashboard) layout reads on
+ * every navigation. Previously every nav re-queried `organizations`
+ * + `warehouses` even though the columns we read change ~never.
  *
- * The (dashboard) layout was re-querying `organizations` on EVERY
- * page navigation for three fields (terminology, mfa_policy,
- * logo_url) that change ~never. Pulling them through unstable_cache
- * eliminates one Postgres round trip from every dashboard
- * nav — measured at 60-120ms cold, 30-50ms warm.
+ * Cache keys include the organizationId so each tenant has its own
+ * entry. Tags are static (per-cache, not per-org) — invalidating
+ * `dashboard-org` busts every org's row cache, which is fine: org
+ * settings change rarely and the cost of refreshing a few sibling
+ * orgs is negligible.
  *
- * Cache key is the org ID. Tagged so the org settings page can
- * `revalidateTag('dashboard-org:<id>')` after an admin edits
- * terminology, MFA policy, or logo.
- *
- * Why service-role: this query reads three benign columns the
- * authenticated user is allowed to see anyway (they're rendered
- * into the dashboard shell for them on every page). Using service-
- * role here just bypasses the per-request RLS planning cost — the
- * data returned is the same.
+ * NOTE: previous version of this file created the `unstable_cache`
+ * wrapper INSIDE the exported function (the `unstable_cache(...)()`
+ * IIFE pattern). That worked during normal page navs but broke
+ * Server Action POSTs in Next.js 16 with a digest-only 500 ("error
+ * in Server Components render") — Next's runtime doesn't allow
+ * dynamic cache-wrapper creation inside action-response render
+ * cycles. The fix is to declare the wrapper ONCE at module load.
  */
-async function fetchOrgDashboardRowImpl(organizationId: string) {
-  const supabase = createAdminClient();
-  const { data, error } = await supabase
-    .from('organizations')
-    .select('terminology, mfa_policy, logo_url, timezone')
-    .eq('id', organizationId)
-    .maybeSingle();
-  if (error) {
-    // Don't throw — the layout's downstream code falls back to
-    // sensible defaults for each field. A failed cache lookup
-    // shouldn't break the dashboard.
-    return null;
-  }
-  return data as {
-    terminology: unknown;
-    mfa_policy: 'optional' | 'admins_required' | 'all_required' | null;
-    logo_url: string | null;
-    timezone: string | null;
-  } | null;
+const fetchOrgRow = unstable_cache(
+  async (organizationId: string) => {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('organizations')
+      .select('terminology, mfa_policy, logo_url, timezone')
+      .eq('id', organizationId)
+      .maybeSingle();
+    if (error) return null;
+    return data as {
+      terminology: unknown;
+      mfa_policy: 'optional' | 'admins_required' | 'all_required' | null;
+      logo_url: string | null;
+      timezone: string | null;
+    } | null;
+  },
+  ['dashboard-org-row'],
+  {
+    revalidate: 60,
+    tags: ['dashboard-org'],
+  },
+);
+
+export function getCachedOrgDashboardRow(organizationId: string) {
+  return fetchOrgRow(organizationId);
 }
 
-export const getCachedOrgDashboardRow = (organizationId: string) =>
-  unstable_cache(
-    () => fetchOrgDashboardRowImpl(organizationId),
-    ['dashboard-org-row', organizationId],
-    {
-      // 60s is a good balance: covers a normal session's worth of
-      // navigations, but a change to org settings is reflected
-      // quickly without needing a manual invalidate. We still tag
-      // it so org-settings writes can revalidate immediately.
-      revalidate: 60,
-      tags: [`dashboard-org:${organizationId}`],
-    },
-  )();
+const fetchOrgWarehouses = unstable_cache(
+  async (organizationId: string) => {
+    const supabase = createAdminClient();
+    const { data } = await supabase
+      .from('warehouses')
+      .select('id, name')
+      .eq('organization_id', organizationId)
+      .neq('status', 'archived')
+      .order('name', { ascending: true });
+    return (data ?? []) as Array<{ id: string; name: string }>;
+  },
+  ['dashboard-org-warehouses'],
+  {
+    revalidate: 300,
+    tags: ['dashboard-org', 'dashboard-warehouses'],
+  },
+);
 
-/**
- * Cached list of the org's non-archived warehouses (id + name only).
- * Used by the topbar's warehouse-filter dropdown — was previously
- * blocking the layout render on every nav, even though the list
- * changes maybe once a year.
- *
- * Per-org cache key, 5-minute TTL, tagged for explicit invalidation
- * from the warehouse-admin pages.
- */
-async function fetchOrgWarehousesImpl(organizationId: string) {
-  const supabase = createAdminClient();
-  const { data } = await supabase
-    .from('warehouses')
-    .select('id, name')
-    .eq('organization_id', organizationId)
-    .neq('status', 'archived')
-    .order('name', { ascending: true });
-  return (data ?? []) as Array<{ id: string; name: string }>;
+export function getCachedOrgWarehouses(organizationId: string) {
+  return fetchOrgWarehouses(organizationId);
 }
-
-export const getCachedOrgWarehouses = (organizationId: string) =>
-  unstable_cache(
-    () => fetchOrgWarehousesImpl(organizationId),
-    ['dashboard-org-warehouses', organizationId],
-    {
-      revalidate: 300,
-      tags: [`dashboard-org:${organizationId}`, `dashboard-warehouses:${organizationId}`],
-    },
-  )();
 
 /**
  * Resolve the org's IANA timezone string, falling back to UTC when
- * nothing is set. Used by every server-side date/time formatter so
- * PDFs, emails, and SSR'd pages render in the org's local time.
- *
- * Goes through the cached org-row fetch so it pays no extra DB cost
- * — same 60s TTL, same revalidate tag.
+ * nothing is set. Goes through the cached org-row fetch so it pays
+ * no extra DB cost.
  */
 export async function getCachedOrgTimezone(organizationId: string): Promise<string> {
   const row = await getCachedOrgDashboardRow(organizationId);

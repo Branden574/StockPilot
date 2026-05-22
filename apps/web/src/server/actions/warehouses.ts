@@ -2,7 +2,6 @@
 
 import { revalidatePath, updateTag } from 'next/cache';
 
-import { requireOrgContext } from '@/lib/auth/session';
 import { ServiceError } from '@/server/services/context';
 import {
   WarehousesService,
@@ -27,14 +26,15 @@ function toResult<T>(error: unknown): ActionResult<T> {
  * dropdown picks up the change immediately on next nav instead of
  * waiting up to 5min for the TTL.
  */
-async function invalidateOrgWarehouses() {
-  try {
-    const ctx = await requireOrgContext();
-    updateTag(`dashboard-warehouses:${ctx.organizationId}`);
-  } catch {
-    // requireOrgContext() throws on unauthed; the underlying action
-    // already failed in that case so nothing to invalidate.
-  }
+function invalidateOrgWarehouses() {
+  // Single cross-org tag (matches the static tag declared on the
+  // unstable_cache wrapper in lib/dashboard/cached-org.ts). Next.js
+  // 16's unstable_cache uses static tags — invalidating one tag
+  // refreshes all per-org cache entries that share it, which is the
+  // intended tradeoff for cache simplicity vs strict per-tenant
+  // isolation. Org settings change rarely, so refreshing a few
+  // sibling orgs alongside is cheap.
+  updateTag('dashboard-warehouses');
 }
 
 export async function createWarehouseAction(
@@ -45,7 +45,7 @@ export async function createWarehouseAction(
   try {
     const svc = await WarehousesService.forCurrentUser();
     const result = await svc.create(parsed.data);
-    await invalidateOrgWarehouses();
+    invalidateOrgWarehouses();
     revalidatePath('/dashboard/admin/warehouses');
     return ok(result);
   } catch (e) {
@@ -62,7 +62,7 @@ export async function updateWarehouseAction(
   try {
     const svc = await WarehousesService.forCurrentUser();
     await svc.update(id, parsed.data);
-    await invalidateOrgWarehouses();
+    invalidateOrgWarehouses();
     revalidatePath('/dashboard/admin/warehouses');
     return ok(undefined);
   } catch (e) {
@@ -74,7 +74,7 @@ export async function archiveWarehouseAction(id: string): Promise<ActionResult<v
   try {
     const svc = await WarehousesService.forCurrentUser();
     await svc.archive(id);
-    await invalidateOrgWarehouses();
+    invalidateOrgWarehouses();
     revalidatePath('/dashboard/admin/warehouses');
     return ok(undefined);
   } catch (e) {
@@ -86,7 +86,7 @@ export async function restoreWarehouseAction(id: string): Promise<ActionResult<v
   try {
     const svc = await WarehousesService.forCurrentUser();
     await svc.restore(id);
-    await invalidateOrgWarehouses();
+    invalidateOrgWarehouses();
     revalidatePath('/dashboard/admin/warehouses');
     return ok(undefined);
   } catch (e) {
