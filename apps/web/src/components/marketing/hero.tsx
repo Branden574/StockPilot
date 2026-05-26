@@ -23,14 +23,7 @@ import { cn } from '@/lib/utils';
 export function Hero() {
   return (
     <section className="relative">
-      <div className="mx-auto max-w-[1280px] px-8 pb-16 pt-24 text-center sm:pt-28">
-        <span
-          className="mx-auto mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 text-[11.5px] text-[var(--ed-ink-3)]"
-        >
-          <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]" />
-          v3.0 — Cycle counts, lot tracking, and a faster cmd palette
-        </span>
-
+      <div className="mx-auto max-w-[1280px] px-8 pb-16 pt-28 text-center sm:pt-32">
         <h1 className="mx-auto max-w-4xl font-display text-[clamp(48px,7vw,88px)] font-medium leading-[0.96] tracking-[-0.04em] text-balance">
           Inventory software
           <br />
@@ -73,7 +66,7 @@ function HeroFrame() {
         <span className="frame-dot" />
         <span className="frame-dot" />
         <span className="ml-3 font-mono text-[10.5px] text-[var(--ed-ink-4)]">
-          stockpilot.dev/lonsdale/inventory
+          stockpilotusa.com/dashboard/inventory
         </span>
       </div>
 
@@ -108,7 +101,7 @@ function HeroFrame() {
         {/* Items table */}
         <div className="p-5">
           <h3 className="font-display text-[18px] tracking-[-0.01em]">Items</h3>
-          <p className="mb-3.5 text-[11px] text-[var(--ed-ink-4)]">17 SKUs · $52,408 on hand</p>
+          <p className="mb-3.5 text-[11px] text-[var(--ed-ink-4)]">248 SKUs · $94,200 on hand</p>
 
           <div className="overflow-hidden rounded-[10px] border border-border">
             <table className="w-full text-[11.5px]">
