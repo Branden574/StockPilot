@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { unstable_cache } from 'next/cache';
+
 import { createAdminClient } from '@/lib/supabase/admin';
 
 /**
@@ -164,46 +166,68 @@ async function resolvePublicImageUrl(
  * returns its public projection. Returns null when the row doesn't
  * exist, is soft-deleted, or isn't active. The caller (route handler)
  * decides whether to 404.
+ *
+ * Wrapped in unstable_cache with a 60s revalidate so repeat QR-scan
+ * visits within the window don't re-hit Supabase + re-sign the image
+ * URL. 60s is bounded by the image signed-URL TTL (1h) — never
+ * extend past that without restructuring resolvePublicImageUrl.
+ *
+ * Cache tag enables future invalidation from item-update flows
+ * via revalidateTag(`public-item:${itemId}`) when behavior becomes
+ * cache-sensitive enough to justify the wiring across every mutation
+ * path. For now, 60s drift on stock counts is acceptable for the
+ * "scan an item label" use case.
  */
 export async function getPublicItem(itemId: string): Promise<PublicItem | null> {
   if (!itemId) return null;
-  const admin = createAdminClient();
-  const { data, error } = await admin
-    .from('inventory_items')
-    .select(
-      'id, name, item_type, quantity_on_hand, custom_fields, status, deleted_at, category:categories!category_id (name)',
-    )
-    .eq('id', itemId)
-    .is('deleted_at', null)
-    .eq('status', 'active')
-    .maybeSingle();
-  if (error || !data) return null;
-
-  // PostgREST returns embedded relations as either an object or array
-  // depending on cardinality. Flatten to the name string.
-  const cat = (data as Record<string, unknown>).category as
-    | { name?: string }
-    | { name?: string }[]
-    | null
-    | undefined;
-  const categoryName = Array.isArray(cat)
-    ? cat[0]?.name ?? null
-    : cat?.name ?? null;
-
-  const customFields = (data as Record<string, unknown>).custom_fields as
-    | Record<string, unknown>
-    | null
-    | undefined;
-
-  const imageUrl = await resolvePublicImageUrl(admin, itemId, customFields);
-
-  return toPublicItem({
-    id: (data as { id: string }).id,
-    name: (data as { name: string }).name,
-    item_type: (data as { item_type: string }).item_type,
-    image_url: imageUrl,
-    quantity_on_hand: (data as { quantity_on_hand?: number }).quantity_on_hand ?? 0,
-    category_name: categoryName,
-    custom_fields: customFields ?? null,
-  });
+  return getPublicItemCached(itemId);
 }
+
+const getPublicItemCached = unstable_cache(
+  async (itemId: string): Promise<PublicItem | null> => {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from('inventory_items')
+      .select(
+        'id, name, item_type, quantity_on_hand, custom_fields, status, deleted_at, category:categories!category_id (name)',
+      )
+      .eq('id', itemId)
+      .is('deleted_at', null)
+      .eq('status', 'active')
+      .maybeSingle();
+    if (error || !data) return null;
+
+    // PostgREST returns embedded relations as either an object or array
+    // depending on cardinality. Flatten to the name string.
+    const cat = (data as Record<string, unknown>).category as
+      | { name?: string }
+      | { name?: string }[]
+      | null
+      | undefined;
+    const categoryName = Array.isArray(cat)
+      ? cat[0]?.name ?? null
+      : cat?.name ?? null;
+
+    const customFields = (data as Record<string, unknown>).custom_fields as
+      | Record<string, unknown>
+      | null
+      | undefined;
+
+    const imageUrl = await resolvePublicImageUrl(admin, itemId, customFields);
+
+    return toPublicItem({
+      id: (data as { id: string }).id,
+      name: (data as { name: string }).name,
+      item_type: (data as { item_type: string }).item_type,
+      image_url: imageUrl,
+      quantity_on_hand: (data as { quantity_on_hand?: number }).quantity_on_hand ?? 0,
+      category_name: categoryName,
+      custom_fields: customFields ?? null,
+    });
+  },
+  ['public-item-v1'],
+  {
+    revalidate: 60,
+    tags: ['public-item'],
+  },
+);
