@@ -4,6 +4,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -414,8 +415,11 @@ export async function POST(req: NextRequest) {
     .select('*')
     .single();
   if (headerErr || !headerRow) {
+    if (headerErr) {
+      await reportError(headerErr, { tag: 'public.order-requests.header-insert' });
+    }
     return NextResponse.json(
-      { error: 'internal_error', message: headerErr?.message ?? 'header_insert_failed' },
+      { error: 'internal_error', message: 'Order could not be submitted. Please try again.' },
       { status: 500 },
     );
   }
@@ -433,8 +437,12 @@ export async function POST(req: NextRequest) {
     .insert(linePayload);
   if (lineErr) {
     await admin.from('order_requests').delete().eq('id', header.id);
+    await reportError(lineErr, {
+      tag: 'public.order-requests.line-insert',
+      extra: { headerId: header.id },
+    });
     return NextResponse.json(
-      { error: 'internal_error', message: lineErr.message },
+      { error: 'internal_error', message: 'Order could not be submitted. Please try again.' },
       { status: 500 },
     );
   }
