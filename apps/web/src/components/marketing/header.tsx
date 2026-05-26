@@ -87,11 +87,8 @@ export function MarketingHeader() {
               </Link>
             ))}
             <div className="mt-2 flex gap-2">
-              <Button asChild variant="ghost" size="sm" className="flex-1">
-                <Link href="/signin">Sign in</Link>
-              </Button>
               <Button asChild size="sm" className="flex-1">
-                <Link href="/signup">Open app</Link>
+                <Link href="/signin">Sign in</Link>
               </Button>
             </div>
           </div>
