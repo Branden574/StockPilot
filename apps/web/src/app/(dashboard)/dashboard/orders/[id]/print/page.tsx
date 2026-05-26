@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 
 import { AutoPrint } from '@/components/orders/auto-print';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { createClient } from '@/lib/supabase/server';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { formatNumber } from '@/lib/utils';
@@ -19,11 +20,12 @@ function shortId(id: string) {
   return id.split('-')[0]?.toUpperCase() ?? id.slice(0, 8).toUpperCase();
 }
 
-function formatDateLong(iso: string) {
+function formatDateLong(iso: string, timeZone: string) {
   return new Date(iso).toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'short',
     day: '2-digit',
+    timeZone,
   });
 }
 
@@ -59,6 +61,7 @@ export default async function OrderPrintPage({
   const itemIds = lines.map((l) => l.item?.id).filter((x): x is string => Boolean(x));
 
   const supabase = await createClient();
+  const orgTimezone = await getCachedOrgTimezone(ctx.organizationId);
 
   const [orgRes, whRes, binRes] = await Promise.all([
     supabase
@@ -193,11 +196,11 @@ export default async function OrderPrintPage({
               <dt className="text-neutral-600">Status</dt>
               <dd className="text-right capitalize">{statusLabel}</dd>
               <dt className="text-neutral-600">Issued</dt>
-              <dd className="text-right">{formatDateLong(request.created_at)}</dd>
+              <dd className="text-right">{formatDateLong(request.created_at, orgTimezone)}</dd>
               {request.approved_at && (
                 <>
                   <dt className="text-neutral-600">Approved</dt>
-                  <dd className="text-right">{formatDateLong(request.approved_at)}</dd>
+                  <dd className="text-right">{formatDateLong(request.approved_at, orgTimezone)}</dd>
                 </>
               )}
               <dt className="text-neutral-600">Lines</dt>
