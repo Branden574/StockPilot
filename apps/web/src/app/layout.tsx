@@ -3,7 +3,6 @@ import { Inter, Inter_Tight, Instrument_Serif, JetBrains_Mono } from 'next/font/
 import type { ReactNode } from 'react';
 
 import { Toaster } from '@/components/ui/sonner';
-import { QueryProvider } from '@/lib/query/provider';
 import { ThemeProvider } from '@/components/theme/theme-provider';
 
 import { APP_DESCRIPTION, APP_NAME } from '@stockpilot/core';
@@ -109,10 +108,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     >
       <body className="min-h-screen bg-background font-sans antialiased">
         <ThemeProvider>
-          <QueryProvider>
-            {children}
-            <Toaster />
-          </QueryProvider>
+          {children}
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>
