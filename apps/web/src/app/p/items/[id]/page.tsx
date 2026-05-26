@@ -1,4 +1,5 @@
 import { Sparkles } from 'lucide-react';
+import Image from 'next/image';
 import { notFound } from 'next/navigation';
 
 import { cn } from '@/lib/utils';
@@ -76,13 +77,19 @@ export default async function PublicItemPage({
           StockPilot · Item details
         </header>
 
-        {/* Image */}
+        {/* Image — LCP element on this page; priority + AVIF/WebP via */}
+        {/* next/image. width/height are required, but the actual layout */}
+        {/* is fluid via the `h-auto w-full` className so they only act as */}
+        {/* an aspect-ratio hint to reserve space and avoid CLS. */}
         {item.imageUrl ? (
           <div className="border-border bg-card mb-6 overflow-hidden rounded-2xl border">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
+            <Image
               src={item.imageUrl}
               alt={item.name}
+              width={800}
+              height={800}
+              priority
+              sizes="(max-width: 640px) 100vw, 600px"
               className="h-auto w-full object-cover"
             />
           </div>
