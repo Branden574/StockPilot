@@ -1,12 +1,12 @@
 ---
 title: "StockPilot — Operating Cost & Value Analysis"
 subtitle: "What it costs to run, what comparable WMS systems cost, and what it's worth to own"
-date: "2026-05-22"
+date: "2026-05-26"
 ---
 
 # Executive summary
 
-StockPilot is a modern, custom-built warehouse management system currently operating L4L Fresno's inventory at a total infrastructure cost of approximately **$70–95 per month** (~$850–1150 / year), with **no per-user fees**. Equivalent functionality from a commercial WMS vendor would cost between **$5,000 and $50,000+ per year** at the same usage scale, plus a one-time **$25,000–$500,000 implementation fee** before the system handles a single order.
+StockPilot is a modern, custom-built warehouse management system currently running in production as the **internal inventory platform at L4L Fresno** (the founder's own organization — pre-revenue internal pilot, not a third-party paying customer). Total infrastructure cost is approximately **$70–95 per month** (~$850–1,150 / year), with **no per-user fees**. Equivalent functionality from a commercial WMS vendor would cost between **$5,000 and $50,000+ per year** at the same usage scale, plus a one-time **$25,000–$500,000 implementation fee** before the system handles a single order.
 
 For an outright buyout of the system (code, IP, deployment, and 6 months of transition support), a fair valuation falls in the range of **$300,000–$600,000**. Continuing the current subscription/retainer arrangement is dramatically cheaper and lower-risk than ownership for any organization that doesn't already operate an in-house software team.
 
@@ -241,7 +241,7 @@ Based on the above, three legitimate price points:
 | **B. Working system + 6 months transition support** | $450,000–$650,000 | Everything in A, plus 6 months of part-time development by the original builder for handover, documentation, bug fixes, and knowledge transfer. |
 | **C. System + 3-year exclusive maintenance retainer** | $700,000–$1,100,000 | Everything in B, plus 3 years of ongoing feature work, on-call support, and infrastructure operations. The buyer effectively gets the system AND the developer. |
 
-For a single-customer organization the size of L4L Fresno (charter school operating 4 warehouses, ~10–20 staff), option **A or B is over-scoped**: owning the codebase only makes financial sense if there's an in-house technical team capable of maintaining it. Charter schools typically don't have that.
+For a single-org operation the size of L4L Fresno (charter school operating 4 warehouses, ~10–20 staff), option **A or B is over-scoped**: owning the codebase only makes financial sense if there's an in-house technical team capable of maintaining it. Charter schools typically don't have that.
 
 ## 5.4 The honest recommendation
 
@@ -266,7 +266,7 @@ The current arrangement — paying ~$1,000/year for infrastructure and a separat
 
 # 6. Bottom line
 
-StockPilot is operating at a **5–500× cost advantage** over commercial WMS systems at the same usage scale, while providing **superior mobile, AI, and real-time capabilities** that no comparable product on the market bundles by default.
+StockPilot is operating at a **3–300× cost advantage** over commercial WMS systems at the same usage scale (verified across the 5/25/100/500-user comparison tables in §2.3), while providing **superior mobile, AI, and real-time capabilities** that no comparable product on the market bundles by default.
 
 For continued operation under the current model, the math is dominated by infrastructure cost (~$1,000 / year) plus whatever the organization chooses to invest in ongoing development. Buying the system outright is technically possible at **$450,000–$650,000** for the production-system tier, but is not financially recommended for any organization without an in-house software engineering team to maintain it.
 
@@ -274,4 +274,4 @@ The real value proposition isn't ownership — it's continued access to a custom
 
 ---
 
-*This document was prepared 2026-05-22. Commercial WMS pricing figures are based on publicly published or industry-typical rates and may vary by region, contract terms, and bundle selection. StockPilot operating costs reflect current usage at L4L Fresno and will scale modestly with increased users, emails, or AI usage.*
+*This document was prepared 2026-05-26. Commercial WMS pricing figures are based on publicly published or industry-typical rates and may vary by region, contract terms, and bundle selection. StockPilot operating costs reflect current pilot usage at L4L Fresno (the founder's own operation) and will scale modestly with increased users, emails, or AI usage.*

@@ -2,7 +2,9 @@
 
 *A printable workbook for walking into your first investor meeting prepared, defensible, and confident.*
 
-**Last updated:** 2026-05-22
+**Last updated:** 2026-05-26
+
+> **Important framing note.** StockPilot is pre-revenue. L4L Fresno is the founder's own organization, where the product is in daily production use as the internal warehouse system. It is NOT a third-party paying customer. Be honest about this — investors fund pre-revenue startups all the time, but they don't fund founders who fudge traction. The honest framing ("we built it for our own ops, it works, now we want to extend it") is far stronger than a vague "we have a customer" claim.
 
 ---
 
@@ -20,20 +22,19 @@ The shape of your pitch changes radically depending on what you're raising for. 
 
 | Path | Round size | What the money buys | Your pitch in one line |
 |---|---|---|---|
-| **A. Bootstrap / friends & angels** | $25k – $250k | 6–9 months part-time dev, light onboarding of 2-3 design-partner orgs | "Look what I've built with almost nothing — help me prove it works for more customers." |
-| **B. Pre-seed / seed VC** | $500k – $1.5M | 1–2 engineering hires, 1 sales hire, 18 months runway, multi-tenant SaaS pivot | "We have a working product, a real customer, and a clear path to vertical SaaS." |
-| **C. Strategic / channel** | Variable | Charter-network rollout, district-level deal, partnership with parent organization | "We've already solved this for one org — let's blanket all 8,000 charter schools." |
-| **D. Customer expansion (light)** | $50k – $150k | 3–5 more charter orgs as paying customers, keep founder-led | "L4L Fresno is paying for the product. I want 4 more like them." |
+| **A. Bootstrap / friends & angels** | $25k – $250k | 6–9 months part-time dev, onboard 2-3 design-partner charter orgs (free, in exchange for feedback + reference) | "We built it for our own warehouse and proved it works. Help me get it into 2-3 more charter orgs." |
+| **B. Pre-seed / seed VC** | $500k – $1.5M | 1–2 engineering hires, 1 sales hire, 18 months runway, convert design partners to first paying customers | "Working product, real-ops validation, clear path to vertical SaaS for charter operations." |
+| **C. Strategic / channel** | Variable | Charter-network rollout, district-level deal, partnership with a parent CMO | "We've already solved this for one charter org — let's blanket all 8,000 charter schools." |
 
-**Action: circle the path you're on:**  **A  /  B  /  C  /  D**
+**Action: circle the path you're on:**  **A  /  B  /  C**
 
-If you're not sure, **default to D for the first meeting**. It's the most defensible (you already have a customer and a working product) and lets you avoid making promises about scale you haven't tested.
+If you're not sure, **default to A for the first meeting**. It's the most honest given pre-revenue status, and it lets you avoid making promises about scale or paying-customer counts you haven't yet validated.
 
 ## Your specific path: A → B
 
-You've told me you're pursuing **paths A and B** — start with friends-and-angels for $50k–$250k to prove the model with 2–3 more customers, then go to seed VCs for $750k–$1.5M once the second customer is paying. This is the right sequence. Specifically:
+You're pursuing **paths A and B** — start with friends-and-angels for $50k–$250k to convert your internal pilot into 2–3 paying design-partner orgs, then go to seed VCs for $750k–$1.5M once design partners convert to paid. This is the right sequence. Specifically:
 
-**Meeting 1 (this one) — likely angels / friends.** Frame it as path A. Round size: **$150k–$250k**, valuation **$2M–$3M post-money**. Use of funds: keep building, onboard 2 charter design-partners, get to "two paying customers" milestone.
+**Meeting 1 (this one) — likely angels / friends.** Frame it as path A. Round size: **$150k–$250k**, valuation **$2M–$3M post-money**. Use of funds: keep building, onboard 2–3 charter design-partners (free pilot → paid conversion), get to "first paying customer" milestone.
 
 **Meeting 6–10 months from now — seed VCs.** Frame it as path B. Round size: **$750k–$1.5M**, valuation **$5M–$8M post-money** (your traction by then determines the upper bound). Use of funds: first engineering hire, sales lead, scale GTM.
 
@@ -193,12 +194,12 @@ Three things to nail down before the investor meeting:
 
 These are your differentiation talking points. Memorize them. Be able to say each in under 20 seconds.
 
-1. **"5 to 500 times cheaper than commercial WMS at every team size, every year, forever."**
-   No per-user fees. Run a 500-person warehouse for $3k/year instead of $1.5M/year.
+1. **"3 to 300 times cheaper than commercial WMS at every team size, every year, forever."**
+   No per-user fees. Run a 500-person warehouse for ~$3k/year vs. $150k–$1.5M+/year on enterprise WMS (see cost analysis for per-vendor breakdown).
 
 2. **"AI features that no commercial WMS bundles."**
-   AI Shelf Scan — one phone photo counts a whole shelf in 8 seconds.
-   AI Inventory Assistant — natural-language chat grounded in real DB queries; cannot hallucinate quantities.
+   AI Shelf Scan — one phone photo counts a whole shelf in 4–8 seconds.
+   AI Inventory Assistant — natural-language chat grounded in real tool calls against the live database; every numeric answer cites the SQL it ran.
    AI PO Import — paste a vendor invoice, get a draft PO automatically.
 
 3. **"Mobile-first, not mobile-as-afterthought."**
@@ -221,7 +222,7 @@ This is the *narrative* — the story that makes investors lean forward. Don't l
 
 ## The before/after story
 
-**Before:** A 20-person warehouse uses spreadsheets, paper, and email. The manager spends Friday afternoons reconciling counts that don't match. Cycle counts take 4 staff × 6 hours every quarter. A teacher who needs 30 textbooks emails three times before someone confirms the order. Buying NetSuite WMS to fix all this costs $50k year one, $36k/year forever, 6-month implementation, two weeks of staff training, and locks them into Oracle's ecosystem.
+**Before:** A 20-person warehouse uses spreadsheets, paper, and email. The manager spends Friday afternoons reconciling counts that don't match. Cycle counts take 4 staff × 6 hours every quarter. A teacher who needs 30 textbooks emails three times before someone confirms the order. Buying NetSuite WMS to fix all this costs ~$50k year one and ~$36k/year ongoing (at ~25 users — pricing scales per-seat from there), multi-month implementation, two weeks of staff training, and locks them into Oracle's ecosystem.
 
 **After (StockPilot):** Day-one deployment. Annual cost: under $1,500. Teacher fills a form, order lands in the queue, picker scans on their phone, manager sees real-time progress, signature captured at delivery. Quarterly cycle count: 24 hours becomes 90 minutes via AI shelf-scan. Every dollar that would have gone to Oracle stays in the org's actual mission.
 
@@ -253,19 +254,19 @@ Investors will ask these. Have a 30-second answer ready for each.
 
 ### Q3. "Why you? Why now?"
 
-> "I built this and operate it daily for our anchor customer. My co-founder brings 15+ years of warehouse operations experience [adjust to your manager's actual experience]. We have a working product, paying customer, real ops feedback loop. Two years ago this would have been a $5M startup. Today, with Vercel + Supabase + cheap inference, it's shippable by two people. We have an 18-month window before bigger players notice."
+> "I built this and run it daily as the internal warehouse system at my own organization, L4L Fresno — so the product is hardened by real ops use, not by a spec doc. My co-founder brings 10+ years of warehouse operations experience [adjust to your manager's actual tenure]. Two years ago this would have been a $5M startup. Today, with Vercel + Supabase + cheap inference, it's shippable by two people. We have an 18-month window before bigger players notice."
 
 ### Q4. "What are your unit economics?"
 
-> "At $500 per month per organization: gross margin around 95%, since infrastructure cost per customer is around $25/month at low scale. Target customer acquisition cost: under $5k. Sweet-spot annual contract value: $5k–$15k. We expect 14-month payback at the entry tier and 8-month payback once we land district-level deals."
+> "Target ACV $5k–$15k at the entry tier; $500/mo per organization is the price point we'll test first. Infrastructure cost per organization is ~$80/month at current pilot scale (Vercel + Supabase + Resend + Gemini, fully detailed in our cost analysis). That puts gross margins in the mid-80s at the entry tier and improves materially as we add customers, because most of the infrastructure cost is fixed not per-org. Target CAC: under $5k. Expected payback: 8–14 months."
 
 ### Q5. "What if your manager / co-founder leaves?"
 
-> "We have a 4-year vesting schedule with a 1-year cliff in writing. If they leave in year one, their equity returns to the pool. Beyond that, we're documenting the operational knowledge as we go — every workflow lives in our Procedures module, which we built specifically to codify domain expertise. Risk is real but it's mitigated."
+> "We have a 4-year vesting schedule with a 1-year cliff [agreement being finalized in writing before close]. If they leave in year one, their equity returns to the pool. Beyond that, we're documenting the operational knowledge as we go — every workflow lives in our Procedures module, which we built specifically to codify domain expertise. Risk is real but mitigated."
 
-### Q6. "You have one customer. Where's the customer concentration risk?"
+### Q6. "You're pre-revenue. Where's the validation?"
 
-> "L4L Fresno is our design partner — we're using them to harden the product. We have three additional charter orgs in late-stage conversations and expect to sign one as a paying customer this quarter. Our 18-month plan is to get to ten paying customers, none representing more than 20% of revenue." *(Build that pipeline before the meeting if you can.)*
+> "Fair question. L4L Fresno is my own organization — it's where the product runs in production every day, not a third-party deal I'm pitching as traction. That means a few real things: the product is battle-tested by daily warehouse use; I see the friction first-hand; and I'm not at risk of churn from my first deployment. What we don't have yet is a third-party paying customer — that's exactly what this round funds. We have [N] charter orgs in pipeline conversations and the goal is to convert 2–3 to paid design partners within 6 months." *(Build that pipeline number before the meeting and fill it in.)*
 
 ### Q7. "What's the exit?"
 
@@ -310,13 +311,13 @@ You have a working product. **Use it.** A 5-minute demo separates you from 95% o
 
 2. **(60 sec)** Click into an order. *"A teacher submitted this via our no-account public link — they didn't need to log in. The manager approves it, the system reserves stock automatically, and a picker on the floor sees it on their phone."*
 
-3. **(45 sec)** Demo the AI shelf-scan on a phone if possible (or a recorded clip if not). *"Watch — one photo, eight seconds, the system identifies every textbook on the shelf and updates inventory. This used to take 20 minutes of manual counting."*
+3. **(45 sec)** Demo the AI shelf-scan on a phone if possible (or a recorded clip if not). *"Watch — one photo, under ten seconds, the system identifies every textbook on the shelf and updates inventory. This used to take 20 minutes of manual counting."*
 
-4. **(45 sec)** Open the AI inventory assistant. Ask it a real question like *"how many Chromebooks do we have?"* — it answers from the live database. *"Notice how it shows which tool it called. We literally cannot hallucinate numbers — every answer comes from a real SQL query against their inventory."*
+4. **(45 sec)** Open the AI inventory assistant. Ask it a real question like *"how many Chromebooks do we have?"* — it answers from the live database. *"Notice how it shows which tool it called and the exact SQL it ran. Every numeric answer is grounded in a real query against the live database — no model-generated quantities."*
 
 5. **(30 sec)** Click into a PDF — packing slip or pick slip. *"Item photos inline. Org-local timezone. Looks like a Fortune 500 logistics doc, not a 2008 WMS printout."*
 
-6. **(30 sec)** Close it out. *"We did all of that with no per-user fees, no implementation cost, no 6-month onboarding. The cost to run this for our customer is about $80 a month."*
+6. **(30 sec)** Close it out. *"We did all of that with no per-user fees, no implementation cost, no multi-month onboarding. The infrastructure cost to run this is about $80 a month."*
 
 **Total: ~4 minutes.** Leaves room for questions.
 
@@ -426,9 +427,9 @@ If they don't respond within a week, send ONE polite follow-up. After that, let 
 
 **THE THREE NUMBERS THAT WIN THE MEETING**
 
-1. We cost $1,000/year. NetSuite WMS costs $50,000/year. Same workflows.
+1. We cost ~$1,000/year. NetSuite WMS costs ~$50k year-1 / ~$36k/yr ongoing at the same ~25-user scale. Same workflows.
 2. Quarterly cycle count: 24 hours → 90 minutes with AI shelf-scan.
-3. We have 1 paying customer + ____ in pipeline.
+3. We're in daily production at our own org. Pipeline: ____ charter orgs in conversation, ____ committed to pilot.
 
 ---
 
@@ -451,6 +452,37 @@ This is a strength, not a weakness. Founders who bullshit get caught. Founders w
 ___________________________________________________________________
 
 ___________________________________________________________________
+
+---
+
+\newpage
+
+# Appendix — Onboarding a new customer (magic-link runbook)
+
+When an investor signal turns into a real "yes, let's pilot this," you'll want a 5-minute white-glove onboarding rather than pointing them at a self-serve signup form (which is intentionally disabled — StockPilot is invite-only). Use this until the superadmin "Create Org For" panel ships.
+
+### The flow
+
+1. **You collect from the customer:** their work email, the org name they want to use, their timezone, and their warehouse list. Two minutes on a call or in email.
+
+2. **You create their Supabase auth account:**
+   - Open the Supabase Dashboard for the StockPilot project → Authentication → Users
+   - Click **Invite user** → enter their email → send
+   - Supabase emails them a magic link
+
+3. **They click the link** in their inbox. Lands them on stockpilotusa.com, signed in. Because they have no organization yet, the middleware sends them to `/onboarding`.
+
+4. **They fill out the org form** — name, timezone, currency, optional industry/size. The system creates their org, makes them the owner, and seeds a default "Main Warehouse" so they can add items immediately.
+
+5. **You follow up by phone** to walk them through their first 3 actions: add a warehouse, add a category, add an item. Takes 10 minutes. Now they're live.
+
+### What to charge
+
+Until you've validated pricing with the first 3 paying pilots, **don't list a price publicly**. Send each one a one-page agreement with the price you want to test ($500/mo per org is the reference point in this workbook), give them the first 60 days free in exchange for committing to either pay or churn at day 60. That's a design-partner deal — gives you fast feedback without making it a freebie forever.
+
+### When to upgrade this process
+
+Once you have 3+ active orgs, the manual Supabase-invite step becomes the bottleneck. At that point you'll have the superadmin "Create Org For" admin panel that lets you provision name + email + org details in one place and sends the magic-link automatically. That's a few-hours feature build — schedule it when you've got the pipeline volume to justify it.
 
 ---
 
