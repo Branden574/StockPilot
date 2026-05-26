@@ -28,6 +28,13 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // Same response is returned for every visitor of the same
+  // (token, warehouseId) pair until item-image or warehouse-publicity state
+  // changes. Allow the Vercel CDN to serve it from edge for 60s and serve
+  // stale-while-revalidate for another 5 minutes. Anonymous endpoint —
+  // no personalization, no auth context — so public-cache is safe.
+  const cdnCacheControl = 'public, s-maxage=60, stale-while-revalidate=300';
+
   const admin = createAdminClient();
 
   // Resolve org by token.
@@ -36,7 +43,9 @@ export async function GET(req: NextRequest) {
     .select('id')
     .eq('public_request_token', token)
     .maybeSingle();
-  if (!org) return NextResponse.json({ urls: {} });
+  if (!org) {
+    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
+  }
   const organizationId = (org as { id: string }).id;
 
   // Confirm warehouseId belongs to this org and is publicly orderable.
@@ -47,7 +56,9 @@ export async function GET(req: NextRequest) {
     .eq('organization_id', organizationId)
     .eq('is_public_orderable', true)
     .maybeSingle();
-  if (!wh) return NextResponse.json({ urls: {} });
+  if (!wh) {
+    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
+  }
 
   // Get book item_ids for this warehouse.
   const { data: items } = await admin
@@ -61,7 +72,9 @@ export async function GET(req: NextRequest) {
     .limit(500);
 
   const itemIds = ((items ?? []) as Array<{ id: string }>).map((i) => i.id);
-  if (itemIds.length === 0) return NextResponse.json({ urls: {} });
+  if (itemIds.length === 0) {
+    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
+  }
 
   // Use ItemImagesService with an admin-level ctx so it can sign URLs.
   const imagesSvc = new ItemImagesService({
@@ -77,5 +90,5 @@ export async function GET(req: NextRequest) {
   const urls: Record<string, string> = {};
   for (const [k, v] of urlMap) urls[k] = v;
 
-  return NextResponse.json({ urls });
+  return NextResponse.json({ urls }, { headers: { 'Cache-Control': cdnCacheControl } });
 }
