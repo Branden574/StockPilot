@@ -1,6 +1,7 @@
 'use client';
 
 import { MapPin, Minus, Plus } from 'lucide-react';
+import Image from 'next/image';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -113,16 +114,24 @@ export function ItemCard({ item }: ItemCardProps) {
           />
         ) : null}
 
-        {/* Layer 3 — real photo; fades in once URL arrives */}
+        {/* Layer 3 — real photo; fades in once URL arrives.
+            Routed through next/image so Supabase signed-URL thumbnails
+            get AVIF/WebP transcoding + edge cache (24h per next.config
+            minimumCacheTTL). The fill + sizes hints let the optimizer
+            pick the right transform size for the grid cell — typical
+            sm:grid-cols-2 → md:4 → lg:6 layout means ~25vw on tablet
+            and ~16vw on desktop. The fade-in onLoad handler is
+            preserved exactly — next/image renders an underlying <img>
+            and surfaces its load event the same way. */}
         {item.imageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <Image
             src={item.imageUrl}
             alt=""
+            fill
+            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 200px"
             loading="lazy"
-            decoding="async"
-            className="absolute inset-0 h-full w-full object-cover opacity-0 transition-opacity duration-300 [&.loaded]:opacity-100"
-            onLoad={(e) => e.currentTarget.classList.add('loaded')}
+            className="object-cover opacity-0 transition-opacity duration-300 [&.loaded]:opacity-100"
+            onLoad={(e) => (e.currentTarget as HTMLImageElement).classList.add('loaded')}
           />
         ) : null}
 
