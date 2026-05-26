@@ -1,3 +1,4 @@
+import { unstable_cache } from 'next/cache';
 import Image from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -24,6 +25,35 @@ function isAllowedLogoUrl(value: string | null): value is string {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * Cached resolver: token → minimal org row. Called from both
+ * generateMetadata AND the page render in the same request — caching
+ * dedupes both within one render AND lets repeat visits within 60s
+ * skip the Supabase round-trip entirely.
+ *
+ * Stale window for an org name/logo/blurb is acceptable; renames and
+ * blurb edits are extremely rare and 60s drift on a public landing
+ * page is invisible. If a token is rotated/revoked, the prior owner
+ * could see stale rendering for up to 60s — but the order-submit
+ * endpoint validates the token fresh on POST, so submissions still
+ * fail closed even if the page renders stale.
+ */
+const getOrgByPublicToken = unstable_cache(
+  async (token: string) => {
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from('organizations')
+      .select('id, name, logo_url, public_request_blurb')
+      .eq('public_request_token', token)
+      .maybeSingle();
+    return data as
+      | { id: string; name: string; logo_url: string | null; public_request_blurb: string | null }
+      | null;
+  },
+  ['public-org-by-token-v1'],
+  { revalidate: 60, tags: ['public-org-by-token'] },
+);
 
 /**
  * Public order-request landing page.
@@ -54,13 +84,8 @@ export async function generateMetadata({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const admin = createAdminClient();
-  const { data } = await admin
-    .from('organizations')
-    .select('name')
-    .eq('public_request_token', token)
-    .maybeSingle();
-  const orgName = (data as { name?: string } | null)?.name ?? 'Order request';
+  const orgRow = await getOrgByPublicToken(token);
+  const orgName = orgRow?.name ?? 'Order request';
   return {
     title: `${orgName} · Place an order`,
     robots: { index: false, follow: false },
@@ -79,21 +104,11 @@ export default async function PublicOrderRequestPage({
   const sp = await searchParams;
   const warehouseQuery = Array.isArray(sp.w) ? sp.w[0] : sp.w;
 
+  // 1. Resolve the org. 404 silently if the token is unknown. Shared
+  // cached lookup with generateMetadata above — same DB row, one fetch.
+  const org = await getOrgByPublicToken(token);
+  if (!org) notFound();
   const admin = createAdminClient();
-
-  // 1. Resolve the org. 404 silently if the token is unknown.
-  const { data: orgRow } = await admin
-    .from('organizations')
-    .select('id, name, logo_url, public_request_blurb')
-    .eq('public_request_token', token)
-    .maybeSingle();
-  if (!orgRow) notFound();
-  const org = orgRow as {
-    id: string;
-    name: string;
-    logo_url: string | null;
-    public_request_blurb: string | null;
-  };
 
   // 2. Eligible warehouses.
   const { data: whRows } = await admin
