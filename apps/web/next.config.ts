@@ -11,17 +11,36 @@ const nextConfig: NextConfig = {
 
   typedRoutes: true,
   experimental: {
-    // Tree-shake big icon/animation libs in dev so route compiles stay fast.
+    // Tree-shake the barrel-exporting packages we actually use. framer-motion
+    // and recharts were removed from deps (no source imports them); keeping
+    // them in the list would have been a no-op anyway.
     optimizePackageImports: [
       'lucide-react',
-      'framer-motion',
-      'recharts',
+      'cmdk',
+      'sonner',
+      'react-hook-form',
+      '@hookform/resolvers',
+      'react-markdown',
+      'remark-gfm',
       '@radix-ui/react-dialog',
       '@radix-ui/react-dropdown-menu',
       '@radix-ui/react-select',
       '@radix-ui/react-tabs',
       '@radix-ui/react-tooltip',
+      '@radix-ui/react-popover',
+      '@radix-ui/react-avatar',
+      '@radix-ui/react-toast',
+      '@radix-ui/react-scroll-area',
+      '@radix-ui/react-switch',
+      '@radix-ui/react-separator',
     ],
+    // Keep prefetched RSC payloads warm a bit longer than Next 16 default
+    // (0s for dynamic) so tab-switching inside the dashboard feels instant.
+    // 30s dynamic / 180s static covers a typical session of clicking around.
+    staleTimes: {
+      dynamic: 30,
+      static: 180,
+    },
   },
 
   images: {
@@ -32,6 +51,13 @@ const nextConfig: NextConfig = {
       { protocol: 'https', hostname: 'avatars.githubusercontent.com' },
     ],
     formats: ['image/avif', 'image/webp'],
+    // Supabase signed URLs expire on a 7-day cadence (SIGNED_URL_TTL_SEC).
+    // Default Vercel image-optimizer cache is 60s, which means re-fetching
+    // the same signed URL ~10,000× over the URL's lifetime. Cache for
+    // 24h instead — the signed URL itself is still validated on each
+    // optimization request, and the upstream Supabase byte payload
+    // doesn't change.
+    minimumCacheTTL: 86400,
   },
 
   transpilePackages: ['@stockpilot/core'],

@@ -10,10 +10,16 @@ import { APP_DESCRIPTION, APP_NAME } from '@stockpilot/core';
 
 import './globals.css';
 
+// `preload: false` on Inter (body sans) and JetBrains_Mono (SKU/mono code):
+// the marketing landing's LCP candidate is the H1 styled with --font-display
+// (Inter_Tight) + the italic --font-serif (Instrument_Serif), so preloading
+// the other two competes for connection slots without paying off. They still
+// load lazily on first use (display: swap means the fallback shows briefly).
 const inter = Inter({
   subsets: ['latin'],
   display: 'swap',
   variable: '--font-sans',
+  preload: false,
 });
 
 const interTight = Inter_Tight({
@@ -35,6 +41,7 @@ const jetbrains = JetBrains_Mono({
   subsets: ['latin'],
   display: 'swap',
   variable: '--font-mono',
+  preload: false,
 });
 
 export const metadata: Metadata = {
