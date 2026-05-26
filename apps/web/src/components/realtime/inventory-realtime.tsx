@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import * as React from 'react';
 
 import { createClient } from '@/lib/supabase/client';
@@ -14,6 +14,32 @@ interface InventoryRealtimeProps {
    */
   tables?: Array<'inventory_items' | 'stock_movements' | 'purchase_orders' | 'rentals'>;
 }
+
+/**
+ * Routes that have nothing to do with live inventory/orders/POs/rentals.
+ * On these paths the realtime WebSocket is skipped entirely — no
+ * subscription opens, no router.refresh() ever fires. Sole purpose:
+ * stop paying for a WebSocket on routes whose RSC payload doesn't
+ * change from inventory mutations (settings, reports, admin config,
+ * schedule, procedures, etc).
+ *
+ * If you add a new dashboard section that needs live updates, omit it
+ * from this list. New admin/config sections SHOULD be added here so
+ * they don't open a useless socket.
+ */
+const REALTIME_SKIP_PREFIXES = [
+  '/dashboard/admin',
+  '/dashboard/settings',
+  '/dashboard/reports',
+  '/dashboard/schedule',
+  '/dashboard/procedures',
+  '/dashboard/team',
+  '/dashboard/locations',
+  '/dashboard/categories',
+  '/dashboard/tags',
+  '/dashboard/suppliers',
+  '/dashboard/ai',
+];
 
 /**
  * Subscribes to org-scoped postgres_changes on the requested tables and
@@ -31,6 +57,12 @@ export function InventoryRealtime({
   tables = ['inventory_items', 'stock_movements', 'purchase_orders', 'rentals'],
 }: InventoryRealtimeProps) {
   const router = useRouter();
+  const pathname = usePathname();
+  // Short-circuit on routes that don't need realtime — no WebSocket opens.
+  const skip = React.useMemo(
+    () => REALTIME_SKIP_PREFIXES.some((p) => pathname?.startsWith(p)),
+    [pathname],
+  );
   // Leading-edge throttle: the FIRST event fires router.refresh()
   // immediately so single inserts (e.g. mobile → web) feel instant;
   // subsequent events within the throttle window collapse into one
@@ -43,6 +75,7 @@ export function InventoryRealtime({
   const pendingRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
+    if (skip) return;
     // Wrap the entire realtime setup in try/catch. If a browser blocks
     // WebSockets (some Chrome enterprise policies, certain extensions,
     // restrictive networks), an exception thrown here would unmount the
@@ -102,7 +135,7 @@ export function InventoryRealtime({
       }
       for (const fn of cleanup) fn();
     };
-  }, [organizationId, router, tables]);
+  }, [organizationId, router, tables, skip]);
 
   return null;
 }
