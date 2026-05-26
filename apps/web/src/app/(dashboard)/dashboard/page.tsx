@@ -17,7 +17,8 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
-import { BigChart, MiniBarChart } from '@/components/dashboard/big-chart';
+import { BigChart } from '@/components/dashboard/big-chart';
+import { MiniBarChart } from '@/components/dashboard/mini-bar-chart';
 import { EmptyState } from '@/components/ui/empty-state';
 import { GetStartedChecklist } from '@/components/dashboard/get-started-checklist';
 import { StatCard } from '@/components/dashboard/stat-card';

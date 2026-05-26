@@ -90,31 +90,6 @@ export function BigChart({ data, height = 240, className }: BigChartProps) {
   );
 }
 
-interface BarChartProps {
-  values: number[];
-  height?: number;
-  className?: string;
-}
-
-export function MiniBarChart({ values, height = 120, className }: BarChartProps) {
-  const max = Math.max(...values, 1);
-  return (
-    <div
-      className={className}
-      style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height }}
-      aria-hidden
-    >
-      {values.map((v, i) => (
-        <div
-          key={i}
-          style={{
-            flex: 1,
-            height: `${(v / max) * 100}%`,
-            background: 'linear-gradient(180deg, hsl(var(--foreground)/0.85), hsl(var(--foreground)/0.4))',
-            borderRadius: 2,
-          }}
-        />
-      ))}
-    </div>
-  );
-}
+// MiniBarChart lives in its own file (mini-bar-chart.tsx). Importing it
+// from there directly keeps it a Server Component instead of being
+// dragged into this 'use client' module's client bundle.
