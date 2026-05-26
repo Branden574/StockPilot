@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { env } from '@/lib/env';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -126,8 +127,18 @@ export async function POST(req: NextRequest) {
     p_signature_data_url: parsed.data.signatureDataUrl,
   });
   if (error) {
+    await reportError(error, {
+      tag: 'orders.sign.rpc',
+      extra: { orderId: order.id },
+    });
     return NextResponse.json(
-      { ok: false, error: { code: 'internal_error', message: error.message } },
+      {
+        ok: false,
+        error: {
+          code: 'internal_error',
+          message: 'Signature could not be recorded. Please try again.',
+        },
+      },
       { status: 500 },
     );
   }
