@@ -1,82 +1,52 @@
 # StockPilot
 
-> Premium multi-tenant inventory SaaS. Web (Next.js 16) + iOS/Android (Expo, Phase 7) + Supabase Postgres backend.
+> Internal warehouse + inventory operations platform — web (Next.js 16) + iOS/Android (Expo) + Supabase Postgres backend.
+
+StockPilot is in production as the internal inventory system for L4L Fresno (a charter-school operation with four warehouses, ~10–20 staff). Pivoted 2026-05-04 from a public multi-tenant SaaS to an invite-only internal tool. Multi-tenant SaaS remains a path-B roadmap target — see [`docs/INVESTOR-MEETING-PREP.md`](./docs/INVESTOR-MEETING-PREP.md) for the current product positioning.
 
 ## Stack
 
-- **Web:** Next.js 16 · TypeScript · Tailwind CSS v4 · shadcn/ui · Framer Motion · TanStack Query · React Hook Form + Zod
-- **Backend:** Supabase Postgres 16 (RLS, Auth, Storage, Realtime, Edge Functions)
-- **Payments:** Stripe Billing
+- **Web:** Next.js 16 · TypeScript · Tailwind CSS v4 · shadcn/ui · TanStack Query · React Hook Form + Zod
+- **Mobile:** Expo / React Native (iOS + Android) — scanning, counting, on-floor adjustments
+- **Backend:** Supabase Postgres 16 (RLS, Auth, Storage, Realtime)
 - **Email:** Resend + React Email
+- **AI:** Google Gemini (chat assistant, shelf-scan CV, PO-import OCR)
 - **Monorepo:** Turborepo + pnpm workspaces
-- **Hosting:** Vercel (web) · Supabase (backend) · EAS (mobile, Phase 7)
-
-See [`BLUEPRINT.md`](./BLUEPRINT.md) for the full architecture, schema, and 10-phase roadmap.
+- **Hosting:** Vercel (web) · Supabase (backend) · EAS (mobile)
 
 ## Repo layout
 
 ```
 .
 ├── apps/
-│   └── web/                Next.js 16 marketing + dashboard
+│   ├── web/                Next.js 16 marketing + dashboard
+│   └── mobile/             Expo React Native app
 ├── packages/
-│   ├── core/               Shared types, Zod schemas, constants (used by web + future mobile)
+│   ├── core/               Shared types, Zod schemas, constants
 │   ├── db/                 Database documentation
 │   └── config/             Shared tsconfig + ESLint preset
 ├── supabase/
-│   ├── migrations/         SQL migrations (0001_init, 0002_inventory, 0003_rls)
+│   ├── migrations/         SQL migrations — every schema change goes here
 │   ├── config.toml         Local Supabase config
 │   └── seed.sql            Local dev seed
-└── BLUEPRINT.md            Full product + technical blueprint
+└── docs/                   Investor materials, system guide, cost analysis
 ```
 
 ## Prerequisites
 
-- **Node.js** ≥ 20.11 (use `nvm use` — the `.nvmrc` points to 20.11.0)
+- **Node.js** ≥ 20.11 (`nvm use` — `.nvmrc` points to 20.11.0)
 - **pnpm** ≥ 9 (`npm install -g pnpm`)
-- **Supabase CLI** for local development (`brew install supabase/tap/supabase`)
+- **Supabase CLI** (`brew install supabase/tap/supabase`)
 - **Vercel CLI** (recommended): `npm install -g vercel`
-- **Stripe CLI** (for webhook testing): `brew install stripe/stripe-cli/stripe`
 
 ## Getting started
 
-### 1. Install dependencies
-
 ```bash
 pnpm install
+supabase start                 # boots local Postgres, Auth, Storage, Studio
+cp apps/web/.env.example apps/web/.env.local   # fill from `supabase status`
+pnpm dev                       # web app at http://localhost:3000
 ```
-
-### 2. Start local Supabase
-
-```bash
-supabase start
-```
-
-This boots Postgres, GoTrue auth, Storage, Studio (`http://localhost:54323`), and the inbucket dev mailbox (`http://localhost:54324`).
-
-### 3. Apply migrations + seed
-
-Migrations in `supabase/migrations/` run automatically on `supabase start`. To re-apply:
-
-```bash
-pnpm db:reset
-```
-
-### 4. Configure env
-
-```bash
-cp apps/web/.env.example apps/web/.env.local
-```
-
-Fill in `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY` from `supabase status`. Stripe and Resend can stay blank for now — they're only required at the Phase 6 / 4 boundaries respectively.
-
-### 5. Run the dev server
-
-```bash
-pnpm dev
-```
-
-The web app boots at [http://localhost:3000](http://localhost:3000).
 
 ## Useful commands
 
@@ -85,12 +55,11 @@ The web app boots at [http://localhost:3000](http://localhost:3000).
 | `pnpm dev` | Starts the web dev server (Turbopack) |
 | `pnpm build` | Production build via Turbo |
 | `pnpm typecheck` | TypeScript across all packages |
-| `pnpm lint` | ESLint via Next.js |
+| `pnpm lint` | ESLint via Next.js + Expo |
 | `pnpm format` | Prettier write |
-| `pnpm format:check` | Prettier check (CI) |
 | `pnpm db:reset` | Drop + reapply local migrations |
 | `pnpm db:push` | Push pending migrations to linked Supabase project |
-| `pnpm db:types` | Regenerate `packages/core/src/types/database.ts` from the live schema |
+| `pnpm db:types` | Regenerate `packages/core/src/types/database.ts` |
 
 ## Environments
 
@@ -98,32 +67,19 @@ The web app boots at [http://localhost:3000](http://localhost:3000).
 |---|---|---|
 | Local | `pnpm dev` | `supabase start` |
 | Preview | Vercel preview per PR | Supabase dev project |
-| Staging | Vercel staging | Supabase staging project |
-| Production | Vercel prod | Supabase prod project |
+| Production | Vercel prod (stockpilotusa.com) | Supabase prod project |
 
-## Linting & formatting
+## Onboarding a new org
 
-Prettier config lives under the `"prettier"` key of the root `package.json`. ESLint runs via `next lint` using `next/core-web-vitals` defaults — no custom config file is checked in (the harness blocks linter config edits in this workspace; add one locally if you want stricter rules).
+Public `/signup` is intentionally disabled (StockPilot is invite-only). To onboard a new organization today, see the magic-link runbook in the Appendix of [`docs/INVESTOR-MEETING-PREP.md`](./docs/INVESTOR-MEETING-PREP.md) — about 5 minutes per org via the Supabase Dashboard.
 
-## What's in Phase 1 (this commit)
+## Documentation
 
-- Monorepo (`apps/web`, `packages/core`, `packages/config`, `packages/db`)
-- Next.js 16 + Tailwind v4 + shadcn primitives + theme provider (light/dark/system)
-- Supabase server / browser / admin clients + auth-aware middleware
-- Foundational migrations: organizations, user_profiles, organization_members, organization_invites — RLS enabled with helper functions (`is_org_member`, `user_org_role`, `has_org_role`)
-- Inventory + RLS migrations also included so Phase 2 starts with the schema in place
-- Auth flows: sign in, sign up, password reset, OAuth/email-confirm callback
-- Onboarding: create-organization wizard, default location seeded
-- Marketing landing: hero with floating cards + dashboard mockup, feature grid, use cases, pricing toggle, FAQ, final CTA
-- Dashboard shell: sidebar nav, topbar, user menu, stat cards, empty state, dashboard home
-- Stripe + Resend env scaffolding (no implementation yet — wired up in Phases 4/6)
-- Zod schemas + shared types in `@stockpilot/core`
-- GitHub Actions CI workflow
-
-## Phase 2 next
-
-Inventory CRUD (table, drawer form, detail page), categories, locations, suppliers, stock movements, low-stock dashboard card. The schema is already in place — just needs UI + service-layer logic.
-
----
-
-© StockPilot — built carefully on purpose.
+| File | Audience |
+|---|---|
+| [`docs/SYSTEM-GUIDE.md`](./docs/SYSTEM-GUIDE.md) | Engineers / architecture deep-dive |
+| [`docs/WAREHOUSING-OVERVIEW.md`](./docs/WAREHOUSING-OVERVIEW.md) | Operators / what the system does in plain English |
+| [`docs/COST-AND-VALUE.md`](./docs/COST-AND-VALUE.md) | Investors / customers — operating cost vs. commercial WMS |
+| [`docs/INVESTOR-MEETING-PREP.md`](./docs/INVESTOR-MEETING-PREP.md) | Founder — pitch workbook + onboarding runbook |
+| [`BLUEPRINT.md`](./BLUEPRINT.md) | Historical — pre-pivot architecture plan (superseded 2026-05-04) |
+| [`SECURITY.md`](./SECURITY.md) | Security disclosure process |
