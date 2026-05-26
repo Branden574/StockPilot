@@ -126,6 +126,9 @@ export function ScrollyWarehouse() {
         .scrolly-chip-1 { opacity: clamp(0, min(calc((var(--p) - 0.08) * 8), calc((0.96 - var(--p)) * 10)), 1); transform: translate3d(calc(max(0px, (0.14 - var(--p)) * 60px)), 0, 0); }
         .scrolly-chip-2 { opacity: clamp(0, min(calc((var(--p) - 0.28) * 8), calc((0.96 - var(--p)) * 10)), 1); transform: translate3d(calc(max(0px, (0.34 - var(--p)) * 60px)), 0, 0); }
         .scrolly-chip-3 { opacity: clamp(0, min(calc((var(--p) - 0.48) * 8), calc((0.96 - var(--p)) * 10)), 1); transform: translate3d(calc(max(0px, (0.54 - var(--p)) * 60px)), 0, 0); }
+        .scrolly-chip-4 { opacity: clamp(0, min(calc((var(--p) - 0.30) * 8), calc((0.96 - var(--p)) * 10)), 1); transform: translate3d(calc(max(0px, (0.36 - var(--p)) * 60px)), 0, 0); }
+        .scrolly-chip-5 { opacity: clamp(0, min(calc((var(--p) - 0.62) * 8), calc((0.96 - var(--p)) * 10)), 1); transform: translate3d(calc(max(0px, (0.68 - var(--p)) * 60px)), 0, 0); }
+        .scrolly-chip-6 { opacity: clamp(0, min(calc((var(--p) - 0.74) * 8), calc((0.96 - var(--p)) * 10)), 1); transform: translate3d(calc(max(0px, (0.80 - var(--p)) * 60px)), 0, 0); }
         .scrolly-chapter-title {
           opacity: clamp(0, calc(var(--p) * 6), 1);
           transform: translate3d(0, calc(max(0px, (0.05 - var(--p)) * 60px)), 0);
@@ -423,6 +426,29 @@ function MetricChips() {
         style={{ top: '72vh', left: '6vw' }}
         label="LOW STOCK"
         value="3 items · 1 critical"
+        accent="#f5b042"
+      />
+      {/* Three quieter chips that surface other capabilities without */}
+      {/* crowding the warehouse — Procedures, Real-time, Mobile. */}
+      <Chip
+        className="scrolly-chip-4"
+        style={{ top: '78vh', left: '34vw' }}
+        label="PROCEDURES"
+        value="14 with video"
+        accent="#46c2ca"
+      />
+      <Chip
+        className="scrolly-chip-5"
+        style={{ top: '58vh', right: '4vw' }}
+        label="REAL-TIME"
+        value="sub-250ms sync"
+        accent="#ff7a45"
+      />
+      <Chip
+        className="scrolly-chip-6"
+        style={{ top: '80vh', right: '8vw' }}
+        label="MOBILE"
+        value="iOS + Android"
         accent="#f5b042"
       />
     </>
