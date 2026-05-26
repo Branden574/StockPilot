@@ -1,7 +1,16 @@
 # StockPilot — Premium Inventory SaaS Blueprint
 
+> **⚠ SUPERSEDED 2026-05-04.** This blueprint describes the original
+> multi-tenant SaaS positioning written in April 2026 before the
+> product pivoted to an invite-only internal tool for L4L Fresno (the
+> founder's own organization). It remains in the repo as a record of
+> the original architectural plan and as the path-B roadmap if/when
+> StockPilot extends to other charter orgs. For current strategy and
+> positioning, see [`docs/INVESTOR-MEETING-PREP.md`](./docs/INVESTOR-MEETING-PREP.md)
+> and [`docs/COST-AND-VALUE.md`](./docs/COST-AND-VALUE.md).
+
 **Working name:** StockPilot
-**Document version:** v1.0 — 2026-04-28
+**Document version:** v1.0 — 2026-04-28 (superseded 2026-05-04)
 **Author:** Founding engineering plan
 
 > Core promise: *"Know exactly what you have, where it is, who moved it, and when you need more."*
