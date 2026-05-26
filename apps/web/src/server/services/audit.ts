@@ -146,7 +146,11 @@ export type AuditEvent =
   | 'mfa.recovery.failed'
   // Ownership transfer — the action doesn't exist yet but the event
   // type lets the fixer agent emit it when the missing flow lands.
-  | 'organization.ownership.transferred';
+  | 'organization.ownership.transferred'
+  // Platform-admin provisioned a brand-new tenant org for a customer
+  // via /dashboard/admin/orgs/new. Cross-org event: organization_id
+  // is the NEW org's id; user_id is the platform admin who acted.
+  | 'organization.provisioned_by_platform_admin';
 
 interface AuditPayload {
   event: AuditEvent;

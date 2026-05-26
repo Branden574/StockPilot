@@ -1,7 +1,8 @@
-import { Building2, FileLock, type LucideIcon, Users, Warehouse } from 'lucide-react';
+import { Building2, FileLock, type LucideIcon, PlusCircle, Users, Warehouse } from 'lucide-react';
 import Link from 'next/link';
 
-import { requireOrgContext } from '@/lib/auth/session';
+import { isPlatformAdmin } from '@/lib/auth/platform-admin';
+import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 
 interface AdminCard {
@@ -14,6 +15,8 @@ interface AdminCard {
 
 export default async function AdminOverviewPage() {
   const ctx = await requireOrgContext();
+  const session = await requireSession();
+  const platformAdmin = isPlatformAdmin(session.email);
   const supabase = await createClient();
 
   const [chartersRes, warehousesRes, membersRes, invitesRes, auditRes] = await Promise.all([
@@ -89,6 +92,33 @@ export default async function AdminOverviewPage() {
           Configure the company structure, manage user access, and review what changed.
         </p>
       </div>
+
+      {platformAdmin && (
+        <div className="mb-6 rounded-[10px] border border-border bg-card p-5">
+          <div className="mb-1 flex items-center gap-2">
+            <PlusCircle className="h-4 w-4 text-foreground" strokeWidth={1.5} />
+            <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
+              Platform admin
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="font-display text-[15px] font-medium tracking-[-0.01em]">
+                Provision a new organization
+              </div>
+              <p className="text-[12.5px] leading-[1.55] text-[var(--ed-ink-3)]">
+                Create a customer account + org + magic-link invite in one step. Audit-logged.
+              </p>
+            </div>
+            <Link
+              href="/dashboard/admin/orgs/new"
+              className="rounded-md border border-border bg-background px-3 py-1.5 text-[12.5px] font-medium hover:border-[var(--ed-line-strong)]"
+            >
+              Open
+            </Link>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
         {cards.map((c) => (
