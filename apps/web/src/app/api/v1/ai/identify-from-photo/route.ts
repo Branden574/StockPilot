@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
   // 30 cover-IDs per minute per user is way over the realistic mobile
   // capture cadence; a tighter cap is fine here because Vision calls
   // are heavier (image upload + multi-second model latency).
-  const rl = await checkRateLimit(`ai-vision:${ctx.userId}`, 30, 60_000);
+  const rl = await checkRateLimit(`ai-vision:${ctx.userId}`, 30, 60_000, 'closed');
   if (!rl.allowed) {
     return NextResponse.json(
       {
