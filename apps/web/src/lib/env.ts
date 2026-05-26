@@ -61,6 +61,20 @@ const serverSchema = z.object({
     // the current production model with its own free quota allotment.
     .default('gemini-2.5-flash')
     .transform((s) => s.trim()),
+
+  // Comma-separated allowlist of email addresses that may access the
+  // platform-admin surfaces (e.g. /dashboard/admin/orgs/new — provision
+  // a new tenant org for a customer). Server-only check; not in the JWT,
+  // not in any client bundle. Matched case-insensitively against the
+  // signed-in user's email. Leave unset in environments where no user
+  // should have platform-admin access.
+  STOCKPILOT_PLATFORM_ADMIN_EMAILS: optionalSecret.transform((s) =>
+    s
+      .split(',')
+      .map((part) => part.trim().toLowerCase())
+      .filter(Boolean)
+      .join(','),
+  ),
 });
 
 const clientSchema = z.object({
