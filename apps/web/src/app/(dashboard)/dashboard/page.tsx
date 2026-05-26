@@ -38,6 +38,11 @@ import { CycleCountsService } from '@/server/services/cycle-counts';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { requireOrgContext } from '@/lib/auth/session';
+import {
+  getMfaFactorsForRequest,
+  getOrgRowForRequest,
+  getWarehousesForRequest,
+} from '@/lib/dashboard/request-cache';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
@@ -126,11 +131,15 @@ export default async function DashboardHome() {
     cycleInProgress,
     pendingApprovals,
     awaitingSignature,
-    whCountRes,
     teamCountRes,
-    factorsRes,
     activeWhNameRes,
-    orgRes,
+    // Request-cached: these three (warehousesList, mfaFactors, orgRow)
+    // are already fetched by the dashboard layout in the same render.
+    // React.cache() guarantees we get the layout's result without a
+    // second Supabase round-trip per page render.
+    warehousesList,
+    mfaFactors,
+    orgRow,
   ] = await Promise.all([
     getDashboardSummary({ warehouseId: warehouseFilter ?? undefined }),
     getLowStockItems(5, { warehouseId: warehouseFilter ?? undefined }),
@@ -156,16 +165,10 @@ export default async function DashboardHome() {
       svc.awaitingSignatureCount(),
     ),
     supabase
-      .from('warehouses')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', ctx.organizationId)
-      .neq('status', 'archived'),
-    supabase
       .from('organization_members')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', ctx.organizationId)
       .not('accepted_at', 'is', null),
-    supabase.auth.mfa.listFactors(),
     warehouseFilter
       ? supabase
           .from('warehouses')
@@ -173,18 +176,14 @@ export default async function DashboardHome() {
           .eq('id', warehouseFilter)
           .maybeSingle()
       : Promise.resolve({ data: null }),
-    supabase
-      .from('organizations')
-      .select('timezone')
-      .eq('id', ctx.organizationId)
-      .maybeSingle(),
+    getWarehousesForRequest(ctx.organizationId),
+    getMfaFactorsForRequest(),
+    getOrgRowForRequest(ctx.organizationId),
   ]);
   const activeWarehouseName = (activeWhNameRes.data?.name as string | undefined) ?? null;
-  const warehouseCount = whCountRes.count ?? 0;
+  const warehouseCount = warehousesList.length;
   const teamCount = teamCountRes.count ?? 0;
-  const hasVerifiedFactor = (factorsRes.data?.all ?? []).some(
-    (f) => f.status === 'verified',
-  );
+  const hasVerifiedFactor = mfaFactors.some((f) => f.status === 'verified');
 
   const checklistSteps = [
     {
@@ -326,7 +325,7 @@ export default async function DashboardHome() {
   // org's saved timezone (see organizations.timezone, default 'UTC') so a
   // late-night warehouse in Tokyo doesn't say "good morning" because the
   // Vercel pod woke up in Virginia at 9am ET.
-  const orgTimezone = (orgRes.data?.timezone as string | null | undefined) ?? null;
+  const orgTimezone = orgRow?.timezone ?? null;
   const { word: greetingWord, dateLabel: today } = buildGreeting(orgTimezone);
   const firstName = ctx.fullName?.split(' ')[0]?.trim() || 'there';
 

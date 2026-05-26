@@ -7,6 +7,11 @@ import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
 import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
 import { requireOrgContext } from '@/lib/auth/session';
+import {
+  getMfaFactorsForRequest,
+  getOrgRowForRequest,
+  getWarehousesForRequest,
+} from '@/lib/dashboard/request-cache';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
@@ -39,28 +44,23 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const ctx = await requireOrgContext();
   const supabase = await createClient();
 
-  // Layout-blocking parallel fan-out. Org row + warehouses list query
-  // directly (no unstable_cache) — the cached variants were rolled
-  // back because they triggered a digest-only 500 in Server Action
-  // POST response render under Next.js 16. Revisit caching once a
-  // safe pattern is confirmed.
+  // Layout-blocking parallel fan-out. Org row, warehouses list, and MFA
+  // factors go through request-cached helpers so the dashboard page (or
+  // any other page in this layout) reuses the same fetch instead of
+  // re-issuing the same Supabase queries in its own Promise.all.
   const [
     access,
     activeWarehouseId,
-    orgRowRes,
-    factorsRes,
+    orgRow,
+    mfaFactors,
     membershipsRes,
     unreadRes,
-    warehousesListRes,
+    warehousesList,
   ] = await Promise.all([
     getWarehouseAccess(),
     getActiveWarehouseFilter(),
-    supabase
-      .from('organizations')
-      .select('terminology, mfa_policy, logo_url, timezone')
-      .eq('id', ctx.organizationId)
-      .maybeSingle(),
-    supabase.auth.mfa.listFactors(),
+    getOrgRowForRequest(ctx.organizationId),
+    getMfaFactorsForRequest(),
     supabase
       .from('organization_members')
       .select('role, organizations:organization_id (id, name, logo_url)')
@@ -72,22 +72,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       .eq('user_id', ctx.userId)
       .eq('organization_id', ctx.organizationId)
       .is('read_at', null),
-    supabase
-      .from('warehouses')
-      .select('id, name')
-      .eq('organization_id', ctx.organizationId)
-      .neq('status', 'archived')
-      .order('name', { ascending: true }),
+    getWarehousesForRequest(ctx.organizationId),
   ]);
-  const orgRow = orgRowRes.data as
-    | {
-        terminology: unknown;
-        mfa_policy: 'optional' | 'admins_required' | 'all_required' | null;
-        logo_url: string | null;
-        timezone: string | null;
-      }
-    | null;
-  const warehousesList = (warehousesListRes.data ?? []) as Array<{ id: string; name: string }>;
   const initialUnreadNotifications = unreadRes.count ?? 0;
 
   const memberships = (membershipsRes.data ?? [])
@@ -126,9 +112,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const isAdmin = ctx.role === 'owner' || ctx.role === 'admin';
   const mfaRequired =
     policy === 'all_required' || (policy === 'admins_required' && isAdmin);
-  const hasVerifiedFactor = (factorsRes.data?.all ?? []).some(
-    (f) => f.status === 'verified',
-  );
+  const hasVerifiedFactor = mfaFactors.some((f) => f.status === 'verified');
   const showMfaBanner = mfaRequired && !hasVerifiedFactor;
 
   // Hard gate for the strictest policy: when policy === 'all_required'
