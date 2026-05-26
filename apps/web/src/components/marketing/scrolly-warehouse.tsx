@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 
+import { useScrollyProgress } from '@/lib/hooks/use-scrolly-progress';
+
 /**
  * Pinned scrollytelling section — inspired by madarplatform.com's
  * wireframe-truck pin, retooled for StockPilot. A wireframe warehouse
@@ -11,54 +13,19 @@ import * as React from 'react';
  * (racks → items, loading bay → movements, office → POs). Floating
  * metric chips slide in alongside.
  *
- * No GSAP / Lenis dep — single scroll listener throttled to
- * requestAnimationFrame writes a normalized progress (0..1) into a CSS
- * custom property on the stage. Every animated element interpolates
- * off `--p` via CSS calc(), which keeps style updates off the React
- * tree entirely and the section silent during scroll on slow devices.
+ * Scroll math lives in `useScrollyProgress` (shared with
+ * ScrollyShelfScan). Every animated element interpolates off the
+ * `--p` CSS custom property via calc()/clamp(), so style updates stay
+ * off the React tree entirely and the section is silent during scroll
+ * on slow devices.
  *
- * Honors prefers-reduced-motion: skips the pin entirely and renders
- * one resting-state composition.
+ * Honors prefers-reduced-motion: pins to a resting-state composition
+ * instead of running the scroll animation.
  */
 export function ScrollyWarehouse() {
   const trackRef = React.useRef<HTMLDivElement | null>(null);
   const stageRef = React.useRef<HTMLDivElement | null>(null);
-
-  React.useEffect(() => {
-    const track = trackRef.current;
-    const stage = stageRef.current;
-    if (!track || !stage) return;
-
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduce) {
-      stage.style.setProperty('--p', '0.55');
-      return;
-    }
-
-    let ticking = false;
-    const tick = () => {
-      const rect = track.getBoundingClientRect();
-      const total = rect.height - window.innerHeight;
-      const passed = Math.min(Math.max(-rect.top, 0), total);
-      const p = total > 0 ? passed / total : 0;
-      stage.style.setProperty('--p', p.toFixed(4));
-      ticking = false;
-    };
-
-    const onScroll = () => {
-      if (ticking) return;
-      ticking = true;
-      requestAnimationFrame(tick);
-    };
-
-    onScroll();
-    window.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', onScroll);
-    return () => {
-      window.removeEventListener('scroll', onScroll);
-      window.removeEventListener('resize', onScroll);
-    };
-  }, []);
+  useScrollyProgress({ trackRef, stageRef });
 
   return (
     <section
