@@ -193,7 +193,7 @@ function Header({
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={org.logo_url}
-          alt=""
+          alt={`${org.name} logo`}
           className="mb-4 h-12 w-12 rounded-lg object-cover"
         />
       ) : null}
