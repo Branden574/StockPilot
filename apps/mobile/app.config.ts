@@ -6,11 +6,14 @@ const config: ExpoConfig = {
   scheme: 'stockpilot',
   version: '0.1.0',
   orientation: 'portrait',
-  icon: './assets/icon.png',
   userInterfaceStyle: 'automatic',
   newArchEnabled: true,
+  // splash + icon assets intentionally omitted while branding PNGs
+  // haven't been committed to apps/mobile/assets. Expo falls back to
+  // its default placeholder icon + a solid-color splash matching the
+  // backgroundColor below. Add proper assets and restore icon/splash
+  // when branding is finalised.
   splash: {
-    image: './assets/splash.png',
     resizeMode: 'contain',
     backgroundColor: '#0a0f1f',
   },
@@ -29,10 +32,6 @@ const config: ExpoConfig = {
   },
   android: {
     package: 'app.stockpilot.mobile',
-    adaptiveIcon: {
-      foregroundImage: './assets/adaptive-icon.png',
-      backgroundColor: '#0a0f1f',
-    },
     permissions: ['CAMERA', 'READ_MEDIA_IMAGES'],
   },
   plugins: [
