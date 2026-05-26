@@ -152,7 +152,7 @@ export default function Receive() {
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>Nothing to receive</Text>
               <Text style={styles.emptyText}>
-                When a PO is approved on the web, it'll appear here ready to
+                When a PO is approved on the web, it&apos;ll appear here ready to
                 scan and receive.
               </Text>
             </View>
