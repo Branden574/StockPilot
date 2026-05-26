@@ -111,7 +111,7 @@ export async function POST(req: Request) {
   // quota from a single misbehaving user (or an attacker with a
   // hijacked session) burning through the daily budget. 60 turns/min
   // is well above any human chat cadence.
-  const rl = await checkRateLimit(`ai-chat:${ctx.userId}`, 60, 60_000);
+  const rl = await checkRateLimit(`ai-chat:${ctx.userId}`, 60, 60_000, 'closed');
   if (!rl.allowed) {
     return NextResponse.json(
       {
@@ -131,6 +131,7 @@ export async function POST(req: Request) {
     `ai-chat-org:${ctx.organizationId}`,
     1000,
     24 * 60 * 60 * 1000,
+    'closed',
   );
   if (!orgRl.allowed) {
     return NextResponse.json(
