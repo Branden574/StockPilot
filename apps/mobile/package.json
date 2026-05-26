@@ -24,6 +24,7 @@
     "expo-image-manipulator": "^55.0.16",
     "expo-image-picker": "~16.0.0",
     "expo-linking": "~7.0.0",
+    "expo-local-authentication": "^56.0.4",
     "expo-network": "~7.0.0",
     "expo-notifications": "~0.29.0",
     "expo-router": "~4.0.0",

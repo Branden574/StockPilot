@@ -2,6 +2,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as React from 'react';
 
+import { BiometricLockScreen } from '@/components/biometric-lock-screen';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { initDb } from '@/lib/db';
@@ -40,7 +41,7 @@ export default function RootLayout() {
 }
 
 function RootGate() {
-  const { session, loading } = useAuth();
+  const { session, loading, locked } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
@@ -60,6 +61,14 @@ function RootGate() {
       router.replace('/');
     }
   }, [session, loading, segments, router]);
+
+  // Biometric lock takes precedence over every routed screen — render
+  // it on top of the Stack instead of the normal routes while locked.
+  // Mounted after loading completes so we don't flash the lock screen
+  // for users without biometric enabled.
+  if (!loading && session && locked) {
+    return <BiometricLockScreen />;
+  }
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#0a0f1f' } }}>

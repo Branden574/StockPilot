@@ -11,7 +11,13 @@ import {
   View,
 } from 'react-native';
 
+import { BiometricOptInSheet } from '@/components/biometric-optin-sheet';
 import { useAuth } from '@/lib/auth-context';
+import {
+  getBiometricCapability,
+  isBiometricEnabledForUser,
+} from '@/lib/biometric';
+import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
 
 export default function SignIn() {
@@ -20,17 +26,39 @@ export default function SignIn() {
   const [password, setPassword] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [showOptIn, setShowOptIn] = React.useState(false);
 
   async function submit() {
     setError(null);
     setBusy(true);
     const res = await signIn(email.trim(), password);
+    if (res.error) {
+      setBusy(false);
+      setError(res.error);
+      return;
+    }
+    // Sign-in succeeded. If the device is biometric-capable AND this
+    // user hasn't already opted in, show the opt-in sheet. The sheet
+    // is non-blocking — RootGate will route to (drawer) the moment the
+    // sheet closes, whether the user enables or skips.
+    try {
+      const cap = await getBiometricCapability();
+      if (cap.hasHardware && cap.isEnrolled) {
+        const { data } = await supabase.auth.getUser();
+        const uid = data.user?.id;
+        if (uid && !(await isBiometricEnabledForUser(uid))) {
+          setShowOptIn(true);
+        }
+      }
+    } catch {
+      // Capability probe failure is non-fatal — proceed without prompt.
+    }
     setBusy(false);
-    if (res.error) setError(res.error);
   }
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <BiometricOptInSheet visible={showOptIn} onDismiss={() => setShowOptIn(false)} />
       <View style={styles.card}>
         <Text style={styles.brand}>StockPilot</Text>
         <Text style={styles.title}>Welcome back</Text>
