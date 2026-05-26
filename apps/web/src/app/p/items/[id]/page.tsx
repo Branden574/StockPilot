@@ -82,7 +82,7 @@ export default async function PublicItemPage({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={item.imageUrl}
-              alt=""
+              alt={item.name}
               className="h-auto w-full object-cover"
             />
           </div>

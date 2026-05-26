@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { Suspense } from 'react';
 
 import { AuthCard } from '@/components/auth/auth-card';
@@ -16,14 +15,7 @@ export default function SignInPage() {
     <AuthCard
       title="Welcome back"
       description="Sign in to continue managing your inventory."
-      footer={
-        <>
-          New to StockPilot?{' '}
-          <Link href="/signup" className="font-medium text-foreground hover:underline">
-            Create an account
-          </Link>
-        </>
-      }
+      footer={<>Need access? Ask your StockPilot administrator.</>}
     >
       <Suspense fallback={<SignInSkeleton />}>
         <SignInForm />

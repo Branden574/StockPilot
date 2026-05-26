@@ -159,8 +159,11 @@ export default async function RolesPage() {
       </div>
 
       <p className="mt-4 text-[11.5px] text-muted-foreground">
-        Need a role changed? Owners and Admins can update roles from the
-        Members page (coming soon — for now reach out in #stockpilot).
+        Need a role changed? Owners and Admins can update roles from the{' '}
+        <a href="/dashboard/team" className="font-medium text-foreground hover:underline">
+          team page
+        </a>
+        .
       </p>
     </div>
   );
