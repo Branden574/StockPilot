@@ -29,6 +29,7 @@ import {
   getDashboardActions,
   getDashboardHistory,
   getDashboardSummary,
+  getItemTrends,
   getLowStockItems,
   getThirtyDayMetrics,
   MovementsService,
@@ -220,6 +221,16 @@ export default async function DashboardHome() {
     },
   ];
   const checklistComplete = checklistSteps.every((s) => s.done);
+
+  // Real 14-day qty trends for the low-stock table sparklines. Replaces the
+  // synthetic Math.sin curve every row used to show. One small query
+  // bucketed in TS — runs only when there are low-stock rows to chart.
+  const lowStockTrends =
+    lowStock.length > 0
+      ? await getItemTrends(
+          lowStock.map((r) => ({ id: r.id, quantityOnHand: r.quantity_on_hand })),
+        )
+      : new Map<string, { qtySeries: number[]; moveSeries: number[] }>();
 
   // Real 30-day series for the StatCards. Replaces the synthetic sin-wave
   // valueSeries and the hardcoded sparkline arrays that used to live here.
@@ -735,12 +746,10 @@ export default async function DashboardHome() {
                       </td>
                       <td className="px-3 text-right">
                         <Sparkline
-                          data={Array.from({ length: 14 }, (_, i) =>
-                            Math.max(
-                              0,
-                              Math.round(row.quantity_on_hand + Math.sin(i / 2) * 4 - i / 2),
-                            ),
-                          )}
+                          data={
+                            lowStockTrends.get(row.id)?.qtySeries ??
+                            new Array<number>(14).fill(row.quantity_on_hand)
+                          }
                           width={70}
                           height={20}
                         />
