@@ -7,6 +7,7 @@ import { PublicOrdersV2 } from '@/components/orders/public-v2/public-orders-v2';
 import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getPublicBookCatalog } from '@/server/services/public-catalog';
 
 /**
  * F9: org.logo_url is editable by org admins and could in theory hold
@@ -146,7 +147,7 @@ export default async function PublicOrderRequestPage({
     : null;
   const activeWarehouse = requested ?? warehouses[0];
   if (!activeWarehouse) notFound();
-  const items = await loadBookCatalog(admin, org.id, activeWarehouse.id);
+  const items = await getPublicBookCatalog(org.id, activeWarehouse.id);
   const aisles = buildAisles(items);
 
   // Charters serviced by the active warehouse — restricted to status=
@@ -233,177 +234,6 @@ function Header({
   );
 }
 
-/**
- * Loads the books-only catalog for the public order link, returning
- * CatalogItem[] compatible with the v2 picker components. Mirrors the
- * staff-side loadCatalogItemsUncached but filtered to item_type='book'
- * and token-gated (caller has already validated org + warehouse).
- *
- * imageUrl is returned as null — client fetches deferred thumbnails via
- * /api/v1/public/catalog-thumbnails after first paint. LQIP blurs are
- * inlined so cards never flash a stark placeholder.
- */
-async function loadBookCatalog(
-  admin: ReturnType<typeof createAdminClient>,
-  orgId: string,
-  warehouseId: string,
-): Promise<CatalogItem[]> {
-  const { data: itemsData } = await admin
-    .from('inventory_items')
-    .select(
-      'id, name, sku, quantity_on_hand, warehouse_id, item_type, custom_fields, bin_location, category_id, charter_id, retail_price, unit_cost, reorder_point',
-    )
-    .eq('organization_id', orgId)
-    .eq('warehouse_id', warehouseId)
-    .eq('item_type', 'book')
-    .eq('status', 'active')
-    .is('deleted_at', null)
-    .order('name', { ascending: true })
-    .limit(500);
-
-  type ItemRow = {
-    id: string;
-    name: string;
-    sku: string;
-    quantity_on_hand: number | null;
-    warehouse_id: string;
-    item_type: string | null;
-    custom_fields: Record<string, unknown> | null;
-    bin_location: string | null;
-    category_id: string | null;
-    charter_id: string | null;
-    retail_price: number | null;
-    unit_cost: number | null;
-    reorder_point: number | null;
-  };
-
-  const items = (itemsData ?? []) as ItemRow[];
-  if (items.length === 0) return [];
-
-  const itemIds = items.map((i) => i.id);
-  const categoryIds = [
-    ...new Set(
-      items.map((i) => i.category_id).filter((v): v is string => Boolean(v)),
-    ),
-  ];
-  const charterIds = [
-    ...new Set(
-      items.map((i) => i.charter_id).filter((v): v is string => Boolean(v)),
-    ),
-  ];
-
-  // Reservations + category names + charter names + LQIP blurs in
-  // parallel. Signed thumbnail URLs are deferred to the client
-  // (same pattern as staff).
-  const [rsRes, categoriesRes, chartersRes, lqipRes] = await Promise.all([
-    admin
-      .from('stock_reservations')
-      .select('item_id, quantity')
-      .eq('organization_id', orgId)
-      .in('item_id', itemIds)
-      .is('released_at', null),
-    categoryIds.length > 0
-      ? admin
-          .from('categories')
-          .select('id, name')
-          .eq('organization_id', orgId)
-          .in('id', categoryIds)
-      : Promise.resolve({ data: [] as Array<{ id: string; name: string }> }),
-    charterIds.length > 0
-      ? admin
-          .from('charters')
-          .select('id, name, code')
-          .eq('organization_id', orgId)
-          .in('id', charterIds)
-      : Promise.resolve({
-          data: [] as Array<{ id: string; name: string; code: string | null }>,
-        }),
-    admin
-      .from('item_images')
-      .select('item_id, lqip, is_primary, sort_order')
-      .eq('organization_id', orgId)
-      .in('item_id', itemIds)
-      .not('lqip', 'is', null)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true }),
-  ]);
-
-  const reservedByItem = new Map<string, number>();
-  for (const row of (rsRes.data ?? []) as Array<{
-    item_id: string;
-    quantity: number;
-  }>) {
-    reservedByItem.set(
-      row.item_id,
-      (reservedByItem.get(row.item_id) ?? 0) + Number(row.quantity),
-    );
-  }
-
-  const categoryNameById = new Map<string, string>();
-  for (const c of (categoriesRes.data ?? []) as Array<{
-    id: string;
-    name: string;
-  }>) {
-    categoryNameById.set(c.id, c.name);
-  }
-
-  const charterById = new Map<string, { name: string; code: string | null }>();
-  for (const c of (chartersRes.data ?? []) as Array<{
-    id: string;
-    name: string;
-    code: string | null;
-  }>) {
-    charterById.set(c.id, { name: c.name, code: c.code ?? null });
-  }
-
-  const lqipByItem = new Map<string, string>();
-  for (const row of (lqipRes.data ?? []) as Array<{
-    item_id: string;
-    lqip: string | null;
-  }>) {
-    if (!lqipByItem.has(row.item_id) && row.lqip) {
-      lqipByItem.set(row.item_id, row.lqip);
-    }
-  }
-
-  function rackLabelFor(it: ItemRow): string | null {
-    if (it.bin_location && it.bin_location.trim()) return it.bin_location.trim();
-    const cf = it.custom_fields ?? {};
-    const num = (cf as { book_rack_number?: unknown }).book_rack_number as
-      | string
-      | undefined;
-    const row = (cf as { book_rack_row?: unknown }).book_rack_row as
-      | string
-      | undefined;
-    if (!num) return null;
-    return row ? `${num}-${row}` : String(num);
-  }
-
-  return items.map((it) => ({
-    id: it.id,
-    sku: it.sku,
-    name: it.name,
-    warehouseId: it.warehouse_id,
-    quantityOnHand: Number(it.quantity_on_hand) || 0,
-    reservedQuantity: reservedByItem.get(it.id) ?? 0,
-    itemType: it.item_type ?? null,
-    categoryId: it.category_id ?? null,
-    categoryName: it.category_id ? (categoryNameById.get(it.category_id) ?? null) : null,
-    charterId: it.charter_id ?? null,
-    charterName: it.charter_id ? charterById.get(it.charter_id)?.name ?? null : null,
-    charterCode: it.charter_id ? charterById.get(it.charter_id)?.code ?? null : null,
-    rackLabel: rackLabelFor(it),
-    imageUrl: null,
-    lqip: lqipByItem.get(it.id) ?? null,
-    price:
-      typeof it.retail_price === 'number'
-        ? it.retail_price
-        : typeof it.unit_cost === 'number'
-        ? it.unit_cost
-        : null,
-    reorderPoint: Number(it.reorder_point) || 0,
-  })) satisfies CatalogItem[];
-}
 
 /**
  * Derives the aisle summary list from the loaded catalog items.
