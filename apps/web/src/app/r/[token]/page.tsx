@@ -1,3 +1,4 @@
+import Image from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
@@ -190,10 +191,13 @@ function Header({
   return (
     <header className="mb-6 flex flex-col items-center text-center">
       {isAllowedLogoUrl(org.logo_url) ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
+        <Image
           src={org.logo_url}
           alt={`${org.name} logo`}
+          width={48}
+          height={48}
+          priority
+          sizes="48px"
           className="mb-4 h-12 w-12 rounded-lg object-cover"
         />
       ) : null}
