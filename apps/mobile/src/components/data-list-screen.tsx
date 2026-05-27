@@ -1,4 +1,4 @@
-import { useNavigation, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { ArrowLeft, Menu, type LucideIcon } from 'lucide-react-native';
 import * as React from 'react';
 import {
@@ -57,10 +57,18 @@ export function DataListScreen<T>({
   const navigation = useNavigation();
   const router = useRouter();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
-  // Prefer popping the navigation stack so `Settings → Workspaces →
-  // back` returns to Settings (and not Home). Fall back to Home only
-  // when there is no history at all — e.g. on a fresh deep link.
+  // Drawer-to-drawer pushes don't reliably build a back-stack in
+  // expo-router (drawer screens share a navigator state that doesn't
+  // track history the way a stack does). Callers that need a specific
+  // back target pass it explicitly via `?return=/path` — same pattern
+  // the web app uses. Fall back to canGoBack/back when no return param
+  // is set, then Home as the ultimate safety net.
+  const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
   const goBack = () => {
+    if (typeof returnPath === 'string' && returnPath.length > 0) {
+      router.replace(returnPath as never);
+      return;
+    }
     if (router.canGoBack()) router.back();
     else router.replace('/');
   };
