@@ -1,4 +1,4 @@
-import { useNavigation, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { ArrowLeft, Barcode, BookMarked, Menu, Plus, Search } from 'lucide-react-native';
 import * as React from 'react';
 import {
@@ -53,6 +53,7 @@ export default function BooksScreen() {
   const { orgId } = useOrg();
   const navigation = useNavigation();
   const { c } = useTheme();
+  const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
   const [rows, setRows] = React.useState<BookRow[]>([]);
   const [bookCategories, setBookCategories] = React.useState<FilterOption[]>([]);
   const [locations, setLocations] = React.useState<FilterOption[]>([]);
@@ -261,8 +262,13 @@ export default function BooksScreen() {
             <IconChip
               icon={ArrowLeft}
               onPress={() => {
-                if (router.canGoBack()) router.back();
-                else router.replace('/');
+                if (typeof returnPath === 'string' && returnPath.length > 0) {
+                  router.replace(returnPath as never);
+                } else if (router.canGoBack()) {
+                  router.back();
+                } else {
+                  router.replace('/');
+                }
               }}
             />
             <IconChip icon={Menu} onPress={openDrawer} />

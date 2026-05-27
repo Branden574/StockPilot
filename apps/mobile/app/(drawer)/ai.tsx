@@ -1,4 +1,4 @@
-import { useNavigation, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { ArrowLeft, ArrowUpRight, Menu, Sparkles } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
@@ -24,6 +24,7 @@ export default function AIAssistantScreen() {
   const { c } = useTheme();
   const navigation = useNavigation();
   const router = useRouter();
+  const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
 
   function openChat() {
@@ -45,8 +46,13 @@ export default function AIAssistantScreen() {
             <IconChip
               icon={ArrowLeft}
               onPress={() => {
-                if (router.canGoBack()) router.back();
-                else router.replace('/');
+                if (typeof returnPath === 'string' && returnPath.length > 0) {
+                  router.replace(returnPath as never);
+                } else if (router.canGoBack()) {
+                  router.back();
+                } else {
+                  router.replace('/');
+                }
               }}
             />
             <IconChip icon={Menu} onPress={openDrawer} />

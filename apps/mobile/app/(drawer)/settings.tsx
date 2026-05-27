@@ -1,4 +1,4 @@
-import { useNavigation, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import {
   ArrowLeft,
   Bell,
@@ -46,6 +46,7 @@ export default function Settings() {
   const { c } = useTheme();
   const router = useRouter();
   const navigation = useNavigation();
+  const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
   const [cap, setCap] = React.useState<BiometricCapability | null>(null);
   const [pending, setPending] = React.useState(false);
 
@@ -109,8 +110,13 @@ export default function Settings() {
           <IconChip
             icon={ArrowLeft}
             onPress={() => {
-              if (router.canGoBack()) router.back();
-              else router.replace('/');
+              if (typeof returnPath === 'string' && returnPath.length > 0) {
+                router.replace(returnPath as never);
+              } else if (router.canGoBack()) {
+                router.back();
+              } else {
+                router.replace('/');
+              }
             }}
           />
           <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -152,7 +158,7 @@ export default function Settings() {
             title="Workspaces"
             detail="View sites"
             chevron
-            onPress={() => router.push('/locations')}
+            onPress={() => router.push('/locations?return=/settings')}
           />
           <Hair inset={70} />
           <SettingRow
@@ -171,7 +177,7 @@ export default function Settings() {
             title="Notifications"
             detail="Push, email"
             chevron
-            onPress={() => router.push('/notifications')}
+            onPress={() => router.push('/notifications?return=/settings')}
           />
           <Hair inset={70} />
           <SettingRow
