@@ -16,15 +16,23 @@ import {
   FlatList,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { Card, Hair } from '@/components/ui/card';
-import { FilterChip } from '@/components/ui/chip';
+import {
+  ActiveFilterPill,
+  FILTER_GENERIC_CHARTER_ID,
+  FilterButton,
+  FilterSheet,
+  EMPTY_FILTER_STATE,
+  activeFilterCount,
+  type FilterOption,
+  type FilterState,
+} from '@/components/filter-sheet';
+import { Hair } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -41,13 +49,13 @@ interface Item {
   quantity_on_hand: number;
   reorder_point: number;
   status: string;
-  category_id?: string | null;
-  category_name?: string | null;
-  imageUrl?: string | null;
+  category_id: string | null;
+  category_name: string | null;
+  primary_location_id: string | null;
+  charter_id: string | null;
+  imageUrl: string | null;
+  updated_at: string | null;
 }
-
-type FilterId = 'ALL' | 'BOOKS' | 'EQUIPMENT' | 'SWAG' | 'SUPPLIES';
-const FILTERS: FilterId[] = ['ALL', 'BOOKS', 'EQUIPMENT', 'SWAG', 'SUPPLIES'];
 
 const PIPS = [ACCENT.pipOrange, ACCENT.pipAmber, ACCENT.pipTeal, undefined, undefined, undefined];
 
@@ -60,33 +68,116 @@ export default function Inventory() {
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const [items, setItems] = React.useState<Item[]>([]);
   const [q, setQ] = React.useState('');
-  const [filter, setFilter] = React.useState<FilterId>('ALL');
+  const [filter, setFilter] = React.useState<FilterState>(EMPTY_FILTER_STATE);
+  const [sheetOpen, setSheetOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [total, setTotal] = React.useState(0);
 
+  // Lookup tables for the filter sheet + the active-filter pill summary
+  const [categories, setCategories] = React.useState<FilterOption[]>([]);
+  const [locations, setLocations] = React.useState<FilterOption[]>([]);
+  const [charters, setCharters] = React.useState<FilterOption[]>([]);
+
+  const categoryMap = React.useMemo(
+    () => new Map(categories.map((x) => [x.id, x.name] as const)),
+    [categories],
+  );
+  const locationMap = React.useMemo(
+    () => new Map(locations.map((x) => [x.id, x.name] as const)),
+    [locations],
+  );
+  const charterMap = React.useMemo(
+    () => new Map(charters.map((x) => [x.id, x.name] as const)),
+    [charters],
+  );
+
+  const loadLookups = React.useCallback(async (orgIdParam: string) => {
+    const [cats, locs, chts] = await Promise.all([
+      supabase
+        .from('categories')
+        .select('id, name')
+        .eq('organization_id', orgIdParam)
+        .is('deleted_at', null)
+        .order('name', { ascending: true }),
+      supabase
+        .from('locations')
+        .select('id, name')
+        .eq('organization_id', orgIdParam)
+        .is('deleted_at', null)
+        .order('name', { ascending: true }),
+      supabase
+        .from('charters')
+        .select('id, name, code')
+        .eq('organization_id', orgIdParam)
+        .order('name', { ascending: true }),
+    ]);
+    setCategories(((cats.data ?? []) as Array<{ id: string; name: string }>) ?? []);
+    setLocations(((locs.data ?? []) as Array<{ id: string; name: string }>) ?? []);
+    setCharters(
+      ((chts.data ?? []) as Array<{ id: string; name: string; code: string | null }>).map((c) => ({
+        id: c.id,
+        name: c.code ? `${c.name} · ${c.code}` : c.name,
+      })),
+    );
+  }, []);
+
   const load = React.useCallback(
-    async (orgIdParam: string, query: string, kind: FilterId) => {
+    async (orgIdParam: string, query: string, f: FilterState) => {
+      const sortMap: Record<typeof f.sort, { col: string; asc: boolean }> = {
+        updated_desc: { col: 'updated_at', asc: false },
+        name_asc: { col: 'name', asc: true },
+        name_desc: { col: 'name', asc: false },
+        qty_desc: { col: 'quantity_on_hand', asc: false },
+        qty_asc: { col: 'quantity_on_hand', asc: true },
+      };
+      const ord = sortMap[f.sort];
+
       let req = supabase
         .from('inventory_items')
         .select(
           `id, name, sku, quantity_on_hand, reorder_point, status, category_id,
+           primary_location_id, charter_id, updated_at,
            category:categories!category_id (name)`,
           { count: 'exact' },
         )
         .eq('organization_id', orgIdParam)
         .eq('status', 'active')
         .is('deleted_at', null)
-        .order('updated_at', { ascending: false })
-        .limit(100);
+        .order(ord.col, { ascending: ord.asc })
+        .limit(200);
+
       if (query.trim()) {
         req = req.or(`name.ilike.%${query}%,sku.ilike.%${query}%,barcode.ilike.%${query}%`);
       }
+
+      if (f.categoryIds.length > 0) {
+        req = req.in('category_id', f.categoryIds);
+      }
+      if (f.locationIds.length > 0) {
+        req = req.in('primary_location_id', f.locationIds);
+      }
+      if (f.charterIds.length > 0) {
+        const wantsGeneric = f.charterIds.includes(FILTER_GENERIC_CHARTER_ID);
+        const real = f.charterIds.filter((x) => x !== FILTER_GENERIC_CHARTER_ID);
+        if (wantsGeneric && real.length > 0) {
+          // PostgREST .or() — match items with no charter OR in selected charters
+          req = req.or(`charter_id.is.null,charter_id.in.(${real.join(',')})`);
+        } else if (wantsGeneric) {
+          req = req.is('charter_id', null);
+        } else {
+          req = req.in('charter_id', real);
+        }
+      }
+      // Stock status: 'out' is qty<=0; 'low' is qty<=reorder and reorder>0.
+      // Reorder is per-row, so 'low' has to be a client-side pass below.
+      if (f.status === 'out') req = req.lte('quantity_on_hand', 0);
+
       const { data, count, error } = await req;
       if (error) {
         console.warn('inventory list', error);
       }
-      const rows = (data ?? []).map((row) => {
+      let rows = (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
         const cat = r.category as { name?: string } | { name?: string }[] | null;
         const catName = Array.isArray(cat) ? cat[0]?.name ?? null : cat?.name ?? null;
@@ -99,24 +190,24 @@ export default function Inventory() {
           status: r.status as string,
           category_id: (r.category_id as string | null) ?? null,
           category_name: catName,
+          primary_location_id: (r.primary_location_id as string | null) ?? null,
+          charter_id: (r.charter_id as string | null) ?? null,
+          updated_at: (r.updated_at as string | null) ?? null,
           imageUrl: null,
         } as Item;
       });
-      // Client-side filter on category name — keeps the FilterChip UX
-      // responsive without a separate query when the user toggles.
-      const filtered =
-        kind === 'ALL'
-          ? rows
-          : rows.filter((r) =>
-              (r.category_name ?? '').toLowerCase().includes(kind.toLowerCase()),
-            );
 
-      // Batch-fetch primary photos for the visible items in one query,
-      // sign each path, and stamp the URLs onto each row. Same data
-      // source as the web — `item_images.storage_path` → signed URL
-      // from the `item-images` bucket. Signed URLs are valid 1h which
-      // is plenty for a single mobile session.
-      const ids = filtered.map((r) => r.id);
+      if (f.status === 'low') {
+        rows = rows.filter(
+          (r) =>
+            r.reorder_point > 0
+            && r.quantity_on_hand <= r.reorder_point
+            && r.quantity_on_hand > 0,
+        );
+      }
+
+      // Batch-fetch primary photos for the visible items
+      const ids = rows.map((r) => r.id);
       if (ids.length > 0) {
         const { data: imgs } = await supabase
           .from('item_images')
@@ -125,13 +216,8 @@ export default function Inventory() {
           .order('is_primary', { ascending: false })
           .order('sort_order', { ascending: true });
         const byItem = new Map<string, string>();
-        for (const row of (imgs ?? []) as Array<{
-          item_id: string;
-          storage_path: string;
-        }>) {
-          if (!byItem.has(row.item_id)) {
-            byItem.set(row.item_id, row.storage_path);
-          }
+        for (const row of (imgs ?? []) as Array<{ item_id: string; storage_path: string }>) {
+          if (!byItem.has(row.item_id)) byItem.set(row.item_id, row.storage_path);
         }
         const paths = Array.from(byItem.values());
         if (paths.length > 0) {
@@ -139,20 +225,17 @@ export default function Inventory() {
             .from('item-images')
             .createSignedUrls(paths, 60 * 60);
           const urlByPath = new Map<string, string>();
-          for (const s of (signed ?? []) as Array<{
-            path: string | null;
-            signedUrl: string;
-          }>) {
+          for (const s of (signed ?? []) as Array<{ path: string | null; signedUrl: string }>) {
             if (s.path && s.signedUrl) urlByPath.set(s.path, s.signedUrl);
           }
-          for (const r of filtered) {
+          for (const r of rows) {
             const p = byItem.get(r.id);
             if (p) r.imageUrl = urlByPath.get(p) ?? null;
           }
         }
       }
 
-      setItems(filtered);
+      setItems(rows);
       setTotal(count ?? rows.length);
       setLoading(false);
     },
@@ -172,9 +255,9 @@ export default function Inventory() {
       if (!member) return;
       const id = member.organization_id as string;
       setOrgId(id);
-      await load(id, '', 'ALL');
+      await Promise.all([loadLookups(id), load(id, '', EMPTY_FILTER_STATE)]);
     })();
-  }, [user, load]);
+  }, [user, load, loadLookups]);
 
   React.useEffect(() => {
     if (!orgId) return;
@@ -188,6 +271,8 @@ export default function Inventory() {
     await load(orgId, q, filter);
     setRefreshing(false);
   }
+
+  const filterCount = activeFilterCount(filter);
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -223,24 +308,15 @@ export default function Inventory() {
                 { color: c.ink, fontFamily: FONT.displayRegular },
               ]}
             />
+            <FilterButton onPress={() => setSheetOpen(true)} count={filterCount} />
             <Barcode size={18} color={c.ink} strokeWidth={1.6} />
           </View>
 
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chips}
-          >
-            {FILTERS.map((f) => (
-              <FilterChip
-                key={f}
-                active={f === filter}
-                onPress={() => setFilter(f)}
-              >
-                {f}
-              </FilterChip>
-            ))}
-          </ScrollView>
+          <ActiveFilterPill
+            state={filter}
+            onClear={() => setFilter(EMPTY_FILTER_STATE)}
+            lookups={{ categories: categoryMap, locations: locationMap, charters: charterMap }}
+          />
         </View>
       </SafeAreaView>
 
@@ -275,6 +351,16 @@ export default function Inventory() {
           )}
         />
       )}
+
+      <FilterSheet
+        visible={sheetOpen}
+        onDismiss={() => setSheetOpen(false)}
+        state={filter}
+        onChange={setFilter}
+        categories={categories}
+        locations={locations}
+        charters={charters}
+      />
     </View>
   );
 }
@@ -390,10 +476,6 @@ const styles = StyleSheet.create({
     fontSize: 14.5,
     height: '100%',
     letterSpacing: -0.17,
-  },
-  chips: {
-    paddingTop: 12,
-    gap: 8,
   },
   empty: {
     padding: 32,
