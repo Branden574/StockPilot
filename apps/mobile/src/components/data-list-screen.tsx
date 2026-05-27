@@ -57,11 +57,13 @@ export function DataListScreen<T>({
   const navigation = useNavigation();
   const router = useRouter();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
-  // Drawer routes are sibling destinations, not stack-pushed children
-  // — `router.back()` follows expo-router's history, which on this app
-  // tends to be "whichever tab you last viewed" rather than the screen
-  // the user came from. Always returning Home is more predictable.
-  const goBack = () => router.replace('/');
+  // Prefer popping the navigation stack so `Settings → Workspaces →
+  // back` returns to Settings (and not Home). Fall back to Home only
+  // when there is no history at all — e.g. on a fresh deep link.
+  const goBack = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/');
+  };
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>

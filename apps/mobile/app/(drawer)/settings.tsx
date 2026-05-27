@@ -106,7 +106,13 @@ export default function Settings() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={ArrowLeft} onPress={() => router.replace('/')} />
+          <IconChip
+            icon={ArrowLeft}
+            onPress={() => {
+              if (router.canGoBack()) router.back();
+              else router.replace('/');
+            }}
+          />
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <IconChip
               icon={Menu}
