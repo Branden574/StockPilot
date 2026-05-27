@@ -1,19 +1,25 @@
+import { Fingerprint, ScanFace } from 'lucide-react-native';
 import * as React from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+} from 'react-native';
 
+import { Button } from '@/components/ui/button';
+import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
-import { radius, space, theme } from '@/lib/theme';
+import { ACCENT, FONT, SHADOW } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 /**
- * One-shot opt-in sheet shown right after a successful interactive
- * sign-in IF the device is biometric-capable AND the user hasn't
- * already made a choice for this account. Two buttons: Enable / Not now.
- *
- * "Not now" simply closes the sheet — the user can flip the toggle in
- * Settings later. We don't store a "user declined" flag; the absence
- * of the opt-in flag is the off state. If the user signs out and back
- * in we will offer the sheet again on next interactive sign-in.
+ * Post-sign-in opt-in sheet. Renders as a native iOS-style bottom sheet
+ * with a grabber on iOS, or a Material 3 bottom sheet on Android.
+ * Eyebrow + display title with a serif-italic emphasis on the biometric
+ * name (Face ID / Touch ID / Fingerprint).
  */
 export function BiometricOptInSheet({
   visible,
@@ -23,6 +29,7 @@ export function BiometricOptInSheet({
   onDismiss: () => void;
 }) {
   const { enableBiometric } = useAuth();
+  const { c, mode } = useTheme();
   const [cap, setCap] = React.useState<BiometricCapability | null>(null);
   const [busy, setBusy] = React.useState(false);
 
@@ -30,16 +37,14 @@ export function BiometricOptInSheet({
     if (!visible) return;
     let cancelled = false;
     void (async () => {
-      const c = await getBiometricCapability();
-      if (!cancelled) setCap(c);
+      const probed = await getBiometricCapability();
+      if (!cancelled) setCap(probed);
     })();
     return () => {
       cancelled = true;
     };
   }, [visible]);
 
-  // If the device isn't capable, we shouldn't have been opened in the
-  // first place — auto-dismiss as a safety net.
   React.useEffect(() => {
     if (!visible || !cap) return;
     if (!cap.hasHardware || !cap.isEnrolled) onDismiss();
@@ -55,7 +60,9 @@ export function BiometricOptInSheet({
     onDismiss();
   }
 
-  const label = cap.label;
+  const isFingerprint = cap.label === 'Fingerprint';
+  const Icon = isFingerprint ? Fingerprint : ScanFace;
+  const labelText = cap.label;
 
   return (
     <Modal
@@ -65,32 +72,70 @@ export function BiometricOptInSheet({
       onRequestClose={onDismiss}
       statusBarTranslucent
     >
-      <View style={styles.scrim}>
-        <View style={styles.sheet}>
-          <View style={styles.iconWell}>
-            <Text style={styles.iconGlyph}>{label === 'Face ID' ? '⌒' : '◉'}</Text>
+      <Pressable
+        style={[
+          styles.scrim,
+          { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+        ]}
+        onPress={onDismiss}
+      >
+        <Pressable
+          onPress={() => undefined}
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: c.card,
+              paddingTop: Platform.OS === 'ios' ? 12 : 20,
+              paddingBottom: Platform.OS === 'ios' ? 36 : 28,
+            },
+            SHADOW.sheet,
+          ]}
+        >
+          {Platform.OS === 'ios' ? (
+            <View style={styles.grabberRow}>
+              <View
+                style={[
+                  styles.grabber,
+                  {
+                    backgroundColor:
+                      mode === 'dark'
+                        ? 'rgba(250,250,247,0.22)'
+                        : 'rgba(14,15,13,0.18)',
+                  },
+                ]}
+              />
+            </View>
+          ) : null}
+
+          <Eyebrow>ONE-TAP SIGN-IN</Eyebrow>
+          <Display size={28} style={{ marginTop: 14, maxWidth: 320 }}>
+            Use <Em>{labelText}</Em> next time?
+          </Display>
+          <Body muted style={{ marginTop: 12 }}>
+            Unlock StockPilot faster and skip typing your password on this device. You can turn it off any time in{' '}
+            <Mono size={12.5} color={c.ink}>Settings · Security</Mono>.
+          </Body>
+
+          <View style={styles.iconWrap}>
+            <Icon size={64} color={c.ink} strokeWidth={1.3} />
+            <View style={[styles.pip, { backgroundColor: ACCENT.pipAmber }]} />
           </View>
-          <Text style={styles.title}>Use {label} next time?</Text>
-          <Text style={styles.body}>
-            Skip the password on this device. We&apos;ll prompt you with{' '}
-            {label} when you open StockPilot. You can turn this off in Settings
-            anytime.
-          </Text>
-          <Pressable
-            style={({ pressed }) => [styles.primary, pressed && { opacity: 0.85 }]}
-            onPress={handleEnable}
-            disabled={busy}
-          >
-            <Text style={styles.primaryLabel}>Enable {label}</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.secondary, pressed && { opacity: 0.85 }]}
-            onPress={onDismiss}
-          >
-            <Text style={styles.secondaryLabel}>Not now</Text>
-          </Pressable>
-        </View>
-      </View>
+
+          <View style={{ gap: 10 }}>
+            <Button
+              block
+              disabled={busy}
+              onPress={handleEnable}
+              leading={<Icon size={18} color={c.paper} strokeWidth={1.6} />}
+            >
+              Enable {labelText}
+            </Button>
+            <Button block variant="ghost" onPress={onDismiss}>
+              Not now
+            </Button>
+          </View>
+        </Pressable>
+      </Pressable>
     </Modal>
   );
 }
@@ -98,60 +143,35 @@ export function BiometricOptInSheet({
 const styles = StyleSheet.create({
   scrim: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: space.lg,
+    justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: theme.card,
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: radius.xl,
-    padding: space.xl,
-    width: '100%',
-    maxWidth: 380,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 22,
+  },
+  grabberRow: {
     alignItems: 'center',
+    marginBottom: 18,
   },
-  iconWell: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: theme.bgElevated,
-    borderWidth: 1,
-    borderColor: theme.border,
+  grabber: {
+    width: 36,
+    height: 5,
+    borderRadius: 100,
+  },
+  iconWrap: {
+    marginTop: 24,
+    marginBottom: 18,
+    paddingVertical: 20,
     alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: space.md,
+    position: 'relative',
   },
-  iconGlyph: { color: theme.primary, fontSize: 28 },
-  title: {
-    color: theme.text,
-    fontSize: 18,
-    fontWeight: '700',
-    textAlign: 'center',
+  pip: {
+    position: 'absolute',
+    top: 28,
+    right: '35%',
+    width: 5,
+    height: 5,
+    borderRadius: 3,
   },
-  body: {
-    color: theme.textMuted,
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 19,
-    marginTop: space.sm,
-    marginBottom: space.lg,
-  },
-  primary: {
-    backgroundColor: theme.primary,
-    borderRadius: radius.md,
-    paddingVertical: 13,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-    width: '100%',
-  },
-  primaryLabel: { color: '#fff', fontWeight: '600', fontSize: 15 },
-  secondary: {
-    marginTop: space.sm,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  secondaryLabel: { color: theme.textMuted, fontSize: 13, fontWeight: '500' },
 });

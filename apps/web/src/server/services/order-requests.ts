@@ -6,6 +6,7 @@ import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
+import { createNotification } from './notifications';
 import {
   assertPermission,
   ServiceError,
@@ -1401,9 +1402,11 @@ export class OrderRequestsService {
       const body = requesterName
         ? `Delivery for ${requesterName} is assigned to you.`
         : 'A delivery has been assigned to you.';
-      await admin.from('notifications').insert({
-        organization_id: this.ctx.organizationId,
-        user_id: assigneeUserId,
+      // Funnel through createNotification so the row insert AND the
+      // Expo push to the user's mobile devices happen together.
+      await createNotification({
+        organizationId: this.ctx.organizationId,
+        userId: assigneeUserId,
         type: 'order_request.delivery_assigned',
         title: 'New delivery assignment',
         body,

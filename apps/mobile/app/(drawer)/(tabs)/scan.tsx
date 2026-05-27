@@ -682,7 +682,7 @@ export default function Scan() {
       )}
 
       {busy && !item && !addBook && !addItem && (
-        <ActivityIndicator style={styles.spinner} color={theme.primary} size="large" />
+        <ActivityIndicator style={styles.spinner} color="#fafaf7" size="large" />
       )}
     </SafeAreaView>
   );
@@ -734,7 +734,7 @@ const styles = StyleSheet.create({
     width: 260,
     height: 260,
     borderWidth: 2,
-    borderColor: theme.primary,
+    borderColor: '#fafaf7',
     borderRadius: radius.xl,
   },
   hint: { color: '#fff', marginTop: space.lg, fontSize: 13, fontWeight: '500' },
@@ -846,9 +846,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 999,
   },
-  modeChipOn: { backgroundColor: theme.primary },
-  modeLabel: { color: '#fff', fontSize: 12, fontWeight: '600', opacity: 0.7 },
-  modeLabelOn: { color: '#fff', opacity: 1 },
+  modeChipOn: { backgroundColor: '#fafaf7' },
+  modeLabel: { color: '#fafaf7', fontSize: 12, fontWeight: '600', opacity: 0.7 },
+  modeLabelOn: { color: '#0e0f0d', opacity: 1 },
   coverCta: {
     position: 'absolute',
     bottom: 120,

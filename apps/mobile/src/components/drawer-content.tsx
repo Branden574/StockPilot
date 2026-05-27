@@ -1,263 +1,180 @@
-import {
-  DrawerContentScrollView,
-  type DrawerContentComponentProps,
-} from '@react-navigation/drawer';
-import { useRouter } from 'expo-router';
+import { type DrawerContentComponentProps } from '@react-navigation/drawer';
+import { useRouter, useSegments } from 'expo-router';
+import { LogOut } from 'lucide-react-native';
 import * as React from 'react';
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BrandLockup } from '@/components/brand/mark';
+import { Avatar } from '@/components/ui/avatar';
+import { Hair } from '@/components/ui/card';
+import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
-import { radius, space, theme } from '@/lib/theme';
-
-interface NavItem {
-  label: string;
-  icon: string;
-  href: string;
-}
-
-const NAV_ITEMS: NavItem[] = [
-  { label: 'Home', icon: '⌂', href: '/' },
-  { label: 'Inventory', icon: '▣', href: '/inventory' },
-  { label: 'Receive', icon: '⇣', href: '/receive' },
-  { label: 'Cycle counts', icon: '✓', href: '/cycle-counts' },
-  { label: 'Scan', icon: '◫', href: '/scan' },
-  { label: 'Bundles', icon: '◇', href: '/bundles' },
-  { label: 'PO scan', icon: '⊟', href: '/scan-po' },
-  { label: 'Settings', icon: '⚙', href: '/settings' },
-];
+import { DRAWER_SECTIONS, type DrawerNavItem } from '@/lib/drawer-nav';
+import { useProfile } from '@/lib/use-profile';
+import { useRole } from '@/lib/use-role';
+import { ACCENT, FONT } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 /**
- * Custom content for the left drawer. Renders the nav list at the top
- * and an account section pinned to the bottom. Item taps close the
- * drawer and navigate via expo-router so tab routes deep-link
- * correctly and modal routes (bundles, scan-po) push onto the root
- * Stack above the drawer.
- *
- * Mobile doesn't track an active-warehouse or active-org yet (the
- * snapshot includes warehouses but there's no "current warehouse"
- * concept), so the account section only renders identity + sign out.
- * When those concepts land, this is the place to surface them.
+ * Side drawer — full web nav parity (Overview, Items, Books, Categories,
+ * Tags, Movements, Rentals, Bundles, Orders, Cycle counts, Procedures,
+ * POs, Locations, Suppliers, Reports, AI, Schedule, Notifications, Team,
+ * Settings, Scan). Surfaces also accessible via bottom tabs are tagged
+ * "TAB" so the user knows which entries are shortcuts vs. drawer-only.
  */
 export function DrawerContent(props: DrawerContentComponentProps) {
+  const { c } = useTheme();
+  const { signOut } = useAuth();
+  const profile = useProfile();
+  const { isAdmin } = useRole();
   const router = useRouter();
-  const { session, signOut } = useAuth();
+  const segments = useSegments();
 
-  const user = session?.user ?? null;
-  const fullName =
-    (user?.user_metadata?.full_name as string | undefined) ?? null;
-  const email = user?.email ?? '';
-  const initials = computeInitials(fullName, email);
+  const activeHref = React.useMemo(() => {
+    const path = '/' + segments.filter((s) => !s.startsWith('(')).join('/');
+    return path === '/' || path === '/index' ? '/' : path;
+  }, [segments]);
 
-  const handleNav = React.useCallback(
-    (href: string) => {
-      props.navigation.closeDrawer();
-      // Defer the route change one tick so the drawer-close animation
-      // doesn't fight the route-render frame on lower-end devices.
-      requestAnimationFrame(() => {
-        router.push(href as Parameters<typeof router.push>[0]);
-      });
-    },
-    [props.navigation, router],
+  // Filter admin section out for non-admins so the drawer doesn't
+  // surface routes the user would just bounce off of. Mirrors web's
+  // navForRole() helper.
+  const sections = React.useMemo(
+    () => DRAWER_SECTIONS.filter((s) => !s.admin || isAdmin),
+    [isAdmin],
   );
 
-  const handleSignOut = React.useCallback(async () => {
+  const navigate = (item: DrawerNavItem) => {
     props.navigation.closeDrawer();
-    try {
-      await signOut();
-    } catch (err) {
-      console.warn('[drawer] sign-out failed', err);
-    }
-  }, [props.navigation, signOut]);
+    if (item.href === '/') router.push('/');
+    else router.push(item.href as never);
+  };
 
   return (
-    <View style={styles.root}>
-      <DrawerContentScrollView
-        {...props}
-        contentContainerStyle={styles.scrollContent}
+    <View style={[styles.root, { backgroundColor: c.paper }]}>
+      <SafeAreaView edges={['top']} style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+        <BrandLockup size={26} />
+      </SafeAreaView>
+
+      <ScrollView
+        contentContainerStyle={{ paddingHorizontal: 8, paddingTop: 16, paddingBottom: 20 }}
+        showsVerticalScrollIndicator={false}
       >
-        <View style={styles.headerRow}>
-          <Text style={styles.headerTitle}>StockPilot</Text>
-        </View>
-
-        <View style={styles.navGroup}>
-          {NAV_ITEMS.map((item) => (
-            <NavRow
-              key={item.href}
-              label={item.label}
-              icon={item.icon}
-              onPress={() => handleNav(item.href)}
-            />
-          ))}
-        </View>
-      </DrawerContentScrollView>
-
-      <View style={styles.footer}>
-        <View style={styles.userRow}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{initials}</Text>
-          </View>
-          <View style={styles.userText}>
-            {fullName ? (
-              <Text style={styles.userName} numberOfLines={1}>
-                {fullName}
-              </Text>
+        {sections.map((section, sIdx) => (
+          <View key={section.label ?? `section-${sIdx}`} style={{ marginTop: sIdx === 0 ? 0 : 20 }}>
+            {section.label ? (
+              <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
+                <Eyebrow>{section.label}</Eyebrow>
+              </View>
             ) : null}
-            <Text
-              style={fullName ? styles.userEmail : styles.userName}
-              numberOfLines={1}
-            >
-              {email || 'Not signed in'}
-            </Text>
+            {section.items.map((item) => {
+              const Icon = item.icon;
+              const isActive =
+                item.href === activeHref ||
+                (item.href === '/' && (activeHref === '/' || activeHref.startsWith('/index'))) ||
+                (item.href !== '/' && activeHref.startsWith(item.href));
+              return (
+                <Pressable
+                  key={item.id}
+                  onPress={() => navigate(item)}
+                  style={({ pressed }) => [
+                    styles.row,
+                    {
+                      backgroundColor: isActive ? c.card : 'transparent',
+                      borderColor: isActive ? c.hair : 'transparent',
+                      opacity: pressed ? 0.7 : 1,
+                    },
+                  ]}
+                >
+                  <Icon
+                    size={18}
+                    color={isActive ? c.ink : c.ink3}
+                    strokeWidth={isActive ? 1.6 : 1.4}
+                  />
+                  <Body
+                    size={14}
+                    color={isActive ? c.ink : c.ink2}
+                    style={{
+                      flex: 1,
+                      fontFamily: isActive ? FONT.display : FONT.displayRegular,
+                    }}
+                  >
+                    {item.label}
+                  </Body>
+                  {item.inTabs ? (
+                    <Mono size={9} tracking={0.16} upper color={c.ink4}>
+                      TAB
+                    </Mono>
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </View>
+        ))}
+      </ScrollView>
+
+      <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+        <Hair />
+        <View style={styles.profile}>
+          <Avatar size={36} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
+              {profile.fullName ?? profile.email ?? 'Account'}
+            </Body>
+            <Mono size={10.5} color={c.ink4} tracking={0.04} style={{ marginTop: 2 }}>
+              {profile.email ?? ''}
+            </Mono>
           </View>
         </View>
-
         <Pressable
-          onPress={handleSignOut}
+          onPress={signOut}
           style={({ pressed }) => [
-            styles.signOutButton,
-            pressed && styles.signOutButtonPressed,
+            styles.signout,
+            {
+              borderColor: c.hair,
+              opacity: pressed ? 0.7 : 1,
+            },
           ]}
-          accessibilityRole="button"
-          accessibilityLabel="Sign out"
         >
-          <Text style={styles.signOutText}>Sign out</Text>
+          <LogOut size={16} color={ACCENT.crit} strokeWidth={1.5} />
+          <Body size={14} color={ACCENT.crit} style={{ fontFamily: FONT.display }}>
+            Sign out
+          </Body>
         </Pressable>
       </View>
     </View>
   );
 }
 
-interface NavRowProps {
-  label: string;
-  icon: string;
-  onPress: () => void;
-}
-
-function NavRow({ label, icon, onPress }: NavRowProps) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.navRow, pressed && styles.navRowPressed]}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-    >
-      <Text style={styles.navIcon}>{icon}</Text>
-      <Text style={styles.navLabel}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function computeInitials(fullName: string | null, email: string): string {
-  const source = (fullName ?? email).trim();
-  if (!source) return '?';
-  const parts = source.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) {
-    return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
-  }
-  return source.slice(0, 2).toUpperCase();
-}
-
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: theme.bgElevated,
   },
-  scrollContent: {
-    paddingTop: space.xl,
-    paddingBottom: space.lg,
-  },
-  headerRow: {
-    paddingHorizontal: space.lg,
-    paddingBottom: space.lg,
-  },
-  headerTitle: {
-    color: theme.text,
-    fontSize: 20,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  navGroup: {
-    paddingHorizontal: space.sm,
-  },
-  navRow: {
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.md,
-    paddingHorizontal: space.md,
-    paddingVertical: 12,
-    borderRadius: radius.md,
+    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 2,
   },
-  navRowPressed: {
-    backgroundColor: theme.card,
-  },
-  navIcon: {
-    color: theme.textMuted,
-    fontSize: 18,
-    width: 22,
-    textAlign: 'center',
-  },
-  navLabel: {
-    color: theme.text,
-    fontSize: 15,
-    fontWeight: '500',
-  },
-  footer: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.border,
-    padding: space.lg,
-    gap: space.md,
-  },
-  userRow: {
+  profile: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.md,
+    gap: 12,
+    paddingTop: 14,
+    paddingBottom: 10,
   },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: theme.primary,
+  signout: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  avatarText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  userText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  userName: {
-    color: theme.text,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  userEmail: {
-    color: theme.textMuted,
-    fontSize: 12,
-    marginTop: 1,
-  },
-  signOutButton: {
-    paddingVertical: 10,
-    paddingHorizontal: space.md,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-    alignItems: 'center',
-  },
-  signOutButtonPressed: {
-    backgroundColor: theme.card,
-  },
-  signOutText: {
-    color: theme.text,
-    fontSize: 14,
-    fontWeight: '600',
+    gap: 8,
+    height: 40,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginTop: 4,
   },
 });

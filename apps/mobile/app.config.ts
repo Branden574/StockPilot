@@ -49,6 +49,7 @@ const config: ExpoConfig = {
       },
     ],
     'expo-secure-store',
+    'expo-sqlite',
     [
       'expo-local-authentication',
       {
@@ -58,6 +59,11 @@ const config: ExpoConfig = {
         faceIDPermission: 'StockPilot uses Face ID to sign you in securely without re-entering your password.',
       },
     ],
+    // Patches the generated Podfile so the `fmt` pod compiles under
+    // Xcode 16+ (defines FMT_USE_CONSTEVAL=0). See the plugin file for
+    // the full rationale. Required for `expo run:ios` to succeed until
+    // we bump to RN 0.81+.
+    './plugins/with-fmt-consteval-fix.js',
   ],
   experiments: {
     typedRoutes: true,
