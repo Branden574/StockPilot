@@ -174,10 +174,19 @@ async function snapshotGET(req: NextRequest) {
   if (itemErr) return dbError(ctx, 'items', itemErr);
 
   // ── Open POs (and their lines) ──────────────────────────────────
+  // purchase_orders ships through a destination_location_id pointer
+  // (FK to locations); each location carries the warehouse_id. The
+  // canonical PO service uses an embedded join — same here. Use !inner
+  // only when filtering, otherwise we'd drop POs whose destination is
+  // null.
+  const destEmbed = !access.hasAllAccess && access.readableIds.length
+    ? 'destination:locations!destination_location_id!inner (warehouse_id)'
+    : 'destination:locations!destination_location_id (warehouse_id)';
   let poQ = ctx.supabase
     .from('purchase_orders')
     .select(
-      `id, po_number, status, expected_at, warehouse_id, updated_at,
+      `id, po_number, status, expected_at, destination_location_id, updated_at,
+       ${destEmbed},
        items:purchase_order_items (
          id, item_id, quantity_ordered, quantity_received, unit_cost
        )`,
@@ -187,7 +196,7 @@ async function snapshotGET(req: NextRequest) {
     .order('updated_at', { ascending: false })
     .limit(200);
   if (!access.hasAllAccess && access.readableIds.length) {
-    poQ = poQ.in('warehouse_id', access.readableIds);
+    poQ = poQ.in('destination.warehouse_id', access.readableIds);
   }
   if (since) poQ = poQ.gte('updated_at', since);
   const { data: pos, error: poErr } = await poQ;
@@ -306,12 +315,16 @@ async function snapshotGET(req: NextRequest) {
         quantity_received: number;
         unit_cost: number;
       }>;
+      const dest = (p as { destination?: { warehouse_id?: string | null } | { warehouse_id?: string | null }[] | null }).destination;
+      const destWarehouseId = Array.isArray(dest)
+        ? (dest[0]?.warehouse_id ?? null)
+        : (dest?.warehouse_id ?? null);
       return {
         id: p.id,
         poNumber: p.po_number,
         status: p.status,
         expectedAt: p.expected_at,
-        warehouseId: p.warehouse_id,
+        warehouseId: destWarehouseId,
         lines: lines.map((l) => ({
           id: l.id,
           itemId: l.item_id,

@@ -42,13 +42,7 @@ export default function AIAssistantScreen() {
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <IconChip
-              icon={ArrowLeft}
-              onPress={() => {
-                if (router.canGoBack()) router.back();
-                else router.replace('/');
-              }}
-            />
+            <IconChip icon={ArrowLeft} onPress={() => router.replace('/')} />
             <IconChip icon={Menu} onPress={openDrawer} />
           </View>
         </View>
