@@ -4,22 +4,20 @@ const config: ExpoConfig = {
   name: 'StockPilot',
   slug: 'stockpilot',
   scheme: 'stockpilot',
-  version: '0.1.0',
+  version: '1.0.0',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   newArchEnabled: true,
-  // splash + icon assets intentionally omitted while branding PNGs
-  // haven't been committed to apps/mobile/assets. Expo falls back to
-  // its default placeholder icon + a solid-color splash matching the
-  // backgroundColor below. Add proper assets and restore icon/splash
-  // when branding is finalised.
+  icon: './assets/icon.png',
   splash: {
+    image: './assets/icon.png',
     resizeMode: 'contain',
     backgroundColor: '#0a0f1f',
   },
   ios: {
     supportsTablet: true,
     bundleIdentifier: 'app.stockpilot.mobile',
+    buildNumber: '1',
     infoPlist: {
       NSCameraUsageDescription: 'StockPilot uses the camera to scan barcodes and QR codes.',
       NSPhotoLibraryUsageDescription: 'StockPilot uses your photo library to attach images to inventory items.',
@@ -28,10 +26,19 @@ const config: ExpoConfig = {
       // Face ID prompt without this string. Touch ID + passcode do not
       // need it but having it doesn't hurt.
       NSFaceIDUsageDescription: 'StockPilot uses Face ID to sign you in securely without re-entering your password.',
+      // Declares the app does not use non-exempt encryption. Required
+      // by Apple's export-compliance prompt at submit time; setting it
+      // here means TestFlight/App Store builds skip the question.
+      ITSAppUsesNonExemptEncryption: false,
     },
   },
   android: {
     package: 'app.stockpilot.mobile',
+    versionCode: 1,
+    adaptiveIcon: {
+      foregroundImage: './assets/icon.png',
+      backgroundColor: '#0a0f1f',
+    },
     permissions: ['CAMERA', 'READ_MEDIA_IMAGES'],
   },
   plugins: [

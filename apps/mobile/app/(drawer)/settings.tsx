@@ -13,13 +13,14 @@ import {
   RefreshCcw,
   Shield,
   Sparkles,
+  Trash2,
   User,
   Warehouse,
   WifiOff,
   type LucideIcon,
 } from 'lucide-react-native';
 import * as React from 'react';
-import { Alert, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Avatar } from '@/components/ui/avatar';
@@ -305,6 +306,16 @@ export default function Settings() {
           />
         </Section>
 
+        <Section label="DANGER ZONE">
+          <SettingRow
+            icon={Trash2}
+            title="Delete my account"
+            detail="Permanent"
+            chevron
+            onPress={() => confirmDeleteAccount(signOut)}
+          />
+        </Section>
+
         <Section label="ABOUT">
           <SettingRow
             icon={HelpCircle}
@@ -425,6 +436,88 @@ function SettingRow({
       {inner}
     </Pressable>
   );
+}
+
+/**
+ * Two-step destructive confirm for the App Store-required in-app
+ * account deletion. Apple requires that the user can fully delete
+ * their account from inside the app — not via a website link.
+ *
+ * Step 1: warn what will happen, offer Cancel.
+ * Step 2: type-DELETE prompt — calls /api/v1/account/delete which
+ *         tombstones the profile + invalidates the auth user.
+ * On success, the auth context is torn down via signOut so the app
+ * lands back at the sign-in screen.
+ */
+function confirmDeleteAccount(signOut: () => Promise<void> | void): void {
+  Alert.alert(
+    'Delete your account?',
+    'This permanently removes your profile, biometric pairing, push tokens, and access to all StockPilot organizations you belong to. Inventory data owned by your organization is retained for org members.\n\nIf you are the sole owner of an organization with other members, transfer ownership first.\n\nThis cannot be undone.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Continue',
+        style: 'destructive',
+        onPress: () => promptDeleteConfirmation(signOut),
+      },
+    ],
+  );
+}
+
+async function performDelete(signOut: () => Promise<void> | void) {
+  try {
+    const { api } = await import('@/lib/api');
+    await api<{ ok: true }>('/api/v1/account/delete', {
+      method: 'POST',
+      body: { confirm: 'DELETE' },
+    });
+    await signOut();
+    Alert.alert('Account deleted', 'Your account has been removed. Thanks for trying StockPilot.');
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Unknown error';
+    Alert.alert('Could not delete account', msg);
+  }
+}
+
+function promptDeleteConfirmation(signOut: () => Promise<void> | void): void {
+  // Alert.prompt is iOS-only — RN's Android impl is a no-op. On
+  // Android we substitute a second yes/no confirm with the same
+  // safety phrasing (App Store cares about iOS; Android Play Store
+  // requires deletion but doesn't mandate the type-to-confirm UX).
+  if (Platform.OS === 'ios') {
+    Alert.prompt(
+      'Type DELETE to confirm',
+      'This is your last chance to back out. Type DELETE (all caps) to permanently delete your account.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete forever',
+          style: 'destructive',
+          onPress: (input) => {
+            if ((input ?? '').trim() !== 'DELETE') {
+              Alert.alert('Not deleted', 'You did not type DELETE exactly. Your account is unchanged.');
+              return;
+            }
+            void performDelete(signOut);
+          },
+        },
+      ],
+      'plain-text',
+    );
+  } else {
+    Alert.alert(
+      'Final confirmation',
+      'Tap “Delete forever” to permanently remove your account. There is no undo.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete forever',
+          style: 'destructive',
+          onPress: () => void performDelete(signOut),
+        },
+      ],
+    );
+  }
 }
 
 const styles = StyleSheet.create({
