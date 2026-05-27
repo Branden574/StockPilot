@@ -1,5 +1,5 @@
 import { useNavigation, useRouter } from 'expo-router';
-import { Barcode, BookMarked, Menu, Plus, Search } from 'lucide-react-native';
+import { ArrowLeft, Barcode, BookMarked, Menu, Plus, Search } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -257,7 +257,16 @@ export default function BooksScreen() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={Menu} onPress={openDrawer} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <IconChip
+              icon={ArrowLeft}
+              onPress={() => {
+                if (router.canGoBack()) router.back();
+                else router.replace('/');
+              }}
+            />
+            <IconChip icon={Menu} onPress={openDrawer} />
+          </View>
           <IconChip icon={Plus} onPress={() => router.push('/scan')} />
         </View>
         <View style={styles.head}>
