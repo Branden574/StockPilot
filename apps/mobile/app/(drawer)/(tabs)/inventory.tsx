@@ -284,7 +284,7 @@ export default function Inventory() {
         <View style={styles.head}>
           <Eyebrow>{`INVENTORY · ${total.toLocaleString()} SKUS`}</Eyebrow>
           <Display size={34} style={{ marginTop: 12 }}>
-            Items <Em>&amp; Books</Em>
+            Items<Em>.</Em>
           </Display>
         </View>
 

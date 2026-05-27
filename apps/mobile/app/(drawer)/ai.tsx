@@ -1,5 +1,5 @@
 import { useNavigation, useRouter } from 'expo-router';
-import { ArrowUpRight, Menu, Sparkles } from 'lucide-react-native';
+import { ArrowLeft, ArrowUpRight, Menu, Sparkles } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -41,7 +41,16 @@ export default function AIAssistantScreen() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={Menu} onPress={openDrawer} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <IconChip
+              icon={ArrowLeft}
+              onPress={() => {
+                if (router.canGoBack()) router.back();
+                else router.replace('/');
+              }}
+            />
+            <IconChip icon={Menu} onPress={openDrawer} />
+          </View>
         </View>
         <View style={styles.head}>
           <Eyebrow>WORKSPACE · BETA</Eyebrow>
