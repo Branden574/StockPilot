@@ -96,62 +96,57 @@ export default function AIChat() {
         throw new Error(`AI chat ${res.status}: ${errText.slice(0, 200) || res.statusText}`);
       }
 
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error('No response body');
-      const decoder = new TextDecoder();
-      let buffer = '';
+      // React Native's fetch polyfill returns `response.body = null`
+      // even for streaming responses (Hermes engine doesn't expose
+      // ReadableStream from fetch the way browsers do). So we read
+      // the full body, then parse the NDJSON in one pass and rebuild
+      // the assistant turn. Loses the typewriter feel; gain is the
+      // chat actually works. A real streaming UX needs an
+      // XHR-with-onprogress shim — that's a follow-up.
+      const fullText = await res.text();
+      const lines = fullText.split('\n').map((l) => l.trim()).filter(Boolean);
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let nl = buffer.indexOf('\n');
-        while (nl !== -1) {
-          const line = buffer.slice(0, nl).trim();
-          buffer = buffer.slice(nl + 1);
-          if (line.length > 0) {
-            try {
-              const event = JSON.parse(line) as
-                | { type: 'text'; delta: string }
-                | { type: 'tool'; name: string; ok: boolean }
-                | { type: 'session'; id: string }
-                | { type: 'done' }
-                | { type: 'error'; message?: string };
-              if (event.type === 'text') {
-                setTurns((prev) => {
-                  const next = [...prev];
-                  const last = next[next.length - 1];
-                  if (last && last.role === 'assistant') {
-                    next[next.length - 1] = { ...last, content: last.content + event.delta };
-                  }
-                  return next;
-                });
-              } else if (event.type === 'tool') {
-                setTurns((prev) => {
-                  const next = [...prev];
-                  const last = next[next.length - 1];
-                  if (last && last.role === 'assistant') {
-                    next[next.length - 1] = {
-                      ...last,
-                      tools: [...(last.tools ?? []), { name: event.name, ok: event.ok }],
-                    };
-                  }
-                  return next;
-                });
-              } else if (event.type === 'session') {
-                setSessionId(event.id);
-              } else if (event.type === 'error') {
-                throw new Error(event.message ?? 'AI error');
-              }
-            } catch (parseErr) {
-              // NDJSON line couldn't parse — log and skip, don't blow up the chat.
-              console.warn('[ai] bad line', line.slice(0, 100), parseErr);
-            }
+      let assistantText = '';
+      const tools: Array<{ name: string; ok: boolean }> = [];
+      let errorMessage: string | null = null;
+
+      for (const line of lines) {
+        try {
+          const event = JSON.parse(line) as
+            | { type: 'text'; delta: string }
+            | { type: 'tool'; name: string; ok: boolean }
+            | { type: 'session'; id: string }
+            | { type: 'done' }
+            | { type: 'error'; message?: string };
+          if (event.type === 'text') {
+            assistantText += event.delta;
+          } else if (event.type === 'tool') {
+            tools.push({ name: event.name, ok: event.ok });
+          } else if (event.type === 'session') {
+            setSessionId(event.id);
+          } else if (event.type === 'error') {
+            errorMessage = event.message ?? 'AI error';
           }
-          nl = buffer.indexOf('\n');
+        } catch (parseErr) {
+          console.warn('[ai] bad line', line.slice(0, 100), parseErr);
         }
-        scrollToBottom();
       }
+
+      if (errorMessage) throw new Error(errorMessage);
+
+      setTurns((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last && last.role === 'assistant') {
+          next[next.length - 1] = {
+            ...last,
+            content: assistantText || '(no response)',
+            tools,
+          };
+        }
+        return next;
+      });
+      scrollToBottom();
     } catch (err) {
       Alert.alert('Chat error', err instanceof Error ? err.message : String(err));
       setTurns((prev) => prev.slice(0, -1)); // remove the empty assistant bubble
