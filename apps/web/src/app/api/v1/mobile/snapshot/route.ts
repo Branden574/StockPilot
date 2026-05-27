@@ -13,13 +13,36 @@ import { reportError } from '@/lib/error-reporter';
 function dbError(
   ctx: { organizationId: string },
   tag: string,
-  err: { message?: string },
+  err: { message?: string; code?: string; details?: string; hint?: string },
 ) {
+  // Log everything server-side via reportError. ALSO surface the tag
+  // (which Supabase table the failure happened on) in the response
+  // body so the mobile client can include it in its console warn —
+  // saves a Vercel logs round-trip when diagnosing a fresh failure.
+  // The message/code/hint go to the server log; only the tag leaks
+  // to the client, which is intentional (no PII, just a table name).
   void reportError(new Error(err.message ?? 'unknown'), {
     tag: `mobile.snapshot.${tag}`,
     organizationId: ctx.organizationId,
+    extra: {
+      code: err.code ?? null,
+      details: err.details ?? null,
+      hint: err.hint ?? null,
+    },
   });
-  return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  return NextResponse.json(
+    {
+      error: 'internal_error',
+      query: tag,
+      // Include the supabase error message in the body too — this
+      // endpoint is only callable by authenticated org members so
+      // the message isn't leaking to an outside attacker, and it
+      // turns a 60s "something's wrong" loop into a 60s "exactly
+      // this query is broken" loop.
+      detail: err.message ?? null,
+    },
+    { status: 500 },
+  );
 }
 
 export const runtime = 'nodejs';
