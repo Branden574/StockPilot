@@ -1,22 +1,28 @@
-import { useRouter } from 'expo-router';
-import { Barcode, BookMarked, BookOpen, Search } from 'lucide-react-native';
+import { useNavigation, useRouter } from 'expo-router';
+import { Barcode, BookMarked, Menu, Plus, Search } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from 'expo-router';
-import { Menu, Plus } from 'lucide-react-native';
 
+import {
+  ActiveFilterPill,
+  FILTER_GENERIC_CHARTER_ID,
+  FilterButton,
+  FilterSheet,
+  EMPTY_FILTER_STATE,
+  activeFilterCount,
+  type FilterOption,
+  type FilterState,
+} from '@/components/filter-sheet';
 import { Card } from '@/components/ui/card';
-import { FilterChip } from '@/components/ui/chip';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -35,13 +41,11 @@ interface BookRow {
   reorder_point: number;
   custom_fields: Record<string, unknown> | null;
   category_id: string | null;
+  primary_location_id: string | null;
+  charter_id: string | null;
+  updated_at: string | null;
   imageUrl: string | null;
   grade: string | null;
-}
-
-interface BookCategory {
-  id: string;
-  name: string;
 }
 
 export default function BooksScreen() {
@@ -50,58 +54,124 @@ export default function BooksScreen() {
   const navigation = useNavigation();
   const { c } = useTheme();
   const [rows, setRows] = React.useState<BookRow[]>([]);
-  const [categories, setCategories] = React.useState<BookCategory[]>([]);
-  const [filter, setFilter] = React.useState<string>('ALL');
+  const [bookCategories, setBookCategories] = React.useState<FilterOption[]>([]);
+  const [locations, setLocations] = React.useState<FilterOption[]>([]);
+  const [charters, setCharters] = React.useState<FilterOption[]>([]);
+  const [filter, setFilter] = React.useState<FilterState>(EMPTY_FILTER_STATE);
+  const [sheetOpen, setSheetOpen] = React.useState(false);
   const [q, setQ] = React.useState('');
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
 
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
 
-  const load = React.useCallback(
-    async (query: string, kind: string) => {
-      if (!orgId) return;
+  const bookCatIds = React.useMemo(() => bookCategories.map((b) => b.id), [bookCategories]);
 
-      // Resolve book category ids. We treat any category with "book" in
-      // the name as a book category so renames don't break the filter.
-      const { data: cats } = await supabase
+  const categoryMap = React.useMemo(
+    () => new Map(bookCategories.map((x) => [x.id, x.name] as const)),
+    [bookCategories],
+  );
+  const locationMap = React.useMemo(
+    () => new Map(locations.map((x) => [x.id, x.name] as const)),
+    [locations],
+  );
+  const charterMap = React.useMemo(
+    () => new Map(charters.map((x) => [x.id, x.name] as const)),
+    [charters],
+  );
+
+  const loadLookups = React.useCallback(async () => {
+    if (!orgId) return;
+    const [cats, locs, chts] = await Promise.all([
+      supabase
         .from('categories')
         .select('id, name')
         .eq('organization_id', orgId)
         .is('deleted_at', null)
-        .ilike('name', '%book%');
-      const bookCats = (cats ?? []) as BookCategory[];
-      setCategories(bookCats);
-      const catIds = bookCats.map((c) => c.id);
-      if (catIds.length === 0) {
+        .ilike('name', '%book%')
+        .order('name', { ascending: true }),
+      supabase
+        .from('locations')
+        .select('id, name')
+        .eq('organization_id', orgId)
+        .is('deleted_at', null)
+        .order('name', { ascending: true }),
+      supabase
+        .from('charters')
+        .select('id, name, code')
+        .eq('organization_id', orgId)
+        .order('name', { ascending: true }),
+    ]);
+    setBookCategories(((cats.data ?? []) as Array<{ id: string; name: string }>) ?? []);
+    setLocations(((locs.data ?? []) as Array<{ id: string; name: string }>) ?? []);
+    setCharters(
+      ((chts.data ?? []) as Array<{ id: string; name: string; code: string | null }>).map((c) => ({
+        id: c.id,
+        name: c.code ? `${c.name} · ${c.code}` : c.name,
+      })),
+    );
+  }, [orgId]);
+
+  const load = React.useCallback(
+    async (query: string, f: FilterState, allBookCatIds: string[]) => {
+      if (!orgId) return;
+      if (allBookCatIds.length === 0) {
         setRows([]);
         setLoading(false);
         return;
       }
 
-      const filterIds =
-        kind === 'ALL'
-          ? catIds
-          : bookCats.filter((c) => c.name === kind).map((c) => c.id);
+      // If user picked specific book categories, narrow to those. Otherwise
+      // include every book category in the org.
+      const catFilter = f.categoryIds.length > 0 ? f.categoryIds : allBookCatIds;
+
+      const sortMap: Record<typeof f.sort, { col: string; asc: boolean }> = {
+        updated_desc: { col: 'updated_at', asc: false },
+        name_asc: { col: 'name', asc: true },
+        name_desc: { col: 'name', asc: false },
+        qty_desc: { col: 'quantity_on_hand', asc: false },
+        qty_asc: { col: 'quantity_on_hand', asc: true },
+      };
+      const ord = sortMap[f.sort];
 
       let req = supabase
         .from('inventory_items')
         .select(
-          'id, name, sku, barcode, quantity_on_hand, reorder_point, custom_fields, category_id',
+          `id, name, sku, barcode, quantity_on_hand, reorder_point, custom_fields,
+           category_id, primary_location_id, charter_id, updated_at`,
         )
         .eq('organization_id', orgId)
-        .in('category_id', filterIds.length ? filterIds : catIds)
+        .in('category_id', catFilter)
         .is('deleted_at', null)
-        .order('name', { ascending: true })
+        .order(ord.col, { ascending: ord.asc })
         .limit(200);
+
       if (query.trim()) {
         req = req.or(
           `name.ilike.%${query}%,sku.ilike.%${query}%,barcode.ilike.%${query}%`,
         );
       }
-      const { data } = await req;
 
-      const bookRows: BookRow[] = (data ?? []).map((row) => {
+      if (f.locationIds.length > 0) {
+        req = req.in('primary_location_id', f.locationIds);
+      }
+      if (f.charterIds.length > 0) {
+        const wantsGeneric = f.charterIds.includes(FILTER_GENERIC_CHARTER_ID);
+        const real = f.charterIds.filter((x) => x !== FILTER_GENERIC_CHARTER_ID);
+        if (wantsGeneric && real.length > 0) {
+          req = req.or(`charter_id.is.null,charter_id.in.(${real.join(',')})`);
+        } else if (wantsGeneric) {
+          req = req.is('charter_id', null);
+        } else {
+          req = req.in('charter_id', real);
+        }
+      }
+      if (f.status === 'out') req = req.lte('quantity_on_hand', 0);
+
+      const { data, error } = await req;
+      if (error) console.warn('books list', error);
+
+      let bookRows: BookRow[] = (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
         const cf = (r.custom_fields as Record<string, unknown> | null) ?? null;
         return {
@@ -113,12 +183,23 @@ export default function BooksScreen() {
           reorder_point: Number(r.reorder_point) || 0,
           custom_fields: cf,
           category_id: (r.category_id as string | null) ?? null,
+          primary_location_id: (r.primary_location_id as string | null) ?? null,
+          charter_id: (r.charter_id as string | null) ?? null,
+          updated_at: (r.updated_at as string | null) ?? null,
           imageUrl: null,
           grade: (cf?.book_grade as string | undefined) ?? null,
         };
       });
 
-      // Same image-batching pattern as inventory.tsx
+      if (f.status === 'low') {
+        bookRows = bookRows.filter(
+          (r) =>
+            r.reorder_point > 0
+            && r.quantity_on_hand <= r.reorder_point
+            && r.quantity_on_hand > 0,
+        );
+      }
+
       const ids = bookRows.map((b) => b.id);
       if (ids.length > 0) {
         const { data: imgs } = await supabase
@@ -154,19 +235,23 @@ export default function BooksScreen() {
   );
 
   React.useEffect(() => {
-    void load('', 'ALL');
-  }, [load]);
+    if (!orgId) return;
+    void loadLookups();
+  }, [orgId, loadLookups]);
 
   React.useEffect(() => {
-    const t = setTimeout(() => void load(q, filter), 250);
+    if (!orgId) return;
+    const t = setTimeout(() => void load(q, filter, bookCatIds), 250);
     return () => clearTimeout(t);
-  }, [q, filter, load]);
+  }, [q, filter, bookCatIds, load, orgId]);
 
   async function refresh() {
     setRefreshing(true);
-    await load(q, filter);
+    await load(q, filter, bookCatIds);
     setRefreshing(false);
   }
+
+  const filterCount = activeFilterCount(filter);
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -202,6 +287,7 @@ export default function BooksScreen() {
                 { color: c.ink, fontFamily: FONT.displayRegular },
               ]}
             />
+            <FilterButton onPress={() => setSheetOpen(true)} count={filterCount} />
             <Pressable
               hitSlop={8}
               onPress={() => router.push('/scan')}
@@ -211,26 +297,11 @@ export default function BooksScreen() {
             </Pressable>
           </View>
 
-          {categories.length > 1 ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.chips}
-            >
-              <FilterChip active={filter === 'ALL'} onPress={() => setFilter('ALL')}>
-                ALL
-              </FilterChip>
-              {categories.map((cat) => (
-                <FilterChip
-                  key={cat.id}
-                  active={filter === cat.name}
-                  onPress={() => setFilter(cat.name)}
-                >
-                  {cat.name.toUpperCase()}
-                </FilterChip>
-              ))}
-            </ScrollView>
-          ) : null}
+          <ActiveFilterPill
+            state={filter}
+            onClear={() => setFilter(EMPTY_FILTER_STATE)}
+            lookups={{ categories: categoryMap, locations: locationMap, charters: charterMap }}
+          />
         </View>
       </SafeAreaView>
 
@@ -258,6 +329,16 @@ export default function BooksScreen() {
           )}
         />
       )}
+
+      <FilterSheet
+        visible={sheetOpen}
+        onDismiss={() => setSheetOpen(false)}
+        state={filter}
+        onChange={setFilter}
+        categories={bookCategories}
+        locations={locations}
+        charters={charters}
+      />
     </View>
   );
 }
@@ -339,10 +420,6 @@ const styles = StyleSheet.create({
     fontSize: 14.5,
     height: '100%',
     letterSpacing: -0.17,
-  },
-  chips: {
-    paddingTop: 12,
-    gap: 8,
   },
   empty: { padding: 32, alignItems: 'center' },
 });
