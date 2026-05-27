@@ -1,5 +1,6 @@
 import { useNavigation, useRouter } from 'expo-router';
 import {
+  ArrowLeft,
   Bell,
   ChevronLeft,
   Fingerprint,
@@ -106,10 +107,19 @@ export default function Settings() {
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
           <IconChip
-            icon={Menu}
-            onPress={() => (navigation as { openDrawer?: () => void }).openDrawer?.()}
+            icon={ArrowLeft}
+            onPress={() => {
+              if (router.canGoBack()) router.back();
+              else router.replace('/');
+            }}
           />
-          <IconChip icon={HelpCircle} />
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <IconChip
+              icon={Menu}
+              onPress={() => (navigation as { openDrawer?: () => void }).openDrawer?.()}
+            />
+            <IconChip icon={HelpCircle} />
+          </View>
         </View>
         <View style={styles.head}>
           <Eyebrow>SETTINGS</Eyebrow>
