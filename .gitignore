@@ -90,3 +90,18 @@ load-tests/results/
 # native config lives in app.config.ts + Expo plugins instead.
 apps/mobile/ios/
 apps/mobile/android/
+
+# Expo local cache + native build artifacts
+**/.expo/
+**/.expo-shared/
+
+# Local agent / tool caches — never belong in git
+.claude/
+.firecrawl/
+.playwright-mcp/
+
+# pnpm sometimes drops a numbered lockfile copy when two `pnpm install`
+# runs collide. Real lockfile is pnpm-lock.yaml; the "pnpm-lock 2.yaml"
+# / "pnpm-lock 3.yaml" siblings are junk.
+pnpm-lock\ *.yaml
+"pnpm-lock 2.yaml"
