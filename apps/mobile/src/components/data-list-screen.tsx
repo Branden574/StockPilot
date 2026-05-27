@@ -1,5 +1,5 @@
-import { useNavigation } from 'expo-router';
-import { Menu, type LucideIcon } from 'lucide-react-native';
+import { useNavigation, useRouter } from 'expo-router';
+import { ArrowLeft, Menu, type LucideIcon } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -55,13 +55,21 @@ export function DataListScreen<T>({
 }) {
   const { c } = useTheme();
   const navigation = useNavigation();
+  const router = useRouter();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
+  const goBack = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/');
+  };
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={Menu} onPress={openDrawer} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <IconChip icon={ArrowLeft} onPress={goBack} />
+            <IconChip icon={Menu} onPress={openDrawer} />
+          </View>
           {trailing}
         </View>
         <View style={styles.head}>
