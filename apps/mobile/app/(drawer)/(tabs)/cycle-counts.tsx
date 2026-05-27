@@ -1,5 +1,10 @@
 import * as Network from 'expo-network';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
+import {
+  Menu,
+  Plus,
+  WifiOff,
+} from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -7,11 +12,15 @@ import {
   Pressable,
   RefreshControl,
   StyleSheet,
-  Text,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Card } from '@/components/ui/card';
+import { Pill } from '@/components/ui/pill';
+import { IconChip } from '@/components/ui/row';
+import { StockBar } from '@/components/ui/stock-bar';
+import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import {
   dirtyLineCounts,
@@ -20,7 +29,8 @@ import {
 } from '@/lib/cycle-count-cache';
 import { useSyncStatus } from '@/lib/cycle-count-sync';
 import { supabase } from '@/lib/supabase';
-import { radius, space, theme } from '@/lib/theme';
+import { ACCENT, FONT } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 interface OpenCount {
   id: string;
@@ -34,8 +44,11 @@ interface OpenCount {
 
 export default function CycleCounts() {
   const router = useRouter();
+  const navigation = useNavigation();
   const { user } = useAuth();
+  const { c } = useTheme();
   const sync = useSyncStatus();
+  const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const [counts, setCounts] = React.useState<OpenCount[]>([]);
   const [pendingByCount, setPendingByCount] = React.useState<Map<string, number>>(new Map());
@@ -65,8 +78,6 @@ export default function CycleCounts() {
     }
     setOffline(!online);
 
-    // Always start by reading the cached headers — they show
-    // immediately even if the network call hangs / fails.
     const cached = await listCachedCycleCounts();
     const cachedView: OpenCount[] = cached.map((c: CachedCycleCountHeader) => ({
       id: c.id,
@@ -145,7 +156,6 @@ export default function CycleCounts() {
     }, [load]),
   );
 
-  // Refresh dirty-counts whenever the global sync engine signals progress.
   React.useEffect(() => {
     void (async () => {
       const dirty = await dirtyLineCounts();
@@ -159,162 +169,247 @@ export default function CycleCounts() {
     setRefreshing(false);
   }
 
-  function open(c: OpenCount) {
-    router.push(`/cycle-count/${c.id}`);
-  }
+  const inProgress = counts.length;
+  const offlineCount = counts.filter((c) => c.source === 'cache').length;
+  const pendingTotal = Array.from(pendingByCount.values()).reduce((a, b) => a + b, 0);
+  const todayCount = counts.filter((c) => {
+    if (!c.startedAt) return false;
+    const d = new Date(c.startedAt);
+    const now = new Date();
+    return d.toDateString() === now.toDateString();
+  }).length;
 
   return (
-    <SafeAreaView style={styles.root} edges={['top']}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Cycle counts</Text>
-        <Text style={styles.subtitle}>
-          {counts.length} in progress
-        </Text>
-      </View>
-      {offline && (
-        <View style={styles.offlineBanner}>
-          <View style={styles.offlineDot} />
-          <Text style={styles.offlineText}>
-            Offline — showing cached counts
-          </Text>
+    <View style={[styles.root, { backgroundColor: c.paper }]}>
+      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
+        <View style={styles.topbar}>
+          <IconChip icon={Menu} onPress={openDrawer} />
+          <IconChip icon={Plus} />
         </View>
-      )}
+        <View style={styles.head}>
+          <Eyebrow>{`${inProgress} IN PROGRESS${offlineCount > 0 ? ` · ${offlineCount} OFFLINE` : ''}`}</Eyebrow>
+          <Display size={34} style={{ marginTop: 12 }}>
+            Cycle <Em>counts.</Em>
+          </Display>
+        </View>
+
+        {offline ? (
+          <View style={[styles.offlineBanner, { backgroundColor: c.paper2 }]}>
+            <WifiOff size={14} color={c.ink3} strokeWidth={1.5} />
+            <Mono size={11.5} tracking={0.04} color={c.ink3}>
+              Offline · showing cached counts
+            </Mono>
+          </View>
+        ) : null}
+
+        <View style={styles.summaryGrid}>
+          <SummaryTile label="TODAY" value={String(todayCount)} sub="counts" />
+          <SummaryTile label="ACTIVE" value={String(inProgress)} sub="lists" />
+          <SummaryTile label="PENDING" value={String(pendingTotal)} sub="to sync" kind="warn" />
+        </View>
+
+        <View style={styles.sectionHead}>
+          <Eyebrow>ACTIVE COUNTS</Eyebrow>
+          <Body size={12} muted>
+            Filter
+          </Body>
+        </View>
+      </SafeAreaView>
+
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={theme.primary} />
-        </View>
+        <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
       ) : (
         <FlatList
           data={counts}
           keyExtractor={(c) => c.id}
-          contentContainerStyle={{ padding: space.md, paddingBottom: space.xxl }}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24, gap: 10 }}
           refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={refresh}
-              tintColor={theme.primary}
-            />
+            <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />
           }
-          ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
           ListEmptyComponent={
             <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>No counts in progress</Text>
-              <Text style={styles.emptyText}>
-                Start a cycle count from the web (Cycle counts → New) and pick
-                it up here on the floor.
-              </Text>
+              <Display size={18}>No counts <Em>yet.</Em></Display>
+              <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
+                Start a cycle count from the web (Cycle counts → New) and pick it up here on the floor.
+              </Body>
             </View>
           }
           renderItem={({ item }) => {
             const pending = pendingByCount.get(item.id) ?? 0;
-            return (
-              <Pressable
-                onPress={() => open(item)}
-                style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.lead}>
-                    {item.warehouseName ?? 'No warehouse'}
-                  </Text>
-                  <Text style={styles.meta}>
-                    {item.startedBy ?? 'Unknown'}
-                    {item.startedAt
-                      ? ` · ${new Date(item.startedAt).toLocaleDateString()}`
-                      : ''}
-                  </Text>
-                  {pending > 0 && (
-                    <View style={styles.pendingPill}>
-                      <Text style={styles.pendingPillText}>
-                        {pending} pending sync
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                {item.source === 'server' ? (
-                  <View style={styles.progressBox}>
-                    <Text style={styles.progressNum}>
-                      {item.countedLines}/{item.totalLines}
-                    </Text>
-                    <Text style={styles.progressLabel}>counted</Text>
-                  </View>
-                ) : (
-                  <View style={styles.progressBox}>
-                    <Text style={styles.cachedTag}>cached</Text>
-                  </View>
-                )}
-              </Pressable>
-            );
+            return <CountCard count={item} pending={pending} onPress={() => router.push(`/cycle-count/${item.id}`)} />;
           }}
         />
       )}
-    </SafeAreaView>
+    </View>
+  );
+}
+
+function SummaryTile({
+  label,
+  value,
+  sub,
+  kind = 'ink',
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  kind?: 'ink' | 'mint' | 'warn';
+}) {
+  const { c, mode } = useTheme();
+  const valueColor =
+    kind === 'mint'
+      ? mode === 'dark'
+        ? ACCENT.mintInkDark
+        : ACCENT.mintInk
+      : kind === 'warn'
+        ? ACCENT.warn
+        : c.ink;
+  return (
+    <Card padding={12} style={{ flex: 1, gap: 6 }}>
+      <Mono size={9} tracking={0.18} upper color={c.ink4}>
+        {label}
+      </Mono>
+      <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 3 }}>
+        <Mono
+          size={22}
+          tracking={-0.022}
+          color={valueColor}
+          style={{ fontFamily: FONT.display }}
+        >
+          {value}
+        </Mono>
+        <Mono size={11} color={c.ink4} tracking={0}>
+          {sub}
+        </Mono>
+      </View>
+    </Card>
+  );
+}
+
+function CountCard({
+  count,
+  pending,
+  onPress,
+}: {
+  count: OpenCount;
+  pending: number;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  const progress = count.totalLines > 0 ? Math.round((count.countedLines / count.totalLines) * 100) : 0;
+  const syncStatus = count.source === 'cache' ? 'OFFLINE' : pending > 0 ? 'PENDING' : 'SYNCED';
+  const syncPill =
+    syncStatus === 'OFFLINE'
+      ? <Pill>OFFLINE</Pill>
+      : syncStatus === 'PENDING'
+        ? <Pill status="warn">PENDING</Pill>
+        : <Pill status="ok">SYNCED</Pill>;
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
+      <Card padding={16}>
+        <View style={countStyles.headerRow}>
+          <View style={{ flex: 1 }}>
+            <Mono
+              size={15.5}
+              tracking={-0.012}
+              color={c.ink}
+              style={{ fontFamily: FONT.display }}
+            >
+              {count.warehouseName ?? 'No warehouse'}
+            </Mono>
+            <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+              {count.startedBy ?? 'Unknown'}
+              {count.startedAt ? ` · ${new Date(count.startedAt).toLocaleDateString()}` : ''}
+            </Mono>
+          </View>
+          {syncPill}
+        </View>
+        {count.source === 'server' ? (
+          <View style={countStyles.progressRow}>
+            <Mono
+              size={22}
+              tracking={-0.022}
+              color={c.ink}
+              style={{ fontFamily: FONT.display }}
+            >
+              {count.countedLines}
+              <Mono size={13} color={c.ink4} style={{ fontFamily: FONT.displayRegular }}>
+                {' / '}{count.totalLines}
+              </Mono>
+            </Mono>
+            <View style={{ flex: 1, gap: 6 }}>
+              <StockBar
+                value={progress}
+                max={100}
+                kind={progress === 100 ? 'ok' : progress < 30 ? 'warn' : 'ok'}
+                height={4}
+              />
+              <Mono size={10} tracking={0.04} color={c.ink4}>
+                {progress}% complete
+              </Mono>
+            </View>
+          </View>
+        ) : null}
+      </Card>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: theme.bg },
-  header: {
-    paddingHorizontal: space.md,
-    paddingVertical: space.lg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
+  root: { flex: 1 },
+  topbar: {
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
   },
-  title: { color: theme.text, fontSize: 24, fontWeight: '700' },
-  subtitle: { color: theme.textMuted, fontSize: 13, marginTop: 2 },
+  head: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
   offlineBanner: {
+    marginHorizontal: 20,
+    marginTop: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    backgroundColor: 'rgba(148, 163, 184, 0.12)',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
   },
-  offlineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: theme.textMuted },
-  offlineText: { color: theme.textMuted, fontSize: 12, fontWeight: '600' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  row: {
+  summaryGrid: {
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 6,
+    flexDirection: 'row',
+    gap: 10,
+  },
+  sectionHead: {
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+  },
+  empty: { padding: 32, alignItems: 'center' },
+});
+
+const countStyles = StyleSheet.create({
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  progressRow: {
+    marginTop: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.card,
-    padding: space.md,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.border,
-  },
-  lead: { color: theme.text, fontSize: 15, fontWeight: '600' },
-  meta: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
-  progressBox: { alignItems: 'flex-end' },
-  progressNum: {
-    color: theme.text,
-    fontVariant: ['tabular-nums'],
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  progressLabel: { color: theme.textMuted, fontSize: 11, marginTop: 1 },
-  cachedTag: {
-    color: theme.textMuted,
-    fontSize: 11,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  pendingPill: {
-    alignSelf: 'flex-start',
-    marginTop: 6,
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    paddingVertical: 2,
-    paddingHorizontal: 8,
-    borderRadius: radius.sm,
-  },
-  pendingPillText: { color: theme.warning, fontSize: 11, fontWeight: '700' },
-  empty: { padding: space.xl, alignItems: 'center' },
-  emptyTitle: { color: theme.text, fontSize: 16, fontWeight: '600' },
-  emptyText: {
-    color: theme.textMuted,
-    fontSize: 13,
-    marginTop: space.sm,
-    textAlign: 'center',
+    gap: 14,
   },
 });

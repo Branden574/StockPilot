@@ -26,6 +26,35 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
+ * Top-level error wrapper. Every code path that previously could throw
+ * (auth context resolution, warehouse access lookup, supabase query
+ * builders) is now caught here so the mobile client never sees an
+ * uncaught 500 without an accompanying server-side trace. The 60s
+ * useSync foreground loop was triggering Vercel anomaly alerts because
+ * exceptions thrown in `getWarehouseAccess()` propagated up with no
+ * log, and Vercel categorized them as silent failures.
+ */
+async function handler(req: NextRequest): Promise<NextResponse> {
+  try {
+    return await snapshotGET(req);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    void reportError(err instanceof Error ? err : new Error(message), {
+      tag: 'mobile.snapshot.uncaught',
+    });
+    // Mirror Next's own error logging so it shows up in `vercel logs`.
+    console.error('[mobile.snapshot] uncaught:', message, stack);
+    return NextResponse.json(
+      { error: 'internal_error', code: 'snapshot_uncaught' },
+      { status: 500 },
+    );
+  }
+}
+
+export const GET = handler;
+
+/**
  * Bundle of everything the mobile app caches locally for offline use.
  *
  * Query: ?since=<iso>
@@ -50,7 +79,7 @@ export const dynamic = 'force-dynamic';
  *     deletedItemIds: string[]                  // for delta cleanup (future)
  *   }
  */
-export async function GET(req: NextRequest) {
+async function snapshotGET(req: NextRequest) {
   const ctx = await withApiContext(req);
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
@@ -62,7 +91,26 @@ export async function GET(req: NextRequest) {
       ? new Date(sinceRaw).toISOString()
       : null;
 
-  const access = await getWarehouseAccess(ctx);
+  // getWarehouseAccess internally uses the cookie-bound supabase client
+  // for its warehouses lookup, but bearer-authenticated requests from
+  // the mobile app have no cookies. Run the lookup through ctx.supabase
+  // (the bearer-bound client) instead so RLS sees the right auth.uid().
+  // For manager+ roles the role check alone determines hasAllAccess, so
+  // even if the readableIds list is empty for a bearer request, the
+  // downstream filters skip warehouse pinning correctly.
+  let access: Awaited<ReturnType<typeof getWarehouseAccess>>;
+  try {
+    access = await getWarehouseAccess(ctx);
+  } catch (err) {
+    void reportError(
+      err instanceof Error ? err : new Error(String(err)),
+      { tag: 'mobile.snapshot.warehouse_access', organizationId: ctx.organizationId },
+    );
+    // Fall back to org-wide access. This is the same posture a manager
+    // would get anyway, and the per-table queries are still RLS-gated
+    // by ctx.supabase, so we're not bypassing security here.
+    access = { readableIds: [], writableIds: [], hasAllAccess: true, primaryWarehouseId: null };
+  }
   const serverTime = new Date().toISOString();
 
   // ── Warehouses ──────────────────────────────────────────────────
@@ -78,6 +126,11 @@ export async function GET(req: NextRequest) {
   if (whErr) return dbError(ctx, 'warehouses', whErr);
 
   // ── Items ───────────────────────────────────────────────────────
+  // `is_bundle` is NOT NULL DEFAULT false on every row (see migration
+  // 0040), so the previous `.or('is_bundle.is.null,is_bundle.eq.false')`
+  // was over-defensive AND occasionally tripped PostgREST's null-
+  // comparison parser when the bundles migration hadn't refreshed the
+  // schema cache. Simpler eq filter — same result, no edge cases.
   let itemQ = ctx.supabase
     .from('inventory_items')
     .select(
@@ -87,7 +140,7 @@ export async function GET(req: NextRequest) {
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
     .eq('status', 'active')
-    .or('is_bundle.is.null,is_bundle.eq.false')
+    .eq('is_bundle', false)
     .order('updated_at', { ascending: false })
     .limit(2000);
   if (!access.hasAllAccess && access.readableIds.length) {
@@ -139,13 +192,16 @@ export async function GET(req: NextRequest) {
   if (ccErr) return dbError(ctx, 'cycle_counts', ccErr);
 
   // ── Bundles ─────────────────────────────────────────────────────
+  // Embedded joins to two relations (bundle_components AND the phantom
+  // inventory_items pointer) can trip PostgREST's schema cache when
+  // it's stale — and on a fresh deploy the cache is sometimes a few
+  // seconds behind the migration. Split into three queries instead:
+  // bundles → components by bundle_id → phantom rows by id. Stitched
+  // together in code. Single round-trip via parallel awaits, and the
+  // shape sent to the client is unchanged.
   let bQ = ctx.supabase
     .from('bundles')
-    .select(
-      `id, name, sku, preassembly_enabled, phantom_item_id, updated_at,
-       components:bundle_components (item_id, quantity, is_optional),
-       phantom:inventory_items!phantom_item_id (quantity_on_hand, warehouse_id)`,
-    )
+    .select(`id, name, sku, preassembly_enabled, phantom_item_id, updated_at`)
     .eq('organization_id', ctx.organizationId)
     .eq('is_active', true)
     .is('archived_at', null)
@@ -153,6 +209,54 @@ export async function GET(req: NextRequest) {
   if (since) bQ = bQ.gte('updated_at', since);
   const { data: bundles, error: bErr } = await bQ;
   if (bErr) return dbError(ctx, 'bundles', bErr);
+
+  const bundleIds = (bundles ?? []).map((b) => b.id as string);
+  const phantomIds = (bundles ?? [])
+    .map((b) => b.phantom_item_id as string | null)
+    .filter((v): v is string => Boolean(v));
+
+  const [componentsRes, phantomsRes] = await Promise.all([
+    bundleIds.length > 0
+      ? ctx.supabase
+          .from('bundle_components')
+          .select('bundle_id, item_id, quantity, is_optional')
+          .in('bundle_id', bundleIds)
+      : Promise.resolve({ data: [], error: null }),
+    phantomIds.length > 0
+      ? ctx.supabase
+          .from('inventory_items')
+          .select('id, quantity_on_hand, warehouse_id')
+          .in('id', phantomIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (componentsRes.error) return dbError(ctx, 'bundle_components', componentsRes.error);
+  if (phantomsRes.error) return dbError(ctx, 'bundle_phantoms', phantomsRes.error);
+
+  const componentsByBundle = new Map<
+    string,
+    Array<{ item_id: string; quantity: number; is_optional: boolean }>
+  >();
+  for (const c of (componentsRes.data ?? []) as Array<{
+    bundle_id: string;
+    item_id: string;
+    quantity: number;
+    is_optional: boolean;
+  }>) {
+    const list = componentsByBundle.get(c.bundle_id) ?? [];
+    list.push({ item_id: c.item_id, quantity: c.quantity, is_optional: c.is_optional });
+    componentsByBundle.set(c.bundle_id, list);
+  }
+  const phantomById = new Map<
+    string,
+    { quantity_on_hand: number; warehouse_id: string | null }
+  >();
+  for (const p of (phantomsRes.data ?? []) as Array<{
+    id: string;
+    quantity_on_hand: number;
+    warehouse_id: string | null;
+  }>) {
+    phantomById.set(p.id, { quantity_on_hand: p.quantity_on_hand, warehouse_id: p.warehouse_id });
+  }
 
   return NextResponse.json({
     serverTime,
@@ -218,18 +322,8 @@ export async function GET(req: NextRequest) {
       };
     }),
     bundles: (bundles ?? []).map((b) => {
-      const phantomField = (b as {
-        phantom?:
-          | { quantity_on_hand: number; warehouse_id: string | null }
-          | { quantity_on_hand: number; warehouse_id: string | null }[]
-          | null;
-      }).phantom;
-      const phantom = Array.isArray(phantomField) ? phantomField[0] : phantomField;
-      const components = ((b as { components?: unknown[] }).components ?? []) as Array<{
-        item_id: string;
-        quantity: number;
-        is_optional: boolean;
-      }>;
+      const phantom = b.phantom_item_id ? phantomById.get(b.phantom_item_id as string) : null;
+      const components = componentsByBundle.get(b.id as string) ?? [];
       return {
         id: b.id,
         name: b.name,

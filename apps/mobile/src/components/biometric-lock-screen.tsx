@@ -1,34 +1,59 @@
+import { Fingerprint, ScanFace } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Animated,
+  Easing,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
+import { AuthShell } from '@/components/auth/auth-shell';
+import { Avatar } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
+import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
-import { radius, space, theme } from '@/lib/theme';
+import { useProfile } from '@/lib/use-profile';
+import { ACCENT, FONT } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 /**
- * Full-screen lock that renders when a user with biometric enabled
- * opens the app and has a valid Supabase session on disk. Triggers
- * the OS biometric prompt automatically once on mount, plus a
- * "Try again" button if they cancel, plus a "Use password" escape
- * hatch that calls signOutToFallback() to drop them at the sign-in
- * screen on this device only (other devices stay signed in).
- *
- * Auto-prompt is fire-and-forget: if the user cancels the OS sheet
- * we don't loop. Re-prompt only happens when they tap "Try again",
- * matching the pattern banking apps use (1Password, Apple Pay, etc).
+ * Full-screen biometric lock — auto-prompts on mount when the device is
+ * capable, with a "Try again" button and a "Use password" escape hatch.
+ * Brand-themed warm-paper / ink-black, large line-art biometric icon
+ * with a subtle pulse ring behind it.
  */
 export function BiometricLockScreen() {
-  const { unlock, signOutToFallback, user } = useAuth();
+  const { unlock, signOutToFallback } = useAuth();
+  const profile = useProfile();
+  const { c } = useTheme();
   const [busy, setBusy] = React.useState(false);
   const [cap, setCap] = React.useState<BiometricCapability | null>(null);
   const [attempted, setAttempted] = React.useState(false);
   const [failedOnce, setFailedOnce] = React.useState(false);
 
+  // Subtle pulse ring behind the biometric glyph
+  const pulse = React.useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    Animated.loop(
+      Animated.timing(pulse, {
+        toValue: 1,
+        duration: 2400,
+        easing: Easing.bezier(0.16, 1, 0.3, 1),
+        useNativeDriver: true,
+      }),
+    ).start();
+  }, [pulse]);
+  const pulseScale = pulse.interpolate({ inputRange: [0, 0.7, 1], outputRange: [0.92, 1.18, 1.18] });
+  const pulseOpacity = pulse.interpolate({ inputRange: [0, 0.7, 1], outputRange: [0.9, 0, 0] });
+
   React.useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const c = await getBiometricCapability();
-      if (!cancelled) setCap(c);
+      const probed = await getBiometricCapability();
+      if (!cancelled) setCap(probed);
     })();
     return () => {
       cancelled = true;
@@ -44,10 +69,6 @@ export function BiometricLockScreen() {
     if (!ok) setFailedOnce(true);
   }, [busy, unlock]);
 
-  // Auto-prompt on first mount once we know the device is capable.
-  // If the capability check says no hardware or no enrollment, we
-  // never prompt — those cases drop straight to the "Use password"
-  // path via the explicit button below.
   React.useEffect(() => {
     if (!cap) return;
     if (!cap.hasHardware || !cap.isEnrolled) return;
@@ -55,110 +76,109 @@ export function BiometricLockScreen() {
     void tryUnlock();
   }, [cap, attempted, tryUnlock]);
 
-  const greeting = user?.email ? user.email : 'StockPilot';
-  const label = cap?.label ?? 'Biometric';
+  const isFingerprint = cap?.label === 'Fingerprint';
+  const Icon = isFingerprint ? Fingerprint : ScanFace;
+  const labelText = cap?.label ?? 'Biometric';
 
   return (
-    <View style={styles.root}>
-      <View style={styles.center}>
-        <Text style={styles.brand}>StockPilot</Text>
-        <Text style={styles.greeting}>{greeting}</Text>
+    <AuthShell>
+      <View style={{ marginTop: 18 }}>
+        <Eyebrow>UNLOCK STOCKPILOT</Eyebrow>
+      </View>
 
-        <View style={styles.iconWell}>
-          {busy ? (
-            <ActivityIndicator color={theme.primary} size="large" />
-          ) : (
-            <Text style={styles.iconGlyph}>{label === 'Face ID' ? '⌒' : '◉'}</Text>
-          )}
+      <View style={styles.center}>
+        <Avatar size={56} />
+        <View style={{ alignItems: 'center', gap: 4, marginTop: 16 }}>
+          <Body size={14} color={c.ink3}>
+            Signed in as
+          </Body>
+          <Body size={16} color={c.ink} style={{ fontFamily: FONT.display }}>
+            {profile.email ?? 'StockPilot'}
+          </Body>
         </View>
 
-        {!cap ? (
-          <Text style={styles.hint}>Checking device…</Text>
-        ) : !cap.hasHardware || !cap.isEnrolled ? (
-          <Text style={styles.hint}>
-            Biometric authentication isn&apos;t set up on this device. Sign in with
-            your password to continue.
-          </Text>
-        ) : failedOnce ? (
-          <Text style={styles.hint}>
-            {label} couldn&apos;t verify you. Try again or sign in with your password.
-          </Text>
-        ) : (
-          <Text style={styles.hint}>Use {label} to unlock</Text>
-        )}
+        <View style={styles.iconWell}>
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.pulseRing,
+              {
+                borderColor: c.hair,
+                transform: [{ scale: pulseScale }],
+                opacity: pulseOpacity,
+              },
+            ]}
+          />
+          {busy ? (
+            <ActivityIndicator size="large" color={c.ink} />
+          ) : (
+            <Icon size={96} color={c.ink} strokeWidth={1.2} />
+          )}
+          <View style={[styles.pip, { backgroundColor: ACCENT.pipTeal }]} />
+        </View>
 
-        {cap && cap.hasHardware && cap.isEnrolled && (
-          <Pressable
-            style={({ pressed }) => [styles.primary, pressed && { opacity: 0.85 }]}
+        <Display size={26} style={{ textAlign: 'center', maxWidth: 280, marginTop: 8 }}>
+          {failedOnce
+            ? <>That didn&apos;t verify. <Em>Try again.</Em></>
+            : cap && (!cap.hasHardware || !cap.isEnrolled)
+              ? <>Use your <Em>password</Em> to continue.</>
+              : <>Look at your screen to <Em>unlock.</Em></>}
+        </Display>
+      </View>
+
+      <View style={styles.footer}>
+        {cap && cap.hasHardware && cap.isEnrolled ? (
+          <Button
+            block
             onPress={tryUnlock}
             disabled={busy}
+            leading={<Icon size={18} color={c.paper} strokeWidth={1.6} />}
           >
-            <Text style={styles.primaryLabel}>Unlock with {label}</Text>
-          </Pressable>
-        )}
-
-        <Pressable
-          style={({ pressed }) => [styles.secondary, pressed && { opacity: 0.85 }]}
-          onPress={signOutToFallback}
-        >
-          <Text style={styles.secondaryLabel}>Use password instead</Text>
-        </Pressable>
+            Unlock with {labelText}
+          </Button>
+        ) : null}
+        <Button block variant="ghost" onPress={signOutToFallback}>
+          Use password instead
+        </Button>
       </View>
-    </View>
+    </AuthShell>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
+  center: {
     flex: 1,
-    backgroundColor: theme.bg,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: space.lg,
+    gap: 24,
   },
-  center: { width: '100%', maxWidth: 380, alignItems: 'center' },
-  brand: {
-    color: theme.primary,
-    fontSize: 12,
-    fontWeight: '600',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  greeting: { color: theme.text, fontSize: 16, marginTop: space.sm, opacity: 0.9 },
   iconWell: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: theme.card,
-    borderWidth: 1,
-    borderColor: theme.border,
-    marginTop: space.xl,
-    marginBottom: space.lg,
+    width: 152,
+    height: 152,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+    marginTop: 12,
   },
-  iconGlyph: { color: theme.primary, fontSize: 44 },
-  hint: {
-    color: theme.textMuted,
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: space.lg,
-    paddingHorizontal: space.md,
+  pulseRing: {
+    position: 'absolute',
+    top: 8,
+    bottom: 8,
+    left: 8,
+    right: 8,
+    borderRadius: 76,
+    borderWidth: 1,
   },
-  primary: {
-    backgroundColor: theme.primary,
-    borderRadius: radius.md,
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-    width: '100%',
+  pip: {
+    position: 'absolute',
+    top: 12,
+    right: 14,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
-  primaryLabel: { color: '#fff', fontWeight: '600', fontSize: 15 },
-  secondary: {
-    marginTop: space.md,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    alignItems: 'center',
+  footer: {
+    paddingBottom: 30,
+    gap: 10,
   },
-  secondaryLabel: { color: theme.textMuted, fontSize: 13, fontWeight: '500' },
 });
