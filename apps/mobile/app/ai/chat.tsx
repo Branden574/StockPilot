@@ -1,0 +1,363 @@
+import { useRouter } from 'expo-router';
+import {
+  ChevronLeft,
+  Send,
+  Sparkles,
+} from 'lucide-react-native';
+import * as React from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { Card } from '@/components/ui/card';
+import { Pill } from '@/components/ui/pill';
+import { IconChip } from '@/components/ui/row';
+import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { API_BASE } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
+import { ACCENT, FONT, RADIUS } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
+
+interface Turn {
+  role: 'user' | 'assistant';
+  content: string;
+  /** Tool calls fired during this assistant turn. */
+  tools?: Array<{ name: string; ok: boolean }>;
+  /** True while tokens are still streaming in. */
+  streaming?: boolean;
+}
+
+/**
+ * Mobile-native AI chat surface. Calls the same /api/ai/chat NDJSON
+ * stream the web uses, reads token deltas as they arrive, and renders
+ * them into a growing assistant bubble. Sessions persist across
+ * messages via sessionId. Tool-call notifications surface as inline
+ * pills so the user can see when the agent is reading inventory /
+ * drafting POs / etc.
+ */
+export default function AIChat() {
+  const router = useRouter();
+  const { c } = useTheme();
+  const [turns, setTurns] = React.useState<Turn[]>([]);
+  const [sessionId, setSessionId] = React.useState<string | undefined>(undefined);
+  const [input, setInput] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const scrollRef = React.useRef<ScrollView>(null);
+
+  const scrollToBottom = React.useCallback(() => {
+    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+  }, []);
+
+  async function send() {
+    const text = input.trim();
+    if (!text || busy) return;
+
+    setInput('');
+    const userTurn: Turn = { role: 'user', content: text };
+    const assistantTurn: Turn = { role: 'assistant', content: '', streaming: true, tools: [] };
+    setTurns((prev) => [...prev, userTurn, assistantTurn]);
+    setBusy(true);
+    scrollToBottom();
+
+    // Build the history payload the server expects (excludes the new
+    // user message since it's passed separately).
+    const history = turns
+      .filter((t) => t.content.trim().length > 0)
+      .map((t) => ({ role: t.role, content: t.content }));
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const res = await fetch(`${API_BASE}/api/ai/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session ? { Authorization: `Bearer ${session.access_token}` } : null),
+        },
+        body: JSON.stringify({
+          message: text,
+          sessionId,
+          history,
+        }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`AI chat ${res.status}: ${errText.slice(0, 200) || res.statusText}`);
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error('No response body');
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let nl = buffer.indexOf('\n');
+        while (nl !== -1) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (line.length > 0) {
+            try {
+              const event = JSON.parse(line) as
+                | { type: 'text'; delta: string }
+                | { type: 'tool'; name: string; ok: boolean }
+                | { type: 'session'; id: string }
+                | { type: 'done' }
+                | { type: 'error'; message?: string };
+              if (event.type === 'text') {
+                setTurns((prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last && last.role === 'assistant') {
+                    next[next.length - 1] = { ...last, content: last.content + event.delta };
+                  }
+                  return next;
+                });
+              } else if (event.type === 'tool') {
+                setTurns((prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last && last.role === 'assistant') {
+                    next[next.length - 1] = {
+                      ...last,
+                      tools: [...(last.tools ?? []), { name: event.name, ok: event.ok }],
+                    };
+                  }
+                  return next;
+                });
+              } else if (event.type === 'session') {
+                setSessionId(event.id);
+              } else if (event.type === 'error') {
+                throw new Error(event.message ?? 'AI error');
+              }
+            } catch (parseErr) {
+              // NDJSON line couldn't parse — log and skip, don't blow up the chat.
+              console.warn('[ai] bad line', line.slice(0, 100), parseErr);
+            }
+          }
+          nl = buffer.indexOf('\n');
+        }
+        scrollToBottom();
+      }
+    } catch (err) {
+      Alert.alert('Chat error', err instanceof Error ? err.message : String(err));
+      setTurns((prev) => prev.slice(0, -1)); // remove the empty assistant bubble
+    } finally {
+      setBusy(false);
+      setTurns((prev) =>
+        prev.map((t, i) => (i === prev.length - 1 ? { ...t, streaming: false } : t)),
+      );
+      scrollToBottom();
+    }
+  }
+
+  const examples = [
+    'What\'s low at our biggest warehouse?',
+    'Show me POs that are overdue.',
+    'How many Chromebooks did we receive this month?',
+  ];
+
+  return (
+    <View style={[styles.root, { backgroundColor: c.paper }]}>
+      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
+        <View style={styles.topbar}>
+          <IconChip icon={ChevronLeft} onPress={() => router.back()} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Sparkles size={14} color={c.ink4} strokeWidth={1.4} />
+            <Mono size={11} tracking={0.12} upper color={c.ink4}>
+              AI · BETA
+            </Mono>
+          </View>
+          <View style={{ width: 38 }} />
+        </View>
+      </SafeAreaView>
+
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+      >
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16, gap: 12 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          {turns.length === 0 ? (
+            <View style={{ alignItems: 'center', paddingTop: 40, gap: 16 }}>
+              <View
+                style={{
+                  width: 72,
+                  height: 72,
+                  borderRadius: 18,
+                  borderWidth: 1,
+                  borderColor: c.hair,
+                  backgroundColor: c.card,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Sparkles size={32} color={c.ink} strokeWidth={1.3} />
+              </View>
+              <View style={{ alignItems: 'center', gap: 8 }}>
+                <Display size={22} style={{ textAlign: 'center' }}>
+                  Ask anything about your <Em>inventory.</Em>
+                </Display>
+                <Body muted style={{ textAlign: 'center', maxWidth: 300 }}>
+                  Natural-language queries with real reads + drafts.
+                </Body>
+              </View>
+              <View style={{ gap: 8, width: '100%' }}>
+                {examples.map((ex) => (
+                  <Pressable
+                    key={ex}
+                    onPress={() => setInput(ex)}
+                    style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+                  >
+                    <Card padding={12}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <Sparkles size={12} color={c.ink4} strokeWidth={1.5} />
+                        <Body size={13} color={c.ink2} style={{ flex: 1, fontFamily: FONT.displayRegular }}>
+                          {ex}
+                        </Body>
+                      </View>
+                    </Card>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : (
+            turns.map((t, i) => <Bubble key={i} turn={t} />)
+          )}
+        </ScrollView>
+
+        <View style={[styles.inputBar, { backgroundColor: c.paper, borderTopColor: c.hair }]}>
+          <View style={[styles.inputBox, { backgroundColor: c.card, borderColor: c.hair }]}>
+            <TextInput
+              value={input}
+              onChangeText={setInput}
+              placeholder="Message StockPilot…"
+              placeholderTextColor={c.ink4}
+              multiline
+              style={[styles.input, { color: c.ink }]}
+            />
+            <Pressable
+              onPress={send}
+              disabled={!input.trim() || busy}
+              style={({ pressed }) => [
+                styles.sendBtn,
+                {
+                  backgroundColor: input.trim() && !busy ? c.ink : c.paper2,
+                  opacity: pressed ? 0.85 : 1,
+                },
+              ]}
+            >
+              {busy ? (
+                <ActivityIndicator size="small" color={c.paper} />
+              ) : (
+                <Send size={16} color={input.trim() ? c.paper : c.ink4} strokeWidth={1.6} />
+              )}
+            </Pressable>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </View>
+  );
+}
+
+function Bubble({ turn }: { turn: Turn }) {
+  const { c } = useTheme();
+  const isUser = turn.role === 'user';
+  return (
+    <View style={{ alignItems: isUser ? 'flex-end' : 'flex-start' }}>
+      {!isUser && turn.tools && turn.tools.length > 0 ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+          {turn.tools.map((t, i) => (
+            <Pill key={i} status={t.ok ? 'ok' : 'warn'}>
+              {t.name}
+            </Pill>
+          ))}
+        </View>
+      ) : null}
+      <View
+        style={{
+          maxWidth: '88%',
+          padding: 12,
+          paddingHorizontal: 14,
+          borderRadius: 14,
+          backgroundColor: isUser ? c.ink : c.card,
+          borderWidth: isUser ? 0 : 1,
+          borderColor: c.hair,
+        }}
+      >
+        {turn.content.length > 0 ? (
+          <Body size={14.5} color={isUser ? c.paper : c.ink}>
+            {turn.content}
+          </Body>
+        ) : turn.streaming ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <ActivityIndicator size="small" color={isUser ? c.paper : c.ink} />
+            <Mono size={11} tracking={0.04} color={c.ink4}>
+              thinking…
+            </Mono>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1 },
+  topbar: {
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  inputBar: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 12,
+    borderTopWidth: 1,
+  },
+  inputBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingLeft: 14,
+    paddingRight: 6,
+    paddingVertical: 6,
+    minHeight: 48,
+  },
+  input: {
+    flex: 1,
+    fontFamily: FONT.displayRegular,
+    fontSize: 15,
+    maxHeight: 120,
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
+  sendBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});

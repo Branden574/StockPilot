@@ -1,21 +1,29 @@
 import { Link } from 'expo-router';
+import { ArrowRight, Mail, RefreshCcw, Warehouse } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
   View,
 } from 'react-native';
 
+import { AuthShell } from '@/components/auth/auth-shell';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Field } from '@/components/ui/field';
+import { Pill } from '@/components/ui/pill';
+import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
-import { radius, space, theme } from '@/lib/theme';
+import { ACCENT, FONT } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 export default function SignUp() {
   const { signUp } = useAuth();
+  const { c } = useTheme();
   const [fullName, setFullName] = React.useState('');
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
@@ -33,77 +41,213 @@ export default function SignUp() {
   }
 
   if (submitted) {
+    const firstName = fullName.trim().split(/\s+/)[0] || 'there';
     return (
-      <View style={styles.container}>
-        <View style={styles.card}>
-          <Text style={styles.title}>Check your email</Text>
-          <Text style={styles.subtitle}>
-            We sent a confirmation link to {email}. Tap it to finish creating your account, then sign in.
-          </Text>
-        </View>
-      </View>
+      <AuthShell>
+        <ScrollView contentContainerStyle={{ paddingBottom: 30 }}>
+          <View style={{ marginTop: 32 }}>
+            <Eyebrow>CHECK YOUR INBOX</Eyebrow>
+            <Display size={36} style={{ marginTop: 16 }}>
+              Almost there, <Em>{firstName}.</Em>
+            </Display>
+          </View>
+
+          <Card hero style={{ padding: 26, marginTop: 28, alignItems: 'center', gap: 18 }}>
+            <View
+              style={[
+                styles.iconWell,
+                { backgroundColor: c.paper2, borderColor: c.hair },
+              ]}
+            >
+              <Mail size={42} color={c.ink} strokeWidth={1.3} />
+              <View
+                style={[
+                  styles.pip,
+                  { backgroundColor: ACCENT.pipOrange },
+                ]}
+              />
+            </View>
+
+            <View style={{ alignItems: 'center', gap: 8 }}>
+              <Display size={20}>We sent a verification link</Display>
+              <Body muted style={{ textAlign: 'center', maxWidth: 280 }}>
+                Open the email at{' '}
+                <Mono size={13}>{email}</Mono> to finish creating your workspace.
+              </Body>
+            </View>
+
+            <View
+              style={[
+                styles.pendingBox,
+                { backgroundColor: c.paper2, borderColor: c.hair },
+              ]}
+            >
+              <Warehouse size={20} color={c.ink2} strokeWidth={1.4} />
+              <View style={{ flex: 1 }}>
+                <Body size={12.5}>{fullName || 'Your workspace'}</Body>
+                <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+                  workspace will activate on verify
+                </Mono>
+              </View>
+              <Pill status="warn">PENDING</Pill>
+            </View>
+
+            <Button
+              block
+              variant="ghost"
+              leading={<RefreshCcw size={16} color={c.ink} strokeWidth={1.4} />}
+            >
+              Resend email
+            </Button>
+          </Card>
+
+          <View style={styles.changeRow}>
+            <Body size={13} color={c.ink4}>
+              Wrong address?{' '}
+            </Body>
+            <Pressable onPress={() => setSubmitted(false)}>
+              <Body
+                size={13}
+                color={c.ink}
+                style={{ borderBottomWidth: 1, borderBottomColor: c.ink, fontFamily: FONT.display }}
+              >
+                Change email
+              </Body>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </AuthShell>
     );
   }
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={styles.card}>
-        <Text style={styles.brand}>StockPilot</Text>
-        <Text style={styles.title}>Start free</Text>
-        <Text style={styles.subtitle}>14 days of Pro features. No credit card.</Text>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <AuthShell>
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: 30 }}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={{ marginTop: 28 }}>
+            <Eyebrow>NEW WORKSPACE</Eyebrow>
+            <Display size={36} style={{ marginTop: 16 }}>
+              Start <Em>free.</Em>
+            </Display>
+            <Body muted style={{ marginTop: 12 }}>
+              14 days of Pro features. No credit card.
+            </Body>
+          </View>
 
-        <Field label="Full name" value={fullName} onChangeText={setFullName} autoComplete="name" />
-        <Field label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" autoComplete="email" />
-        <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry autoComplete="new-password" />
+          <Card hero style={{ padding: 22, marginTop: 26, gap: 18 }}>
+            <Field
+              label="FULL NAME"
+              placeholder="Branden Walker"
+              autoCapitalize="words"
+              autoComplete="name"
+              textContentType="name"
+              value={fullName}
+              onChangeText={setFullName}
+            />
+            <Field
+              label="EMAIL"
+              placeholder="ops@stockpilot.app"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoComplete="email"
+              textContentType="emailAddress"
+              value={email}
+              onChangeText={setEmail}
+              trailing={<Mail size={18} color={c.ink4} strokeWidth={1.4} />}
+            />
+            <Field
+              label="PASSWORD"
+              placeholder="At least 8 characters"
+              secureTextEntry
+              autoComplete="new-password"
+              textContentType="newPassword"
+              value={password}
+              onChangeText={setPassword}
+            />
 
-        {error && <Text style={styles.error}>{error}</Text>}
+            {error ? (
+              <Body size={13} color={ACCENT.crit}>
+                {error}
+              </Body>
+            ) : null}
 
-        <Pressable style={({ pressed }) => [styles.cta, pressed && { opacity: 0.85 }]} onPress={submit} disabled={busy}>
-          {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.ctaLabel}>Create account</Text>}
-        </Pressable>
+            <Button
+              block
+              onPress={submit}
+              disabled={busy}
+              trailing={
+                busy ? (
+                  <ActivityIndicator size="small" color={c.paper} />
+                ) : (
+                  <ArrowRight size={16} color={c.paper} strokeWidth={1.6} />
+                )
+              }
+            >
+              Create account
+            </Button>
+          </Card>
 
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>Have an account? </Text>
-          <Link href="/(auth)/sign-in" replace>
-            <Text style={styles.link}>Sign in</Text>
-          </Link>
-        </View>
-      </View>
+          <View style={styles.changeRow}>
+            <Body size={14} color={c.ink3}>
+              Have an account?{' '}
+            </Body>
+            <Link href="/(auth)/sign-in" replace asChild>
+              <Pressable>
+                <Body
+                  size={14}
+                  color={c.ink}
+                  style={{ borderBottomWidth: 1, borderBottomColor: c.ink, fontFamily: FONT.display }}
+                >
+                  Sign in
+                </Body>
+              </Pressable>
+            </Link>
+          </View>
+        </ScrollView>
+      </AuthShell>
     </KeyboardAvoidingView>
   );
 }
 
-function Field(props: React.ComponentProps<typeof TextInput> & { label: string }) {
-  const { label, ...rest } = props;
-  return (
-    <View style={{ marginTop: space.md }}>
-      <Text style={styles.label}>{label}</Text>
-      <TextInput {...rest} placeholderTextColor={theme.textMuted} style={styles.input} />
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: space.lg, backgroundColor: theme.bg },
-  card: { backgroundColor: theme.card, borderRadius: radius.xl, padding: space.xl, borderWidth: 1, borderColor: theme.border },
-  brand: { color: theme.primary, fontSize: 14, fontWeight: '600', letterSpacing: 1, textTransform: 'uppercase' },
-  title: { color: theme.text, fontSize: 28, fontWeight: '700', marginTop: space.sm },
-  subtitle: { color: theme.textMuted, fontSize: 14, marginTop: space.xs, marginBottom: space.lg },
-  label: { color: theme.textMuted, fontSize: 12, marginBottom: 6, fontWeight: '500' },
-  input: {
-    backgroundColor: theme.bgElevated,
-    borderRadius: radius.md,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    color: theme.text,
-    fontSize: 15,
+  iconWell: {
+    width: 96,
+    height: 96,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: theme.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
   },
-  cta: { backgroundColor: theme.primary, borderRadius: radius.md, paddingVertical: 14, alignItems: 'center', marginTop: space.lg },
-  ctaLabel: { color: '#fff', fontWeight: '600', fontSize: 15 },
-  footer: { flexDirection: 'row', justifyContent: 'center', marginTop: space.lg },
-  footerText: { color: theme.textMuted, fontSize: 13 },
-  link: { color: theme.primary, fontSize: 13, fontWeight: '600' },
-  error: { color: theme.destructive, fontSize: 13, marginTop: space.sm },
+  pip: {
+    position: 'absolute',
+    top: 16,
+    right: 18,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  pendingBox: {
+    width: '100%',
+    padding: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  changeRow: {
+    marginTop: 22,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'baseline',
+  },
 });

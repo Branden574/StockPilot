@@ -1,23 +1,43 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import {
+  ArrowLeftRight,
+  ArrowUpRight,
+  ChevronLeft,
+  Edit3,
+  Minus,
+  Plus,
+  RotateCcw,
+} from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
+  Linking,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Button } from '@/components/ui/button';
+import { Card, Hair } from '@/components/ui/card';
+import { Pill } from '@/components/ui/pill';
+import { IconChip } from '@/components/ui/row';
+import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
-import { radius, space, theme } from '@/lib/theme';
+import { ACCENT, FONT, SHADOW } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
 
 interface Item {
   id: string;
   name: string;
   sku: string;
+  barcode: string | null;
   description: string | null;
   quantity_on_hand: number;
   reorder_point: number;
@@ -26,35 +46,156 @@ interface Item {
   retail_price: number;
   unit_of_measure: string;
   status: string;
+  category_id: string | null;
+  category_name: string | null;
+  supplier_name: string | null;
+  location_name: string | null;
+  imageUrl: string | null;
 }
+
+interface MovementRow {
+  id: string;
+  movement_type: string;
+  quantity_change: number;
+  previous_quantity: number;
+  new_quantity: number;
+  reason: string | null;
+  created_at: string;
+  actor: { full_name: string | null; email: string | null } | null;
+}
+
+const TYPE_LABEL: Record<string, string> = {
+  add: 'Added',
+  remove: 'Removed',
+  adjust: 'Adjusted',
+  transfer: 'Transferred',
+  receive_po: 'Received',
+  return: 'Returned',
+  damage: 'Damaged',
+  loss: 'Lost',
+  correction: 'Corrected',
+  initial: 'Initialized',
+};
+
+type TabId = 'overview' | 'movements';
 
 export default function ItemDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { c } = useTheme();
+  const { orgId } = useOrg();
   const [item, setItem] = React.useState<Item | null>(null);
+  const [movements, setMovements] = React.useState<MovementRow[]>([]);
+  const [movementsLoading, setMovementsLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
+  const [tab, setTab] = React.useState<TabId>('overview');
+  const [adjustOpen, setAdjustOpen] = React.useState(false);
 
   const load = React.useCallback(async () => {
     if (!id) return;
     const { data } = await supabase
       .from('inventory_items')
       .select(
-        'id, name, sku, description, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, retail_price, unit_of_measure, status',
+        `id, name, sku, barcode, description, quantity_on_hand,
+         reorder_point, reorder_quantity, unit_cost, retail_price,
+         unit_of_measure, status, category_id,
+         category:categories!category_id (name),
+         supplier:suppliers!supplier_id (name),
+         primary_location:locations!primary_location_id (name)`,
       )
       .eq('id', id)
       .maybeSingle();
     if (!data) {
-      Alert.alert('Not found', 'This item no longer exists.', [{ text: 'OK', onPress: () => router.back() }]);
+      Alert.alert('Not found', 'This item no longer exists.', [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
       return;
     }
-    setItem(data as Item);
+    const r = data as Record<string, unknown>;
+    const cat = r.category as { name?: string } | { name?: string }[] | null;
+    const sup = r.supplier as { name?: string } | { name?: string }[] | null;
+    const loc = r.primary_location as { name?: string } | { name?: string }[] | null;
+
+    // Primary image — match scan.tsx pattern.
+    const { data: imgRow } = await supabase
+      .from('item_images')
+      .select('storage_path')
+      .eq('item_id', r.id as string)
+      .order('is_primary', { ascending: false })
+      .order('sort_order', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    let imageUrl: string | null = null;
+    if (imgRow?.storage_path) {
+      const { data: signed } = await supabase.storage
+        .from('item-images')
+        .createSignedUrl(imgRow.storage_path as string, 60 * 60);
+      imageUrl = signed?.signedUrl ?? null;
+    }
+
+    setItem({
+      id: r.id as string,
+      name: r.name as string,
+      sku: r.sku as string,
+      barcode: (r.barcode as string | null) ?? null,
+      description: (r.description as string | null) ?? null,
+      quantity_on_hand: Number(r.quantity_on_hand) || 0,
+      reorder_point: Number(r.reorder_point) || 0,
+      reorder_quantity: Number(r.reorder_quantity) || 0,
+      unit_cost: Number(r.unit_cost) || 0,
+      retail_price: Number(r.retail_price) || 0,
+      unit_of_measure: (r.unit_of_measure as string) ?? 'EA',
+      status: r.status as string,
+      category_id: (r.category_id as string | null) ?? null,
+      category_name: Array.isArray(cat) ? cat[0]?.name ?? null : cat?.name ?? null,
+      supplier_name: Array.isArray(sup) ? sup[0]?.name ?? null : sup?.name ?? null,
+      location_name: Array.isArray(loc) ? loc[0]?.name ?? null : loc?.name ?? null,
+      imageUrl,
+    });
   }, [id, router]);
 
+  const loadMovements = React.useCallback(async () => {
+    if (!id || !orgId) return;
+    setMovementsLoading(true);
+    const { data } = await supabase
+      .from('stock_movements')
+      .select(
+        `id, movement_type, quantity_change, previous_quantity, new_quantity,
+         reason, created_at,
+         actor:user_profiles!user_id (full_name, email)`,
+      )
+      .eq('organization_id', orgId)
+      .eq('item_id', id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    setMovements(
+      (data ?? []).map((row) => {
+        const r = row as Record<string, unknown>;
+        const actor = r.actor as MovementRow['actor'] | MovementRow['actor'][] | null;
+        return {
+          id: r.id as string,
+          movement_type: r.movement_type as string,
+          quantity_change: Number(r.quantity_change) || 0,
+          previous_quantity: Number(r.previous_quantity) || 0,
+          new_quantity: Number(r.new_quantity) || 0,
+          reason: (r.reason as string | null) ?? null,
+          created_at: r.created_at as string,
+          actor: Array.isArray(actor) ? actor[0] ?? null : actor,
+        };
+      }),
+    );
+    setMovementsLoading(false);
+  }, [id, orgId]);
+
   React.useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
-  async function adjust(delta: number) {
+  React.useEffect(() => {
+    if (tab === 'movements') void loadMovements();
+  }, [tab, loadMovements]);
+
+  async function adjust(delta: number, reason = 'Mobile detail') {
     if (!item) return;
     setBusy(true);
     const { error } = await supabase.rpc('adjust_stock', {
@@ -62,7 +203,7 @@ export default function ItemDetail() {
       p_quantity_change: delta,
       p_movement_type: delta > 0 ? 'add' : 'remove',
       p_location_id: null,
-      p_reason: 'Mobile detail',
+      p_reason: reason,
       p_notes: null,
     });
     setBusy(false);
@@ -71,127 +212,574 @@ export default function ItemDetail() {
       return;
     }
     setItem({ ...item, quantity_on_hand: item.quantity_on_hand + delta });
+    if (tab === 'movements') void loadMovements();
+  }
+
+  function openEdit() {
+    if (!item) return;
+    Linking.openURL(
+      `https://stockpilotusa.com/dashboard/inventory/${item.id}/edit`,
+    ).catch(() => undefined);
   }
 
   if (!item) {
     return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator color={theme.primary} />
+      <View style={[styles.root, { backgroundColor: c.paper, justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator color={c.ink} />
       </View>
     );
   }
 
+  const lowStock = item.reorder_point > 0 && item.quantity_on_hand <= item.reorder_point;
+  const status: 'ok' | 'warn' | 'crit' =
+    item.quantity_on_hand <= 0 ? 'crit' : lowStock ? 'warn' : 'ok';
+  const inventoryValue = item.unit_cost * item.quantity_on_hand;
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.scroll}>
-        <Pressable onPress={() => router.back()} style={styles.back}>
-          <Text style={{ color: theme.primary, fontSize: 14 }}>← Back</Text>
-        </Pressable>
+    <View style={[styles.root, { backgroundColor: c.paper }]}>
+      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
+        <View style={styles.topbar}>
+          <IconChip icon={ChevronLeft} onPress={() => router.back()} />
+          <IconChip icon={Edit3} onPress={openEdit} />
+        </View>
+      </SafeAreaView>
 
-        <Text style={styles.sku}>{item.sku}</Text>
-        <Text style={styles.name}>{item.name}</Text>
+      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+        {/* Hero */}
+        <View style={styles.hero}>
+          <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
+            — {item.sku}
+          </Mono>
+          <Display size={26} style={{ marginTop: 6 }}>
+            {item.name}
+          </Display>
+          {item.category_name || item.barcode ? (
+            <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 6 }}>
+              {[item.category_name, item.barcode].filter(Boolean).join(' · ')}
+            </Mono>
+          ) : null}
+        </View>
 
-        <View style={styles.qtyCard}>
-          <Text style={styles.qtyLabel}>On hand</Text>
-          <Text style={styles.qtyValue}>
-            {item.quantity_on_hand}
-            <Text style={styles.qtyUnit}> {item.unit_of_measure}</Text>
-          </Text>
-          <Text style={styles.statusLine}>
-            Reorder at {item.reorder_point} · suggested reorder {item.reorder_quantity}
-          </Text>
-
-          <View style={styles.actions}>
-            <ActionBtn label="−5" onPress={() => adjust(-5)} disabled={busy} />
-            <ActionBtn label="−1" onPress={() => adjust(-1)} disabled={busy} />
-            <ActionBtn label="+1" onPress={() => adjust(1)} disabled={busy} primary />
-            <ActionBtn label="+5" onPress={() => adjust(5)} disabled={busy} primary />
+        {/* Image */}
+        {item.imageUrl ? (
+          <View style={{ paddingHorizontal: 20, marginTop: 10 }}>
+            <View
+              style={{
+                aspectRatio: 4 / 3,
+                borderRadius: 14,
+                overflow: 'hidden',
+                borderWidth: 1,
+                borderColor: c.hair,
+                backgroundColor: c.paper2,
+              }}
+            >
+              <Image
+                source={{ uri: item.imageUrl }}
+                style={{ width: '100%', height: '100%' }}
+                resizeMode="cover"
+              />
+            </View>
           </View>
+        ) : null}
+
+        {/* Tab bar */}
+        <View style={styles.tabsRow}>
+          <TabButton
+            label="Overview"
+            active={tab === 'overview'}
+            onPress={() => setTab('overview')}
+          />
+          <TabButton
+            label="Movements"
+            active={tab === 'movements'}
+            onPress={() => setTab('movements')}
+          />
         </View>
 
-        <View style={styles.metaCard}>
-          <Row label="Unit cost" value={`$${item.unit_cost.toFixed(2)}`} />
-          <Row label="Retail price" value={`$${item.retail_price.toFixed(2)}`} />
-          <Row label="Inventory value" value={`$${(item.unit_cost * item.quantity_on_hand).toFixed(2)}`} />
-        </View>
+        {tab === 'overview' ? (
+          <View style={{ paddingHorizontal: 20, gap: 14 }}>
+            {/* Stock card */}
+            <Card hero style={{ padding: 20 }}>
+              <Eyebrow>ON HAND</Eyebrow>
+              <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 8 }}>
+                <Mono size={56} tracking={-0.025} color={c.ink} style={{ fontFamily: FONT.display }}>
+                  {item.quantity_on_hand}
+                </Mono>
+                <Body size={16} color={c.ink4}>
+                  {item.unit_of_measure}
+                </Body>
+                <View style={{ marginLeft: 'auto' }}>
+                  {status === 'ok' ? <Pill status="ok">OK</Pill> : null}
+                  {status === 'warn' ? <Pill status="warn">LOW</Pill> : null}
+                  {status === 'crit' ? <Pill status="crit">OUT</Pill> : null}
+                </View>
+              </View>
+              <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 6 }}>
+                Reorder at {item.reorder_point} · suggested reorder {item.reorder_quantity}
+              </Mono>
 
-        {item.description && (
-          <View style={styles.metaCard}>
-            <Text style={styles.descLabel}>Description</Text>
-            <Text style={styles.desc}>{item.description}</Text>
+              <View style={styles.quickAdjust}>
+                <QuickBtn label="−5" onPress={() => adjust(-5)} disabled={busy} />
+                <QuickBtn label="−1" onPress={() => adjust(-1)} disabled={busy} />
+                <QuickBtn label="+1" onPress={() => adjust(1)} disabled={busy} primary />
+                <QuickBtn label="+5" onPress={() => adjust(5)} disabled={busy} primary />
+              </View>
+
+              <Button
+                block
+                variant="outline"
+                onPress={() => setAdjustOpen(true)}
+                leading={<ArrowLeftRight size={16} color={c.ink} strokeWidth={1.5} />}
+                style={{ marginTop: 12 }}
+              >
+                Adjust with reason
+              </Button>
+            </Card>
+
+            {/* Meta card */}
+            <Card padding={0}>
+              <MetaRow label="UNIT COST" value={`$${item.unit_cost.toFixed(2)}`} />
+              <Hair inset={20} />
+              <MetaRow label="RETAIL PRICE" value={`$${item.retail_price.toFixed(2)}`} />
+              <Hair inset={20} />
+              <MetaRow label="INVENTORY VALUE" value={`$${inventoryValue.toFixed(2)}`} />
+              {item.location_name ? (
+                <>
+                  <Hair inset={20} />
+                  <MetaRow label="LOCATION" value={item.location_name} />
+                </>
+              ) : null}
+              {item.supplier_name ? (
+                <>
+                  <Hair inset={20} />
+                  <MetaRow label="SUPPLIER" value={item.supplier_name} />
+                </>
+              ) : null}
+            </Card>
+
+            {item.description ? (
+              <Card padding={16}>
+                <Eyebrow>DESCRIPTION</Eyebrow>
+                <Body style={{ marginTop: 8 }}>{item.description}</Body>
+              </Card>
+            ) : null}
+
+            <Pressable
+              onPress={openEdit}
+              style={({ pressed }) => ({
+                marginTop: 4,
+                alignItems: 'center',
+                paddingVertical: 14,
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Mono size={11} tracking={0.12} upper color={c.ink}>
+                  Edit on web
+                </Mono>
+                <ArrowUpRight size={12} color={c.ink} strokeWidth={1.6} />
+              </View>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={{ paddingHorizontal: 20 }}>
+            {movementsLoading ? (
+              <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
+            ) : movements.length === 0 ? (
+              <View style={{ padding: 32, alignItems: 'center' }}>
+                <ArrowLeftRight size={32} color={c.ink4} strokeWidth={1.3} />
+                <Display size={18} style={{ marginTop: 12 }}>
+                  No movements <Em>yet.</Em>
+                </Display>
+                <Body muted style={{ marginTop: 6, textAlign: 'center', maxWidth: 280 }}>
+                  Adjustments, receipts, and counts will appear here as you work.
+                </Body>
+              </View>
+            ) : (
+              <View style={{ gap: 8 }}>
+                {movements.map((m) => (
+                  <MovementCard key={m.id} movement={m} />
+                ))}
+              </View>
+            )}
           </View>
         )}
       </ScrollView>
-    </SafeAreaView>
+
+      <AdjustModal
+        visible={adjustOpen}
+        item={item}
+        busy={busy}
+        onClose={() => setAdjustOpen(false)}
+        onConfirm={async (delta, reason) => {
+          await adjust(delta, reason);
+          setAdjustOpen(false);
+        }}
+      />
+    </View>
   );
 }
 
-function ActionBtn({ label, onPress, disabled, primary }: { label: string; onPress: () => void; disabled?: boolean; primary?: boolean }) {
+function TabButton({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, flex: 1 })}
+    >
+      <View
+        style={{
+          paddingVertical: 12,
+          alignItems: 'center',
+          borderBottomWidth: 2,
+          borderBottomColor: active ? c.ink : 'transparent',
+        }}
+      >
+        <Mono
+          size={11}
+          tracking={0.12}
+          upper
+          color={active ? c.ink : c.ink4}
+          style={{ fontFamily: FONT.mono }}
+        >
+          {label}
+        </Mono>
+      </View>
+    </Pressable>
+  );
+}
+
+function QuickBtn({
+  label,
+  onPress,
+  disabled,
+  primary,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  primary?: boolean;
+}) {
+  const { c } = useTheme();
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
       style={({ pressed }) => [
-        styles.actionBtn,
-        primary && { backgroundColor: theme.primary },
-        pressed && { opacity: 0.7 },
-        disabled && { opacity: 0.4 },
+        styles.quickBtn,
+        {
+          backgroundColor: primary ? c.ink : c.card,
+          borderColor: primary ? c.ink : c.hair,
+          opacity: disabled ? 0.4 : pressed ? 0.85 : 1,
+        },
       ]}
     >
-      <Text style={[styles.actionLabel, primary && { color: '#fff' }]}>{label}</Text>
+      <Mono
+        size={15}
+        tracking={-0.012}
+        color={primary ? c.paper : c.ink}
+        style={{ fontFamily: FONT.display }}
+      >
+        {label}
+      </Mono>
     </Pressable>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function MetaRow({ label, value }: { label: string; value: string }) {
+  const { c } = useTheme();
   return (
-    <View style={styles.row}>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowValue}>{value}</Text>
+    <View
+      style={{
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 14,
+        paddingHorizontal: 16,
+      }}
+    >
+      <Mono size={10.5} tracking={0.12} upper color={c.ink4}>
+        {label}
+      </Mono>
+      <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+        {value}
+      </Body>
     </View>
   );
 }
 
+function MovementCard({ movement }: { movement: MovementRow }) {
+  const { c } = useTheme();
+  const isAdd = movement.quantity_change > 0;
+  const Icon = isAdd ? Plus : movement.quantity_change < 0 ? Minus : RotateCcw;
+  const pipColor = isAdd ? ACCENT.mint : movement.quantity_change < 0 ? ACCENT.crit : ACCENT.warn;
+  const verb = TYPE_LABEL[movement.movement_type] ?? movement.movement_type;
+  const actor = movement.actor?.full_name ?? movement.actor?.email ?? 'system';
+  return (
+    <Card padding={12}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: c.hair,
+            alignItems: 'center',
+            justifyContent: 'center',
+            position: 'relative',
+            backgroundColor: c.card,
+          }}
+        >
+          <Icon size={14} color={c.ink} strokeWidth={1.6} />
+          <View
+            style={{
+              position: 'absolute',
+              top: 4,
+              right: 4,
+              width: 5,
+              height: 5,
+              borderRadius: 3,
+              backgroundColor: pipColor,
+            }}
+          />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
+            {verb}
+            {movement.reason ? ` · ${movement.reason}` : ''}
+          </Body>
+          <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+            {actor} · {new Date(movement.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+          </Mono>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Mono
+            size={15}
+            tracking={-0.012}
+            color={isAdd ? ACCENT.mintInk : movement.quantity_change < 0 ? ACCENT.crit : c.ink}
+            style={{ fontFamily: FONT.display }}
+          >
+            {isAdd ? '+' : ''}
+            {movement.quantity_change}
+          </Mono>
+          <Mono size={9.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+            {movement.previous_quantity} → {movement.new_quantity}
+          </Mono>
+        </View>
+      </View>
+    </Card>
+  );
+}
+
+function AdjustModal({
+  visible,
+  item,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  visible: boolean;
+  item: Item;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: (delta: number, reason: string) => Promise<void>;
+}) {
+  const { c, mode } = useTheme();
+  const [delta, setDelta] = React.useState('');
+  const [reason, setReason] = React.useState('');
+
+  React.useEffect(() => {
+    if (visible) {
+      setDelta('');
+      setReason('');
+    }
+  }, [visible]);
+
+  const parsedDelta = parseInt(delta, 10);
+  const isValid = !Number.isNaN(parsedDelta) && parsedDelta !== 0;
+  const preview =
+    isValid ? item.quantity_on_hand + parsedDelta : item.quantity_on_hand;
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <Pressable
+        onPress={onClose}
+        style={[
+          {
+            flex: 1,
+            justifyContent: 'flex-end',
+            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
+          },
+        ]}
+      >
+        <Pressable
+          onPress={() => undefined}
+          style={[
+            {
+              backgroundColor: c.card,
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              paddingTop: 12,
+              paddingBottom: 36,
+              paddingHorizontal: 22,
+            },
+            SHADOW.sheet,
+          ]}
+        >
+          <View style={{ alignItems: 'center', marginBottom: 18 }}>
+            <View
+              style={{
+                width: 36,
+                height: 5,
+                borderRadius: 100,
+                backgroundColor: mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
+              }}
+            />
+          </View>
+          <Eyebrow>ADJUST STOCK</Eyebrow>
+          <Display size={24} style={{ marginTop: 10 }}>
+            {item.name}
+          </Display>
+          <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+            on hand {item.quantity_on_hand} {item.unit_of_measure}
+          </Mono>
+
+          <View style={{ marginTop: 20, gap: 14 }}>
+            <View style={{ gap: 6 }}>
+              <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                CHANGE (+ ADDS, − REMOVES)
+              </Mono>
+              <TextInput
+                value={delta}
+                onChangeText={setDelta}
+                placeholder="e.g. -3 or 12"
+                placeholderTextColor={c.ink5}
+                keyboardType="numbers-and-punctuation"
+                autoFocus
+                style={{
+                  fontFamily: FONT.display,
+                  fontSize: 18,
+                  height: 52,
+                  paddingHorizontal: 14,
+                  borderWidth: 1,
+                  borderColor: c.hair,
+                  borderRadius: 8,
+                  color: c.ink,
+                  backgroundColor: c.paper2,
+                }}
+              />
+            </View>
+            <View style={{ gap: 6 }}>
+              <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                REASON (OPTIONAL)
+              </Mono>
+              <TextInput
+                value={reason}
+                onChangeText={setReason}
+                placeholder="Cycle count variance, damage, etc."
+                placeholderTextColor={c.ink5}
+                style={{
+                  fontFamily: FONT.displayRegular,
+                  fontSize: 15,
+                  height: 50,
+                  paddingHorizontal: 14,
+                  borderWidth: 1,
+                  borderColor: c.hair,
+                  borderRadius: 8,
+                  color: c.ink,
+                  backgroundColor: c.paper2,
+                }}
+              />
+            </View>
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'baseline',
+                marginTop: 4,
+              }}
+            >
+              <Mono size={10.5} tracking={0.12} upper color={c.ink4}>
+                NEW TOTAL
+              </Mono>
+              <Mono
+                size={28}
+                tracking={-0.022}
+                color={preview < 0 ? ACCENT.crit : preview === 0 ? ACCENT.warn : c.ink}
+                style={{ fontFamily: FONT.display }}
+              >
+                {preview}
+              </Mono>
+            </View>
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+            <View style={{ flex: 1 }}>
+              <Button block variant="ghost" onPress={onClose}>
+                Cancel
+              </Button>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Button
+                block
+                onPress={() => isValid && onConfirm(parsedDelta, reason || 'Mobile detail')}
+                disabled={!isValid || busy}
+              >
+                {busy ? 'Saving…' : 'Confirm'}
+              </Button>
+            </View>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.bg },
-  scroll: { padding: space.lg, paddingBottom: space.xxl },
-  back: { marginBottom: space.md },
-  sku: { color: theme.textMuted, fontSize: 12, fontFamily: 'Menlo' },
-  name: { color: theme.text, fontSize: 24, fontWeight: '700', marginTop: 4 },
-  qtyCard: {
-    marginTop: space.lg,
-    backgroundColor: theme.card,
-    borderRadius: radius.lg,
-    padding: space.lg,
-    borderWidth: 1,
-    borderColor: theme.border,
+  root: { flex: 1 },
+  topbar: {
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
   },
-  qtyLabel: { color: theme.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: '500' },
-  qtyValue: { color: theme.text, fontSize: 48, fontWeight: '700', marginTop: 4 },
-  qtyUnit: { color: theme.textMuted, fontSize: 18, fontWeight: '500' },
-  statusLine: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
-  actions: { flexDirection: 'row', gap: space.sm, marginTop: space.lg },
-  actionBtn: {
+  hero: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  tabsRow: {
+    flexDirection: 'row',
+    marginTop: 16,
+    marginBottom: 16,
+    marginHorizontal: 20,
+  },
+  quickAdjust: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 16,
+  },
+  quickBtn: {
     flex: 1,
-    paddingVertical: 14,
-    borderRadius: radius.md,
-    backgroundColor: theme.bgElevated,
+    height: 44,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: theme.border,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  actionLabel: { color: theme.text, fontWeight: '700', fontSize: 14 },
-  metaCard: {
-    marginTop: space.md,
-    backgroundColor: theme.card,
-    borderRadius: radius.lg,
-    padding: space.lg,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
-  rowLabel: { color: theme.textMuted, fontSize: 13 },
-  rowValue: { color: theme.text, fontSize: 14, fontWeight: '600' },
-  descLabel: { color: theme.textMuted, fontSize: 11, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.5 },
-  desc: { color: theme.text, fontSize: 14, marginTop: space.xs, lineHeight: 20 },
 });

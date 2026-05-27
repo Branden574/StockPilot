@@ -1,13 +1,18 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as React from 'react';
+import { View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { BiometricLockScreen } from '@/components/biometric-lock-screen';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { initDb } from '@/lib/db';
+import { palette } from '@/lib/theme';
+import { useBrandFonts } from '@/lib/use-fonts';
 import { usePushNotifications } from '@/lib/use-push-notifications';
 import { useSync } from '@/lib/use-sync';
+import { useTheme } from '@/lib/use-theme';
 
 export default function RootLayout() {
   // Initialise SQLite + cycle-count sync engine once at app start so any
@@ -32,11 +37,23 @@ export default function RootLayout() {
     };
   }, []);
 
+  const fontsReady = useBrandFonts();
+  const { mode, c } = useTheme();
+
+  if (!fontsReady) {
+    // Hold splash-style background until the three brand fonts are
+    // resolved — avoids a flash of system fallback type which would
+    // shift every line of copy.
+    return <View style={{ flex: 1, backgroundColor: palette('light').paper }} />;
+  }
+
   return (
-    <AuthProvider>
-      <StatusBar style="light" />
-      <RootGate />
-    </AuthProvider>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: c.paper }}>
+      <AuthProvider>
+        <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+        <RootGate />
+      </AuthProvider>
+    </GestureHandlerRootView>
   );
 }
 
@@ -44,12 +61,9 @@ function RootGate() {
   const { session, loading, locked } = useAuth();
   const segments = useSegments();
   const router = useRouter();
+  const { c } = useTheme();
 
-  // Register an Expo push token + persist to push_tokens whenever the
-  // signed-in user changes. No-op for nullable session.
   usePushNotifications(session?.user ?? null);
-  // Pull mobile snapshot + drain the offline action queue on app open
-  // and every 60s while foregrounded. Also no-op for nullable session.
   useSync(session?.user ?? null);
 
   React.useEffect(() => {
@@ -62,22 +76,18 @@ function RootGate() {
     }
   }, [session, loading, segments, router]);
 
-  // Biometric lock takes precedence over every routed screen — render
-  // it on top of the Stack instead of the normal routes while locked.
-  // Mounted after loading completes so we don't flash the lock screen
-  // for users without biometric enabled.
   if (!loading && session && locked) {
     return <BiometricLockScreen />;
   }
 
   return (
-    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#0a0f1f' } }}>
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: c.paper },
+      }}
+    >
       <Stack.Screen name="(auth)" />
-      {/*
-        The (drawer) group hosts the bottom tabs inside a drawer
-        navigator (see app/(drawer)/_layout.tsx). Modal screens below
-        stay at the root Stack so their back-swipe still works.
-      */}
       <Stack.Screen name="(drawer)" />
       <Stack.Screen name="item/[id]" options={{ presentation: 'card' }} />
       <Stack.Screen name="scan-po/index" options={{ presentation: 'card' }} />
@@ -87,6 +97,9 @@ function RootGate() {
       />
       <Stack.Screen name="bundles/index" options={{ presentation: 'card' }} />
       <Stack.Screen name="bundles/[id]" options={{ presentation: 'card' }} />
+      <Stack.Screen name="rentals/new" options={{ presentation: 'card' }} />
+      <Stack.Screen name="schedule/new" options={{ presentation: 'card' }} />
+      <Stack.Screen name="ai/chat" options={{ presentation: 'card' }} />
     </Stack>
   );
 }

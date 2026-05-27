@@ -1,5 +1,16 @@
 import { Stack } from 'expo-router';
+import * as React from 'react';
+
+import { useTheme } from '@/lib/use-theme';
 
 export default function AuthLayout() {
-  return <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#0a0f1f' } }} />;
+  const { c } = useTheme();
+  return (
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        contentStyle: { backgroundColor: c.paper },
+      }}
+    />
+  );
 }
