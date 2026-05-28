@@ -409,8 +409,20 @@ export default function CycleCountDetail() {
               : l.counted !== null
                 ? String(l.counted)
                 : '';
+            // Live variance — reflect whatever is currently in the box
+            // (the draft while typing, else the persisted count) so the
+            // delta updates immediately instead of only after the
+            // debounce/sync. Shown for every counted line, including a
+            // zero "matches expected".
+            const parsedDraft =
+              isDrafting && draftVal.trim() !== '' ? Number.parseFloat(draftVal) : NaN;
+            const effectiveCounted = isDrafting
+              ? Number.isFinite(parsedDraft)
+                ? parsedDraft
+                : null
+              : l.counted;
             const variance =
-              l.counted !== null ? l.counted - l.expected : null;
+              effectiveCounted !== null ? effectiveCounted - l.expected : null;
             return (
               <View key={l.id} style={styles.card}>
                 <View style={{ flex: 1 }}>
@@ -420,23 +432,29 @@ export default function CycleCountDetail() {
                   <Text style={styles.itemSku}>{l.itemSku}</Text>
                   <Text style={styles.expected}>
                     Expected: {l.expected}
-                    {variance !== null && variance !== 0 && (
-                      <Text
-                        style={
-                          variance > 0
-                            ? { color: theme.success }
-                            : { color: theme.destructive }
-                        }
-                      >
-                        {' · Δ '}
-                        {variance > 0 ? '+' : ''}
-                        {variance}
-                      </Text>
-                    )}
                     {l.localDirty && (
                       <Text style={{ color: theme.warning }}> · unsynced</Text>
                     )}
                   </Text>
+                  {variance !== null && (
+                    <Text
+                      style={[
+                        styles.variance,
+                        {
+                          color:
+                            variance > 0
+                              ? theme.success
+                              : variance < 0
+                                ? theme.destructive
+                                : theme.textMuted,
+                        },
+                      ]}
+                    >
+                      {variance === 0
+                        ? '✓ Matches expected'
+                        : `Variance ${variance > 0 ? '+' : ''}${variance}`}
+                    </Text>
+                  )}
                 </View>
                 <View style={styles.countBox}>
                   <TextInput
@@ -534,6 +552,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   expected: { color: theme.textMuted, fontSize: 12, marginTop: 4 },
+  variance: { fontSize: 13, fontWeight: '700', marginTop: 4 },
   countBox: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 110 },
   countInput: {
     color: theme.text,
