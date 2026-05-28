@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Loader2,
   PackageCheck,
+  PenLine,
   Printer,
   Save,
   ScanLine,
@@ -54,6 +55,11 @@ interface Props {
   fulfillmentType: 'pickup' | 'delivery';
   assignedDeliveryUserId: string | null;
   signatureToken: string | null;
+  /** Captured digital signature (data URL PNG) + who/when, for the
+   *  "View signature" dialog. Null until the order is signed. */
+  signatureDataUrl: string | null;
+  signedByName: string | null;
+  signedAt: string | null;
   drivers: DriverOption[];
   /** Whether the viewer has orders:approve. Drives which manage-only
    *  sections render. False = staff driver assigned to this delivery
@@ -88,11 +94,15 @@ export function ManagerActionsPanel({
   fulfillmentType,
   assignedDeliveryUserId,
   signatureToken,
+  signatureDataUrl,
+  signedByName,
+  signedAt,
   drivers,
   canApprove,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
+  const [sigOpen, setSigOpen] = React.useState(false);
   const [notes, setNotes] = React.useState(internalNotes ?? '');
   const initialNotes = React.useRef(internalNotes ?? '');
 
@@ -374,6 +384,16 @@ export function ManagerActionsPanel({
                 <Printer className="h-3.5 w-3.5" />
                 Print warehouse slip
               </Button>
+              {signatureDataUrl && (
+                <Button
+                  variant="outline"
+                  onClick={() => setSigOpen(true)}
+                  disabled={busy !== null}
+                >
+                  <PenLine className="h-3.5 w-3.5" />
+                  View signature
+                </Button>
+              )}
             </>
           )}
 
@@ -535,6 +555,39 @@ export function ManagerActionsPanel({
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : null}
               Deny request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View signature */}
+      <Dialog open={sigOpen} onOpenChange={setSigOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Customer signature</DialogTitle>
+            <DialogDescription>
+              {signedByName ? `Signed by ${signedByName}` : 'Signed'}
+              {signedAt
+                ? ` · ${new Date(signedAt).toLocaleString()}`
+                : ''}
+            </DialogDescription>
+          </DialogHeader>
+          {signatureDataUrl ? (
+            <div className="bg-card rounded-md border p-3">
+              {/* The signature is a stored data-URL PNG; render directly. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={signatureDataUrl}
+                alt="Customer signature"
+                className="mx-auto max-h-64 w-full object-contain"
+              />
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-sm">No signature on file.</p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSigOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
