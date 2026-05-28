@@ -265,7 +265,7 @@ export class ReceivingService {
       for (const item of archived) {
         await audit(
           {
-            event: 'inventory_item.auto_unarchived',
+            event: 'inventory.item.restored',
             entityType: 'inventory_item',
             entityId: item.id,
             after: { status: 'active' },
