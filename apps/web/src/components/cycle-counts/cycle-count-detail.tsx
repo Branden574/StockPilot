@@ -402,10 +402,15 @@ function CountRow({
     setDraft(line.counted_quantity != null ? String(line.counted_quantity) : '');
   }, [line.counted_quantity]);
 
+  // Track the value currently IN the box (the draft), not just the saved
+  // count — so an empty box reads as "uncounted" (variance —) instead of
+  // showing the stale saved variance after you clear it. A counted 0 still
+  // shows its variance because draft is "0", not "".
+  const trimmedDraft = draft.trim();
+  const draftNum = trimmedDraft === '' ? NaN : Number(trimmedDraft);
+  const effectiveCounted = Number.isFinite(draftNum) ? draftNum : null;
   const variance =
-    line.counted_quantity != null
-      ? line.counted_quantity - line.expected_quantity
-      : null;
+    effectiveCounted != null ? effectiveCounted - line.expected_quantity : null;
 
   return (
     <TableRow>
@@ -430,9 +435,14 @@ function CountRow({
           onBlur={() => {
             if (disabled) return;
             const trimmed = draft.trim();
-            if (trimmed === '') return; // empty = leave uncounted
-            const next = Number(trimmed);
             const current = line.counted_quantity;
+            if (trimmed === '') {
+              // Emptying the box uncounts the line (clears the variance too),
+              // but only when it actually had a saved value to clear.
+              if (current != null) onClear();
+              return;
+            }
+            const next = Number(trimmed);
             if (Number.isFinite(next) && next !== current) onSave(trimmed);
           }}
           onKeyDown={(e) => {
