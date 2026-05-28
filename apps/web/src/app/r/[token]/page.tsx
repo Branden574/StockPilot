@@ -180,7 +180,7 @@ export default async function PublicOrderRequestPage({
 
   return (
     <div>
-      <Header org={org} />
+      <Header org={org} warehouseName={activeWarehouse.name} catalogCount={items.length} />
       <PublicOrdersV2
         token={token}
         orgName={org.name}
@@ -201,35 +201,96 @@ export default async function PublicOrderRequestPage({
 
 function Header({
   org,
+  warehouseName,
+  catalogCount,
 }: {
   org: { name: string; logo_url: string | null; public_request_blurb: string | null };
+  warehouseName?: string;
+  catalogCount?: number;
 }) {
   return (
-    <header className="mb-6 flex flex-col items-center text-center">
-      {isAllowedLogoUrl(org.logo_url) ? (
-        <Image
-          src={org.logo_url}
-          alt={`${org.name} logo`}
-          width={48}
-          height={48}
-          priority
-          sizes="48px"
-          className="mb-4 h-12 w-12 rounded-lg object-cover"
-        />
-      ) : null}
-      <h1 className="font-display text-[28px] font-medium leading-tight tracking-[-0.025em]">
-        {org.name}
-      </h1>
-      <p className="text-muted-foreground mt-1 text-[11px] font-medium uppercase tracking-[0.12em]">
-        Place an order
-      </p>
-      {org.public_request_blurb ? (
-        // Markdown is allowed in the blurb but rendered as plain text
-        // here. Whitespace + line breaks are preserved via whitespace-pre-line.
-        <p className="text-muted-foreground mt-4 max-w-prose whitespace-pre-line text-sm leading-relaxed">
-          {org.public_request_blurb}
-        </p>
-      ) : null}
+    <header className="mb-8">
+      {/* Brand row */}
+      <div className="border-border flex items-center gap-3 border-b pb-5">
+        {isAllowedLogoUrl(org.logo_url) ? (
+          <Image
+            src={org.logo_url}
+            alt={`${org.name} logo`}
+            width={40}
+            height={40}
+            priority
+            sizes="40px"
+            className="h-10 w-10 rounded-lg object-cover"
+          />
+        ) : (
+          <div className="bg-foreground text-background font-display grid h-10 w-10 place-items-center rounded-lg text-sm font-semibold">
+            {org.name.slice(0, 1).toUpperCase()}
+          </div>
+        )}
+        <div className="min-w-0">
+          <div className="font-display text-[15px] font-semibold leading-tight tracking-[-0.02em]">
+            {org.name}
+          </div>
+          <div className="text-muted-foreground mt-0.5 font-mono text-[10px] uppercase tracking-[0.16em]">
+            Supply Requests
+          </div>
+        </div>
+        <span className="text-muted-foreground ml-auto hidden text-[11px] sm:inline">
+          Powered by StockPilot
+        </span>
+      </div>
+
+      {/* Intro */}
+      <div className="mt-7 flex flex-wrap items-end justify-between gap-x-10 gap-y-6">
+        <div className="min-w-0 flex-1">
+          <div className="text-primary mb-3 font-mono text-[11px] uppercase tracking-[0.18em]">
+            Place an order
+          </div>
+          <h1 className="font-display max-w-[16ch] text-3xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[38px]">
+            Request books &amp;{' '}
+            <span className="text-muted-foreground italic">classroom supplies.</span>
+          </h1>
+          {org.public_request_blurb ? (
+            // Blurb may contain markdown; rendered as plain text with line
+            // breaks preserved.
+            <p className="text-muted-foreground mt-4 max-w-[52ch] whitespace-pre-line text-sm leading-relaxed">
+              {org.public_request_blurb}
+            </p>
+          ) : (
+            <p className="text-muted-foreground mt-4 max-w-[52ch] text-sm leading-relaxed">
+              Browse the catalog, add what your campus needs, and tell us how to get
+              it to you. Our team reviews every request before stock is pulled —
+              you&apos;ll get an email confirmation once it&apos;s approved.
+            </p>
+          )}
+        </div>
+
+        {warehouseName && typeof catalogCount === 'number' ? (
+          <dl className="flex shrink-0 flex-col gap-2.5 text-[12.5px]">
+            <div className="flex items-center gap-2.5">
+              <dt className="text-muted-foreground w-24 font-mono text-[10px] uppercase tracking-[0.14em]">
+                Warehouse
+              </dt>
+              <dd className="text-foreground/90 flex items-center gap-2">
+                <span className="bg-primary h-1.5 w-1.5 rounded-full" />
+                {warehouseName}
+              </dd>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <dt className="text-muted-foreground w-24 font-mono text-[10px] uppercase tracking-[0.14em]">
+                Catalog
+              </dt>
+              <dd className="text-foreground/90">{catalogCount} items in stock</dd>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <dt className="text-muted-foreground w-24 font-mono text-[10px] uppercase tracking-[0.14em]">
+                Turnaround
+              </dt>
+              <dd className="text-foreground/90">Reviewed within 1 business day</dd>
+            </div>
+          </dl>
+        ) : null}
+      </div>
     </header>
   );
 }
