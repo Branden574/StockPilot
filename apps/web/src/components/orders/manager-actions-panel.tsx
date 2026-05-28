@@ -573,8 +573,9 @@ export function ManagerActionsPanel({
             </DialogDescription>
           </DialogHeader>
           {signatureDataUrl ? (
-            <div className="bg-card rounded-md border p-3">
-              {/* The signature is a stored data-URL PNG; render directly. */}
+            <div className="rounded-md border bg-white p-3">
+              {/* Signatures are dark ink on a transparent background, so they
+                  vanish on a dark card — always back them with white. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={signatureDataUrl}
