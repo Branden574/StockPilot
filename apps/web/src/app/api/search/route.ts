@@ -14,7 +14,7 @@ export const dynamic = 'force-dynamic';
  * the org. Suppliers are org-scoped.
  */
 export async function GET(req: Request) {
-  const ctx = await withApiContext();
+  const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const url = new URL(req.url);
