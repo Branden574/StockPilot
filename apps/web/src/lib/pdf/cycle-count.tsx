@@ -108,19 +108,18 @@ export function CycleCountSheetPdf({
               <Text style={[pdfStyles.tHeadCell, { flex: CC_COLS.sku }]}>SKU</Text>
               <Text style={[pdfStyles.tHeadCell, { flex: CC_COLS.name }]}>Description</Text>
               <Text style={[pdfStyles.tHeadCell, { flex: CC_COLS.loc }]}>Location</Text>
-              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: CC_COLS.sysQty }]}>
+              <Text style={[pdfStyles.tHeadCell, { flex: CC_COLS.sysQty, textAlign: 'center' }]}>
                 System
+              </Text>
+              <Text style={[pdfStyles.tHeadCell, { flex: CC_COLS.countQty, textAlign: 'center' }]}>
+                Counted
               </Text>
               <Text
                 style={[
                   pdfStyles.tHeadCell,
-                  pdfStyles.tRight,
-                  { flex: CC_COLS.countQty, paddingRight: 6 },
+                  { flex: CC_COLS.notes, textAlign: isVarianceReport ? 'center' : 'left' },
                 ]}
               >
-                Counted
-              </Text>
-              <Text style={[pdfStyles.tHeadCell, { flex: CC_COLS.notes, paddingLeft: 8 }]}>
                 {isVarianceReport ? 'Variance' : 'Notes'}
               </Text>
             </View>
@@ -151,16 +150,12 @@ export function CycleCountSheetPdf({
                     </Text>
                     <Text style={[pdfStyles.tCell, { flex: CC_COLS.name }]}>{l.name}</Text>
                     <Text style={[pdfStyles.tCell, { flex: CC_COLS.loc }]}>{l.location ?? '—'}</Text>
-                    <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: CC_COLS.sysQty }]}>
+                    <Text style={[pdfStyles.tCell, { flex: CC_COLS.sysQty, textAlign: 'center' }]}>
                       {l.expectedQuantity}
                     </Text>
                     {isVarianceReport ? (
                       <Text
-                        style={[
-                          pdfStyles.tCell,
-                          pdfStyles.tRight,
-                          { flex: CC_COLS.countQty, paddingRight: 6 },
-                        ]}
+                        style={[pdfStyles.tCell, { flex: CC_COLS.countQty, textAlign: 'center' }]}
                       >
                         {counted == null ? '—' : counted}
                       </Text>
@@ -176,7 +171,7 @@ export function CycleCountSheetPdf({
                       />
                     )}
                     {isVarianceReport ? (
-                      <Text style={[pdfStyles.tCell, { flex: CC_COLS.notes, paddingLeft: 8 }]}>
+                      <Text style={[pdfStyles.tCell, { flex: CC_COLS.notes, textAlign: 'center' }]}>
                         {variance == null
                           ? '—'
                           : variance === 0
