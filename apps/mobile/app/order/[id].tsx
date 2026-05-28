@@ -1,0 +1,473 @@
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
+import { ArrowLeft, Camera, ImagePlus, PenLine, Trash2, X } from 'lucide-react-native';
+import * as React from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { CachedImage } from '@/components/ui/cached-image';
+import { Card } from '@/components/ui/card';
+import { IconChip } from '@/components/ui/row';
+import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { useAuth } from '@/lib/auth-context';
+import { resizeForUpload } from '@/lib/image-resize';
+import { supabase } from '@/lib/supabase';
+import { FONT } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
+
+const BUCKET = 'order-attachments';
+
+const ATTACHABLE = [
+  'staged_for_pickup',
+  'staged_for_delivery',
+  'in_transit',
+  'signature_requested',
+  'completed',
+];
+
+const KIND_LABELS: Record<string, string> = {
+  signature: 'Wet signature',
+  dropoff_photo: 'Items dropped off',
+  location: 'Drop-off location',
+  other: 'Other',
+};
+const KINDS = ['dropoff_photo', 'location', 'signature', 'other'] as const;
+type Kind = (typeof KINDS)[number];
+
+function mimeForExt(ext: string): string {
+  const e = ext.toLowerCase();
+  if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
+  if (e === 'png') return 'image/png';
+  if (e === 'heic') return 'image/heic';
+  if (e === 'webp') return 'image/webp';
+  return `image/${e}`;
+}
+
+interface OrderHeader {
+  id: string;
+  status: string;
+  requester: string | null;
+  orgLabel: string | null;
+  warehouseName: string | null;
+  signatureDataUrl: string | null;
+  signedByName: string | null;
+  signedAt: string | null;
+  createdAt: string | null;
+}
+
+interface Attachment {
+  id: string;
+  storagePath: string;
+  kind: string;
+  contentType: string | null;
+  fileName: string | null;
+  url: string | null;
+  createdAt: string;
+}
+
+export default function OrderDetail() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
+  const { user } = useAuth();
+  const { c, mode } = useTheme();
+
+  const [orgId, setOrgId] = React.useState<string | null>(null);
+  const [role, setRole] = React.useState<string | null>(null);
+  const [order, setOrder] = React.useState<OrderHeader | null>(null);
+  const [attachments, setAttachments] = React.useState<Attachment[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [uploading, setUploading] = React.useState(false);
+  const [kind, setKind] = React.useState<Kind>('dropoff_photo');
+  const [sigOpen, setSigOpen] = React.useState(false);
+
+  const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
+  const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
+
+  React.useEffect(() => {
+    if (!user) return;
+    supabase
+      .from('organization_members')
+      .select('organization_id, role')
+      .eq('user_id', user.id)
+      .not('accepted_at', 'is', null)
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => {
+        setOrgId((data?.organization_id as string | undefined) ?? null);
+        setRole((data?.role as string | undefined) ?? null);
+      });
+  }, [user]);
+
+  const loadAttachments = React.useCallback(async () => {
+    if (!orgId || !id) return;
+    const { data } = await supabase
+      .from('order_request_attachments')
+      .select('id, storage_path, kind, content_type, file_name, created_at')
+      .eq('organization_id', orgId)
+      .eq('order_request_id', id)
+      .order('created_at', { ascending: false });
+    const rows = (data ?? []) as Record<string, unknown>[];
+    const paths = rows.map((r) => r.storage_path as string);
+    const signed = new Map<string, string>();
+    if (paths.length > 0) {
+      const { data: urls } = await supabase.storage.from(BUCKET).createSignedUrls(paths, 60 * 60);
+      for (const u of (urls ?? []) as { path?: string | null; signedUrl: string }[]) {
+        if (u.path) signed.set(u.path, u.signedUrl);
+      }
+    }
+    setAttachments(
+      rows.map((r) => ({
+        id: r.id as string,
+        storagePath: r.storage_path as string,
+        kind: (r.kind as string | null) ?? 'other',
+        contentType: (r.content_type as string | null) ?? null,
+        fileName: (r.file_name as string | null) ?? null,
+        url: signed.get(r.storage_path as string) ?? null,
+        createdAt: r.created_at as string,
+      })),
+    );
+  }, [orgId, id]);
+
+  const load = React.useCallback(async () => {
+    if (!orgId || !id) return;
+    const { data } = await supabase
+      .from('order_requests')
+      .select(
+        `id, status, requester_name, requester_email, requester_org_label,
+         signature_data_url, signed_by_name, signed_at, created_at,
+         warehouse:warehouses!warehouse_id (name)`,
+      )
+      .eq('organization_id', orgId)
+      .eq('id', id)
+      .maybeSingle();
+    if (data) {
+      const r = data as Record<string, unknown>;
+      const wh = r.warehouse as { name: string | null } | { name: string | null }[] | null;
+      const whObj = Array.isArray(wh) ? wh[0] : wh;
+      setOrder({
+        id: r.id as string,
+        status: r.status as string,
+        requester: (r.requester_name as string | null) ?? (r.requester_email as string | null) ?? null,
+        orgLabel: (r.requester_org_label as string | null) ?? null,
+        warehouseName: whObj?.name ?? null,
+        signatureDataUrl: (r.signature_data_url as string | null) ?? null,
+        signedByName: (r.signed_by_name as string | null) ?? null,
+        signedAt: (r.signed_at as string | null) ?? null,
+        createdAt: (r.created_at as string | null) ?? null,
+      });
+    }
+    await loadAttachments();
+    setLoading(false);
+  }, [orgId, id, loadAttachments]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void load();
+    }, [load]),
+  );
+
+  async function refresh() {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }
+
+  async function uploadAsset(uri: string) {
+    if (!orgId || !id) return;
+    setUploading(true);
+    try {
+      const resized = await resizeForUpload(uri);
+      const path = `${orgId}/${id}/${Math.random().toString(36).slice(2, 14)}.${resized.ext}`;
+      const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
+      const { error: upErr } = await supabase.storage
+        .from(BUCKET)
+        .upload(path, arrayBuffer, { contentType: mimeForExt(resized.ext) });
+      if (upErr) {
+        Alert.alert('Upload failed', upErr.message);
+        return;
+      }
+      const { error: rowErr } = await supabase.from('order_request_attachments').insert({
+        organization_id: orgId,
+        order_request_id: id,
+        storage_path: path,
+        file_name: null,
+        content_type: mimeForExt(resized.ext),
+        kind,
+      });
+      if (rowErr) {
+        Alert.alert('Could not save attachment', rowErr.message);
+        await supabase.storage.from(BUCKET).remove([path]);
+        return;
+      }
+      await loadAttachments();
+    } catch (e) {
+      Alert.alert('Upload error', e instanceof Error ? e.message : 'Please try again.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function fromCamera() {
+    let perm = await ImagePicker.getCameraPermissionsAsync();
+    if (!perm.granted) perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Camera access needed', 'Allow camera to capture proof photos.');
+      return;
+    }
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 0.7,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        cameraType: ImagePicker.CameraType.back,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      await uploadAsset(result.assets[0].uri);
+    } catch (e) {
+      Alert.alert('Camera unavailable', e instanceof Error ? e.message : 'Use Library instead.');
+    }
+  }
+
+  async function fromLibrary() {
+    let perm = await ImagePicker.getMediaLibraryPermissionsAsync();
+    if (!perm.granted) perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Photo access needed', 'Allow photo library to attach images.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      quality: 0.7,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      selectionLimit: 5,
+    });
+    if (result.canceled) return;
+    for (const a of result.assets) {
+      await uploadAsset(a.uri);
+    }
+  }
+
+  function addProof() {
+    Alert.alert('Add proof of delivery', `Saving as "${KIND_LABELS[kind]}"`, [
+      { text: 'Take photo', onPress: () => void fromCamera() },
+      { text: 'Choose from library', onPress: () => void fromLibrary() },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }
+
+  async function deleteAttachment(att: Attachment) {
+    await supabase.storage.from(BUCKET).remove([att.storagePath]);
+    await supabase
+      .from('order_request_attachments')
+      .delete()
+      .eq('organization_id', orgId)
+      .eq('id', att.id);
+    await loadAttachments();
+  }
+
+  return (
+    <View style={[styles.root, { backgroundColor: c.paper }]}>
+      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
+        <View style={styles.topbar}>
+          <IconChip
+            icon={ArrowLeft}
+            onPress={() => {
+              if (router.canGoBack()) router.back();
+              else router.replace('/');
+            }}
+          />
+        </View>
+      </SafeAreaView>
+
+      {loading ? (
+        <ActivityIndicator color={c.ink} style={{ marginTop: 40 }} />
+      ) : !order ? (
+        <View style={styles.center}>
+          <Display size={18}>Order not <Em>found.</Em></Display>
+        </View>
+      ) : (
+        <ScrollView
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60, gap: 16 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
+        >
+          <View style={{ paddingTop: 4 }}>
+            <Eyebrow>{`ORDER · ${order.status.replace(/_/g, ' ').toUpperCase()}`}</Eyebrow>
+            <Display size={30} style={{ marginTop: 10 }}>
+              {order.requester ?? 'Order'}
+            </Display>
+            <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+              {[order.orgLabel, order.warehouseName].filter(Boolean).join(' · ') || '—'}
+            </Mono>
+          </View>
+
+          {order.signatureDataUrl ? (
+            <Pressable onPress={() => setSigOpen(true)}>
+              <Card padding={14}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <PenLine size={16} color={c.ink} strokeWidth={1.7} />
+                  <View style={{ flex: 1 }}>
+                    <Body size={14} color={c.ink}>View signature</Body>
+                    <Mono size={11} color={c.ink4} style={{ marginTop: 2 }}>
+                      {order.signedByName ?? 'Signed'}
+                      {order.signedAt ? ` · ${new Date(order.signedAt).toLocaleDateString()}` : ''}
+                    </Mono>
+                  </View>
+                </View>
+              </Card>
+            </Pressable>
+          ) : null}
+
+          <View style={{ gap: 10 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Eyebrow>PROOF OF DELIVERY</Eyebrow>
+            </View>
+
+            {canAttach ? (
+              <View style={{ gap: 10 }}>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                  {KINDS.map((k) => {
+                    const on = kind === k;
+                    return (
+                      <Pressable
+                        key={k}
+                        onPress={() => setKind(k)}
+                        style={{
+                          paddingHorizontal: 10,
+                          paddingVertical: 6,
+                          borderRadius: 8,
+                          borderWidth: 1,
+                          borderColor: on ? c.ink : c.hair,
+                          backgroundColor: on ? c.ink : 'transparent',
+                        }}
+                      >
+                        <Mono size={10.5} color={on ? c.paper : c.ink3}>
+                          {KIND_LABELS[k]}
+                        </Mono>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  <Pressable
+                    onPress={addProof}
+                    disabled={uploading}
+                    style={[styles.addBtn, { backgroundColor: c.ink, opacity: uploading ? 0.6 : 1 }]}
+                  >
+                    {uploading ? (
+                      <ActivityIndicator color={c.paper} />
+                    ) : (
+                      <>
+                        <Camera size={16} color={c.paper} strokeWidth={1.8} />
+                        <Mono size={13} color={c.paper}>Add proof</Mono>
+                      </>
+                    )}
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <Mono size={11} color={c.ink4}>
+                {isManager
+                  ? 'Available once the order is out for delivery or completed.'
+                  : 'Managers can add proof of delivery here.'}
+              </Mono>
+            )}
+
+            {attachments.length === 0 ? (
+              <Mono size={11} color={c.ink4} style={{ marginTop: 4 }}>No attachments yet.</Mono>
+            ) : (
+              <View style={styles.grid}>
+                {attachments.map((a) => {
+                  const isImage = (a.contentType ?? '').startsWith('image/');
+                  return (
+                    <View key={a.id} style={[styles.tile, { borderColor: c.hair, backgroundColor: c.card }]}>
+                      {isImage && a.url ? (
+                        <CachedImage uri={a.url} style={styles.tileImg} recyclingKey={a.id} />
+                      ) : (
+                        <View style={[styles.tileImg, { alignItems: 'center', justifyContent: 'center' }]}>
+                          <ImagePlus size={20} color={c.ink4} />
+                        </View>
+                      )}
+                      <View style={styles.tileFoot}>
+                        <Mono size={9.5} color={c.ink4} numberOfLines={1} style={{ flex: 1 }}>
+                          {KIND_LABELS[a.kind] ?? 'Other'}
+                        </Mono>
+                        {isManager ? (
+                          <Pressable onPress={() => void deleteAttachment(a)} hitSlop={8}>
+                            <Trash2 size={14} color={c.ink4} />
+                          </Pressable>
+                        ) : null}
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        </ScrollView>
+      )}
+
+      <Modal visible={sigOpen} transparent animationType="fade" onRequestClose={() => setSigOpen(false)}>
+        <Pressable
+          onPress={() => setSigOpen(false)}
+          style={{
+            flex: 1,
+            justifyContent: 'center',
+            padding: 24,
+            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
+          }}
+        >
+          <Pressable onPress={() => undefined} style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Customer signature</Body>
+              <Pressable onPress={() => setSigOpen(false)} hitSlop={8}>
+                <X size={18} color={c.ink4} />
+              </Pressable>
+            </View>
+            {order?.signatureDataUrl ? (
+              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 8 }}>
+                <Image
+                  source={{ uri: order.signatureDataUrl }}
+                  style={{ width: '100%', height: 180 }}
+                  resizeMode="contain"
+                />
+              </View>
+            ) : null}
+            <Mono size={11} color={c.ink4}>
+              {order?.signedByName ?? 'Signed'}
+              {order?.signedAt ? ` · ${new Date(order.signedAt).toLocaleString()}` : ''}
+            </Mono>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1 },
+  topbar: { paddingHorizontal: 12, paddingTop: 8, flexDirection: 'row' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
+  addBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    height: 44,
+    borderRadius: 10,
+    justifyContent: 'center',
+  },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
+  tile: { width: '31%', borderRadius: 10, borderWidth: 1, overflow: 'hidden' },
+  tileImg: { width: '100%', height: 90 },
+  tileFoot: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 6 },
+});
