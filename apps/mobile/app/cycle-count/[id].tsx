@@ -320,6 +320,9 @@ export default function CycleCountDetail() {
   const allCounted = countedCount === lines.length && lines.length > 0;
   const offline = syncSnapshot.status === 'offline';
   const hasPending = syncSnapshot.pendingCount > 0 || pendingForThis > 0;
+  // Only open (in_progress) counts are editable/postable. Completed or
+  // canceled counts are opened from history read-only.
+  const isOpen = (header?.status ?? 'in_progress') === 'in_progress';
   const postDisabled = posting || countedCount === 0 || offline || hasPending;
 
   if (emptyState === 'offline-uncached') {
@@ -461,6 +464,7 @@ export default function CycleCountDetail() {
                     style={styles.countInput}
                     value={display}
                     onChangeText={(v) => setDraftValue(l.id, v)}
+                    editable={isOpen}
                     keyboardType="numeric"
                     placeholder="—"
                     placeholderTextColor={theme.textMuted}
@@ -478,7 +482,7 @@ export default function CycleCountDetail() {
         </ScrollView>
       )}
 
-      {!loading && lines.length > 0 && (
+      {!loading && lines.length > 0 && isOpen && (
         <View style={styles.footer}>
           <Pressable
             onPress={postCount}
