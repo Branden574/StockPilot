@@ -8,6 +8,7 @@ import * as React from 'react';
 
 import { BulkActions } from '@/components/inventory/bulk-actions';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
+import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 import {
   createSavedViewAction,
   deleteSavedViewAction,
@@ -289,6 +290,7 @@ export function InventoryTable({
     window.localStorage.setItem(SPARK_MODE_KEY, sparkMode);
   }, [sparkMode]);
   const router = useRouter();
+  const addToCount = useCountSelection((s) => s.add);
   const params = useSearchParams();
   const [q, setQ] = React.useState(initialQuery);
   // Server-authoritative search hits — populated after a debounced
@@ -698,6 +700,23 @@ export function InventoryTable({
           hasArchivedSelection={items.some(
             (i) => selected.has(i.id) && i.status === 'archived',
           )}
+          onCycleCount={() => {
+            // Books tab and Items tab share this table; infer the pick
+            // type from the base path so the confirm screen can group
+            // Products vs Books. sku/name are display-only — the server
+            // re-validates by id.
+            const itemType = basePath.includes('/books') ? 'book' : 'product';
+            const byId = new Map<string, Item>();
+            for (const r of items) byId.set(r.id, r);
+            for (const r of serverHits ?? []) byId.set(r.id, r);
+            const picks = [...selected].map((id) => {
+              const r = byId.get(id);
+              return { id, sku: r?.sku ?? '', name: r?.name ?? 'Item', itemType };
+            });
+            addToCount(picks);
+            setSelected(new Set());
+            router.push('/dashboard/cycle-counts/new');
+          }}
         />
       )}
 

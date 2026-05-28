@@ -2,6 +2,7 @@
 
 import {
   Archive,
+  ClipboardCheck,
   ClipboardList,
   FolderTree,
   Layers,
@@ -76,6 +77,9 @@ interface BulkActionsProps {
   /** Whether any of the selected rows is currently archived. Drives the
       "Restore" vs "Archive" affordance. */
   hasArchivedSelection?: boolean;
+  /** Push the selected rows into the cycle-count selection and navigate to
+      the New cycle count screen. Wired by InventoryTable. */
+  onCycleCount: () => void;
 }
 
 type ActiveDialog =
@@ -97,6 +101,7 @@ export function BulkActions({
   tags = [],
   onClear,
   hasArchivedSelection,
+  onCycleCount,
 }: BulkActionsProps) {
   const router = useRouter();
   const [dialog, setDialog] = React.useState<ActiveDialog>(null);
@@ -194,6 +199,15 @@ export function BulkActions({
         >
           Print labels
         </a>
+
+        <span className="text-[var(--ed-ink-4)]">·</span>
+        <button
+          type="button"
+          onClick={onCycleCount}
+          className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
+        >
+          <ClipboardCheck className="h-3 w-3" /> Cycle count
+        </button>
 
         <span className="text-[var(--ed-ink-4)]">·</span>
         <button
