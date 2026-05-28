@@ -14,6 +14,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { requireOrgContext } from '@/lib/auth/session';
+import { createClient } from '@/lib/supabase/server';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatRelative } from '@/lib/utils';
@@ -36,6 +37,27 @@ export default async function CycleCountsPage() {
     warehousesSvc.list(),
   ]);
   const warehouseMap = new Map(warehouses.map((w) => [w.id, w.name]));
+
+  // Resolve assignee names for the "Assigned to" column. Mirrors the
+  // member lookup on the detail/new pages (embed through organization_members
+  // so it works under RLS).
+  const supabase = await createClient();
+  const { data: rawMembers } = await supabase
+    .from('organization_members')
+    .select('user_id, user:user_profiles!user_id (id, full_name, email)')
+    .eq('organization_id', ctx.organizationId)
+    .not('accepted_at', 'is', null);
+  const assigneeMap = new Map<string, string>();
+  for (const row of (rawMembers ?? []) as Array<{
+    user_id: string;
+    user:
+      | { id: string; full_name: string | null; email: string }
+      | { id: string; full_name: string | null; email: string }[]
+      | null;
+  }>) {
+    const u = Array.isArray(row.user) ? row.user[0] : row.user;
+    if (u) assigneeMap.set(u.id, u.full_name ?? u.email);
+  }
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -68,6 +90,7 @@ export default async function CycleCountsPage() {
                   <TableHead>Started</TableHead>
                   <TableHead>Warehouse</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Assigned to</TableHead>
                   <TableHead>Notes</TableHead>
                   <TableHead className="text-right">Completed</TableHead>
                 </TableRow>
@@ -90,6 +113,9 @@ export default async function CycleCountsPage() {
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={c.status} />
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {c.assigned_to ? (assigneeMap.get(c.assigned_to) ?? '—') : '—'}
                     </TableCell>
                     <TableCell className="text-muted-foreground max-w-[260px] truncate text-xs">
                       {c.notes ?? '—'}
