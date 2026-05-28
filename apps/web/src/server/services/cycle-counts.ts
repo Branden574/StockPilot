@@ -311,16 +311,23 @@ export class CycleCountsService {
   async itemsInScopeCount(cycleCountId: string): Promise<number> {
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('cycle_counts')
-      .select('warehouse_id, status')
+      .select('warehouse_id, status, scope')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', cycleCountId)
       .maybeSingle();
     if (hErr) throw new ServiceError('internal_error', hErr.message);
     if (!header) throw new ServiceError('not_found', 'Cycle count not found.');
-    const h = header as { warehouse_id: string | null; status: CycleCountStatus };
+    const h = header as {
+      warehouse_id: string | null;
+      status: CycleCountStatus;
+      scope?: string;
+    };
     // Only meaningful for open counts. Closed counts compare against
     // a fixed snapshot — new items added afterwards aren't "missing".
     if (h.status !== 'in_progress') return 0;
+    // Selection counts have a fixed, hand-picked line set — there's no
+    // "items added to the warehouse since start" concept to warn about.
+    if (h.scope === 'selection') return 0;
 
     let q = this.ctx.supabase
       .from('inventory_items')
@@ -336,46 +343,108 @@ export class CycleCountsService {
 
   /**
    * Starts a new cycle count session by snapshotting the current
-   * quantity_on_hand for every item in the chosen scope. Optionally
-   * scoped to a warehouse — null means "every active item in the org".
+   * quantity_on_hand for every item in scope.
+   *
+   *   • scope 'warehouse' (default) — every active item in the given
+   *     warehouse, or the whole org when warehouseId is null.
+   *   • scope 'selection' — only the explicitly chosen itemIds. The
+   *     header warehouse_id is forced null (the picked set may span
+   *     warehouses); each line still snapshots its item's warehouse so
+   *     post_cycle_count's per-line move guard keeps working unchanged.
+   *
+   * Returns `skipped` = how many requested ids were dropped because they
+   * were archived / deleted / not in the org by the time we snapshotted.
    */
-  async start(input: { warehouseId: string | null; notes?: string | null }): Promise<{ id: string; lineCount: number }> {
+  async start(input: {
+    scope?: 'warehouse' | 'selection';
+    warehouseId: string | null;
+    itemIds?: string[];
+    notes?: string | null;
+    assignedTo?: string | null;
+  }): Promise<{ id: string; lineCount: number; skipped: number }> {
     assertPermission(this.ctx, 'stock:adjust');
-    // Defense-in-depth: warehouse-write check so a manager can't
-    // start a cycle count for a warehouse they can't write to (the
-    // post() path eventually zeros out the warehouse's stock — that
-    // must be gated). Org-wide counts (warehouseId = null) skip the
-    // gate; only admins+ realistically reach that branch via UI.
-    if (input.warehouseId) {
-      await assertWarehouseAccess(input.warehouseId, 'write', this.ctx);
-    }
+    const scope = input.scope ?? 'warehouse';
 
-    let itemQuery = this.ctx.supabase
-      .from('inventory_items')
-      .select('id, quantity_on_hand, warehouse_id')
-      .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active');
-    if (input.warehouseId) {
-      itemQuery = itemQuery.eq('warehouse_id', input.warehouseId);
-    }
-    const { data: items, error: iErr } = await itemQuery;
-    if (iErr) throw new ServiceError('internal_error', iErr.message);
-    if (!items || items.length === 0) {
-      const where = input.warehouseId
-        ? 'this warehouse'
-        : 'your organization';
-      throw new ServiceError(
-        'validation_error',
-        `No active items found in ${where}. Add items first, or pick a different warehouse.`,
-      );
+    let items: Array<{ id: string; quantity_on_hand: number; warehouse_id: string | null }>;
+    let requested: number;
+
+    if (scope === 'selection') {
+      const ids = Array.from(new Set(input.itemIds ?? []));
+      requested = ids.length;
+      if (ids.length === 0) {
+        throw new ServiceError('validation_error', 'Pick at least one item to count.');
+      }
+      const { data, error } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, quantity_on_hand, warehouse_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .is('deleted_at', null)
+        .eq('status', 'active')
+        .in('id', ids);
+      if (error) throw new ServiceError('internal_error', error.message);
+      items = (data ?? []) as typeof items;
+      if (items.length === 0) {
+        throw new ServiceError(
+          'validation_error',
+          'None of the selected items are still active. Refresh and try again.',
+        );
+      }
+      // Write-access gate: every distinct warehouse represented must be
+      // writable by the caller. Items with no warehouse require full
+      // (manager+) access since they aren't pinned to an assignment.
+      const distinctWh = new Set<string>();
+      let hasNullWh = false;
+      for (const it of items) {
+        if (it.warehouse_id) distinctWh.add(it.warehouse_id);
+        else hasNullWh = true;
+      }
+      if (hasNullWh) {
+        const access = await getWarehouseAccess(this.ctx);
+        if (!access.hasAllAccess) {
+          throw new ForbiddenError('You cannot count items that have no warehouse.');
+        }
+      }
+      for (const wh of distinctWh) {
+        await assertWarehouseAccess(wh, 'write', this.ctx);
+      }
+    } else {
+      // Defense-in-depth: warehouse-write check so a manager can't
+      // start a cycle count for a warehouse they can't write to (the
+      // post() path eventually zeros out the warehouse's stock — that
+      // must be gated). Org-wide counts (warehouseId = null) skip the
+      // gate; only admins+ realistically reach that branch via UI.
+      if (input.warehouseId) {
+        await assertWarehouseAccess(input.warehouseId, 'write', this.ctx);
+      }
+
+      let itemQuery = this.ctx.supabase
+        .from('inventory_items')
+        .select('id, quantity_on_hand, warehouse_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .is('deleted_at', null)
+        .eq('status', 'active');
+      if (input.warehouseId) {
+        itemQuery = itemQuery.eq('warehouse_id', input.warehouseId);
+      }
+      const { data, error: iErr } = await itemQuery;
+      if (iErr) throw new ServiceError('internal_error', iErr.message);
+      items = (data ?? []) as typeof items;
+      requested = items.length;
+      if (items.length === 0) {
+        const where = input.warehouseId ? 'this warehouse' : 'your organization';
+        throw new ServiceError(
+          'validation_error',
+          `No active items found in ${where}. Add items first, or pick a different warehouse.`,
+        );
+      }
     }
 
     const { data: cc, error: ccErr } = await this.ctx.supabase
       .from('cycle_counts')
       .insert({
         organization_id: this.ctx.organizationId,
-        warehouse_id: input.warehouseId,
+        warehouse_id: scope === 'selection' ? null : input.warehouseId,
+        scope,
         status: 'in_progress',
         notes: input.notes ?? null,
         started_by: this.ctx.userId,
@@ -398,20 +467,37 @@ export class CycleCountsService {
       .insert(linesPayload);
     if (linesErr) throw new ServiceError('internal_error', linesErr.message);
 
+    // Assign as a SEPARATE update so trg_cycle_counts_assigned (0042)
+    // fires and the assignee gets the in-app + push notification — the
+    // insert above wouldn't trip an AFTER UPDATE OF assigned_to trigger.
+    if (input.assignedTo) {
+      try {
+        await this.assign(cc.id as string, input.assignedTo);
+      } catch {
+        // Non-fatal: the count exists; the assignment just didn't stick.
+        // The starter can re-assign from the detail page.
+      }
+    }
+
     await audit(
       {
         event: 'cycle_count.started',
         entityType: 'cycle_count',
         entityId: cc.id as string,
         after: {
-          warehouseId: input.warehouseId,
+          scope,
+          warehouseId: scope === 'selection' ? null : input.warehouseId,
           lineCount: linesPayload.length,
         },
       },
       this.ctx,
     );
 
-    return { id: cc.id as string, lineCount: linesPayload.length };
+    return {
+      id: cc.id as string,
+      lineCount: linesPayload.length,
+      skipped: requested - linesPayload.length,
+    };
   }
 
   /**
