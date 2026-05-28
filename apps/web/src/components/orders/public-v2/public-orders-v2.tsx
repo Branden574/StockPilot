@@ -28,6 +28,7 @@ import { Toolbar } from '@/components/orders/v2/toolbar';
 import type { AvailabilityFilter, SortKey } from '@/components/orders/v2/toolbar';
 import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 
+import { PublicBookCard } from './public-book-card';
 import { PublicCartRail } from './public-cart-rail';
 import type { SubmittedState } from './public-cart-rail';
 import { PublicYourInfoCard } from './public-your-info-card';
@@ -288,7 +289,8 @@ function PublicOrdersV2Inner({
           hasActiveFilters={hasActiveFilters}
         />
 
-        {/* Catalog grid */}
+        {/* Catalog grid — public portal renders editorial book covers
+            instead of the staff ItemCard. */}
         <CatalogGrid
           items={filteredItems}
           aisles={aisles}
@@ -296,6 +298,7 @@ function PublicOrdersV2Inner({
           groupByAisle={true}
           cols={3}
           onClearFilters={clearFilters}
+          renderCard={(item) => <PublicBookCard item={item} />}
         />
       </div>
 
