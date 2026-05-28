@@ -111,10 +111,16 @@ export function CycleCountSheetPdf({
               <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: CC_COLS.sysQty }]}>
                 System
               </Text>
-              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: CC_COLS.countQty }]}>
+              <Text
+                style={[
+                  pdfStyles.tHeadCell,
+                  pdfStyles.tRight,
+                  { flex: CC_COLS.countQty, paddingRight: 6 },
+                ]}
+              >
                 Counted
               </Text>
-              <Text style={[pdfStyles.tHeadCell, { flex: CC_COLS.notes }]}>
+              <Text style={[pdfStyles.tHeadCell, { flex: CC_COLS.notes, paddingLeft: 8 }]}>
                 {isVarianceReport ? 'Variance' : 'Notes'}
               </Text>
             </View>
@@ -153,7 +159,7 @@ export function CycleCountSheetPdf({
                         style={[
                           pdfStyles.tCell,
                           pdfStyles.tRight,
-                          { flex: CC_COLS.countQty },
+                          { flex: CC_COLS.countQty, paddingRight: 6 },
                         ]}
                       >
                         {counted == null ? '—' : counted}
@@ -170,7 +176,7 @@ export function CycleCountSheetPdf({
                       />
                     )}
                     {isVarianceReport ? (
-                      <Text style={[pdfStyles.tCell, { flex: CC_COLS.notes }]}>
+                      <Text style={[pdfStyles.tCell, { flex: CC_COLS.notes, paddingLeft: 8 }]}>
                         {variance == null
                           ? '—'
                           : variance === 0
