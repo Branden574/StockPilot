@@ -125,10 +125,7 @@ export function PublicCartRail({
   }
 
   return (
-    <aside
-      className="lg:sticky lg:top-4 lg:self-start w-full lg:w-[360px] lg:flex-none"
-      aria-label="Cart"
-    >
+    <div aria-label="Cart">
       {/* Screen-reader live region */}
       <div aria-live="polite" aria-atomic="true" className="sr-only">
         {announcement}
@@ -266,6 +263,6 @@ export function PublicCartRail({
           Send request
         </Button>
       </div>
-    </aside>
+    </div>
   );
 }
