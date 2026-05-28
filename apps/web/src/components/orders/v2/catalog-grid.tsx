@@ -15,6 +15,13 @@ interface CatalogGridProps {
   groupByAisle: boolean;
   cols: 2 | 3 | 4;
   onClearFilters: () => void;
+  /**
+   * Optional per-item card renderer. Defaults to the staff <ItemCard>.
+   * The public portal passes a <PublicBookCard> here so the editorial
+   * cover styling stays scoped to the public link. The grid wraps the
+   * returned node with a stable key, so renderers must not set one.
+   */
+  renderCard?: (item: CatalogItem) => React.ReactNode;
 }
 
 const colsClassMap: Record<number, string> = {
@@ -30,8 +37,15 @@ export function CatalogGrid({
   groupByAisle,
   cols,
   onClearFilters,
+  renderCard,
 }: CatalogGridProps) {
   const gridClass = cn('grid gap-3', colsClassMap[cols] ?? colsClassMap[4]);
+  const card = (item: CatalogItem): React.ReactNode =>
+    renderCard ? (
+      <React.Fragment key={item.id}>{renderCard(item)}</React.Fragment>
+    ) : (
+      <ItemCard key={item.id} item={item} />
+    );
 
   if (items.length === 0) {
     return (
@@ -49,11 +63,7 @@ export function CatalogGrid({
   // Flat grid when on a specific aisle or groupByAisle is off
   if (activeAisleId !== 'all' || !groupByAisle) {
     return (
-      <div className={gridClass}>
-        {items.map((item) => (
-          <ItemCard key={item.id} item={item} />
-        ))}
-      </div>
+      <div className={gridClass}>{items.map((item) => card(item))}</div>
     );
   }
 
@@ -71,9 +81,7 @@ export function CatalogGrid({
             </span>
           </h2>
           <div className={gridClass}>
-            {sectionItems.map((item) => (
-              <ItemCard key={item.id} item={item} />
-            ))}
+            {sectionItems.map((item) => card(item))}
           </div>
         </section>
       ))}
