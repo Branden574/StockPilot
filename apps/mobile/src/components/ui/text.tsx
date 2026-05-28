@@ -140,6 +140,7 @@ export function Mono({
   color,
   tracking = 0.04,
   upper = false,
+  numberOfLines,
 }: {
   children: React.ReactNode;
   size?: number;
@@ -147,10 +148,12 @@ export function Mono({
   color?: string;
   tracking?: number;
   upper?: boolean;
+  numberOfLines?: number;
 }) {
   const { c } = useTheme();
   return (
     <Text
+      numberOfLines={numberOfLines}
       style={[
         {
           fontFamily: FONT.mono,
