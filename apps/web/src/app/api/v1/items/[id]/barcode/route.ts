@@ -30,7 +30,7 @@ export async function GET(
     const type = url.searchParams.get('type') ?? 'code128';
     const valueOverride = url.searchParams.get('value');
 
-    const ctx = await withApiContext();
+    const ctx = await withApiContext(req);
     if (!ctx) return new NextResponse('unauthenticated', { status: 401 });
     const svc = new InventoryService(ctx);
     const item = await svc.get(id);
