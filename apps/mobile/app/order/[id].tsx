@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
   Modal,
   Pressable,
   RefreshControl,
@@ -90,6 +91,7 @@ export default function OrderDetail() {
   const [uploading, setUploading] = React.useState(false);
   const [kind, setKind] = React.useState<Kind>('dropoff_photo');
   const [sigOpen, setSigOpen] = React.useState(false);
+  const [viewerUrl, setViewerUrl] = React.useState<string | null>(null);
 
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
@@ -275,6 +277,19 @@ export default function OrderDetail() {
     await loadAttachments();
   }
 
+  function openAttachment(a: Attachment) {
+    if (!a.url) return;
+    // Images open in an in-app full-screen viewer; PDFs/other open in the
+    // device's browser/viewer via the signed URL.
+    if ((a.contentType ?? '').startsWith('image/')) {
+      setViewerUrl(a.url);
+    } else {
+      Linking.openURL(a.url).catch(() =>
+        Alert.alert('Could not open', 'Unable to open this file on your device.'),
+      );
+    }
+  }
+
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
@@ -390,13 +405,16 @@ export default function OrderDetail() {
                   const isImage = (a.contentType ?? '').startsWith('image/');
                   return (
                     <View key={a.id} style={[styles.tile, { borderColor: c.hair, backgroundColor: c.card }]}>
-                      {isImage && a.url ? (
-                        <CachedImage uri={a.url} style={styles.tileImg} recyclingKey={a.id} />
-                      ) : (
-                        <View style={[styles.tileImg, { alignItems: 'center', justifyContent: 'center' }]}>
-                          <ImagePlus size={20} color={c.ink4} />
-                        </View>
-                      )}
+                      <Pressable onPress={() => openAttachment(a)}>
+                        {isImage && a.url ? (
+                          <CachedImage uri={a.url} style={styles.tileImg} recyclingKey={a.id} />
+                        ) : (
+                          <View style={[styles.tileImg, { alignItems: 'center', justifyContent: 'center', gap: 4 }]}>
+                            <ImagePlus size={20} color={c.ink4} />
+                            <Mono size={9} color={c.ink4}>Open</Mono>
+                          </View>
+                        )}
+                      </Pressable>
                       <View style={styles.tileFoot}>
                         <Mono size={9.5} color={c.ink4} numberOfLines={1} style={{ flex: 1 }}>
                           {KIND_LABELS[a.kind] ?? 'Other'}
@@ -447,6 +465,35 @@ export default function OrderDetail() {
               {order?.signedAt ? ` · ${new Date(order.signedAt).toLocaleString()}` : ''}
             </Mono>
           </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={!!viewerUrl}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewerUrl(null)}
+      >
+        <Pressable
+          onPress={() => setViewerUrl(null)}
+          style={{
+            flex: 1,
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 12,
+            backgroundColor: 'rgba(0,0,0,0.92)',
+          }}
+        >
+          {viewerUrl ? (
+            <Image
+              source={{ uri: viewerUrl }}
+              style={{ width: '100%', height: '82%' }}
+              resizeMode="contain"
+            />
+          ) : null}
+          <Mono size={11} color="rgba(255,255,255,0.7)" style={{ marginTop: 16 }}>
+            Tap anywhere to close
+          </Mono>
         </Pressable>
       </Modal>
     </View>
