@@ -49,6 +49,7 @@ describe('BulkActions', () => {
         locations={[]}
         tags={[]}
         onClear={() => {}}
+        onCycleCount={() => {}}
       />,
     );
     expect(screen.getByText('3 selected')).toBeInTheDocument();
@@ -65,6 +66,7 @@ describe('BulkActions', () => {
         locations={[]}
         tags={[]}
         onClear={() => {}}
+        onCycleCount={() => {}}
       />,
     );
     expect(screen.getByRole('button', { name: /Archive/i })).toBeInTheDocument();
@@ -80,6 +82,7 @@ describe('BulkActions', () => {
         locations={[]}
         tags={[]}
         onClear={() => {}}
+        onCycleCount={() => {}}
         hasArchivedSelection
       />,
     );
@@ -97,6 +100,7 @@ describe('BulkActions', () => {
         locations={[]}
         tags={[]}
         onClear={() => {}}
+        onCycleCount={() => {}}
       />,
     );
     await user.click(screen.getByRole('button', { name: /Archive/i }));
@@ -114,6 +118,7 @@ describe('BulkActions', () => {
         locations={[]}
         tags={[]}
         onClear={() => {}}
+        onCycleCount={() => {}}
       />,
     );
     await user.click(screen.getByRole('button', { name: /Archive/i }));
@@ -133,6 +138,7 @@ describe('BulkActions', () => {
         locations={[]}
         tags={[]}
         onClear={onClear}
+        onCycleCount={() => {}}
       />,
     );
     await user.click(screen.getByRole('button', { name: /Archive/i }));
@@ -156,6 +162,7 @@ describe('BulkActions', () => {
         locations={[]}
         tags={[]}
         onClear={() => {}}
+        onCycleCount={() => {}}
       />,
     );
     await user.click(screen.getByRole('button', { name: /Set category/i }));
@@ -173,6 +180,7 @@ describe('BulkActions', () => {
         locations={[]}
         tags={tags}
         onClear={() => {}}
+        onCycleCount={() => {}}
       />,
     );
     await user.click(screen.getByRole('button', { name: /^Add tags$/i }));
@@ -196,6 +204,7 @@ describe('BulkActions', () => {
         locations={[]}
         tags={tags}
         onClear={() => {}}
+        onCycleCount={() => {}}
       />,
     );
     await user.click(screen.getByRole('button', { name: /^Remove tags$/i }));
@@ -219,6 +228,7 @@ describe('BulkActions', () => {
         locations={[]}
         tags={[]}
         onClear={onClear}
+        onCycleCount={() => {}}
       />,
     );
     await user.click(screen.getByRole('button', { name: /Clear/i }));
