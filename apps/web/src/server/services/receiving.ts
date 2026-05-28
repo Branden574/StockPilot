@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createHash } from 'node:crypto';
 
+import { reportError } from '@/lib/error-reporter';
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
@@ -198,7 +199,88 @@ export class ReceivingService {
       p_dedupe_key: `receipt.posted:${receipt.id}`,
     });
 
+    // Auto-unarchive any items that were archived before this receipt. A
+    // receipt against an archived item is an implicit "bring it back" —
+    // otherwise the stock arrives silently into a SKU that's invisible
+    // on the Items list. Best-effort: a failure here doesn't undo the
+    // receipt (the audit is still in stock_movements), and 'discontinued'
+    // items are left alone since that's a stronger lifecycle signal.
+    void this.maybeAutoUnarchive(input.lines.map((l) => l.poLineId), receipt.id);
+
     return receipt;
+  }
+
+  /**
+   * If any items targeted by this receipt's lines are currently
+   * `status='archived'`, flip them back to `'active'` and audit each
+   * change. Idempotent — only affects rows whose status is still
+   * 'archived' at update time.
+   */
+  private async maybeAutoUnarchive(poLineIds: string[], receiptId: string): Promise<void> {
+    try {
+      if (poLineIds.length === 0) return;
+
+      // Resolve poLineId → item_id
+      const { data: lines } = await this.ctx.supabase
+        .from('purchase_order_items')
+        .select('id, item_id')
+        .in('id', poLineIds);
+      const itemIds = Array.from(
+        new Set(((lines ?? []) as Array<{ item_id: string | null }>)
+          .map((l) => l.item_id)
+          .filter((x): x is string => !!x)),
+      );
+      if (itemIds.length === 0) return;
+
+      // Which of those items are currently archived?
+      const { data: archivedRows } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, name')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', itemIds)
+        .eq('status', 'archived');
+      const archived = (archivedRows ?? []) as Array<{ id: string; name: string }>;
+      if (archived.length === 0) return;
+
+      // Flip them back to active. The `eq('status', 'archived')` guard
+      // makes this race-safe: if another writer un-archived between the
+      // SELECT and the UPDATE we don't accidentally touch 'discontinued'
+      // or anything else.
+      const { error: updErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .update({ status: 'active' })
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', archived.map((a) => a.id))
+        .eq('status', 'archived');
+      if (updErr) {
+        void reportError(new Error(updErr.message), {
+          tag: 'receiving.auto_unarchive.update',
+          organizationId: this.ctx.organizationId,
+        });
+        return;
+      }
+
+      // One audit row per item so the timeline shows exactly which SKUs
+      // came back from a receipt vs. a manual unarchive.
+      for (const item of archived) {
+        await audit(
+          {
+            event: 'inventory_item.auto_unarchived',
+            entityType: 'inventory_item',
+            entityId: item.id,
+            after: { status: 'active' },
+            before: { status: 'archived' },
+            extra: { reason: 'receipt_posted', receiptId, itemName: item.name },
+          },
+          this.ctx,
+        );
+      }
+    } catch (e) {
+      void reportError(e, {
+        tag: 'receiving.auto_unarchive.unhandled',
+        organizationId: this.ctx.organizationId,
+      });
+    }
   }
 
   /**
