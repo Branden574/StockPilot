@@ -4,7 +4,7 @@ import * as React from 'react';
 
 import { SelectionConfirm, type CountMember } from '@/components/cycle-counts/selection-confirm';
 import { StartCycleCountForm } from '@/components/cycle-counts/start-cycle-count-form';
-import { selectCountList, useCountSelection } from '@/lib/cycle-counts/use-count-selection';
+import { useCountPicks } from '@/lib/cycle-counts/use-count-selection';
 import { cn } from '@/lib/utils';
 
 type Mode = 'selection' | 'warehouse';
@@ -28,7 +28,7 @@ export function NewCycleCount({
   members: CountMember[];
   canAssign: boolean;
 }) {
-  const picks = useCountSelection(selectCountList);
+  const picks = useCountPicks();
   const [mounted, setMounted] = React.useState(false);
   const [override, setOverride] = React.useState<Mode | null>(null);
 

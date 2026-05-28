@@ -1,5 +1,6 @@
 'use client';
 
+import * as React from 'react';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
@@ -53,5 +54,16 @@ export const useCountSelection = create<CountSelectionState>()(
   ),
 );
 
-/** Selector: picks as an array (stable enough for list rendering). */
-export const selectCountList = (s: CountSelectionState): CountPick[] => Object.values(s.picks);
+/**
+ * Picks as an array. Selects the stable `s.picks` reference (it only
+ * changes when the store mutates) and derives the array via useMemo.
+ *
+ * Do NOT inline `useCountSelection((s) => Object.values(s.picks))` — under
+ * zustand v5 a selector that returns a fresh array every call produces an
+ * uncached useSyncExternalStore snapshot, which React turns into an
+ * infinite render loop (minified error #185).
+ */
+export function useCountPicks(): CountPick[] {
+  const picks = useCountSelection((s) => s.picks);
+  return React.useMemo(() => Object.values(picks), [picks]);
+}
