@@ -23,6 +23,7 @@ export type AuditEvent =
   | 'inventory.item.updated'
   | 'inventory.item.duplicated'
   | 'inventory.item.archived'
+  | 'inventory.item.restored'
   | 'inventory.item.deleted'
   | 'stock.adjusted'
   | 'stock.received'
