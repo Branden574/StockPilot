@@ -69,7 +69,8 @@ describe('CycleCountsService.start (selection scope)', () => {
       unknown
     >;
     expect(ccInsertArgs.scope).toBe('selection');
-    expect(ccInsertArgs.warehouse_id).toBeNull();
+    // All picks share wh-a, so the count is labeled with that warehouse.
+    expect(ccInsertArgs.warehouse_id).toBe('wh-a');
 
     // Line insert: one per item, each carrying its own warehouse + qty snapshot.
     const lineArgs = stub.chainArgsAll.get('cycle_count_lines.insert')?.[0]?.[0]?.[0] as Array<
@@ -131,6 +132,12 @@ describe('CycleCountsService.start (selection scope)', () => {
     expect(whCalls).toEqual(expect.arrayContaining([['wh-a', 'write'], ['wh-b', 'write']]));
     // Distinct only — wh-a appears once despite two items.
     expect(whCalls.filter((c) => c[0] === 'wh-a')).toHaveLength(1);
+    // Spans two warehouses, so the header warehouse stays null.
+    const ccInsertArgs = stub.chainArgsAll.get('cycle_counts.insert')?.[0]?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(ccInsertArgs.warehouse_id).toBeNull();
   });
 
   it('delegates to assign() when assignedTo is provided (fires notify trigger)', async () => {
