@@ -256,6 +256,9 @@ export default async function OrderDetailPage({
               fulfillmentType={request.fulfillment_type}
               assignedDeliveryUserId={request.assigned_delivery_user_id}
               signatureToken={request.signature_token}
+              signatureDataUrl={request.signature_data_url}
+              signedByName={request.signed_by_name}
+              signedAt={request.signed_at}
               drivers={drivers}
             />
           )}
