@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
+import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
@@ -16,9 +17,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { hasPermission } from '@stockpilot/core';
+import { hasPermission, isManagerOrAbove } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
+import {
+  ATTACHABLE_ORDER_STATUSES,
+  OrderAttachmentsService,
+} from '@/server/services/order-attachments';
 import {
   OrderRequestsService,
   type OrderRequestRow,
@@ -59,6 +64,20 @@ export default async function OrderDetailPage({
   }
 
   const { request, lines, reservations, warehouseName, requesterDisplay } = detail;
+
+  // Proof-of-delivery attachments. Managers+ can upload/delete once the order
+  // is out for delivery / completed; everyone with order access can view.
+  const canManageAttachments = isManagerOrAbove(ctx.role);
+  const canAttach =
+    canManageAttachments &&
+    (ATTACHABLE_ORDER_STATUSES as readonly string[]).includes(request.status);
+  let attachments: Awaited<ReturnType<OrderAttachmentsService['list']>> = [];
+  try {
+    const attSvc = await OrderAttachmentsService.forCurrentUser();
+    attachments = await attSvc.list(id);
+  } catch {
+    attachments = [];
+  }
   const isOwnRequest =
     request.requester_user_id !== null && request.requester_user_id === ctx.userId;
   // Phase 4 — the assigned delivery driver may be a staff user who lacks
@@ -260,6 +279,16 @@ export default async function OrderDetailPage({
               signedByName={request.signed_by_name}
               signedAt={request.signed_at}
               drivers={drivers}
+            />
+          )}
+
+          {(canAttach || attachments.length > 0) && (
+            <OrderAttachmentsPanel
+              orderId={id}
+              organizationId={ctx.organizationId}
+              attachments={attachments}
+              canManage={canManageAttachments}
+              canAttach={canAttach}
             />
           )}
 
