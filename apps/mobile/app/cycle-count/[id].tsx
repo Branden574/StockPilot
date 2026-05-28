@@ -111,7 +111,7 @@ export default function CycleCountDetail() {
       supabase
         .from('cycle_counts')
         .select(
-          `id, organization_id, status, started_at, posted_at, warehouse_id,
+          `id, organization_id, status, started_at, completed_at, warehouse_id,
            warehouse:warehouses!warehouse_id (name)`,
         )
         .eq('organization_id', orgId)
@@ -145,7 +145,7 @@ export default function CycleCountDetail() {
       warehouseName: whName,
       status: (ccRow.status as string | null) ?? 'in_progress',
       startedAt: (ccRow.started_at as string | null) ?? new Date().toISOString(),
-      postedAt: (ccRow.posted_at as string | null) ?? null,
+      postedAt: (ccRow.completed_at as string | null) ?? null,
     };
 
     const fetchedLines = ((lineRows ?? []) as Array<Record<string, unknown>>).map((r) => {
