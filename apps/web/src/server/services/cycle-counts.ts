@@ -367,6 +367,10 @@ export class CycleCountsService {
 
     let items: Array<{ id: string; quantity_on_hand: number; warehouse_id: string | null }>;
     let requested: number;
+    // Header warehouse: for a warehouse-scoped count it's the chosen
+    // warehouse; for a selection it's derived below (the picks' shared
+    // warehouse, or null when they span warehouses / have none).
+    let headerWarehouseId: string | null = input.warehouseId;
 
     if (scope === 'selection') {
       const ids = Array.from(new Set(input.itemIds ?? []));
@@ -407,6 +411,11 @@ export class CycleCountsService {
       for (const wh of distinctWh) {
         await assertWarehouseAccess(wh, 'write', this.ctx);
       }
+      // Label the count with its warehouse when every pick shares one
+      // (the common case — picks usually come from a single warehouse /
+      // the active workspace). Mixed- or no-warehouse selections stay null.
+      headerWarehouseId =
+        distinctWh.size === 1 && !hasNullWh ? (Array.from(distinctWh)[0] as string) : null;
     } else {
       // Defense-in-depth: warehouse-write check so a manager can't
       // start a cycle count for a warehouse they can't write to (the
@@ -443,7 +452,7 @@ export class CycleCountsService {
       .from('cycle_counts')
       .insert({
         organization_id: this.ctx.organizationId,
-        warehouse_id: scope === 'selection' ? null : input.warehouseId,
+        warehouse_id: headerWarehouseId,
         scope,
         status: 'in_progress',
         notes: input.notes ?? null,
@@ -486,7 +495,7 @@ export class CycleCountsService {
         entityId: cc.id as string,
         after: {
           scope,
-          warehouseId: scope === 'selection' ? null : input.warehouseId,
+          warehouseId: headerWarehouseId,
           lineCount: linesPayload.length,
         },
       },
