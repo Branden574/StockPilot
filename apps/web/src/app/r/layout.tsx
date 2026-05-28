@@ -17,10 +17,10 @@ export default function PublicOrderRequestLayout({
 }) {
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-12">
+      <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
         {children}
       </main>
-      <footer className="text-muted-foreground mx-auto max-w-3xl px-4 pb-10 text-center text-[11px] sm:px-6">
+      <footer className="text-muted-foreground mx-auto max-w-6xl px-4 pb-10 text-center text-[11px] sm:px-6">
         Powered by StockPilot
       </footer>
     </div>

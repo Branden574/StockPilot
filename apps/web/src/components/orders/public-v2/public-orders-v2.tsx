@@ -232,24 +232,9 @@ function PublicOrdersV2Inner({
   }
 
   return (
-    <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-      {/* Main column */}
+    <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+      {/* Catalog (main column) */}
       <div className="flex-1 min-w-0 space-y-4">
-        {/* Your info card — above the aisle bar (required to submit) */}
-        <PublicYourInfoCard
-          name={name}
-          onNameChange={setName}
-          email={email}
-          onEmailChange={setEmail}
-          phone={phone}
-          onPhoneChange={setPhone}
-          pickupNotes={pickupNotes}
-          onPickupNotesChange={setPickupNotes}
-          hp={hp}
-          onHpChange={setHp}
-          chartersForWarehouse={chartersForWarehouse}
-        />
-
         {/* Multi-warehouse picker — only when more than one warehouse
             is publicly orderable. Switching reloads the page so the
             server re-fetches the right book catalog for the new
@@ -314,18 +299,34 @@ function PublicOrdersV2Inner({
         />
       </div>
 
-      {/* Cart rail */}
-      <PublicCartRail
-        token={token}
-        warehouseId={initialWarehouseId}
-        itemMap={itemMap}
-        name={name}
-        email={email}
-        phone={phone}
-        pickupNotes={pickupNotes}
-        honeypot={hp}
-        onSubmitted={setSubmitted}
-      />
+      {/* Request rail — your details + cart + submit, all together;
+          sticky on desktop so it follows as you browse the catalog. */}
+      <aside className="w-full space-y-4 lg:sticky lg:top-4 lg:w-[372px] lg:flex-none lg:self-start">
+        <PublicYourInfoCard
+          name={name}
+          onNameChange={setName}
+          email={email}
+          onEmailChange={setEmail}
+          phone={phone}
+          onPhoneChange={setPhone}
+          pickupNotes={pickupNotes}
+          onPickupNotesChange={setPickupNotes}
+          hp={hp}
+          onHpChange={setHp}
+          chartersForWarehouse={chartersForWarehouse}
+        />
+        <PublicCartRail
+          token={token}
+          warehouseId={initialWarehouseId}
+          itemMap={itemMap}
+          name={name}
+          email={email}
+          phone={phone}
+          pickupNotes={pickupNotes}
+          honeypot={hp}
+          onSubmitted={setSubmitted}
+        />
+      </aside>
 
       {/* Warehouse-switch confirm. */}
       <Dialog
