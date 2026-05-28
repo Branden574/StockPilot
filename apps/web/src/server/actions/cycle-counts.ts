@@ -19,15 +19,26 @@ function toResult<T>(error: unknown): ActionResult<T> {
   return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
 }
 
-const startSchema = z.object({
-  warehouseId: z.string().uuid().nullable(),
-  notes: z.string().max(2000).optional().nullable(),
-});
+const startSchema = z
+  .object({
+    scope: z.enum(['warehouse', 'selection']).default('warehouse'),
+    warehouseId: z.string().uuid().nullable(),
+    itemIds: z.array(z.string().uuid()).max(1000).optional(),
+    notes: z.string().max(2000).optional().nullable(),
+    assignedTo: z.string().uuid().nullable().optional(),
+  })
+  .refine((v) => v.scope !== 'selection' || (v.itemIds?.length ?? 0) > 0, {
+    message: 'Pick at least one item to count.',
+    path: ['itemIds'],
+  });
 
 export async function startCycleCountAction(input: {
+  scope?: 'warehouse' | 'selection';
   warehouseId: string | null;
+  itemIds?: string[];
   notes?: string | null;
-}): Promise<ActionResult<{ id: string; lineCount: number }>> {
+  assignedTo?: string | null;
+}): Promise<ActionResult<{ id: string; lineCount: number; skipped: number }>> {
   const parsed = startSchema.safeParse(input);
   if (!parsed.success)
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
