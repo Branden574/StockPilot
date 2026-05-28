@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  selectCountList,
+  useCountPicks,
   useCountSelection,
   type CountPick,
 } from '@/lib/cycle-counts/use-count-selection';
@@ -39,7 +39,7 @@ export function SelectionConfirm({
   canAssign: boolean;
 }) {
   const router = useRouter();
-  const picks = useCountSelection(selectCountList);
+  const picks = useCountPicks();
   const remove = useCountSelection((s) => s.remove);
   const clear = useCountSelection((s) => s.clear);
   const [notes, setNotes] = React.useState('');
