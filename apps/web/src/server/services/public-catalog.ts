@@ -55,10 +55,17 @@ const getPublicBookCatalogCached = unstable_cache(
   async (orgId: string, warehouseId: string): Promise<CatalogItem[]> => {
     const admin = createAdminClient();
 
+    // This catalog is serialized into the RSC payload of the anonymous
+    // /r/[token] page, so it must NOT carry internal data the public UI
+    // doesn't render. We deliberately do NOT select unit_cost, retail_price,
+    // reorder_point, bin_location, or custom_fields, and we null
+    // charterName/charterCode below — none are shown on the public card, and
+    // shipping them leaked internal cost / stock-strategy / site data to
+    // anyone holding the (widely-shared) public link.
     const { data: itemsData } = await admin
       .from('inventory_items')
       .select(
-        'id, name, sku, quantity_on_hand, warehouse_id, item_type, custom_fields, bin_location, category_id, charter_id, retail_price, unit_cost, reorder_point',
+        'id, name, sku, quantity_on_hand, warehouse_id, item_type, category_id, charter_id',
       )
       .eq('organization_id', orgId)
       .eq('warehouse_id', warehouseId)
@@ -75,13 +82,8 @@ const getPublicBookCatalogCached = unstable_cache(
       quantity_on_hand: number | null;
       warehouse_id: string;
       item_type: string | null;
-      custom_fields: Record<string, unknown> | null;
-      bin_location: string | null;
       category_id: string | null;
       charter_id: string | null;
-      retail_price: number | null;
-      unit_cost: number | null;
-      reorder_point: number | null;
     };
 
     const items = (itemsData ?? []) as ItemRow[];
@@ -91,14 +93,13 @@ const getPublicBookCatalogCached = unstable_cache(
     const categoryIds = [
       ...new Set(items.map((i) => i.category_id).filter((v): v is string => Boolean(v))),
     ];
-    const charterIds = [
-      ...new Set(items.map((i) => i.charter_id).filter((v): v is string => Boolean(v))),
-    ];
 
-    // Reservations + category names + charter names + LQIP blurs in
+    // Reservations + category names (for aisle grouping) + LQIP blurs in
     // parallel. Signed thumbnail URLs are deferred to the client (same
-    // pattern as staff).
-    const [rsRes, categoriesRes, chartersRes, lqipRes] = await Promise.all([
+    // pattern as staff). Charter names/codes are intentionally NOT fetched —
+    // they aren't rendered on the public card and would leak the sites an
+    // org services.
+    const [rsRes, categoriesRes, lqipRes] = await Promise.all([
       admin
         .from('stock_reservations')
         .select('item_id, quantity')
@@ -112,15 +113,6 @@ const getPublicBookCatalogCached = unstable_cache(
             .eq('organization_id', orgId)
             .in('id', categoryIds)
         : Promise.resolve({ data: [] as Array<{ id: string; name: string }> }),
-      charterIds.length > 0
-        ? admin
-            .from('charters')
-            .select('id, name, code')
-            .eq('organization_id', orgId)
-            .in('id', charterIds)
-        : Promise.resolve({
-            data: [] as Array<{ id: string; name: string; code: string | null }>,
-          }),
       admin
         .from('item_images')
         .select('item_id, lqip, is_primary, sort_order')
@@ -144,33 +136,11 @@ const getPublicBookCatalogCached = unstable_cache(
       categoryNameById.set(c.id, c.name);
     }
 
-    const charterById = new Map<string, { name: string; code: string | null }>();
-    for (const c of (chartersRes.data ?? []) as Array<{
-      id: string;
-      name: string;
-      code: string | null;
-    }>) {
-      charterById.set(c.id, { name: c.name, code: c.code ?? null });
-    }
-
     const lqipByItem = new Map<string, string>();
     for (const row of (lqipRes.data ?? []) as Array<{ item_id: string; lqip: string | null }>) {
       if (!lqipByItem.has(row.item_id) && row.lqip) {
         lqipByItem.set(row.item_id, row.lqip);
       }
-    }
-
-    function rackLabelFor(it: ItemRow): string | null {
-      if (it.bin_location && it.bin_location.trim()) return it.bin_location.trim();
-      const cf = it.custom_fields ?? {};
-      const num = (cf as { book_rack_number?: unknown }).book_rack_number as
-        | string
-        | undefined;
-      const row = (cf as { book_rack_row?: unknown }).book_rack_row as
-        | string
-        | undefined;
-      if (!num) return null;
-      return row ? `${num}-${row}` : String(num);
     }
 
     return items.map((it) => ({
@@ -183,21 +153,25 @@ const getPublicBookCatalogCached = unstable_cache(
       itemType: it.item_type ?? null,
       categoryId: it.category_id ?? null,
       categoryName: it.category_id ? categoryNameById.get(it.category_id) ?? null : null,
+      // charterId is kept (the cart is charter-scoped); the human-readable
+      // charter name/code are NOT shipped to the anonymous client.
       charterId: it.charter_id ?? null,
-      charterName: it.charter_id ? charterById.get(it.charter_id)?.name ?? null : null,
-      charterCode: it.charter_id ? charterById.get(it.charter_id)?.code ?? null : null,
-      rackLabel: rackLabelFor(it),
+      charterName: null,
+      charterCode: null,
+      // Internal-only fields the public card never renders — nulled so they
+      // don't ride along in the RSC payload to anonymous visitors. (rackLabel
+      // = warehouse bin location; price would have leaked unit_cost; the raw
+      // reorderPoint leaked the restock threshold — the public availability
+      // filter uses a fixed public threshold instead.)
+      rackLabel: null,
+      price: null,
+      reorderPoint: 0,
       imageUrl: null,
       lqip: lqipByItem.get(it.id) ?? null,
-      price:
-        typeof it.retail_price === 'number'
-          ? it.retail_price
-          : typeof it.unit_cost === 'number'
-          ? it.unit_cost
-          : null,
-      reorderPoint: Number(it.reorder_point) || 0,
     })) satisfies CatalogItem[];
   },
-  ['public-book-catalog-v1'],
+  // v2: bumped after the shape was trimmed (price/reorderPoint/bin/charter
+  // dropped) so no stale full-data payloads survive the 60s cache window.
+  ['public-book-catalog-v2'],
   { revalidate: 60, tags: ['public-catalog'] },
 );

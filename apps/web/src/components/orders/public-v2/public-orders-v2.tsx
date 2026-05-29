@@ -33,6 +33,14 @@ import { PublicCartRail } from './public-cart-rail';
 import type { SubmittedState } from './public-cart-rail';
 import { PublicYourInfoCard } from './public-your-info-card';
 
+/**
+ * Public low-stock threshold. The org's real reorder_point is intentionally
+ * NOT shipped to the anonymous catalog (it leaks stocking strategy), so the
+ * "low stock" availability filter classifies against this fixed public number
+ * instead of the confidential per-item trigger.
+ */
+const PUBLIC_LOW_STOCK_THRESHOLD = 5;
+
 export interface PublicOrdersV2Props {
   token: string;
   orgName: string;
@@ -172,8 +180,11 @@ function PublicOrdersV2Inner({
     if (availabilityFilter !== 'any') {
       result = result.filter((it) => {
         const avail = availByItem.get(it.id) ?? 0;
-        if (availabilityFilter === 'in-stock') return avail >= it.reorderPoint;
-        if (availabilityFilter === 'low') return avail > 0 && avail < it.reorderPoint;
+        // reorderPoint is not exposed to the public catalog — classify
+        // against a fixed public threshold instead of the org's secret one.
+        if (availabilityFilter === 'in-stock') return avail > PUBLIC_LOW_STOCK_THRESHOLD;
+        if (availabilityFilter === 'low')
+          return avail > 0 && avail <= PUBLIC_LOW_STOCK_THRESHOLD;
         if (availabilityFilter === 'out') return avail === 0;
         return true;
       });
