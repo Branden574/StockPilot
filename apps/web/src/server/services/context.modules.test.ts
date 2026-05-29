@@ -22,7 +22,8 @@ describe('assertModuleEnabled', () => {
     expect(serviceErrorStatus('module_disabled')).toBe(403);
     expect(serviceErrorStatus('forbidden')).toBe(403);
     expect(serviceErrorStatus('not_found')).toBe(404);
-    expect(serviceErrorStatus('validation_error')).toBe(409);
+    expect(serviceErrorStatus('validation_error')).toBe(400);
+    expect(serviceErrorStatus('conflict')).toBe(409);
     expect(serviceErrorStatus('unauthenticated')).toBe(401);
     expect(serviceErrorStatus('internal_error')).toBe(500);
   });
