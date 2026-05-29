@@ -105,3 +105,4 @@ apps/mobile/android/
 # / "pnpm-lock 3.yaml" siblings are junk.
 pnpm-lock\ *.yaml
 "pnpm-lock 2.yaml"
+secrets/
