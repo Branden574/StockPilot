@@ -84,6 +84,9 @@ export async function GET(req: NextRequest) {
     role: 'admin',
     mfaRequired: false,
     mfaSatisfied: true,
+    // No module gating on this public image-signing path; ItemImagesService
+    // doesn't call assertModuleEnabled and `inventory` is a core module.
+    enabledModules: new Set(),
   });
   const urlMap = await imagesSvc.primaryImagesForPdfRendering(itemIds, 200);
 

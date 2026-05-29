@@ -23,6 +23,8 @@
 
 import { vi } from 'vitest';
 
+import type { ModuleId } from '@stockpilot/core';
+
 export interface QueryResult<T = unknown> {
   data: T;
   error: { message: string; code?: string } | null;
@@ -240,6 +242,7 @@ export function makeServiceContext(
     role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
     mfaRequired: boolean;
     mfaSatisfied: boolean;
+    enabledModules: Set<ModuleId>;
   }> = {},
 ) {
   return {
@@ -250,7 +253,10 @@ export function makeServiceContext(
     // out. Tests covering the MFA gate explicitly set the flags.
     mfaRequired: overrides.mfaRequired ?? false,
     mfaSatisfied: overrides.mfaSatisfied ?? true,
-     
+    // Empty by default; core modules are treated as enabled regardless.
+    // Tests covering optional-module gates pass an explicit set.
+    enabledModules: overrides.enabledModules ?? new Set<ModuleId>(),
+
     supabase: supabase as any,
   };
 }

@@ -6,7 +6,8 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 
 import type { Permission, PlanId, Role } from '@stockpilot/core';
-import { hasPermission, isAdminRole, isUnlimited, PLANS } from '@stockpilot/core';
+import { hasPermission, isAdminRole, isUnlimited, MODULE_REGISTRY, PLANS } from '@stockpilot/core';
+import type { ModuleId } from '@stockpilot/core';
 
 export interface ServiceContext {
   organizationId: string;
@@ -21,6 +22,11 @@ export interface ServiceContext {
   mfaRequired: boolean;
   /** True only when the session is currently at AAL2. */
   mfaSatisfied: boolean;
+  /**
+   * Modules enabled for this org; core modules are always treated as
+   * enabled even if absent.
+   */
+  enabledModules: Set<ModuleId>;
 }
 
 async function resolveMfaState(
@@ -69,6 +75,14 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
     ctx.organizationId,
     ctx.role,
   );
+  const { data: modRows } = await supabase
+    .from('organization_modules')
+    .select('module_id')
+    .eq('organization_id', ctx.organizationId)
+    .eq('enabled', true);
+  const enabledModules = new Set(
+    ((modRows ?? []) as Array<{ module_id: string }>).map((r) => r.module_id as ModuleId),
+  );
   return {
     organizationId: ctx.organizationId,
     userId: ctx.userId,
@@ -76,6 +90,7 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
     supabase,
     mfaRequired,
     mfaSatisfied,
+    enabledModules,
   };
 });
 
@@ -87,6 +102,7 @@ export class ServiceError extends Error {
       | 'not_found'
       | 'validation_error'
       | 'plan_limit_exceeded'
+      | 'module_disabled'
       | 'conflict'
       | 'internal_error',
     message: string,
@@ -113,6 +129,26 @@ export function assertPermission(ctx: ServiceContext, permission: Permission) {
   }
   if (!hasPermission(ctx.role, permission)) {
     throw new ServiceError('forbidden', `Missing permission: ${permission}`);
+  }
+}
+
+export function assertModuleEnabled(ctx: ServiceContext, moduleId: ModuleId): void {
+  if (ctx.enabledModules.has(moduleId)) return;
+  // Core modules are never gated — always available even if a row is missing.
+  if (MODULE_REGISTRY[moduleId]?.tier === 'core') return;
+  throw new ServiceError('module_disabled', `Module not enabled for this organization: ${moduleId}`);
+}
+
+export function serviceErrorStatus(code: ServiceError['code']): number {
+  switch (code) {
+    case 'unauthenticated': return 401;
+    case 'forbidden':
+    case 'module_disabled': return 403;
+    case 'not_found': return 404;
+    case 'validation_error':
+    case 'conflict':
+    case 'plan_limit_exceeded': return 409;
+    default: return 500;
   }
 }
 
