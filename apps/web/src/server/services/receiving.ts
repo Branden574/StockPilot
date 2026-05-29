@@ -201,11 +201,20 @@ export class ReceivingService {
 
     // Auto-unarchive any items that were archived before this receipt. A
     // receipt against an archived item is an implicit "bring it back" —
-    // otherwise the stock arrives silently into a SKU that's invisible
-    // on the Items list. Best-effort: a failure here doesn't undo the
-    // receipt (the audit is still in stock_movements), and 'discontinued'
-    // items are left alone since that's a stronger lifecycle signal.
-    void this.maybeAutoUnarchive(input.lines.map((l) => l.poLineId), receipt.id);
+    // otherwise the stock arrives silently into a SKU that's invisible on
+    // the Items list. Only lines that ACCEPTED stock count: a fully-rejected
+    // line adds no sellable stock, so it shouldn't revive the SKU.
+    //
+    // Awaited (not fire-and-forget): the unarchive does several DB
+    // round-trips + audit inserts, and on serverless the function context
+    // freezes once the response flushes — a bare `void` promise could be
+    // dropped mid-flight, leaving the item archived or the audit rows
+    // unwritten. It's wrapped in try/catch + reportError, so awaiting can't
+    // fail the receipt. 'discontinued' items are left alone (stronger signal).
+    await this.maybeAutoUnarchive(
+      input.lines.filter((l) => Number(l.qtyAccepted) > 0).map((l) => l.poLineId),
+      receipt.id,
+    );
 
     return receipt;
   }
@@ -246,12 +255,13 @@ export class ReceivingService {
       // makes this race-safe: if another writer un-archived between the
       // SELECT and the UPDATE we don't accidentally touch 'discontinued'
       // or anything else.
-      const { error: updErr } = await this.ctx.supabase
+      const { data: flippedRows, error: updErr } = await this.ctx.supabase
         .from('inventory_items')
         .update({ status: 'active' })
         .eq('organization_id', this.ctx.organizationId)
         .in('id', archived.map((a) => a.id))
-        .eq('status', 'archived');
+        .eq('status', 'archived')
+        .select('id, name');
       if (updErr) {
         void reportError(new Error(updErr.message), {
           tag: 'receiving.auto_unarchive.update',
@@ -260,9 +270,13 @@ export class ReceivingService {
         return;
       }
 
-      // One audit row per item so the timeline shows exactly which SKUs
-      // came back from a receipt vs. a manual unarchive.
-      for (const item of archived) {
+      // One audit row per item THIS call actually flipped — iterate the
+      // UPDATE's returned rows, not the earlier SELECT. The
+      // eq('status','archived') guard means a concurrent receipt flips a
+      // given row only once; auditing the SELECT result would emit a
+      // duplicate 'restored' entry for the loser of the race.
+      const flipped = (flippedRows ?? []) as Array<{ id: string; name: string }>;
+      for (const item of flipped) {
         await audit(
           {
             event: 'inventory.item.restored',
