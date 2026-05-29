@@ -56,6 +56,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     membershipsRes,
     unreadRes,
     warehousesList,
+    modulesRes,
   ] = await Promise.all([
     getWarehouseAccess(),
     getActiveWarehouseFilter(),
@@ -73,8 +74,22 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       .eq('organization_id', ctx.organizationId)
       .is('read_at', null),
     getWarehousesForRequest(ctx.organizationId),
+    supabase
+      .from('organization_modules')
+      .select('module_id')
+      .eq('organization_id', ctx.organizationId)
+      .eq('enabled', true),
   ]);
   const initialUnreadNotifications = unreadRes.count ?? 0;
+
+  // Module IDs enabled for this org, serialized as plain strings so the
+  // client DashboardShell/Sidebar can reconstruct a Set across the RSC
+  // boundary. Core modules are always treated as enabled by the resolver
+  // regardless of this list, so a grandfathered org with no rows still gets
+  // the full core nav.
+  const enabledModules = ((modulesRes.data ?? []) as Array<{ module_id: string }>).map(
+    (r) => r.module_id,
+  );
 
   const memberships = (membershipsRes.data ?? [])
     .map((row) => {
@@ -162,6 +177,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         userName={ctx.fullName ?? ctx.email}
         userRole={`${ROLE_LABELS[ctx.role].label} · ${ctx.organizationName}`}
         role={ctx.role}
+        enabledModules={enabledModules}
         warehouseFilter={warehouseFilter}
       >
         {showMfaBanner && <MfaRequiredBanner />}
