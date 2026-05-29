@@ -3,7 +3,7 @@ import 'server-only';
 import { z } from 'zod';
 
 import { audit } from './audit';
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 export const createSupplierSchema = z.object({
   name: z.string().min(1).max(120).trim(),
@@ -32,6 +32,7 @@ export class SuppliersService {
    * mode.
    */
   async list(opts: { includeArchived?: boolean } = {}) {
+    assertModuleEnabled(this.ctx, 'suppliers');
     let query = this.ctx.supabase
       .from('suppliers')
       .select('id, name, contact_name, email, phone, website, notes, deleted_at, created_at, updated_at')
@@ -46,6 +47,7 @@ export class SuppliersService {
   }
 
   async create(input: CreateSupplierInput) {
+    assertModuleEnabled(this.ctx, 'suppliers');
     assertPermission(this.ctx, 'suppliers:manage');
     const { data, error } = await this.ctx.supabase
       .from('suppliers')
@@ -65,6 +67,7 @@ export class SuppliersService {
   }
 
   async update(id: string, patch: UpdateSupplierInput) {
+    assertModuleEnabled(this.ctx, 'suppliers');
     assertPermission(this.ctx, 'suppliers:manage');
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
@@ -85,6 +88,7 @@ export class SuppliersService {
   }
 
   async archive(id: string) {
+    assertModuleEnabled(this.ctx, 'suppliers');
     assertPermission(this.ctx, 'suppliers:manage');
     const { error } = await this.ctx.supabase
       .from('suppliers')
@@ -104,6 +108,7 @@ export class SuppliersService {
    * audit pipeline below, so we never lose the chain of custody.
    */
   async restore(id: string) {
+    assertModuleEnabled(this.ctx, 'suppliers');
     assertPermission(this.ctx, 'suppliers:manage');
     const { error } = await this.ctx.supabase
       .from('suppliers')

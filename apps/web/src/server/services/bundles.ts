@@ -4,6 +4,7 @@ import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { audit } from './audit';
 import {
+  assertModuleEnabled,
   assertPermission,
   ServiceError,
   withContext,
@@ -150,6 +151,7 @@ export class BundlesService {
   }
 
   async list(opts: { search?: string; includeInactive?: boolean; includeArchived?: boolean } = {}): Promise<BundleSummary[]> {
+    assertModuleEnabled(this.ctx, 'bundles');
     let query = this.ctx.supabase
       .from('bundles')
       .select(
@@ -220,6 +222,7 @@ export class BundlesService {
   }
 
   async get(id: string): Promise<BundleDetail> {
+    assertModuleEnabled(this.ctx, 'bundles');
     const { data: bundle, error } = await this.ctx.supabase
       .from('bundles')
       .select('*')
@@ -299,6 +302,7 @@ export class BundlesService {
     quantity: number,
     warehouseId: string,
   ): Promise<DistributionPreview> {
+    assertModuleEnabled(this.ctx, 'bundles');
     // Reads bundle components + stock levels; viewer+ already see inventory
     // counts, so use `items:read` as the consistent read gate. Without
     // this gate a public-route caller (no permission elision intended)
@@ -376,6 +380,7 @@ export class BundlesService {
   async recentDistributions(
     opts: { bundleId?: string; limit?: number } = {},
   ): Promise<BundleDistributionRow[]> {
+    assertModuleEnabled(this.ctx, 'bundles');
     // Reads distribution history; gate at `items:read` to match preview()
     // and the rest of the bundle read surface.
     assertPermission(this.ctx, 'items:read');
@@ -392,6 +397,7 @@ export class BundlesService {
   }
 
   async create(input: CreateBundleInput): Promise<BundleDetail> {
+    assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
     if (input.components.length === 0) {
       throw new ServiceError('validation_error', 'A bundle needs at least one component');
@@ -442,6 +448,7 @@ export class BundlesService {
   }
 
   async update(id: string, patch: UpdateBundleInput): Promise<BundleDetail> {
+    assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
 
     // Block toggling preassembly off while phantom stock exists.
@@ -509,6 +516,7 @@ export class BundlesService {
   }
 
   async archive(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
     const { error } = await this.ctx.supabase
       .from('bundles')
@@ -529,6 +537,7 @@ export class BundlesService {
    * and can be distributed again. Same permission gate as archive().
    */
   async restore(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
     const { error } = await this.ctx.supabase
       .from('bundles')
@@ -544,6 +553,7 @@ export class BundlesService {
   }
 
   async setActive(id: string, isActive: boolean): Promise<void> {
+    assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
     const payload: Record<string, unknown> = {
       is_active: isActive,
@@ -578,6 +588,7 @@ export class BundlesService {
     warehouseId: string,
     notes?: string | null,
   ): Promise<{ phantomItemId: string; phantomQty: number }> {
+    assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
     // H3: warehouse-scoped managers can hold `bundles:manage` org-wide
     // but must still be assigned to the target warehouse. Without this
@@ -634,6 +645,7 @@ export class BundlesService {
   }
 
   async distribute(id: string, input: DistributeInput): Promise<{ distributionId: string }> {
+    assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:distribute');
     // H3: warehouse-scope gate. Same rationale as assemble(): a warehouse-
     // scoped staff member shouldn't be able to draw from a warehouse they

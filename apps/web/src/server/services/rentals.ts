@@ -2,6 +2,7 @@ import 'server-only';
 
 import { audit } from './audit';
 import {
+  assertModuleEnabled,
   assertPermission,
   ServiceContext,
   ServiceError,
@@ -67,6 +68,7 @@ export class RentalsService {
   async list(filters: ListRentalsFilters = {}): Promise<{
     rentals: Array<RentalRow & { lines: RentalLineRow[] }>;
   }> {
+    assertModuleEnabled(this.ctx, 'rentals');
     // Build base query. We need a typed local variable so we can conditionally
     // attach filters without fighting TS's inference on chained query builders.
     let query = this.ctx.supabase
@@ -91,6 +93,7 @@ export class RentalsService {
   }
 
   async get(id: string): Promise<(RentalRow & { lines: RentalLineRow[] }) | null> {
+    assertModuleEnabled(this.ctx, 'rentals');
     const { data, error } = await this.ctx.supabase
       .from('rentals')
       .select('*, lines:rental_lines(*)')
@@ -102,6 +105,7 @@ export class RentalsService {
   }
 
   async create(input: CreateRentalInput): Promise<{ id: string }> {
+    assertModuleEnabled(this.ctx, 'rentals');
     assertPermission(this.ctx, 'rentals:create');
 
     // Validate: expected_return_at must be in the future or "now-ish"
@@ -227,6 +231,7 @@ export class RentalsService {
   }
 
   async markReturned(input: MarkReturnedInput): Promise<void> {
+    assertModuleEnabled(this.ctx, 'rentals');
     assertPermission(this.ctx, 'rentals:create');
 
     const { data: row } = await this.ctx.supabase
@@ -283,6 +288,7 @@ export class RentalsService {
   }
 
   async cancel(input: CancelRentalInput): Promise<void> {
+    assertModuleEnabled(this.ctx, 'rentals');
     assertPermission(this.ctx, 'rentals:manage');
 
     const { data: row } = await this.ctx.supabase

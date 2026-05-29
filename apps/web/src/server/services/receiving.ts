@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 
 import { reportError } from '@/lib/error-reporter';
 import { audit } from './audit';
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 import type {
   PostReceiptInput,
@@ -80,6 +80,7 @@ export class ReceivingService {
     receipts: ReceiptRow[];
     lines: ReceiptLineRow[];
   }> {
+    assertModuleEnabled(this.ctx, 'receiving');
     const { data: receipts, error: rErr } = await this.ctx.supabase
       .from('receipts')
       .select('*')
@@ -109,6 +110,7 @@ export class ReceivingService {
    * payload throws conflict.
    */
   async postReceipt(input: PostReceiptInput): Promise<ReceiptRow> {
+    assertModuleEnabled(this.ctx, 'receiving');
     assertPermission(this.ctx, 'stock:adjust');
 
     const requestHash = hashReceiptRequest(input);
@@ -303,6 +305,7 @@ export class ReceivingService {
    * 'reversed' but its row is preserved for audit history.
    */
   async reverseReceipt(input: ReverseReceiptInput): Promise<ReceiptRow> {
+    assertModuleEnabled(this.ctx, 'receiving');
     assertPermission(this.ctx, 'stock:adjust');
 
     const { data, error } = await this.ctx.supabase.rpc('reverse_receipt', {

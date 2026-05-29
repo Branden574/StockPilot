@@ -6,7 +6,7 @@ import type {
 } from '@stockpilot/core';
 
 import { audit } from './audit';
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 export interface ProcedureCategoryRow {
   id: string;
@@ -35,6 +35,7 @@ export class ProcedureCategoriesService {
 
   /** All non-archived categories, sorted by sort_order then name. */
   async list(): Promise<ProcedureCategoryRow[]> {
+    assertModuleEnabled(this.ctx, 'procedures');
     const { data, error } = await this.ctx.supabase
       .from('procedure_categories')
       .select('id, name, color, sort_order, archived_at, created_at, updated_at')
@@ -47,6 +48,7 @@ export class ProcedureCategoriesService {
   }
 
   async create(input: CreateProcedureCategoryInput): Promise<ProcedureCategoryRow> {
+    assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'organization:update');
     const { data, error } = await this.ctx.supabase
       .from('procedure_categories')
@@ -68,6 +70,7 @@ export class ProcedureCategoriesService {
   }
 
   async update(id: string, patch: UpdateProcedureCategoryInput): Promise<ProcedureCategoryRow> {
+    assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'organization:update');
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
@@ -107,6 +110,7 @@ export class ProcedureCategoriesService {
    * org timeline.
    */
   async archive(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'organization:update');
     // Only archive a live row. Re-archiving an already-archived category
     // would otherwise silently succeed but not represent a real state
