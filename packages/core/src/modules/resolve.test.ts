@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { resolveSurface } from './resolve';
-import { DEFAULT_MODULE_IDS } from './registry';
+import { resolveSurface, SECTION_ORDER } from './resolve';
+import { DEFAULT_MODULE_IDS, MODULE_REGISTRY } from './registry';
 
 const ALL = new Set(DEFAULT_MODULE_IDS);
+
+describe('SECTION_ORDER', () => {
+  it('covers every section used by any registry placement', () => {
+    const used = new Set<string>();
+    for (const def of Object.values(MODULE_REGISTRY))
+      for (const p of def.placements) used.add(p.section);
+    for (const s of used) expect(SECTION_ORDER).toContain(s);
+  });
+});
 
 describe('resolveSurface', () => {
   it('admin sees the web sidebar including admin items', () => {
