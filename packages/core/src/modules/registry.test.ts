@@ -47,4 +47,24 @@ describe('MODULE_REGISTRY', () => {
       '/dashboard/admin/uom-conversions','/dashboard/admin/reconciliation','/dashboard/admin/audit',
     ]) expect(webHrefs).toContain(href);
   });
+  it('covers the current mobile drawer hrefs', () => {
+    const drawerHrefs = Object.values(MODULE_REGISTRY).flatMap((m) => m.placements)
+      .filter((p) => p.surface === 'mobile_drawer').map((p) => p.href);
+    for (const href of [
+      '/','/inventory','/tags','/movements','/categories','/locations','/reports',
+      '/notifications','/team','/settings','/admin','/admin/charters','/admin/warehouses',
+      '/admin/bins','/admin/users','/admin/vendor-mappings','/admin/uom-conversions',
+      '/admin/reconciliation','/admin/audit','/scan','/books','/rentals','/bundles',
+      '/orders','/cycle-counts','/procedures','/purchase-orders','/receive','/po-imports',
+      '/suppliers','/ai','/schedule',
+    ]) expect(drawerHrefs).toContain(href);
+  });
+  it('each module permissions array is a superset of the requires it uses', () => {
+    for (const def of Object.values(MODULE_REGISTRY)) {
+      const perms = new Set(def.permissions);
+      const used = new Set(def.placements.flatMap((p) => (p.requires ? [p.requires] : [])));
+      for (const r of used)
+        expect(perms.has(r), `module "${def.id}" uses requires "${r}" not in its permissions array`).toBe(true);
+    }
+  });
 });
