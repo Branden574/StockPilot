@@ -2,6 +2,7 @@ import * as Network from 'expo-network';
 import * as React from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
+import { api } from './api';
 import {
   outboxAck,
   outboxBumpFailure,
@@ -9,7 +10,6 @@ import {
   outboxPending,
   totalPendingCount,
 } from './cycle-count-cache';
-import { supabase } from './supabase';
 
 /**
  * Cycle-count sync engine.
@@ -219,7 +219,7 @@ class CycleCountSyncEngine {
 
   private async sendRecordCount(
     payload: Record<string, unknown>,
-    _signal: AbortSignal,
+    signal: AbortSignal,
   ): Promise<void> {
     const lineId = typeof payload.lineId === 'string' ? payload.lineId : '';
     const cycleCountId =
@@ -235,23 +235,21 @@ class CycleCountSyncEngine {
       throw new Error('record_count: invalid counted quantity');
     }
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    const { error } = await supabase
-      .from('cycle_count_lines')
-      .update({
-        counted_quantity: counted,
-        counted_by: user?.id ?? null,
-        counted_at: new Date().toISOString(),
-      })
-      .eq('cycle_count_id', cycleCountId)
-      .eq('id', lineId);
-
-    if (error) {
-      throw new Error(error.message);
-    }
+    // Route through the gated API endpoint instead of a raw
+    // cycle_count_lines update. The server then enforces stock:adjust
+    // permission, the per-warehouse write gate (assertSessionAccess), the
+    // in-progress + counted_by RLS, and the 1e9 quantity cap — none of
+    // which a direct PostgREST write honors. It also surfaces real
+    // rejections: the old raw update had no .select(), so an RLS-blocked
+    // write returned 0 rows silently and the row was ACKed as if it
+    // succeeded. The endpoint uses .select().maybeSingle(), so a blocked
+    // or no-longer-editable line now throws and the outbox retries.
+    // (Mirrors the legacy sync.ts record_count drain.)
+    await api(`/api/v1/cycle-counts/${cycleCountId}/lines/${lineId}/record`, {
+      method: 'POST',
+      body: { ...payload, countedQuantity: counted },
+      signal,
+    });
   }
 
   private emit() {
