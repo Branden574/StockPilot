@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { hasPermission } from '@/lib/auth/permissions';
+import { assertModuleEnabled, ServiceError } from '@/server/services/context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { buildOrgSnapshot, streamChat, type ChatTurn, type ToolCallRecord } from '@/lib/ai/chat';
@@ -97,6 +98,18 @@ const MAX_HISTORY_TURNS = 40;
 export async function POST(req: Request) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  // Module gate — the AI Assistant is an optional module. Enforce it here
+  // since there's no AI service class to host the gate; the org's
+  // enabledModules set rides on the ServiceContext from withApiContext.
+  try {
+    assertModuleEnabled(ctx, 'ai');
+  } catch (e) {
+    if (e instanceof ServiceError && e.code === 'module_disabled') {
+      return NextResponse.json({ error: 'module_disabled', message: e.message }, { status: 403 });
+    }
+    throw e;
+  }
 
   // Route-level role gate. The write tools each assertPermission too,
   // but viewers can still spend Gemini tokens by chatting read-only —

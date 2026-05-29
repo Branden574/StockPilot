@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
           ? 404
           : e.code === 'validation_error'
             ? 400
-            : e.code === 'forbidden'
+            : e.code === 'forbidden' || e.code === 'module_disabled'
               ? 403
               : 500;
       return NextResponse.json({ error: e.code, message: e.message }, { status });

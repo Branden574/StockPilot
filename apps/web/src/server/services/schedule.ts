@@ -4,6 +4,7 @@ import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 
 import { audit } from './audit';
 import {
+  assertModuleEnabled,
   assertPermission,
   ServiceError,
   withContext,
@@ -182,6 +183,7 @@ export class ScheduleService {
    * for filtering purposes — they always show on their start day.
    */
   async listInRange(from: Date, to: Date): Promise<ScheduleEventRow[]> {
+    assertModuleEnabled(this.ctx, 'schedule');
     const { data, error } = await this.ctx.supabase
       .from('schedule_events')
       .select(SELECT_COLUMNS)
@@ -212,6 +214,7 @@ export class ScheduleService {
 
   /** All upcoming events from now forward, capped — used for dashboards. */
   async listUpcoming(limit = 25): Promise<ScheduleEventRow[]> {
+    assertModuleEnabled(this.ctx, 'schedule');
     const { data, error } = await this.ctx.supabase
       .from('schedule_events')
       .select(SELECT_COLUMNS)
@@ -231,6 +234,7 @@ export class ScheduleService {
   }
 
   async get(id: string): Promise<ScheduleEventRow> {
+    assertModuleEnabled(this.ctx, 'schedule');
     const { data, error } = await this.ctx.supabase
       .from('schedule_events')
       .select(SELECT_COLUMNS)
@@ -247,6 +251,7 @@ export class ScheduleService {
   }
 
   async create(input: CreateScheduleEventInput): Promise<ScheduleEventRow> {
+    assertModuleEnabled(this.ctx, 'schedule');
     assertPermission(this.ctx, 'schedule:manage');
 
     // Verify the caller can write to the event's warehouse + (if a
@@ -321,6 +326,7 @@ export class ScheduleService {
   }
 
   async update(id: string, patch: UpdateScheduleEventInput): Promise<ScheduleEventRow> {
+    assertModuleEnabled(this.ctx, 'schedule');
     assertPermission(this.ctx, 'schedule:manage');
 
     // Load the current row up-front so we can: enforce the status
@@ -575,6 +581,7 @@ export class ScheduleService {
   }
 
   async delete(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'schedule');
     assertPermission(this.ctx, 'schedule:manage');
 
     // Read the row first so the audit entry can record what was

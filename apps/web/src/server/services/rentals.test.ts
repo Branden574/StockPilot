@@ -8,6 +8,10 @@ vi.mock('./context', () => ({
     }
   },
   assertPermission: vi.fn(),
+  // No-op the module gate: this suite represents a grandfathered org
+  // with the rentals module on. (The dedicated gate test lives in
+  // rentals.modules.test.ts and exercises the real assertModuleEnabled.)
+  assertModuleEnabled: vi.fn(),
 }));
 vi.mock('./audit', () => ({
   audit: vi.fn(async () => undefined),

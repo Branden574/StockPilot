@@ -11,6 +11,7 @@ import {
   type MappingRow,
 } from './vendor-item-mappings-match';
 import {
+  assertModuleEnabled,
   assertPermission,
   ServiceError,
   withContext,
@@ -80,6 +81,7 @@ export class PoImportsService {
   }
 
   async list(): Promise<PoImportRow[]> {
+    assertModuleEnabled(this.ctx, 'po_imports');
     const { data, error } = await this.ctx.supabase
       .from('po_imports')
       .select(
@@ -95,6 +97,7 @@ export class PoImportsService {
   }
 
   async get(id: string): Promise<{ header: PoImportRow; lines: PoImportLineRow[] }> {
+    assertModuleEnabled(this.ctx, 'po_imports');
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('po_imports')
       .select('*')
@@ -128,6 +131,7 @@ export class PoImportsService {
     fileSize: number;
     sha256: string;
   }): Promise<{ id: string; duplicateOf: string | null }> {
+    assertModuleEnabled(this.ctx, 'po_imports');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     // Defense-in-depth: the action schema validates storagePath as a
@@ -198,6 +202,7 @@ export class PoImportsService {
     vendorId?: string | null;
     warehouseId?: string | null;
   }): Promise<{ id: string; duplicateOf: string | null; lowConfidenceLines: number }> {
+    assertModuleEnabled(this.ctx, 'po_imports');
     assertPermission(this.ctx, 'purchase_orders:manage');
     if (input.files.length === 0) {
       throw new ServiceError('validation_error', 'No files provided.');
@@ -386,6 +391,7 @@ export class PoImportsService {
    * (or 'failed').
    */
   async parseImport(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'po_imports');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     const { data: header, error: hErr } = await this.ctx.supabase
@@ -530,6 +536,7 @@ export class PoImportsService {
    * skipped. Inventory stock is NOT touched.
    */
   async approve(input: ApprovePoImportInput): Promise<{ poId: string }> {
+    assertModuleEnabled(this.ctx, 'po_imports');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     const { header, lines } = await this.get(input.poImportId);
@@ -689,6 +696,7 @@ export class PoImportsService {
   }
 
   async cancel(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'po_imports');
     assertPermission(this.ctx, 'purchase_orders:manage');
     const { error } = await this.ctx.supabase
       .from('po_imports')

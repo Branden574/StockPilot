@@ -3,7 +3,7 @@ import 'server-only';
 import type { RecordProcedureVideoInput } from '@stockpilot/core';
 
 import { audit } from './audit';
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 export interface ProcedureVideoRow {
   id: string;
@@ -55,6 +55,7 @@ export class ProcedureVideosService {
 
   /** List of video rows for a procedure, ordered by order_idx asc. */
   async listForProcedure(procedureId: string): Promise<ProcedureVideoRow[]> {
+    assertModuleEnabled(this.ctx, 'procedures');
     const { data, error } = await this.ctx.supabase
       .from('procedure_videos')
       .select(
@@ -130,6 +131,7 @@ export class ProcedureVideosService {
    * `procedure.video.added` audit event.
    */
   async record(input: RecordProcedureVideoInput): Promise<ProcedureVideoRow> {
+    assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'categories:manage');
 
     // Defense-in-depth: the action schema accepts `storagePath` as a
@@ -240,6 +242,7 @@ export class ProcedureVideosService {
    * then the DB row. Manager+ only.
    */
   async delete(id: string): Promise<{ procedureId: string }> {
+    assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'categories:manage');
     const { data: row, error: readErr } = await this.ctx.supabase
       .from('procedure_videos')

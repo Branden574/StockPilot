@@ -4,6 +4,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { env } from '@/lib/env';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { assertModuleEnabled, ServiceError } from '@/server/services/context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,6 +22,16 @@ export async function POST(req: NextRequest) {
   const ctx = await withApiContext(req);
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
+  // Module gate — the AI Assistant is an optional module. Enforce here
+  // since there's no AI service class; enabledModules rides on the ctx.
+  try {
+    assertModuleEnabled(ctx, 'ai');
+  } catch (e) {
+    if (e instanceof ServiceError && e.code === 'module_disabled') {
+      return NextResponse.json({ error: 'module_disabled', message: e.message }, { status: 403 });
+    }
+    throw e;
   }
   // 30 cover-IDs per minute per user is way over the realistic mobile
   // capture cadence; a tighter cap is fine here because Vision calls
