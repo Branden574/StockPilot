@@ -87,6 +87,12 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // boundary. Core modules are always treated as enabled by the resolver
   // regardless of this list, so a grandfathered org with no rows still gets
   // the full core nav.
+  // Fail CLOSED: on a query error we get `[]` → core-only nav (optional
+  // modules hidden), never a fuller nav than the org is entitled to. Log so a
+  // real outage isn't invisible (mirrors resolveMfaState / resolveApiEnabledModules).
+  if (modulesRes.error) {
+    console.error('[dashboard layout] organization_modules query failed:', modulesRes.error);
+  }
   const enabledModules = ((modulesRes.data ?? []) as Array<{ module_id: string }>).map(
     (r) => r.module_id,
   );
