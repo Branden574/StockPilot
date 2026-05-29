@@ -1,9 +1,14 @@
-import { useNavigation, useRouter } from 'expo-router';
+import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
 import {
+  ArrowLeft,
   Barcode,
   BookMarked,
   Box,
+  Check,
+  CheckCircle2,
+  Circle,
   Layers,
+  ListChecks,
   Menu,
   Package,
   Plus,
@@ -12,8 +17,9 @@ import {
 } from 'lucide-react-native';
 import * as React from 'react';
 import {
-  ActivityIndicator,
   FlatList,
+  Keyboard,
+  Platform,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -21,6 +27,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 import {
   ActiveFilterPill,
@@ -32,15 +39,20 @@ import {
   type FilterOption,
   type FilterState,
 } from '@/components/filter-sheet';
+import { CountSelectBar } from '@/components/count-select-bar';
 import { Hair } from '@/components/ui/card';
+import { Paginator } from '@/components/ui/paginator';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
+import { ItemListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
-import { useAuth } from '@/lib/auth-context';
+import { countSelection, useIsPicked } from '@/lib/use-count-selection';
+import { signItemImages } from '@/lib/image-cache';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { useWorkspace } from '@/lib/use-workspace';
 
 interface Item {
   id: string;
@@ -59,20 +71,39 @@ interface Item {
 
 const PIPS = [ACCENT.pipOrange, ACCENT.pipAmber, ACCENT.pipTeal, undefined, undefined, undefined];
 
+// Stable, module-scoped helpers so the FlatList doesn't see a new
+// keyExtractor / header element on every render — both are common
+// causes of full-list re-renders during scroll.
+const keyExtractor = (i: Item): string => i.id;
+const listHeader = <View style={{ height: 6 }} />;
+
+const PAGE_SIZE = 50;
+
 export default function Inventory() {
-  const { user } = useAuth();
   const router = useRouter();
   const navigation = useNavigation();
   const { c } = useTheme();
+  // The bottom tab bar uses position: 'absolute' (see (tabs)/_layout.tsx),
+  // so the FlatList content extends behind it. Use the navigator's
+  // real height — covers the home-indicator inset on every iPhone form
+  // factor — and add breathing room so the last row never feels glued
+  // to the blur edge.
+  const tabBarHeight = useBottomTabBarHeight();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   const [orgId, setOrgId] = React.useState<string | null>(null);
+  const { activeOrgId, activeWarehouseId } = useWorkspace();
   const [items, setItems] = React.useState<Item[]>([]);
   const [q, setQ] = React.useState('');
+  const [page, setPage] = React.useState(1);
+  const listRef = React.useRef<FlatList<Item> | null>(null);
   const [filter, setFilter] = React.useState<FilterState>(EMPTY_FILTER_STATE);
   const [sheetOpen, setSheetOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [total, setTotal] = React.useState(0);
+  // Cycle-count select mode: tapping a row toggles it into the shared
+  // count-selection store instead of opening the item.
+  const [selectMode, setSelectMode] = React.useState(false);
 
   // Lookup tables for the filter sheet + the active-filter pill summary
   const [categories, setCategories] = React.useState<FilterOption[]>([]);
@@ -123,7 +154,7 @@ export default function Inventory() {
   }, []);
 
   const load = React.useCallback(
-    async (orgIdParam: string, query: string, f: FilterState) => {
+    async (orgIdParam: string, query: string, f: FilterState, warehouseScopeId: string | null, pageParam: number) => {
       const sortMap: Record<typeof f.sort, { col: string; asc: boolean }> = {
         updated_desc: { col: 'updated_at', asc: false },
         name_asc: { col: 'name', asc: true },
@@ -133,19 +164,41 @@ export default function Inventory() {
       };
       const ord = sortMap[f.sort];
 
+      // 'low' has to be filtered client-side (reorder_point is a
+      // per-row column we can't express in a PostgREST .filter), so
+      // when it's selected we fetch a wider window and skip paging.
+      const isLow = f.status === 'low';
+
       let req = supabase
         .from('inventory_items')
         .select(
           `id, name, sku, quantity_on_hand, reorder_point, status, category_id,
-           primary_location_id, charter_id, updated_at,
+           primary_location_id, charter_id, warehouse_id, updated_at,
            category:categories!category_id (name)`,
           { count: 'exact' },
         )
         .eq('organization_id', orgIdParam)
         .eq('status', 'active')
+        // Match web: the Items tab is products only. Books live on
+        // their own tab; mixing them was masking the per-tab counts.
+        .neq('item_type', 'book')
         .is('deleted_at', null)
-        .order(ord.col, { ascending: ord.asc })
-        .limit(200);
+        .order(ord.col, { ascending: ord.asc });
+
+      if (isLow) {
+        req = req.limit(200);
+      } else {
+        const start = (pageParam - 1) * PAGE_SIZE;
+        const end = start + PAGE_SIZE - 1;
+        req = req.range(start, end);
+      }
+
+      // Active warehouse scoping — when the drawer's workspace switcher
+      // narrows to a single warehouse, the list scopes to it. Mirrors
+      // the web sidebar's per-warehouse filter.
+      if (warehouseScopeId) {
+        req = req.eq('warehouse_id', warehouseScopeId);
+      }
 
       if (query.trim()) {
         req = req.or(`name.ilike.%${query}%,sku.ilike.%${query}%,barcode.ilike.%${query}%`);
@@ -197,7 +250,7 @@ export default function Inventory() {
         } as Item;
       });
 
-      if (f.status === 'low') {
+      if (isLow) {
         rows = rows.filter(
           (r) =>
             r.reorder_point > 0
@@ -206,7 +259,9 @@ export default function Inventory() {
         );
       }
 
-      // Batch-fetch primary photos for the visible items
+      // Batch-fetch primary photos for the visible items. Signed URLs
+      // are cached + reused across screens (see image-cache) so repeat
+      // loads skip the round-trip and the bitmaps come from disk.
       const ids = rows.map((r) => r.id);
       if (ids.length > 0) {
         const { data: imgs } = await supabase
@@ -221,13 +276,7 @@ export default function Inventory() {
         }
         const paths = Array.from(byItem.values());
         if (paths.length > 0) {
-          const { data: signed } = await supabase.storage
-            .from('item-images')
-            .createSignedUrls(paths, 60 * 60);
-          const urlByPath = new Map<string, string>();
-          for (const s of (signed ?? []) as Array<{ path: string | null; signedUrl: string }>) {
-            if (s.path && s.signedUrl) urlByPath.set(s.path, s.signedUrl);
-          }
+          const urlByPath = await signItemImages(paths);
           for (const r of rows) {
             const p = byItem.get(r.id);
             if (p) r.imageUrl = urlByPath.get(p) ?? null;
@@ -236,50 +285,117 @@ export default function Inventory() {
       }
 
       setItems(rows);
-      setTotal(count ?? rows.length);
+      // When 'low' is on, the server count is the un-filtered total so
+      // it's misleading — use the client-filtered length instead. For
+      // every other query the server count is the authoritative total
+      // used by the Paginator footer.
+      setTotal(isLow ? rows.length : count ?? rows.length);
       setLoading(false);
     },
     [],
   );
 
+  // Source the org from the workspace switcher. This used to be a
+  // standalone organization_members.limit(1) query that ignored the active
+  // org — so a multi-org user who switched orgs kept seeing the FIRST org's
+  // items while activeWarehouseId came from the *switched* org, producing a
+  // permanently empty list (org A ∧ warehouse-of-org-B matches nothing).
   React.useEffect(() => {
-    if (!user) return;
-    (async () => {
-      const { data: member } = await supabase
-        .from('organization_members')
-        .select('organization_id')
-        .eq('user_id', user.id)
-        .not('accepted_at', 'is', null)
-        .limit(1)
-        .maybeSingle();
-      if (!member) return;
-      const id = member.organization_id as string;
-      setOrgId(id);
-      await Promise.all([loadLookups(id), load(id, '', EMPTY_FILTER_STATE)]);
-    })();
-  }, [user, load, loadLookups]);
+    if (!activeOrgId) {
+      setOrgId(null);
+      return;
+    }
+    setOrgId(activeOrgId);
+    void Promise.all([
+      loadLookups(activeOrgId),
+      load(activeOrgId, '', EMPTY_FILTER_STATE, activeWarehouseId, 1),
+    ]);
+  }, [activeOrgId, load, loadLookups, activeWarehouseId]);
+
+  // Whenever the query / filter / workspace changes, jump back to page 1.
+  React.useEffect(() => {
+    setPage(1);
+  }, [q, filter, activeWarehouseId]);
 
   React.useEffect(() => {
     if (!orgId) return;
-    const t = setTimeout(() => load(orgId, q, filter), 250);
+    const t = setTimeout(() => load(orgId, q, filter, activeWarehouseId, page), 250);
     return () => clearTimeout(t);
-  }, [q, filter, orgId, load]);
+  }, [q, filter, orgId, load, activeWarehouseId, page]);
 
   async function onRefresh() {
     if (!orgId) return;
     setRefreshing(true);
-    await load(orgId, q, filter);
+    await load(orgId, q, filter, activeWarehouseId, page);
     setRefreshing(false);
   }
 
+  const onPageChange = React.useCallback((p: number) => {
+    // Re-trigger the loading skeleton so the page transition feels
+    // immediate instead of staring at the previous page until the
+    // network fetch lands. load() will flip this back to false.
+    setLoading(true);
+    setPage(p);
+    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+  }, []);
+
+  // Dismiss any keyboard left open from a previous screen / tab switch.
+  // Tabs preserve mount state, so a focused search bar carries over.
+  useFocusEffect(
+    React.useCallback(() => {
+      Keyboard.dismiss();
+    }, []),
+  );
+
   const filterCount = activeFilterCount(filter);
+
+  const onItemPress = React.useCallback(
+    (id: string) => {
+      Keyboard.dismiss();
+      router.push({ pathname: '/item/[id]', params: { id } });
+    },
+    [router],
+  );
+
+  const onToggleSelect = React.useCallback((it: Item) => {
+    countSelection.toggle({ id: it.id, sku: it.sku, name: it.name, itemType: 'product' });
+  }, []);
+
+  const renderItem = React.useCallback(
+    ({ item, index }: { item: Item; index: number }) => (
+      <ItemRow
+        item={item}
+        isLast={index === items.length - 1}
+        index={index}
+        onItemPress={onItemPress}
+        selectMode={selectMode}
+        onToggleSelect={onToggleSelect}
+      />
+    ),
+    [items.length, onItemPress, selectMode, onToggleSelect],
+  );
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={Menu} onPress={openDrawer} />
-          <IconChip icon={Plus} onPress={() => router.push('/scan')} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <IconChip
+              icon={ArrowLeft}
+              onPress={() => {
+                if (router.canGoBack()) router.back();
+                else router.replace('/');
+              }}
+            />
+            <IconChip icon={Menu} onPress={openDrawer} />
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <IconChip
+              icon={selectMode ? Check : ListChecks}
+              onPress={() => setSelectMode((v) => !v)}
+            />
+            <IconChip icon={Plus} onPress={() => router.push('/item/new')} />
+          </View>
         </View>
         <View style={styles.head}>
           <Eyebrow>{`INVENTORY · ${total.toLocaleString()} SKUS`}</Eyebrow>
@@ -303,13 +419,24 @@ export default function Inventory() {
               placeholderTextColor={c.ink4}
               autoCapitalize="none"
               autoCorrect={false}
+              autoFocus={false}
+              returnKeyType="search"
+              onSubmitEditing={() => Keyboard.dismiss()}
               style={[
                 styles.searchInput,
                 { color: c.ink, fontFamily: FONT.displayRegular },
               ]}
             />
             <FilterButton onPress={() => setSheetOpen(true)} count={filterCount} />
-            <Barcode size={18} color={c.ink} strokeWidth={1.6} />
+            <Pressable
+              onPress={() => router.push('/scan')}
+              hitSlop={8}
+              style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1 })}
+              accessibilityRole="button"
+              accessibilityLabel="Open scanner"
+            >
+              <Barcode size={18} color={c.ink} strokeWidth={1.6} />
+            </Pressable>
           </View>
 
           <ActiveFilterPill
@@ -321,12 +448,13 @@ export default function Inventory() {
       </SafeAreaView>
 
       {loading ? (
-        <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
+        <ItemListSkeleton count={8} />
       ) : (
         <FlatList
+          ref={listRef}
           data={items}
-          keyExtractor={(i) => i.id}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 }}
+          keyExtractor={keyExtractor}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: tabBarHeight + 24 }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.ink} />
           }
@@ -338,17 +466,22 @@ export default function Inventory() {
               </Body>
             </View>
           }
-          ListHeaderComponent={<View style={{ height: 6 }} />}
-          renderItem={({ item, index }) => (
-            <ItemRow
-              item={item}
-              isLast={index === items.length - 1}
-              index={index}
-              onPress={() =>
-                router.push({ pathname: '/item/[id]', params: { id: item.id } })
-              }
+          ListHeaderComponent={listHeader}
+          ListFooterComponent={
+            <Paginator
+              page={page}
+              total={total}
+              pageSize={PAGE_SIZE}
+              onPageChange={onPageChange}
             />
-          )}
+          }
+          renderItem={renderItem}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          initialNumToRender={12}
+          maxToRenderPerBatch={8}
+          windowSize={9}
+          removeClippedSubviews={Platform.OS === 'android'}
         />
       )}
 
@@ -361,6 +494,8 @@ export default function Inventory() {
         locations={locations}
         charters={charters}
       />
+
+      <CountSelectBar visible={selectMode} bottomInset={tabBarHeight} />
     </View>
   );
 }
@@ -379,25 +514,30 @@ function glyphFromItem(item: Item): LucideIcon {
   return Package;
 }
 
-function ItemRow({
+const ItemRow = React.memo(function ItemRow({
   item,
   isLast,
   index,
-  onPress,
+  onItemPress,
+  selectMode,
+  onToggleSelect,
 }: {
   item: Item;
   isLast: boolean;
   index: number;
-  onPress: () => void;
+  onItemPress: (id: string) => void;
+  selectMode: boolean;
+  onToggleSelect: (item: Item) => void;
 }) {
   const { c } = useTheme();
+  const picked = useIsPicked(item.id);
   const status = statusFromItem(item);
   const Icon = glyphFromItem(item);
   const pip = PIPS[index % PIPS.length];
   return (
     <View
       style={{
-        backgroundColor: c.card,
+        backgroundColor: picked ? c.paper2 : c.card,
         borderTopWidth: index === 0 ? 1 : 0,
         borderBottomWidth: 1,
         borderLeftWidth: 1,
@@ -410,13 +550,13 @@ function ItemRow({
       }}
     >
       <Pressable
-        onPress={onPress}
+        onPress={() => (selectMode ? onToggleSelect(item) : onItemPress(item.id))}
         style={({ pressed }) => [
           rowStyles.row,
           { opacity: pressed ? 0.7 : 1 },
         ]}
       >
-        <Thumb size={56} icon={Icon} pip={pip} imageUrl={item.imageUrl ?? null} />
+        <Thumb size={56} icon={Icon} pip={pip} imageUrl={item.imageUrl ?? null} recyclingKey={item.id} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <Mono
             color={c.ink}
@@ -426,7 +566,7 @@ function ItemRow({
           >
             {item.name}
           </Mono>
-          <Mono size={11} color={c.ink4} tracking={0.04} style={{ marginTop: 4 }}>
+          <Mono size={11} color={c.ink4} tracking={0.04} numberOfLines={1} style={{ marginTop: 4 }}>
             {item.sku}
           </Mono>
         </View>
@@ -442,11 +582,20 @@ function ItemRow({
           {status === 'warn' ? <Pill status="warn">LOW</Pill> : null}
           {status === 'crit' ? <Pill status="crit">OUT</Pill> : null}
         </View>
+        {selectMode ? (
+          <View style={{ marginLeft: 2 }}>
+            {picked ? (
+              <CheckCircle2 size={22} color={c.ink} strokeWidth={2} />
+            ) : (
+              <Circle size={22} color={c.ink4} strokeWidth={1.6} />
+            )}
+          </View>
+        ) : null}
       </Pressable>
       {!isLast ? <Hair inset={86} /> : null}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

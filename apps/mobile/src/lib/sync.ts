@@ -290,14 +290,31 @@ async function sendOne(
 }
 
 /**
+ * Single-flight guard. `syncNow` is fired from several lifecycle hooks
+ * (app open, foreground event, 60s timer) which used to overlap and
+ * race two `db.withTransactionAsync` calls on the same SQLite
+ * connection — yielding the noisy `cannot start a transaction within
+ * a transaction` and `cannot rollback - no transaction is active`
+ * errors. We coalesce concurrent callers onto the in-flight promise so
+ * only one sync runs at a time.
+ */
+let inFlightSync: Promise<void> | null = null;
+
+/**
  * Run pull then push. Called on app open + foreground + a 60s timer.
  * Catches all errors so a failed sync never crashes the app shell.
  */
 export async function syncNow(): Promise<void> {
-  try {
-    await pullSnapshot();
-    await drainQueue();
-  } catch (e) {
-    console.warn('[sync] syncNow failed', e);
-  }
+  if (inFlightSync) return inFlightSync;
+  inFlightSync = (async () => {
+    try {
+      await pullSnapshot();
+      await drainQueue();
+    } catch (e) {
+      console.warn('[sync] syncNow failed', e);
+    } finally {
+      inFlightSync = null;
+    }
+  })();
+  return inFlightSync;
 }

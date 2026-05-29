@@ -1,6 +1,8 @@
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import {
   ChevronLeft,
+  Paperclip,
   Send,
   Sparkles,
 } from 'lucide-react-native';
@@ -51,14 +53,15 @@ export default function AIChat() {
   const [sessionId, setSessionId] = React.useState<string | undefined>(undefined);
   const [input, setInput] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const [uploading, setUploading] = React.useState(false);
   const scrollRef = React.useRef<ScrollView>(null);
 
   const scrollToBottom = React.useCallback(() => {
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
   }, []);
 
-  async function send() {
-    const text = input.trim();
+  async function send(textArg?: string) {
+    const text = (textArg ?? input).trim();
     if (!text || busy) return;
 
     setInput('');
@@ -159,6 +162,89 @@ export default function AIChat() {
     }
   }
 
+  /**
+   * Attach a photo of a book list / shelf, send it to the
+   * extract-isbns-ai endpoint, then auto-send the extracted ISBNs as a
+   * chat message. Mirrors the web chat-panel's Paperclip upload — but
+   * uses the camera/library (expo-image-picker) since that's the mobile
+   * way to capture a printed list. (PDF attach would need
+   * expo-document-picker + a native rebuild; photo covers the common case.)
+   */
+  async function attachPhoto() {
+    if (uploading || busy) return;
+    const choice = await new Promise<'camera' | 'library' | null>((resolve) => {
+      Alert.alert('Attach a book list', 'Snap or pick a photo of a list of books to extract ISBNs.', [
+        { text: 'Take photo', onPress: () => resolve('camera') },
+        { text: 'Choose from library', onPress: () => resolve('library') },
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
+      ]);
+    });
+    if (!choice) return;
+
+    let result: ImagePicker.ImagePickerResult;
+    if (choice === 'camera') {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Camera access needed', 'Allow camera to photograph a book list.');
+        return;
+      }
+      result = await ImagePicker.launchCameraAsync({ quality: 0.7, mediaTypes: ImagePicker.MediaTypeOptions.Images });
+    } else {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Photo access needed', 'Allow photo library to attach an image.');
+        return;
+      }
+      result = await ImagePicker.launchImageLibraryAsync({ quality: 0.7, mediaTypes: ImagePicker.MediaTypeOptions.Images });
+    }
+    if (result.canceled || !result.assets[0]) return;
+
+    const asset = result.assets[0];
+    setUploading(true);
+    try {
+      const ext = (asset.uri.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'jpg').toLowerCase();
+      const form = new FormData();
+      // React Native FormData file shape: { uri, name, type }.
+      form.append('file', {
+        uri: asset.uri,
+        name: `booklist.${ext}`,
+        type: asset.mimeType ?? `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+      } as unknown as Blob);
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const res = await fetch(`${API_BASE}/api/books/extract-isbns-ai`, {
+        method: 'POST',
+        headers: {
+          ...(session ? { Authorization: `Bearer ${session.access_token}` } : null),
+        },
+        body: form,
+      });
+      const json = (await res.json().catch(() => null)) as
+        | { isbns?: string[]; totalFound?: number; message?: string }
+        | null;
+      if (!res.ok) {
+        throw new Error(json?.message ?? `Couldn't read that image (${res.status}). Try a clearer photo.`);
+      }
+      const isbns = json?.isbns ?? [];
+      if (isbns.length === 0) {
+        Alert.alert('No ISBNs found', 'Couldn\'t spot any ISBNs in that photo. Try a clearer, closer shot of the list.');
+        return;
+      }
+      // Auto-send the extracted ISBNs so the agent can add the books.
+      void send(
+        `I uploaded a photo of a book list. Please add these ${isbns.length} book${
+          isbns.length === 1 ? '' : 's'
+        } by ISBN:\n${isbns.join(', ')}`,
+      );
+    } catch (err) {
+      Alert.alert('Upload failed', err instanceof Error ? err.message : 'Could not process the image.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
   const examples = [
     'What\'s low at our biggest warehouse?',
     'Show me POs that are overdue.',
@@ -240,6 +326,23 @@ export default function AIChat() {
 
         <View style={[styles.inputBar, { backgroundColor: c.paper, borderTopColor: c.hair }]}>
           <View style={[styles.inputBox, { backgroundColor: c.card, borderColor: c.hair }]}>
+            <Pressable
+              onPress={attachPhoto}
+              disabled={uploading || busy}
+              hitSlop={8}
+              style={({ pressed }) => [
+                styles.attachBtn,
+                { opacity: uploading || busy ? 0.4 : pressed ? 0.6 : 1 },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Attach a book-list photo"
+            >
+              {uploading ? (
+                <ActivityIndicator size="small" color={c.ink3} />
+              ) : (
+                <Paperclip size={18} color={c.ink3} strokeWidth={1.6} />
+              )}
+            </Pressable>
             <TextInput
               value={input}
               onChangeText={setInput}
@@ -249,7 +352,7 @@ export default function AIChat() {
               style={[styles.input, { color: c.ink }]}
             />
             <Pressable
-              onPress={send}
+              onPress={() => void send()}
               disabled={!input.trim() || busy}
               style={({ pressed }) => [
                 styles.sendBtn,
@@ -335,10 +438,17 @@ const styles = StyleSheet.create({
     gap: 8,
     borderWidth: 1,
     borderRadius: 16,
-    paddingLeft: 14,
+    paddingLeft: 6,
     paddingRight: 6,
     paddingVertical: 6,
     minHeight: 48,
+  },
+  attachBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   input: {
     flex: 1,

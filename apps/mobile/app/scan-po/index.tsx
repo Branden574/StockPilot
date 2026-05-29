@@ -1,6 +1,8 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Linking from 'expo-linking';
+import { useRouter } from 'expo-router';
+import { ChevronLeft } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -14,6 +16,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { IconChip } from '@/components/ui/row';
 import { useAuth } from '@/lib/auth-context';
 import { API_BASE } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
@@ -37,6 +40,7 @@ const MAX_FRAMES = 5;
  * is dense and works much better on desktop).
  */
 export default function ScanPo() {
+  const router = useRouter();
   const { session } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
   const [frames, setFrames] = React.useState<CapturedFrame[]>([]);
@@ -193,6 +197,15 @@ export default function ScanPo() {
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
+      <View style={styles.topbar}>
+        <IconChip
+          icon={ChevronLeft}
+          onPress={() => {
+            if (router.canGoBack()) router.back();
+            else router.replace('/');
+          }}
+        />
+      </View>
       <ScrollView contentContainerStyle={{ padding: space.md, paddingBottom: 200 }}>
         <Text style={styles.title}>Scan a PO</Text>
         <Text style={styles.subtitle}>
@@ -264,6 +277,13 @@ export default function ScanPo() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
+  topbar: {
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingBottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   cameraRoot: { flex: 1, backgroundColor: '#000' },
   camera: { flex: 1 },
   cameraOverlay: {

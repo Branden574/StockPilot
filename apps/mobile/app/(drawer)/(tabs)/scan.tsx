@@ -1,10 +1,13 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
+import { useRouter } from 'expo-router';
+import { X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
+  Animated,
+  Easing,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,8 +18,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddBookCard, type IsbnLookupResult } from '@/components/AddBookCard';
 import { AddItemCard, type UpcLookupResult } from '@/components/AddItemCard';
+import { CachedImage } from '@/components/ui/cached-image';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { signItemImage } from '@/lib/image-cache';
+import { resizeForUpload } from '@/lib/image-resize';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
 
@@ -66,6 +72,16 @@ function formatCurrency(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
+/** Maps a file extension to an image MIME type for storage uploads. */
+function mimeForExt(ext: string): string {
+  const e = ext.toLowerCase();
+  if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
+  if (e === 'png') return 'image/png';
+  if (e === 'heic') return 'image/heic';
+  if (e === 'webp') return 'image/webp';
+  return `image/${e}`;
+}
+
 function readBookStorage(cf: Record<string, unknown> | null) {
   const f = cf ?? {};
   const rackNumber = f.book_rack_number ? String(f.book_rack_number) : null;
@@ -92,6 +108,7 @@ const CRATE_HEX: Record<string, string> = {
 };
 
 export default function Scan() {
+  const router = useRouter();
   const { user } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = React.useState(true);
@@ -143,10 +160,7 @@ export default function Scan() {
       .maybeSingle();
     let imageUrl: string | null = null;
     if (imgRow?.storage_path) {
-      const { data: signed } = await supabase.storage
-        .from('item-images')
-        .createSignedUrl(imgRow.storage_path as string, 60 * 60);
-      imageUrl = signed?.signedUrl ?? null;
+      imageUrl = await signItemImage(imgRow.storage_path as string);
     }
 
     const r = row as Record<string, unknown>;
@@ -409,13 +423,18 @@ export default function Scan() {
     setBusy(true);
     try {
       const asset = result.assets[0];
-      const ext = (asset.uri.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'jpg').toLowerCase();
-      const path = `${orgId}/items/${item.id}/${cryptoRandom()}.${ext}`;
+      // Resize on-device so the bucket only stores list-friendly sizes
+      // (~400 KB JPEGs instead of multi-megapixel phone photos).
+      const resized = await resizeForUpload(asset.uri);
+      const path = `${orgId}/items/${item.id}/${cryptoRandom()}.${resized.ext}`;
 
-      const blob = await (await fetch(asset.uri)).blob();
+      // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
+      // in React Native/Expo, which is why captured photos never showed
+      // up. See item/new.tsx mimeForExt note.
+      const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
       const { error: upErr } = await supabase.storage
         .from('item-images')
-        .upload(path, blob, { contentType: blob.type || `image/${ext}` });
+        .upload(path, arrayBuffer, { contentType: mimeForExt(resized.ext) });
       if (upErr) throw new Error(upErr.message);
 
       const { data: existing } = await supabase
@@ -434,11 +453,9 @@ export default function Scan() {
       });
       if (insErr) throw new Error(insErr.message);
 
-      const { data: signed } = await supabase.storage
-        .from('item-images')
-        .createSignedUrl(path, 60 * 60);
-      if (signed?.signedUrl) {
-        setItem({ ...item, image_url: signed.signedUrl });
+      const signedUrl = await signItemImage(path);
+      if (signedUrl) {
+        setItem({ ...item, image_url: signedUrl });
       }
     } catch (e) {
       Alert.alert('Upload failed', e instanceof Error ? e.message : 'Unknown error');
@@ -483,6 +500,19 @@ export default function Scan() {
         />
       ) : null}
 
+      <Pressable
+        onPress={() => {
+          if (router.canGoBack()) router.back();
+          else router.replace('/');
+        }}
+        style={styles.closeBtn}
+        hitSlop={10}
+        accessibilityRole="button"
+        accessibilityLabel="Close scanner"
+      >
+        <X size={20} color="#f6f4ef" strokeWidth={1.8} />
+      </Pressable>
+
       <View style={styles.overlay} pointerEvents="box-none">
         {!item && !addBook && (
           <View style={styles.modeChips} pointerEvents="auto">
@@ -507,7 +537,8 @@ export default function Scan() {
 
         {mode === 'lookup' ? (
           <>
-            <View style={styles.frame} />
+            <ScanReticle />
+            <Text style={styles.reticleLabel}>— ALIGN BARCODE</Text>
             <Text style={styles.hint}>
               {scanning && !item ? 'Point at a barcode or QR code' : ''}
             </Text>
@@ -536,7 +567,7 @@ export default function Scan() {
           <ScrollView contentContainerStyle={{ paddingBottom: space.md }}>
             <View style={styles.headerRow}>
               {item.image_url ? (
-                <Image source={{ uri: item.image_url }} style={styles.thumb} />
+                <CachedImage uri={item.image_url} style={styles.thumb} recyclingKey={item.id} />
               ) : (
                 <View style={[styles.thumb, styles.thumbPlaceholder]}>
                   <Text style={styles.thumbPlaceholderText}>No image</Text>
@@ -688,6 +719,47 @@ export default function Scan() {
   );
 }
 
+// Animated reticle — 4 corner brackets with a mint scan line that
+// sweeps top→bottom→top continuously while the scanner is open.
+function ScanReticle() {
+  // 0 = top, 1 = bottom — interpolated to translateY across the
+  // reticle's interior so the line never crosses the corner brackets.
+  const t = React.useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(t, {
+          toValue: 1,
+          duration: 1600,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(t, {
+          toValue: 0,
+          duration: 1600,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [t]);
+  const translateY = t.interpolate({
+    inputRange: [0, 1],
+    outputRange: [10, 270],
+  });
+  return (
+    <View style={styles.reticle}>
+      <View style={[styles.corner, styles.cornerTL]} />
+      <View style={[styles.corner, styles.cornerTR]} />
+      <View style={[styles.corner, styles.cornerBL]} />
+      <View style={[styles.corner, styles.cornerBR]} />
+      <Animated.View style={[styles.scanLine, { transform: [{ translateY }] }]} />
+    </View>
+  );
+}
+
 function LocRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <View style={styles.locRow}>
@@ -730,12 +802,53 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: 80,
   },
-  frame: {
-    width: 260,
-    height: 260,
-    borderWidth: 2,
-    borderColor: '#fafaf7',
-    borderRadius: radius.xl,
+  closeBtn: {
+    position: 'absolute',
+    top: 60,
+    left: 16,
+    zIndex: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reticle: {
+    width: 280,
+    height: 280,
+    position: 'relative',
+  },
+  corner: {
+    position: 'absolute',
+    width: 36,
+    height: 36,
+    borderColor: '#f6f4ef',
+  },
+  cornerTL: { top: 0, left: 0, borderTopWidth: 2, borderLeftWidth: 2, borderTopLeftRadius: 4 },
+  cornerTR: { top: 0, right: 0, borderTopWidth: 2, borderRightWidth: 2, borderTopRightRadius: 4 },
+  cornerBL: { bottom: 0, left: 0, borderBottomWidth: 2, borderLeftWidth: 2, borderBottomLeftRadius: 4 },
+  cornerBR: { bottom: 0, right: 0, borderBottomWidth: 2, borderRightWidth: 2, borderBottomRightRadius: 4 },
+  scanLine: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    top: 0,
+    height: 2,
+    backgroundColor: '#9adfc8',
+    borderRadius: 2,
+    shadowColor: '#9adfc8',
+    shadowOpacity: 0.95,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  reticleLabel: {
+    color: '#f6f4ef',
+    marginTop: 24,
+    fontSize: 11,
+    letterSpacing: 2,
+    opacity: 0.7,
+    fontFamily: 'Menlo',
   },
   hint: { color: '#fff', marginTop: space.lg, fontSize: 13, fontWeight: '500' },
   sheet: {

@@ -33,25 +33,70 @@ export default function WarehousesAdmin() {
       setLoading(false);
       return;
     }
-    const { data } = await supabase
-      .from('warehouses')
-      .select(
-        `id, name, code, status, contact_name,
-         charter:charters!charter_id (name)`,
-      )
-      .eq('organization_id', orgId)
-      .order('name', { ascending: true });
+    // `warehouses.charter_id` was dropped in migration 0008 — charters
+    // are now linked through the `warehouse_charters` join table.
+    // Selecting the removed column previously errored and zeroed the
+    // results. Now we fetch warehouses + the join in parallel and
+    // resolve each warehouse to its first associated charter for the
+    // single-pill display.
+    const [whResp, joinResp] = await Promise.all([
+      supabase
+        .from('warehouses')
+        .select('id, name, code, status, contact_name')
+        .eq('organization_id', orgId)
+        .order('name', { ascending: true }),
+      supabase
+        .from('warehouse_charters')
+        .select('warehouse_id, charter_id')
+        .eq('organization_id', orgId),
+    ]);
+    if (whResp.error) {
+      console.warn('[admin/warehouses] fetch failed:', whResp.error.message);
+    }
+    if (joinResp.error) {
+      console.warn('[admin/warehouses] charter-join fetch failed:', joinResp.error.message);
+    }
+    const whRows = (whResp.data ?? []) as Array<{
+      id: string;
+      name: string;
+      code: string;
+      status: string;
+      contact_name: string | null;
+    }>;
+    const joinRows = (joinResp.data ?? []) as Array<{
+      warehouse_id: string;
+      charter_id: string;
+    }>;
+    const warehouseToCharter = new Map<string, string>();
+    for (const j of joinRows) {
+      if (!warehouseToCharter.has(j.warehouse_id)) {
+        warehouseToCharter.set(j.warehouse_id, j.charter_id);
+      }
+    }
+    const charterIds = Array.from(new Set(joinRows.map((j) => j.charter_id)));
+    let charterMap = new Map<string, string>();
+    if (charterIds.length > 0) {
+      const { data: charters, error: chErr } = await supabase
+        .from('charters')
+        .select('id, name')
+        .in('id', charterIds);
+      if (chErr) {
+        console.warn('[admin/warehouses] charter fetch failed:', chErr.message);
+      }
+      charterMap = new Map(
+        (charters ?? []).map((c) => [c.id as string, (c.name as string | null) ?? '']),
+      );
+    }
     setRows(
-      (data ?? []).map((row) => {
-        const r = row as Record<string, unknown>;
-        const ch = r.charter as { name: string | null } | { name: string | null }[] | null;
+      whRows.map((w) => {
+        const chId = warehouseToCharter.get(w.id);
         return {
-          id: r.id as string,
-          name: r.name as string,
-          code: r.code as string,
-          status: r.status as string,
-          contact_name: (r.contact_name as string | null) ?? null,
-          charter: Array.isArray(ch) ? ch[0] ?? null : ch,
+          id: w.id,
+          name: w.name,
+          code: w.code,
+          status: w.status,
+          contact_name: w.contact_name,
+          charter: chId ? { name: charterMap.get(chId) ?? null } : null,
         };
       }),
     );

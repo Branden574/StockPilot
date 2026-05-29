@@ -5,16 +5,23 @@ import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { BiometricLockScreen } from '@/components/biometric-lock-screen';
+import { MfaChallengeScreen } from '@/components/mfa-challenge-screen';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { initDb } from '@/lib/db';
 import { palette } from '@/lib/theme';
 import { useBrandFonts } from '@/lib/use-fonts';
+import { useOtaAutoReload } from '@/lib/use-ota-updates';
 import { usePushNotifications } from '@/lib/use-push-notifications';
 import { useSync } from '@/lib/use-sync';
 import { useTheme } from '@/lib/use-theme';
 
 export default function RootLayout() {
+  // Apply a freshly-published OTA on this launch (auto check + reload)
+  // instead of the default "applies next launch" — so a published update
+  // lands after one relaunch, not two.
+  useOtaAutoReload();
+
   // Initialise SQLite + cycle-count sync engine once at app start so any
   // screen that calls getDb() / useSyncStatus() can assume both are
   // ready. Idempotent — initDb() short-circuits if the DB is already
@@ -58,7 +65,7 @@ export default function RootLayout() {
 }
 
 function RootGate() {
-  const { session, loading, locked } = useAuth();
+  const { session, loading, locked, mfaRequired } = useAuth();
   const segments = useSegments();
   const router = useRouter();
   const { c } = useTheme();
@@ -76,6 +83,12 @@ function RootGate() {
     }
   }, [session, loading, segments, router]);
 
+  // MFA gate takes precedence over the biometric lock: a fresh password
+  // sign-in that owes a TOTP code must complete it before anything else.
+  if (!loading && session && mfaRequired) {
+    return <MfaChallengeScreen />;
+  }
+
   if (!loading && session && locked) {
     return <BiometricLockScreen />;
   }
@@ -90,6 +103,7 @@ function RootGate() {
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(drawer)" />
       <Stack.Screen name="item/[id]" options={{ presentation: 'card' }} />
+      <Stack.Screen name="order/[id]" options={{ presentation: 'card' }} />
       <Stack.Screen name="scan-po/index" options={{ presentation: 'card' }} />
       <Stack.Screen
         name="cycle-count/scan/[id]"

@@ -24,6 +24,19 @@ interface AuthState {
   locked: boolean;
   /** True iff the currently-signed-in user has previously opted in. */
   biometricEnabled: boolean;
+  /**
+   * True when the user has authenticated with password (AAL1) but holds a
+   * verified TOTP factor and must still enter a 6-digit code to reach AAL2.
+   * RootGate renders the MFA challenge screen while this is true. Mirrors
+   * the web app's /signin/mfa step — without it the mobile app would let a
+   * 2FA-enrolled user in on password alone.
+   */
+  mfaRequired: boolean;
+  /**
+   * Submit a 6-digit TOTP code to complete the AAL1→AAL2 challenge.
+   * Returns an error string on an invalid/expired code.
+   */
+  verifyMfa: (code: string) => Promise<{ error?: string }>;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   signUp: (
     email: string,
@@ -55,6 +68,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = React.useState(true);
   const [locked, setLocked] = React.useState(false);
   const [biometricEnabled, setBiometricEnabledState] = React.useState(false);
+  const [mfaRequired, setMfaRequired] = React.useState(false);
+  const mfaFactorId = React.useRef<string | null>(null);
+
+  // Resolves whether the current session is stuck at AAL1 with a verified
+  // TOTP factor (i.e. a 2FA challenge is owed). Supabase encodes AAL in the
+  // JWT, so a session that already reached AAL2 — including one restored
+  // from disk — reports currentLevel='aal2' and needs no challenge.
+  const checkMfa = React.useCallback(async () => {
+    try {
+      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+      if (aal?.currentLevel === 'aal1' && aal?.nextLevel === 'aal2') {
+        const { data: factors } = await supabase.auth.mfa.listFactors();
+        const verified = factors?.totp?.[0] ?? null;
+        if (verified) {
+          mfaFactorId.current = verified.id;
+          setMfaRequired(true);
+          return;
+        }
+      }
+      mfaFactorId.current = null;
+      setMfaRequired(false);
+    } catch (e) {
+      console.warn('[auth] MFA level check failed', e);
+      mfaFactorId.current = null;
+      setMfaRequired(false);
+    }
+  }, []);
 
   // On first mount, hydrate the session from SecureStore (Supabase
   // does this internally) AND check whether the resulting user has
@@ -73,6 +113,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         setBiometricEnabledState(enabled);
         setLocked(enabled);
+        // A restored session may still owe an AAL2 challenge if it was
+        // only ever AAL1 on disk. Check before exposing the app.
+        await checkMfa();
+        if (cancelled) return;
       }
       setLoading(false);
     })();
@@ -87,6 +131,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (event === 'SIGNED_OUT' || !s?.user) {
         setLocked(false);
         setBiometricEnabledState(false);
+        setMfaRequired(false);
+        mfaFactorId.current = null;
         return;
       }
       // When the user signs IN (event = SIGNED_IN), check whether
@@ -101,6 +147,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // the session was restored from disk (handled in the mount
         // effect above).
       }
+      // MFA_CHALLENGE_VERIFIED fires after a successful verify() and
+      // upgrades the session to AAL2 — clear the gate. Any other
+      // auth event re-checks the level.
+      if (event === 'MFA_CHALLENGE_VERIFIED') {
+        setMfaRequired(false);
+        mfaFactorId.current = null;
+      }
     });
     return () => {
       cancelled = true;
@@ -111,6 +164,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn: AuthState['signIn'] = async (email, password) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) return { error: error.message };
+    // Password got us to AAL1. If the account has a verified TOTP factor,
+    // raise the MFA gate so RootGate shows the code screen instead of the
+    // app. Without this a 2FA-enrolled user would be let in on password
+    // alone — the bug being fixed.
+    await checkMfa();
+    return {};
+  };
+
+  const verifyMfa: AuthState['verifyMfa'] = async (code) => {
+    const factorId = mfaFactorId.current;
+    if (!factorId) return { error: 'No pending two-factor challenge.' };
+    const { data: challenge, error: challengeErr } = await supabase.auth.mfa.challenge({
+      factorId,
+    });
+    if (challengeErr || !challenge) {
+      return { error: challengeErr?.message ?? 'Could not start the challenge. Try again.' };
+    }
+    const { error: verifyErr } = await supabase.auth.mfa.verify({
+      factorId,
+      challengeId: challenge.id,
+      code: code.trim(),
+    });
+    if (verifyErr) {
+      return { error: verifyErr.message };
+    }
+    // verify() upgrades the session to AAL2 and emits
+    // MFA_CHALLENGE_VERIFIED (handled in onAuthStateChange), but clear the
+    // gate here too so the UI updates immediately.
+    mfaFactorId.current = null;
+    setMfaRequired(false);
     return {};
   };
 
@@ -144,6 +227,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // on this device only.
     await supabase.auth.signOut({ scope: 'local' });
     setLocked(false);
+    setMfaRequired(false);
+    mfaFactorId.current = null;
   };
 
   const unlock: AuthState['unlock'] = async () => {
@@ -173,6 +258,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         locked,
         biometricEnabled,
+        mfaRequired,
+        verifyMfa,
         signIn,
         signUp,
         signOut,
