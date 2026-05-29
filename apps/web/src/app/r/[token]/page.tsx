@@ -240,9 +240,12 @@ function Header({
         </span>
       </div>
 
-      {/* Intro */}
-      <div className="mt-7 flex flex-wrap items-end justify-between gap-x-10 gap-y-6">
-        <div className="min-w-0 flex-1">
+      {/* Intro. On phones the intro + meta STACK (full width each) — a
+          flex-wrap row here squeezed the blurb into a ~100px column because
+          the intro is flex-1/min-w-0 and the meta keeps its width, so the
+          row never actually wrapped. Side-by-side only kicks in at sm+. */}
+      <div className="mt-7 flex flex-col gap-8 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-x-10 sm:gap-y-6">
+        <div className="min-w-0 sm:flex-1">
           <div className="text-primary mb-3 font-mono text-[11px] uppercase tracking-[0.18em]">
             Place an order
           </div>
@@ -266,7 +269,7 @@ function Header({
         </div>
 
         {warehouseName && typeof catalogCount === 'number' ? (
-          <dl className="flex shrink-0 flex-col gap-2.5 text-[12.5px]">
+          <dl className="flex w-full flex-col gap-2.5 text-[12.5px] sm:w-auto sm:shrink-0">
             <div className="flex items-center gap-2.5">
               <dt className="text-muted-foreground w-24 font-mono text-[10px] uppercase tracking-[0.14em]">
                 Warehouse
