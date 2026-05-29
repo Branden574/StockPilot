@@ -9,6 +9,10 @@ import { BrandLockup } from '@/components/brand/mark';
 import { Avatar } from '@/components/ui/avatar';
 import { Hair } from '@/components/ui/card';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
+import {
+  WorkspaceHeaderChip,
+  WorkspaceSwitcherSheet,
+} from '@/components/workspace-switcher';
 import { useAuth } from '@/lib/auth-context';
 import { DRAWER_SECTIONS, type DrawerNavItem } from '@/lib/drawer-nav';
 import { useProfile } from '@/lib/use-profile';
@@ -50,11 +54,20 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     else router.push(item.href as never);
   };
 
+  const [switcherOpen, setSwitcherOpen] = React.useState(false);
+
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ paddingHorizontal: 16, paddingTop: 8 }}>
         <BrandLockup size={26} />
+        <View style={{ marginTop: 12 }}>
+          <WorkspaceHeaderChip onPress={() => setSwitcherOpen(true)} />
+        </View>
       </SafeAreaView>
+      <WorkspaceSwitcherSheet
+        visible={switcherOpen}
+        onDismiss={() => setSwitcherOpen(false)}
+      />
 
       <ScrollView
         contentContainerStyle={{ paddingHorizontal: 8, paddingTop: 16, paddingBottom: 20 }}

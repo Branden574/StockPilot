@@ -40,26 +40,54 @@ export default function TeamScreen() {
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
-    const { data } = await supabase
+    // Two-step fetch — the embedded `profile:user_profiles!user_id (...)`
+    // was returning zero rows because organization_members has two FKs
+    // into user_profiles (user_id + invited_by) and PostgREST's hint
+    // resolution silently nulled the embed.
+    // `invited_email` lives on `organization_invites`, not here — selecting
+    // it caused `column ... does not exist` and dropped every row.
+    const { data: members, error: membersErr } = await supabase
       .from('organization_members')
-      .select(
-        `user_id, role, accepted_at, invited_email,
-         profile:user_profiles!user_id (full_name, avatar_url, email)`,
-      )
+      .select('user_id, role, accepted_at')
       .eq('organization_id', orgId)
       .order('accepted_at', { ascending: false });
+    if (membersErr) {
+      console.warn('[team] members fetch failed:', membersErr.message);
+    }
+    const memberRows = (members ?? []) as Array<{
+      user_id: string;
+      role: string;
+      accepted_at: string | null;
+    }>;
+    const userIds = memberRows.map((m) => m.user_id).filter(Boolean);
+    let profileMap = new Map<string, MemberRow['profile']>();
+    if (userIds.length > 0) {
+      const { data: profiles, error: profilesErr } = await supabase
+        .from('user_profiles')
+        .select('id, full_name, avatar_url, email')
+        .in('id', userIds);
+      if (profilesErr) {
+        console.warn('[team] profile fetch failed:', profilesErr.message);
+      }
+      profileMap = new Map(
+        (profiles ?? []).map((p) => [
+          p.id as string,
+          {
+            full_name: (p.full_name as string | null) ?? null,
+            avatar_url: (p.avatar_url as string | null) ?? null,
+            email: (p.email as string | null) ?? null,
+          },
+        ]),
+      );
+    }
     setRows(
-      (data ?? []).map((row) => {
-        const r = row as Record<string, unknown>;
-        const p = r.profile as MemberRow['profile'] | MemberRow['profile'][] | null;
-        return {
-          user_id: r.user_id as string,
-          role: r.role as string,
-          accepted_at: (r.accepted_at as string | null) ?? null,
-          invited_email: (r.invited_email as string | null) ?? null,
-          profile: Array.isArray(p) ? p[0] ?? null : p,
-        };
-      }),
+      memberRows.map((m) => ({
+        user_id: m.user_id,
+        role: m.role,
+        accepted_at: m.accepted_at,
+        invited_email: null,
+        profile: profileMap.get(m.user_id) ?? null,
+      })),
     );
     setLoading(false);
   }, [orgId]);

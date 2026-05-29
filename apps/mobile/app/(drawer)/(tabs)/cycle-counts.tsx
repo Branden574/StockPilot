@@ -1,6 +1,7 @@
 import * as Network from 'expo-network';
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
 import {
+  ArrowLeft,
   Menu,
   Plus,
   WifiOff,
@@ -8,6 +9,7 @@ import {
 import * as React from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -15,6 +17,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
@@ -37,6 +40,11 @@ interface OpenCount {
   warehouseName: string | null;
   startedAt: string;
   startedBy: string | null;
+  /** Display name of the assignee, when the count is assigned to someone. */
+  assigneeName: string | null;
+  /** 'in_progress' | 'completed' | 'canceled'. */
+  status: string;
+  completedAt: string | null;
   totalLines: number;
   countedLines: number;
   source: 'server' | 'cache';
@@ -47,6 +55,7 @@ export default function CycleCounts() {
   const navigation = useNavigation();
   const { user } = useAuth();
   const { c } = useTheme();
+  const tabBarHeight = useBottomTabBarHeight();
   const sync = useSyncStatus();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   const [orgId, setOrgId] = React.useState<string | null>(null);
@@ -84,6 +93,9 @@ export default function CycleCounts() {
       warehouseName: c.warehouseName,
       startedAt: c.startedAt,
       startedBy: null,
+      assigneeName: null,
+      status: 'in_progress',
+      completedAt: null,
       totalLines: 0,
       countedLines: 0,
       source: 'cache',
@@ -99,14 +111,17 @@ export default function CycleCounts() {
     const { data, error } = await supabase
       .from('cycle_counts')
       .select(
-        `id, started_at, started_by,
+        `id, started_at, started_by, assigned_to, status, completed_at,
          warehouse:warehouses!warehouse_id (name),
          starter:user_profiles!started_by (full_name, email),
+         assignee:user_profiles!assigned_to (full_name, email),
          lines:cycle_count_lines (id, counted_quantity)`,
       )
       .eq('organization_id', orgId)
-      .eq('status', 'in_progress')
-      .order('started_at', { ascending: false });
+      // Load active + recent history (completed/canceled) so the floor can
+      // review past counts, not just open ones.
+      .order('started_at', { ascending: false })
+      .limit(50);
 
     if (error || !data) {
       console.warn('cycle_counts list', error);
@@ -125,12 +140,21 @@ export default function CycleCounts() {
         | null;
       const s = Array.isArray(starterRow) ? starterRow[0] : starterRow;
       const starter = s?.full_name ?? s?.email ?? null;
+      const assigneeRow = r.assignee as
+        | { full_name: string | null; email: string | null }
+        | { full_name: string | null; email: string | null }[]
+        | null;
+      const a = Array.isArray(assigneeRow) ? assigneeRow[0] : assigneeRow;
+      const assignee = a?.full_name ?? a?.email ?? null;
       const lines = (r.lines as Array<{ id: string; counted_quantity: number | null }> | null) ?? [];
       return {
         id: r.id as string,
         warehouseName: whName,
         startedAt: r.started_at as string,
         startedBy: starter,
+        assigneeName: assignee,
+        status: (r.status as string | null) ?? 'in_progress',
+        completedAt: (r.completed_at as string | null) ?? null,
         totalLines: lines.length,
         countedLines: lines.filter((l) => l.counted_quantity !== null).length,
         source: 'server' as const,
@@ -169,9 +193,15 @@ export default function CycleCounts() {
     setRefreshing(false);
   }
 
-  const inProgress = counts.length;
+  // Active = still open (countable). History = posted/canceled, shown
+  // read-only so the floor can review past counts.
+  const active = counts.filter((c) => c.status === 'in_progress');
+  const history = counts.filter((c) => c.status !== 'in_progress');
+  const inProgress = active.length;
   const offlineCount = counts.filter((c) => c.source === 'cache').length;
   const pendingTotal = Array.from(pendingByCount.values()).reduce((a, b) => a + b, 0);
+  // "Today" counts every count started today, regardless of status — so it
+  // doesn't drop to 0 the moment a count is posted.
   const todayCount = counts.filter((c) => {
     if (!c.startedAt) return false;
     const d = new Date(c.startedAt);
@@ -183,8 +213,26 @@ export default function CycleCounts() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={Menu} onPress={openDrawer} />
-          <IconChip icon={Plus} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <IconChip
+              icon={ArrowLeft}
+              onPress={() => {
+                if (router.canGoBack()) router.back();
+                else router.replace('/');
+              }}
+            />
+            <IconChip icon={Menu} onPress={openDrawer} />
+          </View>
+          <IconChip
+            icon={Plus}
+            onPress={() =>
+              Alert.alert('Start a cycle count', 'Pick what you want to count, then tap Select.', [
+                { text: 'Pick items', onPress: () => router.push('/inventory') },
+                { text: 'Pick books', onPress: () => router.push('/books') },
+                { text: 'Cancel', style: 'cancel' },
+              ])
+            }
+          />
         </View>
         <View style={styles.head}>
           <Eyebrow>{`${inProgress} IN PROGRESS${offlineCount > 0 ? ` · ${offlineCount} OFFLINE` : ''}`}</Eyebrow>
@@ -220,19 +268,40 @@ export default function CycleCounts() {
         <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
       ) : (
         <FlatList
-          data={counts}
+          data={active}
           keyExtractor={(c) => c.id}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24, gap: 10 }}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: tabBarHeight + 24, gap: 10 }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />
           }
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <Display size={18}>No counts <Em>yet.</Em></Display>
-              <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
-                Start a cycle count from the web (Cycle counts → New) and pick it up here on the floor.
-              </Body>
-            </View>
+            history.length > 0 ? (
+              <View style={{ paddingVertical: 12 }}>
+                <Body muted>No active counts. Tap ＋ to start one.</Body>
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <Display size={18}>No counts <Em>yet.</Em></Display>
+                <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
+                  Tap ＋ to start a count — pick items or books, tap Select, then Review. Or start one from the web.
+                </Body>
+              </View>
+            )
+          }
+          ListFooterComponent={
+            history.length > 0 ? (
+              <View style={{ marginTop: 22, gap: 10 }}>
+                <Eyebrow>RECENT</Eyebrow>
+                {history.map((h) => (
+                  <CountCard
+                    key={h.id}
+                    count={h}
+                    pending={pendingByCount.get(h.id) ?? 0}
+                    onPress={() => router.push(`/cycle-count/${h.id}`)}
+                  />
+                ))}
+              </View>
+            ) : null
           }
           renderItem={({ item }) => {
             const pending = pendingByCount.get(item.id) ?? 0;
@@ -297,13 +366,36 @@ function CountCard({
 }) {
   const { c } = useTheme();
   const progress = count.totalLines > 0 ? Math.round((count.countedLines / count.totalLines) * 100) : 0;
+  const isCompleted = count.status === 'completed';
+  const isCanceled = count.status === 'canceled';
   const syncStatus = count.source === 'cache' ? 'OFFLINE' : pending > 0 ? 'PENDING' : 'SYNCED';
-  const syncPill =
-    syncStatus === 'OFFLINE'
-      ? <Pill>OFFLINE</Pill>
-      : syncStatus === 'PENDING'
-        ? <Pill status="warn">PENDING</Pill>
-        : <Pill status="ok">SYNCED</Pill>;
+  const statusPill = isCompleted ? (
+    <Pill status="ok">POSTED</Pill>
+  ) : isCanceled ? (
+    <Pill>CANCELED</Pill>
+  ) : syncStatus === 'OFFLINE' ? (
+    <Pill>OFFLINE</Pill>
+  ) : syncStatus === 'PENDING' ? (
+    <Pill status="warn">PENDING</Pill>
+  ) : (
+    <Pill status="ok">SYNCED</Pill>
+  );
+  const progressLabel = isCompleted
+    ? count.completedAt
+      ? `Posted · ${new Date(count.completedAt).toLocaleDateString()}`
+      : 'Posted'
+    : isCanceled
+      ? 'Canceled'
+      : progress === 100
+        ? 'Ready to post · not finished'
+        : `${progress}% counted`;
+  const barKind: 'ok' | 'warn' = isCanceled
+    ? 'warn'
+    : isCompleted
+      ? 'ok'
+      : progress === 100
+        ? 'warn'
+        : 'ok';
   return (
     <Pressable
       onPress={onPress}
@@ -321,11 +413,13 @@ function CountCard({
               {count.warehouseName ?? 'No warehouse'}
             </Mono>
             <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
-              {count.startedBy ?? 'Unknown'}
+              {count.assigneeName
+                ? `Assigned: ${count.assigneeName}`
+                : count.startedBy ?? 'Unknown'}
               {count.startedAt ? ` · ${new Date(count.startedAt).toLocaleDateString()}` : ''}
             </Mono>
           </View>
-          {syncPill}
+          {statusPill}
         </View>
         {count.source === 'server' ? (
           <View style={countStyles.progressRow}>
@@ -344,11 +438,11 @@ function CountCard({
               <StockBar
                 value={progress}
                 max={100}
-                kind={progress === 100 ? 'ok' : progress < 30 ? 'warn' : 'ok'}
+                kind={barKind}
                 height={4}
               />
               <Mono size={10} tracking={0.04} color={c.ink4}>
-                {progress}% complete
+                {progressLabel}
               </Mono>
             </View>
           </View>

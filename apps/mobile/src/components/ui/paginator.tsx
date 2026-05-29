@@ -1,0 +1,163 @@
+import { ChevronLeft, ChevronRight } from 'lucide-react-native';
+import * as React from 'react';
+import { Pressable, View } from 'react-native';
+
+import { Mono } from '@/components/ui/text';
+import { FONT } from '@/lib/theme';
+import { useTheme } from '@/lib/use-theme';
+
+/**
+ * Returns a windowed page list with ellipses, e.g.:
+ *   pageNumbers(1, 8)  → [1, 2, 3, 4, 5, '…', 8]
+ *   pageNumbers(5, 8)  → [1, '…', 4, 5, 6, '…', 8]
+ *   pageNumbers(8, 8)  → [1, '…', 4, 5, 6, 7, 8]
+ */
+function pageNumbers(current: number, total: number): Array<number | 'ellipsis'> {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  const result: Array<number | 'ellipsis'> = [1];
+  if (current <= 4) {
+    for (let i = 2; i <= 5; i++) result.push(i);
+    result.push('ellipsis');
+    result.push(total);
+  } else if (current >= total - 3) {
+    result.push('ellipsis');
+    for (let i = total - 4; i <= total; i++) result.push(i);
+  } else {
+    result.push('ellipsis');
+    for (let i = current - 1; i <= current + 1; i++) result.push(i);
+    result.push('ellipsis');
+    result.push(total);
+  }
+  return result;
+}
+
+export function Paginator({
+  page,
+  total,
+  pageSize,
+  onPageChange,
+}: {
+  page: number;
+  total: number;
+  pageSize: number;
+  onPageChange: (p: number) => void;
+}) {
+  const { c } = useTheme();
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (totalPages <= 1) return null;
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+  const nums = pageNumbers(page, totalPages);
+
+  return (
+    <View style={{ paddingVertical: 18, alignItems: 'center', gap: 12 }}>
+      <Mono size={10.5} tracking={0.12} upper color={c.ink4}>
+        SHOWING {start.toLocaleString()}–{end.toLocaleString()} OF {total.toLocaleString()}
+      </Mono>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <PaginatorArrow
+          direction="prev"
+          onPress={() => onPageChange(page - 1)}
+          disabled={page <= 1}
+        />
+        {nums.map((n, i) =>
+          n === 'ellipsis' ? (
+            <View
+              key={`e${i}`}
+              style={{ width: 22, alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Mono size={14} color={c.ink4}>
+                ·
+              </Mono>
+            </View>
+          ) : (
+            <PageButton
+              key={n}
+              num={n}
+              active={n === page}
+              onPress={() => onPageChange(n)}
+            />
+          ),
+        )}
+        <PaginatorArrow
+          direction="next"
+          onPress={() => onPageChange(page + 1)}
+          disabled={page >= totalPages}
+        />
+      </View>
+    </View>
+  );
+}
+
+function PageButton({
+  num,
+  active,
+  onPress,
+}: {
+  num: number;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={4}
+      style={({ pressed }) => ({
+        minWidth: 36,
+        height: 36,
+        paddingHorizontal: 9,
+        borderRadius: 8,
+        backgroundColor: active ? c.ink : 'transparent',
+        borderWidth: active ? 0 : 1,
+        borderColor: c.hair,
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: pressed && !active ? 0.7 : 1,
+      })}
+    >
+      <Mono
+        size={13}
+        tracking={-0.012}
+        color={active ? c.paper : c.ink}
+        style={{ fontFamily: FONT.display }}
+      >
+        {num}
+      </Mono>
+    </Pressable>
+  );
+}
+
+function PaginatorArrow({
+  direction,
+  onPress,
+  disabled,
+}: {
+  direction: 'prev' | 'next';
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  const { c } = useTheme();
+  const Icon = direction === 'prev' ? ChevronLeft : ChevronRight;
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      hitSlop={6}
+      style={({ pressed }) => ({
+        width: 36,
+        height: 36,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: c.hair,
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: disabled ? 0.3 : pressed ? 0.7 : 1,
+      })}
+    >
+      <Icon size={16} color={c.ink} strokeWidth={1.6} />
+    </Pressable>
+  );
+}

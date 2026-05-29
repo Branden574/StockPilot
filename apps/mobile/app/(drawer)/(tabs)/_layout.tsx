@@ -1,8 +1,8 @@
 import { BlurView } from 'expo-blur';
 import { Tabs } from 'expo-router';
 import {
+  Book,
   Box,
-  ClipboardCheck,
   Layers,
   ScanLine,
   Truck,
@@ -71,6 +71,13 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="books"
+        options={{
+          title: 'Books',
+          tabBarIcon: ({ color, focused }) => <TabIcon icon={Book} color={color} focused={focused} />,
+        }}
+      />
+      <Tabs.Screen
         name="receive"
         options={{
           title: 'POs',
@@ -78,17 +85,21 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="cycle-counts"
-        options={{
-          title: 'Counts',
-          tabBarIcon: ({ color, focused }) => <TabIcon icon={ClipboardCheck} color={color} focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
         name="scan"
         options={{
           title: 'Scan',
           tabBarIcon: ({ color, focused }) => <TabIcon icon={ScanLine} color={color} focused={focused} />,
+        }}
+      />
+      {/* Cycle counts moved off the bottom strip — Books took its
+          place to match the school-books-heavy workflow. Counts is
+          still routable via the drawer + via `/cycle-counts` deep
+          links; `href: null` mounts it inside the tabs navigator so
+          the bottom bar persists on that screen. */}
+      <Tabs.Screen
+        name="cycle-counts"
+        options={{
+          href: null,
         }}
       />
       {/* Settings now lives in the drawer as a top-level route — see
