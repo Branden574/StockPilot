@@ -64,11 +64,16 @@ async function resolveApiEnabledModules(
   supabase: any,
   organizationId: string,
 ): Promise<Set<ModuleId>> {
-  const { data: modRows } = await supabase
+  const { data: modRows, error } = await supabase
     .from('organization_modules')
     .select('module_id')
     .eq('organization_id', organizationId)
     .eq('enabled', true);
+  if (error) {
+    // Fail open for core / closed for optional (empty set). Log so a silent
+    // empty set is distinguishable from "org genuinely has no optional modules".
+    console.error('[resolveApiEnabledModules] failed:', error);
+  }
   return new Set(
     ((modRows ?? []) as Array<{ module_id: string }>).map((r) => r.module_id as ModuleId),
   );

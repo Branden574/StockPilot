@@ -75,11 +75,17 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
     ctx.organizationId,
     ctx.role,
   );
-  const { data: modRows } = await supabase
+  const { data: modRows, error: modErr } = await supabase
     .from('organization_modules')
     .select('module_id')
     .eq('organization_id', ctx.organizationId)
     .eq('enabled', true);
+  if (modErr) {
+    // Fail OPEN for core, CLOSED for optional: an empty set still lets core
+    // modules through (assertModuleEnabled checks the registry tier), while
+    // optional/premium are denied. Log so a silent empty set is observable.
+    console.error('[withContext] organization_modules query failed:', modErr);
+  }
   const enabledModules = new Set(
     ((modRows ?? []) as Array<{ module_id: string }>).map((r) => r.module_id as ModuleId),
   );
@@ -145,7 +151,10 @@ export function serviceErrorStatus(code: ServiceError['code']): number {
     case 'forbidden':
     case 'module_disabled': return 403;
     case 'not_found': return 404;
-    case 'validation_error':
+    // 400 for request-validation failures (the conventional choice, and what
+    // routes adopting this helper should converge on); 409 reserved for true
+    // state conflicts / plan limits.
+    case 'validation_error': return 400;
     case 'conflict':
     case 'plan_limit_exceeded': return 409;
     default: return 500;
