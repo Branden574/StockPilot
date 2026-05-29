@@ -1,9 +1,21 @@
-import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { ArrowLeft, Barcode, BookMarked, Menu, Plus, Search } from 'lucide-react-native';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import {
+  ArrowLeft,
+  Barcode,
+  BookMarked,
+  Check,
+  CheckCircle2,
+  Circle,
+  ListChecks,
+  Menu,
+  Plus,
+  Search,
+} from 'lucide-react-native';
 import * as React from 'react';
 import {
-  ActivityIndicator,
   FlatList,
+  Keyboard,
+  Platform,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -11,6 +23,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 import {
   ActiveFilterPill,
@@ -22,15 +35,20 @@ import {
   type FilterOption,
   type FilterState,
 } from '@/components/filter-sheet';
+import { CountSelectBar } from '@/components/count-select-bar';
 import { Card } from '@/components/ui/card';
+import { Paginator } from '@/components/ui/paginator';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
+import { BookListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
-import { useOrg } from '@/lib/use-org';
+import { countSelection, useIsPicked } from '@/lib/use-count-selection';
+import { signItemImages } from '@/lib/image-cache';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { useWorkspace } from '@/lib/use-workspace';
 
 interface BookRow {
   id: string;
@@ -48,13 +66,26 @@ interface BookRow {
   grade: string | null;
 }
 
+const bookKeyExtractor = (b: BookRow): string => b.id;
+
+const PAGE_SIZE = 50;
+
 export default function BooksScreen() {
   const router = useRouter();
-  const { orgId } = useOrg();
+  // Org + warehouse both come from the workspace switcher so they stay in
+  // sync. (Sourcing orgId from useOrg's .limit(1) while taking the warehouse
+  // from the active workspace mismatched on org switch → empty list.)
+  const { activeOrgId: orgId, activeWarehouseId } = useWorkspace();
   const navigation = useNavigation();
   const { c } = useTheme();
+  // Bottom tab bar is absolute-positioned and overlays content — use
+  // the navigator-reported height so the last book row clears the blur.
+  const tabBarHeight = useBottomTabBarHeight();
   const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
   const [rows, setRows] = React.useState<BookRow[]>([]);
+  const [total, setTotal] = React.useState(0);
+  const [page, setPage] = React.useState(1);
+  const listRef = React.useRef<FlatList<BookRow> | null>(null);
   const [bookCategories, setBookCategories] = React.useState<FilterOption[]>([]);
   const [locations, setLocations] = React.useState<FilterOption[]>([]);
   const [charters, setCharters] = React.useState<FilterOption[]>([]);
@@ -63,6 +94,9 @@ export default function BooksScreen() {
   const [q, setQ] = React.useState('');
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  // Cycle-count select mode: tapping a card toggles it into the shared
+  // count-selection store instead of opening the book.
+  const [selectMode, setSelectMode] = React.useState(false);
 
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
 
@@ -114,17 +148,8 @@ export default function BooksScreen() {
   }, [orgId]);
 
   const load = React.useCallback(
-    async (query: string, f: FilterState, allBookCatIds: string[]) => {
+    async (query: string, f: FilterState, _allBookCatIds: string[], pageParam: number) => {
       if (!orgId) return;
-      if (allBookCatIds.length === 0) {
-        setRows([]);
-        setLoading(false);
-        return;
-      }
-
-      // If user picked specific book categories, narrow to those. Otherwise
-      // include every book category in the org.
-      const catFilter = f.categoryIds.length > 0 ? f.categoryIds : allBookCatIds;
 
       const sortMap: Record<typeof f.sort, { col: string; asc: boolean }> = {
         updated_desc: { col: 'updated_at', asc: false },
@@ -134,18 +159,44 @@ export default function BooksScreen() {
         qty_asc: { col: 'quantity_on_hand', asc: true },
       };
       const ord = sortMap[f.sort];
+      const isLow = f.status === 'low';
 
+      // Match web: books are identified by `item_type='book'` directly.
+      // The previous category-name LIKE '%book%' filter missed every
+      // book whose category didn't happen to contain the word "book"
+      // (47 of 93 records on this org). Web mirrors this filter in
+      // InventoryService.list({ itemType: 'book' }).
       let req = supabase
         .from('inventory_items')
         .select(
           `id, name, sku, barcode, quantity_on_hand, reorder_point, custom_fields,
-           category_id, primary_location_id, charter_id, updated_at`,
+           category_id, primary_location_id, charter_id, warehouse_id, updated_at`,
+          { count: 'exact' },
         )
         .eq('organization_id', orgId)
-        .in('category_id', catFilter)
+        .eq('item_type', 'book')
         .is('deleted_at', null)
-        .order(ord.col, { ascending: ord.asc })
-        .limit(200);
+        .order(ord.col, { ascending: ord.asc });
+
+      if (isLow) {
+        // 'low' is a per-row client filter; widen the window and skip
+        // server-side paging.
+        req = req.limit(500);
+      } else {
+        const start = (pageParam - 1) * PAGE_SIZE;
+        const end = start + PAGE_SIZE - 1;
+        req = req.range(start, end);
+      }
+
+      // Honor the drawer workspace's active warehouse so book lookups
+      // scope the same way as Items.
+      if (activeWarehouseId) {
+        req = req.eq('warehouse_id', activeWarehouseId);
+      }
+
+      if (f.categoryIds.length > 0) {
+        req = req.in('category_id', f.categoryIds);
+      }
 
       if (query.trim()) {
         req = req.or(
@@ -169,7 +220,7 @@ export default function BooksScreen() {
       }
       if (f.status === 'out') req = req.lte('quantity_on_hand', 0);
 
-      const { data, error } = await req;
+      const { data, count, error } = await req;
       if (error) console.warn('books list', error);
 
       let bookRows: BookRow[] = (data ?? []).map((row) => {
@@ -192,7 +243,7 @@ export default function BooksScreen() {
         };
       });
 
-      if (f.status === 'low') {
+      if (isLow) {
         bookRows = bookRows.filter(
           (r) =>
             r.reorder_point > 0
@@ -215,13 +266,7 @@ export default function BooksScreen() {
         }
         const paths = Array.from(byItem.values());
         if (paths.length > 0) {
-          const { data: signed } = await supabase.storage
-            .from('item-images')
-            .createSignedUrls(paths, 60 * 60);
-          const urlByPath = new Map<string, string>();
-          for (const s of (signed ?? []) as Array<{ path: string | null; signedUrl: string }>) {
-            if (s.path && s.signedUrl) urlByPath.set(s.path, s.signedUrl);
-          }
+          const urlByPath = await signItemImages(paths);
           for (const b of bookRows) {
             const p = byItem.get(b.id);
             if (p) b.imageUrl = urlByPath.get(p) ?? null;
@@ -230,9 +275,10 @@ export default function BooksScreen() {
       }
 
       setRows(bookRows);
+      setTotal(isLow ? bookRows.length : count ?? bookRows.length);
       setLoading(false);
     },
-    [orgId],
+    [orgId, activeWarehouseId],
   );
 
   React.useEffect(() => {
@@ -240,19 +286,64 @@ export default function BooksScreen() {
     void loadLookups();
   }, [orgId, loadLookups]);
 
+  // Whenever the query / filter / workspace changes, jump back to page 1.
+  React.useEffect(() => {
+    setPage(1);
+  }, [q, filter, activeWarehouseId]);
+
   React.useEffect(() => {
     if (!orgId) return;
-    const t = setTimeout(() => void load(q, filter, bookCatIds), 250);
+    const t = setTimeout(() => void load(q, filter, bookCatIds, page), 250);
     return () => clearTimeout(t);
-  }, [q, filter, bookCatIds, load, orgId]);
+  }, [q, filter, bookCatIds, load, orgId, activeWarehouseId, page]);
 
   async function refresh() {
     setRefreshing(true);
-    await load(q, filter, bookCatIds);
+    await load(q, filter, bookCatIds, page);
     setRefreshing(false);
   }
 
+  const onPageChange = React.useCallback((p: number) => {
+    // Show skeleton during the transition so page changes feel
+    // immediate instead of staring at the prior page until the fetch
+    // lands. load() flips loading back to false when done.
+    setLoading(true);
+    setPage(p);
+    listRef.current?.scrollToOffset({ offset: 0, animated: false });
+  }, []);
+
+  // Dismiss any keyboard left open from a previous screen / tab switch.
+  useFocusEffect(
+    React.useCallback(() => {
+      Keyboard.dismiss();
+    }, []),
+  );
+
   const filterCount = activeFilterCount(filter);
+
+  const onBookPress = React.useCallback(
+    (id: string) => {
+      Keyboard.dismiss();
+      router.push({ pathname: '/item/[id]', params: { id } });
+    },
+    [router],
+  );
+
+  const onToggleSelect = React.useCallback((b: BookRow) => {
+    countSelection.toggle({ id: b.id, sku: b.sku, name: b.name, itemType: 'book' });
+  }, []);
+
+  const renderBookItem = React.useCallback(
+    ({ item }: { item: BookRow }) => (
+      <BookCard
+        book={item}
+        onBookPress={onBookPress}
+        selectMode={selectMode}
+        onToggleSelect={onToggleSelect}
+      />
+    ),
+    [onBookPress, selectMode, onToggleSelect],
+  );
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -273,10 +364,19 @@ export default function BooksScreen() {
             />
             <IconChip icon={Menu} onPress={openDrawer} />
           </View>
-          <IconChip icon={Plus} onPress={() => router.push('/scan')} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <IconChip
+              icon={selectMode ? Check : ListChecks}
+              onPress={() => setSelectMode((v) => !v)}
+            />
+            <IconChip
+              icon={Plus}
+              onPress={() => router.push({ pathname: '/item/new', params: { type: 'book' } })}
+            />
+          </View>
         </View>
         <View style={styles.head}>
-          <Eyebrow>{`INVENTORY · ${rows.length} BOOKS`}</Eyebrow>
+          <Eyebrow>{`INVENTORY · ${total.toLocaleString()} BOOKS`}</Eyebrow>
           <Display size={34} style={{ marginTop: 12 }}>
             Book <Em>catalog.</Em>
           </Display>
@@ -297,6 +397,9 @@ export default function BooksScreen() {
               placeholderTextColor={c.ink4}
               autoCapitalize="none"
               autoCorrect={false}
+              autoFocus={false}
+              returnKeyType="search"
+              onSubmitEditing={() => Keyboard.dismiss()}
               style={[
                 styles.searchInput,
                 { color: c.ink, fontFamily: FONT.displayRegular },
@@ -321,12 +424,13 @@ export default function BooksScreen() {
       </SafeAreaView>
 
       {loading ? (
-        <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
+        <BookListSkeleton count={6} />
       ) : (
         <FlatList
+          ref={listRef}
           data={rows}
-          keyExtractor={(b) => b.id}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24, gap: 10 }}
+          keyExtractor={bookKeyExtractor}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: tabBarHeight + 24, gap: 10 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
           ListEmptyComponent={
             <View style={styles.empty}>
@@ -336,12 +440,21 @@ export default function BooksScreen() {
               </Body>
             </View>
           }
-          renderItem={({ item }) => (
-            <BookCard
-              book={item}
-              onPress={() => router.push({ pathname: '/item/[id]', params: { id: item.id } })}
+          ListFooterComponent={
+            <Paginator
+              page={page}
+              total={total}
+              pageSize={PAGE_SIZE}
+              onPageChange={onPageChange}
             />
-          )}
+          }
+          renderItem={renderBookItem}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          initialNumToRender={12}
+          maxToRenderPerBatch={8}
+          windowSize={9}
+          removeClippedSubviews={Platform.OS === 'android'}
         />
       )}
 
@@ -354,12 +467,25 @@ export default function BooksScreen() {
         locations={locations}
         charters={charters}
       />
+
+      <CountSelectBar visible={selectMode} bottomInset={tabBarHeight} />
     </View>
   );
 }
 
-function BookCard({ book, onPress }: { book: BookRow; onPress: () => void }) {
+const BookCard = React.memo(function BookCard({
+  book,
+  onBookPress,
+  selectMode,
+  onToggleSelect,
+}: {
+  book: BookRow;
+  onBookPress: (id: string) => void;
+  selectMode: boolean;
+  onToggleSelect: (book: BookRow) => void;
+}) {
   const { c } = useTheme();
+  const picked = useIsPicked(book.id);
   const author =
     (book.custom_fields?.book_author as string | undefined)
     ?? (book.custom_fields?.author as string | undefined)
@@ -369,7 +495,10 @@ function BookCard({ book, onPress }: { book: BookRow; onPress: () => void }) {
   const status: 'ok' | 'warn' | 'crit' =
     book.quantity_on_hand <= 0 ? 'crit' : lowStock ? 'warn' : 'ok';
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
+    <Pressable
+      onPress={() => (selectMode ? onToggleSelect(book) : onBookPress(book.id))}
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
       <Card padding={14}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
           <Thumb size={56} icon={BookMarked} imageUrl={book.imageUrl} />
@@ -383,12 +512,12 @@ function BookCard({ book, onPress }: { book: BookRow; onPress: () => void }) {
               {book.name}
             </Body>
             {author ? (
-              <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+              <Mono size={11.5} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 4 }}>
                 {author}
               </Mono>
             ) : null}
             {isbn ? (
-              <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+              <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 2 }}>
                 {isbn}
                 {book.grade ? ` · Grade ${book.grade}` : ''}
               </Mono>
@@ -402,11 +531,20 @@ function BookCard({ book, onPress }: { book: BookRow; onPress: () => void }) {
             {status === 'warn' ? <Pill status="warn">LOW</Pill> : null}
             {status === 'crit' ? <Pill status="crit">OUT</Pill> : null}
           </View>
+          {selectMode ? (
+            <View style={{ marginLeft: 2 }}>
+              {picked ? (
+                <CheckCircle2 size={22} color={c.ink} strokeWidth={2} />
+              ) : (
+                <Circle size={22} color={c.ink4} strokeWidth={1.6} />
+              )}
+            </View>
+          ) : null}
         </View>
       </Card>
     </Pressable>
   );
-}
+});
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

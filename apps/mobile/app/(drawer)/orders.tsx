@@ -1,4 +1,4 @@
-import { Linking } from 'react-native';
+import { type Href, useRouter } from 'expo-router';
 import { ShoppingCart } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
@@ -109,16 +109,16 @@ export default function OrdersScreen() {
 
 function OrderCard({ order }: { order: OrderRow }) {
   const { c } = useTheme();
+  const router = useRouter();
   const meta = STATUS_META[order.status] ?? { label: order.status.toUpperCase(), status: 'default' as const };
   const requester = order.requester_name ?? order.requester_email ?? 'Unknown requester';
   const when = new Date(order.created_at);
 
-  function openOnWeb() {
-    Linking.openURL(`https://stockpilotusa.com/dashboard/orders/${order.id}`).catch(() => undefined);
-  }
-
   return (
-    <Pressable onPress={openOnWeb} style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
+    <Pressable
+      onPress={() => router.push(`/order/${order.id}` as Href)}
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
       <Card padding={16}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
           <View style={{ flex: 1, minWidth: 0 }}>

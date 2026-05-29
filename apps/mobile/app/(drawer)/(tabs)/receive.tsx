@@ -1,5 +1,6 @@
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
 import {
+  ArrowLeft,
   Camera,
   Menu,
   Search,
@@ -14,6 +15,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 import { Card } from '@/components/ui/card';
 import { MintWash } from '@/components/ui/mint-wash';
@@ -44,6 +46,7 @@ export default function Receive() {
   const navigation = useNavigation();
   const { user } = useAuth();
   const { c } = useTheme();
+  const tabBarHeight = useBottomTabBarHeight();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const [pos, setPos] = React.useState<OpenPo[]>([]);
@@ -133,7 +136,16 @@ export default function Receive() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={Menu} onPress={openDrawer} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <IconChip
+              icon={ArrowLeft}
+              onPress={() => {
+                if (router.canGoBack()) router.back();
+                else router.replace('/');
+              }}
+            />
+            <IconChip icon={Menu} onPress={openDrawer} />
+          </View>
           <IconChip icon={Search} />
         </View>
         <View style={styles.head}>
@@ -193,7 +205,7 @@ export default function Receive() {
         <FlatList
           data={pos}
           keyExtractor={(p) => p.id}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24, gap: 10 }}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: tabBarHeight + 24, gap: 10 }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />
           }

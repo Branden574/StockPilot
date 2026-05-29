@@ -4,7 +4,10 @@ import {
   Bell,
   Link2,
   Menu,
+  Minus,
+  Plus,
   RefreshCcw,
+  RotateCcw,
 } from 'lucide-react-native';
 import * as React from 'react';
 import {
@@ -16,6 +19,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 import { Avatar } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
@@ -38,6 +42,29 @@ interface Summary {
   lowStockCount: number;
 }
 
+interface RecentMovement {
+  id: string;
+  itemId: string;
+  itemName: string;
+  movementType: string;
+  quantityChange: number;
+  reason: string | null;
+  createdAt: string;
+}
+
+const MOVEMENT_VERB: Record<string, string> = {
+  add: 'Added',
+  remove: 'Removed',
+  adjust: 'Adjusted',
+  transfer: 'Transferred',
+  receive_po: 'Received',
+  return: 'Returned',
+  damage: 'Damaged',
+  loss: 'Lost',
+  correction: 'Corrected',
+  initial: 'Initialized',
+};
+
 const SHORT_MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const SHORT_DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -47,7 +74,9 @@ export default function Home() {
   const { user } = useAuth();
   const { c } = useTheme();
   const profile = useProfile();
+  const tabBarHeight = useBottomTabBarHeight();
   const [summary, setSummary] = React.useState<Summary | null>(null);
+  const [recent, setRecent] = React.useState<RecentMovement[]>([]);
   const [orgName, setOrgName] = React.useState<string>('Your workspace');
   const [refreshing, setRefreshing] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
@@ -68,7 +97,7 @@ export default function Home() {
     const orgObj = Array.isArray(orgsField) ? orgsField[0] : orgsField;
     setOrgName(((orgObj as { name?: string } | null)?.name as string | undefined) ?? 'Workspace');
 
-    const [{ count: itemCount }, { count: outOfStockCount }, valueRpc, lowRpc] = await Promise.all([
+    const [{ count: itemCount }, { count: outOfStockCount }, valueRpc, lowRpc, movements] = await Promise.all([
       supabase
         .from('inventory_items')
         .select('id', { count: 'exact', head: true })
@@ -84,6 +113,14 @@ export default function Home() {
         .is('deleted_at', null),
       supabase.rpc('inventory_value', { p_org_id: orgId }),
       supabase.rpc('low_stock_count', { p_org_id: orgId }),
+      supabase
+        .from('stock_movements')
+        .select(
+          'id, movement_type, quantity_change, reason, created_at, item_id, item:inventory_items!item_id (name)',
+        )
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false })
+        .limit(3),
     ]);
 
     setSummary({
@@ -92,6 +129,22 @@ export default function Home() {
       inventoryValue: typeof valueRpc.data === 'number' ? valueRpc.data : 0,
       lowStockCount: typeof lowRpc.data === 'number' ? lowRpc.data : 0,
     });
+    setRecent(
+      (movements.data ?? []).map((row) => {
+        const r = row as Record<string, unknown>;
+        const item = r.item as { name?: string } | { name?: string }[] | null;
+        const itemObj = Array.isArray(item) ? item[0] ?? null : item;
+        return {
+          id: r.id as string,
+          itemId: r.item_id as string,
+          itemName: (itemObj?.name as string | undefined) ?? 'Unknown item',
+          movementType: r.movement_type as string,
+          quantityChange: Number(r.quantity_change) || 0,
+          reason: (r.reason as string | null) ?? null,
+          createdAt: r.created_at as string,
+        };
+      }),
+    );
     setLoading(false);
   }, [user]);
 
@@ -144,7 +197,7 @@ export default function Home() {
       </SafeAreaView>
 
       <ScrollView
-        contentContainerStyle={{ paddingBottom: 30 }}
+        contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -234,7 +287,45 @@ export default function Home() {
               </Pressable>
             </View>
 
-            <View style={{ paddingHorizontal: 20, marginTop: 16 }}>
+            <View style={{ paddingHorizontal: 20, marginTop: 22 }}>
+              <View style={styles.sectionHead}>
+                <Eyebrow>RECENT MOVEMENTS</Eyebrow>
+                <Pressable
+                  onPress={() => router.push('/movements')}
+                  hitSlop={10}
+                  style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+                >
+                  <Mono size={11} tracking={0.06} color={c.ink3}>
+                    See all
+                  </Mono>
+                </Pressable>
+              </View>
+              {recent.length === 0 ? (
+                <Card padding={18}>
+                  <Body muted>
+                    No stock movements yet. Scan, count, or receive items to fill this feed.
+                  </Body>
+                </Card>
+              ) : (
+                <Card padding={0}>
+                  {recent.map((m, i) => (
+                    <MovementMiniRow
+                      key={m.id}
+                      m={m}
+                      divider={i < recent.length - 1}
+                      onPress={() =>
+                        router.push({ pathname: '/item/[id]', params: { id: m.itemId } })
+                      }
+                    />
+                  ))}
+                </Card>
+              )}
+            </View>
+
+            <View style={{ paddingHorizontal: 20, marginTop: 22 }}>
+              <View style={styles.sectionHead}>
+                <Eyebrow>BUNDLES</Eyebrow>
+              </View>
               <Pressable
                 onPress={() => router.push('/bundles')}
                 style={({ pressed }) => ({ opacity: pressed ? 0.92 : 1 })}
@@ -259,9 +350,104 @@ export default function Home() {
   );
 }
 
+// Strip noisy auto-generated UUID parentheticals (e.g.
+// "Order pick (order_request 4af...)" -> "Order pick") and clamp
+// length so the secondary line doesn't wrap on narrow rows.
+function cleanReason(raw: string | null): string {
+  if (!raw) return '';
+  const stripped = raw.replace(/\s*\([^)]*\)\s*/g, '').trim();
+  if (stripped.length <= 38) return stripped;
+  return stripped.slice(0, 36).trimEnd() + '…';
+}
+
+function MovementMiniRow({
+  m,
+  divider,
+  onPress,
+}: {
+  m: RecentMovement;
+  divider: boolean;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  const isAdd = m.quantityChange > 0;
+  const isSub = m.quantityChange < 0;
+  const Icon = isAdd ? Plus : isSub ? Minus : RotateCcw;
+  const pipColor = isAdd ? ACCENT.mint : isSub ? ACCENT.crit : ACCENT.warn;
+  const verb = MOVEMENT_VERB[m.movementType] ?? m.movementType;
+  const time = new Date(m.createdAt).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const reason = cleanReason(m.reason);
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.miniRow,
+        { borderBottomColor: c.hair, borderBottomWidth: divider ? StyleSheet.hairlineWidth : 0 },
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      <View style={styles.miniTime}>
+        <Mono size={11} tracking={0.04} color={c.ink4}>
+          {time}
+        </Mono>
+        <View style={[styles.miniPip, { backgroundColor: pipColor }]} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Body size={14.5} color={c.ink} numberOfLines={1} style={{ fontFamily: FONT.display }}>
+          {m.itemName}
+        </Body>
+        <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+          {verb}
+          {reason ? ` · ${reason}` : ''}
+        </Mono>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 8 }}>
+        <Icon size={12} color={c.ink3} strokeWidth={1.8} />
+        <Mono
+          size={15}
+          tracking={-0.012}
+          color={isAdd ? ACCENT.mintInk : isSub ? ACCENT.crit : c.ink}
+          style={{ fontFamily: FONT.display }}
+        >
+          {isAdd ? '+' : ''}
+          {m.quantityChange}
+        </Mono>
+      </View>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   root: {
     flex: 1,
+  },
+  sectionHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: 10,
+  },
+  miniRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 14,
+  },
+  miniTime: {
+    width: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  miniPip: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
   },
   topbar: {
     paddingHorizontal: 12,

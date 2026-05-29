@@ -17,8 +17,10 @@
     },
     "preview": {
       "distribution": "internal",
+      "node": "20.11.0",
       "ios": {
-        "resourceClass": "m-medium"
+        "resourceClass": "m-medium",
+        "image": "latest"
       },
       "channel": "preview",
       "env": {
@@ -27,8 +29,10 @@
     },
     "production": {
       "autoIncrement": true,
+      "node": "20.11.0",
       "ios": {
-        "resourceClass": "m-medium"
+        "resourceClass": "m-medium",
+        "image": "latest"
       },
       "channel": "production",
       "env": {
@@ -39,9 +43,11 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "REPLACE_WITH_YOUR_APPLE_ID_EMAIL",
-        "ascAppId": "REPLACE_WITH_APP_STORE_CONNECT_APP_ID",
-        "appleTeamId": "REPLACE_WITH_APPLE_TEAM_ID"
+        "ascAppId": "6773892519",
+        "ascApiKeyPath": "../../secrets/AuthKey_9SA2GBH9YV.p8",
+        "ascApiKeyId": "9SA2GBH9YV",
+        "ascApiKeyIssuerId": "aead110f-3dbb-4ea8-86a3-c0a41f22b775",
+        "appleTeamId": "6R2T984G9S"
       },
       "android": {
         "serviceAccountKeyPath": "../../secrets/play-store-service-account.json",

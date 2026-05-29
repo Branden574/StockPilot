@@ -9,6 +9,12 @@ const config: ExpoConfig = {
   userInterfaceStyle: 'automatic',
   newArchEnabled: true,
   icon: './assets/icon.png',
+  updates: {
+    url: 'https://u.expo.dev/68235e4f-fd32-4c8c-a2b5-9f9df663e6cc',
+  },
+  runtimeVersion: {
+    policy: 'appVersion',
+  },
   splash: {
     image: './assets/icon.png',
     resizeMode: 'contain',
@@ -57,6 +63,11 @@ const config: ExpoConfig = {
     ],
     'expo-secure-store',
     'expo-sqlite',
+    // Registers the native push module + adds the iOS `aps-environment`
+    // entitlement. Without this plugin the build has no push entitlement,
+    // so getExpoPushTokenAsync() fails on device and no token is ever
+    // registered (the web then shows "No registered devices").
+    'expo-notifications',
     [
       'expo-local-authentication',
       {
@@ -79,7 +90,11 @@ const config: ExpoConfig = {
     supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL,
     supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
     apiUrl: process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000',
+    eas: {
+      projectId: '68235e4f-fd32-4c8c-a2b5-9f9df663e6cc',
+    },
   },
+  owner: 'branden615',
 };
 
 export default config;

@@ -1,7 +1,9 @@
+import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ArrowLeftRight,
   ArrowUpRight,
+  Camera,
   ChevronLeft,
   Edit3,
   Minus,
@@ -12,9 +14,10 @@ import * as React from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
+  KeyboardAvoidingView,
   Linking,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -24,11 +27,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
+import { CachedImage } from '@/components/ui/cached-image';
 import { Card, Hair } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useOrg } from '@/lib/use-org';
+import { signItemImage } from '@/lib/image-cache';
+import { resizeForUpload } from '@/lib/image-resize';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -50,6 +56,14 @@ interface Item {
   category_name: string | null;
   supplier_name: string | null;
   location_name: string | null;
+  warehouse_name: string | null;
+  bin_location: string | null;
+  charter_name: string | null;
+  item_type: string | null;
+  rack_label: string | null;
+  crate_color: string | null;
+  crate_number: string | null;
+  grade: string | null;
   imageUrl: string | null;
 }
 
@@ -79,6 +93,15 @@ const TYPE_LABEL: Record<string, string> = {
 
 type TabId = 'overview' | 'movements';
 
+function mimeForExt(ext: string): string {
+  const e = ext.toLowerCase();
+  if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
+  if (e === 'png') return 'image/png';
+  if (e === 'heic') return 'image/heic';
+  if (e === 'webp') return 'image/webp';
+  return `image/${e}`;
+}
+
 export default function ItemDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -90,6 +113,7 @@ export default function ItemDetail() {
   const [busy, setBusy] = React.useState(false);
   const [tab, setTab] = React.useState<TabId>('overview');
   const [adjustOpen, setAdjustOpen] = React.useState(false);
+  const [photoBusy, setPhotoBusy] = React.useState(false);
 
   const load = React.useCallback(async () => {
     if (!id) return;
@@ -98,7 +122,8 @@ export default function ItemDetail() {
       .select(
         `id, name, sku, barcode, description, quantity_on_hand,
          reorder_point, reorder_quantity, unit_cost, retail_price,
-         unit_of_measure, status, category_id,
+         unit_of_measure, status, category_id, item_type, bin_location,
+         warehouse_id, custom_fields,
          category:categories!category_id (name),
          supplier:suppliers!supplier_id (name),
          primary_location:locations!primary_location_id (name)`,
@@ -116,7 +141,65 @@ export default function ItemDetail() {
     const sup = r.supplier as { name?: string } | { name?: string }[] | null;
     const loc = r.primary_location as { name?: string } | { name?: string }[] | null;
 
-    // Primary image — match scan.tsx pattern.
+    // Rack stamp keys differ by item_type so books and products don't
+    // clobber each other in custom_fields:
+    //   • products:  rack_number + rack_row
+    //   • books:     book_rack_number + book_rack_row
+    // Crate info (color + number) and grade are book-only — products
+    // are just on a rack.
+    const cf = (r.custom_fields as Record<string, unknown> | null) ?? null;
+    const cfStr = (key: string): string | null => {
+      const v = cf?.[key];
+      return typeof v === 'string' && v.trim() !== '' ? v : null;
+    };
+    const itemTypeStr = (r.item_type as string | null) ?? 'product';
+    const isBook = itemTypeStr === 'book';
+    const rackNum = isBook
+      ? cfStr('book_rack_number') ?? cfStr('rack_number')
+      : cfStr('rack_number') ?? cfStr('book_rack_number');
+    const rackRow = isBook
+      ? cfStr('book_rack_row') ?? cfStr('rack_row')
+      : cfStr('rack_row') ?? cfStr('book_rack_row');
+    // Legacy free-text rack label support (older imports stamped this
+    // single value before the structured number/row split).
+    const legacyRack =
+      cfStr('rackLabel') ?? cfStr('rack_label') ?? cfStr('rack');
+    const rackLabel = rackNum || rackRow
+      ? [rackNum, rackRow].filter(Boolean).join(' · ')
+      : legacyRack;
+    const crateColor = cfStr('crateColor') ?? cfStr('crate_color');
+    const crateNumber = cfStr('crateNumber') ?? cfStr('crate_number');
+    const grade = cfStr('grade');
+
+    // Warehouse + charter are resolved in a second pass to avoid a
+    // multi-FK embed (`warehouses` has two relations into other tables
+    // that confuse PostgREST). Cheap because we filter to one row.
+    let warehouseName: string | null = null;
+    let charterName: string | null = null;
+    const whId = r.warehouse_id as string | null | undefined;
+    if (whId) {
+      const [whResp, joinResp] = await Promise.all([
+        supabase.from('warehouses').select('name').eq('id', whId).maybeSingle(),
+        supabase
+          .from('warehouse_charters')
+          .select('charter_id')
+          .eq('warehouse_id', whId)
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      warehouseName = (whResp.data?.name as string | undefined) ?? null;
+      const charterId = (joinResp.data?.charter_id as string | undefined) ?? null;
+      if (charterId) {
+        const { data: ch } = await supabase
+          .from('charters')
+          .select('name')
+          .eq('id', charterId)
+          .maybeSingle();
+        charterName = (ch?.name as string | undefined) ?? null;
+      }
+    }
+
+    // Primary image — cached signed URL (reused across screens).
     const { data: imgRow } = await supabase
       .from('item_images')
       .select('storage_path')
@@ -127,10 +210,7 @@ export default function ItemDetail() {
       .maybeSingle();
     let imageUrl: string | null = null;
     if (imgRow?.storage_path) {
-      const { data: signed } = await supabase.storage
-        .from('item-images')
-        .createSignedUrl(imgRow.storage_path as string, 60 * 60);
-      imageUrl = signed?.signedUrl ?? null;
+      imageUrl = await signItemImage(imgRow.storage_path as string);
     }
 
     setItem({
@@ -150,6 +230,14 @@ export default function ItemDetail() {
       category_name: Array.isArray(cat) ? cat[0]?.name ?? null : cat?.name ?? null,
       supplier_name: Array.isArray(sup) ? sup[0]?.name ?? null : sup?.name ?? null,
       location_name: Array.isArray(loc) ? loc[0]?.name ?? null : loc?.name ?? null,
+      warehouse_name: warehouseName,
+      bin_location: (r.bin_location as string | null) ?? null,
+      charter_name: charterName,
+      item_type: (r.item_type as string | null) ?? null,
+      rack_label: rackLabel,
+      crate_color: crateColor,
+      crate_number: crateNumber,
+      grade,
       imageUrl,
     });
   }, [id, router]);
@@ -222,6 +310,118 @@ export default function ItemDetail() {
     ).catch(() => undefined);
   }
 
+  async function pickFromCamera() {
+    let perm = await ImagePicker.getCameraPermissionsAsync();
+    if (!perm.granted) perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert(
+        'Camera access needed',
+        perm.canAskAgain
+          ? 'Allow camera in the prompt to take photos.'
+          : 'Enable camera in Settings → StockPilot.',
+      );
+      return;
+    }
+    try {
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 0.7,
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        cameraType: ImagePicker.CameraType.back,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      const a = result.assets[0];
+      const ext = (a.uri.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'jpg').toLowerCase();
+      await uploadAndReplace(a.uri, ext);
+    } catch (e) {
+      Alert.alert(
+        'Camera unavailable',
+        e instanceof Error ? e.message : 'Use Library instead.',
+      );
+    }
+  }
+
+  async function pickFromLibrary() {
+    let perm = await ImagePicker.getMediaLibraryPermissionsAsync();
+    if (!perm.granted) perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Photo access needed', 'Allow photo library to attach images.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      quality: 0.7,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: false,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const a = result.assets[0];
+    const ext = (a.uri.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'jpg').toLowerCase();
+    await uploadAndReplace(a.uri, ext);
+  }
+
+  function openPhotoActions() {
+    if (!item || photoBusy) return;
+    const hasPhoto = !!item.imageUrl;
+    Alert.alert(
+      hasPhoto ? 'Replace photo' : 'Add photo',
+      undefined,
+      [
+        { text: 'Take photo', onPress: () => void pickFromCamera() },
+        { text: 'Choose from library', onPress: () => void pickFromLibrary() },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  }
+
+  async function uploadAndReplace(uri: string, ext: string) {
+    if (!item || !orgId) return;
+    setPhotoBusy(true);
+    try {
+      // Resize on-device so the bucket only stores list-friendly sizes
+      // (~400 KB JPEGs instead of multi-megapixel phone photos).
+      const resized = await resizeForUpload(uri);
+      const path = `${orgId}/items/${item.id}/${Math.random().toString(36).slice(2, 14)}.${resized.ext}`;
+      // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
+      // to Supabase Storage in RN/Expo, so use arrayBuffer().
+      const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
+      const { error: upErr } = await supabase.storage
+        .from('item-images')
+        .upload(path, arrayBuffer, { contentType: mimeForExt(resized.ext) });
+      if (upErr) {
+        Alert.alert('Upload failed', upErr.message);
+        return;
+      }
+      // Wipe any existing image rows + their storage files. Cleans up
+      // the legacy 0-byte uploads from before the arrayBuffer fix.
+      const { data: oldRows } = await supabase
+        .from('item_images')
+        .select('id, storage_path')
+        .eq('item_id', item.id);
+      const oldPaths = ((oldRows ?? []) as Array<{ storage_path: string | null }>)
+        .map((r) => r.storage_path)
+        .filter((p): p is string => !!p);
+      if (oldPaths.length > 0) {
+        await supabase.storage.from('item-images').remove(oldPaths);
+        await supabase.from('item_images').delete().eq('item_id', item.id);
+      }
+      const { error: insErr } = await supabase.from('item_images').insert({
+        organization_id: orgId,
+        item_id: item.id,
+        storage_path: path,
+        is_primary: true,
+      });
+      if (insErr) {
+        Alert.alert('Save failed', insErr.message);
+        return;
+      }
+      const signedUrl = await signItemImage(path);
+      setItem({ ...item, imageUrl: signedUrl });
+    } catch (e) {
+      Alert.alert('Photo error', e instanceof Error ? e.message : 'Upload failed.');
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
+
   if (!item) {
     return (
       <View style={[styles.root, { backgroundColor: c.paper, justifyContent: 'center', alignItems: 'center' }]}>
@@ -260,9 +460,15 @@ export default function ItemDetail() {
           ) : null}
         </View>
 
-        {/* Image */}
-        {item.imageUrl ? (
-          <View style={{ paddingHorizontal: 20, marginTop: 10 }}>
+        {/* Image — tap to add or replace */}
+        <View style={{ paddingHorizontal: 20, marginTop: 10 }}>
+          <Pressable
+            onPress={openPhotoActions}
+            disabled={photoBusy}
+            style={({ pressed }) => ({ opacity: pressed && !photoBusy ? 0.85 : 1 })}
+            accessibilityRole="button"
+            accessibilityLabel={item.imageUrl ? 'Replace photo' : 'Add photo'}
+          >
             <View
               style={{
                 aspectRatio: 4 / 3,
@@ -271,16 +477,64 @@ export default function ItemDetail() {
                 borderWidth: 1,
                 borderColor: c.hair,
                 backgroundColor: c.paper2,
+                justifyContent: 'center',
+                alignItems: 'center',
               }}
             >
-              <Image
-                source={{ uri: item.imageUrl }}
-                style={{ width: '100%', height: '100%' }}
-                resizeMode="cover"
-              />
+              {item.imageUrl ? (
+                <CachedImage
+                  uri={item.imageUrl}
+                  style={{ width: '100%', height: '100%' }}
+                  recyclingKey={`${item.id}-${item.imageUrl}`}
+                />
+              ) : (
+                <View style={{ alignItems: 'center', gap: 8 }}>
+                  <Camera size={28} color={c.ink4} strokeWidth={1.4} />
+                  <Mono size={11} tracking={0.12} upper color={c.ink4}>
+                    Tap to add photo
+                  </Mono>
+                </View>
+              )}
+              {item.imageUrl && !photoBusy ? (
+                <View
+                  style={{
+                    position: 'absolute',
+                    bottom: 10,
+                    right: 10,
+                    backgroundColor: 'rgba(0,0,0,0.55)',
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
+                    borderRadius: 8,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  <Camera size={12} color="#fff" strokeWidth={1.6} />
+                  <Mono size={10} tracking={0.12} upper color="#fff">
+                    Replace
+                  </Mono>
+                </View>
+              ) : null}
+              {photoBusy ? (
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.4)',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                  }}
+                >
+                  <ActivityIndicator color="#fff" />
+                </View>
+              ) : null}
             </View>
-          </View>
-        ) : null}
+          </Pressable>
+        </View>
 
         {/* Tab bar */}
         <View style={styles.tabsRow}>
@@ -343,12 +597,6 @@ export default function ItemDetail() {
               <MetaRow label="RETAIL PRICE" value={`$${item.retail_price.toFixed(2)}`} />
               <Hair inset={20} />
               <MetaRow label="INVENTORY VALUE" value={`$${inventoryValue.toFixed(2)}`} />
-              {item.location_name ? (
-                <>
-                  <Hair inset={20} />
-                  <MetaRow label="LOCATION" value={item.location_name} />
-                </>
-              ) : null}
               {item.supplier_name ? (
                 <>
                   <Hair inset={20} />
@@ -356,6 +604,42 @@ export default function ItemDetail() {
                 </>
               ) : null}
             </Card>
+
+            {/* Location block — only render when at least one field is
+                populated. Mirrors what the web detail page shows under
+                its "Location & storage" section. */}
+            {(() => {
+              const isBookView = item.item_type === 'book';
+              const rows: Array<{ label: string; value: string }> = [];
+              if (item.warehouse_name) rows.push({ label: 'WAREHOUSE', value: item.warehouse_name });
+              if (item.charter_name) rows.push({ label: 'CHARTER', value: item.charter_name });
+              if (item.location_name) rows.push({ label: 'LOCATION', value: item.location_name });
+              if (item.rack_label) rows.push({ label: 'RACK', value: item.rack_label });
+              if (isBookView && (item.crate_color || item.crate_number)) {
+                rows.push({
+                  label: 'CRATE',
+                  value: [item.crate_color, item.crate_number].filter(Boolean).join(' · '),
+                });
+              }
+              if (isBookView && item.grade) rows.push({ label: 'GRADE', value: item.grade });
+              // bin_location is a separate free-text field — only render
+              // it when there's NO structured rack info, to avoid double
+              // labelling for the same physical spot.
+              if (!item.rack_label && item.bin_location) {
+                rows.push({ label: isBookView ? 'BIN' : 'RACK', value: item.bin_location });
+              }
+              if (rows.length === 0) return null;
+              return (
+                <Card padding={0}>
+                  {rows.map((row, i) => (
+                    <React.Fragment key={row.label}>
+                      {i > 0 ? <Hair inset={20} /> : null}
+                      <MetaRow label={row.label} value={row.value} />
+                    </React.Fragment>
+                  ))}
+                </Card>
+              );
+            })()}
 
             {item.description ? (
               <Card padding={16}>
@@ -617,16 +901,20 @@ function AdjustModal({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <Pressable
-        onPress={onClose}
-        style={[
-          {
-            flex: 1,
-            justifyContent: 'flex-end',
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-          },
-        ]}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1 }}
       >
+        <Pressable
+          onPress={onClose}
+          style={[
+            {
+              flex: 1,
+              justifyContent: 'flex-end',
+              backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
+            },
+          ]}
+        >
         <Pressable
           onPress={() => undefined}
           style={[
@@ -745,7 +1033,8 @@ function AdjustModal({
             </View>
           </View>
         </Pressable>
-      </Pressable>
+        </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
