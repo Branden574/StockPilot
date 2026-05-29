@@ -6,7 +6,6 @@ import {
   type ModuleId,
   type NavSurface,
   type NavSectionKey,
-  type NavPlacement,
 } from './registry';
 
 /**
@@ -46,7 +45,10 @@ export interface ResolvedNavSection {
   items: ResolvedNavItem[];
 }
 
-const SECTION_ORDER: NavSectionKey[] = ['overview', 'inventory', 'workspace', 'tools', 'admin'];
+/** Canonical section render order. Exported so a guard test can assert it
+ *  covers every section any placement uses (a new section omitted here would
+ *  silently never render). */
+export const SECTION_ORDER: NavSectionKey[] = ['overview', 'inventory', 'workspace', 'tools', 'admin'];
 
 export function resolveSurface(surface: NavSurface, input: ResolveInput): ResolvedNavSection[] {
   const admin = isAdminRole(input.role);
@@ -56,7 +58,7 @@ export function resolveSurface(surface: NavSurface, input: ResolveInput): Resolv
     const moduleOn = def.tier === 'core' || input.enabledModules.has(def.id);
     if (!moduleOn) continue;
 
-    for (const p of def.placements as NavPlacement[]) {
+    for (const p of def.placements) {
       if (p.surface !== surface) continue;
       if (p.requiresAdmin && !admin) continue;
       if (p.requires && !hasPermission(input.role, p.requires)) continue;
@@ -82,6 +84,10 @@ export function resolveSurface(surface: NavSurface, input: ResolveInput): Resolv
 
   return SECTION_ORDER.filter((s) => (bySection.get(s)?.length ?? 0) > 0).map((s) => ({
     section: s,
-    items: bySection.get(s)!.sort((a, b) => a.sortOrder - b.sortOrder),
+    // Stable, deterministic order: sortOrder first, then label as a tiebreak
+    // so two placements sharing a sortOrder never depend on engine sort order.
+    items: bySection
+      .get(s)!
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label)),
   }));
 }
