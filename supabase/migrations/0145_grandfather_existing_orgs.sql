@@ -58,6 +58,12 @@ cross join (values
 on conflict (organization_id, module_id) do nothing;
 
 -- ── New-org seed trigger: core + optional only (25) ────────────────────────
+-- SECURITY DEFINER: the trigger fires AFTER INSERT on organizations, before any
+-- membership exists, so an `authenticated` creator would fail the
+-- has_org_role(...,'admin') write check on the brand-new org. DEFINER (with a
+-- locked search_path) lets the seed succeed regardless of the caller's role.
+-- The insert body is wrapped so a seed failure can NEVER abort tenant creation
+-- (it degrades to a module-less org, which the grandfather backfill repairs).
 create or replace function public.seed_org_modules()
 returns trigger
 language plpgsql
@@ -98,6 +104,13 @@ begin
   ) as m(module_id, tier)
   on conflict (organization_id, module_id) do nothing;
   return new;
+exception
+  when others then
+    -- Best-effort: never let a module-seed failure roll back org creation.
+    -- The org is created module-less; the grandfather backfill (or a re-run
+    -- of this migration's insert) will populate it.
+    raise warning 'seed_org_modules failed for org %: %', new.id, sqlerrm;
+    return new;
 end;
 $$;
 
