@@ -23,7 +23,7 @@
 
 import { vi } from 'vitest';
 
-import type { ModuleId } from '@stockpilot/core';
+import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
 export interface QueryResult<T = unknown> {
   data: T;
@@ -253,9 +253,12 @@ export function makeServiceContext(
     // out. Tests covering the MFA gate explicitly set the flags.
     mfaRequired: overrides.mfaRequired ?? false,
     mfaSatisfied: overrides.mfaSatisfied ?? true,
-    // Empty by default; core modules are treated as enabled regardless.
-    // Tests covering optional-module gates pass an explicit set.
-    enabledModules: overrides.enabledModules ?? new Set<ModuleId>(),
+    // Default to the FULL charter-school module set — existing service
+    // tests represent a grandfathered org with everything enabled, so a
+    // newly-added assertModuleEnabled gate is a no-op for them. Tests
+    // covering the module gate pass an explicit set that EXCLUDES the
+    // module under test.
+    enabledModules: overrides.enabledModules ?? new Set<ModuleId>(DEFAULT_MODULE_IDS),
 
     supabase: supabase as any,
   };

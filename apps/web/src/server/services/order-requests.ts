@@ -8,6 +8,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from './audit';
 import { createNotification } from './notifications';
 import {
+  assertModuleEnabled,
   assertPermission,
   ServiceError,
   withContext,
@@ -214,6 +215,7 @@ export class OrderRequestsService {
     since?: string;
     until?: string;
   } = {}): Promise<OrderRequestSummary[]> {
+    assertModuleEnabled(this.ctx, 'orders');
     let q = this.ctx.supabase
       .from('order_requests')
       .select(
@@ -400,6 +402,7 @@ export class OrderRequestsService {
   }
 
   async get(id: string): Promise<OrderRequestDetail> {
+    assertModuleEnabled(this.ctx, 'orders');
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('order_requests')
       .select('*')
@@ -495,6 +498,7 @@ export class OrderRequestsService {
   // ── Write — requester actions ───────────────────────────────────
 
   async create(input: CreateOrderRequestInput): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:request');
     // Gate by warehouse access too — `orders:request` is org-wide, but a
     // requester restricted to warehouse A shouldn't be able to file a
@@ -614,6 +618,7 @@ export class OrderRequestsService {
   }
 
   async cancel(id: string, reason?: string | null): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
     // C2: gate on the same permission used to create a request. The
     // underlying RPC (SECURITY DEFINER) still enforces its own
     // membership + owner-or-manager checks; the TS gate closes the
@@ -687,6 +692,7 @@ export class OrderRequestsService {
   // ── Write — manager actions ─────────────────────────────────────
 
   async approve(id: string, internalNotes?: string | null): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:approve');
     // C3: warehouse-scoped managers must have write access to the
     // request's warehouse before flipping its status. The RPC's
@@ -737,6 +743,7 @@ export class OrderRequestsService {
   }
 
   async generatePickSlip(id: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:approve');
     await this.requireWarehouseAccess(id, 'write');
     const { data: row, error } = await this.ctx.supabase
@@ -773,6 +780,7 @@ export class OrderRequestsService {
   }
 
   async recordPickedLine(orderId: string, lineId: string, qty: number): Promise<void> {
+    assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'items:update');
     // C3: warehouse-scope gate. Without this, a staff user scoped to
     // Warehouse A could pick lines on a Warehouse B order if they
@@ -800,6 +808,7 @@ export class OrderRequestsService {
   }
 
   async completePicking(id: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'items:update');
     await this.requireWarehouseAccess(id, 'write');
     const { data, error } = await this.ctx.supabase.rpc('complete_picking', {
@@ -827,6 +836,7 @@ export class OrderRequestsService {
   }
 
   async generatePackingSlips(id: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:approve');
     await this.requireWarehouseAccess(id, 'write');
 
@@ -896,6 +906,7 @@ export class OrderRequestsService {
     id: string,
     target: 'staged_for_pickup' | 'staged_for_delivery',
   ): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:approve');
     await this.requireWarehouseAccess(id, 'write');
 
@@ -972,6 +983,7 @@ export class OrderRequestsService {
   }
 
   async assignDelivery(id: string, deliveryUserId: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:assign_delivery');
     await this.requireWarehouseAccess(id, 'write');
 
@@ -1035,6 +1047,7 @@ export class OrderRequestsService {
   }
 
   async markInTransit(id: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
     // Permission gate: assigned driver OR manager+. The internal
     // check below enforces driver-OR-manager; this assertPermission
     // call gates anyone without the broader orders:approve permission
@@ -1107,6 +1120,7 @@ export class OrderRequestsService {
   }
 
   async deny(id: string, reason: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:approve');
     // C3: warehouse-scope gate before any mutation.
     await this.requireWarehouseAccess(id, 'write');
@@ -1142,6 +1156,7 @@ export class OrderRequestsService {
   }
 
   async setInternalNotes(id: string, notes: string | null): Promise<void> {
+    assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:approve');
     // C3: 'read' is enough for editing internal notes — the RLS UPDATE
     // policy further restricts writes to manager+, and we already
@@ -1185,6 +1200,7 @@ export class OrderRequestsService {
   // ── Public link admin ───────────────────────────────────────────
 
   async rotatePublicToken(): Promise<{ token: string }> {
+    assertModuleEnabled(this.ctx, 'public_requests');
     // C1: org-level public-link admin (token rotation, blurb, per-warehouse
     // public_orderable toggle) writes to the `organizations` / `warehouses`
     // tables whose UPDATE RLS policies require admin+. Previously gated on
@@ -1213,6 +1229,7 @@ export class OrderRequestsService {
   }
 
   async setBlurb(blurb: string | null): Promise<void> {
+    assertModuleEnabled(this.ctx, 'public_requests');
     // C1: writes `organizations.public_request_blurb`; RLS requires admin+.
     assertPermission(this.ctx, 'organization:update');
     const { error } = await this.ctx.supabase
@@ -1226,6 +1243,7 @@ export class OrderRequestsService {
     warehouseId: string,
     on: boolean,
   ): Promise<void> {
+    assertModuleEnabled(this.ctx, 'public_requests');
     // C1: writes `warehouses.is_public_orderable`; `warehouses_admin_write`
     // RLS requires admin+. Was previously `orders:approve` (manager+) which
     // let a manager-scoped session through the service gate and then trip
@@ -1245,6 +1263,7 @@ export class OrderRequestsService {
     blurb: string | null;
     publicOrderableWarehouseIds: string[];
   }> {
+    assertModuleEnabled(this.ctx, 'public_requests');
     const { data: org, error: oErr } = await this.ctx.supabase
       .from('organizations')
       .select('public_request_token, public_request_token_rotated_at, public_request_blurb')

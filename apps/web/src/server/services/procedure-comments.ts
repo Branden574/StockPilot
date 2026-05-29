@@ -7,7 +7,7 @@ import type {
 import { isAdminRole } from '@stockpilot/core';
 
 import { audit } from './audit';
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 export interface ProcedureCommentAuthor {
   id: string | null;
@@ -76,6 +76,7 @@ export class ProcedureCommentsService {
    * "(deleted)" when `deleted_at` is non-null.
    */
   async listForProcedure(procedureId: string): Promise<ProcedureCommentNode[]> {
+    assertModuleEnabled(this.ctx, 'procedures');
     const { data, error } = await this.ctx.supabase
       .from('procedure_comments')
       .select(
@@ -128,6 +129,7 @@ export class ProcedureCommentsService {
    * product is intentionally single-level.
    */
   async create(input: CreateProcedureCommentInput): Promise<ProcedureCommentNode> {
+    assertModuleEnabled(this.ctx, 'procedures');
     // Gate posting on `categories:manage` (manager+), matching the RLS
     // insert policy from migration 0088. Previously gated on `items:update`
     // (staff+), which let staff pass the service gate and trip a raw RLS
@@ -197,6 +199,7 @@ export class ProcedureCommentsService {
   }
 
   async update(id: string, input: UpdateProcedureCommentInput): Promise<void> {
+    assertModuleEnabled(this.ctx, 'procedures');
     const row = await this.fetchOwnedOrAdmin(id);
     if (row.deleted_at) {
       throw new ServiceError('validation_error', 'Cannot edit a deleted comment');
@@ -228,6 +231,7 @@ export class ProcedureCommentsService {
    * place so the thread shape (parent → replies) doesn't collapse.
    */
   async delete(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'procedures');
     const row = await this.fetchOwnedOrAdmin(id);
     if (row.deleted_at) return; // idempotent
     const { error } = await this.ctx.supabase

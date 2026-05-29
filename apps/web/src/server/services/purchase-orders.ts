@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { audit } from './audit';
 import { ItemImagesService } from './item-images';
 
@@ -78,6 +78,7 @@ export class PurchaseOrdersService {
   }
 
   async list(params: { warehouseId?: string } = {}) {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
     const access = await getWarehouseAccess(this.ctx);
 
     // Scope by destination location's warehouse via inner-join when needed.
@@ -107,6 +108,7 @@ export class PurchaseOrdersService {
   }
 
   async get(id: string) {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
     // Permission gate — `get()` is reused by the detail page, the PDF
     // route, and bulk actions, so the cheapest place to enforce read is
     // here. RLS would also keep the row hidden, but an explicit check
@@ -171,6 +173,7 @@ export class PurchaseOrdersService {
   }
 
   async create(input: CreatePoInput) {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     // Validate the destination location is in a warehouse the user can write to.
@@ -241,6 +244,7 @@ export class PurchaseOrdersService {
   }
 
   async updateStatus(id: string, status: 'draft' | 'ordered' | 'cancelled') {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
     await this.get(id); // throws not_found if user can't see this PO's warehouse
     const { error } = await this.ctx.supabase
@@ -285,6 +289,7 @@ export class PurchaseOrdersService {
     supplierFailures: Array<{ supplierId: string; supplierName: string; error: string }>;
     supplierCount: number;
   }> {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     const { data: rows, error: fetchErr } = await this.ctx.supabase

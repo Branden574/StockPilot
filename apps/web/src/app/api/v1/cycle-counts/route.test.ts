@@ -26,7 +26,10 @@ function buildCtx() {
     supabase: stub.client as never,
     mfaRequired: false,
     mfaSatisfied: true,
-    enabledModules: new Set<ModuleId>(),
+    // Grandfathered org: the cycle_counts module is on so the gate is a
+    // no-op (the service is mocked in this suite, but keep the fixture
+    // truthful to a live org's enablement).
+    enabledModules: new Set<ModuleId>(['cycle_counts']),
   };
 }
 

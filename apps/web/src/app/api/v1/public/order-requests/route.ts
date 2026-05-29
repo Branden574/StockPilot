@@ -287,6 +287,27 @@ export async function POST(req: NextRequest) {
   }
   const organizationId = (org as { id: string }).id;
 
+  // Module gate — public order requests are an optional module. The
+  // service layer's assertModuleEnabled can't run here (no
+  // ServiceContext on this anonymous path), so check enablement
+  // directly against organization_modules. A 404 (not 403) so we
+  // don't leak that the org exists but has the feature off — same
+  // posture as the unknown-token branch above. `public_requests` is
+  // optional (not core), so an explicit enabled row is required.
+  const { data: modRow, error: modErr } = await admin
+    .from('organization_modules')
+    .select('module_id')
+    .eq('organization_id', organizationId)
+    .eq('module_id', 'public_requests')
+    .eq('enabled', true)
+    .maybeSingle();
+  if (modErr) {
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  }
+  if (!modRow) {
+    return NextResponse.json({ error: 'not_found' }, { status: 404 });
+  }
+
   // 4. Verify the warehouse is in the org and is publicly orderable.
   const { data: wh, error: whErr } = await admin
     .from('warehouses')

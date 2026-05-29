@@ -3,7 +3,7 @@ import 'server-only';
 import type { CreateProcedureInput, UpdateProcedureInput } from '@stockpilot/core';
 
 import { audit } from './audit';
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { ProcedureVideosService, type ProcedureVideoWithUrl } from './procedure-videos';
 import {
   ProcedureCommentsService,
@@ -131,6 +131,7 @@ export class ProceduresService {
     offset = 0,
     includeArchived = false,
   }: ListParams): Promise<{ rows: ProcedureListRow[]; total: number }> {
+    assertModuleEnabled(this.ctx, 'procedures');
     // TODO(perf): the embedded `videos` + `comments` arrays are an N+1
     // shape — we hydrate every row to compute the live comment count and
     // pick a thumbnail. The proper fix is a server-side view / RPC that
@@ -259,6 +260,7 @@ export class ProceduresService {
    * info joined). Throws not_found if RLS hides the row.
    */
   async get(id: string): Promise<ProcedureDetailRow> {
+    assertModuleEnabled(this.ctx, 'procedures');
     assertUuid(id, 'procedure id');
     const { data, error } = await this.ctx.supabase
       .from('procedures')
@@ -313,6 +315,7 @@ export class ProceduresService {
   }
 
   async create(input: CreateProcedureInput): Promise<{ id: string }> {
+    assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'categories:manage');
     const { data, error } = await this.ctx.supabase
       .from('procedures')
@@ -345,6 +348,7 @@ export class ProceduresService {
   }
 
   async update(id: string, patch: UpdateProcedureInput): Promise<{ id: string }> {
+    assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'categories:manage');
     assertUuid(id, 'procedure id');
     // Optimistic concurrency: when the caller passes an `ifMatch`
@@ -403,6 +407,7 @@ export class ProceduresService {
   }
 
   async archive(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'categories:manage');
     assertUuid(id, 'procedure id');
     // Filter on `archived_at is null` so we only flip live rows. If the
@@ -440,6 +445,7 @@ export class ProceduresService {
    * (no-op restores are user-visible bugs, not silent successes).
    */
   async restore(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'procedures');
     assertPermission(this.ctx, 'categories:manage');
     assertUuid(id, 'procedure id');
     const { data, error } = await this.ctx.supabase

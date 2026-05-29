@@ -4,6 +4,7 @@ import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib
 
 import { audit } from './audit';
 import {
+  assertModuleEnabled,
   assertPermission,
   ServiceError,
   withContext,
@@ -109,6 +110,7 @@ export class CycleCountsService {
   }
 
   async list(filters: { assignedTo?: string | null } = {}): Promise<CycleCountRow[]> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
     // Warehouse-scoped users (staff/viewer with assignments) only see
     // counts for warehouses they can write to. Managers+ have
     // hasAllAccess and see every count. Org-wide counts (warehouse_id
@@ -158,6 +160,7 @@ export class CycleCountsService {
     assignedTo: string | null,
     expectedAssignee?: string | null,
   ): Promise<CycleCountRow> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'cycle_counts:assign');
 
     // Refuse to update if the count is closed — assigning a completed
@@ -235,6 +238,7 @@ export class CycleCountsService {
   async get(
     id: string,
   ): Promise<{ header: CycleCountRow; lines: CycleCountLineWithItem[] }> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('cycle_counts')
       .select('*')
@@ -309,6 +313,7 @@ export class CycleCountsService {
    * query — no row data is transferred.
    */
   async itemsInScopeCount(cycleCountId: string): Promise<number> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('cycle_counts')
       .select('warehouse_id, status, scope')
@@ -362,6 +367,7 @@ export class CycleCountsService {
     notes?: string | null;
     assignedTo?: string | null;
   }): Promise<{ id: string; lineCount: number; skipped: number }> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
     const scope = input.scope ?? 'warehouse';
 
@@ -575,6 +581,7 @@ export class CycleCountsService {
     notes?: string | null;
     aiScanId?: string | null;
   }): Promise<void> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(input.cycleCountId);
     // Use .select() so an RLS-blocked or already-missing row surfaces
@@ -635,6 +642,7 @@ export class CycleCountsService {
       author: string | null;
     }>
   > {
+    assertModuleEnabled(this.ctx, 'ai_shelf_scan');
     // Reuse the existing session-access gate — same RBAC + warehouse
     // scope as recordCount. Throws not_found / forbidden which the
     // route handler maps to 404 / 403.
@@ -707,6 +715,7 @@ export class CycleCountsService {
     geminiResponse: unknown;
     modelVersion: string;
   }): Promise<{ id: string }> {
+    assertModuleEnabled(this.ctx, 'ai_shelf_scan');
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(input.cycleCountId);
     // Look up org_id from the parent count — we don't want to trust
@@ -742,6 +751,7 @@ export class CycleCountsService {
    * manager+).
    */
   async markAiScanConfirmed(scanId: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'ai_shelf_scan');
     assertPermission(this.ctx, 'stock:adjust');
     const { data, error } = await this.ctx.supabase
       .from('cycle_count_ai_scans')
@@ -763,6 +773,7 @@ export class CycleCountsService {
 
   /** Clears a previously-recorded count for a line so the user can recount. */
   async clearCount(input: { cycleCountId: string; lineId: string }): Promise<void> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(input.cycleCountId);
     const { data, error } = await this.ctx.supabase
@@ -789,6 +800,7 @@ export class CycleCountsService {
 
   /** Cancels the session without posting any adjustments. */
   async cancel(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(id);
     // Use .select().maybeSingle() so a stale page (someone else
@@ -832,6 +844,7 @@ export class CycleCountsService {
    * session to 'completed'. Atomic via the post_cycle_count RPC.
    */
   async post(id: string): Promise<CycleCountRow> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(id);
     const { data, error } = await this.ctx.supabase.rpc('post_cycle_count', {
