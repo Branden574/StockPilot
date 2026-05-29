@@ -49,6 +49,11 @@ as $$
   );
 $$;
 
+-- Explicitly grant EXECUTE (don't rely on the PUBLIC default) so the service /
+-- API layer (Tasks 6-8) can call it; matches the repo's explicit-grant
+-- convention for app-facing helpers.
+grant execute on function public.module_enabled(uuid, text) to authenticated;
+
 -- RLS ----------------------------------------------------------------------
 alter table public.organization_modules enable row level security;
 
