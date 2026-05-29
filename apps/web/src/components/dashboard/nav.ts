@@ -4,6 +4,7 @@ import {
   DEFAULT_MODULE_IDS,
   resolveSurface,
   type ModuleId,
+  type NavSectionKey,
   type Role,
 } from '@stockpilot/core';
 
@@ -27,7 +28,7 @@ export interface NavSection {
  * the sidebar renders. The `overview` section has no header (it's the
  * bare top group), matching the original static nav.
  */
-const SECTION_LABEL: Record<string, string | undefined> = {
+const SECTION_LABEL: Record<NavSectionKey, string | undefined> = {
   overview: undefined,
   inventory: 'Inventory',
   workspace: 'Workspace',
