@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { ModuleId } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { makeSupabaseStub } from '@/test/supabase-mock';
@@ -29,6 +31,7 @@ function buildCtx(client: unknown) {
     supabase: client as never,
     mfaRequired: false,
     mfaSatisfied: true,
+    enabledModules: new Set<ModuleId>(),
   };
 }
 

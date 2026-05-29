@@ -6,7 +6,7 @@ import { env } from '@/lib/env';
 import { createClient } from '@/lib/supabase/server';
 import type { ServiceContext } from '@/server/services/context';
 
-import type { Role, Database } from '@stockpilot/core';
+import type { Role, Database, ModuleId } from '@stockpilot/core';
 import { isAdminRole } from '@stockpilot/core';
 
 /**
@@ -50,6 +50,28 @@ async function resolveApiMfaState(
     return { mfaRequired: true, mfaSatisfied: false };
   }
   return { mfaRequired, mfaSatisfied };
+}
+
+/**
+ * Mirror of the enabled-module query in withContext() (services/context.ts),
+ * parameterized over an arbitrary Supabase client so both the cookie and
+ * bearer API paths populate ctx.enabledModules and assertModuleEnabled()
+ * works inside API route handlers. Core modules are always treated as
+ * enabled by assertModuleEnabled even if absent from this set.
+ */
+async function resolveApiEnabledModules(
+
+  supabase: any,
+  organizationId: string,
+): Promise<Set<ModuleId>> {
+  const { data: modRows } = await supabase
+    .from('organization_modules')
+    .select('module_id')
+    .eq('organization_id', organizationId)
+    .eq('enabled', true);
+  return new Set(
+    ((modRows ?? []) as Array<{ module_id: string }>).map((r) => r.module_id as ModuleId),
+  );
 }
 
 /**
@@ -155,6 +177,10 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       member.organization_id as string,
       member.role as Role,
     );
+    const enabledModules = await resolveApiEnabledModules(
+      supabase,
+      member.organization_id as string,
+    );
     return {
       organizationId: member.organization_id as string,
       userId: userRes.user.id,
@@ -162,6 +188,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       supabase,
       mfaRequired: mfa.mfaRequired,
       mfaSatisfied: mfa.mfaSatisfied,
+      enabledModules,
     };
   }
 
@@ -203,6 +230,10 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     member.organization_id as string,
     member.role as Role,
   );
+  const enabledModules = await resolveApiEnabledModules(
+    supabase,
+    member.organization_id as string,
+  );
   return {
     organizationId: member.organization_id as string,
     userId: user.id,
@@ -210,5 +241,6 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     supabase,
     mfaRequired: mfa.mfaRequired,
     mfaSatisfied: mfa.mfaSatisfied,
+    enabledModules,
   };
 }
