@@ -10,7 +10,7 @@ import { OrgSwitcher } from '@/components/dashboard/org-switcher';
 import { IconMark } from '@/components/ui/icon-mark';
 import { cn } from '@/lib/utils';
 
-import type { Role } from '@stockpilot/core';
+import { DEFAULT_MODULE_IDS, type ModuleId, type Role } from '@stockpilot/core';
 
 interface SidebarProps {
   className?: string;
@@ -22,6 +22,13 @@ interface SidebarProps {
   userRole?: string;
   /** DB role token used to filter nav (admin section is admin-only). */
   role: Role;
+  /**
+   * Module IDs enabled for this org, serialized as plain strings so the
+   * server layout can pass them across the RSC boundary. Reconstructed into
+   * a `Set<ModuleId>` here. Defaults to the full default module set so the
+   * sidebar (and tests that omit it) renders today's grandfathered nav.
+   */
+  enabledModules?: string[];
   onNavigate?: () => void;
 }
 
@@ -34,9 +41,14 @@ export function Sidebar({
   userName,
   userRole,
   role,
+  enabledModules,
   onNavigate,
 }: SidebarProps) {
-  const sections: NavSection[] = navForRole(role);
+  const moduleSet = React.useMemo(
+    () => new Set((enabledModules ?? DEFAULT_MODULE_IDS) as ModuleId[]),
+    [enabledModules],
+  );
+  const sections: NavSection[] = navForRole(role, moduleSet);
   const pathname = usePathname();
   const router = useRouter();
   const initials = (userName || 'U')

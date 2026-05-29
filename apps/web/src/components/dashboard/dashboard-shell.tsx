@@ -27,6 +27,8 @@ interface DashboardShellProps {
   userName: string | null;
   userRole: string;
   role: Role;
+  /** Module IDs enabled for this org (serialized as strings for the RSC boundary). */
+  enabledModules: string[];
   warehouseFilter?: {
     warehouses: Array<{ id: string; name: string }>;
     activeId: string | null;
@@ -48,6 +50,7 @@ export function DashboardShell({
   userName,
   userRole,
   role,
+  enabledModules,
   warehouseFilter,
 }: DashboardShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
@@ -122,6 +125,7 @@ export function DashboardShell({
         userName={userName}
         userRole={userRole}
         role={role}
+        enabledModules={enabledModules}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -169,6 +173,7 @@ export function DashboardShell({
               userName={userName}
               userRole={userRole}
               role={role}
+              enabledModules={enabledModules}
               onNavigate={() => setMobileNavOpen(false)}
             />
           </SheetContent>
