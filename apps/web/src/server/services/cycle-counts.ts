@@ -525,10 +525,42 @@ export class CycleCountsService {
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Cycle count not found.');
     const wh = (data as { warehouse_id: string | null }).warehouse_id;
-    // Org-wide sessions (null warehouse) skip the gate — only admins+
-    // can start those today, and the start() guard already enforces
-    // permission. Any future role expansion should re-check here.
-    if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
+    if (wh) {
+      await assertWarehouseAccess(wh, 'write', this.ctx);
+      return;
+    }
+    // Null header warehouse: either a true org-wide warehouse count OR a
+    // selection that spans multiple warehouses / includes no-warehouse
+    // items (start() forces the header null in those cases). The header
+    // carries no warehouse to gate on, so fall back to gating on every
+    // warehouse the count's LINES actually touch — mirroring start()'s
+    // per-warehouse write gate. Without this a warehouse-scoped staffer
+    // could record/clear lines for a warehouse they have no write access
+    // to: the cycle_count_lines RLS is org-wide, not warehouse-scoped, so
+    // the DB won't catch it. Items with no warehouse require full
+    // (manager+) access, same as start().
+    const { data: lineRows, error: lErr } = await this.ctx.supabase
+      .from('cycle_count_lines')
+      .select('warehouse_id')
+      .eq('cycle_count_id', cycleCountId);
+    if (lErr) throw new ServiceError('internal_error', lErr.message);
+    const distinctWh = new Set<string>();
+    let hasNullWh = false;
+    for (const r of (lineRows ?? []) as Array<{ warehouse_id: string | null }>) {
+      if (r.warehouse_id) distinctWh.add(r.warehouse_id);
+      else hasNullWh = true;
+    }
+    if (hasNullWh) {
+      const access = await getWarehouseAccess(this.ctx);
+      if (!access.hasAllAccess) {
+        throw new ForbiddenError(
+          'You cannot modify a count that includes items with no warehouse.',
+        );
+      }
+    }
+    for (const w of distinctWh) {
+      await assertWarehouseAccess(w, 'write', this.ctx);
+    }
   }
 
   /** Records a counted quantity for a single line. When `aiScanId` is
