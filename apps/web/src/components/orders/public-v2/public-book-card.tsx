@@ -135,9 +135,12 @@ export function PublicBookCard({ item }: { item: CatalogItem }) {
               <button
                 type="button"
                 onClick={() => {
-                  if (qty < item.quantityOnHand) dispatch({ type: 'inc', itemId: item.id });
+                  // Clamp to AVAILABLE (on-hand minus reserved), matching the
+                  // availability badge — not gross quantityOnHand, which would
+                  // let a requester step past the "N avail" the card shows.
+                  if (qty < available) dispatch({ type: 'inc', itemId: item.id });
                 }}
-                disabled={qty >= item.quantityOnHand}
+                disabled={qty >= available}
                 className="text-primary hover:bg-primary/15 grid h-full place-items-center disabled:opacity-40"
                 aria-label="Add one"
               >
