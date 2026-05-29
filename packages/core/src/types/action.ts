@@ -15,6 +15,7 @@ export type ActionErrorCode =
   | 'not_found'
   | 'validation_error'
   | 'plan_limit_exceeded'
+  | 'module_disabled'
   | 'conflict'
   | 'rate_limited'
   | 'internal_error';
