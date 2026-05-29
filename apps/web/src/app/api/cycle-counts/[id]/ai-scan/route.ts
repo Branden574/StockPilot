@@ -208,7 +208,7 @@ function serviceErrorToResponse(e: unknown): NextResponse {
     const status =
       e.code === 'not_found'
         ? 404
-        : e.code === 'forbidden'
+        : e.code === 'forbidden' || e.code === 'module_disabled'
           ? 403
           : e.code === 'validation_error'
             ? 400
