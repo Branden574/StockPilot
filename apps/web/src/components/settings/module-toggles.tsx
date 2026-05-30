@@ -20,7 +20,6 @@ import { computeModuleChangeSet, MODULE_REGISTRY, type ModuleId } from '@stockpi
 interface ModuleRow {
   id: ModuleId;
   title: string;
-  description: string;
   tier: 'core' | 'optional' | 'premium';
 }
 
@@ -232,9 +231,6 @@ function TierSection({ title, subtitle, modules, enabled, savingId, locked, onTo
                     </Badge>
                   )}
                 </div>
-                {m.description ? (
-                  <div className="text-muted-foreground text-xs">{m.description}</div>
-                ) : null}
               </div>
               {isCore ? (
                 <span className="text-muted-foreground text-xs shrink-0">Always on</span>
@@ -248,6 +244,7 @@ function TierSection({ title, subtitle, modules, enabled, savingId, locked, onTo
                   disabled={busy || locked}
                   className={cn(
                     'relative shrink-0 mt-0.5 inline-flex h-6 w-11 items-center rounded-full transition-colors',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                     checked ? 'bg-primary' : 'bg-muted',
                     (busy || locked) && 'cursor-not-allowed',
                   )}
