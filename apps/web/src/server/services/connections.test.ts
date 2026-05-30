@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -19,14 +19,27 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => adminClientHolder.client),
 }));
 
+import { env } from '@/lib/env';
 import { audit } from '@/server/services/audit';
 import { ConnectionsService } from './connections';
 import { ServiceError } from './context';
 
 import type { ModuleId } from '@stockpilot/core';
 
+// env.QBO_CLIENT_ID is optionalSecret (defaults to '' in the test env, which
+// has no Intuit creds). beginConnect() now fast-fails when it's empty, so the
+// happy-path tests need a non-empty client id; we stamp one per test and
+// restore the original afterwards. The misconfiguration test overrides this
+// back to '' inside its own body.
+const ORIGINAL_QBO_CLIENT_ID = env.QBO_CLIENT_ID;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  (env as { QBO_CLIENT_ID: string }).QBO_CLIENT_ID = 'test-qbo-client-id';
+});
+
+afterEach(() => {
+  (env as { QBO_CLIENT_ID: string }).QBO_CLIENT_ID = ORIGINAL_QBO_CLIENT_ID;
 });
 
 describe('ConnectionsService.beginConnect', () => {
@@ -60,6 +73,8 @@ describe('ConnectionsService.beginConnect', () => {
 
   it('upserts a pending row with oauth_state and returns the QBO authorize URL', async () => {
     const stub = makeSupabaseStub({
+      // Fresh connect: no existing row to merge against.
+      'org_connections.select': { data: [], error: null },
       'org_connections.insert': {
         data: [{ id: 'conn-1', oauth_state: 'ignored-by-test' }],
         error: null,
@@ -84,6 +99,9 @@ describe('ConnectionsService.beginConnect', () => {
     expect(upsertArgs.status).toBe('pending');
     expect(typeof upsertArgs.oauth_state).toBe('string');
     expect((upsertArgs.oauth_state as string).length).toBeGreaterThan(16);
+    // Fresh insert stamps the connector with the establishing user + env.
+    expect(upsertArgs.created_by).toBe('user-test');
+    expect(upsertArgs.settings).toMatchObject({ env: 'sandbox' });
 
     // Authorize URL built from the registry + env + callback redirect_uri + state.
     const parsed = new URL(url);
@@ -96,6 +114,78 @@ describe('ConnectionsService.beginConnect', () => {
     expect(parsed.searchParams.get('redirect_uri')).toContain(
       '/api/integrations/quickbooks/callback',
     );
+  });
+
+  it('preserves previously-saved settings.accountIds on reconnect (no clobber)', async () => {
+    // Reconnect path: an existing row already carries an admin-saved account
+    // mapping. beginConnect must NOT wipe settings.accountIds when it rotates
+    // the CSRF state, otherwise the connector loses the config it needs to post
+    // Bills + the valuation JournalEntry. It must also NOT overwrite created_by.
+    const stub = makeSupabaseStub({
+      'org_connections.select': {
+        data: [
+          {
+            id: 'conn-1',
+            settings: {
+              env: 'sandbox',
+              accountIds: { billExpense: '54', inventoryAsset: '81', valuationOffset: '90' },
+              lastValuationSnapshotValue: 1234,
+            },
+            created_by: 'original-owner',
+          },
+        ],
+        error: null,
+      },
+      'org_connections.insert': {
+        data: [{ id: 'conn-1', oauth_state: 'rotated' }],
+        error: null,
+      },
+    });
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        userId: 'reconnecting-admin',
+        enabledModules: new Set<ModuleId>(['integrations']),
+      }),
+    );
+
+    await svc.beginConnect('quickbooks');
+
+    const upsertArgs = stub.chainArgsAll.get('org_connections.insert')?.[0]?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    // accountIds + other non-secret settings survive; env still stamped.
+    expect(upsertArgs.settings).toMatchObject({
+      env: 'sandbox',
+      accountIds: { billExpense: '54', inventoryAsset: '81', valuationOffset: '90' },
+      lastValuationSnapshotValue: 1234,
+    });
+    // Original establisher attribution is retained, not the reconnecting admin.
+    expect(upsertArgs.created_by).toBe('original-owner');
+    // Status is reset to pending + a fresh CSRF state is rotated in.
+    expect(upsertArgs.status).toBe('pending');
+    expect(typeof upsertArgs.oauth_state).toBe('string');
+  });
+
+  it('throws validation_error when QBO_CLIENT_ID is not configured', async () => {
+    // When integrations is enabled but the deployment lacks Intuit credentials,
+    // fail fast BEFORE writing a pending row / redirecting the user to a
+    // dead-end authorize URL. (afterEach restores the per-test client id.)
+    (env as { QBO_CLIENT_ID: string }).QBO_CLIENT_ID = '';
+    const stub = makeSupabaseStub({ 'org_connections.select': { data: [], error: null } });
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(['integrations']),
+      }),
+    );
+
+    await expect(svc.beginConnect('quickbooks')).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    // No pending row written when misconfigured.
+    expect(stub.fromCalls).not.toContain('org_connections');
   });
 });
 
