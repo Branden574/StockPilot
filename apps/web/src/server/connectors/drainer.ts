@@ -7,6 +7,8 @@ import type {
   OutboxEvent,
 } from '@stockpilot/core';
 
+import { reportError } from '@/lib/error-reporter';
+
 import { getConnectionSecret, putConnectionSecret } from './secret-store';
 
 /**
@@ -24,12 +26,25 @@ export const MAX_ATTEMPTS = 8;
  * multiplicative hash (2654435761) spreads consecutive attempt numbers across
  * the jitter band, giving roughly ±12.5% spread around the base delay without
  * any randomness.
+ *
+ * NOTE: the 1h cap is currently unreachable — nextBackoff(MAX_ATTEMPTS=8) is
+ * ~3.8min, so the Math.min cap is dead code for the present config. It only
+ * goes live if MAX_ATTEMPTS grows past ~12 (2**22 ms > 1h). Kept as defensive
+ * code so growing MAX_ATTEMPTS can't blow the delay out to days.
  */
 export function nextBackoff(attempt: number): number {
-  const base = Math.min(60 * 60 * 1000, 2 ** attempt * 1000); // cap 1h
+  const base = Math.min(60 * 60 * 1000, 2 ** attempt * 1000); // cap 1h (see note above)
   const jitter = base * 0.25 * ((attempt * 2654435761) % 1000 / 1000); // deterministic-ish jitter (no Math.random)
   return Math.round(base - base * 0.125 + jitter);
 }
+
+/**
+ * How many candidate outbox events to consider per connection per tick. The set
+ * is restricted to events NOT yet in a terminal (success/dead) delivery state
+ * for this connection (see runDrain), so the window always advances rather than
+ * re-fetching the same already-delivered head of the queue.
+ */
+const CANDIDATE_LIMIT = 200;
 
 export interface DrainResult {
   processed: number;
@@ -48,13 +63,26 @@ export interface DrainResult {
  * legacy path; flipping it here would silently starve other connectors).
  *
  * Idempotency + backoff:
- *  - skip events already 'success' or 'dead' for this connection
- *  - skip 'error' rows whose next_attempt_at is still in the future
+ *  - the candidate window already EXCLUDES events terminal (success/dead) for
+ *    this connection, so the oldest-N window advances instead of re-scanning an
+ *    already-delivered head of the queue (head-of-line starvation fix)
+ *  - per event, skip a 'success'/'dead' row defensively, and skip 'error' rows
+ *    whose next_attempt_at is still in the future
  *  - on failure, schedule nextBackoff(attempts); dead-letter at MAX_ATTEMPTS
  *
+ * Error handling is FAIL-CLOSED (mirrors services/digest.ts which throws on any
+ * query error): a failed top-level select throws so the cron route returns 500
+ * (a masked DB outage is worse than a visible one). A failed ledger write
+ * (pending upsert / success / error update) is reported via reportError and the
+ * event is skipped/counted-failed rather than proceeding as if the write
+ * succeeded — a silently-lost 'success' write would otherwise re-dispatch the
+ * already-delivered side effect next tick.
+ *
  * Tokens are refreshed (when the connector supports it) if they expire within
- * 5 minutes, then re-persisted to Vault via putConnectionSecret. Full tokens
- * are never logged.
+ * 5 minutes, then re-persisted to Vault via putConnectionSecret; the returned
+ * Vault id is written back to org_connections.secret_id so the next tick reads
+ * the rotated secret (no orphaned-secret / refresh-loop). Full tokens are never
+ * logged.
  *
  * `now` is injected so the orchestrator stays testable; app runtime passes
  * `new Date()`.
@@ -65,11 +93,26 @@ export async function runDrain(
   now: Date,
 ): Promise<DrainResult> {
   const res: DrainResult = { processed: 0, succeeded: 0, failed: 0, deadlettered: 0 };
-  // 1. active connections
-  const { data: conns } = await admin.from('org_connections').select('*').eq('status', 'active');
+  // 1. active connections. Fail-closed (throw) on a query error so a DB outage
+  //    surfaces as a 500 instead of a silent {processed:0}.
+  const { data: conns, error: connsErr } = await admin
+    .from('org_connections')
+    .select('*')
+    .eq('status', 'active');
+  if (connsErr) throw new Error(`org_connections select: ${connsErr.message}`);
   for (const c of (conns ?? []) as any[]) {
     const connector = connectors[c.provider_id as ConnectorProviderId];
     if (!connector) continue;
+    // An 'active' connection with no Vault secret handle is malformed — the
+    // OAuth flow must have set secret_id. Skip (and report) rather than calling
+    // getConnectionSecret(undefined) and throwing the whole run.
+    if (!c.secret_id) {
+      void reportError(new Error('active connection missing secret_id'), {
+        tag: 'cron.drain-outbox.connection',
+        extra: { connectionId: c.id, providerId: c.provider_id },
+      });
+      continue;
+    }
     const conn: ConnectionRef = {
       id: c.id,
       organizationId: c.organization_id,
@@ -78,22 +121,44 @@ export async function runDrain(
       externalAccountId: c.external_account_id,
       settings: c.settings ?? {},
     };
-    // 2. candidate outbox events for this org with subscribed topics, not yet succeeded.
-    const { data: events } = await admin
+
+    // 2a. Terminal (success/dead) deliveries for this connection — these events
+    //     must drop OUT of the candidate window so the oldest-N fetch advances
+    //     instead of permanently re-scanning a delivered head of the queue.
+    const { data: terminal, error: terminalErr } = await admin
+      .from('connection_sync_log')
+      .select('outbox_event_id')
+      .eq('connection_id', conn.id)
+      .in('status', ['success', 'dead']);
+    if (terminalErr) throw new Error(`connection_sync_log select: ${terminalErr.message}`);
+    const terminalIds = ((terminal ?? []) as any[]).map((r) => r.outbox_event_id);
+
+    // 2b. candidate outbox events for this org on subscribed topics, EXCLUDING
+    //     events already terminal for this connection.
+    let eventsQuery = admin
       .from('outbox_events')
       .select('*')
       .eq('organization_id', c.organization_id)
-      .in('topic', connector.subscribedTopics)
+      .in('topic', connector.subscribedTopics);
+    if (terminalIds.length > 0) {
+      // PostgREST in-list filter: not.in.(uuid,uuid,...)
+      eventsQuery = eventsQuery.not('id', 'in', `(${terminalIds.join(',')})`);
+    }
+    const { data: events, error: eventsErr } = await eventsQuery
       .order('created_at', { ascending: true })
-      .limit(200);
+      .limit(CANDIDATE_LIMIT);
+    if (eventsErr) throw new Error(`outbox_events select: ${eventsErr.message}`);
+
     for (const e of (events ?? []) as any[]) {
-      // skip if a success/dead log row exists, or an error row not yet due
-      const { data: existing } = await admin
+      // The candidate set already excludes terminal rows; we still point-read
+      // the ledger to recover the attempt count + the backoff gate for 'error'.
+      const { data: existing, error: existingErr } = await admin
         .from('connection_sync_log')
         .select('*')
         .eq('connection_id', conn.id)
         .eq('outbox_event_id', e.id)
         .maybeSingle();
+      if (existingErr) throw new Error(`connection_sync_log select: ${existingErr.message}`);
       if (existing && (existing.status === 'success' || existing.status === 'dead')) continue;
       if (
         existing &&
@@ -104,8 +169,10 @@ export async function runDrain(
         continue;
       const attempts = (existing?.attempts ?? 0) + 1;
       res.processed++;
-      // upsert pending row
-      await admin.from('connection_sync_log').upsert(
+      // Upsert the pending row. If THIS write fails we must NOT fire the
+      // connector — a lost pending row means a lost terminal row later, which
+      // would re-dispatch the external side effect every tick with no backoff.
+      const { error: pendingErr } = await admin.from('connection_sync_log').upsert(
         {
           connection_id: conn.id,
           organization_id: conn.organizationId,
@@ -117,6 +184,14 @@ export async function runDrain(
         },
         { onConflict: 'connection_id,outbox_event_id' },
       );
+      if (pendingErr) {
+        void reportError(new Error(`connection_sync_log upsert: ${pendingErr.message}`), {
+          tag: 'cron.drain-outbox.pending',
+          extra: { connectionId: conn.id, eventId: e.id },
+        });
+        res.failed++;
+        continue;
+      }
       try {
         const event: OutboxEvent = {
           id: e.id,
@@ -134,11 +209,36 @@ export async function runDrain(
           new Date(secrets.expiresAt).getTime() < now.getTime() + 5 * 60 * 1000
         ) {
           secrets = await connector.refreshAuth(conn, secrets);
-          await putConnectionSecret(admin as any, `connector:${conn.id}`, secrets);
+          const newSecretId = await putConnectionSecret(
+            admin as any,
+            `connector:${conn.id}`,
+            secrets,
+          );
+          // Write the (possibly new) Vault id back so the next tick reads the
+          // rotated secret. connector_secret_put upserts by NAME and may return
+          // a fresh id; without this the connection keeps pointing at the stale
+          // (now-expiring) secret → refresh loop + orphaned Vault rows.
+          if (newSecretId && newSecretId !== c.secret_id) {
+            const { error: secretIdErr } = await admin
+              .from('org_connections')
+              .update({ secret_id: newSecretId, updated_at: now.toISOString() })
+              .eq('id', conn.id);
+            if (secretIdErr) {
+              void reportError(
+                new Error(`org_connections secret_id update: ${secretIdErr.message}`),
+                {
+                  tag: 'cron.drain-outbox.secret-rotate',
+                  extra: { connectionId: conn.id },
+                },
+              );
+            } else {
+              c.secret_id = newSecretId;
+            }
+          }
         }
         const out = await connector.handleOutboxEvent(event, conn, secrets, makeDeps(admin));
         if (out.ok) {
-          await admin
+          const { error: successErr } = await admin
             .from('connection_sync_log')
             .update({
               status: 'success',
@@ -148,6 +248,15 @@ export async function runDrain(
             })
             .eq('connection_id', conn.id)
             .eq('outbox_event_id', e.id);
+          if (successErr) {
+            // The external side effect already fired but we couldn't record it.
+            // Report loudly — next tick will re-dispatch (only safe if the
+            // connector is idempotent via connection_mappings).
+            void reportError(new Error(`connection_sync_log success update: ${successErr.message}`), {
+              tag: 'cron.drain-outbox.success',
+              extra: { connectionId: conn.id, eventId: e.id },
+            });
+          }
           await admin
             .from('org_connections')
             .update({ last_synced_at: now.toISOString(), last_error: null })
@@ -155,7 +264,7 @@ export async function runDrain(
           res.succeeded++;
         } else {
           const dead = attempts >= MAX_ATTEMPTS;
-          await admin
+          const { error: errUpdateErr } = await admin
             .from('connection_sync_log')
             .update({
               status: dead ? 'dead' : 'error',
@@ -165,12 +274,20 @@ export async function runDrain(
             })
             .eq('connection_id', conn.id)
             .eq('outbox_event_id', e.id);
+          if (errUpdateErr) {
+            // A failed 'error' write leaves no backoff row → re-dispatch every
+            // tick with no delay. Report so it's visible.
+            void reportError(new Error(`connection_sync_log error update: ${errUpdateErr.message}`), {
+              tag: 'cron.drain-outbox.error',
+              extra: { connectionId: conn.id, eventId: e.id },
+            });
+          }
           if (dead) res.deadlettered++;
           else res.failed++;
         }
       } catch (err) {
         const dead = attempts >= MAX_ATTEMPTS;
-        await admin
+        const { error: catchUpdateErr } = await admin
           .from('connection_sync_log')
           .update({
             status: dead ? 'dead' : 'error',
@@ -180,6 +297,12 @@ export async function runDrain(
           })
           .eq('connection_id', conn.id)
           .eq('outbox_event_id', e.id);
+        if (catchUpdateErr) {
+          void reportError(new Error(`connection_sync_log error update: ${catchUpdateErr.message}`), {
+            tag: 'cron.drain-outbox.error',
+            extra: { connectionId: conn.id, eventId: e.id },
+          });
+        }
         if (dead) res.deadlettered++;
         else res.failed++;
       }
