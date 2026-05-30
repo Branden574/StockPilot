@@ -62,6 +62,15 @@ const serverSchema = z.object({
     .default('gemini-2.5-flash')
     .transform((s) => s.trim()),
 
+  // QuickBooks Online connector (integrations module). OAuth2 app
+  // credentials from the Intuit developer portal. Only required when the
+  // integrations module is enabled and an org connects QuickBooks; unset
+  // in environments without the integration. QBO_ENV selects the Intuit
+  // API host (sandbox vs production).
+  QBO_CLIENT_ID: optionalSecret.transform((s) => s.trim()),
+  QBO_CLIENT_SECRET: optionalSecret.transform((s) => s.trim()),
+  QBO_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
+
   // Comma-separated allowlist of email addresses that may access the
   // platform-admin surfaces (e.g. /dashboard/admin/orgs/new — provision
   // a new tenant org for a customer). Server-only check; not in the JWT,
