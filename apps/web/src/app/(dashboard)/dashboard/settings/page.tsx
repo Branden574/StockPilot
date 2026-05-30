@@ -55,6 +55,13 @@ const RECOVERY_SECTIONS = [
   { href: '/dashboard/settings/recovery', title: 'Recovery', description: 'Restore soft-deleted items, categories, suppliers, and locations.' },
 ];
 
+// Module control plane — turn features on or off for the whole org.
+// Gated on `organization:update` so only admins and owners see the tile
+// (the underlying page redirects anyone without that permission anyway).
+const MODULES_SECTIONS = [
+  { href: '/dashboard/settings/modules', title: 'Modules', description: 'Turn features on or off for your whole organization.' },
+];
+
 export default async function SettingsPage() {
   const ctx = await requireOrgContext();
   const sections = [
@@ -64,6 +71,7 @@ export default async function SettingsPage() {
     ...(hasPermission(ctx.role, 'activity_logs:read') ? ADMIN_SECTIONS : []),
     ...(hasPermission(ctx.role, 'ai:manage') ? AI_SECTIONS : []),
     ...(hasPermission(ctx.role, 'items:delete') ? RECOVERY_SECTIONS : []),
+    ...(hasPermission(ctx.role, 'organization:update') ? MODULES_SECTIONS : []),
   ];
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
