@@ -57,6 +57,36 @@ export interface DrainResult {
 }
 
 /**
+ * Module-enabled gate for the connector engine.
+ *
+ * Returns the subset of `orgIds` whose 'integrations' module is currently
+ * enabled (organization_modules.enabled=true, module_id='integrations' — see
+ * migration 0144). The cron drain + valuation passes consume this at the point
+ * of dispatch so disabling the module in Settings -> Modules immediately stops
+ * exports, and re-enabling auto-resumes with NO reactivation logic (we never
+ * cascade on the toggle).
+ *
+ * FAIL-CLOSED: on a query error the caller MUST treat every org as disabled
+ * (skip dispatch) rather than exporting — a masked module-gate failure that
+ * keeps pushing Bills/JEs to QBO is the exact regression this guards against.
+ * We surface that by THROWING here so the caller's try/catch can fail closed.
+ */
+export async function enabledIntegrationOrgIds(
+  admin: { from: (t: string) => any },
+  orgIds: string[],
+): Promise<Set<string>> {
+  if (orgIds.length === 0) return new Set();
+  const { data, error } = await admin
+    .from('organization_modules')
+    .select('organization_id')
+    .eq('module_id', 'integrations')
+    .eq('enabled', true)
+    .in('organization_id', orgIds);
+  if (error) throw new Error(`organization_modules select: ${error.message}`);
+  return new Set(((data ?? []) as Array<{ organization_id: string }>).map((r) => r.organization_id));
+}
+
+/**
  * Drains the transactional outbox into every active connector.
  *
  * Fan-out semantics: multiple connectors may each consume the same
@@ -106,9 +136,36 @@ export async function runDrain(
     .select('*')
     .eq('status', 'active');
   if (connsErr) throw new Error(`org_connections select: ${connsErr.message}`);
+
+  // 1b. Module-enabled gate. An admin who connected a provider and later
+  //     disabled the 'integrations' module in Settings -> Modules must stop
+  //     getting exports — we gate at consumption (no cascade on the toggle), so
+  //     re-enabling auto-resumes cleanly with no reactivation logic. Fetch the
+  //     enabled org set ONCE for all active connections; FAIL-CLOSED: if the
+  //     gate query errors, report and treat EVERY org as disabled (skip
+  //     dispatch) rather than exporting against a possibly-disabled module.
+  const orgIds: string[] = Array.from(
+    new Set(((conns ?? []) as any[]).map((c) => c.organization_id as string)),
+  );
+  let enabledOrgIds: Set<string>;
+  try {
+    enabledOrgIds = await enabledIntegrationOrgIds(admin, orgIds);
+  } catch (gateErr) {
+    void reportError(
+      gateErr instanceof Error ? gateErr : new Error('integrations module gate failed'),
+      { tag: 'cron.drain-outbox.module-gate' },
+    );
+    enabledOrgIds = new Set();
+  }
+
   for (const c of (conns ?? []) as any[]) {
     const connector = connectors[c.provider_id as ConnectorProviderId];
     if (!connector) continue;
+    // SKIP any connection whose org's integrations module is not enabled. A
+    // disabled-module org yields ZERO connector.handleOutboxEvent calls and ZERO
+    // QBO posts (no candidate fetch, no ledger writes) — disabling the module
+    // truly stops exports.
+    if (!enabledOrgIds.has(c.organization_id)) continue;
     // An 'active' connection with no Vault secret handle is malformed — the
     // OAuth flow must have set secret_id. Skip (and report) rather than calling
     // getConnectionSecret(undefined) and throwing the whole run.
@@ -297,7 +354,13 @@ export async function runDrain(
           .update({
             status: dead ? 'dead' : 'error',
             last_error: err instanceof Error ? err.message : 'error',
-            next_attempt_at: new Date(now.getTime() + nextBackoff(attempts)).toISOString(),
+            // Mirror the else-branch's permanent handling: a dead-lettered row
+            // schedules NO further attempt (null), only an 'error' row gets a
+            // future backoff. Inert today (a thrown error at MAX_ATTEMPTS won't
+            // be re-read anyway) but correct + consistent.
+            next_attempt_at: dead
+              ? null
+              : new Date(now.getTime() + nextBackoff(attempts)).toISOString(),
             updated_at: now.toISOString(),
           })
           .eq('connection_id', conn.id)

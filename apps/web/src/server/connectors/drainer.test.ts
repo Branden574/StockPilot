@@ -44,7 +44,16 @@ function makeFakeAdmin(opts: {
   errors?: Record<string, string>;
   /** error message to inject on the candidate-selection RPC */
   candidatesRpcError?: string;
+  /**
+   * Org ids whose 'integrations' module is enabled (organization_modules gate,
+   * migration 0144). Defaults to ALL conns' org ids (module on) so the existing
+   * happy-path cases keep dispatching; pass [] to simulate a disabled module.
+   */
+  enabledModuleOrgIds?: string[];
 }) {
+  const enabledOrgIds =
+    opts.enabledModuleOrgIds ??
+    Array.from(new Set((opts.conns ?? []).map((c) => c.organization_id)));
   const writes: Array<{ table: string; op: string; values: any }> = [];
   /** records every connector_drain_candidates RPC call so tests can assert args */
   const candidateCalls: Array<{ fn: string; args: any }> = [];
@@ -107,6 +116,14 @@ function makeFakeAdmin(opts: {
       then(resolve: any) {
         if (table === 'org_connections') {
           return resolve({ data: opts.conns ?? [], error: err('org_connections:select') });
+        }
+        // organization_modules module-enabled gate (migration 0144): return the
+        // enabled org ids as rows, or inject an error to exercise fail-closed.
+        if (table === 'organization_modules') {
+          return resolve({
+            data: enabledOrgIds.map((organization_id) => ({ organization_id })),
+            error: err('organization_modules:select'),
+          });
         }
         return resolve({ data: [], error: null });
       },
@@ -335,6 +352,69 @@ describe('runDrain happy path', () => {
     const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date());
     expect(connector.handleOutboxEvent).not.toHaveBeenCalled();
     expect(res.succeeded).toBe(0);
+  });
+});
+
+describe('runDrain gates on the integrations module (migration 0144)', () => {
+  const connAndEvent = () => ({
+    conns: [
+      {
+        id: 'conn-1',
+        organization_id: 'org-1',
+        provider_id: 'quickbooks',
+        status: 'active',
+        secret_id: 'sec-1',
+        settings: {},
+      },
+    ],
+    events: [
+      {
+        id: 'evt-1',
+        organization_id: 'org-1',
+        topic: 'receipt.posted',
+        aggregate_type: 'receipt',
+        aggregate_id: 'r1',
+        payload: {},
+        created_at: new Date().toISOString(),
+      },
+    ],
+  });
+
+  it('dispatches when the org integrations module is ENABLED', async () => {
+    const connector = okConnector();
+    const admin = makeFakeAdmin({ ...connAndEvent(), enabledModuleOrgIds: ['org-1'] });
+    const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date());
+    expect(connector.handleOutboxEvent).toHaveBeenCalledTimes(1);
+    expect(res.succeeded).toBe(1);
+  });
+
+  it('does NOT dispatch and writes NO success row when the module is DISABLED', async () => {
+    const connector = okConnector();
+    const admin = makeFakeAdmin({ ...connAndEvent(), enabledModuleOrgIds: [] });
+    const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date());
+    // ZERO connector calls, ZERO QBO posts (the connector is never invoked).
+    expect(connector.handleOutboxEvent).not.toHaveBeenCalled();
+    expect(res.processed).toBe(0);
+    expect(res.succeeded).toBe(0);
+    // No candidate fetch and NO sync_log writes for the disabled org.
+    expect((admin as any).__candidateCalls).toHaveLength(0);
+    const successUpdate = (admin.__writes as any[]).find(
+      (w) => w.table === 'connection_sync_log' && w.values?.status === 'success',
+    );
+    expect(successUpdate).toBeUndefined();
+    expect(admin.__writes).toHaveLength(0);
+  });
+
+  it('FAIL-CLOSED: a module-gate query error skips dispatch (no connector call)', async () => {
+    const connector = okConnector();
+    const admin = makeFakeAdmin({
+      ...connAndEvent(),
+      errors: { 'organization_modules:select': 'gate down' },
+    });
+    const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date());
+    expect(connector.handleOutboxEvent).not.toHaveBeenCalled();
+    expect(res.processed).toBe(0);
+    expect((admin as any).__candidateCalls).toHaveLength(0);
   });
 });
 

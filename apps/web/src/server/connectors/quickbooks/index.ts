@@ -11,7 +11,7 @@ import type {
 
 import { env } from '@/lib/env';
 
-import { buildBillFromReceipt, resolveVendor, type BillLine } from './bill';
+import { buildBillFromReceipt, resolveVendor, round2, type BillLine } from './bill';
 import { QboClient, type QboEnv } from './client';
 import { refreshTokens } from './oauth';
 
@@ -131,9 +131,13 @@ export const quickbooksConnector: Connector = {
     // ZERO-AMOUNT SHORT-CIRCUIT: an all-rejected receipt (every accepted qty 0)
     // has nothing to book. QBO rejects a $0 Bill with a non-retryable 4xx that
     // would burn the full retry budget before dead-lettering, so ACK instead of
-    // POSTing — and skip the needless vendor-resolution round-trip.
+    // POSTing — and skip the needless vendor-resolution round-trip. Compare the
+    // ROUNDED total with the SAME round2 the Bill builder uses: a sub-cent total
+    // in (0, 0.005) passes an unrounded `> 0` gate but posts a $0.00 Bill (the
+    // builder rounds the Amount to 0) that QBO rejects. Gate on round2 so a
+    // rounds-to-zero receipt is acked, not posted.
     const totalAmount = billLines.reduce((sum, l) => sum + l.qtyAccepted * l.unitCost, 0);
-    if (totalAmount <= 0) return { ok: true };
+    if (round2(totalAmount) <= 0) return { ok: true };
 
     const qboEnv: QboEnv = settings.env ?? env.QBO_ENV;
     const client = new QboClient(conn.externalAccountId!, secrets, qboEnv);
