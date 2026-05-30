@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as React from 'react';
 
 import { useAuth } from './auth-context';
+import { refreshEnabledModules } from './enabled-modules';
+import { syncNow } from './sync';
 import { supabase } from './supabase';
 
 /**
@@ -155,6 +157,10 @@ export async function setActiveOrg(orgId: string): Promise<void> {
     activeWarehouseId,
     activeWarehouseName: activeWarehouse?.name ?? null,
   });
+  // Pull a fresh snapshot scoped to the new org (api.ts now sends
+  // X-Organization-Id from the persisted activeOrgId), then notify
+  // useEnabledModules hooks so the drawer + tabs refresh without remount.
+  void syncNow().then(() => refreshEnabledModules());
 }
 
 export async function setActiveWarehouse(warehouseId: string | null): Promise<void> {
