@@ -380,7 +380,10 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['receipts', 'receipt_lines'],
     defaultOnFor: ['charter_school', 'distribution', 'agriculture_food', 'light_3pl'],
     placements: [
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Receive POs', href: '/receive', iconName: 'Truck', defaultSortOrder: 115, mobileTabEligible: true },
+      // 105 keeps Receive POs between Procedures (100) and Purchase orders (110),
+      // matching the mobile drawer's historical order. (receiving has no
+      // web_sidebar placement, so the web sidebar is unaffected.)
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Receive POs', href: '/receive', iconName: 'Truck', defaultSortOrder: 105, mobileTabEligible: true },
     ],
   },
   po_imports: {
