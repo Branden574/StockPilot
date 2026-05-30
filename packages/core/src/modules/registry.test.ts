@@ -32,6 +32,19 @@ describe('MODULE_REGISTRY', () => {
     for (const id of core) expect(DEFAULT_MODULE_IDS).toContain(id);
     expect(modulesForPack('charter_school').sort()).toEqual([...DEFAULT_MODULE_IDS].sort());
   });
+  it('integrations is an optional, OFF-by-default module (not in any pack)', () => {
+    const integrations = MODULE_REGISTRY['integrations' as ModuleId];
+    expect(integrations).toBeDefined();
+    expect(integrations.tier).toBe('optional');
+    expect(integrations.defaultOnFor).toEqual([]);
+    expect(DEFAULT_MODULE_IDS).not.toContain('integrations');
+    // OFF for every pack — never auto-enabled.
+    expect(modulesForPack('charter_school')).not.toContain('integrations');
+    expect(modulesForPack('distribution')).not.toContain('integrations');
+    expect(modulesForPack('agriculture_food')).not.toContain('integrations');
+    expect(modulesForPack('retail_backroom')).not.toContain('integrations');
+    expect(modulesForPack('light_3pl')).not.toContain('integrations');
+  });
   it('covers the current web sidebar hrefs', () => {
     const webHrefs = Object.values(MODULE_REGISTRY).flatMap((m) => m.placements)
       .filter((p) => p.surface === 'web_sidebar').map((p) => p.href);

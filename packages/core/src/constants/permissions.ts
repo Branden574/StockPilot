@@ -56,6 +56,13 @@ export const PERMISSIONS = [
   // inventory. Used by /dashboard/settings/ai and the AI tile on
   // /dashboard/settings. Owners + admins.
   'ai:manage',
+  // Connector integrations (QuickBooks Online export, future connectors).
+  // Connect/disconnect a per-org connection + view sync health. Admin-only
+  // (owner + admin via ALL_PERMISSIONS) because OAuth tokens grant external
+  // accounting access; a manager must not be able to wire up or tear down
+  // an export pipeline. Gated by the off-by-default `integrations` module.
+  // Used by /dashboard/settings/integrations.
+  'integrations:manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -334,6 +341,12 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     group: 'Organization',
     label: 'Manage AI assistant',
     description: 'Run semantic-search embeddings backfill and configure AI features.',
+  },
+
+  'integrations:manage': {
+    group: 'Organization',
+    label: 'Manage integrations',
+    description: 'Connect, disconnect, and monitor connectors like QuickBooks Online.',
   },
 
   'rentals:create': {
