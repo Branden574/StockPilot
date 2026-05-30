@@ -42,4 +42,12 @@ describe('computeModuleChangeSet', () => {
     const cs = computeModuleChangeSet(set(), 'receiving', true);
     expect(cs.some((c) => c.moduleId === 'inventory')).toBe(false);
   });
+  it('enabling does not re-emit a dep that is already on', () => {
+    expect(computeModuleChangeSet(set('purchase_orders'), 'receiving', true)).toEqual([
+      { moduleId: 'receiving', enabled: true },
+    ]);
+  });
+  it('returns [] when called with a core moduleId (guard boundary)', () => {
+    expect(computeModuleChangeSet(set(), 'inventory', false)).toEqual([]);
+  });
 });
