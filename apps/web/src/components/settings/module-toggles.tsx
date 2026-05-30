@@ -48,6 +48,11 @@ export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
   const optionalModules = modules.filter((m) => m.tier === 'optional');
   const premiumModules = modules.filter((m) => m.tier === 'premium');
 
+  // Serialize toggles: while a save is in flight (or a confirm dialog is open),
+  // lock every switch so a second toggle can't race the first and apply against
+  // a stale `enabled` snapshot.
+  const locked = pending || confirm !== null;
+
   /** Apply a toggle (after any confirm). */
   function applyToggle(moduleId: ModuleId, next: boolean) {
     // Optimistic: apply the full change set locally immediately.
@@ -103,6 +108,7 @@ export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
           modules={coreModules}
           enabled={enabled}
           savingId={savingId}
+          locked={locked}
           onToggle={handleToggle}
         />
         <TierSection
@@ -111,6 +117,7 @@ export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
           modules={optionalModules}
           enabled={enabled}
           savingId={savingId}
+          locked={locked}
           onToggle={handleToggle}
         />
         {premiumModules.length > 0 && (
@@ -120,6 +127,7 @@ export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
             modules={premiumModules}
             enabled={enabled}
             savingId={savingId}
+            locked={locked}
             onToggle={handleToggle}
           />
         )}
@@ -189,10 +197,12 @@ interface TierSectionProps {
   modules: ModuleRow[];
   enabled: Set<ModuleId>;
   savingId: ModuleId | null;
+  /** True while any toggle is saving or a confirm is open — disables every switch. */
+  locked: boolean;
   onToggle: (id: ModuleId, next: boolean) => void;
 }
 
-function TierSection({ title, subtitle, modules, enabled, savingId, onToggle }: TierSectionProps) {
+function TierSection({ title, subtitle, modules, enabled, savingId, locked, onToggle }: TierSectionProps) {
   if (modules.length === 0) return null;
   return (
     <section className="space-y-3">
@@ -234,12 +244,12 @@ function TierSection({ title, subtitle, modules, enabled, savingId, onToggle }: 
                   role="switch"
                   aria-checked={checked}
                   aria-label={`Toggle ${m.title}`}
-                  onClick={() => !busy && onToggle(m.id, !checked)}
-                  disabled={busy}
+                  onClick={() => !busy && !locked && onToggle(m.id, !checked)}
+                  disabled={busy || locked}
                   className={cn(
                     'relative shrink-0 mt-0.5 inline-flex h-6 w-11 items-center rounded-full transition-colors',
                     checked ? 'bg-primary' : 'bg-muted',
-                    busy && 'cursor-not-allowed',
+                    (busy || locked) && 'cursor-not-allowed',
                   )}
                 >
                   <span
