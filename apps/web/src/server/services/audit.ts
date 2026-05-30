@@ -153,7 +153,12 @@ export type AuditEvent =
   // Platform-admin provisioned a brand-new tenant org for a customer
   // via /dashboard/admin/orgs/new. Cross-org event: organization_id
   // is the NEW org's id; user_id is the platform admin who acted.
-  | 'organization.provisioned_by_platform_admin';
+  | 'organization.provisioned_by_platform_admin'
+  // Integrations module (Phase 3a connector framework). Connect lands when
+  // the OAuth callback writes the token to Vault (status active); disconnect
+  // tears the connection down and destroys the Vault secret.
+  | 'integration.connected'
+  | 'integration.disconnected';
 
 interface AuditPayload {
   event: AuditEvent;
