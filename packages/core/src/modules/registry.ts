@@ -29,6 +29,7 @@ export type ModuleId =
   | 'reports' | 'notifications' | 'team' | 'settings' | 'admin_tools' | 'charters' | 'scan'
   | 'books' | 'rentals' | 'bundles' | 'orders' | 'cycle_counts' | 'procedures'
   | 'purchase_orders' | 'receiving' | 'po_imports' | 'suppliers' | 'schedule' | 'ai' | 'public_requests'
+  | 'integrations'
   | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'api_access';
 
 export interface NavPlacement {
@@ -456,6 +457,21 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     apiPrefixes: ['/api/public/requests'],
     ownsTables: [],
     defaultOnFor: ['charter_school'],
+    placements: [],
+  },
+  integrations: {
+    id: 'integrations',
+    tier: 'optional',
+    title: 'Integrations',
+    dependsOn: [],
+    permissions: ['integrations:manage'],
+    surfaces: ['api'],
+    apiPrefixes: ['/api/integrations', '/api/cron/drain-outbox'],
+    ownsTables: ['org_connections', 'connection_mappings', 'connection_sync_log'],
+    // Net-new connector framework — OFF for every pack (incl. charter);
+    // explicit opt-in only. Surfaced via the Integrations settings page,
+    // not the main nav (no placements).
+    defaultOnFor: [],
     placements: [],
   },
 
