@@ -20,9 +20,14 @@ export async function checkModuleAccess(moduleId: ModuleId): Promise<ModuleAcces
   const canManage = ctx.role === 'owner' || ctx.role === 'admin';
   if (MODULE_REGISTRY[moduleId].tier === 'core') return { enabled: true, canManage };
   const supabase = await createClient();
-  const { data } = await supabase.rpc('module_enabled', {
+  const { data, error } = await supabase.rpc('module_enabled', {
     p_org: ctx.organizationId,
     p_module: moduleId,
   });
+  // Fail closed (show "not enabled") on a read error, but log it so infra
+  // problems are observable rather than silently denying access.
+  if (error) {
+    console.error('[module-gate] module_enabled RPC failed, denying access', moduleId, error.message);
+  }
   return { enabled: data === true, canManage };
 }
