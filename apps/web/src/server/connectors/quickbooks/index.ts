@@ -11,7 +11,7 @@ import type {
 
 import { env } from '@/lib/env';
 
-import { buildBillFromReceipt, resolveVendor } from './bill';
+import { buildBillFromReceipt, resolveVendor, type BillLine } from './bill';
 import { QboClient, type QboEnv } from './client';
 import { refreshTokens } from './oauth';
 
@@ -80,30 +80,60 @@ export const quickbooksConnector: Connector = {
       from: (t: string) => any;
     };
 
+    // FAIL-CLOSED reads (mirrors drainer.ts, which throws on every query error):
+    // a transient DB error here must surface as a THROW so the drainer records a
+    // retryable error row + backoff and re-tries next tick. If we swallowed the
+    // error and `data` was null, the rehydration would be indistinguishable from
+    // a genuinely-absent row → we'd ACK and the drainer would mark the export
+    // `success`, silently dropping a Bill that never got created. We therefore
+    // ONLY `return { ok: true }` when the read SUCCEEDED and the row is truly
+    // absent (error null AND data null).
+    //
     // The receipt.posted payload has no line items — rehydrate by aggregate id.
-    const { data: receipt } = await admin
+    const { data: receipt, error: receiptErr } = await admin
       .from('receipts')
       .select('id, purchase_order_id, receipt_number')
       .eq('id', event.aggregateId)
       .maybeSingle();
+    if (receiptErr) throw new Error(`receipts select: ${receiptErr.message}`);
     if (!receipt) return { ok: true };
 
-    const { data: lines } = await admin
+    const { data: lines, error: linesErr } = await admin
       .from('receipt_lines')
       .select('qty_accepted_base, unit_cost')
       .eq('receipt_id', receipt.id);
+    if (linesErr) throw new Error(`receipt_lines select: ${linesErr.message}`);
 
-    const { data: po } = receipt.purchase_order_id
+    const { data: po, error: poErr } = receipt.purchase_order_id
       ? await admin
           .from('purchase_orders')
           .select('supplier_id')
           .eq('id', receipt.purchase_order_id)
           .maybeSingle()
-      : { data: null };
+      : { data: null, error: null };
+    if (poErr) throw new Error(`purchase_orders select: ${poErr.message}`);
 
-    const { data: supplier } = po?.supplier_id
+    const { data: supplier, error: supplierErr } = po?.supplier_id
       ? await admin.from('suppliers').select('id, name').eq('id', po.supplier_id).maybeSingle()
-      : { data: null };
+      : { data: null, error: null };
+    if (supplierErr) throw new Error(`suppliers select: ${supplierErr.message}`);
+
+    // Normalize the lines once. `?? 0` keeps a null/undefined column (or a value
+    // that doesn't parse) from becoming NaN, which JSON-serializes to null and
+    // QBO rejects — defensive only, the schema defaults unit_cost to 0.
+    const billLines: BillLine[] = (
+      (lines ?? []) as Array<{ qty_accepted_base: unknown; unit_cost: unknown }>
+    ).map((l) => ({
+      qtyAccepted: Number(l.qty_accepted_base) || 0,
+      unitCost: Number(l.unit_cost) || 0,
+    }));
+
+    // ZERO-AMOUNT SHORT-CIRCUIT: an all-rejected receipt (every accepted qty 0)
+    // has nothing to book. QBO rejects a $0 Bill with a non-retryable 4xx that
+    // would burn the full retry budget before dead-lettering, so ACK instead of
+    // POSTing — and skip the needless vendor-resolution round-trip.
+    const totalAmount = billLines.reduce((sum, l) => sum + l.qtyAccepted * l.unitCost, 0);
+    if (totalAmount <= 0) return { ok: true };
 
     const qboEnv: QboEnv = settings.env ?? env.QBO_ENV;
     const client = new QboClient(conn.externalAccountId!, secrets, qboEnv);
@@ -126,10 +156,7 @@ export const quickbooksConnector: Connector = {
       const body = buildBillFromReceipt({
         vendorId,
         billExpenseAccountId,
-        lines: (lines ?? []).map((l: { qty_accepted_base: unknown; unit_cost: unknown }) => ({
-          qtyAccepted: Number(l.qty_accepted_base),
-          unitCost: Number(l.unit_cost),
-        })),
+        lines: billLines,
       });
 
       const requestId = `rcpt-${receipt.id}`.slice(0, 50);
