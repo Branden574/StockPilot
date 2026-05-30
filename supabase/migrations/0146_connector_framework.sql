@@ -14,9 +14,10 @@
 --
 -- Secret invariant: OAuth tokens live ONLY in Supabase Vault. The tables store
 -- a `secret_id` UUID handle, never the token. The connector_secret_* RPCs are
--- SECURITY DEFINER and callable ONLY by service_role (revoked from
--- authenticated + anon) so the browser/'authenticated' role can never read a
--- token.
+-- SECURITY DEFINER and callable ONLY by service_role (revoked from public,
+-- authenticated, anon — the `public` revoke is required because CREATE FUNCTION
+-- grants EXECUTE to PUBLIC by default) so the browser/'authenticated' role can
+-- never read a token.
 --
 -- RLS helpers re-used verbatim from 0001_init.sql:
 --   is_org_member(org_id uuid) -> boolean
@@ -139,7 +140,13 @@ grant select, insert, update, delete on public.connection_mappings to authentica
 grant select on public.connection_sync_log to authenticated;
 
 -- ============================================================================
--- Vault secret RPCs — service_role ONLY (revoked from authenticated/anon).
+-- Vault secret RPCs — service_role ONLY.
+-- IMPORTANT: CREATE FUNCTION grants EXECUTE to PUBLIC by default, and PUBLIC is
+-- a pseudo-role every role (incl. authenticated/anon) inherits implicitly. A
+-- revoke FROM authenticated alone leaves the implicit PUBLIC grant intact, so
+-- these SECURITY DEFINER functions MUST revoke FROM public as well (matching the
+-- repo convention in 0125/0127/0129) before granting execute to service_role.
+-- This keeps the decrypted OAuth token unreadable by the browser/'authenticated'.
 -- vault 0.3.1 signatures (verified on the linked project):
 --   vault.create_secret(new_secret text, new_name text, new_description text,
 --                        new_key_id uuid) returns uuid  -- last 3 args defaulted
@@ -170,9 +177,9 @@ returns void language sql security definer set search_path = public, vault as $$
   delete from vault.secrets where id = p_secret_id;
 $$;
 
-revoke all on function public.connector_secret_put(jsonb, text)   from authenticated, anon;
-revoke all on function public.connector_secret_get(uuid)          from authenticated, anon;
-revoke all on function public.connector_secret_delete(uuid)       from authenticated, anon;
+revoke all on function public.connector_secret_put(jsonb, text)   from public, authenticated, anon;
+revoke all on function public.connector_secret_get(uuid)          from public, authenticated, anon;
+revoke all on function public.connector_secret_delete(uuid)       from public, authenticated, anon;
 grant execute on function public.connector_secret_put(jsonb, text)   to service_role;
 grant execute on function public.connector_secret_get(uuid)          to service_role;
 grant execute on function public.connector_secret_delete(uuid)       to service_role;
