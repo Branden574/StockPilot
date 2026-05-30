@@ -180,6 +180,27 @@ describe('quickbooksConnector.handleOutboxEvent — zero-amount short-circuit', 
     expect(res).toEqual({ ok: true });
     expect(postSpy).not.toHaveBeenCalled();
   });
+
+  it('acks without POSTing a sub-cent total that rounds to $0.00 (round2 gate, not unrounded > 0)', async () => {
+    // 1 unit @ $0.004 → unrounded total 0.004 (> 0) but round2 → 0.00. The Bill
+    // builder rounds the Amount to 0, which QBO rejects, so we must ACK not POST.
+    const admin = makeAdmin({
+      tables: {
+        receipts: { data: { id: 'r1', purchase_order_id: 'po-1', receipt_number: 'RC-1' }, error: null },
+        receipt_lines: { data: [{ qty_accepted_base: 1, unit_cost: 0.004 }], error: null },
+        purchase_orders: { data: { supplier_id: 'sup-1' }, error: null },
+        suppliers: { data: { id: 'sup-1', name: 'Acme' }, error: null },
+      },
+    });
+    const res = await quickbooksConnector.handleOutboxEvent(
+      event,
+      conn,
+      {} as any,
+      makeDeps({ admin }),
+    );
+    expect(res).toEqual({ ok: true });
+    expect(postSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('quickbooksConnector via runDrain (integration) — Step 6', () => {
@@ -292,6 +313,8 @@ describe('quickbooksConnector via runDrain (integration) — Step 6', () => {
       purchase_orders: { data: { supplier_id: 'sup-1' } },
       suppliers: { data: { id: 'sup-1', name: 'Acme' } },
       connection_mappings: { data: { external_id: 'qbo-vendor-7', external_meta: {} } },
+      // integrations module enabled for org-1 (migration 0144 gate) so the drainer dispatches.
+      organization_modules: { data: [{ organization_id: 'org-1' }] },
     };
     const admin = makeDrainAdmin(domain);
 

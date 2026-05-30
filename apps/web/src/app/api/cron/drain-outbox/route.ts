@@ -8,7 +8,7 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { CONNECTORS } from '@/server/connectors';
-import { runDrain } from '@/server/connectors/drainer';
+import { enabledIntegrationOrgIds, runDrain } from '@/server/connectors/drainer';
 import { quickbooksConnector } from '@/server/connectors/quickbooks';
 import { QboClient, type QboEnv } from '@/server/connectors/quickbooks/client';
 import { maybePostMonthlyValuation } from '@/server/connectors/quickbooks/valuation';
@@ -62,8 +62,23 @@ async function runMonthlyValuation(
     return;
   }
 
+  // Module-enabled gate (same as runDrain): an org that disabled the
+  // 'integrations' module must get ZERO valuation JEs posted. FAIL-CLOSED — if
+  // the gate query errors, report and treat every org as disabled (post
+  // nothing) rather than pushing a JE against a possibly-disabled module.
+  const orgIds = Array.from(new Set((conns ?? []).map((c) => c.organization_id as string)));
+  let enabledOrgIds: Set<string>;
+  try {
+    enabledOrgIds = await enabledIntegrationOrgIds(admin, orgIds);
+  } catch (gateErr) {
+    void reportError(gateErr, { tag: 'cron.drain-outbox.valuation.module-gate' });
+    return;
+  }
+
   for (const c of (conns ?? []) as Array<Record<string, any>>) {
     try {
+      // Skip orgs whose integrations module is disabled — no JournalEntry post.
+      if (!enabledOrgIds.has(c.organization_id)) continue;
       // An active connection without a Vault handle is malformed (the OAuth
       // callback must set secret_id). Skip rather than throwing the whole pass.
       if (!c.secret_id || !c.external_account_id) continue;
