@@ -208,5 +208,6 @@ export async function wipeForSignOut(): Promise<void> {
     delete from bundle_components;
     delete from pending_actions;
     delete from meta where key = 'last_synced_at';
+    delete from meta where key = 'enabled_modules';
   `);
 }

@@ -293,6 +293,11 @@ async function snapshotGET(req: NextRequest) {
   return NextResponse.json({
     serverTime,
     since,
+    // The org's enabled module ids. Mobile derives its drawer + gates its
+    // bottom tabs from this set (mirrors the web sidebar, which already
+    // derives from the registry). string[] over the wire; mobile re-hydrates
+    // it into a Set<ModuleId>.
+    enabledModules: Array.from(ctx.enabledModules),
     warehouses: (warehouses ?? []).map((w) => ({
       id: w.id,
       name: w.name,
