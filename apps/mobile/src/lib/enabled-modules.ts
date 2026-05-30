@@ -17,6 +17,12 @@ import { getMeta } from './db';
  * That guarantees the grandfathered "all modules on" org never sees a
  * partial/empty drawer or a tab flicker out while offline or before the first
  * sync of this build lands a persisted value.
+ *
+ * NOTE: this default is deliberately PERMISSIVE (show everything until proven
+ * otherwise). That is safe only because navigation is cosmetic — actual access
+ * is independently gated server-side (assertModuleEnabled + RLS), so a briefly
+ * over-shown tab for a disabled module 403s on use rather than leaking data.
+ * The nav is NOT an entitlement boundary.
  */
 export const ENABLED_MODULES_META_KEY = 'enabled_modules';
 
@@ -42,9 +48,14 @@ export async function readPersistedEnabledModules(): Promise<Set<ModuleId> | nul
 
 /**
  * React hook returning the current org's enabled module set, defaulting to
- * DEFAULT_ENABLED_MODULES until a persisted value is read. Re-reads on a
- * bumpable `version` so a fresh sync can refresh consumers if needed; for the
- * grandfathered org the default already matches, so there's no visible change.
+ * DEFAULT_ENABLED_MODULES until a persisted value is read once on mount.
+ *
+ * Phase-1 limitation (deliberate): it does NOT re-read on org switch or after a
+ * later sync — consumers refresh on remount. That's fine while every org is
+ * grandfathered to the full set (all orgs resolve identically). When orgs gain
+ * differing entitlements (post-Phase-1, alongside the workspace switcher), wire
+ * a refresh here (e.g. re-read after syncNow / subscribe to the workspace
+ * channel) so an in-session org switch updates the drawer/tabs without remount.
  */
 export function useEnabledModules(): Set<ModuleId> {
   const [modules, setModules] = React.useState<Set<ModuleId>>(DEFAULT_ENABLED_MODULES);
