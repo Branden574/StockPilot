@@ -39,10 +39,13 @@ export function nextBackoff(attempt: number): number {
 }
 
 /**
- * How many candidate outbox events to consider per connection per tick. The set
- * is restricted to events NOT yet in a terminal (success/dead) delivery state
- * for this connection (see runDrain), so the window always advances rather than
- * re-fetching the same already-delivered head of the queue.
+ * How many candidate outbox events to consider per connection per tick. The
+ * candidate set is computed SERVER-SIDE by the connector_drain_candidates RPC
+ * (migration 0148): oldest-first events for the org+topics that are NOT yet
+ * terminal (success/dead) for this connection AND not an error row still inside
+ * its backoff window. Because the RPC bounds the result by work-REMAINING (this
+ * limit) rather than work-DONE, the window always advances and there is no
+ * unbounded NOT-IN exclusion list to truncate or blow the request URL.
  */
 const CANDIDATE_LIMIT = 200;
 
@@ -63,11 +66,14 @@ export interface DrainResult {
  * legacy path; flipping it here would silently starve other connectors).
  *
  * Idempotency + backoff:
- *  - the candidate window already EXCLUDES events terminal (success/dead) for
- *    this connection, so the oldest-N window advances instead of re-scanning an
- *    already-delivered head of the queue (head-of-line starvation fix)
- *  - per event, skip a 'success'/'dead' row defensively, and skip 'error' rows
- *    whose next_attempt_at is still in the future
+ *  - the candidate window is computed by the connector_drain_candidates RPC,
+ *    which EXCLUDES events terminal (success/dead) for this connection AND error
+ *    rows still inside their backoff window, ordered oldest-first and bounded by
+ *    work-remaining (CANDIDATE_LIMIT). The window advances instead of re-scanning
+ *    an already-delivered head of the queue (head-of-line starvation fix), with
+ *    no unbounded NOT-IN list that could truncate at PostgREST's max-rows cap
+ *  - per event, defensively re-check the ledger: skip a 'success'/'dead' row,
+ *    and skip 'error' rows whose next_attempt_at is still in the future
  *  - on failure, schedule nextBackoff(attempts); dead-letter at MAX_ATTEMPTS
  *
  * Error handling is FAIL-CLOSED (mirrors services/digest.ts which throws on any
@@ -122,32 +128,21 @@ export async function runDrain(
       settings: c.settings ?? {},
     };
 
-    // 2a. Terminal (success/dead) deliveries for this connection — these events
-    //     must drop OUT of the candidate window so the oldest-N fetch advances
-    //     instead of permanently re-scanning a delivered head of the queue.
-    const { data: terminal, error: terminalErr } = await admin
-      .from('connection_sync_log')
-      .select('outbox_event_id')
-      .eq('connection_id', conn.id)
-      .in('status', ['success', 'dead']);
-    if (terminalErr) throw new Error(`connection_sync_log select: ${terminalErr.message}`);
-    const terminalIds = ((terminal ?? []) as any[]).map((r) => r.outbox_event_id);
-
-    // 2b. candidate outbox events for this org on subscribed topics, EXCLUDING
-    //     events already terminal for this connection.
-    let eventsQuery = admin
-      .from('outbox_events')
-      .select('*')
-      .eq('organization_id', c.organization_id)
-      .in('topic', connector.subscribedTopics);
-    if (terminalIds.length > 0) {
-      // PostgREST in-list filter: not.in.(uuid,uuid,...)
-      eventsQuery = eventsQuery.not('id', 'in', `(${terminalIds.join(',')})`);
-    }
-    const { data: events, error: eventsErr } = await eventsQuery
-      .order('created_at', { ascending: true })
-      .limit(CANDIDATE_LIMIT);
-    if (eventsErr) throw new Error(`outbox_events select: ${eventsErr.message}`);
+    // 2. candidate outbox events for this org on subscribed topics. Computed
+    //    server-side by connector_drain_candidates (SECURITY DEFINER, migration
+    //    0148): oldest-first, EXCLUDING events terminal (success/dead) for this
+    //    connection AND error rows still inside their backoff window, bounded by
+    //    CANDIDATE_LIMIT. Bounding by work-REMAINING (not a NOT-IN list of all
+    //    work-done) means the window advances and can never truncate at the
+    //    PostgREST max-rows cap (head-of-line starvation fix). Fail-closed.
+    const { data: events, error: eventsErr } = await admin.rpc('connector_drain_candidates', {
+      p_connection_id: conn.id,
+      p_organization_id: c.organization_id,
+      p_topics: connector.subscribedTopics,
+      p_now: now.toISOString(),
+      p_limit: CANDIDATE_LIMIT,
+    });
+    if (eventsErr) throw new Error(`connector_drain_candidates: ${eventsErr.message}`);
 
     for (const e of (events ?? []) as any[]) {
       // The candidate set already excludes terminal rows; we still point-read
@@ -315,7 +310,7 @@ export async function runDrain(
  * Builds the injected service-layer seam handed to each connector. Keeps the
  * connector implementations free of the supabase dependency and unit-testable.
  */
-export function makeDeps(admin: any) {
+function makeDeps(admin: any) {
   return {
     admin,
     fetch,
