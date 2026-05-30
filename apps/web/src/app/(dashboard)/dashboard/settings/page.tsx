@@ -62,6 +62,13 @@ const MODULES_SECTIONS = [
   { href: '/dashboard/settings/modules', title: 'Modules', description: 'Turn features on or off for your whole organization.' },
 ];
 
+// Integrations control plane — connect external tools (QuickBooks Online).
+// Gated on `integrations:manage` (owner+admin); the underlying page also
+// redirects anyone without that permission.
+const INTEGRATIONS_SECTIONS = [
+  { href: '/dashboard/settings/integrations', title: 'Integrations', description: 'Connect QuickBooks Online and other tools to export your data.' },
+];
+
 export default async function SettingsPage() {
   const ctx = await requireOrgContext();
   const sections = [
@@ -72,6 +79,7 @@ export default async function SettingsPage() {
     ...(hasPermission(ctx.role, 'ai:manage') ? AI_SECTIONS : []),
     ...(hasPermission(ctx.role, 'items:delete') ? RECOVERY_SECTIONS : []),
     ...(hasPermission(ctx.role, 'organization:update') ? MODULES_SECTIONS : []),
+    ...(hasPermission(ctx.role, 'integrations:manage') ? INTEGRATIONS_SECTIONS : []),
   ];
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
