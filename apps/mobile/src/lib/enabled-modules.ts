@@ -47,28 +47,43 @@ export async function readPersistedEnabledModules(): Promise<Set<ModuleId> | nul
 }
 
 /**
+ * Module-level subscriber set — notified by `refreshEnabledModules()`.
+ * Mirrors the `listeners` pattern used in `use-workspace.ts`.
+ */
+const listeners = new Set<() => void>();
+
+/**
+ * Notify all active `useEnabledModules` hooks to re-read the persisted
+ * module set. Call this after a snapshot pull completes (e.g. on org switch).
+ */
+export function refreshEnabledModules(): void {
+  for (const fn of listeners) fn();
+}
+
+/**
  * React hook returning the current org's enabled module set, defaulting to
- * DEFAULT_ENABLED_MODULES until a persisted value is read once on mount.
+ * DEFAULT_ENABLED_MODULES until a persisted value is read.
  *
- * Phase-1 limitation (deliberate): it does NOT re-read on org switch or after a
- * later sync — consumers refresh on remount. That's fine while every org is
- * grandfathered to the full set (all orgs resolve identically). When orgs gain
- * differing entitlements (post-Phase-1, alongside the workspace switcher), wire
- * a refresh here (e.g. re-read after syncNow / subscribe to the workspace
- * channel) so an in-session org switch updates the drawer/tabs without remount.
+ * Re-reads when `refreshEnabledModules()` is called (e.g. after an in-session
+ * org switch triggers a fresh snapshot pull). This fixes the Phase-1 limitation
+ * where the drawer/tabs would not update their entitlements without a remount.
  */
 export function useEnabledModules(): Set<ModuleId> {
   const [modules, setModules] = React.useState<Set<ModuleId>>(DEFAULT_ENABLED_MODULES);
 
   React.useEffect(() => {
     let cancelled = false;
-    void (async () => {
+    const reread = async (): Promise<void> => {
+      if (cancelled) return;
       const persisted = await readPersistedEnabledModules();
       if (cancelled || !persisted) return;
       setModules(persisted);
-    })();
+    };
+    listeners.add(reread);
+    void reread();
     return () => {
       cancelled = true;
+      listeners.delete(reread);
     };
   }, []);
 
