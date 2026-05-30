@@ -14,7 +14,8 @@ import {
   WorkspaceSwitcherSheet,
 } from '@/components/workspace-switcher';
 import { useAuth } from '@/lib/auth-context';
-import { DRAWER_SECTIONS, type DrawerNavItem } from '@/lib/drawer-nav';
+import { drawerSectionsFor, type DrawerNavItem } from '@/lib/drawer-nav';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { useProfile } from '@/lib/use-profile';
 import { useRole } from '@/lib/use-role';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -31,7 +32,8 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const { c } = useTheme();
   const { signOut } = useAuth();
   const profile = useProfile();
-  const { isAdmin } = useRole();
+  const { role } = useRole();
+  const enabledModules = useEnabledModules();
   const router = useRouter();
   const segments = useSegments();
 
@@ -40,12 +42,17 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     return path === '/' || path === '/index' ? '/' : path;
   }, [segments]);
 
-  // Filter admin section out for non-admins so the drawer doesn't
-  // surface routes the user would just bounce off of. Mirrors web's
-  // navForRole() helper.
+  // Drawer is derived from the shared @stockpilot/core registry:
+  // resolveSurface filters the admin section out for non-admins (mirroring
+  // web's navForRole()) and drops items for modules the org hasn't enabled.
+  // While the role is still loading we treat the user as 'staff' — that
+  // yields exactly the non-admin drawer the old code showed while isAdmin
+  // was false, so there's no flicker for the admin section. enabledModules
+  // defaults to DEFAULT_MODULE_IDS until a snapshot persists, so the
+  // grandfathered all-modules-on org renders its full drawer offline too.
   const sections = React.useMemo(
-    () => DRAWER_SECTIONS.filter((s) => !s.admin || isAdmin),
-    [isAdmin],
+    () => drawerSectionsFor(role ?? 'staff', enabledModules),
+    [role, enabledModules],
   );
 
   const navigate = (item: DrawerNavItem) => {
