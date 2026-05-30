@@ -52,3 +52,42 @@ describe('resolveSurface', () => {
     expect(hrefs).toContain('/scan');
   });
 });
+
+// Zero-visual-change guards: pin the EXACT ordered href sequence an admin
+// with the full charter module set sees on each surface to what the original
+// static nav (web BASE_NAV+ADMIN_NAV / mobile DRAWER_SECTIONS) produced. Any
+// future sortOrder/section drift fails here instead of silently reordering nav.
+describe('nav order is frozen to the original static nav', () => {
+  it('web_sidebar (admin, full set) matches the legacy BASE_NAV+ADMIN_NAV order', () => {
+    const hrefs = resolveSurface('web_sidebar', { role: 'admin', enabledModules: ALL })
+      .flatMap((s) => s.items.map((i) => i.href));
+    expect(hrefs).toEqual([
+      '/dashboard',
+      '/dashboard/inventory', '/dashboard/books', '/dashboard/categories', '/dashboard/tags',
+      '/dashboard/movements', '/dashboard/rentals', '/dashboard/bundles', '/dashboard/orders',
+      '/dashboard/cycle-counts', '/dashboard/procedures', '/dashboard/purchase-orders',
+      '/dashboard/purchase-orders/imports', '/dashboard/locations', '/dashboard/suppliers',
+      '/dashboard/reports',
+      '/dashboard/ai', '/dashboard/schedule', '/dashboard/notifications', '/dashboard/team',
+      '/dashboard/settings',
+      '/dashboard/admin', '/dashboard/admin/charters', '/dashboard/admin/warehouses',
+      '/dashboard/admin/bins', '/dashboard/admin/users', '/dashboard/admin/vendor-mappings',
+      '/dashboard/admin/uom-conversions', '/dashboard/admin/reconciliation', '/dashboard/admin/audit',
+    ]);
+  });
+
+  it('mobile_drawer (admin, full set) matches the legacy DRAWER_SECTIONS order', () => {
+    const hrefs = resolveSurface('mobile_drawer', { role: 'admin', enabledModules: ALL })
+      .flatMap((s) => s.items.map((i) => i.href));
+    expect(hrefs).toEqual([
+      '/',
+      '/inventory', '/books', '/categories', '/tags', '/movements', '/rentals', '/bundles',
+      '/orders', '/cycle-counts', '/procedures', '/receive', '/purchase-orders', '/po-imports',
+      '/locations', '/suppliers', '/reports',
+      '/ai', '/schedule', '/notifications', '/team', '/settings',
+      '/scan',
+      '/admin', '/admin/charters', '/admin/warehouses', '/admin/bins', '/admin/users',
+      '/admin/vendor-mappings', '/admin/uom-conversions', '/admin/reconciliation', '/admin/audit',
+    ]);
+  });
+});
