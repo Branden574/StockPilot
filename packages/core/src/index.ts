@@ -4,3 +4,4 @@ export * from './constants';
 export * from './order-state-machine';
 export * from './modules/registry';
 export * from './modules/resolve';
+export * from './modules/change-set';
