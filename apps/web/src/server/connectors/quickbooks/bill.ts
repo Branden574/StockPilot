@@ -106,11 +106,13 @@ export async function resolveVendor(
   let vendorId = found?.[0]?.Id;
 
   if (!vendorId) {
-    const created = await client.post(
-      '/vendor',
-      { DisplayName: supplier.name },
-      `vendor-${conn.id}-${supplier.id}`.slice(0, 50),
-    );
+    // Idempotency requestid for the Vendor create. Put the supplier id FIRST so
+    // the Intuit 50-char requestid cap can't truncate it: 'vendor-'(7) +
+    // supplier.id(36) + '-'(1) = 44, leaving the conn id as a 6-char tail
+    // discriminator. Ordering it conn-first would slice the supplier UUID down
+    // to ~6 chars and two suppliers sharing a 6-hex prefix could collide.
+    const requestId = `vendor-${supplier.id}-${conn.id}`.slice(0, 50);
+    const created = await client.post('/vendor', { DisplayName: supplier.name }, requestId);
     vendorId = (created.Vendor as { Id?: string } | undefined)?.Id;
     if (!vendorId) {
       throw new Error('QBO vendor create returned no Id');
