@@ -1,6 +1,8 @@
 import { Calendar } from 'lucide-react';
 import { redirect } from 'next/navigation';
 
+import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { ScheduleCalendar } from '@/components/schedule/schedule-calendar';
 import { requireOrgContext } from '@/lib/auth/session';
 import { ScheduleService } from '@/server/services/schedule';
@@ -20,6 +22,10 @@ export default async function SchedulePage({
 }: {
   searchParams: Promise<{ m?: string }>;
 }) {
+  const moduleAccess = await checkModuleAccess('schedule');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="schedule" canManage={moduleAccess.canManage} />;
+  }
   // Schedule is manager+ — viewers can't add events and don't see the
   // surface. Sidebar already filters this out for them; redirect on
   // direct URL access.

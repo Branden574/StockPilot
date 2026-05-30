@@ -1,5 +1,7 @@
 import Link from 'next/link';
 
+import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { RentalsListTable } from '@/components/rentals/rentals-list-table';
 import { RentalsTabs } from '@/components/rentals/rentals-tabs';
 import { Button } from '@/components/ui/button';
@@ -38,6 +40,10 @@ export default async function RentalsPage({
 }: {
   searchParams: Promise<{ status?: string }>;
 }) {
+  const moduleAccess = await checkModuleAccess('rentals');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="rentals" canManage={moduleAccess.canManage} />;
+  }
   const ctx = await requireOrgContext();
   // Viewers without rentals:create can still read (RLS allows any org member
   // with warehouse access); we just hide create/action buttons.

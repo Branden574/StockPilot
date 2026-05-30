@@ -4,6 +4,8 @@ import Link from 'next/link';
 
 export const metadata: Metadata = { title: 'Books' };
 
+import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { BackfillCoversButton } from '@/components/books/backfill-covers-button';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -78,6 +80,10 @@ export default async function BooksPage({
     rack?: string;
   }>;
 }) {
+  const moduleAccess = await checkModuleAccess('books');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="books" canManage={moduleAccess.canManage} />;
+  }
   const params = await searchParams;
   const page = Math.max(1, Number(params.page) || 1);
   const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, chartersSvc, imagesSvc, savedViewsSvc, warehouseFilter, sessionCtx] = await Promise.all([
