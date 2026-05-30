@@ -120,4 +120,57 @@ describe('setModuleEnabledAction', () => {
     expect(audit).toHaveBeenCalledTimes(1);
     expect(vi.mocked(audit).mock.calls[0]?.[0].event).toBe('module.enabled');
   });
+
+  it('disables purchase_orders + cascades receiving off, audits module.disabled, no enable-stamp', async () => {
+    sessionState.role = 'owner';
+
+    const upsertSpy = vi.fn((..._args: unknown[]) => ({
+      then: (resolve: (v: { error: null }) => void) => resolve({ error: null }),
+    }));
+
+    // DB currently has purchase_orders + receiving enabled (po_imports is off).
+    stubHolder.stub = makeSupabaseStub({
+      'organization_modules.select': {
+        data: [
+          { module_id: 'purchase_orders', enabled: true },
+          { module_id: 'receiving', enabled: true },
+        ],
+        error: null,
+      },
+    });
+    const originalFrom = stubHolder.stub.client.from.bind(stubHolder.stub.client);
+    stubHolder.stub.client.from = vi.fn((table: string) => {
+      const chain = originalFrom(table);
+      if (table === 'organization_modules') {
+        return new Proxy(chain as object, {
+          get(target, prop: string) {
+            if (prop === 'upsert') return upsertSpy;
+            return (target as Record<string, unknown>)[prop];
+          },
+        });
+      }
+      return chain;
+    });
+
+    const result = await setModuleEnabledAction({ moduleId: 'purchase_orders', enabled: false });
+    expect(result.ok).toBe(true);
+
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+    const rows = upsertSpy.mock.calls[0]?.[0] as Array<{ module_id: string; enabled: boolean }>;
+    const mods = rows.map((r) => r.module_id).sort();
+    expect(mods).toContain('purchase_orders');
+    expect(mods).toContain('receiving'); // cascaded off (depends on purchase_orders)
+    expect(mods).not.toContain('po_imports'); // was already off -> not a change
+    expect(rows.every((r) => r.enabled === false)).toBe(true);
+    // I2: disabling must NOT stamp the enable provenance columns.
+    expect(rows.every((r) => !('enabled_at' in r) && !('enabled_by' in r))).toBe(true);
+
+    // audit: module.disabled, with `before` capturing the prior enabled set.
+    expect(audit).toHaveBeenCalledTimes(1);
+    const auditArg = vi.mocked(audit).mock.calls[0]?.[0];
+    expect(auditArg?.event).toBe('module.disabled');
+    expect(auditArg?.before).toEqual({
+      enabled: expect.arrayContaining(['purchase_orders', 'receiving']),
+    });
+  });
 });

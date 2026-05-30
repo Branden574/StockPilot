@@ -37,10 +37,14 @@ export async function setModuleEnabledAction(
       return err('forbidden', 'Only owners and admins can change modules.');
 
     const supabase = await createClient();
-    const { data: rows } = await supabase
+    const { data: rows, error: selectError } = await supabase
       .from('organization_modules')
       .select('module_id, enabled')
       .eq('organization_id', ctx.organizationId);
+    // Fail CLOSED: if the read fails, `current` would look empty and a disable
+    // could cascade off modules that are actually enabled. Bail rather than act
+    // on a phantom empty set (mirrors the dashboard layout's module-read guard).
+    if (selectError) throw new ServiceError('internal_error', selectError.message);
     const current = new Set<ModuleId>(
       ((rows ?? []) as Array<{ module_id: string; enabled: boolean }>)
         .filter((r) => r.enabled)
@@ -50,13 +54,20 @@ export async function setModuleEnabledAction(
     const changes = computeModuleChangeSet(current, moduleId, enabled);
     if (changes.length === 0) return ok({ enabled: [...current] });
 
+    // A single action's change set is uniformly all-enable or all-disable
+    // (computeModuleChangeSet sets every change to `enabled`), so the column set
+    // is uniform across the batch. Only stamp enabled_at/enabled_by when
+    // ENABLING — those columns mean "when/who enabled", so on disable we leave
+    // the prior enable provenance intact rather than recording the disabler.
+    const stamp = enabled
+      ? { enabled_at: new Date().toISOString(), enabled_by: ctx.userId }
+      : {};
     const upserts = changes.map((c) => ({
       organization_id: ctx.organizationId,
       module_id: c.moduleId,
       enabled: c.enabled,
       tier: MODULE_REGISTRY[c.moduleId].tier,
-      enabled_at: new Date().toISOString(),
-      enabled_by: ctx.userId,
+      ...stamp,
     }));
     const { error } = await supabase
       .from('organization_modules')
@@ -67,6 +78,7 @@ export async function setModuleEnabledAction(
       event: enabled ? 'module.enabled' : 'module.disabled',
       entityType: 'organization_module',
       entityId: moduleId,
+      before: { enabled: [...current] },
       after: { changes },
     });
 
