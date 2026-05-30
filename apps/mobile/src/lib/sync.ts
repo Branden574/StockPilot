@@ -2,6 +2,7 @@ import * as Network from 'expo-network';
 
 import { api } from './api';
 import { getDb, getMeta, setMeta } from './db';
+import { ENABLED_MODULES_META_KEY } from './enabled-modules';
 import { listPending, markFailed, markOk, markSending } from './queue';
 
 /**
@@ -19,6 +20,13 @@ import { listPending, markFailed, markOk, markSending } from './queue';
 
 interface SnapshotResponse {
   serverTime: string;
+  /**
+   * The org's enabled module ids. Drives the drawer (derived from the
+   * shared @stockpilot/core registry) + gates the optional bottom tabs.
+   * Absent in snapshots cached before this field existed — readers must
+   * default (the drawer/tab consumers fall back to DEFAULT_MODULE_IDS).
+   */
+  enabledModules: string[];
   warehouses: Array<{ id: string; name: string }>;
   items: Array<{
     id: string;
@@ -199,6 +207,14 @@ export async function pullSnapshot(): Promise<{ items: number; pos: number; coun
   });
 
   await setMeta('last_synced_at', snap.serverTime);
+  // Persist the org's enabled modules so the drawer + tab gating can read
+  // them synchronously between syncs (and while offline). Always written —
+  // even an empty array is meaningful (the consumers treat "no persisted
+  // value yet" differently from "explicitly no optional modules").
+  await setMeta(
+    ENABLED_MODULES_META_KEY,
+    JSON.stringify(Array.isArray(snap.enabledModules) ? snap.enabledModules : []),
+  );
 
   return {
     items: snap.items.length,

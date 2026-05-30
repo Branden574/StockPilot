@@ -11,6 +11,7 @@ import {
 import * as React from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
 
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -22,6 +23,14 @@ import { useTheme } from '@/lib/use-theme';
  */
 export default function TabsLayout() {
   const { c, mode } = useTheme();
+  // Optional tabs (Books, Receive POs) are gated by the org's enabled
+  // modules. `href: null` removes the tab from the bottom bar while still
+  // mounting its screen in the navigator (parity with the always-hidden
+  // cycle-counts tab). index / inventory / scan map to CORE modules and are
+  // never gated. enabledModules defaults to DEFAULT_MODULE_IDS until a
+  // snapshot persists, so the grandfathered all-modules-on org keeps all
+  // five tabs with no flicker on cold start / offline.
+  const enabledModules = useEnabledModules();
   return (
     <Tabs
       screenOptions={{
@@ -74,6 +83,7 @@ export default function TabsLayout() {
         name="books"
         options={{
           title: 'Books',
+          href: enabledModules.has('books') ? undefined : null,
           tabBarIcon: ({ color, focused }) => <TabIcon icon={Book} color={color} focused={focused} />,
         }}
       />
@@ -81,6 +91,7 @@ export default function TabsLayout() {
         name="receive"
         options={{
           title: 'POs',
+          href: enabledModules.has('receiving') ? undefined : null,
           tabBarIcon: ({ color, focused }) => <TabIcon icon={Truck} color={color} focused={focused} />,
         }}
       />
