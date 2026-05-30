@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
 import { supabase } from './supabase';
@@ -44,9 +45,11 @@ async function authHeader(): Promise<Record<string, string>> {
 }
 
 export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
+  const orgId = await AsyncStorage.getItem('workspace.activeOrgId');
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(await authHeader()),
+    ...(orgId ? { 'X-Organization-Id': orgId } : {}),
   };
 
   const res = await fetch(`${API_URL}${path}`, {
