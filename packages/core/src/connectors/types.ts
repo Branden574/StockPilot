@@ -84,9 +84,7 @@ export interface ConnectorMeta {
   title: string;
   modes: ConnectorMode[];
   subscribedTopics: string[];
-  // 'integrations'. Widened to `ModuleId | 'integrations'` because Task 2 lands
-  // before Task 3 adds 'integrations' to the ModuleId union; once Task 3 lands,
-  // 'integrations' is a ModuleId and this collapses to `ModuleId`.
-  requiresModule: ModuleId | 'integrations';
+  /** The module that must be enabled for this connector to operate (e.g. 'integrations'). */
+  requiresModule: ModuleId;
   oauth: { authorizeBase: string; scopes: string[] };
 }
