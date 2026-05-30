@@ -5,3 +5,5 @@ export * from './order-state-machine';
 export * from './modules/registry';
 export * from './modules/resolve';
 export * from './modules/change-set';
+export * from './connectors/types';
+export * from './connectors/registry';
