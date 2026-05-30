@@ -177,6 +177,9 @@ describe('quickbooksConnector via runDrain — end-to-end Bill export + idempote
       // Pre-existing supplier→Vendor mapping so resolveVendor short-circuits and
       // the only POST is the Bill (keeps the "exactly one Bill" count exact).
       connection_mappings: { data: { external_id: 'qbo-vendor-7', external_meta: {} } },
+      // integrations module enabled for org-1 (migration 0144 gate) so the
+      // drainer dispatches; a disabled-module case is covered in drainer.test.ts.
+      organization_modules: { data: [{ organization_id: 'org-1' }] },
     };
   }
 
