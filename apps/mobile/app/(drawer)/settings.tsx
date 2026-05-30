@@ -10,6 +10,7 @@ import {
   LogOut,
   Menu,
   Moon,
+  Plug,
   RefreshCcw,
   Shield,
   Sparkles,
@@ -31,7 +32,9 @@ import { Toggle } from '@/components/ui/toggle';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { useProfile } from '@/lib/use-profile';
+import { useRole } from '@/lib/use-role';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -46,6 +49,9 @@ export default function Settings() {
   const profile = useProfile();
   const { c } = useTheme();
   const router = useRouter();
+  const { isAdmin } = useRole();
+  const enabledModules = useEnabledModules();
+  const showIntegrations = enabledModules.has('integrations') && isAdmin;
   const navigation = useNavigation();
   const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
   const [cap, setCap] = React.useState<BiometricCapability | null>(null);
@@ -207,6 +213,18 @@ export default function Settings() {
             }}
           />
         </Section>
+
+        {showIntegrations ? (
+          <Section label="INTEGRATIONS">
+            <SettingRow
+              icon={Plug}
+              title="Integrations"
+              detail="QuickBooks"
+              chevron
+              onPress={() => router.push('/settings/integrations' as never)}
+            />
+          </Section>
+        ) : null}
 
         <Section label="SECURITY">
           <Pressable
