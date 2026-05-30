@@ -28,7 +28,6 @@ export default async function ModulesSettingsPage() {
   const modules = Object.values(MODULE_REGISTRY).map((m) => ({
     id: m.id,
     title: m.title,
-    description: '',
     tier: m.tier,
   }));
 
