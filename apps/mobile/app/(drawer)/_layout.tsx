@@ -55,6 +55,10 @@ export default function DrawerLayout() {
       <Drawer.Screen name="team" options={{ drawerLabel: 'Team' }} />
       <Drawer.Screen name="settings" options={{ drawerLabel: 'Settings' }} />
       <Drawer.Screen
+        name="settings/integrations"
+        options={{ drawerLabel: 'Integrations', drawerItemStyle: { display: 'none' } }}
+      />
+      <Drawer.Screen
         name="admin/index"
         options={{ drawerLabel: 'Admin overview', drawerItemStyle: { display: 'none' } }}
       />
