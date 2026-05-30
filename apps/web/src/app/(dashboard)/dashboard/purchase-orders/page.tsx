@@ -1,6 +1,8 @@
 import { ClipboardList } from 'lucide-react';
 import Link from 'next/link';
 
+import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
 import { Button } from '@/components/ui/button';
@@ -18,6 +20,10 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
 export default async function PurchaseOrdersPage() {
+  const moduleAccess = await checkModuleAccess('purchase_orders');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="purchase_orders" canManage={moduleAccess.canManage} />;
+  }
   const [poSvc, supplierSvc, warehouseFilter] = await Promise.all([
     PurchaseOrdersService.forCurrentUser(),
     SuppliersService.forCurrentUser(),

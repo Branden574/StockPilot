@@ -4,6 +4,8 @@ import Link from 'next/link';
 
 export const metadata: Metadata = { title: 'Orders' };
 
+import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { EmptyState } from '@/components/ui/empty-state';
 import { OrderStatusBadge, summaryRequesterLabel } from '@/components/orders/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -89,6 +91,10 @@ export default async function OrdersPage({
 }: {
   searchParams: Promise<{ status?: string; page?: string }>;
 }) {
+  const moduleAccess = await checkModuleAccess('orders');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="orders" canManage={moduleAccess.canManage} />;
+  }
   const params = await searchParams;
   const ctx = await requireOrgContext();
   const canApprove = hasPermission(ctx.role, 'orders:approve');

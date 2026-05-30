@@ -1,5 +1,7 @@
 import Link from 'next/link';
 
+import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { PoImportStatusBadge } from '@/components/po-imports/po-import-status-badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -14,6 +16,10 @@ import { PoImportsService } from '@/server/services/po-imports';
 import { formatRelative } from '@/lib/utils';
 
 export default async function PoImportsPage() {
+  const moduleAccess = await checkModuleAccess('po_imports');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="po_imports" canManage={moduleAccess.canManage} />;
+  }
   const svc = await PoImportsService.forCurrentUser();
   const imports = await svc.list();
 

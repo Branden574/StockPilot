@@ -1,6 +1,8 @@
 import { BookOpen, History, Search, X } from 'lucide-react';
 import Link from 'next/link';
 
+import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -31,6 +33,10 @@ export default async function ProceduresListPage({
 }: {
   searchParams: Promise<SearchParams>;
 }) {
+  const moduleAccess = await checkModuleAccess('procedures');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="procedures" canManage={moduleAccess.canManage} />;
+  }
   const params = await searchParams;
   const q = params.q?.trim() || '';
   const cat = params.cat?.trim() || '';

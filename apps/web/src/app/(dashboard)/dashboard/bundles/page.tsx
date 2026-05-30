@@ -2,6 +2,8 @@ import { History, Package } from 'lucide-react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { RestoreBundleButton } from '@/components/bundles/restore-bundle-button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -25,6 +27,10 @@ export default async function BundlesListPage({
 }: {
   searchParams: Promise<{ q?: string; view?: string }>;
 }) {
+  const moduleAccess = await checkModuleAccess('bundles');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="bundles" canManage={moduleAccess.canManage} />;
+  }
   const params = await searchParams;
   const search = params.q?.trim() || undefined;
   const isArchivedView = params.view === 'archived';
