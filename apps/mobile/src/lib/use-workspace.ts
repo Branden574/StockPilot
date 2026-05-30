@@ -160,6 +160,17 @@ export async function setActiveOrg(orgId: string): Promise<void> {
   // Pull a fresh snapshot scoped to the new org (api.ts now sends
   // X-Organization-Id from the persisted activeOrgId), then notify
   // useEnabledModules hooks so the drawer + tabs refresh without remount.
+  // Fire-and-forget: syncNow swallows its own errors, so on failure the
+  // refresh simply doesn't fire and the existing entitlement set persists
+  // until the next background sync — no unhandled rejection.
+  //
+  // KNOWN LIMITATION (out of scope here — entitlements only): the local
+  // SQLite item/PO/count tables are NOT yet wiped/re-scoped on an org switch,
+  // and pullSnapshot sends `?since=<last_synced_at>` from the previous org's
+  // timeline. So for a true multi-org user, the NAV updates correctly but the
+  // cached data lists can show the prior org's rows until a full resync. Full
+  // multi-org device data-isolation (wipe + unconditional first pull on switch)
+  // is a separate effort; harmless today since prod is single-org.
   void syncNow().then(() => refreshEnabledModules());
 }
 

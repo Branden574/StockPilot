@@ -45,6 +45,11 @@ async function authHeader(): Promise<Record<string, string>> {
 }
 
 export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
+  // Scope every request to the active workspace org. The server (withApiContext)
+  // validates membership and 401s on a bad value. Key MUST match
+  // ORG_STORAGE_KEY in use-workspace.ts ('workspace.activeOrgId') — kept as a
+  // literal here to avoid importing use-workspace (which would create a cycle:
+  // use-workspace → sync → api).
   const orgId = await AsyncStorage.getItem('workspace.activeOrgId');
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
