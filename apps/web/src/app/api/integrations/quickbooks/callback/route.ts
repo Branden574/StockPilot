@@ -10,7 +10,7 @@ import { putConnectionSecret } from '@/server/connectors/secret-store';
 
 import { exchangeCode } from '@/server/connectors/quickbooks/oauth';
 
-import { hasPermission, MODULE_REGISTRY, type Role } from '@stockpilot/core';
+import { hasPermission, type Role } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -100,7 +100,7 @@ export async function GET(req: Request) {
       .eq('module_id', 'integrations')
       .eq('enabled', true)
       .maybeSingle();
-    if (!moduleRow && MODULE_REGISTRY.integrations?.tier !== 'core') {
+    if (!moduleRow) {
       return redirectWithError('module_disabled');
     }
 

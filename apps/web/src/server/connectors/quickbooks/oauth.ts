@@ -2,21 +2,19 @@ import 'server-only';
 
 import { env } from '@/lib/env';
 
-import { CONNECTOR_REGISTRY } from '@stockpilot/core';
-
 /**
- * QuickBooks Online OAuth2 token lifecycle (authorize URL + code exchange +
- * refresh). One-way export only — these helpers only ever obtain/rotate tokens
- * so the connector can PUSH StockPilot data into QBO; nothing here reads QBO
- * data back into StockPilot.
+ * QuickBooks Online OAuth2 token lifecycle (code exchange + refresh). One-way
+ * export only — these helpers only ever obtain/rotate tokens so the connector
+ * can PUSH StockPilot data into QBO; nothing here reads QBO data back into
+ * StockPilot. (The authorize URL is built registry-generically by
+ * ConnectionsService.beginConnect, not here.)
  *
- * Implemented with raw `fetch` rather than the `intuit-oauth` SDK: the three
- * operations are plain HTTP (authorize URL build, two form-encoded POSTs to the
- * Intuit token endpoint), and the SHARED CONSTRAINTS + plan explicitly allow a
- * raw-fetch fallback. Raw fetch keeps these helpers stateless (the SDK client
- * retains the token on its instance) which matters for the SECRET INVARIANT,
- * and makes them trivially testable with a fetch spy. `intuit-oauth` remains a
- * dependency for type reference / future use.
+ * Implemented with raw `fetch` rather than the Intuit OAuth SDK: the token
+ * operations are plain HTTP (two form-encoded POSTs to the Intuit token
+ * endpoint), and the SHARED CONSTRAINTS + plan explicitly allow a raw-fetch
+ * fallback. Raw fetch keeps these helpers stateless (the SDK client retains the
+ * token on its instance) which matters for the SECRET INVARIANT, and makes them
+ * trivially testable with a fetch spy.
  *
  * SECRET INVARIANT: tokens are returned to the caller (the service-role
  * callback/drainer) and never logged. The HTTP Basic header is built from
@@ -65,21 +63,6 @@ function basicAuthHeader(): string {
 
 function expiresAtFrom(expiresIn: number): string {
   return new Date(Date.now() + expiresIn * 1000).toISOString();
-}
-
-/**
- * Build the Intuit authorize URL for the connect flow. `state` is the CSRF
- * token persisted on the pending org_connections row; the callback verifies it.
- */
-export function buildAuthorizeUrl(state: string): string {
-  const meta = CONNECTOR_REGISTRY.quickbooks;
-  const url = new URL(meta.oauth.authorizeBase);
-  url.searchParams.set('client_id', env.QBO_CLIENT_ID);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', meta.oauth.scopes.join(' '));
-  url.searchParams.set('redirect_uri', redirectUri());
-  url.searchParams.set('state', state);
-  return url.toString();
 }
 
 /**

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildAuthorizeUrl, exchangeCode, refreshTokens } from './oauth';
+import { exchangeCode, refreshTokens } from './oauth';
 
 // The env module reads QBO_* from process.env at import time. These tests set
 // process.env BEFORE importing via the static import above is fine because the
 // env module memoizes — so we instead assert behaviour that doesn't depend on a
 // real client secret by spying on fetch and inspecting the request the OAuth
-// helpers assemble. buildAuthorizeUrl is asserted structurally.
+// helpers assemble.
 
 const TOKEN_ENDPOINT = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 
@@ -32,19 +32,6 @@ describe('quickbooks oauth', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-  });
-
-  it('buildAuthorizeUrl assembles the Intuit authorize URL with scope + state', () => {
-    const url = new URL(buildAuthorizeUrl('state-123'));
-    expect(url.origin + url.pathname).toBe('https://appcenter.intuit.com/connect/oauth2');
-    expect(url.searchParams.get('response_type')).toBe('code');
-    expect(url.searchParams.get('scope')).toBe('com.intuit.quickbooks.accounting');
-    expect(url.searchParams.get('state')).toBe('state-123');
-    expect(url.searchParams.get('redirect_uri')).toContain(
-      '/api/integrations/quickbooks/callback',
-    );
-    // client_id is always present (empty string when QBO_CLIENT_ID unset in test env).
-    expect(url.searchParams.has('client_id')).toBe(true);
   });
 
   it('exchangeCode posts to the token endpoint and derives expiresAt from expires_in', async () => {
