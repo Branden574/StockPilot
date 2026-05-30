@@ -258,13 +258,23 @@ export async function runDrain(
             .eq('id', conn.id);
           res.succeeded++;
         } else {
-          const dead = attempts >= MAX_ATTEMPTS;
+          // A connector that explicitly returns retryable:false is signalling a
+          // PERMANENT failure (e.g. a 4xx the request will never recover from) —
+          // dead-letter it immediately rather than burning the full MAX_ATTEMPTS
+          // budget retrying something that can't succeed. next_attempt_at is null
+          // so no further attempt is ever scheduled. Retryable/unknown failures
+          // keep the backoff path and only dead-letter at MAX_ATTEMPTS. (The catch
+          // block below stays fail-closed: a THROWN error is always retryable.)
+          const permanent = out.retryable === false;
+          const dead = permanent || attempts >= MAX_ATTEMPTS;
           const { error: errUpdateErr } = await admin
             .from('connection_sync_log')
             .update({
               status: dead ? 'dead' : 'error',
               last_error: out.error ?? 'unknown',
-              next_attempt_at: new Date(now.getTime() + nextBackoff(attempts)).toISOString(),
+              next_attempt_at: permanent
+                ? null
+                : new Date(now.getTime() + nextBackoff(attempts)).toISOString(),
               updated_at: now.toISOString(),
             })
             .eq('connection_id', conn.id)

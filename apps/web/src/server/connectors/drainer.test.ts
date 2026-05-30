@@ -337,3 +337,86 @@ describe('runDrain happy path', () => {
     expect(res.succeeded).toBe(0);
   });
 });
+
+describe('runDrain honors PushResult.retryable', () => {
+  /** One active connection + one due event, shared by the cases below. */
+  const oneActiveConnWithEvent = () => ({
+    conns: [
+      {
+        id: 'conn-1',
+        organization_id: 'org-1',
+        provider_id: 'quickbooks',
+        status: 'active',
+        secret_id: 'sec-1',
+        settings: {},
+      },
+    ],
+    events: [
+      {
+        id: 'evt-1',
+        organization_id: 'org-1',
+        topic: 'receipt.posted',
+        aggregate_type: 'receipt',
+        aggregate_id: 'r1',
+        payload: {},
+        created_at: new Date().toISOString(),
+      },
+    ],
+  });
+
+  /** Tiny stub connector — no real QBO client. `result` drives the failure mode. */
+  const stubConnector = (result: () => Promise<any>) => ({
+    id: 'quickbooks' as const,
+    modes: ['push'] as const,
+    subscribedTopics: ['receipt.posted'],
+    handleOutboxEvent: vi.fn(result),
+  });
+
+  const errorUpdate = (admin: any) =>
+    (admin.__writes as any[]).find(
+      (w) =>
+        w.table === 'connection_sync_log' &&
+        w.op === 'update' &&
+        (w.values.status === 'error' || w.values.status === 'dead'),
+    );
+
+  it('dead-letters immediately on {ok:false, retryable:false} (no retry scheduled) on the FIRST attempt', async () => {
+    const connector = stubConnector(async () => ({ ok: false, retryable: false, error: 'bad request' }));
+    const admin = makeFakeAdmin(oneActiveConnWithEvent());
+    const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date());
+
+    expect(connector.handleOutboxEvent).toHaveBeenCalledTimes(1);
+    const update = errorUpdate(admin);
+    // Permanent failure → 'dead' on the first attempt, no backoff scheduled.
+    expect(update?.values.status).toBe('dead');
+    expect(update?.values.next_attempt_at).toBeNull();
+    expect(res.deadlettered).toBe(1);
+    expect(res.failed).toBe(0);
+  });
+
+  it('retries (status error + backoff) on {ok:false} without retryable=false', async () => {
+    const connector = stubConnector(async () => ({ ok: false, error: 'transient' }));
+    const admin = makeFakeAdmin(oneActiveConnWithEvent());
+    const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date());
+
+    const update = errorUpdate(admin);
+    expect(update?.values.status).toBe('error');
+    expect(typeof update?.values.next_attempt_at).toBe('string');
+    expect(res.failed).toBe(1);
+    expect(res.deadlettered).toBe(0);
+  });
+
+  it('retries (status error + backoff) when the connector THROWS (fail-closed)', async () => {
+    const connector = stubConnector(async () => {
+      throw new Error('network blip');
+    });
+    const admin = makeFakeAdmin(oneActiveConnWithEvent());
+    const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date());
+
+    const update = errorUpdate(admin);
+    expect(update?.values.status).toBe('error');
+    expect(typeof update?.values.next_attempt_at).toBe('string');
+    expect(res.failed).toBe(1);
+    expect(res.deadlettered).toBe(0);
+  });
+});
