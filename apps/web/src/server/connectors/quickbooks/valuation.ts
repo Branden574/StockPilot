@@ -94,6 +94,9 @@ function dateKey(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
 
+/** Page size for the paginated inventory scan (PostgREST max-rows-safe). */
+const VALUATION_PAGE_SIZE = 1000;
+
 /**
  * Current total inventory value for an org: `Σ quantity_on_hand × unit_cost`
  * over active, non-deleted, non-rental items.
@@ -104,23 +107,35 @@ function dateKey(now: Date): string {
  * service-role cron. So we re-run the same query filters here against the admin
  * client, scoped explicitly by organization_id. Filters mirror reports.ts
  * exactly: deleted_at IS NULL, status='active', is_rental=false.
+ *
+ * UNLIKE reports.ts (which caps at .limit(10_000) for an informational view),
+ * this sum feeds a POSTED QuickBooks JournalEntry — a truncated sum would
+ * silently under-value inventory and skew every subsequent month's delta off a
+ * truncated snapshot. So we page through the full set with `.range()` (the
+ * established pagination pattern; see services/procedures.ts) and never cap.
  */
 async function currentInventoryValue(admin: AdminClient, organizationId: string): Promise<number> {
-  const { data, error } = await admin
-    .from('inventory_items')
-    .select('quantity_on_hand, unit_cost')
-    .eq('organization_id', organizationId)
-    .is('deleted_at', null)
-    .eq('status', 'active')
-    .eq('is_rental', false)
-    .limit(10_000);
-  if (error) throw new Error(`inventory_items valuation select: ${error.message}`);
-
   let total = 0;
-  for (const r of (data ?? []) as Array<{ quantity_on_hand: unknown; unit_cost: unknown }>) {
-    const qty = Number(r.quantity_on_hand) || 0;
-    const cost = Number(r.unit_cost) || 0;
-    total += qty * cost;
+  for (let offset = 0; ; offset += VALUATION_PAGE_SIZE) {
+    const { data, error } = await admin
+      .from('inventory_items')
+      .select('quantity_on_hand, unit_cost')
+      .eq('organization_id', organizationId)
+      .is('deleted_at', null)
+      .eq('status', 'active')
+      .eq('is_rental', false)
+      .order('id', { ascending: true })
+      .range(offset, offset + VALUATION_PAGE_SIZE - 1);
+    if (error) throw new Error(`inventory_items valuation select: ${error.message}`);
+
+    const rows = (data ?? []) as Array<{ quantity_on_hand: unknown; unit_cost: unknown }>;
+    for (const r of rows) {
+      const qty = Number(r.quantity_on_hand) || 0;
+      const cost = Number(r.unit_cost) || 0;
+      total += qty * cost;
+    }
+    // A short (or empty) page means we've consumed the full result set.
+    if (rows.length < VALUATION_PAGE_SIZE) break;
   }
   return total;
 }
@@ -136,12 +151,17 @@ async function currentInventoryValue(admin: AdminClient, organizationId: string)
  *  2. Compute the org's current total inventory value; delta = round2(current −
  *     lastSnapshot). Snapshot defaults to 0 on first run.
  *  3. GRACEFUL CONFIG GAP: if the inventoryAsset / valuationOffset accounts
- *     aren't configured in the Integrations panel, record a `last_error` note
- *     and skip — never crash the cron or block the drain.
+ *     aren't configured in the Integrations panel, record the skip reason in a
+ *     DEDICATED `settings.lastValuationSkipReason` field (NOT the shared
+ *     `last_error` column — that belongs to the drainer's Bill-export failures
+ *     and ConnectionsService surfaces it as `lastError`; reusing it here would
+ *     clobber a real export error every 5-min tick) and skip — never crash the
+ *     cron or block the drain.
  *  4. If delta !== 0, POST a balanced JE (requestid `val-<realmId>-<month>` for
  *     idempotency — a replay never double-posts).
  *  5. Update `settings` (merge, do NOT clobber accountIds): snapshot=current,
- *     lastValuationMonth=month, lastValuationAt=now.
+ *     lastValuationMonth=month, lastValuationAt=now, and CLEAR any stale
+ *     lastValuationSkipReason now that a JE has posted.
  *
  * Note: the snapshot + month are advanced even when delta is 0 (nothing to post
  * but the period is "done"), and only after a successful POST otherwise — so a
@@ -158,6 +178,7 @@ export async function maybePostMonthlyValuation(
     accountIds?: { inventoryAsset?: string; valuationOffset?: string };
     lastValuationSnapshotValue?: number;
     lastValuationMonth?: string;
+    lastValuationSkipReason?: string | null;
   };
 
   // 1. Once per calendar month per connection.
@@ -166,15 +187,23 @@ export async function maybePostMonthlyValuation(
   const inventoryAssetId = settings.accountIds?.inventoryAsset;
   const valuationOffsetId = settings.accountIds?.valuationOffset;
 
-  // 3. GRACEFUL CONFIG GAP — record a note and skip without blocking the drain.
+  // 3. GRACEFUL CONFIG GAP — record the skip in a DEDICATED settings field
+  //    (never the shared last_error column, which the drainer uses for real
+  //    Bill-export failures) and skip without blocking the drain. Merge so we
+  //    don't clobber accountIds. Only write when the reason actually changes,
+  //    so an unconfigured connection isn't re-stamped on every 5-min tick.
   if (!inventoryAssetId || !valuationOffsetId) {
-    await admin
-      .from('org_connections')
-      .update({
-        last_error: 'Inventory valuation skipped: inventoryAsset/valuationOffset account not configured',
-        updated_at: now.toISOString(),
-      })
-      .eq('id', conn.id);
+    const skipReason =
+      'Inventory valuation skipped: inventoryAsset/valuationOffset account not configured';
+    if (settings.lastValuationSkipReason !== skipReason) {
+      await admin
+        .from('org_connections')
+        .update({
+          settings: { ...settings, lastValuationSkipReason: skipReason },
+          updated_at: now.toISOString(),
+        })
+        .eq('id', conn.id);
+    }
     return;
   }
 
@@ -197,12 +226,14 @@ export async function maybePostMonthlyValuation(
     }
   }
 
-  // 5. Merge the snapshot bookkeeping into settings WITHOUT clobbering accountIds.
+  // 5. Merge the snapshot bookkeeping into settings WITHOUT clobbering accountIds,
+  //    and clear any stale config-gap skip reason now that a JE has posted.
   const nextSettings = {
     ...settings,
     lastValuationSnapshotValue: current,
     lastValuationMonth: month,
     lastValuationAt: now.toISOString(),
+    lastValuationSkipReason: null,
   };
   const { error: updErr } = await admin
     .from('org_connections')
