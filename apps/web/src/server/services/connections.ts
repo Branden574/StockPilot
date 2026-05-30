@@ -146,7 +146,41 @@ export class ConnectionsService {
     const meta = CONNECTOR_REGISTRY[provider];
     if (!meta) throw new ServiceError('validation_error', `Unknown provider: ${provider}`);
 
+    // Fail fast on a misconfigured deployment: QBO_CLIENT_ID is optionalSecret
+    // (defaults to ''). Without it the authorize URL carries client_id='' and
+    // Intuit rejects the user with an opaque error AFTER the redirect. Surface
+    // it here so we never write a stray pending row or leave the app.
+    if (!env.QBO_CLIENT_ID) {
+      throw new ServiceError(
+        'validation_error',
+        'QuickBooks is not configured on this deployment (missing QBO_CLIENT_ID).',
+      );
+    }
+
     const state = crypto.randomUUID();
+
+    // Read the existing row first (if any) so the upsert's UPDATE branch
+    // MERGES rather than CLOBBERS. The upsert is keyed on the
+    // (organization_id, provider_id) UNIQUE constraint, so on reconnect
+    // Postgres would otherwise replace the whole `settings` jsonb with
+    // `{ env }` — silently dropping settings.accountIds (billExpense /
+    // inventoryAsset / valuationOffset) the admin saved via
+    // saveAccountMapping(), which the connector needs to post Bills + the
+    // valuation JournalEntry. We spread the current settings and re-stamp env.
+    const { data: existing, error: selectError } = await this.ctx.supabase
+      .from('org_connections')
+      .select('settings, created_by')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('provider_id', provider)
+      .maybeSingle();
+    if (selectError) throw new ServiceError('internal_error', selectError.message);
+
+    const currentSettings =
+      ((existing as { settings: Record<string, unknown> | null } | null)?.settings) ?? {};
+    // Preserve the ORIGINAL establisher's attribution on reconnect; only stamp
+    // created_by on a first-time insert (no existing row).
+    const createdBy =
+      ((existing as { created_by: string | null } | null)?.created_by) ?? this.ctx.userId;
 
     // Upsert keyed on the (organization_id, provider_id) UNIQUE constraint:
     // reconnecting an existing (e.g. errored/disconnected) connection reuses the
@@ -158,8 +192,8 @@ export class ConnectionsService {
         provider_id: provider,
         status: 'pending',
         oauth_state: state,
-        settings: { env: env.QBO_ENV },
-        created_by: this.ctx.userId,
+        settings: { ...currentSettings, env: env.QBO_ENV },
+        created_by: createdBy,
       },
       { onConflict: 'organization_id,provider_id' },
     );
@@ -176,8 +210,15 @@ export class ConnectionsService {
   }
 
   /**
-   * Disconnects a provider: deletes the Vault secret (service-role admin client),
-   * sets status='disconnected', and nulls secret_id + oauth_state. Audited.
+   * Disconnects a provider: sets status='disconnected' and nulls secret_id +
+   * oauth_state, THEN deletes the Vault secret (service-role admin client).
+   * Audited.
+   *
+   * Ordering matters: we null the row's secret_id BEFORE destroying the Vault
+   * secret so a failure mid-disconnect never leaves a dangling secret_id
+   * pointing at a deleted Vault entry. If the Vault delete fails after the row
+   * update, a retry re-runs cleanly (row already disconnected, secret_id null)
+   * and the orphaned Vault secret is at worst a harmless inert handle.
    *
    * `assertCurrentAal2` is intentionally NOT required here: disconnecting only
    * tears down an external export integration (no StockPilot data is mutated and
@@ -198,20 +239,22 @@ export class ConnectionsService {
     if (!row) throw new ServiceError('not_found', `No ${provider} connection to disconnect.`);
 
     const secretId = (row as { secret_id: string | null }).secret_id;
-    // Destroy the Vault token via the SERVICE-ROLE admin client. The user
-    // request client (authenticated role) is not granted the secret RPCs.
-    // `as never` mirrors the drainer's cast: secret-store types `admin` to the
-    // minimal rpc shape it needs, narrower than the full SupabaseClient.
-    if (secretId) {
-      await deleteConnectionSecret(createAdminClient() as never, secretId);
-    }
 
+    // Null the row FIRST so secret_id never dangles past a deleted Vault entry.
     const { error: updateError } = await this.ctx.supabase
       .from('org_connections')
       .update({ status: 'disconnected', secret_id: null, oauth_state: null })
       .eq('organization_id', this.ctx.organizationId)
       .eq('provider_id', provider);
     if (updateError) throw new ServiceError('internal_error', updateError.message);
+
+    // Then destroy the Vault token via the SERVICE-ROLE admin client. The user
+    // request client (authenticated role) is not granted the secret RPCs.
+    // `as never` mirrors the drainer's cast: secret-store types `admin` to the
+    // minimal rpc shape it needs, narrower than the full SupabaseClient.
+    if (secretId) {
+      await deleteConnectionSecret(createAdminClient() as never, secretId);
+    }
 
     void audit(
       {
