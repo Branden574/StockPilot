@@ -2,6 +2,8 @@ import { ClipboardCheck } from 'lucide-react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -22,6 +24,10 @@ import { formatRelative } from '@/lib/utils';
 import { hasPermission } from '@stockpilot/core';
 
 export default async function CycleCountsPage() {
+  const moduleAccess = await checkModuleAccess('cycle_counts');
+  if (!moduleAccess.enabled) {
+    return <ModuleNotEnabled moduleId="cycle_counts" canManage={moduleAccess.canManage} />;
+  }
   // Cycle counts emit stock_movements rows when posted — gated on
   // stock:adjust (staff+). Viewers get bounced.
   const ctx = await requireOrgContext();
