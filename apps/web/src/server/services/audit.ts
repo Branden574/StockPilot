@@ -135,6 +135,8 @@ export type AuditEvent =
   // Org-level admin actions (replacing prior misuse of warehouse.updated
   // for org logo / MFA policy changes).
   | 'organization.updated'
+  | 'module.enabled'
+  | 'module.disabled'
   | 'organization.mfa_policy.changed'
   | 'organization.public_request_token.rotated'
   // MFA discrete events (replacing prior misuse of user.role.changed
