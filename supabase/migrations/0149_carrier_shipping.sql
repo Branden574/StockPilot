@@ -38,8 +38,23 @@ alter table public.charters add column if not exists contact_phone text;
 create index if not exists charters_org_with_address_idx
   on public.charters (organization_id) where address is not null;
 
--- 2. shipments — one per (delivery order, EasyPost shipment). -----------------
-create table if not exists public.shipments (
+-- 2. carrier_shipments — one per (delivery order, EasyPost shipment). ---------
+--    NOTE: deliberately NOT named `shipments` — that name is taken by the
+--    deprecated outbound warehouse-to-warehouse packing-slip table from
+--    0050_shipments.sql, whose drop is still deferred (0114). Reusing the name
+--    would make `create table if not exists` a silent no-op on any DB that has
+--    the 0050 table (every existing/prod DB), so none of the EasyPost columns
+--    would be created and the easypost_shipment_id index below would then abort.
+--
+--    FK on-delete (deliberate): organization_id + order_request_id CASCADE so a
+--    deleted org/order takes its shipments with it. connection_id and
+--    purchased_by intentionally use the default NO ACTION: org_connections is
+--    soft-disconnected (status='disconnected', secret_id nulled — never hard
+--    deleted) so it is never the deletion source, and on org deletion both this
+--    table and org_connections cascade together via organizations; purchased_by
+--    points at the actor and we keep the shipment audit even if the user row is
+--    later removed (no automatic deletion path exercises these FKs today).
+create table if not exists public.carrier_shipments (
   id                   uuid primary key default gen_random_uuid(),
   organization_id      uuid not null references public.organizations(id) on delete cascade,
   order_request_id     uuid not null references public.order_requests(id) on delete cascade,
@@ -64,31 +79,31 @@ create table if not exists public.shipments (
   created_at           timestamptz not null default now(),
   updated_at           timestamptz not null default now()
 );
-create index if not exists shipments_org_order_idx
-  on public.shipments (organization_id, order_request_id);
-create index if not exists shipments_easypost_shipment_idx
-  on public.shipments (easypost_shipment_id);
+create index if not exists carrier_shipments_org_order_idx
+  on public.carrier_shipments (organization_id, order_request_id);
+create index if not exists carrier_shipments_easypost_shipment_idx
+  on public.carrier_shipments (easypost_shipment_id);
 
 -- updated_at maintenance (tg_set_updated_at convention, 0001). ---------------
-drop trigger if exists shipments_set_updated_at on public.shipments;
-create trigger shipments_set_updated_at
-  before update on public.shipments
+drop trigger if exists carrier_shipments_set_updated_at on public.carrier_shipments;
+create trigger carrier_shipments_set_updated_at
+  before update on public.carrier_shipments
   for each row execute function public.tg_set_updated_at();
 
 -- RLS: member read, manager write. -------------------------------------------
-alter table public.shipments enable row level security;
+alter table public.carrier_shipments enable row level security;
 
-drop policy if exists shipments_select on public.shipments;
-create policy shipments_select on public.shipments
+drop policy if exists carrier_shipments_select on public.carrier_shipments;
+create policy carrier_shipments_select on public.carrier_shipments
   for select to authenticated using ((select public.is_org_member(organization_id)));
 
-drop policy if exists shipments_write on public.shipments;
-create policy shipments_write on public.shipments
+drop policy if exists carrier_shipments_write on public.carrier_shipments;
+create policy carrier_shipments_write on public.carrier_shipments
   for all to authenticated
   using ((select public.has_org_role(organization_id,'manager')))
   with check ((select public.has_org_role(organization_id,'manager')));
 
-grant select, insert, update, delete on public.shipments to authenticated;
+grant select, insert, update, delete on public.carrier_shipments to authenticated;
 
 -- 3. Grandfather: net-new 'shipping' module OFF for every existing org. -------
 --    Mirrors 0147 (explicit opt-in; admin connects EasyPost from settings).
