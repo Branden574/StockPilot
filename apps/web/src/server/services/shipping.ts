@@ -125,10 +125,33 @@ function hasMailingAddress(addr: StoredAddress | null | undefined): addr is Stor
  * `shipping:manage`. Reads (getShipment) are member-level + module-gated.
  *
  * Writes to `carrier_shipments` go through the SERVICE-ROLE admin client: the
- * EasyPost call already proves the caller is an authorized manager (it passed
- * the permission gate), and using the admin client keeps the write off the
- * user's RLS path so a draft row is always recorded alongside the billable
- * EasyPost object (avoiding an orphaned EasyPost Shipment with no local row).
+ * permission gate already proves the caller is an authorized owner/admin (see
+ * AUTHORIZATION below), and using the admin client keeps the write off the
+ * user's RLS path so a local row is always recorded alongside the billable
+ * EasyPost object (avoiding an orphaned EasyPost Shipment with no local row —
+ * `getRates` inserts the local draft row BEFORE creating the EasyPost Shipment
+ * for exactly this reason).
+ *
+ * AUTHORIZATION: every mutation gates on `assertPermission(ctx,'shipping:manage')`,
+ * which `ROLE_PERMISSIONS` grants to OWNER + ADMIN only (mirrors
+ * `integrations:manage`); a manager does NOT have it and is correctly blocked.
+ * Because all `carrier_shipments` writes use the service-role admin client (RLS
+ * bypassed), this app-layer permission gate — NOT the table's RLS write policy
+ * — is the effective control. The 0149 RLS write policy (`has_org_role(...,
+ * 'manager')`) is a more-permissive backstop for any future user-RLS writer and
+ * is intentionally never the binding check here.
+ *
+ * DOUBLE-BUY SAFETY: `buyLabel` is idempotent against concurrent/retried calls.
+ * It claims the draft with an atomic compare-and-swap (UPDATE ... WHERE id=? AND
+ * status='draft' AND purchased_by IS NULL) before calling EasyPost, so only one
+ * of two concurrent calls ever reaches `client.buyShipment`; the loser re-reads
+ * and returns the purchased row. The claim also stamps `purchased_by`, so a
+ * retry after a successful buy but a failed final UPDATE will NOT re-claim (and
+ * therefore will not re-buy) — it returns the already-purchased row instead.
+ * NOTE: this is application-level CAS, not a DB constraint. A DB-level partial
+ * unique index on (organization_id, order_request_id) WHERE status='purchased'
+ * would harden this further but requires a migration (deferred; out of scope
+ * here — 0149 is already applied to prod).
  */
 export class ShippingService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -243,6 +266,12 @@ export class ShippingService {
    * charter destination, persists a `draft` carrier_shipments row, and returns
    * the available rates. Creating a Shipment does NOT buy postage — `buyLabel`
    * does, on explicit rate confirmation.
+   *
+   * ORDERING: the local draft row is inserted BEFORE the EasyPost Shipment is
+   * created (then patched with the EasyPost id), so a failure of the EasyPost
+   * call leaves a recoverable local row rather than an orphaned billable-less
+   * EasyPost object — matching the class doc's "no orphaned EasyPost object
+   * without a local row" rationale for using the admin client.
    */
   async getRates(orderRequestId: string, parcel: ParcelInput): Promise<GetRatesResult> {
     assertModuleEnabled(this.ctx, 'shipping');
@@ -257,6 +286,28 @@ export class ShippingService {
       width: parsed.width_in,
       height: parsed.height_in,
     };
+
+    // Persist the draft row FIRST (service-role admin client — see class doc),
+    // capturing the resolved addresses + parcel. The EasyPost shipment id is
+    // patched in once the (non-billable) createShipment call returns; doing the
+    // insert first guarantees the EasyPost Shipment is never orphaned without a
+    // local row to find it from.
+    const { data: inserted, error: insertError } = await this.admin
+      .from('carrier_shipments')
+      .insert({
+        organization_id: this.ctx.organizationId,
+        order_request_id: resolved.orderRequestId,
+        connection_id: resolved.connectionId,
+        status: 'draft',
+        from_address: resolved.fromAddress,
+        to_address: resolved.toAddress,
+        parcel: easypostParcel,
+      })
+      .select('id')
+      .single();
+    if (insertError) throw new ServiceError('internal_error', insertError.message);
+
+    const shipmentId = (inserted as { id: string }).id;
 
     const client = new EasyPostClient(resolved.apiKey);
     const shipment = await client.createShipment({
@@ -283,26 +334,14 @@ export class ShippingService {
           : Number(r.delivery_days),
     }));
 
-    // Persist a draft row (service-role admin client — see class doc). We
-    // capture the EasyPost shipment id + the resolved addresses + parcel so the
-    // subsequent buyLabel call (and the webhook) can find this row.
-    const { data: inserted, error: insertError } = await this.admin
+    // Patch the draft with the EasyPost shipment id so buyLabel (and the
+    // webhook) can find this row.
+    const { error: patchError } = await this.admin
       .from('carrier_shipments')
-      .insert({
-        organization_id: this.ctx.organizationId,
-        order_request_id: resolved.orderRequestId,
-        connection_id: resolved.connectionId,
-        status: 'draft',
-        easypost_shipment_id: easypostShipmentId,
-        from_address: resolved.fromAddress,
-        to_address: resolved.toAddress,
-        parcel: easypostParcel,
-      })
-      .select('id')
-      .single();
-    if (insertError) throw new ServiceError('internal_error', insertError.message);
-
-    const shipmentId = (inserted as { id: string }).id;
+      .update({ easypost_shipment_id: easypostShipmentId })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', shipmentId);
+    if (patchError) throw new ServiceError('internal_error', patchError.message);
 
     void audit(
       {
@@ -318,10 +357,23 @@ export class ShippingService {
   }
 
   /**
-   * Buys the selected rate, generating a postage label. IDEMPOTENT: if a
-   * `purchased` carrier_shipments row already exists for the order, returns it
-   * WITHOUT a second EasyPost buy (no double charge). Otherwise loads the draft,
-   * buys the rate, and stamps the row `purchased`.
+   * Buys the selected rate, generating a postage label. IDEMPOTENT and safe
+   * against concurrent/retried calls (no double charge):
+   *
+   *   1. Short-circuit if a `purchased` row already exists for the order.
+   *   2. Load the most-recent draft.
+   *   3. Atomically CLAIM the draft with a compare-and-swap — UPDATE ... WHERE
+   *      id=? AND status='draft' AND purchased_by IS NULL — stamping
+   *      purchased_by/purchased_at. If zero rows are claimed, another call (or
+   *      a prior, partially-completed attempt) already owns this draft: re-read
+   *      the purchased row and return it rather than buying again.
+   *   4. Only the winning claimant calls EasyPost `buyShipment` and stamps the
+   *      row `purchased`.
+   *
+   * Because the claim is the atomic gate, two concurrent buyLabel calls cannot
+   * both reach EasyPost, and a retry after a successful buy but a failed final
+   * UPDATE will not re-buy (the row is already claimed). The `easypost_*` ids
+   * stored at claim time let a retry/operator recover the purchased state.
    */
   async buyLabel(orderRequestId: string, rateId: string): Promise<CarrierShipmentRow> {
     assertModuleEnabled(this.ctx, 'shipping');
@@ -360,6 +412,43 @@ export class ShippingService {
       );
     }
 
+    // ATOMIC CLAIM (compare-and-swap): take ownership of this draft before any
+    // billable EasyPost call. The `status='draft' AND purchased_by IS NULL`
+    // predicate means exactly one concurrent caller wins; the DB applies the
+    // UPDATE atomically per row, so a second concurrent caller updates zero
+    // rows. We keep status='draft' here (the table's CHECK constraint has no
+    // intermediate state) but set purchased_by, which is the lock witness.
+    const claimStamp = new Date().toISOString();
+    const { data: claimed, error: claimError } = await this.admin
+      .from('carrier_shipments')
+      .update({ purchased_by: this.ctx.userId, purchased_at: claimStamp })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', draftRow.id)
+      .eq('status', 'draft')
+      .is('purchased_by', null)
+      .select('id');
+    if (claimError) throw new ServiceError('internal_error', claimError.message);
+    const claimedRows = (claimed as Array<{ id: string }> | null) ?? [];
+    if (claimedRows.length === 0) {
+      // Lost the race (or a prior attempt already claimed + bought this draft):
+      // re-read the purchased row and return it idempotently. If it is not yet
+      // 'purchased' another call is mid-flight at EasyPost; surface a clear
+      // retryable error rather than risk a parallel buy.
+      const { data: rePurchased, error: reError } = await this.admin
+        .from('carrier_shipments')
+        .select('*')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('order_request_id', orderRequestId)
+        .eq('status', 'purchased')
+        .maybeSingle();
+      if (reError) throw new ServiceError('internal_error', reError.message);
+      if (rePurchased) return rePurchased as CarrierShipmentRow;
+      throw new ServiceError(
+        'validation_error',
+        'This label is already being purchased. Refresh in a moment.',
+      );
+    }
+
     // Resolve the EasyPost key for this order's connection.
     const resolved = await this.resolveShippingContext(orderRequestId);
     const client = new EasyPostClient(resolved.apiKey);
@@ -387,16 +476,25 @@ export class ShippingService {
       service: (selectedRate.service as string | undefined) ?? null,
       rate_cents: rateCents,
       currency: (selectedRate.currency as string | undefined) ?? draftRow.currency ?? 'USD',
+      // Prefer EasyPost's echoed selected_rate.id (the rate actually bought).
+      // Fall back to the caller-supplied rateId only if EasyPost omitted it;
+      // EasyPost validates rateId against the shipment, so a mismatched id is
+      // rejected before this point and never persisted.
       easypost_rate_id: (selectedRate.id as string | undefined) ?? rateId,
+      // Keep the claim stamp (purchased_by/purchased_at already set at claim
+      // time); refresh purchased_at to the buy-completion instant.
       purchased_at: new Date().toISOString(),
       purchased_by: this.ctx.userId,
     };
 
+    // Finalize as a compare-and-swap on the row we claimed: only transition the
+    // row we still own (status='draft', purchased_by=this user) to 'purchased'.
     const { data: updated, error: updateError } = await this.admin
       .from('carrier_shipments')
       .update(updates)
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', draftRow.id)
+      .eq('status', 'draft')
       .select('*')
       .single();
     if (updateError) throw new ServiceError('internal_error', updateError.message);
@@ -415,9 +513,10 @@ export class ShippingService {
   }
 
   /**
-   * Member-level read of the shipment for an order. Returns the latest
-   * non-draft (or any) shipment row, or null when none exists. Reads ride the
-   * user's RLS (member-read policy on carrier_shipments).
+   * Member-level read of the shipment for an order. Returns the single
+   * most-recent row by `created_at` (any status, including a `draft` if that is
+   * the latest), or null when none exists. Reads ride the user's RLS
+   * (member-read policy on carrier_shipments).
    */
   async getShipment(orderRequestId: string): Promise<CarrierShipmentRow | null> {
     assertModuleEnabled(this.ctx, 'shipping');
