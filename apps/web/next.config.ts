@@ -35,10 +35,16 @@ const nextConfig: NextConfig = {
       '@radix-ui/react-separator',
     ],
     // Keep prefetched RSC payloads warm a bit longer than Next 16 default
-    // (0s for dynamic) so tab-switching inside the dashboard feels instant.
-    // 30s dynamic / 180s static covers a typical session of clicking around.
+    // (0s for dynamic) so tab-switching/back-nav inside the dashboard feels
+    // instant for a full working session of clicking around.
+    //
+    // Tradeoff: on a soft (client-side) navigation, the cached RSC payload may
+    // be reused for up to ~180s, so list data can be that stale on warm
+    // tab/back nav. A hard navigation (reload / fresh entry) and any mutation
+    // that calls revalidatePath (already wired on create/edit/delete/import)
+    // refresh it immediately, so post-write views stay correct.
     staleTimes: {
-      dynamic: 30,
+      dynamic: 180,
       static: 180,
     },
   },
