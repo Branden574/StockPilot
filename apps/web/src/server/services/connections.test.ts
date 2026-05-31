@@ -435,6 +435,81 @@ describe('ConnectionsService.disconnect', () => {
     );
     await expect(svc.disconnect('quickbooks')).rejects.toBeInstanceOf(ServiceError);
   });
+
+  it('throws module_disabled disconnecting quickbooks when the integrations module is off', async () => {
+    // The module gate fires BEFORE the permission gate. An owner (who HAS
+    // integrations:manage) must still be blocked with module_disabled when the
+    // integrations module is off — proving the module check is not dropped.
+    const stub = makeSupabaseStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(),
+      }),
+    );
+    await expect(svc.disconnect('quickbooks')).rejects.toMatchObject({ code: 'module_disabled' });
+    // Gated before any DB read or Vault delete.
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(stub.fromCalls).not.toContain('org_connections');
+  });
+
+  it('disconnects easypost under the shipping module + shipping:manage (owner)', async () => {
+    // EasyPost is routed through the off-by-default `shipping` module +
+    // `shipping:manage`, NOT integrations:manage. A shipping-only org with an
+    // owner must be able to tear down its carrier connection.
+    const stub = makeSupabaseStub({
+      'org_connections.select': {
+        data: [{ id: 'conn-ep', secret_id: 'ep-secret-1' }],
+        error: null,
+      },
+      'org_connections.update': { data: null, error: null },
+    });
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(['shipping']),
+      }),
+    );
+
+    await svc.disconnect('easypost');
+
+    // Routed through shipping gating, the Vault secret was deleted + audited.
+    expect(deleteSpy).toHaveBeenCalledTimes(1);
+    expect(deleteSpy).toHaveBeenCalledWith(adminClientHolder.client, 'ep-secret-1');
+    expect(vi.mocked(audit).mock.calls[0]?.[0].event).toBe('integration.disconnected');
+  });
+
+  it('throws forbidden disconnecting easypost without shipping:manage (shipping enabled)', async () => {
+    // A role lacking shipping:manage (staff) must be blocked even with the
+    // shipping module ON — and an integrations-only grant must NOT satisfy the
+    // easypost branch's shipping:manage requirement.
+    const stub = makeSupabaseStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'staff',
+        enabledModules: new Set<ModuleId>(['shipping', 'integrations']),
+      }),
+    );
+    await expect(svc.disconnect('easypost')).rejects.toMatchObject({ code: 'forbidden' });
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(stub.fromCalls).not.toContain('org_connections');
+  });
+
+  it('throws module_disabled disconnecting easypost when the shipping module is off', async () => {
+    // The shipping module is OFF; integrations being on must NOT help the
+    // easypost branch (it gates on `shipping`, not `integrations`). An owner is
+    // still blocked with module_disabled.
+    const stub = makeSupabaseStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(['integrations']),
+      }),
+    );
+    await expect(svc.disconnect('easypost')).rejects.toMatchObject({ code: 'module_disabled' });
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(stub.fromCalls).not.toContain('org_connections');
+  });
 });
 
 describe('ConnectionsService.saveAccountMapping', () => {

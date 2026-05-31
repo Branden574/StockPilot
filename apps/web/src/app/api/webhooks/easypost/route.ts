@@ -72,13 +72,21 @@ function mapTrackingStatus(trackingStatus: string): ShipmentStatus | null {
  * `hmac-sha256-hex=<hex>`; we accept that prefixed form and a bare hex digest.
  * Returns false (never throws) on any malformed input so a bad header is a clean
  * 401 rather than a 500.
+ *
+ * NFKD: EasyPost computes its HMAC over the NFKD (compatibility-decomposed)
+ * Unicode normalization of the webhook secret, so a secret containing any
+ * non-ASCII characters (or precomposed code points) only verifies if we key our
+ * HMAC with the SAME NFKD form. We normalize before keying to match EasyPost.
+ * For a pure-ASCII secret NFKD is a no-op (ASCII is already in normal form), so
+ * this is invisible to existing ASCII secrets and only fixes Unicode ones.
  */
 function verifySignature(rawBody: string, secret: string, header: string | null): boolean {
   if (!header || !secret) return false;
   // Strip an optional `hmac-sha256-hex=` (or similar `algo=`) prefix.
   const provided = header.includes('=') ? header.slice(header.indexOf('=') + 1) : header;
+  const normalizedSecret = secret.normalize('NFKD');
   const expected = crypto
-    .createHmac('sha256', Buffer.from(secret, 'utf8'))
+    .createHmac('sha256', Buffer.from(normalizedSecret, 'utf8'))
     .update(Buffer.from(rawBody, 'utf8'))
     .digest('hex');
   // timingSafeEqual requires equal-length buffers — a length mismatch is itself

@@ -37,11 +37,12 @@ export class EasyPostClient {
     this.authHeader = `Basic ${Buffer.from(`${apiKey}:`).toString('base64')}`;
   }
 
-  private headers(): Record<string, string> {
+  private headers(extra?: Record<string, string>): Record<string, string> {
     return {
       Authorization: this.authHeader,
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...extra,
     };
   }
 
@@ -103,17 +104,50 @@ export class EasyPostClient {
    * Buy the selected rate on an existing Shipment, generating a postage label.
    * Returns the updated Shipment object (carries `postage_label`,
    * `tracking_code`, `selected_rate`).
+   *
+   * IDEMPOTENCY: pass a stable `idempotencyKey` (the caller uses our
+   * carrier_shipments row id) so a retried buy on the SAME shipment after a
+   * network timeout/5xx — where EasyPost may have already completed the purchase
+   * server-side — does NOT double-charge. EasyPost dedupes a retry that carries
+   * the same `Idempotency-Key` and replays the original response instead of
+   * buying again. Omit it (legacy callers) and the buy is non-idempotent.
    */
-  async buyShipment(shipmentId: string, rateId: string): Promise<Record<string, unknown>> {
+  async buyShipment(
+    shipmentId: string,
+    rateId: string,
+    idempotencyKey?: string,
+  ): Promise<Record<string, unknown>> {
     const res = await fetch(`${BASE_URL}/shipments/${encodeURIComponent(shipmentId)}/buy`, {
       method: 'POST',
-      headers: this.headers(),
+      headers: this.headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined),
       body: JSON.stringify({ rate: { id: rateId } }),
     });
     if (!res.ok) {
       const detail = await EasyPostClient.errorDetail(res);
       throw new EasyPostApiError(
         `EasyPost buyShipment failed (status ${res.status}): ${detail}`,
+        res.status,
+      );
+    }
+    return (await res.json()) as Record<string, unknown>;
+  }
+
+  /**
+   * Retrieve a Shipment by id (GET, non-billable). Used to RECONCILE an
+   * ambiguous buy after a timeout/5xx: if the returned shipment already carries
+   * a `postage_label`, the purchase actually completed at EasyPost and the
+   * caller can finalize the local row instead of re-buying (which would risk a
+   * double charge). Returns the parsed Shipment object.
+   */
+  async retrieveShipment(shipmentId: string): Promise<Record<string, unknown>> {
+    const res = await fetch(`${BASE_URL}/shipments/${encodeURIComponent(shipmentId)}`, {
+      method: 'GET',
+      headers: this.headers(),
+    });
+    if (!res.ok) {
+      const detail = await EasyPostClient.errorDetail(res);
+      throw new EasyPostApiError(
+        `EasyPost retrieveShipment failed (status ${res.status}): ${detail}`,
         res.status,
       );
     }
