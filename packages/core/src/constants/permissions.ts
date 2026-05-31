@@ -63,6 +63,12 @@ export const PERMISSIONS = [
   // an export pipeline. Gated by the off-by-default `integrations` module.
   // Used by /dashboard/settings/integrations.
   'integrations:manage',
+  // Carrier shipping (EasyPost labels + tracking). Connect the carrier
+  // connection, buy labels, and view tracking. Admin-only (owner + admin via
+  // ALL_PERMISSIONS) because the EasyPost API key buys real postage; a manager
+  // must not be able to wire up the carrier or spend on labels. Gated by the
+  // off-by-default `shipping` module. Mirrors `integrations:manage`.
+  'shipping:manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -347,6 +353,12 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     group: 'Organization',
     label: 'Manage integrations',
     description: 'Connect, disconnect, and monitor connectors like QuickBooks Online.',
+  },
+
+  'shipping:manage': {
+    group: 'Organization',
+    label: 'Manage shipping',
+    description: 'Connect a carrier (EasyPost), buy shipping labels, and view tracking.',
   },
 
   'rentals:create': {
