@@ -514,9 +514,19 @@ export class ShippingService {
 
   /**
    * Member-level read of the shipment for an order. Returns the single
-   * most-recent row by `created_at` (any status, including a `draft` if that is
-   * the latest), or null when none exists. Reads ride the user's RLS
+   * most-recent NON-`draft` row by `created_at` — i.e. the latest actually
+   * purchased/active shipment (status in
+   * purchased/in_transit/delivered/returned/failure/cancelled) — or null when
+   * only draft(s) exist (or nothing at all). Reads ride the user's RLS
    * (member-read policy on carrier_shipments).
+   *
+   * Draft rows are intentionally excluded: a draft is created during `getRates`
+   * before any label is bought, so surfacing it here would make the web order
+   * page and the mobile order screen show a phantom "shipment" for a manager
+   * who shopped rates but never confirmed a buy. Draft rows still live in the
+   * table for the in-flight buy flow (`buyLabel` claims the latest draft) — they
+   * are just not surfaced as "the shipment". The buy-label dialog uses the
+   * rates/label endpoints, not `getShipment`, so it is unaffected.
    */
   async getShipment(orderRequestId: string): Promise<CarrierShipmentRow | null> {
     assertModuleEnabled(this.ctx, 'shipping');
@@ -526,6 +536,7 @@ export class ShippingService {
       .select('*')
       .eq('organization_id', this.ctx.organizationId)
       .eq('order_request_id', orderRequestId)
+      .in('status', ['purchased', 'in_transit', 'delivered', 'returned', 'failure', 'cancelled'])
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
