@@ -39,12 +39,15 @@ const nextConfig: NextConfig = {
     // instant for a full working session of clicking around.
     //
     // Tradeoff: on a soft (client-side) navigation, the cached RSC payload may
-    // be reused for up to ~180s, so list data can be that stale on warm
+    // be reused for up to ~90s, so list data can be that stale on warm
     // tab/back nav. A hard navigation (reload / fresh entry) and any mutation
     // that calls revalidatePath (already wired on create/edit/delete/import)
-    // refresh it immediately, so post-write views stay correct.
+    // refresh it immediately, so post-write views stay correct. dynamic is kept
+    // at 90s (not the higher 180s) as a deliberate balance for an inventory app
+    // where another user's stock change should surface reasonably quickly on
+    // warm nav; still 3x the prior 30s so tab/back-nav feels instant.
     staleTimes: {
-      dynamic: 180,
+      dynamic: 90,
       static: 180,
     },
   },
