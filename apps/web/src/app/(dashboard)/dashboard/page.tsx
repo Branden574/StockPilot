@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -109,10 +110,137 @@ export default async function DashboardHome() {
   // command counts all narrow to the same scope.
   const warehouseFilter = await getActiveWarehouseFilter();
 
-  // Resolve org context first so downstream service builders share the same
-  // React.cache()'d auth load. Then dispatch every dashboard data fetch in
-  // parallel — one round trip per branch.
+  // SECURITY-CRITICAL: org/auth context stays BLOCKING in the shell (never
+  // behind Suspense) so an unauthenticated/unauthorized request is rejected
+  // before any chrome paints. requireOrgContext + orgRow + the active
+  // warehouse name are all request-cached/cheap, so the header (greeting,
+  // action buttons) paints immediately while the heavy data sections stream.
   const ctx = await requireOrgContext();
+
+  const supabaseShell = await createClient();
+  const [orgRow, activeWhNameRes] = await Promise.all([
+    getOrgRowForRequest(ctx.organizationId),
+    warehouseFilter
+      ? supabaseShell
+          .from('warehouses')
+          .select('name')
+          .eq('id', warehouseFilter)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const activeWarehouseName = (activeWhNameRes.data?.name as string | undefined) ?? null;
+
+  // Greeting + journalistic date header. Time-of-day greeting respects the
+  // org's saved timezone (see organizations.timezone, default 'UTC') so a
+  // late-night warehouse in Tokyo doesn't say "good morning" because the
+  // Vercel pod woke up in Virginia at 9am ET.
+  const orgTimezone = orgRow?.timezone ?? null;
+  const { word: greetingWord, dateLabel: today } = buildGreeting(orgTimezone);
+  const firstName = ctx.fullName?.split(' ')[0]?.trim() || 'there';
+
+  return (
+    <div className="mx-auto w-full max-w-[1760px] px-5 pb-20 pt-6 sm:px-7 2xl:px-9">
+      {/* ──────────────── Morning briefing — greeting + hero attention ─────────
+       *
+       * The hero section is the LEAD. Everything below it (stat row, charts,
+       * activity feed) is context. The greeting + briefing sentence answer
+       * "who is at the keyboard and what should they look at first"; the
+       * attention list answers "where should they click right now".
+       *
+       * The greeting + action buttons paint immediately from the request-
+       * cached auth context; the data-driven body (checklist, attention hero,
+       * stat row, charts, activity feed) streams in via <Suspense> below.
+       */}
+      <section className="mb-6">
+        <div className="flex flex-col gap-4 pb-5 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
+              {today}
+              {activeWarehouseName && (
+                <>
+                  {' · '}
+                  <span className="text-foreground">
+                    filtered to {activeWarehouseName}
+                  </span>
+                </>
+              )}
+            </p>
+            <h1 className="font-display text-[34px] font-medium leading-tight tracking-[-0.025em]">
+              Good {greetingWord}, {firstName}.
+            </h1>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/dashboard/reports">
+                <Download className="h-3 w-3" /> Export
+              </Link>
+            </Button>
+            {hasPermission(ctx.role, 'items:create') && (
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/dashboard/inventory/new">
+                  <Plus className="h-3 w-3" /> New item
+                </Link>
+              </Button>
+            )}
+            {hasPermission(ctx.role, 'purchase_orders:manage') && (
+              <Button size="sm" asChild>
+                <Link href="/dashboard/purchase-orders/new">
+                  <Zap className="h-3 w-3" /> Receive stock
+                </Link>
+              </Button>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <Suspense fallback={<DashboardBodySkeleton />}>
+        <DashboardBody ctx={ctx} warehouseFilter={warehouseFilter} />
+      </Suspense>
+    </div>
+  );
+}
+
+/**
+ * Lightweight fallback for the streamed dashboard body. Mirrors the rough
+ * shape of the data sections (stat row + chart row) so the layout doesn't
+ * jump when the real content streams in. Chrome above (greeting + actions)
+ * has already painted by the time this shows.
+ */
+function DashboardBodySkeleton() {
+  return (
+    <div className="animate-pulse">
+      <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="bg-card h-[120px] rounded-lg border border-border" />
+        ))}
+      </div>
+      <div className="mb-4 grid grid-cols-1 gap-3.5 lg:grid-cols-12">
+        <div className="bg-card h-[360px] rounded-lg border border-border lg:col-span-9" />
+        <div className="bg-card h-[360px] rounded-lg border border-border lg:col-span-3" />
+      </div>
+      <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-12">
+        <div className="bg-card h-[300px] rounded-lg border border-border lg:col-span-7" />
+        <div className="bg-card h-[300px] rounded-lg border border-border lg:col-span-5" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Inner async Server Component holding ALL data-dependent dashboard content
+ * (the parallel data fan-out + every derived stat/chart/feed). Streamed
+ * behind <Suspense> so the page header paints before this resolves. The
+ * security-critical org/auth gate already ran in the shell — `ctx` is passed
+ * in so this never re-gates and the request-cached helpers reuse the layout's
+ * loads.
+ */
+async function DashboardBody({
+  ctx,
+  warehouseFilter,
+}: {
+  ctx: Awaited<ReturnType<typeof requireOrgContext>>;
+  warehouseFilter: string | null;
+}) {
   const isManagerPlus = isManagerOrAbove(ctx.role);
 
   // Single parallel fan-out — was two serial Promise.all blocks (15
@@ -133,14 +261,12 @@ export default async function DashboardHome() {
     pendingApprovals,
     awaitingSignature,
     teamCountRes,
-    activeWhNameRes,
-    // Request-cached: these three (warehousesList, mfaFactors, orgRow)
-    // are already fetched by the dashboard layout in the same render.
-    // React.cache() guarantees we get the layout's result without a
-    // second Supabase round-trip per page render.
+    // Request-cached: warehousesList + mfaFactors are already fetched by the
+    // dashboard layout (and the shell, for orgRow) in the same render.
+    // React.cache() guarantees we get that result without a second Supabase
+    // round-trip per page render.
     warehousesList,
     mfaFactors,
-    orgRow,
   ] = await Promise.all([
     getDashboardSummary({ warehouseId: warehouseFilter ?? undefined }),
     getLowStockItems(5, { warehouseId: warehouseFilter ?? undefined }),
@@ -170,18 +296,9 @@ export default async function DashboardHome() {
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', ctx.organizationId)
       .not('accepted_at', 'is', null),
-    warehouseFilter
-      ? supabase
-          .from('warehouses')
-          .select('name')
-          .eq('id', warehouseFilter)
-          .maybeSingle()
-      : Promise.resolve({ data: null }),
     getWarehousesForRequest(ctx.organizationId),
     getMfaFactorsForRequest(),
-    getOrgRowForRequest(ctx.organizationId),
   ]);
-  const activeWarehouseName = (activeWhNameRes.data?.name as string | undefined) ?? null;
   const warehouseCount = warehousesList.length;
   const teamCount = teamCountRes.count ?? 0;
   const hasVerifiedFactor = mfaFactors.some((f) => f.status === 'verified');
@@ -322,14 +439,6 @@ export default async function DashboardHome() {
   const itemCountDelta = deltaPct(itemCountSeries);
   const lowOutDelta = deltaRaw(lowOutSeries);
 
-  // Greeting + journalistic date header. Time-of-day greeting respects the
-  // org's saved timezone (see organizations.timezone, default 'UTC') so a
-  // late-night warehouse in Tokyo doesn't say "good morning" because the
-  // Vercel pod woke up in Virginia at 9am ET.
-  const orgTimezone = orgRow?.timezone ?? null;
-  const { word: greetingWord, dateLabel: today } = buildGreeting(orgTimezone);
-  const firstName = ctx.fullName?.split(' ')[0]?.trim() || 'there';
-
   const attentionStockCount = summary.lowStockCount + summary.outOfStockCount;
   const healthyCount = Math.max(summary.itemCount - attentionStockCount, 0);
   const healthRate =
@@ -408,61 +517,20 @@ export default async function DashboardHome() {
       : `${attentionItemCount} thing${attentionItemCount === 1 ? '' : 's'} need${attentionItemCount === 1 ? 's' : ''} attention today.`;
 
   return (
-    <div className="mx-auto w-full max-w-[1760px] px-5 pb-20 pt-6 sm:px-7 2xl:px-9">
+    <>
       {!checklistComplete && (
         <div className="mb-5">
           <GetStartedChecklist steps={checklistSteps} />
         </div>
       )}
-      {/* ──────────────── Morning briefing — greeting + hero attention ─────────
+      {/* ──────────────── Morning briefing — hero attention ──────────────────
        *
-       * The hero section is the LEAD. Everything below it (stat row, charts,
-       * activity feed) is context. The greeting + briefing sentence answer
-       * "who is at the keyboard and what should they look at first"; the
-       * attention list answers "where should they click right now".
+       * The greeting + action buttons already painted in the shell above.
+       * This streamed block carries the data-driven briefing sentence + the
+       * attention list ("where should they click right now").
        */}
       <section className="mb-6">
-        <div className="flex flex-col gap-4 pb-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--ed-ink-4)]">
-              {today}
-              {activeWarehouseName && (
-                <>
-                  {' · '}
-                  <span className="text-foreground">
-                    filtered to {activeWarehouseName}
-                  </span>
-                </>
-              )}
-            </p>
-            <h1 className="font-display text-[34px] font-medium leading-tight tracking-[-0.025em]">
-              Good {greetingWord}, {firstName}.
-            </h1>
-            <p className="mt-1.5 text-[14px] text-[var(--ed-ink-3)]">{briefingSentence}</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" asChild>
-              <Link href="/dashboard/reports">
-                <Download className="h-3 w-3" /> Export
-              </Link>
-            </Button>
-            {hasPermission(ctx.role, 'items:create') && (
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/dashboard/inventory/new">
-                  <Plus className="h-3 w-3" /> New item
-                </Link>
-              </Button>
-            )}
-            {hasPermission(ctx.role, 'purchase_orders:manage') && (
-              <Button size="sm" asChild>
-                <Link href="/dashboard/purchase-orders/new">
-                  <Zap className="h-3 w-3" /> Receive stock
-                </Link>
-              </Button>
-            )}
-          </div>
-        </div>
-
+        <p className="mb-4 text-[14px] text-[var(--ed-ink-3)]">{briefingSentence}</p>
         <NeedsAttentionHero items={attentionItems} />
       </section>
 
@@ -845,7 +913,7 @@ export default async function DashboardHome() {
           )}
         </Card>
       </div>
-    </div>
+    </>
   );
 }
 
