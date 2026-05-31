@@ -487,7 +487,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // so we deliberately do NOT list /api/v1/orders here to avoid clobbering
     // the orders module's prefix ownership.
     apiPrefixes: ['/api/webhooks/easypost'],
-    ownsTables: ['shipments'],
+    ownsTables: ['carrier_shipments'],
     // Net-new carrier shipping — OFF for every pack (incl. charter); explicit
     // opt-in only. Surfaced via the Integrations settings page (EasyPost card),
     // not the main nav (no placements).
