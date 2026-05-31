@@ -51,7 +51,7 @@ describe('MODULE_REGISTRY', () => {
     expect(shipping.tier).toBe('optional');
     expect(shipping.defaultOnFor).toEqual([]);
     expect(shipping.permissions).toContain('shipping:manage');
-    expect(shipping.ownsTables).toContain('shipments');
+    expect(shipping.ownsTables).toContain('carrier_shipments');
     expect(DEFAULT_MODULE_IDS).not.toContain('shipping');
     // OFF for every pack — never auto-enabled.
     expect(modulesForPack('charter_school')).not.toContain('shipping');
