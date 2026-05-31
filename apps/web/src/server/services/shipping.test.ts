@@ -271,6 +271,116 @@ describe('ShippingService.buyLabel', () => {
     // The idempotency guard must short-circuit before any EasyPost buy.
     expect(buyShipmentSpy).not.toHaveBeenCalled();
   });
+
+  it('claims the draft, buys the rate, and maps the response onto the row (happy path)', async () => {
+    const draftRow = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'draft',
+      easypost_shipment_id: 'shp_easypost_1',
+      currency: 'USD',
+      purchased_by: null,
+    };
+    // buyLabel issues two carrier_shipments selects in order: (1) purchased
+    // guard -> none; (2) draft load -> the draft row. A call-counting result
+    // distinguishes them. buyLabel also calls resolveShippingContext (order +
+    // charter + warehouse + connection reads), so build on the full delivery
+    // stub.
+    let selectCall = 0;
+    const stub = makeDeliveryStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1
+          ? { data: [], error: null } // purchased guard: no purchased row yet
+          : { data: [draftRow], error: null }; // draft load
+      },
+      // Claim CAS returns exactly one row (this caller won the claim); the
+      // final finalize update returns the purchased row.
+      'carrier_shipments.update': { data: [{ id: 'ship-1' }], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.buyLabel('order-1', 'rate_1');
+
+    // EasyPost buy invoked once, with the draft's easypost shipment id + rate.
+    expect(buyShipmentSpy).toHaveBeenCalledTimes(1);
+    expect(buyShipmentSpy).toHaveBeenCalledWith('shp_easypost_1', 'rate_1');
+
+    // Response mapping: rate_cents = round(rate*100); label/tracking fallbacks;
+    // purchased_by stamped. The LAST update payload is the finalize.
+    const updateArgs = stub.chainArgs.get('carrier_shipments.update');
+    const payload = updateArgs?.[0]?.[0] as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      status: 'purchased',
+      label_url: 'https://easypost/label.pdf',
+      tracking_code: '1Z999',
+      tracking_url: 'https://track/1Z999',
+      carrier: 'USPS',
+      service: 'Priority',
+      rate_cents: 845,
+      currency: 'USD',
+      easypost_rate_id: 'rate_1',
+      purchased_by: 'user-test',
+    });
+    expect(result).toBeTruthy();
+  });
+
+  it('does not re-buy when the atomic claim loses the race (returns the purchased row)', async () => {
+    const draftRow = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'draft',
+      easypost_shipment_id: 'shp_easypost_1',
+      currency: 'USD',
+      purchased_by: null,
+    };
+    const winnerPurchased = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'purchased',
+      easypost_shipment_id: 'shp_easypost_1',
+      tracking_code: '1Z999',
+    };
+    // Selects in order: (1) purchased guard -> none; (2) draft load -> draft;
+    // (3) re-read after a lost claim -> the row the winner purchased.
+    let selectCall = 0;
+    const stub = makeSupabaseStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        if (selectCall === 1) return { data: [], error: null };
+        if (selectCall === 2) return { data: [draftRow], error: null };
+        return { data: [winnerPurchased], error: null };
+      },
+      // The claim CAS updates ZERO rows -> this caller lost the race.
+      'carrier_shipments.update': { data: [], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.buyLabel('order-1', 'rate_1');
+
+    // Lost the claim -> NO EasyPost buy, returns the winner's purchased row.
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ id: 'ship-1', status: 'purchased' });
+  });
+
+  it('blocks a manager (no shipping:manage) from buying a label', async () => {
+    const stub = makeSupabaseStub({});
+    adminClientHolder.client = stub.client;
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: SHIPPING_MODULES }),
+    );
+    await expect(svc.buyLabel('order-1', 'rate_1')).rejects.toMatchObject({ code: 'forbidden' });
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('module + permission gating', () => {
