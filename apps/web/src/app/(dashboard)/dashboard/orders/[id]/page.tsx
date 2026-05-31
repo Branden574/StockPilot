@@ -7,6 +7,7 @@ import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
+import { ShippingPanel } from '@/components/orders/shipping-panel';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -19,6 +20,7 @@ import {
 } from '@/components/ui/table';
 import { hasPermission, isManagerOrAbove } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import {
   ATTACHABLE_ORDER_STATUSES,
@@ -27,6 +29,7 @@ import {
 import {
   OrderRequestsService,
   type OrderRequestRow,
+  type OrderRequestStatus,
 } from '@/server/services/order-requests';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
@@ -144,6 +147,32 @@ export default async function OrderDetailPage({
       .sort((a, b) =>
         (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
       );
+  }
+
+  // Carrier shipping (EasyPost). The Buy-label affordance only makes sense for
+  // a delivery order that has reached staging, when the viewer can manage
+  // shipping (owner/admin with the `shipping` module on). We only pay for the
+  // module_enabled RPC + permission check on delivery orders at/after staging;
+  // every other order skips the round-trip. The panel still renders a read-only
+  // tracking section (via its own GET) whenever a shipment already exists, even
+  // for non-managers — it self-hides when the GET returns nothing.
+  const SHIPPABLE_STATUSES: OrderRequestStatus[] = [
+    'staged_for_delivery',
+    'in_transit',
+    'completed',
+  ];
+  let canBuyLabel = false;
+  let showShippingPanel = false;
+  if (
+    request.fulfillment_type === 'delivery' &&
+    request.delivery_charter_id &&
+    SHIPPABLE_STATUSES.includes(request.status)
+  ) {
+    showShippingPanel = true;
+    if (hasPermission(ctx.role, 'shipping:manage')) {
+      const shippingAccess = await checkModuleAccess('shipping');
+      canBuyLabel = shippingAccess.enabled;
+    }
   }
 
   return (
@@ -279,6 +308,14 @@ export default async function OrderDetailPage({
               signedByName={request.signed_by_name}
               signedAt={request.signed_at}
               drivers={drivers}
+            />
+          )}
+
+          {showShippingPanel && (
+            <ShippingPanel
+              orderId={id}
+              canBuyLabel={canBuyLabel}
+              charterSettingsHref="/dashboard/admin/charters"
             />
           )}
 
