@@ -1,6 +1,6 @@
 'use client';
 
-import { Building2, History, Loader2, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { Building2, History, Loader2, MapPin, Plus, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
@@ -36,6 +36,15 @@ import {
   updateCharterAction,
 } from '@/server/actions/charters';
 
+interface CharterAddress {
+  line1?: string | null;
+  line2?: string | null;
+  city?: string | null;
+  region?: string | null;
+  postalCode?: string | null;
+  country?: string | null;
+}
+
 interface CharterRow {
   id: string;
   name: string;
@@ -43,6 +52,10 @@ interface CharterRow {
   description: string | null;
   notes: string | null;
   status: 'active' | 'inactive' | 'archived';
+  address: CharterAddress | null;
+  contact_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
   warehouse_count: number;
   user_count: number;
 }
@@ -52,6 +65,40 @@ interface FormValues {
   code: string;
   description: string;
   notes: string;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  region: string;
+  postalCode: string;
+  country: string;
+  contactName: string;
+  contactEmail: string;
+  contactPhone: string;
+}
+
+/** True when none of the address fields carry a value. Used to surface the
+ *  "needed for shipping labels" hint on the charter row. */
+function isAddressEmpty(address: CharterAddress | null): boolean {
+  if (!address) return true;
+  return !(
+    address.line1 ||
+    address.line2 ||
+    address.city ||
+    address.region ||
+    address.postalCode ||
+    address.country
+  );
+}
+
+/** Flattens the jsonb address into displayable lines, dropping blanks so we
+ *  never render "null". Mirrors the warehouse detail renderer. */
+function formatAddressLines(address: CharterAddress | null): string[] {
+  if (!address) return [];
+  const cityLine = [address.city, address.region].filter(Boolean).join(', ');
+  const cityZip = [cityLine, address.postalCode].filter(Boolean).join(' ').trim();
+  return [address.line1, address.line2, cityZip, address.country].filter(
+    (s): s is string => typeof s === 'string' && s.trim().length > 0,
+  );
 }
 
 export function ChartersManager({
@@ -106,7 +153,7 @@ export function ChartersManager({
                 <TableHead>Code</TableHead>
                 <TableHead className="text-right">Warehouses</TableHead>
                 <TableHead className="text-right">Users</TableHead>
-                <TableHead>Description</TableHead>
+                <TableHead>Shipping address</TableHead>
                 <TableHead className="w-32 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -184,8 +231,18 @@ function CharterTableRow({
       <TableCell className="font-mono text-xs text-muted-foreground">{row.code ?? '—'}</TableCell>
       <TableCell className="text-right tabular-nums">{row.warehouse_count}</TableCell>
       <TableCell className="text-right tabular-nums">{row.user_count}</TableCell>
-      <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
-        {row.description ?? '—'}
+      <TableCell className="max-w-xs text-sm text-muted-foreground">
+        {isAddressEmpty(row.address) ? (
+          <span className="inline-flex items-center gap-1.5 text-amber-600 dark:text-amber-500">
+            <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
+            <span className="text-xs">Needed for shipping labels</span>
+          </span>
+        ) : (
+          <span className="inline-flex items-start gap-1.5">
+            <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{formatAddressLines(row.address).join(', ')}</span>
+          </span>
+        )}
       </TableCell>
       <TableCell className="flex justify-end gap-2">
         {isArchivedView ? (
@@ -257,7 +314,21 @@ function CharterDialog({
   } = useForm<FormValues>({
     mode: 'onBlur',
     reValidateMode: 'onChange',
-    defaultValues: { name: '', code: '', description: '', notes: '' },
+    defaultValues: {
+      name: '',
+      code: '',
+      description: '',
+      notes: '',
+      addressLine1: '',
+      addressLine2: '',
+      city: '',
+      region: '',
+      postalCode: '',
+      country: '',
+      contactName: '',
+      contactEmail: '',
+      contactPhone: '',
+    },
   });
 
   React.useEffect(() => {
@@ -267,6 +338,15 @@ function CharterDialog({
         code: editing?.code ?? '',
         description: editing?.description ?? '',
         notes: editing?.notes ?? '',
+        addressLine1: editing?.address?.line1 ?? '',
+        addressLine2: editing?.address?.line2 ?? '',
+        city: editing?.address?.city ?? '',
+        region: editing?.address?.region ?? '',
+        postalCode: editing?.address?.postalCode ?? '',
+        country: editing?.address?.country ?? '',
+        contactName: editing?.contact_name ?? '',
+        contactEmail: editing?.contact_email ?? '',
+        contactPhone: editing?.contact_phone ?? '',
       });
     }
   }, [open, editing, reset]);
@@ -278,6 +358,17 @@ function CharterDialog({
       description: values.description || undefined,
       notes: values.notes || undefined,
       status: 'active' as const,
+      address: {
+        line1: values.addressLine1 || undefined,
+        line2: values.addressLine2 || undefined,
+        city: values.city || undefined,
+        region: values.region || undefined,
+        postalCode: values.postalCode || undefined,
+        country: values.country || undefined,
+      },
+      contactName: values.contactName || undefined,
+      contactEmail: values.contactEmail || undefined,
+      contactPhone: values.contactPhone || undefined,
     };
     const res = editing
       ? await updateCharterAction(editing.id, payload)
@@ -293,7 +384,7 @@ function CharterDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {editing ? `Edit ${termSingular.toLowerCase()}` : `New ${termSingular.toLowerCase()}`}
@@ -338,6 +429,78 @@ function CharterDialog({
               {...register('description', { maxLength: 2000 })}
             />
           </div>
+          <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+            <div>
+              <Label className="text-sm font-medium">
+                Shipping address
+                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+              </Label>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Destination for delivery orders. Required before you can buy a shipping label
+                for this {termSingular.toLowerCase()}.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Input
+                placeholder="Address line 1"
+                aria-label="Address line 1"
+                {...register('addressLine1', { maxLength: 200 })}
+              />
+              <Input
+                placeholder="Address line 2"
+                aria-label="Address line 2"
+                {...register('addressLine2', { maxLength: 200 })}
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <Input placeholder="City" aria-label="City" {...register('city', { maxLength: 120 })} />
+                <Input
+                  placeholder="State / region"
+                  aria-label="State or region"
+                  {...register('region', { maxLength: 120 })}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  placeholder="Postal code"
+                  aria-label="Postal code"
+                  {...register('postalCode', { maxLength: 32 })}
+                />
+                <Input
+                  placeholder="Country"
+                  aria-label="Country"
+                  {...register('country', { maxLength: 120 })}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>
+              Contact
+              <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+            </Label>
+            <div className="grid grid-cols-3 gap-2">
+              <Input placeholder="Name" aria-label="Contact name" {...register('contactName', { maxLength: 120 })} />
+              <Input
+                placeholder="Email"
+                type="email"
+                aria-label="Contact email"
+                {...register('contactEmail', {
+                  maxLength: 254,
+                  pattern: { value: /^[^@\s]+@[^@\s]+\.[^@\s]+$/, message: 'Invalid email' },
+                })}
+              />
+              <Input
+                placeholder="Phone"
+                aria-label="Contact phone"
+                {...register('contactPhone', { maxLength: 40 })}
+              />
+            </div>
+            {errors.contactEmail && (
+              <p className="text-xs text-destructive">Enter a valid email address.</p>
+            )}
+          </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="charter-notes">
               Internal notes
