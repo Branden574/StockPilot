@@ -79,9 +79,22 @@ export class ConnectionsService {
    * member-level (RLS on org_connections allows org members to read; the row
    * never exposes a token, only the secret_id UUID handle), so no permission
    * gate here beyond module enablement.
+   *
+   * Module gate is `integrations` OR `shipping`: this lists ALL org_connections
+   * regardless of provider (the integrations settings page renders the QBO card
+   * from the integrations module and the EasyPost card from the shipping
+   * module), so an org with only shipping enabled must still be able to read its
+   * connections. Fail-closed: if NEITHER module is enabled, throw module_disabled.
    */
   async list(): Promise<ConnectionsListResult> {
-    assertModuleEnabled(this.ctx, 'integrations');
+    if (
+      !this.ctx.enabledModules.has('integrations') &&
+      !this.ctx.enabledModules.has('shipping')
+    ) {
+      // Reuse assertModuleEnabled to throw the canonical module_disabled error;
+      // 'integrations' is the primary owner of this surface so it names the gate.
+      assertModuleEnabled(this.ctx, 'integrations');
+    }
 
     const { data: rows, error } = await this.ctx.supabase
       .from('org_connections')
