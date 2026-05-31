@@ -383,6 +383,58 @@ describe('ShippingService.buyLabel', () => {
   });
 });
 
+describe('ShippingService.getShipment', () => {
+  it('returns null for a draft-only order (no phantom unpurchased shipment)', async () => {
+    // The query filters with .in('status', [non-draft statuses]); a draft-only
+    // order therefore matches nothing -> the DB returns no row. The stub does
+    // not itself filter, so we model that by returning an empty result.
+    const stub = makeSupabaseStub({
+      'carrier_shipments.select': { data: [], error: null },
+    });
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'staff', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.getShipment('order-1');
+
+    expect(result).toBeNull();
+    // The read must scope to NON-draft statuses (excludes 'draft').
+    const chain = stub.chains.get('carrier_shipments.select');
+    expect(chain).toContain('in');
+    const args = stub.chainArgs.get('carrier_shipments.select');
+    const inCall = args?.[chain?.indexOf('in') ?? -1];
+    expect(inCall?.[0]).toBe('status');
+    const statuses = inCall?.[1] as string[];
+    expect(statuses).not.toContain('draft');
+    expect(statuses).toContain('purchased');
+  });
+
+  it('returns the purchased row for a purchased order', async () => {
+    const purchasedRow = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'purchased',
+      easypost_shipment_id: 'shp_easypost_1',
+      tracking_code: '1Z999',
+      label_url: 'https://easypost/label.pdf',
+      carrier: 'USPS',
+      service: 'Priority',
+      rate_cents: 845,
+    };
+    const stub = makeSupabaseStub({
+      'carrier_shipments.select': { data: [purchasedRow], error: null },
+    });
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'staff', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.getShipment('order-1');
+
+    expect(result).toMatchObject({ id: 'ship-1', status: 'purchased' });
+  });
+});
+
 describe('module + permission gating', () => {
   it('getRates throws module_disabled when shipping is off', async () => {
     const stub = makeDeliveryStub();
