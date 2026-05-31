@@ -33,6 +33,16 @@ export default async function IntegrationsSettingsPage() {
   const { connections, health } = await svc.list();
   const qbo = connections.find((c) => c.providerId === 'quickbooks') ?? null;
 
+  // EasyPost (shipping) is a separate, off-by-default module gated on
+  // `shipping:manage`. Only surface its card when the shipping module is on AND
+  // the caller can manage it — otherwise hide it entirely (the connect action
+  // is the server-side source of truth regardless).
+  const shippingAccess = await checkModuleAccess('shipping');
+  const showEasyPost = shippingAccess.enabled && hasPermission(ctx.role, 'shipping:manage');
+  const easypost = showEasyPost
+    ? connections.find((c) => c.providerId === 'easypost') ?? null
+    : null;
+
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -57,6 +67,16 @@ export default async function IntegrationsSettingsPage() {
         lastError={qbo?.lastError ?? null}
         accountIds={qbo?.accountIds ?? {}}
         health={health}
+        easyPost={
+          showEasyPost
+            ? {
+                status: easypost?.status ?? null,
+                mode: (easypost?.settings.mode as string | undefined) ?? null,
+                lastConnectedAt: easypost?.lastConnectedAt ?? null,
+                lastError: easypost?.lastError ?? null,
+              }
+            : null
+        }
       />
     </div>
   );

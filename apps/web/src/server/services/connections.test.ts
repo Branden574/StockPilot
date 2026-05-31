@@ -10,8 +10,33 @@ vi.mock('@/server/services/audit', () => ({
 }));
 
 const deleteSpy = vi.fn(async (_admin: unknown, _secretId: string) => undefined);
+const putSpy = vi.fn(
+  async (_admin: unknown, _name: string, _secret: Record<string, unknown>) => 'vault-secret-id-1',
+);
 vi.mock('@/server/connectors/secret-store', () => ({
   deleteConnectionSecret: (admin: unknown, secretId: string) => deleteSpy(admin, secretId),
+  putConnectionSecret: (admin: unknown, name: string, secret: Record<string, unknown>) =>
+    putSpy(admin, name, secret),
+}));
+
+// EasyPost client: validateKey() resolves by default (good key). Tests that
+// need a bad key set the spy to reject with an EasyPostApiError.
+const validateKeySpy = vi.fn(async () => undefined);
+vi.mock('@/server/connectors/easypost/client', () => ({
+  EasyPostApiError: class EasyPostApiError extends Error {
+    status: number;
+    constructor(message: string, status: number) {
+      super(message);
+      this.name = 'EasyPostApiError';
+      this.status = status;
+    }
+  },
+  EasyPostClient: class EasyPostClient {
+    constructor(_apiKey: string) {}
+    validateKey() {
+      return validateKeySpy();
+    }
+  },
 }));
 
 const adminClientHolder = { client: { _admin: true } as unknown };
@@ -20,6 +45,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 }));
 
 import { env } from '@/lib/env';
+import { EasyPostApiError } from '@/server/connectors/easypost/client';
 import { audit } from '@/server/services/audit';
 import { ConnectionsService } from './connections';
 import { ServiceError } from './context';
@@ -35,6 +61,9 @@ const ORIGINAL_QBO_CLIENT_ID = env.QBO_CLIENT_ID;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Reset the EasyPost key validation to the happy path (good key); the
+  // bad-key test overrides it.
+  validateKeySpy.mockResolvedValue(undefined);
   (env as { QBO_CLIENT_ID: string }).QBO_CLIENT_ID = 'test-qbo-client-id';
 });
 
@@ -186,6 +215,100 @@ describe('ConnectionsService.beginConnect', () => {
     });
     // No pending row written when misconfigured.
     expect(stub.fromCalls).not.toContain('org_connections');
+  });
+});
+
+describe('ConnectionsService.connectApiKey (EasyPost)', () => {
+  it('validates the key, stores both secrets in Vault, and activates the connection', async () => {
+    const stub = makeSupabaseStub({
+      // Fresh connect: no existing easypost row.
+      'org_connections.select': { data: [], error: null },
+      'org_connections.insert': { data: [{ id: 'conn-ep-1' }], error: null },
+    });
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(['shipping']),
+      }),
+    );
+
+    await svc.connectApiKey('easypost', '  EZTK_test_key_123  ', 'whsec_abc');
+
+    // Key validated against EasyPost before anything persisted.
+    expect(validateKeySpy).toHaveBeenCalledTimes(1);
+
+    // BOTH carrier secrets written to Vault via the service-role admin client —
+    // never into org_connections.settings. The blob is ConnectorSecrets-shaped
+    // (accessToken mirrors the key) and carries apiKey + webhookSecret (trimmed).
+    expect(putSpy).toHaveBeenCalledTimes(1);
+    const [adminArg, , secretArg] = putSpy.mock.calls[0] as [unknown, string, Record<string, unknown>];
+    expect(adminArg).toBe(adminClientHolder.client);
+    expect(secretArg).toMatchObject({
+      apiKey: 'EZTK_test_key_123',
+      webhookSecret: 'whsec_abc',
+      accessToken: 'EZTK_test_key_123',
+    });
+
+    // Connection upserted active with the Vault secret id + mode (test, from the
+    // EZTK prefix). The raw key must NOT appear in settings.
+    const upsertArgs = stub.chainArgsAll.get('org_connections.insert')?.[0]?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(upsertArgs.provider_id).toBe('easypost');
+    expect(upsertArgs.status).toBe('active');
+    expect(upsertArgs.secret_id).toBe('vault-secret-id-1');
+    expect(upsertArgs.settings).toMatchObject({ mode: 'test' });
+    expect(JSON.stringify(upsertArgs.settings)).not.toContain('EZTK_test_key_123');
+
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(audit).mock.calls[0]?.[0].event).toBe('integration.connected');
+  });
+
+  it('throws validation_error when EasyPost rejects the key (no secret stored)', async () => {
+    validateKeySpy.mockRejectedValueOnce(new EasyPostApiError('bad key', 401));
+    const stub = makeSupabaseStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(['shipping']),
+      }),
+    );
+
+    await expect(svc.connectApiKey('easypost', 'EZAK_bad')).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    // Nothing persisted on a bad key.
+    expect(putSpy).not.toHaveBeenCalled();
+  });
+
+  it('throws forbidden when the caller lacks shipping:manage', async () => {
+    const stub = makeSupabaseStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'staff',
+        enabledModules: new Set<ModuleId>(['shipping']),
+      }),
+    );
+    await expect(svc.connectApiKey('easypost', 'EZAK_x')).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    expect(validateKeySpy).not.toHaveBeenCalled();
+  });
+
+  it('throws module_disabled when the shipping module is off', async () => {
+    const stub = makeSupabaseStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        // Shipping is OFF (even integrations on shouldn't help).
+        enabledModules: new Set<ModuleId>(['integrations']),
+      }),
+    );
+    await expect(svc.connectApiKey('easypost', 'EZAK_x')).rejects.toMatchObject({
+      code: 'module_disabled',
+    });
+    expect(validateKeySpy).not.toHaveBeenCalled();
   });
 });
 
