@@ -145,6 +145,15 @@ export class ConnectionsService {
 
     const meta = CONNECTOR_REGISTRY[provider];
     if (!meta) throw new ServiceError('validation_error', `Unknown provider: ${provider}`);
+    // beginConnect drives the OAuth authorize redirect. API-key/webhook-only
+    // connectors (e.g. EasyPost) have no `oauth` metadata and must use their own
+    // connect path, never this method.
+    if (!meta.oauth) {
+      throw new ServiceError(
+        'validation_error',
+        `Provider ${provider} does not support OAuth connect.`,
+      );
+    }
 
     // Fail fast on a misconfigured deployment: QBO_CLIENT_ID is optionalSecret
     // (defaults to ''). Without it the authorize URL carries client_id='' and

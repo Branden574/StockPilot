@@ -1,7 +1,7 @@
 import type { ModuleId } from '../modules/registry';
 
 export type ConnectorMode = 'push' | 'pull' | 'bidi' | 'webhook';
-export type ConnectorProviderId = 'quickbooks'; // grows: 'carrier' | 'amazon' | ...
+export type ConnectorProviderId = 'quickbooks' | 'easypost'; // grows: 'amazon' | ...
 
 export interface OutboxEvent {
   id: string;
@@ -86,5 +86,6 @@ export interface ConnectorMeta {
   subscribedTopics: string[];
   /** The module that must be enabled for this connector to operate (e.g. 'integrations'). */
   requiresModule: ModuleId;
-  oauth: { authorizeBase: string; scopes: string[] };
+  /** OAuth metadata. Optional — API-key/webhook-only connectors (e.g. EasyPost) omit it. */
+  oauth?: { authorizeBase: string; scopes: string[] };
 }
