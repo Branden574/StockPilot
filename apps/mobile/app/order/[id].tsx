@@ -1,6 +1,6 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { ArrowLeft, Camera, ImagePlus, PenLine, Trash2, X } from 'lucide-react-native';
+import { ArrowLeft, Camera, ImagePlus, PenLine, Trash2, Truck, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -22,6 +22,7 @@ import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { resizeForUpload } from '@/lib/image-resize';
+import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -44,6 +45,16 @@ const KIND_LABELS: Record<string, string> = {
 };
 const KINDS = ['dropoff_photo', 'location', 'signature', 'other'] as const;
 type Kind = (typeof KINDS)[number];
+
+const SHIPMENT_STATUS_LABELS: Record<string, string> = {
+  draft: 'Label not purchased',
+  purchased: 'Label purchased',
+  in_transit: 'In transit',
+  delivered: 'Delivered',
+  returned: 'Returned',
+  failure: 'Delivery failed',
+  cancelled: 'Cancelled',
+};
 
 function mimeForExt(ext: string): string {
   const e = ext.toLowerCase();
@@ -92,6 +103,7 @@ export default function OrderDetail() {
   const [kind, setKind] = React.useState<Kind>('dropoff_photo');
   const [sigOpen, setSigOpen] = React.useState(false);
   const [viewerUrl, setViewerUrl] = React.useState<string | null>(null);
+  const [shipment, setShipment] = React.useState<OrderShipment | null>(null);
 
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
@@ -170,6 +182,10 @@ export default function OrderDetail() {
       });
     }
     await loadAttachments();
+    // Read-only carrier tracking. The wrapper soft-gates: if the shipping
+    // module is off, the member lacks access, or there is simply no shipment,
+    // it returns null and the section below stays hidden.
+    setShipment(await getOrderShipment(id));
     setLoading(false);
   }, [orgId, id, loadAttachments]);
 
@@ -340,6 +356,44 @@ export default function OrderDetail() {
                 </View>
               </Card>
             </Pressable>
+          ) : null}
+
+          {shipment ? (
+            <View style={{ gap: 8 }}>
+              <Eyebrow>SHIPPING</Eyebrow>
+              <Card padding={14}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                  <Truck size={16} color={c.ink} strokeWidth={1.7} style={{ marginTop: 2 }} />
+                  <View style={{ flex: 1, gap: 6 }}>
+                    <Body size={14} color={c.ink}>
+                      {[shipment.carrier, shipment.service].filter(Boolean).join(' · ') || 'Carrier'}
+                    </Body>
+                    <Mono size={11} color={c.ink4}>
+                      {SHIPMENT_STATUS_LABELS[shipment.status] ??
+                        shipment.status.replace(/_/g, ' ')}
+                      {shipment.tracking_status ? ` · ${shipment.tracking_status}` : ''}
+                    </Mono>
+                    {shipment.tracking_code ? (
+                      <Mono size={11} color={c.ink3}>{`Tracking ${shipment.tracking_code}`}</Mono>
+                    ) : null}
+                    {shipment.tracking_url ? (
+                      <Pressable
+                        onPress={() =>
+                          Linking.openURL(shipment.tracking_url as string).catch(() =>
+                            Alert.alert('Could not open', 'Unable to open the tracking page.'),
+                          )
+                        }
+                        hitSlop={6}
+                      >
+                        <Mono size={11} color={c.ink} style={{ textDecorationLine: 'underline' }}>
+                          Track package
+                        </Mono>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              </Card>
+            </View>
           ) : null}
 
           <View style={{ gap: 10 }}>
