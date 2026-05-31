@@ -218,6 +218,63 @@ describe('ConnectionsService.beginConnect', () => {
   });
 });
 
+describe('ConnectionsService.list', () => {
+  // list() returns ALL org_connections regardless of provider; it backs the
+  // shared Integrations settings page that hosts both the QuickBooks
+  // (integrations) and EasyPost (shipping) cards. So the module gate is
+  // `integrations` OR `shipping`, fail-closed when NEITHER is enabled.
+  function listStub() {
+    return makeSupabaseStub({
+      'org_connections.select': {
+        data: [
+          { id: 'conn-qbo', provider_id: 'quickbooks', status: 'active', settings: {} },
+          { id: 'conn-ep', provider_id: 'easypost', status: 'active', settings: { mode: 'test' } },
+        ],
+        error: null,
+      },
+      'connection_sync_log.select': { data: [], error: null },
+    });
+  }
+
+  it('lists connections when only the integrations module is enabled', async () => {
+    const stub = listStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(['integrations']),
+      }),
+    );
+    const { connections } = await svc.list();
+    expect(connections.map((c) => c.providerId)).toEqual(['quickbooks', 'easypost']);
+  });
+
+  it('lists connections when only the shipping module is enabled (integrations off)', async () => {
+    // The key regression: a shipping-only org must still be able to read its
+    // connections (to render + manage the EasyPost card) even though the
+    // integrations module is off.
+    const stub = listStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(['shipping']),
+      }),
+    );
+    const { connections } = await svc.list();
+    expect(connections.map((c) => c.providerId)).toContain('easypost');
+  });
+
+  it('throws module_disabled when NEITHER integrations nor shipping is enabled', async () => {
+    const stub = listStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(),
+      }),
+    );
+    await expect(svc.list()).rejects.toMatchObject({ code: 'module_disabled' });
+  });
+});
+
 describe('ConnectionsService.connectApiKey (EasyPost)', () => {
   it('validates the key, stores both secrets in Vault, and activates the connection', async () => {
     const stub = makeSupabaseStub({

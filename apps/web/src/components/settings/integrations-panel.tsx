@@ -44,6 +44,13 @@ export interface EasyPostPanelProps {
 }
 
 export interface QuickBooksPanelProps {
+  /**
+   * Whether to render the QuickBooks cards + recent-sync activity. False hides
+   * them entirely — the integrations module is off for this org or the caller
+   * lacks `integrations:manage` (e.g. a shipping-only org reaching this page to
+   * manage EasyPost). Defaults to shown for back-compat.
+   */
+  showQuickBooks?: boolean;
   /** Null when no connection row exists yet (never connected). */
   status: ConnectionStatus | null;
   externalAccountId: string | null;
@@ -74,6 +81,7 @@ function formatDate(iso: string | null): string {
 
 export function IntegrationsPanel(props: QuickBooksPanelProps) {
   const meta = CONNECTOR_REGISTRY.quickbooks;
+  const showQuickBooks = props.showQuickBooks ?? true;
   const status = props.status;
   const isConnected = status === 'active';
   const badge = status ? STATUS_BADGE[status] : null;
@@ -131,6 +139,8 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
 
   return (
     <div className="space-y-6">
+      {showQuickBooks && (
+      <>
       <Card>
         <CardHeader>
           <div className="flex items-start justify-between gap-4">
@@ -261,9 +271,12 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
           </form>
         </CardContent>
       </Card>
+      </>
+      )}
 
       {props.easyPost && <EasyPostCard {...props.easyPost} />}
 
+      {showQuickBooks && (
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Recent sync activity</CardTitle>
@@ -294,6 +307,7 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
           )}
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }
