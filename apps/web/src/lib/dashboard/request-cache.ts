@@ -4,6 +4,8 @@ import { cache } from 'react';
 
 import { createClient } from '@/lib/supabase/server';
 
+import type { ModuleId } from '@stockpilot/core';
+
 /**
  * Request-scoped React.cache() wrappers for data the dashboard layout AND
  * the dashboard page both need in the same render. Without these, the
@@ -67,3 +69,35 @@ export const getMfaFactorsForRequest = cache(async (): Promise<MfaFactor[]> => {
   const res = await supabase.auth.mfa.listFactors();
   return (res.data?.all ?? []) as MfaFactor[];
 });
+
+/**
+ * Enabled `organization_modules` for the org, as a Set of module ids.
+ * Request-cached so the dashboard layout AND `withContext()` (in
+ * `server/services/context.ts`) share ONE `organization_modules` round-trip
+ * per render instead of each issuing its own identical query.
+ *
+ * Fail behaviour matches both prior call sites: on a query error this
+ * returns an EMPTY set (logged). Callers treat an empty set as "core-only"
+ * — `assertModuleEnabled` still lets core modules through via the registry,
+ * while optional/premium modules are denied. So an error fails CLOSED for
+ * optional modules and never widens entitlements. NOTE: this helper does NOT
+ * throw; a thrown error from the underlying client would propagate to the
+ * caller exactly as the inline query would have (it never threw before, and
+ * the Supabase client surfaces failures as `{ error }`, not exceptions).
+ */
+export const getModulesForRequest = cache(
+  async (organizationId: string): Promise<Set<ModuleId>> => {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from('organization_modules')
+      .select('module_id')
+      .eq('organization_id', organizationId)
+      .eq('enabled', true);
+    if (error) {
+      console.error('[getModulesForRequest] organization_modules query failed:', error);
+    }
+    return new Set(
+      ((data ?? []) as Array<{ module_id: string }>).map((r) => r.module_id as ModuleId),
+    );
+  },
+);
