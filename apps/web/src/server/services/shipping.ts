@@ -65,7 +65,15 @@ export interface CarrierShipmentRow {
   from_address: Record<string, unknown> | null;
   to_address: Record<string, unknown> | null;
   parcel: Record<string, unknown> | null;
-  status: 'draft' | 'purchased' | 'in_transit' | 'delivered' | 'returned' | 'failure' | 'cancelled';
+  status:
+    | 'draft'
+    | 'purchasing'
+    | 'purchased'
+    | 'in_transit'
+    | 'delivered'
+    | 'returned'
+    | 'failure'
+    | 'cancelled';
   purchased_at: string | null;
   purchased_by: string | null;
 }
@@ -141,17 +149,31 @@ function hasMailingAddress(addr: StoredAddress | null | undefined): addr is Stor
  * 'manager')`) is a more-permissive backstop for any future user-RLS writer and
  * is intentionally never the binding check here.
  *
- * DOUBLE-BUY SAFETY: `buyLabel` is idempotent against concurrent/retried calls.
- * It claims the draft with an atomic compare-and-swap (UPDATE ... WHERE id=? AND
- * status='draft' AND purchased_by IS NULL) before calling EasyPost, so only one
- * of two concurrent calls ever reaches `client.buyShipment`; the loser re-reads
- * and returns the purchased row. The claim also stamps `purchased_by`, so a
- * retry after a successful buy but a failed final UPDATE will NOT re-claim (and
- * therefore will not re-buy) — it returns the already-purchased row instead.
- * NOTE: this is application-level CAS, not a DB constraint. A DB-level partial
- * unique index on (organization_id, order_request_id) WHERE status='purchased'
- * would harden this further but requires a migration (deferred; out of scope
- * here — 0149 is already applied to prod).
+ * DOUBLE-BUY SAFETY: `buyLabel` is airtight against concurrent/retried calls —
+ * EasyPost can be charged AT MOST ONCE per order even under a multi-draft race
+ * (two getRates sessions → two distinct 'draft' rows → two buyLabel calls
+ * claiming DIFFERENT drafts). The guarantee is anchored at the DATABASE by the
+ * 0150 partial unique index `carrier_shipments_one_active_per_order` on
+ * (organization_id, order_request_id) WHERE status in ('purchasing','purchased'):
+ * at most one row per order can occupy the active-buy slot.
+ *
+ *   1. Idempotent short-circuit: a 'purchased' row for the order → return it.
+ *   2. CLAIM: atomically transition the chosen draft 'draft'→'purchasing'
+ *      (UPDATE ... WHERE id=? AND status='draft'). The 0150 unique index makes a
+ *      SECOND claim for the same order — whether the rival is already
+ *      'purchasing' or 'purchased', possibly on a DIFFERENT draft row — raise a
+ *      unique violation (SQLSTATE 23505). The service detects 23505 (and a
+ *      zero-row claim) and resolves idempotently instead of 500ing or buying.
+ *   3. Only the claim winner calls `client.buyShipment`.
+ *   4. SUCCESS → finalize the claimed row to 'purchased'.
+ *   5. EasyPost FAILURE → roll the claimed row back to 'draft' (clearing
+ *      purchased_by) so the order is not permanently stuck in 'purchasing'
+ *      (which the unique index would otherwise treat as an occupied slot) and
+ *      can be retried; the error is rethrown as a clear ServiceError.
+ *
+ * Because the 'purchasing' claim occupies the unique slot BEFORE the billable
+ * call, two concurrent buyLabel calls can never both reach EasyPost, and a retry
+ * after a successful buy short-circuits on the 'purchased' row.
  */
 export class ShippingService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -357,23 +379,26 @@ export class ShippingService {
   }
 
   /**
-   * Buys the selected rate, generating a postage label. IDEMPOTENT and safe
-   * against concurrent/retried calls (no double charge):
+   * Buys the selected rate, generating a postage label. AIRTIGHT against
+   * concurrent/retried calls — EasyPost is charged AT MOST ONCE per order, even
+   * under a multi-draft race (see the class-level DOUBLE-BUY SAFETY note). The
+   * guarantee is anchored by the 0150 partial unique index
+   * `carrier_shipments_one_active_per_order` (at most one 'purchasing'/'purchased'
+   * row per order):
    *
-   *   1. Short-circuit if a `purchased` row already exists for the order.
+   *   1. Short-circuit if a 'purchased' row already exists for the order.
    *   2. Load the most-recent draft.
-   *   3. Atomically CLAIM the draft with a compare-and-swap — UPDATE ... WHERE
-   *      id=? AND status='draft' AND purchased_by IS NULL — stamping
-   *      purchased_by/purchased_at. If zero rows are claimed, another call (or
-   *      a prior, partially-completed attempt) already owns this draft: re-read
-   *      the purchased row and return it rather than buying again.
-   *   4. Only the winning claimant calls EasyPost `buyShipment` and stamps the
-   *      row `purchased`.
-   *
-   * Because the claim is the atomic gate, two concurrent buyLabel calls cannot
-   * both reach EasyPost, and a retry after a successful buy but a failed final
-   * UPDATE will not re-buy (the row is already claimed). The `easypost_*` ids
-   * stored at claim time let a retry/operator recover the purchased state.
+   *   3. CLAIM: atomically transition the draft 'draft'→'purchasing'. A SECOND
+   *      claim for the same order (rival already 'purchasing'/'purchased', even
+   *      on a different draft row) violates the unique index → SQLSTATE 23505,
+   *      which we catch; a zero-row claim means the predicate already moved on.
+   *      Either way we re-check for a 'purchased' row and return it, else throw
+   *      a clear "in progress" ServiceError — never reaching EasyPost twice.
+   *   4. Only the claim winner calls EasyPost `buyShipment`.
+   *   5. SUCCESS → finalize the claimed row to 'purchased'.
+   *   6. EasyPost FAILURE → roll the claimed row back to 'draft' (clear
+   *      purchased_by) so the order is not stuck 'purchasing' and can be
+   *      retried; rethrow as a clear ServiceError.
    */
   async buyLabel(orderRequestId: string, rateId: string): Promise<CarrierShipmentRow> {
     assertModuleEnabled(this.ctx, 'shipping');
@@ -381,17 +406,8 @@ export class ShippingService {
 
     // Idempotency guard FIRST: a purchased row blocks a re-buy. Read via the
     // admin client so the check sees rows regardless of the user's RLS path.
-    const { data: purchased, error: purchasedError } = await this.admin
-      .from('carrier_shipments')
-      .select('*')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('order_request_id', orderRequestId)
-      .eq('status', 'purchased')
-      .maybeSingle();
-    if (purchasedError) throw new ServiceError('internal_error', purchasedError.message);
-    if (purchased) {
-      return purchased as CarrierShipmentRow;
-    }
+    const purchased = await this.findPurchased(orderRequestId);
+    if (purchased) return purchased;
 
     // Load the most-recent draft for this order.
     const { data: draft, error: draftError } = await this.admin
@@ -412,47 +428,77 @@ export class ShippingService {
       );
     }
 
-    // ATOMIC CLAIM (compare-and-swap): take ownership of this draft before any
-    // billable EasyPost call. The `status='draft' AND purchased_by IS NULL`
-    // predicate means exactly one concurrent caller wins; the DB applies the
-    // UPDATE atomically per row, so a second concurrent caller updates zero
-    // rows. We keep status='draft' here (the table's CHECK constraint has no
-    // intermediate state) but set purchased_by, which is the lock witness.
+    // CLAIM: transition the chosen draft 'draft'→'purchasing' BEFORE any billable
+    // EasyPost call. The 0150 partial unique index on (organization_id,
+    // order_request_id) WHERE status in ('purchasing','purchased') makes this the
+    // airtight gate: a SECOND claim for the same order — whether a rival already
+    // sits in 'purchasing'/'purchased' on this OR a different draft row — raises a
+    // unique violation (SQLSTATE 23505). We detect that error code (and a zero-row
+    // claim, where the row was no longer 'draft') and resolve idempotently rather
+    // than letting it 500 or reaching EasyPost a second time.
     const claimStamp = new Date().toISOString();
-    const { data: claimed, error: claimError } = await this.admin
+    const {
+      data: claimed,
+      error: claimError,
+    } = await this.admin
       .from('carrier_shipments')
-      .update({ purchased_by: this.ctx.userId, purchased_at: claimStamp })
+      .update({ status: 'purchasing', purchased_by: this.ctx.userId, updated_at: claimStamp })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', draftRow.id)
       .eq('status', 'draft')
-      .is('purchased_by', null)
       .select('id');
-    if (claimError) throw new ServiceError('internal_error', claimError.message);
+
+    if (claimError) {
+      // 23505 = unique_violation on carrier_shipments_one_active_per_order:
+      // another claim already occupies this order's active-buy slot. Treat as a
+      // lost race, NOT a 500.
+      if (claimError.code === '23505') {
+        return await this.resolveLostClaim(orderRequestId);
+      }
+      throw new ServiceError('internal_error', claimError.message);
+    }
     const claimedRows = (claimed as Array<{ id: string }> | null) ?? [];
     if (claimedRows.length === 0) {
-      // Lost the race (or a prior attempt already claimed + bought this draft):
-      // re-read the purchased row and return it idempotently. If it is not yet
-      // 'purchased' another call is mid-flight at EasyPost; surface a clear
-      // retryable error rather than risk a parallel buy.
-      const { data: rePurchased, error: reError } = await this.admin
-        .from('carrier_shipments')
-        .select('*')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('order_request_id', orderRequestId)
-        .eq('status', 'purchased')
-        .maybeSingle();
-      if (reError) throw new ServiceError('internal_error', reError.message);
-      if (rePurchased) return rePurchased as CarrierShipmentRow;
-      throw new ServiceError(
-        'validation_error',
-        'This label is already being purchased. Refresh in a moment.',
-      );
+      // Zero rows updated: the row was no longer 'draft' (a concurrent/prior buy
+      // already claimed it). Resolve idempotently.
+      return await this.resolveLostClaim(orderRequestId);
     }
 
-    // Resolve the EasyPost key for this order's connection.
+    // We OWN the 'purchasing' claim. Resolve the EasyPost key + buy. Wrap the
+    // billable call so a failure rolls the claim back to 'draft' (freeing the
+    // unique slot) instead of leaving the order stuck 'purchasing' forever.
     const resolved = await this.resolveShippingContext(orderRequestId);
     const client = new EasyPostClient(resolved.apiKey);
-    const bought = await client.buyShipment(draftRow.easypost_shipment_id, rateId);
+
+    let bought: Record<string, unknown>;
+    try {
+      bought = await client.buyShipment(draftRow.easypost_shipment_id, rateId);
+    } catch (err) {
+      // Roll the claim back so the order isn't permanently blocked and can be
+      // retried. Best-effort: a rollback failure must not mask the original
+      // EasyPost error.
+      const { error: rollbackError } = await this.admin
+        .from('carrier_shipments')
+        .update({ status: 'draft', purchased_by: null, updated_at: new Date().toISOString() })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', draftRow.id)
+        .eq('status', 'purchasing');
+      if (rollbackError) {
+        // Surface both: the buy failed AND the row could not be reset.
+        throw new ServiceError(
+          'internal_error',
+          `Label purchase failed and the shipment could not be reset (${rollbackError.message}). Original error: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      throw new ServiceError(
+        'validation_error',
+        `Label purchase failed at the carrier: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
 
     const selectedRate = (bought.selected_rate as Record<string, unknown> | undefined) ?? {};
     const postageLabel = (bought.postage_label as Record<string, unknown> | undefined) ?? {};
@@ -481,20 +527,18 @@ export class ShippingService {
       // EasyPost validates rateId against the shipment, so a mismatched id is
       // rejected before this point and never persisted.
       easypost_rate_id: (selectedRate.id as string | undefined) ?? rateId,
-      // Keep the claim stamp (purchased_by/purchased_at already set at claim
-      // time); refresh purchased_at to the buy-completion instant.
       purchased_at: new Date().toISOString(),
       purchased_by: this.ctx.userId,
     };
 
     // Finalize as a compare-and-swap on the row we claimed: only transition the
-    // row we still own (status='draft', purchased_by=this user) to 'purchased'.
+    // row we still own ('purchasing') to 'purchased'.
     const { data: updated, error: updateError } = await this.admin
       .from('carrier_shipments')
       .update(updates)
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', draftRow.id)
-      .eq('status', 'draft')
+      .eq('status', 'purchasing')
       .select('*')
       .single();
     if (updateError) throw new ServiceError('internal_error', updateError.message);
@@ -512,21 +556,50 @@ export class ShippingService {
     return updated as CarrierShipmentRow;
   }
 
+  /** Read the single 'purchased' row for an order via the admin client, or null. */
+  private async findPurchased(orderRequestId: string): Promise<CarrierShipmentRow | null> {
+    const { data, error } = await this.admin
+      .from('carrier_shipments')
+      .select('*')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('order_request_id', orderRequestId)
+      .eq('status', 'purchased')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    return (data as CarrierShipmentRow | null) ?? null;
+  }
+
+  /**
+   * Resolve a lost claim (zero-row claim OR 23505 unique violation): a
+   * concurrent/prior buy won the order's active-buy slot. Return its 'purchased'
+   * row if it has completed, otherwise throw a clear retryable error — never
+   * reaching EasyPost.
+   */
+  private async resolveLostClaim(orderRequestId: string): Promise<CarrierShipmentRow> {
+    const winner = await this.findPurchased(orderRequestId);
+    if (winner) return winner;
+    throw new ServiceError(
+      'validation_error',
+      'A label purchase is already in progress for this order',
+    );
+  }
+
   /**
    * Member-level read of the shipment for an order. Returns the single
-   * most-recent NON-`draft` row by `created_at` — i.e. the latest actually
-   * purchased/active shipment (status in
+   * most-recent row whose status is NOT IN ('draft','purchasing') by
+   * `created_at` — i.e. the latest actually purchased/active shipment (status in
    * purchased/in_transit/delivered/returned/failure/cancelled) — or null when
-   * only draft(s) exist (or nothing at all). Reads ride the user's RLS
-   * (member-read policy on carrier_shipments).
+   * only draft/in-flight row(s) exist (or nothing at all). Reads ride the user's
+   * RLS (member-read policy on carrier_shipments).
    *
-   * Draft rows are intentionally excluded: a draft is created during `getRates`
-   * before any label is bought, so surfacing it here would make the web order
-   * page and the mobile order screen show a phantom "shipment" for a manager
-   * who shopped rates but never confirmed a buy. Draft rows still live in the
-   * table for the in-flight buy flow (`buyLabel` claims the latest draft) — they
-   * are just not surfaced as "the shipment". The buy-label dialog uses the
-   * rates/label endpoints, not `getShipment`, so it is unaffected.
+   * Both 'draft' AND 'purchasing' rows are intentionally excluded: a draft is
+   * created during `getRates` before any label is bought, and a 'purchasing' row
+   * is a mid-buy claim (0150) that has not yet completed at EasyPost — surfacing
+   * either would make the web order page and the mobile order screen show a
+   * phantom/half-bought "shipment". These rows still live in the table for the
+   * in-flight buy flow (`buyLabel` claims the latest draft into 'purchasing')
+   * — they are just not surfaced as "the shipment". The buy-label dialog uses
+   * the rates/label endpoints, not `getShipment`, so it is unaffected.
    */
   async getShipment(orderRequestId: string): Promise<CarrierShipmentRow | null> {
     assertModuleEnabled(this.ctx, 'shipping');

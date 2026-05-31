@@ -272,7 +272,7 @@ describe('ShippingService.buyLabel', () => {
     expect(buyShipmentSpy).not.toHaveBeenCalled();
   });
 
-  it('claims the draft, buys the rate, and maps the response onto the row (happy path)', async () => {
+  it('claims the draft to purchasing, buys the rate ONCE, then finalizes to purchased (happy path)', async () => {
     const draftRow = {
       id: 'ship-1',
       organization_id: 'org-test',
@@ -295,8 +295,8 @@ describe('ShippingService.buyLabel', () => {
           ? { data: [], error: null } // purchased guard: no purchased row yet
           : { data: [draftRow], error: null }; // draft load
       },
-      // Claim CAS returns exactly one row (this caller won the claim); the
-      // final finalize update returns the purchased row.
+      // Both the claim UPDATE (-> purchasing) and the finalize UPDATE
+      // (-> purchased) return one row: the claim wins, the finalize succeeds.
       'carrier_shipments.update': { data: [{ id: 'ship-1' }], error: null },
     });
     adminClientHolder.client = stub.client;
@@ -306,15 +306,23 @@ describe('ShippingService.buyLabel', () => {
 
     const result = await svc.buyLabel('order-1', 'rate_1');
 
-    // EasyPost buy invoked once, with the draft's easypost shipment id + rate.
+    // EasyPost buy invoked ONCE, with the draft's easypost shipment id + rate.
     expect(buyShipmentSpy).toHaveBeenCalledTimes(1);
     expect(buyShipmentSpy).toHaveBeenCalledWith('shp_easypost_1', 'rate_1');
 
-    // Response mapping: rate_cents = round(rate*100); label/tracking fallbacks;
-    // purchased_by stamped. The LAST update payload is the finalize.
-    const updateArgs = stub.chainArgs.get('carrier_shipments.update');
-    const payload = updateArgs?.[0]?.[0] as Record<string, unknown>;
-    expect(payload).toMatchObject({
+    // Two carrier_shipments updates fired: [0] the claim (draft -> purchasing),
+    // [1] the finalize (purchasing -> purchased).
+    const allUpdates = stub.chainArgsAll.get('carrier_shipments.update');
+    expect(allUpdates).toHaveLength(2);
+
+    // CLAIM payload: transitions to 'purchasing' and stamps the actor BEFORE the
+    // billable EasyPost call (the airtight gate against double-buy).
+    const claimPayload = allUpdates?.[0]?.[0]?.[0] as Record<string, unknown>;
+    expect(claimPayload).toMatchObject({ status: 'purchasing', purchased_by: 'user-test' });
+
+    // FINALIZE payload: rate_cents = round(rate*100); label/tracking fallbacks.
+    const finalizePayload = allUpdates?.[1]?.[0]?.[0] as Record<string, unknown>;
+    expect(finalizePayload).toMatchObject({
       status: 'purchased',
       label_url: 'https://easypost/label.pdf',
       tracking_code: '1Z999',
@@ -329,7 +337,7 @@ describe('ShippingService.buyLabel', () => {
     expect(result).toBeTruthy();
   });
 
-  it('does not re-buy when the atomic claim loses the race (returns the purchased row)', async () => {
+  it('does not re-buy when the claim updates ZERO rows (returns the winner purchased row)', async () => {
     const draftRow = {
       id: 'ship-1',
       organization_id: 'org-test',
@@ -357,7 +365,7 @@ describe('ShippingService.buyLabel', () => {
         if (selectCall === 2) return { data: [draftRow], error: null };
         return { data: [winnerPurchased], error: null };
       },
-      // The claim CAS updates ZERO rows -> this caller lost the race.
+      // The claim updates ZERO rows (the row was no longer 'draft') -> lost race.
       'carrier_shipments.update': { data: [], error: null },
     });
     adminClientHolder.client = stub.client;
@@ -370,6 +378,141 @@ describe('ShippingService.buyLabel', () => {
     // Lost the claim -> NO EasyPost buy, returns the winner's purchased row.
     expect(buyShipmentSpy).not.toHaveBeenCalled();
     expect(result).toMatchObject({ id: 'ship-1', status: 'purchased' });
+  });
+
+  it('does not re-buy when the claim hits the partial-unique-index conflict (23505) and returns the winner row', async () => {
+    const draftRow = {
+      id: 'ship-2',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'draft',
+      easypost_shipment_id: 'shp_easypost_2',
+      currency: 'USD',
+      purchased_by: null,
+    };
+    const winnerPurchased = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'purchased',
+      easypost_shipment_id: 'shp_easypost_1',
+      tracking_code: '1Z999',
+    };
+    // Two getRates sessions made two distinct drafts (ship-1 already won + is
+    // 'purchased'; this caller holds ship-2). Selects: (1) purchased guard ->
+    // none yet; (2) draft load -> ship-2; (3) re-read after the 23505 -> the
+    // winner's purchased row (ship-1).
+    let selectCall = 0;
+    const stub = makeSupabaseStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        if (selectCall === 1) return { data: [], error: null };
+        if (selectCall === 2) return { data: [draftRow], error: null };
+        return { data: [winnerPurchased], error: null };
+      },
+      // The claim's transition into 'purchasing' violates
+      // carrier_shipments_one_active_per_order (a rival already owns the order's
+      // active-buy slot) -> Postgres unique_violation 23505.
+      'carrier_shipments.update': {
+        data: null,
+        error: {
+          code: '23505',
+          message:
+            'duplicate key value violates unique constraint "carrier_shipments_one_active_per_order"',
+        },
+      },
+    });
+    adminClientHolder.client = stub.client;
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.buyLabel('order-1', 'rate_1');
+
+    // The 23505 must be CAUGHT (not 500) -> no EasyPost buy, winner row returned.
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ id: 'ship-1', status: 'purchased' });
+  });
+
+  it('throws an "in progress" error when the claim loses but the rival has not finished buying', async () => {
+    const draftRow = {
+      id: 'ship-2',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'draft',
+      easypost_shipment_id: 'shp_easypost_2',
+      currency: 'USD',
+      purchased_by: null,
+    };
+    // Selects: (1) purchased guard -> none; (2) draft load -> ship-2; (3) re-read
+    // after the 23505 -> STILL no purchased row (the rival is mid-buy in
+    // 'purchasing'). We must surface a retryable error, never reach EasyPost.
+    let selectCall = 0;
+    const stub = makeSupabaseStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        if (selectCall === 2) return { data: [draftRow], error: null };
+        return { data: [], error: null };
+      },
+      'carrier_shipments.update': {
+        data: null,
+        error: { code: '23505', message: 'duplicate key value violates unique constraint' },
+      },
+    });
+    adminClientHolder.client = stub.client;
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    await expect(svc.buyLabel('order-1', 'rate_1')).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'A label purchase is already in progress for this order',
+    });
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+  });
+
+  it('rolls the claim back to draft and surfaces a clear error when EasyPost buyShipment throws', async () => {
+    const draftRow = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'draft',
+      easypost_shipment_id: 'shp_easypost_1',
+      currency: 'USD',
+      purchased_by: null,
+    };
+    let selectCall = 0;
+    const stub = makeDeliveryStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1 ? { data: [], error: null } : { data: [draftRow], error: null };
+      },
+      // Claim wins (one row); the rollback update also succeeds.
+      'carrier_shipments.update': { data: [{ id: 'ship-1' }], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    // EasyPost buy fails (e.g. carrier 422 / transient 5xx).
+    buyShipmentSpy.mockRejectedValueOnce(new Error('EasyPost buyShipment failed (status 422)'));
+
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    await expect(svc.buyLabel('order-1', 'rate_1')).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+
+    // The buy was attempted exactly once and then failed.
+    expect(buyShipmentSpy).toHaveBeenCalledTimes(1);
+
+    // Updates fired: [0] the claim (draft -> purchasing), [1] the rollback
+    // (purchasing -> draft, purchased_by cleared) — NO finalize to 'purchased'.
+    const allUpdates = stub.chainArgsAll.get('carrier_shipments.update');
+    expect(allUpdates).toHaveLength(2);
+    const claimPayload = allUpdates?.[0]?.[0]?.[0] as Record<string, unknown>;
+    expect(claimPayload).toMatchObject({ status: 'purchasing' });
+    const rollbackPayload = allUpdates?.[1]?.[0]?.[0] as Record<string, unknown>;
+    expect(rollbackPayload).toMatchObject({ status: 'draft', purchased_by: null });
   });
 
   it('blocks a manager (no shipping:manage) from buying a label', async () => {
@@ -406,6 +549,9 @@ describe('ShippingService.getShipment', () => {
     expect(inCall?.[0]).toBe('status');
     const statuses = inCall?.[1] as string[];
     expect(statuses).not.toContain('draft');
+    // A mid-buy 'purchasing' row (0150) must ALSO be excluded — it is not a real
+    // shipment yet.
+    expect(statuses).not.toContain('purchasing');
     expect(statuses).toContain('purchased');
   });
 
