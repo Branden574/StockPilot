@@ -158,7 +158,9 @@ export type AuditEvent =
   // the OAuth callback writes the token to Vault (status active); disconnect
   // tears the connection down and destroys the Vault secret.
   | 'integration.connected'
-  | 'integration.disconnected';
+  | 'integration.disconnected'
+  | 'shipping.rates_fetched'
+  | 'shipping.label_purchased';
 
 interface AuditPayload {
   event: AuditEvent;
