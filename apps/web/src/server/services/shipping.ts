@@ -3,7 +3,7 @@ import 'server-only';
 import { z } from 'zod';
 
 import { createAdminClient } from '@/lib/supabase/admin';
-import { EasyPostClient } from '@/server/connectors/easypost/client';
+import { EasyPostApiError, EasyPostClient } from '@/server/connectors/easypost/client';
 import { getConnectionSecret } from '@/server/connectors/secret-store';
 
 import { audit } from './audit';
@@ -158,22 +158,52 @@ function hasMailingAddress(addr: StoredAddress | null | undefined): addr is Stor
  * at most one row per order can occupy the active-buy slot.
  *
  *   1. Idempotent short-circuit: a 'purchased' row for the order → return it.
- *   2. CLAIM: atomically transition the chosen draft 'draft'→'purchasing'
+ *   2. RESOLVE the EasyPost key/addresses BEFORE claiming. Resolving first means
+ *      a resolve failure (connection disconnected/flipped inactive, charter
+ *      address removed, Vault/RPC error between getRates and buyLabel) throws
+ *      while the row is still 'draft' — it can NEVER strand a row in
+ *      'purchasing'. We only claim a slot we can actually use.
+ *   3. CLAIM: atomically transition the chosen draft 'draft'→'purchasing'
  *      (UPDATE ... WHERE id=? AND status='draft'). The 0150 unique index makes a
  *      SECOND claim for the same order — whether the rival is already
  *      'purchasing' or 'purchased', possibly on a DIFFERENT draft row — raise a
  *      unique violation (SQLSTATE 23505). The service detects 23505 (and a
  *      zero-row claim) and resolves idempotently instead of 500ing or buying.
- *   3. Only the claim winner calls `client.buyShipment`.
- *   4. SUCCESS → finalize the claimed row to 'purchased'.
- *   5. EasyPost FAILURE → roll the claimed row back to 'draft' (clearing
- *      purchased_by) so the order is not permanently stuck in 'purchasing'
- *      (which the unique index would otherwise treat as an occupied slot) and
- *      can be retried; the error is rethrown as a clear ServiceError.
+ *   4. Only the claim winner calls `client.buyShipment`, passing the row id as
+ *      an EasyPost `Idempotency-Key` so a retried buy on the SAME shipment
+ *      (after a timeout/5xx where EasyPost may already have charged) replays the
+ *      original response instead of double-charging.
+ *   5. SUCCESS → finalize the claimed row to 'purchased'.
+ *   6. EasyPost FAILURE → branch on whether a charge could have occurred:
+ *        • Definitive client error (4xx other than 429) PROVES no charge → roll
+ *          the claimed row back to 'draft' (clear purchased_by) so it can be
+ *          retried.
+ *        • Ambiguous failure (timeout, network error, 5xx, 429) MIGHT have
+ *          charged → RECONCILE via a GET of the shipment. If it now carries a
+ *          postage_label, finalize to 'purchased' (the buy actually completed);
+ *          if it definitively has none, roll back to 'draft'. If even the
+ *          reconcile GET fails, LEAVE the row 'purchasing' (never blindly reopen
+ *          a possibly-charged buy for re-buy) and surface a clear error pointing
+ *          at the operator recovery runbook below.
  *
  * Because the 'purchasing' claim occupies the unique slot BEFORE the billable
  * call, two concurrent buyLabel calls can never both reach EasyPost, and a retry
  * after a successful buy short-circuits on the 'purchased' row.
+ *
+ * STUCK-ROW RECOVERY (operator runbook): a process crash / serverless timeout /
+ * OOM between the claim (→'purchasing') and the finalize (→'purchased') can leave
+ * a row stranded in 'purchasing'. The 0150 partial unique index then blocks every
+ * future buyLabel for that order (the claim 23505s; resolveLostClaim finds no
+ * 'purchased' row and throws "already in progress"), and getShipment hides it. To
+ * recover such a row, an operator (or a future reaper) reconciles it against
+ * EasyPost using its easypost_shipment_id:
+ *   • GET the EasyPost shipment. If it carries a postage_label, the buy
+ *     completed and was charged → finalize the row to 'purchased' (copy
+ *     label_url / tracking_code / selected_rate as buyLabel's success path does).
+ *   • If it has no postage_label, the buy never completed → reset the row to
+ *     'draft' (clear purchased_by) so the order can be re-bought.
+ * `reconcilePurchasing(orderRequestId)` performs exactly this against the latest
+ * 'purchasing' row and is the programmatic entry point for that recovery.
  */
 export class ShippingService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -388,17 +418,21 @@ export class ShippingService {
    *
    *   1. Short-circuit if a 'purchased' row already exists for the order.
    *   2. Load the most-recent draft.
-   *   3. CLAIM: atomically transition the draft 'draft'→'purchasing'. A SECOND
+   *   3. RESOLVE the EasyPost key/addresses BEFORE claiming, so a resolve failure
+   *      throws while the row is still 'draft' (never stranding 'purchasing').
+   *   4. CLAIM: atomically transition the draft 'draft'→'purchasing'. A SECOND
    *      claim for the same order (rival already 'purchasing'/'purchased', even
    *      on a different draft row) violates the unique index → SQLSTATE 23505,
    *      which we catch; a zero-row claim means the predicate already moved on.
    *      Either way we re-check for a 'purchased' row and return it, else throw
    *      a clear "in progress" ServiceError — never reaching EasyPost twice.
-   *   4. Only the claim winner calls EasyPost `buyShipment`.
-   *   5. SUCCESS → finalize the claimed row to 'purchased'.
-   *   6. EasyPost FAILURE → roll the claimed row back to 'draft' (clear
-   *      purchased_by) so the order is not stuck 'purchasing' and can be
-   *      retried; rethrow as a clear ServiceError.
+   *   5. Only the claim winner calls EasyPost `buyShipment`, keyed with the row
+   *      id as an Idempotency-Key (a retried buy can't double-charge).
+   *   6. SUCCESS → finalize the claimed row to 'purchased'.
+   *   7. EasyPost FAILURE → roll back to 'draft' ONLY on a definitive no-charge
+   *      4xx; on an ambiguous failure (timeout/5xx/429) reconcile via a GET and
+   *      finalize-or-rollback, leaving the row 'purchasing' if even the GET
+   *      fails (so a possibly-charged buy is never blindly re-bought).
    */
   async buyLabel(orderRequestId: string, rateId: string): Promise<CarrierShipmentRow> {
     assertModuleEnabled(this.ctx, 'shipping');
@@ -428,6 +462,17 @@ export class ShippingService {
       );
     }
 
+    // RESOLVE the EasyPost key BEFORE claiming. resolveShippingContext does
+    // several DB reads + a Vault secret fetch, all of which can throw (connection
+    // disconnected or flipped inactive between getRates and buyLabel, charter
+    // address removed, Vault/RPC transient error). Doing it BEFORE the claim
+    // guarantees such a throw leaves the row 'draft' — it can never strand the
+    // order in 'purchasing' (which the 0150 unique index would treat as an
+    // occupied slot, permanently wedging every future buyLabel). We only claim a
+    // slot we can actually use.
+    const resolved = await this.resolveShippingContext(orderRequestId);
+    const client = new EasyPostClient(resolved.apiKey);
+
     // CLAIM: transition the chosen draft 'draft'→'purchasing' BEFORE any billable
     // EasyPost call. The 0150 partial unique index on (organization_id,
     // order_request_id) WHERE status in ('purchasing','purchased') makes this the
@@ -436,13 +481,12 @@ export class ShippingService {
     // unique violation (SQLSTATE 23505). We detect that error code (and a zero-row
     // claim, where the row was no longer 'draft') and resolve idempotently rather
     // than letting it 500 or reaching EasyPost a second time.
-    const claimStamp = new Date().toISOString();
     const {
       data: claimed,
       error: claimError,
     } = await this.admin
       .from('carrier_shipments')
-      .update({ status: 'purchasing', purchased_by: this.ctx.userId, updated_at: claimStamp })
+      .update({ status: 'purchasing', purchased_by: this.ctx.userId })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', draftRow.id)
       .eq('status', 'draft')
@@ -464,59 +508,62 @@ export class ShippingService {
       return await this.resolveLostClaim(orderRequestId);
     }
 
-    // We OWN the 'purchasing' claim. Resolve the EasyPost key + buy. Wrap the
-    // billable call so a failure rolls the claim back to 'draft' (freeing the
-    // unique slot) instead of leaving the order stuck 'purchasing' forever.
-    const resolved = await this.resolveShippingContext(orderRequestId);
-    const client = new EasyPostClient(resolved.apiKey);
-
+    // We OWN the 'purchasing' claim. Buy the label, passing the row id as an
+    // EasyPost Idempotency-Key: a retried buy on the SAME shipment (after a
+    // timeout/5xx where EasyPost may already have charged) replays the original
+    // response instead of buying twice.
     let bought: Record<string, unknown>;
     try {
-      bought = await client.buyShipment(draftRow.easypost_shipment_id, rateId);
-    } catch (err) {
-      // Roll the claim back so the order isn't permanently blocked and can be
-      // retried. Best-effort: a rollback failure must not mask the original
-      // EasyPost error.
-      const { error: rollbackError } = await this.admin
-        .from('carrier_shipments')
-        .update({ status: 'draft', purchased_by: null, updated_at: new Date().toISOString() })
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('id', draftRow.id)
-        .eq('status', 'purchasing');
-      if (rollbackError) {
-        // Surface both: the buy failed AND the row could not be reset.
-        throw new ServiceError(
-          'internal_error',
-          `Label purchase failed and the shipment could not be reset (${rollbackError.message}). Original error: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      }
-      throw new ServiceError(
-        'validation_error',
-        `Label purchase failed at the carrier: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+      bought = await client.buyShipment(
+        draftRow.easypost_shipment_id,
+        rateId,
+        draftRow.id,
       );
+    } catch (err) {
+      return await this.handleBuyFailure(orderRequestId, draftRow, client, err);
     }
 
-    const selectedRate = (bought.selected_rate as Record<string, unknown> | undefined) ?? {};
-    const postageLabel = (bought.postage_label as Record<string, unknown> | undefined) ?? {};
-    const tracker = (bought.tracker as Record<string, unknown> | undefined) ?? {};
+    const updated = await this.finalizePurchased(draftRow, bought, rateId);
+
+    void audit(
+      {
+        event: 'shipping.label_purchased',
+        entityType: 'carrier_shipment',
+        entityId: draftRow.id,
+        extra: { orderRequestId, carrier: updated.carrier, rateCents: updated.rate_cents },
+      },
+      this.ctx,
+    );
+
+    return updated;
+  }
+
+  /**
+   * Build the 'purchased' updates from a bought/retrieved EasyPost Shipment and
+   * finalize the claimed row as a compare-and-swap (only the row we still own in
+   * 'purchasing' transitions to 'purchased'). Shared by the buy-success path and
+   * the reconcile path so both write identical, complete label/tracking fields.
+   */
+  private async finalizePurchased(
+    draftRow: CarrierShipmentRow,
+    shipment: Record<string, unknown>,
+    rateId: string,
+  ): Promise<CarrierShipmentRow> {
+    const selectedRate = (shipment.selected_rate as Record<string, unknown> | undefined) ?? {};
+    const postageLabel = (shipment.postage_label as Record<string, unknown> | undefined) ?? {};
+    const tracker = (shipment.tracker as Record<string, unknown> | undefined) ?? {};
 
     const rateStr = selectedRate.rate;
     const rateCents =
-      rateStr === undefined || rateStr === null
-        ? null
-        : Math.round(Number(rateStr) * 100);
+      rateStr === undefined || rateStr === null ? null : Math.round(Number(rateStr) * 100);
 
     const updates = {
       status: 'purchased' as const,
       label_url: (postageLabel.label_url as string | undefined) ?? null,
-      tracking_code: (bought.tracking_code as string | undefined) ?? null,
+      tracking_code: (shipment.tracking_code as string | undefined) ?? null,
       tracking_url:
         (tracker.public_url as string | undefined) ??
-        (bought.tracking_url as string | undefined) ??
+        (shipment.tracking_url as string | undefined) ??
         null,
       carrier: (selectedRate.carrier as string | undefined) ?? null,
       service: (selectedRate.service as string | undefined) ?? null,
@@ -542,18 +589,185 @@ export class ShippingService {
       .select('*')
       .single();
     if (updateError) throw new ServiceError('internal_error', updateError.message);
-
-    void audit(
-      {
-        event: 'shipping.label_purchased',
-        entityType: 'carrier_shipment',
-        entityId: draftRow.id,
-        extra: { orderRequestId, carrier: updates.carrier, rateCents: updates.rate_cents },
-      },
-      this.ctx,
-    );
-
     return updated as CarrierShipmentRow;
+  }
+
+  /**
+   * Reset a claimed 'purchasing' row back to 'draft' (clearing purchased_by) so
+   * the order is not stuck and can be retried. Used when a buy failure PROVES no
+   * charge occurred. Best-effort: a rollback failure surfaces a combined error
+   * rather than masking the original cause.
+   */
+  private async rollbackClaim(draftRow: CarrierShipmentRow, original: unknown): Promise<never> {
+    const { error: rollbackError } = await this.admin
+      .from('carrier_shipments')
+      .update({ status: 'draft', purchased_by: null })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', draftRow.id)
+      .eq('status', 'purchasing');
+    if (rollbackError) {
+      throw new ServiceError(
+        'internal_error',
+        `Label purchase failed and the shipment could not be reset (${rollbackError.message}). Original error: ${
+          original instanceof Error ? original.message : String(original)
+        }`,
+      );
+    }
+    throw new ServiceError(
+      'validation_error',
+      `Label purchase failed at the carrier: ${
+        original instanceof Error ? original.message : String(original)
+      }`,
+    );
+  }
+
+  /**
+   * Decide what to do after `client.buyShipment` threw, WITHOUT risking a double
+   * charge:
+   *   • Definitive client error (EasyPostApiError 4xx, excluding 429) PROVES the
+   *     buy never charged → roll the claim back to 'draft' for retry.
+   *   • Ambiguous failure (timeout, network error, 5xx, 429) MIGHT have charged
+   *     → RECONCILE via a GET of the shipment. If it now carries a postage_label,
+   *     the buy actually completed → finalize to 'purchased'. If it definitively
+   *     has none, roll back to 'draft'. If the GET itself fails, LEAVE the row
+   *     'purchasing' (never blindly reopen a possibly-charged buy) and surface a
+   *     clear error pointing at the recovery runbook (reconcilePurchasing).
+   */
+  private async handleBuyFailure(
+    orderRequestId: string,
+    draftRow: CarrierShipmentRow,
+    client: EasyPostClient,
+    err: unknown,
+  ): Promise<CarrierShipmentRow> {
+    const definitiveNoCharge =
+      err instanceof EasyPostApiError && err.status >= 400 && err.status < 500 && err.status !== 429;
+    if (definitiveNoCharge) {
+      // 4xx (not 429): EasyPost rejected the request before charging. Safe to
+      // reopen the draft for a corrected retry.
+      return await this.rollbackClaim(draftRow, err);
+    }
+
+    // Ambiguous: the buy may have completed server-side. Reconcile via GET.
+    const shipmentId = draftRow.easypost_shipment_id;
+    if (!shipmentId) {
+      // No id to reconcile against (should not happen — buyLabel guards it) →
+      // treat conservatively as no-charge and reopen.
+      return await this.rollbackClaim(draftRow, err);
+    }
+    let reconciled: Record<string, unknown>;
+    try {
+      reconciled = await client.retrieveShipment(shipmentId);
+    } catch {
+      // Even the reconcile GET failed. Do NOT roll back — leave the row
+      // 'purchasing' so a possibly-charged buy is never re-bought. Recovery is
+      // via reconcilePurchasing (see the class-level runbook).
+      throw new ServiceError(
+        'internal_error',
+        'Label purchase could not be confirmed at the carrier and the shipment status could not be reconciled. ' +
+          'The order is left mid-purchase; run shipment reconciliation to resolve it. ' +
+          `Original error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    const postageLabel =
+      (reconciled.postage_label as Record<string, unknown> | undefined) ?? undefined;
+    if (postageLabel && postageLabel.label_url) {
+      // The buy DID complete (and was charged). Finalize from the reconciled
+      // shipment so the paid label is reflected instead of being lost.
+      const selectedRate = (reconciled.selected_rate as Record<string, unknown> | undefined) ?? {};
+      const rateId = (selectedRate.id as string | undefined) ?? '';
+      const updated = await this.finalizePurchased(draftRow, reconciled, rateId);
+      void audit(
+        {
+          event: 'shipping.label_purchased',
+          entityType: 'carrier_shipment',
+          entityId: draftRow.id,
+          extra: {
+            orderRequestId,
+            carrier: updated.carrier,
+            rateCents: updated.rate_cents,
+            reconciled: true,
+          },
+        },
+        this.ctx,
+      );
+      return updated;
+    }
+
+    // Reconcile confirms NO label was bought → safe to reopen the draft.
+    return await this.rollbackClaim(draftRow, err);
+  }
+
+  /**
+   * Operator/reaper recovery for a row stranded in 'purchasing' (process crash /
+   * serverless timeout between claim and finalize — see the class-level runbook).
+   * Reconciles the latest 'purchasing' row for the order against EasyPost:
+   *   • postage_label present → finalize to 'purchased' (the buy was charged).
+   *   • no postage_label → reset to 'draft' so the order can be re-bought.
+   * Idempotent: if no 'purchasing' row exists it returns the 'purchased' row (if
+   * any) or null. Gated like every mutation (shipping + shipping:manage).
+   */
+  async reconcilePurchasing(orderRequestId: string): Promise<CarrierShipmentRow | null> {
+    assertModuleEnabled(this.ctx, 'shipping');
+    assertPermission(this.ctx, 'shipping:manage');
+
+    const { data: stuck, error: stuckError } = await this.admin
+      .from('carrier_shipments')
+      .select('*')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('order_request_id', orderRequestId)
+      .eq('status', 'purchasing')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (stuckError) throw new ServiceError('internal_error', stuckError.message);
+    const stuckRow = stuck as CarrierShipmentRow | null;
+    if (!stuckRow) {
+      // Nothing stranded — return the purchased row if the buy already completed.
+      return await this.findPurchased(orderRequestId);
+    }
+    if (!stuckRow.easypost_shipment_id) {
+      // No EasyPost id to reconcile against → it never reached the carrier; reopen.
+      const { error: resetError } = await this.admin
+        .from('carrier_shipments')
+        .update({ status: 'draft', purchased_by: null })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', stuckRow.id)
+        .eq('status', 'purchasing');
+      if (resetError) throw new ServiceError('internal_error', resetError.message);
+      return null;
+    }
+
+    const resolved = await this.resolveShippingContext(orderRequestId);
+    const client = new EasyPostClient(resolved.apiKey);
+    const shipment = await client.retrieveShipment(stuckRow.easypost_shipment_id);
+
+    const postageLabel = (shipment.postage_label as Record<string, unknown> | undefined) ?? undefined;
+    if (postageLabel && postageLabel.label_url) {
+      const selectedRate = (shipment.selected_rate as Record<string, unknown> | undefined) ?? {};
+      const rateId = (selectedRate.id as string | undefined) ?? '';
+      const updated = await this.finalizePurchased(stuckRow, shipment, rateId);
+      void audit(
+        {
+          event: 'shipping.label_purchased',
+          entityType: 'carrier_shipment',
+          entityId: stuckRow.id,
+          extra: { orderRequestId, reconciled: true },
+        },
+        this.ctx,
+      );
+      return updated;
+    }
+
+    // No label at the carrier → reset to draft for a clean re-buy.
+    const { error: resetError } = await this.admin
+      .from('carrier_shipments')
+      .update({ status: 'draft', purchased_by: null })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', stuckRow.id)
+      .eq('status', 'purchasing');
+    if (resetError) throw new ServiceError('internal_error', resetError.message);
+    return null;
   }
 
   /** Read the single 'purchased' row for an order via the admin client, or null. */

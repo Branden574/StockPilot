@@ -23,12 +23,15 @@ vi.mock('@/server/connectors/secret-store', () => ({
   getConnectionSecret: (admin: unknown, secretId: string) => getSecretSpy(admin, secretId),
 }));
 
-// EasyPost client: createShipment + buyShipment are the two billable calls.
+// EasyPost client: createShipment + buyShipment are the two billable calls;
+// retrieveShipment is the non-billable GET used to reconcile an ambiguous buy.
 // Default happy-path returns are set in beforeEach so each test can override.
 const createShipmentSpy = vi.fn(async (_body: unknown) => ({}) as Record<string, unknown>);
 const buyShipmentSpy = vi.fn(
-  async (_id: string, _rateId: string) => ({}) as Record<string, unknown>,
+  async (_id: string, _rateId: string, _idempotencyKey?: string) =>
+    ({}) as Record<string, unknown>,
 );
+const retrieveShipmentSpy = vi.fn(async (_id: string) => ({}) as Record<string, unknown>);
 vi.mock('@/server/connectors/easypost/client', () => ({
   EasyPostApiError: class EasyPostApiError extends Error {
     status: number;
@@ -43,8 +46,11 @@ vi.mock('@/server/connectors/easypost/client', () => ({
     createShipment(body: unknown) {
       return createShipmentSpy(body);
     }
-    buyShipment(id: string, rateId: string) {
-      return buyShipmentSpy(id, rateId);
+    buyShipment(id: string, rateId: string, idempotencyKey?: string) {
+      return buyShipmentSpy(id, rateId, idempotencyKey);
+    }
+    retrieveShipment(id: string) {
+      return retrieveShipmentSpy(id);
     }
   },
 }));
@@ -57,6 +63,7 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => adminClientHolder.client),
 }));
 
+import { EasyPostApiError } from '@/server/connectors/easypost/client';
 import { ShippingService } from './shipping';
 import { ServiceError } from './context';
 
@@ -167,6 +174,9 @@ beforeEach(() => {
     postage_label: { label_url: 'https://easypost/label.pdf' },
     tracker: { public_url: 'https://track/1Z999' },
   });
+  // Default reconcile GET: shipment with NO label (the buy never completed) so
+  // the ambiguous-failure path rolls back unless a test overrides it.
+  retrieveShipmentSpy.mockResolvedValue({ id: 'shp_easypost_1' });
 });
 
 afterEach(() => {
@@ -306,9 +316,10 @@ describe('ShippingService.buyLabel', () => {
 
     const result = await svc.buyLabel('order-1', 'rate_1');
 
-    // EasyPost buy invoked ONCE, with the draft's easypost shipment id + rate.
+    // EasyPost buy invoked ONCE, with the draft's easypost shipment id + rate +
+    // the row id as the Idempotency-Key (so a retried buy can't double-charge).
     expect(buyShipmentSpy).toHaveBeenCalledTimes(1);
-    expect(buyShipmentSpy).toHaveBeenCalledWith('shp_easypost_1', 'rate_1');
+    expect(buyShipmentSpy).toHaveBeenCalledWith('shp_easypost_1', 'rate_1', 'ship-1');
 
     // Two carrier_shipments updates fired: [0] the claim (draft -> purchasing),
     // [1] the finalize (purchasing -> purchased).
@@ -355,10 +366,12 @@ describe('ShippingService.buyLabel', () => {
       easypost_shipment_id: 'shp_easypost_1',
       tracking_code: '1Z999',
     };
-    // Selects in order: (1) purchased guard -> none; (2) draft load -> draft;
-    // (3) re-read after a lost claim -> the row the winner purchased.
+    // buyLabel now RESOLVES the EasyPost context (order/charter/warehouse/
+    // connection reads) BEFORE the claim, so build on the full delivery stub.
+    // carrier_shipments selects in order: (1) purchased guard -> none; (2) draft
+    // load -> draft; (3) re-read after a lost claim -> the winner's purchased row.
     let selectCall = 0;
-    const stub = makeSupabaseStub({
+    const stub = makeDeliveryStub({
       'carrier_shipments.select': () => {
         selectCall += 1;
         if (selectCall === 1) return { data: [], error: null };
@@ -399,11 +412,12 @@ describe('ShippingService.buyLabel', () => {
       tracking_code: '1Z999',
     };
     // Two getRates sessions made two distinct drafts (ship-1 already won + is
-    // 'purchased'; this caller holds ship-2). Selects: (1) purchased guard ->
-    // none yet; (2) draft load -> ship-2; (3) re-read after the 23505 -> the
-    // winner's purchased row (ship-1).
+    // 'purchased'; this caller holds ship-2). buyLabel resolves the EasyPost
+    // context before claiming, so build on the full delivery stub.
+    // carrier_shipments selects: (1) purchased guard -> none yet; (2) draft load
+    // -> ship-2; (3) re-read after the 23505 -> the winner's purchased row (ship-1).
     let selectCall = 0;
-    const stub = makeSupabaseStub({
+    const stub = makeDeliveryStub({
       'carrier_shipments.select': () => {
         selectCall += 1;
         if (selectCall === 1) return { data: [], error: null };
@@ -444,11 +458,13 @@ describe('ShippingService.buyLabel', () => {
       currency: 'USD',
       purchased_by: null,
     };
-    // Selects: (1) purchased guard -> none; (2) draft load -> ship-2; (3) re-read
-    // after the 23505 -> STILL no purchased row (the rival is mid-buy in
-    // 'purchasing'). We must surface a retryable error, never reach EasyPost.
+    // buyLabel resolves the EasyPost context before claiming, so build on the
+    // full delivery stub. carrier_shipments selects: (1) purchased guard ->
+    // none; (2) draft load -> ship-2; (3) re-read after the 23505 -> STILL no
+    // purchased row (the rival is mid-buy in 'purchasing'). We must surface a
+    // retryable error, never reach EasyPost.
     let selectCall = 0;
-    const stub = makeSupabaseStub({
+    const stub = makeDeliveryStub({
       'carrier_shipments.select': () => {
         selectCall += 1;
         if (selectCall === 2) return { data: [draftRow], error: null };
@@ -471,7 +487,7 @@ describe('ShippingService.buyLabel', () => {
     expect(buyShipmentSpy).not.toHaveBeenCalled();
   });
 
-  it('rolls the claim back to draft and surfaces a clear error when EasyPost buyShipment throws', async () => {
+  it('rolls the claim back to draft on a definitive 4xx (no charge) without reconciling', async () => {
     const draftRow = {
       id: 'ship-1',
       organization_id: 'org-test',
@@ -491,8 +507,11 @@ describe('ShippingService.buyLabel', () => {
       'carrier_shipments.update': { data: [{ id: 'ship-1' }], error: null },
     });
     adminClientHolder.client = stub.client;
-    // EasyPost buy fails (e.g. carrier 422 / transient 5xx).
-    buyShipmentSpy.mockRejectedValueOnce(new Error('EasyPost buyShipment failed (status 422)'));
+    // EasyPost buy fails with a DEFINITIVE 422 — the carrier rejected the request
+    // before charging, so it is safe to reopen the draft without reconciling.
+    buyShipmentSpy.mockRejectedValueOnce(
+      new EasyPostApiError('EasyPost buyShipment failed (status 422)', 422),
+    );
 
     const svc = new ShippingService(
       makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
@@ -504,6 +523,8 @@ describe('ShippingService.buyLabel', () => {
 
     // The buy was attempted exactly once and then failed.
     expect(buyShipmentSpy).toHaveBeenCalledTimes(1);
+    // A definitive 4xx proves no charge -> NO reconcile GET.
+    expect(retrieveShipmentSpy).not.toHaveBeenCalled();
 
     // Updates fired: [0] the claim (draft -> purchasing), [1] the rollback
     // (purchasing -> draft, purchased_by cleared) — NO finalize to 'purchased'.
@@ -515,6 +536,180 @@ describe('ShippingService.buyLabel', () => {
     expect(rollbackPayload).toMatchObject({ status: 'draft', purchased_by: null });
   });
 
+  it('reconciles an ambiguous failure (5xx): finalizes to purchased when the label exists', async () => {
+    // A transient 5xx (or timeout) where EasyPost actually completed the buy
+    // server-side. The reconcile GET shows a postage_label -> finalize to
+    // 'purchased' instead of re-buying (which would double-charge) or losing the
+    // paid label.
+    const draftRow = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'draft',
+      easypost_shipment_id: 'shp_easypost_1',
+      currency: 'USD',
+      purchased_by: null,
+    };
+    let selectCall = 0;
+    const stub = makeDeliveryStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1 ? { data: [], error: null } : { data: [draftRow], error: null };
+      },
+      'carrier_shipments.update': { data: [{ id: 'ship-1', status: 'purchased' }], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    buyShipmentSpy.mockRejectedValueOnce(
+      new EasyPostApiError('EasyPost buyShipment failed (status 503)', 503),
+    );
+    // Reconcile GET: the buy DID complete at the carrier.
+    retrieveShipmentSpy.mockResolvedValueOnce({
+      id: 'shp_easypost_1',
+      tracking_code: '1Z999',
+      selected_rate: { id: 'rate_1', carrier: 'USPS', service: 'Priority', rate: '8.45', currency: 'USD' },
+      postage_label: { label_url: 'https://easypost/label.pdf' },
+      tracker: { public_url: 'https://track/1Z999' },
+    });
+
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.buyLabel('order-1', 'rate_1');
+
+    // Reconciled via GET, did NOT re-buy, and finalized the paid label.
+    expect(buyShipmentSpy).toHaveBeenCalledTimes(1);
+    expect(retrieveShipmentSpy).toHaveBeenCalledTimes(1);
+    const allUpdates = stub.chainArgsAll.get('carrier_shipments.update');
+    expect(allUpdates).toHaveLength(2); // claim + finalize (no rollback)
+    const finalizePayload = allUpdates?.[1]?.[0]?.[0] as Record<string, unknown>;
+    expect(finalizePayload).toMatchObject({
+      status: 'purchased',
+      label_url: 'https://easypost/label.pdf',
+      tracking_code: '1Z999',
+    });
+    expect(result).toBeTruthy();
+  });
+
+  it('reconciles an ambiguous failure (5xx): rolls back to draft when NO label exists', async () => {
+    const draftRow = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'draft',
+      easypost_shipment_id: 'shp_easypost_1',
+      currency: 'USD',
+      purchased_by: null,
+    };
+    let selectCall = 0;
+    const stub = makeDeliveryStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1 ? { data: [], error: null } : { data: [draftRow], error: null };
+      },
+      'carrier_shipments.update': { data: [{ id: 'ship-1' }], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    buyShipmentSpy.mockRejectedValueOnce(
+      new EasyPostApiError('EasyPost buyShipment failed (status 503)', 503),
+    );
+    // Reconcile GET (default beforeEach return): no postage_label -> no charge.
+
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    await expect(svc.buyLabel('order-1', 'rate_1')).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(retrieveShipmentSpy).toHaveBeenCalledTimes(1);
+    const allUpdates = stub.chainArgsAll.get('carrier_shipments.update');
+    expect(allUpdates).toHaveLength(2); // claim + rollback
+    const rollbackPayload = allUpdates?.[1]?.[0]?.[0] as Record<string, unknown>;
+    expect(rollbackPayload).toMatchObject({ status: 'draft', purchased_by: null });
+  });
+
+  it('leaves the row purchasing (no rollback) when the buy AND the reconcile both fail', async () => {
+    // Ambiguous buy failure where even the reconcile GET fails. The row must
+    // stay 'purchasing' (a possibly-charged buy is never blindly re-bought) and
+    // the error must point at the recovery path — NO rollback update fires.
+    const draftRow = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'draft',
+      easypost_shipment_id: 'shp_easypost_1',
+      currency: 'USD',
+      purchased_by: null,
+    };
+    let selectCall = 0;
+    const stub = makeDeliveryStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1 ? { data: [], error: null } : { data: [draftRow], error: null };
+      },
+      'carrier_shipments.update': { data: [{ id: 'ship-1' }], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    buyShipmentSpy.mockRejectedValueOnce(
+      new EasyPostApiError('EasyPost buyShipment failed (status 503)', 503),
+    );
+    retrieveShipmentSpy.mockRejectedValueOnce(
+      new EasyPostApiError('EasyPost retrieveShipment failed (status 503)', 503),
+    );
+
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    await expect(svc.buyLabel('order-1', 'rate_1')).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    expect(retrieveShipmentSpy).toHaveBeenCalledTimes(1);
+    // ONLY the claim update fired — no rollback (the row stays 'purchasing').
+    const allUpdates = stub.chainArgsAll.get('carrier_shipments.update');
+    expect(allUpdates).toHaveLength(1);
+    const claimPayload = allUpdates?.[0]?.[0]?.[0] as Record<string, unknown>;
+    expect(claimPayload).toMatchObject({ status: 'purchasing' });
+  });
+
+  it('leaves the order stuck purchasing when resolveShippingContext throws BEFORE the claim', async () => {
+    // The active EasyPost connection was disconnected between getRates and
+    // buyLabel. Because we resolve the context BEFORE claiming, the throw lands
+    // while the row is still 'draft' — NO claim update fires, so the order is
+    // never stranded in 'purchasing'.
+    const draftRow = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'draft',
+      easypost_shipment_id: 'shp_easypost_1',
+      currency: 'USD',
+      purchased_by: null,
+    };
+    let selectCall = 0;
+    const stub = makeDeliveryStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1 ? { data: [], error: null } : { data: [draftRow], error: null };
+      },
+      // No active EasyPost connection -> resolveShippingContext throws.
+      'org_connections.select': { data: [], error: null },
+      'carrier_shipments.update': { data: [{ id: 'ship-1' }], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    await expect(svc.buyLabel('order-1', 'rate_1')).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    // Never bought, and crucially NEVER claimed (no update fired) -> not stuck.
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+    expect(stub.chainArgsAll.get('carrier_shipments.update')).toBeUndefined();
+  });
+
   it('blocks a manager (no shipping:manage) from buying a label', async () => {
     const stub = makeSupabaseStub({});
     adminClientHolder.client = stub.client;
@@ -523,6 +718,108 @@ describe('ShippingService.buyLabel', () => {
     );
     await expect(svc.buyLabel('order-1', 'rate_1')).rejects.toMatchObject({ code: 'forbidden' });
     expect(buyShipmentSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('ShippingService.reconcilePurchasing (stuck-row recovery)', () => {
+  const stuckRow = {
+    id: 'ship-1',
+    organization_id: 'org-test',
+    order_request_id: 'order-1',
+    status: 'purchasing',
+    easypost_shipment_id: 'shp_easypost_1',
+    currency: 'USD',
+    purchased_by: 'user-test',
+  };
+
+  it('finalizes a stranded purchasing row to purchased when EasyPost shows the label', async () => {
+    const stub = makeDeliveryStub({
+      'carrier_shipments.select': { data: [stuckRow], error: null },
+      'carrier_shipments.update': { data: [{ id: 'ship-1', status: 'purchased' }], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    retrieveShipmentSpy.mockResolvedValueOnce({
+      id: 'shp_easypost_1',
+      tracking_code: '1Z999',
+      selected_rate: { id: 'rate_1', carrier: 'USPS', service: 'Priority', rate: '8.45', currency: 'USD' },
+      postage_label: { label_url: 'https://easypost/label.pdf' },
+      tracker: { public_url: 'https://track/1Z999' },
+    });
+
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.reconcilePurchasing('order-1');
+
+    expect(retrieveShipmentSpy).toHaveBeenCalledWith('shp_easypost_1');
+    // Never re-buys; finalizes the existing (charged) label.
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+    const updatePayload = stub.chainArgsAll.get('carrier_shipments.update')?.[0]?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(updatePayload).toMatchObject({ status: 'purchased', label_url: 'https://easypost/label.pdf' });
+    expect(result).toBeTruthy();
+  });
+
+  it('resets a stranded purchasing row to draft when EasyPost shows NO label', async () => {
+    const stub = makeDeliveryStub({
+      'carrier_shipments.select': { data: [stuckRow], error: null },
+      'carrier_shipments.update': { data: [{ id: 'ship-1', status: 'draft' }], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    retrieveShipmentSpy.mockResolvedValueOnce({ id: 'shp_easypost_1' }); // no label
+
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.reconcilePurchasing('order-1');
+
+    expect(result).toBeNull();
+    const updatePayload = stub.chainArgsAll.get('carrier_shipments.update')?.[0]?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(updatePayload).toMatchObject({ status: 'draft', purchased_by: null });
+  });
+
+  it('returns the purchased row (no-op) when nothing is stranded', async () => {
+    const purchasedRow = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'purchased',
+      easypost_shipment_id: 'shp_easypost_1',
+    };
+    // First select (stuck 'purchasing' lookup) -> none; second (findPurchased) -> the row.
+    let selectCall = 0;
+    const stub = makeSupabaseStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1 ? { data: [], error: null } : { data: [purchasedRow], error: null };
+      },
+    });
+    adminClientHolder.client = stub.client;
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.reconcilePurchasing('order-1');
+
+    expect(retrieveShipmentSpy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ id: 'ship-1', status: 'purchased' });
+  });
+
+  it('is gated: blocks a manager without shipping:manage', async () => {
+    const stub = makeSupabaseStub({});
+    adminClientHolder.client = stub.client;
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: SHIPPING_MODULES }),
+    );
+    await expect(svc.reconcilePurchasing('order-1')).rejects.toMatchObject({ code: 'forbidden' });
+    expect(retrieveShipmentSpy).not.toHaveBeenCalled();
   });
 });
 

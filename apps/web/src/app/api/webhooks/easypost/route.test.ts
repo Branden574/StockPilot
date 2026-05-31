@@ -190,6 +190,52 @@ describe('POST /api/webhooks/easypost', () => {
     expect(getSecretSpy).not.toHaveBeenCalled();
   });
 
+  it('verifies a Unicode webhook secret keyed by its NFKD-normalized form', async () => {
+    // EasyPost computes its HMAC over the NFKD (compatibility-decomposed) form of
+    // the webhook secret. Use a precomposed secret (é = U+00E9) whose NFKD form
+    // (e + U+0301 combining acute) differs byte-for-byte. The route must key its
+    // HMAC with the NFKD form to match EasyPost.
+    const precomposed = 'whsec_café_secret'; // contains é (U+00E9)
+    const nfkd = precomposed.normalize('NFKD');
+    expect(Buffer.from(precomposed, 'utf8').equals(Buffer.from(nfkd, 'utf8'))).toBe(false);
+
+    getSecretSpy.mockResolvedValueOnce({
+      apiKey: 'EZTK-test-key',
+      webhookSecret: precomposed,
+      accessToken: 'EZTK-test-key',
+      refreshToken: '',
+      expiresAt: '',
+    });
+    const stub = wireMatchedAdmin();
+    const rawBody = JSON.stringify(trackerEvent('in_transit'));
+
+    // Sign with the NFKD form (what EasyPost actually does) -> verifies.
+    const res = await POST(buildRequest(rawBody, sign(rawBody, nfkd)));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, updated: true });
+    expect(stub.chains.has('carrier_shipments.update')).toBe(true);
+  });
+
+  it('rejects (401) a Unicode secret signed with its non-normalized precomposed form', async () => {
+    // The mirror of the above: a signature keyed with the RAW precomposed secret
+    // (NOT normalized) must NOT verify, proving the NFKD normalization is the
+    // load-bearing step rather than incidentally passing.
+    const precomposed = 'whsec_café_secret';
+    getSecretSpy.mockResolvedValueOnce({
+      apiKey: 'EZTK-test-key',
+      webhookSecret: precomposed,
+      accessToken: 'EZTK-test-key',
+      refreshToken: '',
+      expiresAt: '',
+    });
+    const stub = wireMatchedAdmin();
+    const rawBody = JSON.stringify(trackerEvent('in_transit'));
+
+    const res = await POST(buildRequest(rawBody, sign(rawBody, precomposed)));
+    expect(res.status).toBe(401);
+    expect(stub.chains.has('carrier_shipments.update')).toBe(false);
+  });
+
   it('matches by tracking_code when no shipment_id is present', async () => {
     const stub = makeSupabaseStub({
       // First lookup (by easypost_shipment_id) is skipped because there's no
