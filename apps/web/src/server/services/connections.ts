@@ -2,7 +2,8 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { env } from '@/lib/env';
-import { deleteConnectionSecret } from '@/server/connectors/secret-store';
+import { EasyPostApiError, EasyPostClient } from '@/server/connectors/easypost/client';
+import { deleteConnectionSecret, putConnectionSecret } from '@/server/connectors/secret-store';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
@@ -219,6 +220,124 @@ export class ConnectionsService {
   }
 
   /**
+   * Connects an API-key/webhook-only provider (EasyPost). Unlike `beginConnect`
+   * (OAuth), there is no redirect: the admin pastes their carrier API key (and
+   * optionally the webhook signing secret), we validate the key against the
+   * provider, store BOTH secrets in Supabase Vault, and mark the connection
+   * `active` in one step.
+   *
+   * SECRET INVARIANT: the EasyPost API key + webhook secret live ONLY in Vault
+   * (written via the service-role admin client + the `connector_secret_put`
+   * RPC). They are never returned to the client, never written to
+   * `org_connections.settings`, and never logged. `settings` carries only the
+   * non-secret `mode` (test vs production, inferred from the key prefix).
+   *
+   * Gated on the off-by-default `shipping` module + `shipping:manage` (the key
+   * buys real postage), NOT the integrations gates used by `beginConnect`.
+   */
+  async connectApiKey(
+    provider: ConnectorProviderId,
+    apiKey: string,
+    webhookSecret?: string,
+  ): Promise<void> {
+    assertModuleEnabled(this.ctx, 'shipping');
+    assertPermission(this.ctx, 'shipping:manage');
+
+    // EasyPost is the only API-key connector today. Guard so a future OAuth-only
+    // provider can't be routed through this path with a stray "key".
+    if (provider !== 'easypost') {
+      throw new ServiceError(
+        'validation_error',
+        `Provider ${provider} does not support API-key connect.`,
+      );
+    }
+
+    const key = apiKey.trim();
+    if (!key) {
+      throw new ServiceError('validation_error', 'An API key is required.');
+    }
+
+    // Validate the key against EasyPost before persisting anything. A bad key
+    // 401s; surface that as a validation_error so the UI shows a clear message
+    // rather than a silent half-connected row.
+    try {
+      await new EasyPostClient(key).validateKey();
+    } catch (e) {
+      if (e instanceof EasyPostApiError) {
+        throw new ServiceError(
+          'validation_error',
+          'EasyPost rejected this API key. Double-check it and try again.',
+        );
+      }
+      throw new ServiceError('internal_error', 'Could not reach EasyPost to validate the key.');
+    }
+
+    // EasyPost test keys are prefixed `EZTK`; production keys `EZAK`. Record the
+    // mode (non-secret) so label/rate calls and the UI know which environment
+    // this connection talks to.
+    const mode = key.startsWith('EZTK') ? 'test' : 'production';
+
+    // Preserve the original establisher's attribution on reconnect; only stamp
+    // created_by on a first-time insert.
+    const { data: existing, error: selectError } = await this.ctx.supabase
+      .from('org_connections')
+      .select('id, settings, created_by')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('provider_id', provider)
+      .maybeSingle();
+    if (selectError) throw new ServiceError('internal_error', selectError.message);
+
+    const currentSettings =
+      ((existing as { settings: Record<string, unknown> | null } | null)?.settings) ?? {};
+    const createdBy =
+      ((existing as { created_by: string | null } | null)?.created_by) ?? this.ctx.userId;
+
+    // Write the secret blob to Vault via the SERVICE-ROLE admin client. The
+    // ConnectorSecrets type wants accessToken/refreshToken/expiresAt; we satisfy
+    // it (apiKey mirrored into accessToken for the connector framework) but the
+    // real carrier secret is `apiKey` + `webhookSecret`. `as never` mirrors the
+    // disconnect()/drainer cast: secret-store types `admin` to the minimal rpc
+    // shape, narrower than the full SupabaseClient.
+    const secretName = `connector:${(existing as { id: string } | null)?.id ?? `${this.ctx.organizationId}:${provider}`}`;
+    const secretId = await putConnectionSecret(createAdminClient() as never, secretName, {
+      apiKey: key,
+      webhookSecret: webhookSecret?.trim() ? webhookSecret.trim() : null,
+      accessToken: key,
+      refreshToken: '',
+      expiresAt: '',
+    });
+
+    const { data: upserted, error: upsertError } = await this.ctx.supabase
+      .from('org_connections')
+      .upsert(
+        {
+          organization_id: this.ctx.organizationId,
+          provider_id: provider,
+          status: 'active',
+          secret_id: secretId,
+          oauth_state: null,
+          settings: { ...currentSettings, mode },
+          created_by: createdBy,
+          last_connected_at: new Date().toISOString(),
+        },
+        { onConflict: 'organization_id,provider_id' },
+      )
+      .select('id')
+      .maybeSingle();
+    if (upsertError) throw new ServiceError('internal_error', upsertError.message);
+
+    void audit(
+      {
+        event: 'integration.connected',
+        entityType: 'org_connection',
+        entityId: (upserted as { id: string } | null)?.id ?? (existing as { id: string } | null)?.id ?? null,
+        extra: { provider, mode },
+      },
+      this.ctx,
+    );
+  }
+
+  /**
    * Disconnects a provider: sets status='disconnected' and nulls secret_id +
    * oauth_state, THEN deletes the Vault secret (service-role admin client).
    * Audited.
@@ -235,8 +354,17 @@ export class ConnectionsService {
    * mutations (MFA unenroll) that DO step up.
    */
   async disconnect(provider: ConnectorProviderId): Promise<void> {
-    assertModuleEnabled(this.ctx, 'integrations');
-    assertPermission(this.ctx, 'integrations:manage');
+    // EasyPost lives under the off-by-default `shipping` module + `shipping:manage`
+    // (it buys real postage); every other provider is an `integrations` export.
+    // Gate by provider so an org that enabled only shipping can still tear down
+    // its carrier connection.
+    if (provider === 'easypost') {
+      assertModuleEnabled(this.ctx, 'shipping');
+      assertPermission(this.ctx, 'shipping:manage');
+    } else {
+      assertModuleEnabled(this.ctx, 'integrations');
+      assertPermission(this.ctx, 'integrations:manage');
+    }
 
     const { data: row, error: selectError } = await this.ctx.supabase
       .from('org_connections')

@@ -10,7 +10,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   beginConnectAction,
+  connectEasyPostAction,
   disconnectAction,
+  disconnectEasyPostAction,
   saveAccountMappingAction,
 } from '@/server/actions/connections';
 
@@ -28,6 +30,19 @@ interface SyncHealthRow {
   createdAt: string;
 }
 
+/**
+ * EasyPost (shipping) connection state. `null` means the EasyPost card is hidden
+ * entirely — the shipping module is off for this org or the caller lacks
+ * `shipping:manage`. When present, `status` is null until first connected.
+ */
+export interface EasyPostPanelProps {
+  status: ConnectionStatus | null;
+  /** 'test' | 'production', inferred from the key prefix. */
+  mode: string | null;
+  lastConnectedAt: string | null;
+  lastError: string | null;
+}
+
 export interface QuickBooksPanelProps {
   /** Null when no connection row exists yet (never connected). */
   status: ConnectionStatus | null;
@@ -37,6 +52,8 @@ export interface QuickBooksPanelProps {
   lastError: string | null;
   accountIds: { billExpense?: string; inventoryAsset?: string; valuationOffset?: string };
   health: SyncHealthRow[];
+  /** EasyPost shipping connection; null hides the card. */
+  easyPost?: EasyPostPanelProps | null;
 }
 
 const STATUS_BADGE: Record<
@@ -245,6 +262,8 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
         </CardContent>
       </Card>
 
+      {props.easyPost && <EasyPostCard {...props.easyPost} />}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Recent sync activity</CardTitle>
@@ -290,5 +309,141 @@ function SyncStatusBadge({ status }: { status: SyncHealthRow['status'] }) {
     <Badge variant={map[status]} className="text-[10px] px-1.5 py-0 capitalize">
       {status}
     </Badge>
+  );
+}
+
+/**
+ * EasyPost carrier-shipping card: paste an API key (+ optional webhook signing
+ * secret) to connect. The key buys real postage, so secrets go straight to the
+ * server action → Vault and are NEVER rendered back; the card only shows
+ * connection status + mode. Disconnect destroys the Vault secret.
+ */
+function EasyPostCard(props: EasyPostPanelProps) {
+  const status = props.status;
+  const isConnected = status === 'active';
+  const badge = status ? STATUS_BADGE[status] : null;
+
+  const [connecting, startConnect] = React.useTransition();
+  const [disconnecting, startDisconnect] = React.useTransition();
+  const [apiKey, setApiKey] = React.useState('');
+  const [webhookSecret, setWebhookSecret] = React.useState('');
+
+  function handleConnect(e: React.FormEvent) {
+    e.preventDefault();
+    startConnect(async () => {
+      const res = await connectEasyPostAction({
+        apiKey,
+        webhookSecret: webhookSecret.trim() ? webhookSecret : undefined,
+      });
+      if (res.ok) {
+        toast.success('EasyPost connected.');
+        // Never keep the pasted secrets in client state past a successful save.
+        setApiKey('');
+        setWebhookSecret('');
+      } else {
+        toast.error(res.error.message);
+      }
+    });
+  }
+
+  function handleDisconnect() {
+    startDisconnect(async () => {
+      const res = await disconnectEasyPostAction();
+      if (res.ok) {
+        toast.success('EasyPost disconnected.');
+      } else {
+        toast.error(res.error.message);
+      }
+    });
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              {CONNECTOR_REGISTRY.easypost.title}
+              {badge && (
+                <Badge variant={badge.variant} className="text-[10px] px-1.5 py-0">
+                  {badge.label}
+                </Badge>
+              )}
+              {isConnected && props.mode && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
+                  {props.mode}
+                </Badge>
+              )}
+            </CardTitle>
+            <CardDescription>
+              Buy carrier shipping labels and track delivery orders. StockPilot pushes label
+              requests to EasyPost and receives tracking updates — it never changes inventory based
+              on EasyPost data. Your API key is stored encrypted and never shown again.
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+          <div>
+            <dt className="text-muted-foreground text-xs">Last connected</dt>
+            <dd className="font-medium">{formatDate(props.lastConnectedAt)}</dd>
+          </div>
+          {props.lastError && (
+            <div className="col-span-2">
+              <dt className="text-muted-foreground text-xs">Last error</dt>
+              <dd className="text-destructive font-medium">{props.lastError}</dd>
+            </div>
+          )}
+        </dl>
+
+        {isConnected ? (
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={handleDisconnect}
+            disabled={disconnecting}
+            className="focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+          </Button>
+        ) : (
+          <form onSubmit={handleConnect} className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="easypost-api-key">EasyPost API key</Label>
+              <Input
+                id="easypost-api-key"
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="EZAK… (production) or EZTK… (test)"
+                autoComplete="off"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="easypost-webhook-secret">
+                Webhook signing secret <span className="text-muted-foreground">(optional)</span>
+              </Label>
+              <Input
+                id="easypost-webhook-secret"
+                type="password"
+                value={webhookSecret}
+                onChange={(e) => setWebhookSecret(e.target.value)}
+                placeholder="Used to verify tracking webhooks"
+                autoComplete="off"
+              />
+            </div>
+            <Button
+              type="submit"
+              variant="gradient"
+              disabled={connecting || apiKey.trim().length === 0}
+              className="focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              {connecting ? 'Connecting…' : 'Connect EasyPost'}
+            </Button>
+          </form>
+        )}
+      </CardContent>
+    </Card>
   );
 }

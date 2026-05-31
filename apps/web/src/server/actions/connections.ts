@@ -14,6 +14,14 @@ const providerSchema = z.object({
   provider: z.literal('quickbooks'),
 });
 
+// EasyPost connect: an API key (+ optional webhook signing secret). Both are
+// secrets — they go straight to the service, which validates the key and stores
+// it in Vault. Never echoed back to the client.
+const easyPostConnectSchema = z.object({
+  apiKey: z.string().min(1, 'An API key is required.').max(200).trim(),
+  webhookSecret: z.string().max(200).trim().optional(),
+});
+
 const accountMappingSchema = z.object({
   provider: z.literal('quickbooks'),
   // QBO account ids are free-text for the MVP (a chart-of-accounts picker is a
@@ -55,6 +63,41 @@ export async function disconnectAction(
   try {
     const svc = await ConnectionsService.forCurrentUser();
     await svc.disconnect(parsed.data.provider);
+    revalidatePath('/dashboard/settings/integrations');
+    return ok(undefined);
+  } catch (e) {
+    return toActionError(e);
+  }
+}
+
+/**
+ * Connects EasyPost from a pasted API key (+ optional webhook secret). The
+ * service validates the key against EasyPost and stores both secrets in Vault;
+ * neither is returned to the client. Gated on the shipping module +
+ * `shipping:manage` inside the service.
+ */
+export async function connectEasyPostAction(
+  input: { apiKey: string; webhookSecret?: string },
+): Promise<ActionResult> {
+  const parsed = easyPostConnectSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid EasyPost credentials');
+  }
+  try {
+    const svc = await ConnectionsService.forCurrentUser();
+    await svc.connectApiKey('easypost', parsed.data.apiKey, parsed.data.webhookSecret);
+    revalidatePath('/dashboard/settings/integrations');
+    return ok(undefined);
+  } catch (e) {
+    return toActionError(e);
+  }
+}
+
+/** Disconnects EasyPost: destroys the Vault secret + marks the row disconnected. */
+export async function disconnectEasyPostAction(): Promise<ActionResult> {
+  try {
+    const svc = await ConnectionsService.forCurrentUser();
+    await svc.disconnect('easypost');
     revalidatePath('/dashboard/settings/integrations');
     return ok(undefined);
   } catch (e) {
