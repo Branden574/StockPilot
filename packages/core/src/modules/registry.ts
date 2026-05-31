@@ -29,7 +29,7 @@ export type ModuleId =
   | 'reports' | 'notifications' | 'team' | 'settings' | 'admin_tools' | 'charters' | 'scan'
   | 'books' | 'rentals' | 'bundles' | 'orders' | 'cycle_counts' | 'procedures'
   | 'purchase_orders' | 'receiving' | 'po_imports' | 'suppliers' | 'schedule' | 'ai' | 'public_requests'
-  | 'integrations'
+  | 'integrations' | 'shipping'
   | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'api_access';
 
 export interface NavPlacement {
@@ -470,6 +470,26 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['org_connections', 'connection_mappings', 'connection_sync_log'],
     // Net-new connector framework — OFF for every pack (incl. charter);
     // explicit opt-in only. Surfaced via the Integrations settings page,
+    // not the main nav (no placements).
+    defaultOnFor: [],
+    placements: [],
+  },
+  shipping: {
+    id: 'shipping',
+    tier: 'optional',
+    title: 'Shipping',
+    dependsOn: [],
+    permissions: ['shipping:manage'],
+    surfaces: ['api'],
+    // Only the EasyPost tracking webhook is exclusive to shipping. The order
+    // shipping endpoints live under /api/v1/orders (shared with the orders
+    // module) and are gated per-endpoint via assertModuleEnabled('shipping'),
+    // so we deliberately do NOT list /api/v1/orders here to avoid clobbering
+    // the orders module's prefix ownership.
+    apiPrefixes: ['/api/webhooks/easypost'],
+    ownsTables: ['shipments'],
+    // Net-new carrier shipping — OFF for every pack (incl. charter); explicit
+    // opt-in only. Surfaced via the Integrations settings page (EasyPost card),
     // not the main nav (no placements).
     defaultOnFor: [],
     placements: [],

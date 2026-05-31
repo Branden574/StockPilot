@@ -45,6 +45,21 @@ describe('MODULE_REGISTRY', () => {
     expect(modulesForPack('retail_backroom')).not.toContain('integrations');
     expect(modulesForPack('light_3pl')).not.toContain('integrations');
   });
+  it('shipping is an optional, OFF-by-default module (not in any pack)', () => {
+    const shipping = MODULE_REGISTRY['shipping' as ModuleId];
+    expect(shipping).toBeDefined();
+    expect(shipping.tier).toBe('optional');
+    expect(shipping.defaultOnFor).toEqual([]);
+    expect(shipping.permissions).toContain('shipping:manage');
+    expect(shipping.ownsTables).toContain('shipments');
+    expect(DEFAULT_MODULE_IDS).not.toContain('shipping');
+    // OFF for every pack — never auto-enabled.
+    expect(modulesForPack('charter_school')).not.toContain('shipping');
+    expect(modulesForPack('distribution')).not.toContain('shipping');
+    expect(modulesForPack('agriculture_food')).not.toContain('shipping');
+    expect(modulesForPack('retail_backroom')).not.toContain('shipping');
+    expect(modulesForPack('light_3pl')).not.toContain('shipping');
+  });
   it('covers the current web sidebar hrefs', () => {
     const webHrefs = Object.values(MODULE_REGISTRY).flatMap((m) => m.placements)
       .filter((p) => p.surface === 'web_sidebar').map((p) => p.href);
