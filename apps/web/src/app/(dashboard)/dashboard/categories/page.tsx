@@ -1,4 +1,7 @@
+import { Suspense } from 'react';
+
 import { CategoriesManager } from '@/components/categories/categories-manager';
+import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { requireOrgContext } from '@/lib/auth/session';
 import { CategoriesService } from '@/server/services/categories';
 
@@ -11,12 +14,6 @@ interface CategoriesPageProps {
 export default async function CategoriesPage({ searchParams }: CategoriesPageProps) {
   const params = await searchParams;
   const isArchivedView = params.view === 'archived';
-  const [ctx, svc] = await Promise.all([
-    requireOrgContext(),
-    CategoriesService.forCurrentUser(),
-  ]);
-  const canManage = hasPermission(ctx.role, 'categories:manage');
-  const rows = await svc.list({ includeArchived: isArchivedView });
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -28,17 +25,38 @@ export default async function CategoriesPage({ searchParams }: CategoriesPagePro
             : 'Group items so filters and reports stay tidy.'}
         </p>
       </div>
-      <CategoriesManager
-        view={isArchivedView ? 'archived' : 'active'}
-        canManage={canManage}
-        initial={rows.map((r) => ({
-          id: r.id as string,
-          name: r.name as string,
-          description: (r.description as string | null) ?? null,
-          color: (r.color as string | null) ?? null,
-          supports_sizes: Boolean(r.supports_sizes),
-        }))}
-      />
+      <Suspense fallback={<TableBodySkeleton rows={6} />}>
+        <CategoriesSection isArchivedView={isArchivedView} />
+      </Suspense>
     </div>
+  );
+}
+
+/**
+ * Inner async Server Component: the awaited category list fetch lives here so
+ * the page heading/description above paint immediately and only the manager
+ * table streams. Same component, same props as before — relocated behind
+ * <Suspense>.
+ */
+async function CategoriesSection({ isArchivedView }: { isArchivedView: boolean }) {
+  const [ctx, svc] = await Promise.all([
+    requireOrgContext(),
+    CategoriesService.forCurrentUser(),
+  ]);
+  const canManage = hasPermission(ctx.role, 'categories:manage');
+  const rows = await svc.list({ includeArchived: isArchivedView });
+
+  return (
+    <CategoriesManager
+      view={isArchivedView ? 'archived' : 'active'}
+      canManage={canManage}
+      initial={rows.map((r) => ({
+        id: r.id as string,
+        name: r.name as string,
+        description: (r.description as string | null) ?? null,
+        color: (r.color as string | null) ?? null,
+        supports_sizes: Boolean(r.supports_sizes),
+      }))}
+    />
   );
 }
