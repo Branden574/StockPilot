@@ -3,11 +3,28 @@ import 'server-only';
 import { cache } from 'react';
 
 import { requireOrgContext } from '@/lib/auth/session';
+import {
+  getMfaFactorsForRequest,
+  getModulesForRequest,
+  getOrgRowForRequest,
+} from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
 
 import type { Permission, PlanId, Role } from '@stockpilot/core';
 import { hasPermission, isAdminRole, isUnlimited, MODULE_REGISTRY, PLANS } from '@stockpilot/core';
 import type { ModuleId } from '@stockpilot/core';
+
+/**
+ * Cheap context-resolution timing. Emitted as a structured debug log only
+ * when `DEBUG_CONTEXT_TIMING` is truthy, so it's a no-op in normal prod.
+ * The label/duration are the units a Server-Timing header would carry, so
+ * a caller (e.g. a route/layout) can forward them if desired. Non-breaking.
+ */
+function logContextTiming(label: string, startMs: number): void {
+  if (!process.env.DEBUG_CONTEXT_TIMING) return;
+  const dur = Math.round((performance.now() - startMs) * 100) / 100;
+  console.info(`[context.timing] ${label}=${dur}ms`);
+}
 
 export interface ServiceContext {
   organizationId: string;
@@ -34,28 +51,36 @@ async function resolveMfaState(
   organizationId: string,
   role: Role,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean }> {
-  let mfaRequired = false;
-  let mfaSatisfied = false;
   try {
-    const { data: org } = await supabase
-      .from('organizations')
-      .select('mfa_policy')
-      .eq('id', organizationId)
-      .maybeSingle();
+    // DEDUPE: the org row (incl. mfa_policy) was already fetched by the
+    // dashboard layout via this request-cached helper — reuse it instead of
+    // issuing a second `organizations` SELECT for the same row.
+    const org = await getOrgRowForRequest(organizationId);
     const policy = (org?.mfa_policy as
       | 'optional'
       | 'admins_required'
       | 'all_required'
+      | null
       | undefined) ?? 'optional';
-    mfaRequired =
+    const mfaRequired =
       policy === 'all_required' ||
       (policy === 'admins_required' && isAdminRole(role));
-    if (mfaRequired) {
-      const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-      mfaSatisfied = data?.currentLevel === 'aal2';
-    } else {
-      mfaSatisfied = true;
+    if (!mfaRequired) {
+      return { mfaRequired: false, mfaSatisfied: true };
     }
+    // SHORT-CIRCUIT: a user with NO verified factor can never be at AAL2, so
+    // skip the `auth.mfa.getAuthenticatorAssuranceLevel()` round-trip and
+    // fail closed directly. The factor list is request-cached (the layout
+    // already loaded it). Only when a verified factor exists do we spend the
+    // AAL round-trip to confirm the session actually stepped up. Same
+    // fail-closed outcome as before, fewer round-trips.
+    const factors = await getMfaFactorsForRequest();
+    const hasVerifiedFactor = factors.some((f) => f.status === 'verified');
+    if (!hasVerifiedFactor) {
+      return { mfaRequired: true, mfaSatisfied: false };
+    }
+    const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    return { mfaRequired: true, mfaSatisfied: data?.currentLevel === 'aal2' };
   } catch (err) {
     // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
     // org lookup must NOT silently let an admin bypass MFA. The user
@@ -64,31 +89,23 @@ async function resolveMfaState(
     console.error('[resolveMfaState] failed:', err);
     return { mfaRequired: true, mfaSatisfied: false };
   }
-  return { mfaRequired, mfaSatisfied };
 }
 
 export const withContext = cache(async (): Promise<ServiceContext> => {
+  const startMs = performance.now();
   const ctx = await requireOrgContext();
   const supabase = await createClient();
-  const { mfaRequired, mfaSatisfied } = await resolveMfaState(
-    supabase,
-    ctx.organizationId,
-    ctx.role,
-  );
-  const { data: modRows, error: modErr } = await supabase
-    .from('organization_modules')
-    .select('module_id')
-    .eq('organization_id', ctx.organizationId)
-    .eq('enabled', true);
-  if (modErr) {
-    // Fail OPEN for core, CLOSED for optional: an empty set still lets core
-    // modules through (assertModuleEnabled checks the registry tier), while
-    // optional/premium are denied. Log so a silent empty set is observable.
-    console.error('[withContext] organization_modules query failed:', modErr);
-  }
-  const enabledModules = new Set(
-    ((modRows ?? []) as Array<{ module_id: string }>).map((r) => r.module_id as ModuleId),
-  );
+  // PARALLELIZE: the MFA-state resolution and the enabled-modules read are
+  // independent. Run them concurrently instead of sequentially. The modules
+  // read goes through the request-cached `getModulesForRequest` so the
+  // dashboard layout and `withContext` share ONE `organization_modules`
+  // round-trip per render (it also absorbs/logs query errors, returning an
+  // empty set = core-only nav, never a wider entitlement than the org has).
+  const [{ mfaRequired, mfaSatisfied }, enabledModules] = await Promise.all([
+    resolveMfaState(supabase, ctx.organizationId, ctx.role),
+    getModulesForRequest(ctx.organizationId),
+  ]);
+  logContextTiming('withContext', startMs);
   return {
     organizationId: ctx.organizationId,
     userId: ctx.userId,

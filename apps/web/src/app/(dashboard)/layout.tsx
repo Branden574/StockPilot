@@ -9,6 +9,7 @@ import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
 import { requireOrgContext } from '@/lib/auth/session';
 import {
   getMfaFactorsForRequest,
+  getModulesForRequest,
   getOrgRowForRequest,
   getWarehousesForRequest,
 } from '@/lib/dashboard/request-cache';
@@ -56,7 +57,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     membershipsRes,
     unreadRes,
     warehousesList,
-    modulesRes,
+    enabledModuleSet,
   ] = await Promise.all([
     getWarehouseAccess(),
     getActiveWarehouseFilter(),
@@ -74,11 +75,11 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       .eq('organization_id', ctx.organizationId)
       .is('read_at', null),
     getWarehousesForRequest(ctx.organizationId),
-    supabase
-      .from('organization_modules')
-      .select('module_id')
-      .eq('organization_id', ctx.organizationId)
-      .eq('enabled', true),
+    // Request-cached: shares ONE organization_modules round-trip with
+    // withContext() in the same render. The helper logs + fails closed
+    // (empty set = core-only nav) on a query error, same as the prior
+    // inline query did.
+    getModulesForRequest(ctx.organizationId),
   ]);
   const initialUnreadNotifications = unreadRes.count ?? 0;
 
@@ -87,15 +88,12 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // boundary. Core modules are always treated as enabled by the resolver
   // regardless of this list, so a grandfathered org with no rows still gets
   // the full core nav.
-  // Fail CLOSED: on a query error we get `[]` → core-only nav (optional
-  // modules hidden), never a fuller nav than the org is entitled to. Log so a
-  // real outage isn't invisible (mirrors resolveMfaState / resolveApiEnabledModules).
-  if (modulesRes.error) {
-    console.error('[dashboard layout] organization_modules query failed:', modulesRes.error);
-  }
-  const enabledModules = ((modulesRes.data ?? []) as Array<{ module_id: string }>).map(
-    (r) => r.module_id,
-  );
+  //
+  // Fail CLOSED on a query error: `getModulesForRequest` logs the failure and
+  // returns an empty set → core-only nav (optional modules hidden), never a
+  // fuller nav than the org is entitled to (mirrors resolveMfaState /
+  // resolveApiEnabledModules).
+  const enabledModules = Array.from(enabledModuleSet);
 
   const memberships = (membershipsRes.data ?? [])
     .map((row) => {
