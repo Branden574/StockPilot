@@ -28,6 +28,15 @@ export interface OrgRow {
   mfa_policy: 'optional' | 'admins_required' | 'all_required' | null;
   logo_url: string | null;
   timezone: string | null;
+  /**
+   * Per-org sidebar customization (NavOverrides v1) + dashboard widget layout
+   * (DashboardLayout v1), added by migration 0158. Typed `unknown` here so the
+   * pure `@stockpilot/core` apply functions remain the single source of truth
+   * for validation — both fail CLOSED on null/garbage. Reading these off the
+   * already-cached org row costs zero extra round-trips (preserves load-perf).
+   */
+  nav_overrides: unknown;
+  dashboard_layout: unknown;
 }
 
 export const getOrgRowForRequest = cache(
@@ -35,7 +44,7 @@ export const getOrgRowForRequest = cache(
     const supabase = await createClient();
     const { data } = await supabase
       .from('organizations')
-      .select('terminology, mfa_policy, logo_url, timezone')
+      .select('terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout')
       .eq('id', organizationId)
       .maybeSingle();
     return (data as OrgRow | null) ?? null;
