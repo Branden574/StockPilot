@@ -73,6 +73,51 @@ export function isSnakeCaseKey(key: unknown): key is string {
 }
 
 // ---------------------------------------------------------------------------
+// Reserved custom_fields keys (the single source of truth)
+// ---------------------------------------------------------------------------
+
+/**
+ * custom_fields keys OWNED by the item form / detail / import code via
+ * purpose-built, hardcoded inputs. A per-org custom field definition may NEVER
+ * claim one of these: if it could, the registry-driven generic input would
+ * render ALONGSIDE the dedicated input (e.g. the Grade <Select>), and at submit
+ * the two inputs would fight over the same jsonb key — silently overwriting or
+ * dropping a value depending on which is non-empty.
+ *
+ * This is the SINGLE shared source of truth. The server action's zod refine,
+ * the CustomFieldsService backstop, the item form, item detail, and the
+ * settings editor all import it so a future hardcoded key can't drift out of
+ * sync with the validation gate.
+ *
+ *  - book_rack_number / book_rack_row  -> book rack inputs
+ *  - rack_number / rack_row            -> non-book rack inputs + sized variants
+ *  - book_crate_color / book_crate_number -> book crate inputs
+ *  - book_grade                        -> book grade <Select>
+ *  - size                              -> sized-variant bulk create (per row)
+ *  - author                            -> book author input
+ *  - isbn / isbn13 / isbn10            -> legacy ISBN fallbacks read by detail
+ */
+export const RESERVED_CUSTOM_FIELD_KEYS: ReadonlySet<string> = new Set<string>([
+  'book_rack_number',
+  'book_rack_row',
+  'rack_number',
+  'rack_row',
+  'book_crate_color',
+  'book_crate_number',
+  'book_grade',
+  'size',
+  'author',
+  'isbn',
+  'isbn13',
+  'isbn10',
+]);
+
+/** True if `key` is reserved by hardcoded item form/detail behavior. */
+export function isReservedCustomFieldKey(key: unknown): boolean {
+  return typeof key === 'string' && RESERVED_CUSTOM_FIELD_KEYS.has(key);
+}
+
+// ---------------------------------------------------------------------------
 // validateCustomFieldValue — pure, authoritative per-value validator
 // ---------------------------------------------------------------------------
 

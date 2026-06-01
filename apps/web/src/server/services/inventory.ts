@@ -15,7 +15,7 @@ import type {
   TransferStockInput,
   UpdateItemInput,
 } from '@stockpilot/core';
-import { validateCustomFields } from '@stockpilot/core';
+import { RESERVED_CUSTOM_FIELD_KEYS, validateCustomFields } from '@stockpilot/core';
 
 import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 import { audit } from './audit';
@@ -938,6 +938,12 @@ export class InventoryService {
     /** Structured rack stamp written to every variant's custom_fields.rack_number/rack_row. */
     rackNumber?: string | null;
     rackRow?: string | null;
+    /**
+     * Per-org custom field values applied to EVERY created variant. Reserved
+     * keys (size, rack_number, rack_row, ...) are stripped — the variant
+     * builder owns those.
+     */
+    customFields?: Record<string, unknown> | null;
     variants: Array<{
       size: 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL' | 'XXXXXL';
       quantity: number;
@@ -951,6 +957,22 @@ export class InventoryService {
       );
     }
     await assertPlanLimit(this.ctx, 'items', input.variants.length);
+
+    // Per-org custom fields shared by every variant. Strip any reserved key the
+    // variant builder owns (size/rack_*) so a stray payload can't clobber them,
+    // then run the authoritative server-side gate so REQUIRED custom fields are
+    // enforced on this write path too (parity with create/update). Validation
+    // runs once against the merged-with-size shape so a required `size`-like
+    // definition would also be checked — but `size` is reserved and never
+    // definable, so in practice only the org's own keys are validated.
+    const sharedCustomFields: Record<string, unknown> = {};
+    if (input.customFields) {
+      for (const [k, v] of Object.entries(input.customFields)) {
+        if (RESERVED_CUSTOM_FIELD_KEYS.has(k)) continue;
+        sharedCustomFields[k] = v;
+      }
+    }
+    await this.assertCustomFieldsValid(sharedCustomFields);
 
     // Resolve warehouse: warehouse-scoped users get their assignment
     // forced; managers must specify a warehouse they can write to.
@@ -996,7 +1018,9 @@ export class InventoryService {
     const rackRow =
       input.rackRow?.trim().toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
     const variantCustomFields = (size: string) => {
-      const cf: Record<string, unknown> = { size };
+      // Org custom fields first; the reserved variant keys (size/rack_*) are
+      // applied last so they always win even if a stray key slipped through.
+      const cf: Record<string, unknown> = { ...sharedCustomFields, size };
       if (rackNum) cf.rack_number = rackNum;
       if (rackRow) cf.rack_row = rackRow;
       return cf;

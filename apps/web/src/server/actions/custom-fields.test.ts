@@ -212,6 +212,36 @@ describe('createCustomFieldAction', () => {
     expect(insertSpy).not.toHaveBeenCalled();
   });
 
+  // Every key OWNED by hardcoded item form/detail behavior must be rejected so
+  // a definition can never collide with (and silently overwrite) a dedicated
+  // input's jsonb key. These are the keys missed by the original reserved set.
+  it.each([
+    'book_rack_number',
+    'book_rack_row',
+    'rack_number',
+    'rack_row',
+    'book_crate_color',
+    'book_crate_number',
+    'book_grade',
+    'author',
+    'isbn',
+    'isbn13',
+    'isbn10',
+  ])('rejects reserved field_key %s as validation_error, no write', async (fieldKey) => {
+    const { stub, insertSpy } = stubWithRow(defRow());
+    stubHolder.stub = stub;
+
+    const result = await createCustomFieldAction({
+      fieldKey,
+      label: 'Should be rejected',
+      fieldType: 'text',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    expect(insertSpy).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it('persists a valid definition, audits, and round-trips the row', async () => {
     const row = defRow();
     const { stub, insertSpy } = stubWithRow(row);
