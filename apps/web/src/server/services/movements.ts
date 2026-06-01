@@ -254,21 +254,30 @@ export async function getThirtyDayMetrics(
 }
 
 export interface DashboardHistory {
-  /** Daily active SKU count, length 30, oldest → newest. Derived from
-      inventory_items.created_at. Today (index 29) matches summary.itemCount. */
+  /** Number of days the series spans (length of each series array). */
+  rangeDays: number;
+  /** Daily active SKU count, length `rangeDays`, oldest → newest. Derived
+      from inventory_items.created_at. The last index matches summary.itemCount. */
   itemCountSeries: number[];
-  /** Daily approximate inventory value, length 30, oldest → newest.
-      Computed by walking 30d of stock_movements backward from today's
+  /** Daily approximate inventory value, length `rangeDays`, oldest → newest.
+      Computed by walking the window of stock_movements backward from today's
       value using each item's current unit_cost. Approximate because
       cost may have changed historically; cheap enough for a dashboard
-      tile. Today (index 29) matches summary.inventoryValue. */
+      tile. The last index matches summary.inventoryValue. */
   inventoryValueSeries: number[];
   /** Daily count of items where qty <= reorder_point (and reorder_point > 0),
-      length 30, oldest → newest. Reverse-walks movements to reconstruct
-      historical quantities. Today (index 29) matches summary.lowStockCount
-      + summary.outOfStockCount. */
+      length `rangeDays`, oldest → newest. Reverse-walks movements to
+      reconstruct historical quantities. The last index matches
+      summary.lowStockCount + summary.outOfStockCount. */
   lowOutSeries: number[];
 }
+
+/** Supported history windows. 365d is intentionally NOT offered: the
+ *  reverse-walk pulls every movement in the window into Node memory, which
+ *  is fine at 30/90d but becomes expensive (and increasingly inaccurate as
+ *  unit_cost drift compounds) over a year. A finance-grade yearly series
+ *  needs a daily snapshot table — deferred to a later phase. */
+export type HistoryRangeDays = 30 | 90;
 
 /**
  * Real 30-day history series for the dashboard StatCards. Replaces the
@@ -288,12 +297,19 @@ export interface DashboardHistory {
  * table; this is a pragmatic dashboard-quality approximation.
  */
 export async function getDashboardHistory(
-  options: { warehouseId?: string | null; ctx?: ServiceContext } = {},
+  options: {
+    warehouseId?: string | null;
+    ctx?: ServiceContext;
+    /** Window length in days. Defaults to 30. See HistoryRangeDays for why
+     *  365 is not supported. */
+    rangeDays?: HistoryRangeDays;
+  } = {},
 ): Promise<DashboardHistory> {
   const ctx = options.ctx ?? (await withContext());
+  const rangeDays: number = options.rangeDays ?? 30;
   const dayMs = 24 * 60 * 60 * 1000;
   const now = Date.now();
-  const startMs = now - 30 * dayMs;
+  const startMs = now - rangeDays * dayMs;
 
   // 1 & 2. Items in scope + 30-day movements. These are independent —
   // run them concurrently to halve the wall-clock for this function.
@@ -355,24 +371,25 @@ export async function getDashboardHistory(
 
   // Bucket movements by day so we can replay them in reverse order.
   type Move = { item_id: string; quantity_change: number };
-  const movesByDay: Move[][] = Array.from({ length: 30 }, () => []);
+  const lastIdx = rangeDays - 1;
+  const movesByDay: Move[][] = Array.from({ length: rangeDays }, () => []);
   for (const r of (movData ?? []) as unknown as Array<{
     item_id: string;
     quantity_change: number;
     created_at: string;
   }>) {
     const t = new Date(r.created_at).getTime();
-    const dayIdx = Math.min(29, Math.max(0, Math.floor((t - startMs) / dayMs)));
+    const dayIdx = Math.min(lastIdx, Math.max(0, Math.floor((t - startMs) / dayMs)));
     movesByDay[dayIdx]!.push({
       item_id: r.item_id,
       quantity_change: Number(r.quantity_change) || 0,
     });
   }
 
-  // 3. Reverse-walk: index 29 = today (current state), then undo each day's
+  // 3. Reverse-walk: last index = today (current state), then undo each day's
   //    movements to recover the previous day's end-of-day state.
-  const inventoryValueSeries = new Array<number>(30).fill(0);
-  const lowOutSeries = new Array<number>(30).fill(0);
+  const inventoryValueSeries = new Array<number>(rangeDays).fill(0);
+  const lowOutSeries = new Array<number>(rangeDays).fill(0);
   let value = valueToday;
 
   const countLowOut = () => {
@@ -385,7 +402,7 @@ export async function getDashboardHistory(
     return n;
   };
 
-  for (let d = 29; d >= 0; d--) {
+  for (let d = lastIdx; d >= 0; d--) {
     inventoryValueSeries[d] = value;
     lowOutSeries[d] = countLowOut();
     // Undo this day's movements to step back to (d-1)'s end-of-day state.
@@ -402,15 +419,15 @@ export async function getDashboardHistory(
   // 4. Item-count series from created_at. itemCountSeries[d] = items where
   //    created_at <= end of day d. Sort once, single forward sweep.
   const sorted = [...createdAtTimes].sort((a, b) => a - b);
-  const itemCountSeries = new Array<number>(30).fill(0);
+  const itemCountSeries = new Array<number>(rangeDays).fill(0);
   let cursor = 0;
-  for (let d = 0; d < 30; d++) {
+  for (let d = 0; d < rangeDays; d++) {
     const dayEnd = startMs + (d + 1) * dayMs;
     while (cursor < sorted.length && sorted[cursor]! <= dayEnd) cursor++;
     itemCountSeries[d] = cursor;
   }
 
-  return { itemCountSeries, inventoryValueSeries, lowOutSeries };
+  return { rangeDays, itemCountSeries, inventoryValueSeries, lowOutSeries };
 }
 
 export interface ItemTrend {
