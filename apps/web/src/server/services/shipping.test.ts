@@ -823,6 +823,113 @@ describe('ShippingService.reconcilePurchasing (stuck-row recovery)', () => {
   });
 });
 
+describe('ShippingService.reapStuckShipment (service-role reaper)', () => {
+  const stuckRow = {
+    id: 'ship-1',
+    organization_id: 'org-test',
+    order_request_id: 'order-1',
+    status: 'purchasing' as const,
+    easypost_shipment_id: 'shp_easypost_1',
+    currency: 'USD',
+    purchased_by: 'user-test',
+  };
+
+  it('finalizes a stale purchasing row to purchased when EasyPost shows the label', async () => {
+    const stub = makeSupabaseStub({
+      'org_connections.select': {
+        data: [{ id: 'conn-1', secret_id: 'secret-1' }],
+        error: null,
+      },
+      'carrier_shipments.update': { data: [{ id: 'ship-1', status: 'purchased' }], error: null },
+    });
+    retrieveShipmentSpy.mockResolvedValueOnce({
+      id: 'shp_easypost_1',
+      tracking_code: '1Z999',
+      selected_rate: { id: 'rate_1', carrier: 'USPS', service: 'Priority', rate: '8.45', currency: 'USD' },
+      postage_label: { label_url: 'https://easypost/label.pdf' },
+      tracker: { public_url: 'https://track/1Z999' },
+    });
+
+    const outcome = await ShippingService.reapStuckShipment(
+      stub.client as never,
+      stuckRow as never,
+    );
+
+    expect(outcome).toBe('purchased');
+    expect(retrieveShipmentSpy).toHaveBeenCalledWith('shp_easypost_1');
+    // NEVER re-buys — only copies the already-charged label.
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+    const updatePayload = stub.chainArgsAll.get('carrier_shipments.update')?.[0]?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(updatePayload).toMatchObject({
+      status: 'purchased',
+      label_url: 'https://easypost/label.pdf',
+      tracking_code: '1Z999',
+      rate_cents: 845,
+    });
+  });
+
+  it('resets a stale purchasing row to draft when EasyPost shows NO label', async () => {
+    const stub = makeSupabaseStub({
+      'org_connections.select': {
+        data: [{ id: 'conn-1', secret_id: 'secret-1' }],
+        error: null,
+      },
+      'carrier_shipments.update': { data: [{ id: 'ship-1', status: 'draft' }], error: null },
+    });
+    retrieveShipmentSpy.mockResolvedValueOnce({ id: 'shp_easypost_1' }); // no label
+
+    const outcome = await ShippingService.reapStuckShipment(
+      stub.client as never,
+      stuckRow as never,
+    );
+
+    expect(outcome).toBe('draft');
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+    const updatePayload = stub.chainArgsAll.get('carrier_shipments.update')?.[0]?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(updatePayload).toMatchObject({ status: 'draft', purchased_by: null });
+  });
+
+  it('skips (leaves purchasing) when the org has no active EasyPost connection', async () => {
+    const stub = makeSupabaseStub({
+      'org_connections.select': { data: [], error: null },
+    });
+
+    const outcome = await ShippingService.reapStuckShipment(
+      stub.client as never,
+      stuckRow as never,
+    );
+
+    // Can't confirm whether the carrier charged -> must NOT reset to draft.
+    expect(outcome).toBe('skipped');
+    expect(retrieveShipmentSpy).not.toHaveBeenCalled();
+    expect(stub.chainArgsAll.get('carrier_shipments.update')).toBeUndefined();
+  });
+
+  it('skips (leaves purchasing) when the row has no easypost_shipment_id', async () => {
+    const stub = makeSupabaseStub({
+      'org_connections.select': {
+        data: [{ id: 'conn-1', secret_id: 'secret-1' }],
+        error: null,
+      },
+    });
+
+    const outcome = await ShippingService.reapStuckShipment(
+      stub.client as never,
+      { ...stuckRow, easypost_shipment_id: null } as never,
+    );
+
+    expect(outcome).toBe('skipped');
+    expect(retrieveShipmentSpy).not.toHaveBeenCalled();
+    expect(stub.chainArgsAll.get('carrier_shipments.update')).toBeUndefined();
+  });
+});
+
 describe('ShippingService.getShipment', () => {
   it('returns null for a draft-only order (no phantom unpurchased shipment)', async () => {
     // The query filters with .in('status', [non-draft statuses]); a draft-only
