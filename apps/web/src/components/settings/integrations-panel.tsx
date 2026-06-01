@@ -303,7 +303,8 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
                 inputMode="numeric"
               />
               <p className="text-muted-foreground text-xs">
-                Closed returns post as CreditMemos against this account.
+                Closed returns post a balanced journal entry crediting this
+                account (the offsetting debit uses the inventory-asset account).
               </p>
             </div>
             <Button

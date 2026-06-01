@@ -30,9 +30,9 @@ const accountMappingSchema = z.object({
   billExpense: z.string().max(64).trim(),
   inventoryAsset: z.string().max(64).trim(),
   valuationOffset: z.string().max(64).trim(),
-  // Account a closed return's CreditMemo is booked against (Phase B). Optional
-  // with a default so saving a mapping from an older form (pre-returnCredit)
-  // still parses and just leaves it blank.
+  // GL account a closed return's value is credited to (Phase B); the balancing
+  // debit is the inventoryAsset account. Optional with a default so saving a
+  // mapping from an older form (pre-returnCredit) still parses and leaves it blank.
   returnCredit: z.string().max(64).trim().default(''),
 });
 

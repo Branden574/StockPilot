@@ -66,7 +66,7 @@ export async function POST(
       inventoryAsset: body.inventoryAsset,
       valuationOffset: body.valuationOffset,
       // Optional on this surface; the web Integrations form is the primary
-      // editor. Blank leaves the CreditMemo export gracefully unconfigured.
+      // editor. Blank leaves the return JournalEntry export gracefully unconfigured.
       returnCredit: nonEmptyString(body.returnCredit) ? body.returnCredit : '',
     });
     return NextResponse.json({ ok: true });
