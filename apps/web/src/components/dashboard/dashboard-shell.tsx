@@ -6,6 +6,7 @@ import { CommandPalette } from '@/components/dashboard/command-palette';
 import { EdgeSwipeOpener } from '@/components/dashboard/edge-swipe-opener';
 import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
 import { NavProgressBar } from '@/components/dashboard/nav-progress-bar';
+import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -35,6 +36,12 @@ interface DashboardShellProps {
    * CLOSED to the derived nav on null/garbage).
    */
   navOverrides: unknown;
+  /**
+   * Raw per-org `order_status_config` jsonb from the organizations row.
+   * Untrusted — typed `unknown` and resolved by `OrderStatusConfigProvider`
+   * (fails CLOSED to the canonical order status defaults on null/garbage).
+   */
+  orderStatusConfig: unknown;
   warehouseFilter?: {
     warehouses: Array<{ id: string; name: string }>;
     activeId: string | null;
@@ -58,6 +65,7 @@ export function DashboardShell({
   role,
   enabledModules,
   navOverrides,
+  orderStatusConfig,
   warehouseFilter,
 }: DashboardShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
@@ -160,7 +168,11 @@ export function DashboardShell({
           tabIndex={-1}
           className="bg-card flex-1 overflow-y-auto focus:outline-none"
         >
-          <div className="min-h-full">{children}</div>
+          <div className="min-h-full">
+            <OrderStatusConfigProvider config={orderStatusConfig}>
+              {children}
+            </OrderStatusConfigProvider>
+          </div>
         </main>
       </div>
 
