@@ -22,6 +22,9 @@ import { SECTION_ORDER } from '../modules/resolve';
 // Per-org custom field definitions for items (registry types + pure validator).
 export * from './custom-fields';
 
+// Per-org order status presentation overrides (label/color/sortOrder resolver).
+export * from './order-status';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
