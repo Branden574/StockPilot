@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
-import { suggestReorderPoint, type ReorderSuggestion } from './forecasting';
+import { computeReorderSuggestion, getBulkItemVelocities } from './forecasting';
 import { PurchaseOrdersService } from './purchase-orders';
 
 /** Per-org planning parameters, stored in organization_modules.settings. */
@@ -43,9 +43,10 @@ function posNumber(value: unknown, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-// Upper bound on items scanned per planning run — keeps the per-item velocity
-// fan-out bounded for large catalogs (mirrors the PO reorder-forecast cap).
-const MAX_ITEMS = 500;
+// Upper bound on items scanned per planning run. The velocity calc is bulk
+// (one stock_movements query for the whole candidate set), so this bounds row
+// COUNT, not query volume — it mirrors the PO reorder-forecast cap.
+const MAX_ITEMS = 5_000;
 
 /**
  * PlanningService — velocity-based demand planning. Reads per-org planning
@@ -90,6 +91,12 @@ export class PlanningService {
    */
   async getReorderSuggestions(_params: { warehouseId?: string } = {}): Promise<PlanningSuggestion[]> {
     assertModuleEnabled(this.ctx, 'planning');
+    // Defense-in-depth on the registry's dependsOn: ['inventory','purchase_orders']
+    // contract. dependsOn is normally enforced at toggle/pack-apply time, but a
+    // direct organization_modules write or a partial cascade could leave
+    // planning=true while purchase_orders=false. Re-assert at the boundary so we
+    // never run velocity math for a module whose dependency is off.
+    assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     const planningParams = await this.readParams();
@@ -99,7 +106,7 @@ export class PlanningService {
     // signature stable without scoping the velocity calc yet.
     const { data: rows, error } = await this.ctx.supabase
       .from('inventory_items')
-      .select('id, sku, name, quantity_on_hand, reorder_point, unit_cost, supplier_id')
+      .select('id, sku, name, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, supplier_id, created_at')
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
       .eq('status', 'active')
@@ -113,8 +120,10 @@ export class PlanningService {
       name: string | null;
       quantity_on_hand: number | null;
       reorder_point: number | null;
+      reorder_quantity: number | null;
       unit_cost: number | null;
       supplier_id: string | null;
+      created_at: string;
     };
     const items = (rows ?? []) as Row[];
     if (items.length === 0) return [];
@@ -133,21 +142,29 @@ export class PlanningService {
       }
     }
 
-    const forecasts = await Promise.all(
-      items.map((item) =>
-        suggestReorderPoint(this.ctx.supabase, this.ctx.organizationId, item.id, {
-          leadTimeDays: planningParams.leadTimeDays,
-          safetyMultiplier: planningParams.safetyMultiplier,
-          windowDays: planningParams.velocityWindowDays,
-        }),
-      ),
+    // ONE stock_movements query for the whole candidate set — no per-item DB
+    // fan-out. The reorder formula is then computed in memory off each item's
+    // already-fetched reorder_point/quantity (no redundant second item read).
+    const velocities = await getBulkItemVelocities(
+      this.ctx.supabase,
+      this.ctx.organizationId,
+      items,
+      planningParams.velocityWindowDays,
     );
 
-    const byItem = new Map<string, Row>(items.map((i) => [i.id, i]));
-    const suggestions: PlanningSuggestion[] = forecasts.map((f: ReorderSuggestion) => {
-      const item = byItem.get(f.itemId)!;
+    const suggestions: PlanningSuggestion[] = items.map((item) => {
+      const velocity = velocities.get(item.id)!;
+      const f = computeReorderSuggestion(
+        velocity,
+        Number(item.reorder_point ?? 0),
+        Number(item.reorder_quantity ?? 0),
+        {
+          leadTimeDays: planningParams.leadTimeDays,
+          safetyMultiplier: planningParams.safetyMultiplier,
+        },
+      );
       return {
-        itemId: f.itemId,
+        itemId: item.id,
         sku: item.sku ?? null,
         name: item.name ?? '',
         quantityOnHand: f.velocity.quantityOnHand,
@@ -192,6 +209,10 @@ export class PlanningService {
     _params: { itemIds?: string[] } = {},
   ): Promise<Awaited<ReturnType<PurchaseOrdersService['createDraftsFromReorderForecast']>>> {
     assertModuleEnabled(this.ctx, 'planning');
+    // Mirror getReorderSuggestions: assert the dependsOn'd purchase_orders
+    // module here too. createDraftsFromReorderForecast re-gates internally, but
+    // asserting at the planning boundary keeps the dependency contract explicit.
+    assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     const poService = new PurchaseOrdersService(this.ctx);
