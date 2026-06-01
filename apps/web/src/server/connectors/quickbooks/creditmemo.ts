@@ -3,69 +3,94 @@ import 'server-only';
 import { round2 } from './bill';
 
 /**
- * return → QuickBooks Online CreditMemo mapping. ONE-WAY EXPORT ONLY: this
- * helper only builds the QBO CreditMemo body — nothing here ever writes QBO
- * data back into StockPilot, and (unlike the Bill's Vendor) a return needs no
- * customer resolution: a CreditMemo can post against a generic/default customer.
+ * return → QuickBooks Online JournalEntry mapping. ONE-WAY EXPORT ONLY: this
+ * helper only builds the QBO JournalEntry body — nothing here ever writes QBO
+ * data back into StockPilot.
  *
- * CreditMemo is the QBO entity for a credit/return: it offsets a prior sale.
- * v1 collapses every return line into a SINGLE account-based credit line (the
- * aggregate credited value booked against the configured `returnCredit`
- * account), mirroring buildBillFromReceipt's single-line model — per-line item
- * mapping is a deliberate future extension, not a v1 requirement. Pure function
- * (no I/O) so the body shape is unit-testable without the network.
+ * WHY A JOURNALENTRY (not a CreditMemo): a closed return books the returned
+ * inventory's VALUE against GL accounts — there is no customer-facing sales
+ * credit involved. QBO's CreditMemo is a SALES transaction that REQUIRES a
+ * CustomerRef and item-based (SalesItemLineDetail/ItemRef) lines, neither of
+ * which a return-value posting has. The correct account-based entity is a
+ * balanced JournalEntry, which is exactly what the existing inventory-valuation
+ * export uses (see valuation.ts) — so we mirror that proven shape rather than
+ * the Bill's account-based-expense shape (which is only valid on purchase docs).
+ *
+ * v1 collapses every return line into ONE balanced debit/credit pair (the
+ * aggregate credited value) — per-line item mapping is a deliberate future
+ * extension, not a v1 requirement. Pure function (no I/O) so the body shape is
+ * unit-testable without the network.
  */
 
-/** One return line distilled to the two fields the CreditMemo amount needs. */
-export interface CreditMemoLine {
+/** One return line distilled to the two fields the credit amount needs. */
+export interface ReturnCreditLine {
   quantity: number;
   unitCost: number;
 }
 
-export interface BuildCreditMemoArgs {
+export interface BuildReturnCreditArgs {
   /**
-   * The QBO Customer to credit. Optional: when a return has no resolvable
-   * customer the caller may omit it and QBO books the CreditMemo against the
-   * company's default — the connector passes a configured generic customer id
-   * when present, else leaves CustomerRef off entirely.
+   * The account CREDITED by the return (the configured `returnCredit` account):
+   * the GL account that offsets the returned inventory's value.
    */
-  customerId?: string;
   returnCreditAccountId: string;
-  lines: CreditMemoLine[];
+  /**
+   * The account DEBITED to balance the entry (the configured `inventoryAsset`
+   * account): the returned goods re-enter inventory asset value. A JournalEntry
+   * MUST balance (Σ debits === Σ credits), so a second account is required.
+   */
+  inventoryAssetAccountId: string;
+  lines: ReturnCreditLine[];
 }
 
-export interface QboCreditMemoBody {
-  CustomerRef?: { value: string };
-  Line: Array<{
-    DetailType: 'AccountBasedExpenseLineDetail';
-    Amount: number;
-    AccountBasedExpenseLineDetail: { AccountRef: { value: string } };
-  }>;
+/** One QBO JournalEntry line (mirrors valuation.ts). */
+interface JournalEntryLine {
+  DetailType: 'JournalEntryLineDetail';
+  Amount: number;
+  JournalEntryLineDetail: {
+    PostingType: 'Debit' | 'Credit';
+    AccountRef: { value: string };
+  };
+}
+
+export interface ReturnCreditJournalEntryBody {
+  /** Period-end posting date as YYYY-MM-DD. */
+  TxnDate: string;
+  Line: JournalEntryLine[];
 }
 
 /**
- * Build the QBO CreditMemo request body from a closed return's lines.
+ * Build a BALANCED QBO JournalEntry crediting a closed return's value.
  *
  * Amount = Σ (quantity × unitCost), rounded to 2-dp (the same round2 the Bill
- * builder uses, so a sub-cent total never posts a $0.00 line QBO rejects). The
- * credit is booked against the configured `returnCredit` account. CustomerRef
- * is included only when a customer id is supplied.
+ * and valuation builders use). The returned value is CREDITED to the configured
+ * `returnCredit` account and DEBITED to the configured `inventoryAsset` account
+ * so Σ debits === Σ credits — QBO rejects an unbalanced JournalEntry. No
+ * CustomerRef is needed (this is an account-only posting, not a sales credit).
  */
-export function buildCreditMemoFromReturn(args: BuildCreditMemoArgs): QboCreditMemoBody {
+export function buildReturnCreditJournalEntry(
+  args: BuildReturnCreditArgs & { txnDate: string },
+): ReturnCreditJournalEntryBody {
   const amount = round2(args.lines.reduce((sum, l) => sum + l.quantity * l.unitCost, 0));
-  const body: QboCreditMemoBody = {
+  return {
+    TxnDate: args.txnDate,
     Line: [
       {
-        DetailType: 'AccountBasedExpenseLineDetail',
+        DetailType: 'JournalEntryLineDetail',
         Amount: amount,
-        AccountBasedExpenseLineDetail: {
+        JournalEntryLineDetail: {
+          PostingType: 'Debit',
+          AccountRef: { value: args.inventoryAssetAccountId },
+        },
+      },
+      {
+        DetailType: 'JournalEntryLineDetail',
+        Amount: amount,
+        JournalEntryLineDetail: {
+          PostingType: 'Credit',
           AccountRef: { value: args.returnCreditAccountId },
         },
       },
     ],
   };
-  if (args.customerId) {
-    body.CustomerRef = { value: args.customerId };
-  }
-  return body;
 }

@@ -13,7 +13,7 @@ import { env } from '@/lib/env';
 
 import { buildBillFromReceipt, resolveVendor, round2, type BillLine } from './bill';
 import { QboClient, type QboEnv } from './client';
-import { buildCreditMemoFromReturn, type CreditMemoLine } from './creditmemo';
+import { buildReturnCreditJournalEntry, type ReturnCreditLine } from './creditmemo';
 import { refreshTokens } from './oauth';
 
 /** QBO settings persisted on the connection (see ConnectionsService). */
@@ -22,9 +22,10 @@ interface QboSettings {
   accountIds?: {
     billExpense?: string;
     defaultVendorId?: string;
+    /** GL account credited by a closed return's value. */
     returnCredit?: string;
-    /** Optional generic customer to credit returns against. */
-    defaultCustomerId?: string;
+    /** GL account debited to balance the return JournalEntry (returned goods re-enter asset value). */
+    inventoryAsset?: string;
   };
 }
 
@@ -40,8 +41,10 @@ function isRetryableQboError(e: unknown): boolean {
  * QuickBooks Online connector. ONE-WAY EXPORT ONLY (push mode):
  *  - on a posted receipt it creates a QBO Bill against the configured expense
  *    account;
- *  - on a closed return it creates a QBO CreditMemo against the configured
- *    returnCredit account.
+ *  - on a closed return it creates a BALANCED QBO JournalEntry crediting the
+ *    configured returnCredit account and debiting the inventoryAsset account
+ *    (a return books the returned inventory's VALUE against GL accounts — not a
+ *    customer-facing sales credit, so JournalEntry, not CreditMemo, is correct).
  * It never writes QBO data back into StockPilot and never mutates
  * items/books/receiving/returns.
  *
@@ -220,12 +223,19 @@ async function handleReceiptPosted(
 }
 
 /**
- * return.closed → QBO CreditMemo. The payload carries NO line items (like
+ * return.closed → QBO JournalEntry. The payload carries NO line items (like
  * receipt.posted), so rehydrate the return + its return_lines (joined to the
  * source order line for unit_cost_at_request) by aggregate id, then POST a
- * single-line account-based CreditMemo against the configured `returnCredit`
- * account. Idempotent on the `return-<id>` requestid; the return→CreditMemo.Id
- * link is persisted via deps.putMapping(entity_type='return').
+ * BALANCED two-line JournalEntry: CREDIT the configured `returnCredit` account
+ * and DEBIT the configured `inventoryAsset` account for the returned value.
+ * Idempotent on the `return-<id>` requestid; the return→JournalEntry.Id link is
+ * persisted via deps.putMapping(entity_type='return').
+ *
+ * WHY JournalEntry (not CreditMemo): a return credits the returned inventory's
+ * VALUE against GL accounts with no customer involved. QBO's CreditMemo is a
+ * SALES transaction requiring a CustomerRef + item-based lines — neither of
+ * which a return-value posting has — so a balanced account-based JournalEntry
+ * (the same entity valuation.ts uses) is the correct, QBO-valid mapping.
  *
  * FAIL-CLOSED reads mirror the Bill path: a transient DB error THROWS so the
  * drainer records a retryable row + backoff; we only ACK (ok:true) when the read
@@ -239,13 +249,19 @@ async function handleReturnClosed(
 ): Promise<PushResult> {
   const settings = conn.settings as QboSettings;
 
-  // GRACEFUL CONFIG GAP: the admin must have set the returnCredit account in
-  // the Integrations panel. Without it we can't book the CreditMemo — fail
-  // non-retryably (retrying won't fix a missing config), mirroring the Bill
+  // GRACEFUL CONFIG GAP: a JournalEntry MUST balance, so the admin must have set
+  // BOTH the returnCredit account (credited) and the inventoryAsset account
+  // (debited) in the Integrations panel. Both are existing, settable fields on
+  // the account-mapping form. Without either we can't book a balanced entry —
+  // fail non-retryably (retrying won't fix a missing config), mirroring the Bill
   // expense-account gap.
   const returnCreditAccountId = settings.accountIds?.returnCredit;
   if (!returnCreditAccountId) {
     return { ok: false, retryable: false, error: 'returnCredit account not configured' };
+  }
+  const inventoryAssetAccountId = settings.accountIds?.inventoryAsset;
+  if (!inventoryAssetAccountId) {
+    return { ok: false, retryable: false, error: 'inventoryAsset account not configured' };
   }
 
   const admin = deps.admin as { from: (t: string) => any };
@@ -261,7 +277,7 @@ async function handleReturnClosed(
   if (retErr) throw new Error(`returns select: ${retErr.message}`);
   if (!ret) return { ok: true };
 
-  // Rehydrate the lines + each source order line's unit cost (the CreditMemo
+  // Rehydrate the lines + each source order line's unit cost (the credited
   // amount = Σ quantity × unit_cost_at_request).
   const { data: lines, error: linesErr } = await admin
     .from('return_lines')
@@ -269,7 +285,7 @@ async function handleReturnClosed(
     .eq('return_id', ret.id);
   if (linesErr) throw new Error(`return_lines select: ${linesErr.message}`);
 
-  const creditLines: CreditMemoLine[] = (
+  const creditLines: ReturnCreditLine[] = (
     (lines ?? []) as Array<{
       quantity: unknown;
       order_request_line:
@@ -288,7 +304,7 @@ async function handleReturnClosed(
   });
 
   // ZERO-AMOUNT SHORT-CIRCUIT: a return whose credited total rounds to $0.00
-  // (e.g. zero-cost lines) has nothing to book; QBO rejects a $0 CreditMemo
+  // (e.g. zero-cost lines) has nothing to book; QBO rejects a $0 JournalEntry
   // with a non-retryable 4xx. Gate on the SAME round2 the builder uses so a
   // sub-cent total is acked, not posted.
   const totalAmount = creditLines.reduce((sum, l) => sum + l.quantity * l.unitCost, 0);
@@ -298,18 +314,20 @@ async function handleReturnClosed(
   const client = new QboClient(conn.externalAccountId!, secrets, qboEnv);
 
   try {
-    const body = buildCreditMemoFromReturn({
-      // Optional generic customer; QBO books against the company default if absent.
-      customerId: settings.accountIds?.defaultCustomerId,
+    const body = buildReturnCreditJournalEntry({
       returnCreditAccountId,
+      inventoryAssetAccountId,
       lines: creditLines,
+      // Post-dated to "now" (UTC date) like the valuation JE; the close event
+      // has no business date of its own and the requestid guards a replay.
+      txnDate: new Date().toISOString().slice(0, 10),
     });
 
     const requestId = `return-${ret.id}`.slice(0, 50);
-    const created = await client.post('/creditmemo', body, requestId);
-    const externalId = (created.CreditMemo as { Id?: string } | undefined)?.Id;
+    const created = await client.post('/journalentry', body, requestId);
+    const externalId = (created.JournalEntry as { Id?: string } | undefined)?.Id;
 
-    // Persist the return→CreditMemo link so the export is traceable + a future
+    // Persist the return→JournalEntry link so the export is traceable + a future
     // pull/update path can find it. Best-effort within the success path.
     if (externalId) {
       await deps.putMapping(conn.id, conn.organizationId, 'return', ret.id, externalId);
@@ -319,7 +337,7 @@ async function handleReturnClosed(
     return {
       ok: false,
       retryable: isRetryableQboError(e),
-      error: e instanceof Error ? e.message : 'qbo credit memo failed',
+      error: e instanceof Error ? e.message : 'qbo return journal entry failed',
     };
   }
 }

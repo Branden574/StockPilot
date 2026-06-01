@@ -350,7 +350,7 @@ describe('quickbooksConnector via runDrain (integration) — Step 6', () => {
   });
 });
 
-// ── return.closed → QBO CreditMemo (Phase B) ───────────────────────────────
+// ── return.closed → QBO JournalEntry (Phase B) ─────────────────────────────
 
 const returnEvent: OutboxEvent = {
   id: 'evt-2',
@@ -365,17 +365,19 @@ const returnEvent: OutboxEvent = {
 
 const returnConn: ConnectionRef = {
   ...conn,
-  settings: { env: 'sandbox', accountIds: { returnCredit: 'acct-47' } },
+  // A return JournalEntry must balance, so BOTH the credited (returnCredit) and
+  // debited (inventoryAsset) accounts are required.
+  settings: { env: 'sandbox', accountIds: { returnCredit: 'acct-47', inventoryAsset: 'acct-12' } },
 };
 
-describe('quickbooksConnector.handleOutboxEvent — return.closed → CreditMemo', () => {
+describe('quickbooksConnector.handleOutboxEvent — return.closed → JournalEntry', () => {
   beforeEach(() => {
-    // The default postSpy returns a Bill; for the CreditMemo path return a
-    // CreditMemo so the connector can read CreditMemo.Id.
-    postSpy.mockReset().mockResolvedValue({ CreditMemo: { Id: 'qbo-cm-5' } });
+    // The default postSpy returns a Bill; for the return path return a
+    // JournalEntry so the connector can read JournalEntry.Id.
+    postSpy.mockReset().mockResolvedValue({ JournalEntry: { Id: 'qbo-je-5' } });
   });
 
-  it('posts a single CreditMemo, returns its id, and maps return→CreditMemo.Id (idempotent requestid)', async () => {
+  it('posts a single BALANCED JournalEntry (Debit inventoryAsset / Credit returnCredit, no CustomerRef), returns its id, and maps return→JournalEntry.Id (idempotent requestid)', async () => {
     const admin = makeAdmin({
       tables: {
         returns: { data: { id: 'ret-1', return_number: 'RMA-1' }, error: null },
@@ -392,25 +394,44 @@ describe('quickbooksConnector.handleOutboxEvent — return.closed → CreditMemo
 
     const res = await quickbooksConnector.handleOutboxEvent(returnEvent, returnConn, {} as any, deps);
 
-    expect(res).toEqual({ ok: true, externalId: 'qbo-cm-5' });
-    // 2*5 + 1*3 = 13
+    expect(res).toEqual({ ok: true, externalId: 'qbo-je-5' });
     expect(postSpy).toHaveBeenCalledTimes(1);
-    expect(postSpy).toHaveBeenCalledWith(
-      '/creditmemo',
-      expect.objectContaining({ Line: [expect.objectContaining({ Amount: 13 })] }),
-      'return-ret-1',
-    );
+
+    // Assert against the QBO JournalEntry CONTRACT, not the impl: posted to
+    // /journalentry as a balanced Debit/Credit pair (2*5 + 1*3 = 13) with NO
+    // CustomerRef and NO AccountBasedExpenseLineDetail (both would be 400s).
+    const [endpoint, body, requestId] = postSpy.mock.calls[0]!;
+    expect(endpoint).toBe('/journalentry');
+    expect(requestId).toBe('return-ret-1');
+    expect(body.CustomerRef).toBeUndefined();
+    const lines = body.Line as Array<{
+      DetailType: string;
+      Amount: number;
+      JournalEntryLineDetail: { PostingType: string; AccountRef: { value: string } };
+    }>;
+    expect(lines).toHaveLength(2);
+    for (const l of lines) expect(l.DetailType).toBe('JournalEntryLineDetail');
+    const debit = lines.find((l) => l.JournalEntryLineDetail.PostingType === 'Debit')!;
+    const credit = lines.find((l) => l.JournalEntryLineDetail.PostingType === 'Credit')!;
+    expect(debit.Amount).toBe(13);
+    expect(credit.Amount).toBe(13);
+    expect(debit.JournalEntryLineDetail.AccountRef.value).toBe('acct-12');
+    expect(credit.JournalEntryLineDetail.AccountRef.value).toBe('acct-47');
+
     expect(deps.putMapping).toHaveBeenCalledWith(
       'conn-1',
       'org-1',
       'return',
       'ret-1',
-      'qbo-cm-5',
+      'qbo-je-5',
     );
   });
 
   it('fails NON-retryably when returnCredit account is not configured', async () => {
-    const connNoAccount: ConnectionRef = { ...conn, settings: { env: 'sandbox', accountIds: {} } };
+    const connNoAccount: ConnectionRef = {
+      ...conn,
+      settings: { env: 'sandbox', accountIds: { inventoryAsset: 'acct-12' } },
+    };
     const res = await quickbooksConnector.handleOutboxEvent(
       returnEvent,
       connNoAccount,
@@ -421,6 +442,25 @@ describe('quickbooksConnector.handleOutboxEvent — return.closed → CreditMemo
       ok: false,
       retryable: false,
       error: 'returnCredit account not configured',
+    });
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails NON-retryably when inventoryAsset (the balancing debit) account is not configured', async () => {
+    const connNoAsset: ConnectionRef = {
+      ...conn,
+      settings: { env: 'sandbox', accountIds: { returnCredit: 'acct-47' } },
+    };
+    const res = await quickbooksConnector.handleOutboxEvent(
+      returnEvent,
+      connNoAsset,
+      {} as any,
+      makeDeps({ admin: makeAdmin({}) }),
+    );
+    expect(res).toEqual({
+      ok: false,
+      retryable: false,
+      error: 'inventoryAsset account not configured',
     });
     expect(postSpy).not.toHaveBeenCalled();
   });
@@ -480,7 +520,7 @@ describe('quickbooksConnector.handleOutboxEvent — return.closed → CreditMemo
     expect(postSpy).not.toHaveBeenCalled();
   });
 
-  it('classifies a 5xx CreditMemo POST error as retryable', async () => {
+  it('classifies a 5xx JournalEntry POST error as retryable', async () => {
     postSpy.mockReset().mockRejectedValue(Object.assign(new Error('qbo down'), { status: 503 }));
     const admin = makeAdmin({
       tables: {
@@ -500,7 +540,7 @@ describe('quickbooksConnector.handleOutboxEvent — return.closed → CreditMemo
     expect(res).toMatchObject({ ok: false, retryable: true });
   });
 
-  it('classifies a 400 CreditMemo POST error as NON-retryable', async () => {
+  it('classifies a 400 JournalEntry POST error as NON-retryable', async () => {
     postSpy.mockReset().mockRejectedValue(Object.assign(new Error('bad request'), { status: 400 }));
     const admin = makeAdmin({
       tables: {
