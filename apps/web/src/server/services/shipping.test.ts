@@ -744,11 +744,22 @@ describe('ShippingService.buyReturnLabel', () => {
     });
   }
 
-  it('builds an is_return shipment with REVERSED addresses (to=warehouse, from=charter) and buys ONCE', async () => {
-    // carrier_shipments selects: (1) purchased-return guard -> none; the insert
-    // creates the draft, then the claim + finalize updates fire.
+  // The parcel persisted on the order's forward outbound shipment, reused for
+  // the reverse label (EasyPost shape: weight/length/width/height).
+  const OUTBOUND_PARCEL = { weight: 32, length: 10, width: 8, height: 4 };
+
+  it('builds an is_return shipment with REVERSED addresses (to=warehouse, from=charter), reuses the outbound parcel, and buys ONCE', async () => {
+    // carrier_shipments selects in order: (1) purchased-return guard -> none;
+    // (2) loadOutboundParcel -> the outbound row carrying the parcel. The insert
+    // then creates the return draft, and the claim + finalize updates fire.
+    let selectCall = 0;
     const stub = makeReturnStub({
-      'carrier_shipments.select': { data: [], error: null },
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1
+          ? { data: [], error: null } // purchased-return guard: none yet
+          : { data: [{ parcel: OUTBOUND_PARCEL }], error: null }; // outbound parcel
+      },
       'carrier_shipments.insert': { data: [{ id: 'ret-ship-1' }], error: null },
       'carrier_shipments.update': { data: [{ id: 'ret-ship-1' }], error: null },
     });
@@ -766,6 +777,7 @@ describe('ShippingService.buyReturnLabel', () => {
         is_return?: boolean;
         to_address: Record<string, unknown>;
         from_address: Record<string, unknown>;
+        parcel?: Record<string, unknown>;
       };
     };
     expect(body.shipment.is_return).toBe(true);
@@ -773,6 +785,8 @@ describe('ShippingService.buyReturnLabel', () => {
     expect(body.shipment.to_address).toMatchObject({ street1: '100 Depot Rd', city: 'Austin', zip: '78701' });
     // from_address = charter destination (reversed).
     expect(body.shipment.from_address).toMatchObject({ street1: '200 Campus Way', city: 'Dallas', zip: '75201' });
+    // The outbound parcel is REUSED — EasyPost will not rate a parcel-less shipment.
+    expect(body.shipment.parcel).toMatchObject(OUTBOUND_PARCEL);
 
     // EasyPost buy invoked ONCE, keyed with the draft row id as the
     // Idempotency-Key, against the created shipment's cheapest rate (rate_1, $8.45).
@@ -780,7 +794,8 @@ describe('ShippingService.buyReturnLabel', () => {
     expect(buyShipmentSpy).toHaveBeenCalledWith('shp_easypost_1', 'rate_1', 'ret-ship-1');
 
     // The draft was inserted with direction='return' (independent of any outbound
-    // label, per the 0156 per-direction unique index).
+    // label, per the 0156 per-direction unique index) AND with the reused parcel
+    // persisted on it.
     const insertPayload = stub.chainArgsAll.get('carrier_shipments.insert')?.[0]?.[0]?.[0] as Record<
       string,
       unknown
@@ -789,9 +804,79 @@ describe('ShippingService.buyReturnLabel', () => {
       order_request_id: 'order-1',
       direction: 'return',
       status: 'draft',
+      parcel: OUTBOUND_PARCEL,
     });
 
     expect(result).toBeTruthy();
+  });
+
+  it('REGRESSION: createShipment is called WITH a parcel so EasyPost returns rates (missing-parcel produces no label)', async () => {
+    // Guards the B2 defect: a parcel-less return createShipment comes back with
+    // empty rates[], pickCheapestRate returns null, and the buy can never produce
+    // a label. Here the createShipment mock returns rates ONLY when a parcel is
+    // present; with the fix in place (the outbound parcel is reused) the buy
+    // completes. Without it, this test would fail at the 'No return rates'
+    // validation_error path.
+    createShipmentSpy.mockImplementation(async (body: unknown) => {
+      const shipment = (body as { shipment?: { parcel?: unknown } }).shipment;
+      if (!shipment?.parcel) {
+        // EasyPost cannot rate a shipment without parcel dimensions.
+        return { id: 'shp_easypost_1', rates: [] } as Record<string, unknown>;
+      }
+      return {
+        id: 'shp_easypost_1',
+        rates: [
+          { id: 'rate_1', carrier: 'USPS', service: 'Priority', rate: '8.45', currency: 'USD', delivery_days: 2 },
+        ],
+      } as Record<string, unknown>;
+    });
+
+    let selectCall = 0;
+    const stub = makeReturnStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1
+          ? { data: [], error: null }
+          : { data: [{ parcel: OUTBOUND_PARCEL }], error: null };
+      },
+      'carrier_shipments.insert': { data: [{ id: 'ret-ship-1' }], error: null },
+      'carrier_shipments.update': { data: [{ id: 'ret-ship-1' }], error: null },
+    });
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.buyReturnLabel('ret-1');
+
+    // A parcel WAS sent -> EasyPost returned a rate -> the buy completed.
+    const body = createShipmentSpy.mock.calls[0]?.[0] as { shipment: { parcel?: unknown } };
+    expect(body.shipment.parcel).toBeTruthy();
+    expect(buyShipmentSpy).toHaveBeenCalledTimes(1);
+    expect(result).toBeTruthy();
+  });
+
+  it('fails cleanly (no EasyPost call, no stray draft) when the order has no outbound parcel to reuse', async () => {
+    // No forward outbound shipment was ever rated/bought, so loadOutboundParcel
+    // finds nothing. The return must fail BEFORE inserting a draft or touching
+    // EasyPost — a parcel-less shipment could never produce a label anyway.
+    let selectCall = 0;
+    const stub = makeReturnStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1
+          ? { data: [], error: null } // purchased-return guard: none
+          : { data: [], error: null }; // loadOutboundParcel: no outbound parcel
+      },
+    });
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    await expect(svc.buyReturnLabel('ret-1')).rejects.toMatchObject({ code: 'validation_error' });
+    // Failed up-front: no shipment created, no buy, no draft inserted.
+    expect(createShipmentSpy).not.toHaveBeenCalled();
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+    expect(stub.chainArgsAll.get('carrier_shipments.insert')).toBeUndefined();
   });
 
   it('is idempotent: returns the existing purchased return label without a second buy', async () => {

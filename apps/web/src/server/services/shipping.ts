@@ -876,6 +876,35 @@ export class ShippingService {
   }
 
   /**
+   * Load the parcel (EasyPost `{weight,length,width,height}` shape) from the
+   * order's most-recent forward direction='outbound' carrier_shipments row that
+   * actually carries one. `getRates` persists the manager-entered parcel on the
+   * outbound draft, so the return label can REUSE those dimensions — the same
+   * goods travelling the reverse leg — instead of EasyPost rejecting a
+   * parcel-less return shipment with empty rates[]. Reads via the admin client
+   * (mirrors the other carrier_shipments reads in this flow) so it sees the
+   * outbound row regardless of the caller's RLS path. Returns null when no
+   * outbound row with a parcel exists (the caller surfaces a clear error).
+   */
+  private async loadOutboundParcel(
+    orderRequestId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const { data, error } = await this.admin
+      .from('carrier_shipments')
+      .select('parcel')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('order_request_id', orderRequestId)
+      .eq('direction', 'outbound')
+      .not('parcel', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    const parcel = (data as { parcel?: Record<string, unknown> | null } | null)?.parcel ?? null;
+    return parcel;
+  }
+
+  /**
    * Read the single 'purchased' row for an order via the admin client, or null.
    * Scoped to a single `direction` ('outbound' delivery label vs 'return' RMA
    * label) so the per-direction unique slot (0156) is honored: an outbound buy's
@@ -997,6 +1026,13 @@ export class ShippingService {
    *     charter, with is_return:true. We resolve the SAME order context as the
    *     forward label and simply swap from/to.
    *
+   *   • REUSED parcel — there is no return-rate dialog to collect dimensions, so
+   *     the return shipment reuses the parcel persisted on the order's forward
+   *     outbound shipment (loadOutboundParcel). EasyPost will not rate a
+   *     parcel-less shipment (it returns empty rates[]), so a return for an order
+   *     whose outbound label was never rated/bought fails cleanly up-front rather
+   *     than producing an unbuyable shipment.
+   *
    *   • One-shot create+buy (no separate rate-shop). There is no return-rate
    *     dialog — we createShipment, then buy the cheapest returned rate.
    *
@@ -1060,9 +1096,27 @@ export class ShippingService {
     const returnFromAddress = resolved.toAddress; // charter destination
     const client = new EasyPostClient(resolved.apiKey);
 
+    // EasyPost will NOT return rates for a shipment with no parcel (the forward
+    // getRates flow always sends weight/length/width/height). There is no
+    // return-rate dialog to collect dimensions, so REUSE the parcel from the
+    // order's forward outbound shipment — it shipped the same goods one way and
+    // is the right size/weight for the reverse leg. Without a parcel the created
+    // return shipment comes back with empty rates[], pickCheapestRate returns
+    // null, and the buy can never produce a label. Resolve it BEFORE inserting
+    // the draft so a missing parcel fails cleanly without leaving a stray draft.
+    const returnParcel = await this.loadOutboundParcel(orderRequestId);
+    if (!returnParcel) {
+      throw new ServiceError(
+        'validation_error',
+        'No parcel dimensions are available for this return. Buy (or fetch rates for) the outbound shipping label first so its parcel can be reused.',
+      );
+    }
+
     // Insert the direction='return' draft FIRST (service-role admin client — see
     // class doc), so the billable EasyPost Shipment is never orphaned without a
     // local row. The easypost_shipment_id is patched in after createShipment.
+    // Persist the reused parcel on the draft so the reconcile/recovery paths and
+    // any future audit see the dimensions the shipment was rated with.
     const { data: inserted, error: insertError } = await this.admin
       .from('carrier_shipments')
       .insert({
@@ -1073,19 +1127,22 @@ export class ShippingService {
         direction: 'return',
         from_address: returnFromAddress,
         to_address: returnToAddress,
+        parcel: returnParcel,
       })
       .select('*')
       .single();
     if (insertError) throw new ServiceError('internal_error', insertError.message);
     const draftRow = inserted as CarrierShipmentRow;
 
-    // createShipment with is_return:true + reversed addresses (non-billable).
+    // createShipment with is_return:true + reversed addresses + the reused parcel
+    // (non-billable). The parcel is REQUIRED for EasyPost to return rates.
     let shipment: Record<string, unknown>;
     try {
       shipment = await client.createShipment({
         shipment: {
           to_address: returnToAddress,
           from_address: returnFromAddress,
+          parcel: returnParcel,
           is_return: true,
         },
       });
