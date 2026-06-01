@@ -386,4 +386,162 @@ export class PurchaseOrdersService {
     };
   }
 
+  /**
+   * Recomputes the reorder forecast (items at or below their reorder point)
+   * and turns the suggestions into editable DRAFT purchase orders — the
+   * "last mile" of reorder automation.
+   *
+   * Items are grouped by their supplier_id and one draft PO is created per
+   * supplier. Line quantities are pre-filled with the deficit needed to
+   * bring each item back up to its target level — `max(reorder_quantity,
+   * reorder_point) - quantity_on_hand` (floored at 1 unit for a flagged
+   * item). This mirrors the deficit shown on the reorder-forecast report.
+   *
+   * Items with no supplier_id are NOT dropped: they are collected into a
+   * single "unassigned" draft PO (supplier_id null) so the buyer can assign
+   * a supplier during review. `unassignedCount` reports how many landed
+   * there.
+   *
+   * Drafts are editable and NOT auto-sent — the caller routes the user to
+   * the created drafts for review before sending. Per-supplier failures are
+   * collected so callers can report partial success; we do NOT roll back
+   * already-created drafts.
+   *
+   * Org-scoped + gated identically to other PO creation (assertModuleEnabled
+   * + assertPermission run inside the shared create()).
+   */
+  async createDraftsFromReorderForecast(): Promise<{
+    createdPoIds: string[];
+    /** How many items landed on the unassigned (no-supplier) draft PO. */
+    unassignedCount: number;
+    /** Items that were below par but couldn't be processed at all. */
+    skipped: number;
+    supplierFailures: Array<{ supplierId: string | null; supplierName: string; error: string }>;
+    /** Distinct real suppliers (excludes the unassigned bucket). */
+    supplierCount: number;
+  }> {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
+    assertPermission(this.ctx, 'purchase_orders:manage');
+
+    // Recompute the below-par set with the same filters the reorder-forecast
+    // report uses: active, non-deleted, non-rental, reorder_point > 0.
+    const { data: rows, error: fetchErr } = await this.ctx.supabase
+      .from('inventory_items')
+      .select(
+        'id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost',
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .is('deleted_at', null)
+      .eq('status', 'active')
+      .eq('is_rental', false)
+      .gt('reorder_point', 0)
+      .limit(5_000);
+    if (fetchErr) throw new ServiceError('internal_error', fetchErr.message);
+
+    type Row = {
+      id: string;
+      supplier_id: string | null;
+      reorder_point: number | null;
+      reorder_quantity: number | null;
+      quantity_on_hand: number | null;
+      unit_cost: number | null;
+    };
+
+    // Build a prefilled line for each item that is at or below its reorder
+    // point. Quantity = deficit to bring it back to target.
+    type PreparedLine = { itemId: string; quantityOrdered: number; unitCost: number };
+    const bySupplier = new Map<string, PreparedLine[]>();
+    const unassigned: PreparedLine[] = [];
+
+    for (const raw of (rows ?? []) as Row[]) {
+      const qty = Number(raw.quantity_on_hand ?? 0);
+      const reorderPoint = Number(raw.reorder_point ?? 0);
+      if (qty > reorderPoint) continue; // healthy — skip
+      const reorderQty = Number(raw.reorder_quantity ?? 0);
+      const targetQty = Math.max(reorderQty, reorderPoint);
+      // Floor at 1 so a flagged item always produces a positive line even
+      // when it sits exactly at its reorder point with no reorder qty set.
+      const quantityOrdered = Math.max(1, targetQty - qty);
+      const line: PreparedLine = {
+        itemId: raw.id,
+        quantityOrdered,
+        unitCost: Number(raw.unit_cost ?? 0),
+      };
+      if (raw.supplier_id) {
+        const list = bySupplier.get(raw.supplier_id) ?? [];
+        list.push(line);
+        bySupplier.set(raw.supplier_id, list);
+      } else {
+        unassigned.push(line);
+      }
+    }
+
+    // Resolve supplier names for failure messages.
+    const supplierIds = [...bySupplier.keys()];
+    const supplierName = new Map<string, string>();
+    if (supplierIds.length > 0) {
+      const { data: suppliersData } = await this.ctx.supabase
+        .from('suppliers')
+        .select('id, name')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', supplierIds);
+      for (const s of (suppliersData ?? []) as Array<{ id: string; name: string }>) {
+        supplierName.set(s.id, s.name);
+      }
+    }
+
+    const createdPoIds: string[] = [];
+    const supplierFailures: Array<{
+      supplierId: string | null;
+      supplierName: string;
+      error: string;
+    }> = [];
+    let skipped = 0;
+
+    // One draft per supplier.
+    for (const [supplierId, lines] of bySupplier) {
+      try {
+        const po = await this.create({ supplierId, lines });
+        createdPoIds.push(po.id);
+      } catch (e) {
+        skipped += lines.length;
+        supplierFailures.push({
+          supplierId,
+          supplierName: supplierName.get(supplierId) ?? 'Unknown supplier',
+          error: errMessage(e),
+        });
+      }
+    }
+
+    // One draft for the unassigned bucket (supplier_id null) so no
+    // suggestion is silently dropped.
+    if (unassigned.length > 0) {
+      try {
+        const po = await this.create({ supplierId: null, lines: unassigned });
+        createdPoIds.push(po.id);
+      } catch (e) {
+        skipped += unassigned.length;
+        supplierFailures.push({
+          supplierId: null,
+          supplierName: 'Unassigned (no supplier)',
+          error: errMessage(e),
+        });
+      }
+    }
+
+    return {
+      createdPoIds,
+      unassignedCount: unassigned.length,
+      skipped,
+      supplierFailures,
+      supplierCount: bySupplier.size,
+    };
+  }
+
+}
+
+function errMessage(e: unknown): string {
+  if (e instanceof ServiceError) return e.message;
+  if (e instanceof Error) return e.message;
+  return 'Unknown error';
 }
