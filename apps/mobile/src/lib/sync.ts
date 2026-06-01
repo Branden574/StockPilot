@@ -2,7 +2,7 @@ import * as Network from 'expo-network';
 
 import { api } from './api';
 import { getDb, getMeta, setMeta } from './db';
-import { ENABLED_MODULES_META_KEY } from './enabled-modules';
+import { ENABLED_MODULES_META_KEY, refreshEnabledModules } from './enabled-modules';
 import { listPending, markFailed, markOk, markSending } from './queue';
 
 /**
@@ -222,10 +222,20 @@ export async function pullSnapshot(
   // them synchronously between syncs (and while offline). Always written —
   // even an empty array is meaningful (the consumers treat "no persisted
   // value yet" differently from "explicitly no optional modules").
-  await setMeta(
-    ENABLED_MODULES_META_KEY,
-    JSON.stringify(Array.isArray(snap.enabledModules) ? snap.enabledModules : []),
+  //
+  // If the set CHANGED since the last sync (e.g. an admin toggled a module on
+  // the web control plane), notify the live useEnabledModules() subscribers so
+  // the drawer + bottom tabs add/remove the entry IMMEDIATELY — on the next
+  // foreground/60s sync, no app restart. Compared as JSON so we only re-render
+  // the nav when it actually changed, not on every routine sync.
+  const nextModulesJson = JSON.stringify(
+    Array.isArray(snap.enabledModules) ? snap.enabledModules : [],
   );
+  const prevModulesJson = await getMeta(ENABLED_MODULES_META_KEY);
+  await setMeta(ENABLED_MODULES_META_KEY, nextModulesJson);
+  if (prevModulesJson !== nextModulesJson) {
+    refreshEnabledModules();
+  }
 
   return {
     items: snap.items.length,
