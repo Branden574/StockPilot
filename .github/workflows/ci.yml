@@ -25,11 +25,17 @@ jobs:
           node-version: 20
           cache: 'pnpm'
 
+      - name: Guard against committed .env secrets
+        run: bash scripts/check-no-committed-env.sh
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck
         run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
 
   build:
     name: Build
