@@ -38,6 +38,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { ActivityService } from '@/server/services/activity';
 import { ServiceError, withContext } from '@/server/services/context';
+import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
@@ -76,7 +77,7 @@ interface ItemDetailProps {
 export async function ItemDetail({ id, backHref, backLabel, editHref, tab, returnParam }: ItemDetailProps) {
   const activeTab: DetailTabId = parseDetailTab(tab);
 
-  const [ctx, inventorySvc, activitySvc, imagesSvc, locationsSvc, reportsSvc] =
+  const [ctx, inventorySvc, activitySvc, imagesSvc, locationsSvc, reportsSvc, customFieldsSvc] =
     await Promise.all([
       withContext(),
       InventoryService.forCurrentUser(),
@@ -84,6 +85,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
       ItemImagesService.forCurrentUser(),
       LocationsService.forCurrentUser(),
       ReportsService.forCurrentUser(),
+      CustomFieldsService.forCurrentUser(),
     ]);
 
   let item;
@@ -101,7 +103,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // fan out alongside.
   const categoryIdForFetch = (item.category_id as string | null) ?? null;
   const supplierIdForFetch = (item.supplier_id as string | null) ?? null;
-  const [categoryRow, supplierRow, locations, activity, imageRows, costHistory] =
+  const [categoryRow, supplierRow, locations, activity, imageRows, costHistory, customFieldDefs] =
     await Promise.all([
       categoryIdForFetch
         ? ctx.supabase
@@ -128,7 +130,34 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
       // out alongside the other detail fetches; rendered as a lazy Recharts
       // island so the server shell never imports Recharts.
       reportsSvc.itemCostHistory(id),
+      // Org's ACTIVE item custom field definitions — used to render the
+      // defined extra fields with their human labels (not raw jsonb keys).
+      customFieldsSvc.listDefinitions('item'),
     ]);
+
+  // Resolve the org's defined custom fields against this item's stored
+  // custom_fields. Only fields with a stored, non-empty value are shown so the
+  // section stays empty on items that never set them.
+  const itemCustomFields =
+    (item as { custom_fields?: Record<string, unknown> | null }).custom_fields ?? {};
+  const definedCustomFields = customFieldDefs
+    .filter((d) => !d.archived)
+    .map((d) => {
+      const raw = itemCustomFields[d.fieldKey];
+      let display: string | null = null;
+      if (d.fieldType === 'checkbox') {
+        display = raw === true ? 'Yes' : raw === false ? 'No' : null;
+      } else if (raw !== undefined && raw !== null && String(raw).trim() !== '') {
+        if (d.fieldType === 'select') {
+          const opt = (d.options ?? []).find((o) => o.value === raw);
+          display = opt ? opt.label : String(raw);
+        } else {
+          display = String(raw);
+        }
+      }
+      return { def: d, display };
+    })
+    .filter((f) => f.display !== null);
   const signed = await imagesSvc.signedUrls(imageRows.map((r) => r.storage_path as string));
   const images = imageRows.map((r) => ({
     id: r.id as string,
@@ -441,6 +470,22 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                 />
               </CardContent>
             </Card>
+
+            {/* Per-org custom fields — only the org's DEFINED item fields that
+                this item has a value for. Reserved/hardcoded keys are rendered
+                by their own detail rows above and are never represented here. */}
+            {definedCustomFields.length > 0 && (
+              <Card className="sm:col-span-2">
+                <CardHeader>
+                  <CardTitle className="text-base">Additional fields</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  {definedCustomFields.map(({ def, display }) => (
+                    <Stat key={def.id} label={def.label} value={display as string} />
+                  ))}
+                </CardContent>
+              </Card>
+            )}
           </div>
 
           {/* Supplier cost trend — what we've paid for this item over time,

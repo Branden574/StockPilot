@@ -145,6 +145,12 @@ export type AuditEvent =
   // Per-org dashboard customization (Phase 2). An admin saved or reset the
   // landing dashboard widget layout (show/hide + reorder) for the org.
   | 'dashboard_layout.updated'
+  // Per-org platform customization (Phase 3 T1). An admin created, edited, or
+  // archived a custom field DEFINITION for items (the typed extra-field
+  // registry stored in custom_field_definitions).
+  | 'custom_field_definition.created'
+  | 'custom_field_definition.updated'
+  | 'custom_field_definition.archived'
   // MFA discrete events (replacing prior misuse of user.role.changed
   // and warehouse.updated for these forensic-relevant flows).
   | 'mfa.enrolled'
