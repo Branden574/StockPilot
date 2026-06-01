@@ -87,6 +87,7 @@ export interface ReturnRow {
   source: 'internal' | 'requester';
   reason_code: ReturnReasonCode | null;
   notes: string | null;
+  denial_reason: string | null;
   requested_by: string | null;
   requester_email: string | null;
   requester_name: string | null;
@@ -247,6 +248,11 @@ export class RMAService {
     // 2. Load the order's fulfilled lines so we can validate each requested
     //    return line belongs to the order and is within the fulfilled quantity.
     const lineIds = parsed.lines.map((l) => l.orderRequestLineId);
+    // NB: order_request_lines has NO organization_id column (RLS gates it via
+    // the parent order_requests, 0044/0078). Org isolation here rests on the
+    // in-org parent check above (line 'order' verified .eq(organization_id)),
+    // order_request_lines RLS being org-scoped through that parent, AND the
+    // per-line belonging re-check below (orderLine.order_request_id === id).
     const { data: orderLines, error: orderLinesError } = await this.ctx.supabase
       .from('order_request_lines')
       .select('id, order_request_id, item_id, quantity_fulfilled')
@@ -428,11 +434,13 @@ export class RMAService {
     const current = await this.requireReturn(id);
     this.assertTransition(current.status, 'denied');
 
+    // Write the reason to the dedicated `denial_reason` column (0154) — NOT
+    // `notes`, which would clobber any creation-time notes from createFromOrder.
     const updated = await this.applyTransition(id, current.status, {
       status: 'denied',
       denied_by: this.ctx.userId,
       denied_at: new Date().toISOString(),
-      ...(reason ? { notes: reason } : {}),
+      ...(reason ? { denial_reason: reason } : {}),
     });
 
     await audit(
