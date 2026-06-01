@@ -4,7 +4,7 @@
 
 begin;
 
-select plan(7);
+select plan(9);
 
 \set user_id '\'11111111-1111-1111-1111-111111111111\''
 
@@ -66,7 +66,7 @@ select ok(
 -- ─────────────────────────────────────────────────────────────────────
 
 select is(
-  (select public.consume_mfa_recovery_code((select code from _gen limit 1))),
+  (select public.consume_mfa_recovery_code((select code from _gen order by code limit 1))),
   true,
   'consume_mfa_recovery_code returns true for a valid unused code'
 );
@@ -83,7 +83,7 @@ select is(
 -- ─────────────────────────────────────────────────────────────────────
 
 select is(
-  (select public.consume_mfa_recovery_code((select code from _gen limit 1))),
+  (select public.consume_mfa_recovery_code((select code from _gen order by code limit 1))),
   false,
   'Already-used code cannot be consumed again'
 );
@@ -92,7 +92,10 @@ select is(
 -- Test 6: regenerate wipes the old set entirely.
 -- ─────────────────────────────────────────────────────────────────────
 
-perform public.generate_mfa_recovery_codes();
+-- `perform` is plpgsql-only; at the psql top level we must use a plain
+-- statement. generate_mfa_recovery_codes() is a set-returning function,
+-- so discard its result rows inside a DO block.
+do $$ begin perform 1 from public.generate_mfa_recovery_codes(); end $$;
 
 select is(
   (select count(*)::int from public.mfa_recovery_codes
