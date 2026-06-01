@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
+import { CreateReturnDialog } from '@/components/returns/create-return-dialog';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
@@ -31,6 +32,7 @@ import {
   type OrderRequestRow,
   type OrderRequestStatus,
 } from '@/server/services/order-requests';
+import { RMAService, type ReturnableLine } from '@/server/services/returns';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
 const TIMELINE_FIELDS: Array<{
@@ -175,6 +177,31 @@ export default async function OrderDetailPage({
     }
   }
 
+  // Returns (RMA). The "Create return" affordance only makes sense on a
+  // returnable order (completed / legacy delivered) when the viewer can manage
+  // returns AND the off-by-default `returns` module is on. We only pay for the
+  // module-enabled RPC + the returnable-lines read on those orders; everything
+  // else skips the round-trip. The dialog is hidden when no lines remain
+  // returnable (already fully returned).
+  // 'completed' is the live terminal status; 'delivered' is a legacy value
+  // some older rows still carry (compared as a raw string since it's no longer
+  // in the OrderRequestStatus union). The service is authoritative either way.
+  const orderIsReturnable =
+    request.status === 'completed' || (request.status as string) === 'delivered';
+  let returnableLines: ReturnableLine[] = [];
+  if (hasPermission(ctx.role, 'returns:manage') && orderIsReturnable) {
+    const returnsAccess = await checkModuleAccess('returns');
+    if (returnsAccess.enabled) {
+      try {
+        const rmaSvc = await RMAService.forCurrentUser();
+        returnableLines = await rmaSvc.returnableLinesForOrder(id);
+      } catch {
+        returnableLines = [];
+      }
+    }
+  }
+  const canCreateReturn = returnableLines.length > 0;
+
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <OrderRealtimeRefresh orderId={id} />
@@ -202,6 +229,7 @@ export default async function OrderDetailPage({
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            {canCreateReturn && <CreateReturnDialog orderId={id} lines={returnableLines} />}
             {(canApprove || isOwnRequest) && (
               <CancelOrderButton orderId={id} status={request.status} />
             )}

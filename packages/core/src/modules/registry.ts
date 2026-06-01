@@ -504,10 +504,19 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     apiPrefixes: ['/api/returns'],
     ownsTables: ['returns', 'return_lines'],
     // Net-new RMA / returns flow — OFF for every pack; explicit opt-in only.
-    // Surfaced via its own /dashboard/returns staff UI (Phase A3), gated per
-    // call by assertModuleEnabled('returns') (no main-nav placement here).
+    // Surfaced via its own /dashboard/returns staff UI (Phase A3). The sidebar
+    // placement is module-derived: it only renders when the org has the
+    // off-by-default `returns` module enabled AND the role holds
+    // `returns:manage` (resolveSurface filters on both), mirroring how other
+    // optional modules surface their nav. Sits just after Orders (80) in the
+    // Inventory section.
     defaultOnFor: [],
-    placements: [],
+    // Web-only for Phase A3 — there is no mobile /returns route yet, so we
+    // deliberately add ONLY a web_sidebar placement (a mobile_drawer placement
+    // would surface a dead nav link in the app).
+    placements: [
+      { surface: 'web_sidebar', section: 'inventory', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 85, requires: 'returns:manage' },
+    ],
   },
 
   // ── Premium modules (plan-gated; no nav) ───────────────────────────────
