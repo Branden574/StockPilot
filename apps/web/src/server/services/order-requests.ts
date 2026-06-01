@@ -158,6 +158,29 @@ export interface OrderRequestSummary {
   assignedDeliveryUserName: string | null;
 }
 
+/** One flattened order-history row for CSV export (see exportRows). */
+export interface OrderExportRow {
+  id: string;
+  status: OrderRequestStatus;
+  requesterName: string | null;
+  requesterEmail: string | null;
+  requesterOrgLabel: string | null;
+  warehouseName: string | null;
+  /** Delivery charter "Name (CODE)" when set; null for pickup orders. */
+  charterLabel: string | null;
+  fulfillmentType: 'pickup' | 'delivery';
+  source: OrderRequestSource;
+  lineCount: number;
+  totalQuantity: number;
+  /** Sum of quantity_requested × unit_cost_at_request across the lines. */
+  totalCost: number;
+  notes: string | null;
+  createdAt: string;
+  approvedAt: string | null;
+  /** completed_at, falling back to delivered_at for older rows. */
+  completedAt: string | null;
+}
+
 export interface OrderRequestDetail {
   request: OrderRequestRow;
   lines: OrderRequestLineWithItem[];
@@ -372,6 +395,129 @@ export class OrderRequestsService {
 
   async myRequests(): Promise<OrderRequestSummary[]> {
     return this.list({ requesterUserId: this.ctx.userId });
+  }
+
+  /**
+   * Flattened order-history rows for CSV export. Org-scoped (via the
+   * RLS-bound client + the explicit organization_id filter) and honoring
+   * the same dimensions the orders list filters on: status, created-at
+   * date range, delivery charter, and fulfillment type.
+   *
+   * Unlike list() this is NOT paginated for the UI — it pulls up to
+   * `cap` rows so a single export captures the whole filtered set. The
+   * caller (the export.csv route) clamps `cap` and signals truncation in
+   * the body when the cap is hit.
+   *
+   * Computes line count, total requested qty, and total cost (sum of
+   * quantity_requested × unit_cost_at_request across the order's lines)
+   * so the CSV can carry order-level totals without a second round trip.
+   */
+  async exportRows(filters: {
+    status?: OrderRequestStatus | OrderRequestStatus[];
+    requesterUserId?: string;
+    warehouseId?: string;
+    deliveryCharterId?: string;
+    fulfillmentType?: 'pickup' | 'delivery';
+    since?: string;
+    until?: string;
+    cap?: number;
+  } = {}): Promise<{ rows: OrderExportRow[]; total: number }> {
+    assertModuleEnabled(this.ctx, 'orders');
+
+    const cap = Math.min(Math.max(1, filters.cap ?? 10_000), 50_000);
+
+    let q = this.ctx.supabase
+      .from('order_requests')
+      .select(
+        `id, status, warehouse_id, requester_user_id, requester_email,
+         requester_name, requester_org_label, source, notes,
+         created_at, updated_at, approved_at, delivered_at, completed_at,
+         fulfillment_type, delivery_charter_id,
+         warehouse:warehouses!warehouse_id (name),
+         charter:charters!delivery_charter_id (name, code),
+         lines:order_request_lines (quantity_requested, unit_cost_at_request),
+         requester:user_profiles!requester_user_id (full_name, email)`,
+        { count: 'exact' },
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false });
+
+    if (filters.status) {
+      const arr = Array.isArray(filters.status) ? filters.status : [filters.status];
+      q = q.in('status', arr);
+    } else {
+      // Same anti-spam exclusion as list(): hide public-submit limbo rows
+      // unless a caller explicitly asks for them.
+      q = q.neq('status', 'pending_confirmation');
+    }
+    if (filters.requesterUserId) q = q.eq('requester_user_id', filters.requesterUserId);
+    if (filters.warehouseId) q = q.eq('warehouse_id', filters.warehouseId);
+    if (filters.deliveryCharterId) q = q.eq('delivery_charter_id', filters.deliveryCharterId);
+    if (filters.fulfillmentType) q = q.eq('fulfillment_type', filters.fulfillmentType);
+    if (filters.since) q = q.gte('created_at', filters.since);
+    if (filters.until) q = q.lt('created_at', filters.until);
+
+    q = q.range(0, cap - 1);
+
+    const { data, error, count } = await q;
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    const rows = (data ?? []).map((row): OrderExportRow => {
+      const r = row as Record<string, unknown>;
+      const flatten = <T>(field: unknown): T | null =>
+        Array.isArray(field) ? ((field[0] as T | undefined) ?? null) : ((field as T) ?? null);
+      const wh = flatten<{ name?: string | null }>(r.warehouse);
+      const ch = flatten<{ name?: string | null; code?: string | null }>(r.charter);
+      const reqProfile = flatten<{ full_name?: string | null; email?: string | null }>(
+        r.requester,
+      );
+      const lines =
+        (r.lines as Array<{ quantity_requested: number; unit_cost_at_request: number }> | null) ??
+        [];
+
+      const requesterName =
+        ((r.requester_name as string | null) ?? null) ||
+        (reqProfile?.full_name?.trim() || null);
+      const requesterEmail =
+        ((r.requester_email as string | null) ?? null) ||
+        (reqProfile?.email?.trim() || null);
+      // Charter/destination: real charter when set, otherwise the warehouse
+      // (pickup orders have no charter — they're collected at the warehouse).
+      const charterName = ch?.name ?? null;
+      const charterLabel = charterName
+        ? ch?.code
+          ? `${charterName} (${ch.code})`
+          : charterName
+        : null;
+
+      return {
+        id: r.id as string,
+        status: r.status as OrderRequestStatus,
+        requesterName,
+        requesterEmail,
+        requesterOrgLabel: (r.requester_org_label as string | null) ?? null,
+        warehouseName: wh?.name ?? null,
+        charterLabel,
+        fulfillmentType: (r.fulfillment_type as 'pickup' | 'delivery' | null) ?? 'pickup',
+        source: r.source as OrderRequestSource,
+        lineCount: lines.length,
+        totalQuantity: lines.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0),
+        totalCost: lines.reduce(
+          (s, l) =>
+            s + (Number(l.quantity_requested) || 0) * (Number(l.unit_cost_at_request) || 0),
+          0,
+        ),
+        notes: (r.notes as string | null) ?? null,
+        createdAt: r.created_at as string,
+        approvedAt: (r.approved_at as string | null) ?? null,
+        completedAt:
+          ((r.completed_at as string | null) ?? null) ||
+          ((r.delivered_at as string | null) ?? null),
+      };
+    });
+
+    return { rows, total: count ?? rows.length };
   }
 
   async pendingCount(): Promise<number> {
