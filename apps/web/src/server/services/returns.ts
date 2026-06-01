@@ -27,12 +27,17 @@ import {
  * INVENTORY CORRECTNESS (paramount):
  *   • createFromOrder REFUSES a non-returnable order (only 'completed' /
  *     legacy 'delivered' with fulfilled lines) and REFUSES a line quantity
- *     that exceeds quantity_fulfilled MINUS what prior live returns already
- *     claimed for that source line — so the cumulative returned quantity can
- *     never exceed what was fulfilled, even across many returns. The DB
- *     constraint trigger return_lines_enforce_fulfilled_cap (0153) is the
- *     authoritative backstop; this service rejects early with a clear
- *     validation_error.
+ *     that exceeds the DURABLE budget — quantity_fulfilled MINUS
+ *     order_request_lines.returned_quantity (0153) read straight off the
+ *     immutable source line, NOT a SUM over mutable prior return rows. Because
+ *     returned_quantity is incremented at apply-time and never reclaimed by a
+ *     cancel/flip/delete, the cumulative returned quantity can never exceed what
+ *     was fulfilled, even across many returns, and the old cancel→revive
+ *     inflation hole is closed at the root. The DB constraint trigger
+ *     return_lines_enforce_fulfilled_cap (0153) is the authoritative backstop;
+ *     this service rejects early with a clear validation_error. It also enforces
+ *     item identity: a return line may only restock the item that was fulfilled
+ *     on its source line.
  *   • Inventory only moves when the return is RECEIVED, and it moves through
  *     the process_return_disposition RPC (0153), which is idempotent on each
  *     line's `applied` latch and itself flips received → closed in the same
@@ -131,7 +136,7 @@ export interface ReturnableLine {
   itemName: string | null;
   itemSku: string | null;
   quantityFulfilled: number;
-  /** Fulfilled minus what live (non-cancelled/denied) returns already claimed. */
+  /** Durable budget: quantity_fulfilled - order_request_lines.returned_quantity. */
   quantityRemaining: number;
 }
 
@@ -139,6 +144,12 @@ const createLineSchema = z.object({
   orderRequestLineId: z.string().uuid(),
   quantity: z.number().positive(),
   disposition: z.enum(['restock', 'scrap']),
+  // Optional item identity assertion. The return ALWAYS restocks the item that
+  // was fulfilled on the source line (the service stamps item_id from the order
+  // line, never from the client). If a caller passes itemId, it must match the
+  // source line's item — a mismatch is rejected rather than silently coerced, so
+  // no path can restock a different item than the one fulfilled.
+  itemId: z.string().uuid().optional(),
 });
 
 const createFromOrderSchema = z.object({
@@ -223,11 +234,15 @@ export class RMAService {
 
   /**
    * The returnable lines for a fulfilled order, with the remaining returnable
-   * quantity per source line (quantity_fulfilled minus what live returns —
-   * not cancelled / denied — already claimed). Drives the "Create return"
-   * dialog: it pre-fills each line to its remaining-returnable default and
-   * caps the input. Returns an empty array (not an error) when the order is
-   * not returnable, so the caller can simply hide the affordance.
+   * quantity per source line. Remaining is the DURABLE budget read directly off
+   * the source line: quantity_fulfilled - returned_quantity (0153). It is NOT a
+   * SUM over prior return rows — returned_quantity is incremented at apply-time
+   * inside process_return_disposition and lives on the immutable order line, so
+   * a cancelled/flipped/deleted return header can never reclaim budget that
+   * stock already moved against. Drives the "Create return" dialog: it pre-fills
+   * each line to its remaining-returnable default and caps the input. Returns an
+   * empty array (not an error) when the order is not returnable, so the caller
+   * can simply hide the affordance.
    *
    * This mirrors the createFromOrder over-return validation so the UI and the
    * write path agree on what's returnable; the DB cap trigger remains the
@@ -249,7 +264,7 @@ export class RMAService {
     const { data: orderLines, error: linesError } = await this.ctx.supabase
       .from('order_request_lines')
       .select(
-        `id, item_id, quantity_fulfilled,
+        `id, item_id, quantity_fulfilled, returned_quantity,
          item:inventory_items!item_id (id, name, sku)`,
       )
       .eq('order_request_id', orderRequestId);
@@ -259,43 +274,19 @@ export class RMAService {
       id: string;
       item_id: string;
       quantity_fulfilled: number | null;
+      returned_quantity: number | null;
       item:
         | { id: string; name: string; sku: string | null }
         | { id: string; name: string; sku: string | null }[]
         | null;
     }> | null) ?? [];
 
-    const lineIds = lineRows.map((l) => l.id);
-    const alreadyReturnedByLine = new Map<string, number>();
-    if (lineIds.length > 0) {
-      const { data: priorLines, error: priorError } = await this.ctx.supabase
-        .from('return_lines')
-        .select('order_request_line_id, quantity, returns!inner(status)')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('order_request_line_id', lineIds);
-      if (priorError) throw new ServiceError('internal_error', priorError.message);
-
-      for (const pl of (priorLines as Array<{
-        order_request_line_id: string;
-        quantity: number | null;
-        returns: { status: ReturnStatus } | { status: ReturnStatus }[] | null;
-      }> | null) ?? []) {
-        const rel = Array.isArray(pl.returns) ? pl.returns[0] : pl.returns;
-        const status = rel?.status;
-        if (status === 'cancelled' || status === 'denied') continue;
-        alreadyReturnedByLine.set(
-          pl.order_request_line_id,
-          (alreadyReturnedByLine.get(pl.order_request_line_id) ?? 0) +
-            (Number(pl.quantity) || 0),
-        );
-      }
-    }
-
     const out: ReturnableLine[] = [];
     for (const l of lineRows) {
       const fulfilled = Number(l.quantity_fulfilled) || 0;
       if (fulfilled <= 0) continue;
-      const remaining = fulfilled - (alreadyReturnedByLine.get(l.id) ?? 0);
+      // Durable budget: remaining = fulfilled - already-applied returned units.
+      const remaining = fulfilled - (Number(l.returned_quantity) || 0);
       if (remaining <= 0) continue;
       const item = Array.isArray(l.item) ? (l.item[0] ?? null) : (l.item ?? null);
       out.push({
@@ -314,10 +305,16 @@ export class RMAService {
 
   /**
    * Create a 'requested' return from a fulfilled order. Validates the order is
-   * returnable and that every requested line quantity is within the remaining
-   * returnable quantity (quantity_fulfilled minus quantities already claimed by
-   * prior live returns for the same source line). Rejects over-quantity /
-   * non-returnable orders with a `validation_error` BEFORE writing anything.
+   * returnable and that every requested line quantity is within the DURABLE
+   * remaining budget read directly off the source line: quantity_fulfilled -
+   * returned_quantity (0153). returned_quantity is incremented at apply-time
+   * inside process_return_disposition and lives on the immutable order line, so
+   * the cap can NEVER be inflated by cancelling/flipping/deleting a prior return
+   * header (the old SUM-over-live-return-rows aggregate was the inflation hole).
+   * Also enforces item identity (the source line's item is the only item that
+   * can be returned) and the status gate (order completed/delivered). Rejects
+   * over-quantity / non-returnable / cross-item with a `validation_error` BEFORE
+   * writing anything; the DB cap trigger remains the authoritative backstop.
    */
   async createFromOrder(
     orderRequestId: string,
@@ -346,7 +343,12 @@ export class RMAService {
     }
 
     // 2. Load the order's fulfilled lines so we can validate each requested
-    //    return line belongs to the order and is within the fulfilled quantity.
+    //    return line belongs to the order and is within the DURABLE budget.
+    //    We read returned_quantity (0153) directly off each source line — this
+    //    is the running total of units ALREADY APPLIED against the line and is
+    //    the authoritative consumed-budget number. We do NOT sum prior return
+    //    rows: that aggregate is freed by a cancel/delete and was the inflation
+    //    hole the durable budget closes.
     const lineIds = parsed.lines.map((l) => l.orderRequestLineId);
     // NB: order_request_lines has NO organization_id column (RLS gates it via
     // the parent order_requests, 0044/0078). Org isolation here rests on the
@@ -355,59 +357,43 @@ export class RMAService {
     // per-line belonging re-check below (orderLine.order_request_id === id).
     const { data: orderLines, error: orderLinesError } = await this.ctx.supabase
       .from('order_request_lines')
-      .select('id, order_request_id, item_id, quantity_fulfilled')
+      .select('id, order_request_id, item_id, quantity_fulfilled, returned_quantity')
       .eq('order_request_id', orderRequestId)
       .in('id', lineIds);
     if (orderLinesError) throw new ServiceError('internal_error', orderLinesError.message);
 
     const orderLineById = new Map<
       string,
-      { id: string; order_request_id: string; item_id: string; quantity_fulfilled: number }
+      {
+        id: string;
+        order_request_id: string;
+        item_id: string;
+        quantity_fulfilled: number;
+        returned_quantity: number;
+      }
     >();
     for (const ol of (orderLines as Array<{
       id: string;
       order_request_id: string;
       item_id: string;
       quantity_fulfilled: number | null;
+      returned_quantity: number | null;
     }> | null) ?? []) {
       orderLineById.set(ol.id, {
         id: ol.id,
         order_request_id: ol.order_request_id,
         item_id: ol.item_id,
         quantity_fulfilled: Number(ol.quantity_fulfilled) || 0,
+        returned_quantity: Number(ol.returned_quantity) || 0,
       });
     }
 
-    // 3. Already-returned quantity per source line, across all live (not
-    //    cancelled / denied) returns. This is what bounds OVER-RETURN across
-    //    multiple returns — not just within this one.
-    const { data: priorLines, error: priorError } = await this.ctx.supabase
-      .from('return_lines')
-      .select('order_request_line_id, quantity, returns!inner(status)')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('order_request_line_id', lineIds);
-    if (priorError) throw new ServiceError('internal_error', priorError.message);
-
-    const alreadyReturnedByLine = new Map<string, number>();
-    for (const pl of (priorLines as Array<{
-      order_request_line_id: string;
-      quantity: number | null;
-      returns: { status: ReturnStatus } | { status: ReturnStatus }[] | null;
-    }> | null) ?? []) {
-      // The embedded relation can come back as an object or a single-element
-      // array depending on the join cardinality — normalize both.
-      const rel = Array.isArray(pl.returns) ? pl.returns[0] : pl.returns;
-      const status = rel?.status;
-      if (status === 'cancelled' || status === 'denied') continue;
-      alreadyReturnedByLine.set(
-        pl.order_request_line_id,
-        (alreadyReturnedByLine.get(pl.order_request_line_id) ?? 0) + (Number(pl.quantity) || 0),
-      );
-    }
-
-    // 4. Validate each requested line. Also reject duplicate source lines in
-    //    one request (the DB UNIQUE(return_id, order_request_line_id) would
-    //    reject it, but a clear early error is friendlier).
+    // 3. Validate each requested line against the durable budget. Also reject
+    //    duplicate source lines in one request (the DB UNIQUE(return_id,
+    //    order_request_line_id) would reject it, but a clear early error is
+    //    friendlier). NOTE: a SINGLE request can still over-return within itself
+    //    if two lines target the same source line — the duplicate guard prevents
+    //    that; the budget bounds the cross-request aggregate.
     const seenLineIds = new Set<string>();
     for (const line of parsed.lines) {
       if (seenLineIds.has(line.orderRequestLineId)) {
@@ -425,14 +411,29 @@ export class RMAService {
           'One or more lines do not belong to this order.',
         );
       }
+      // Item identity: the only item that may be returned for a source line is
+      // the item that was fulfilled on it. The service always STAMPS item_id
+      // from the order line (below), so substitution is structurally impossible
+      // here; but if a caller supplied an itemId we reject a mismatch rather
+      // than silently coerce, mirroring the DB return_item_mismatch trigger.
+      if (line.itemId && line.itemId !== orderLine.item_id) {
+        throw new ServiceError(
+          'validation_error',
+          'A return line item must match the item fulfilled on that order line.',
+          { orderRequestLineId: line.orderRequestLineId },
+        );
+      }
       if (orderLine.quantity_fulfilled <= 0) {
         throw new ServiceError(
           'validation_error',
           'You can only return lines that were fulfilled.',
         );
       }
-      const alreadyReturned = alreadyReturnedByLine.get(line.orderRequestLineId) ?? 0;
-      const remaining = orderLine.quantity_fulfilled - alreadyReturned;
+      // DURABLE budget: remaining = quantity_fulfilled - returned_quantity,
+      // read straight off the immutable source line. This bounds over-return
+      // ACROSS multiple returns (returned_quantity accumulates at apply-time and
+      // is never reclaimed by a cancel/flip/delete).
+      const remaining = orderLine.quantity_fulfilled - orderLine.returned_quantity;
       if (line.quantity > remaining) {
         throw new ServiceError(
           'validation_error',
