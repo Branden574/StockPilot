@@ -584,7 +584,13 @@ export class RMAService {
    * The RPC is idempotent on the per-line latch and itself guards
    * status='received', so the disposition can never be applied twice.
    *
-   * (Phase B publishes return.closed to the outbox here.)
+   * On a successful close we publish a `return.closed` outbox event (Phase B)
+   * so the QuickBooks connector can book a CreditMemo. Mirrors
+   * receiving.ts:188 (receipt.posted → Bill): the payload carries summary
+   * fields only (no line items — the connector rehydrates return_lines by
+   * aggregate id), and a stable dedupe key keeps a replayed close from queueing
+   * a duplicate export. Best-effort, like receipt.posted: a publish failure must
+   * NOT undo a close whose inventory the RPC already moved.
    */
   async close(id: string): Promise<ReturnRow> {
     this.gate();
@@ -621,7 +627,66 @@ export class RMAService {
       { event: 'return.closed', entityType: 'return', entityId: id },
       this.ctx,
     );
+
+    // Publish return.closed for downstream connectors (QBO CreditMemo). The
+    // payload total is informational (the connector recomputes from the lines
+    // it rehydrates); we derive it here from each return line's quantity ×ⁿ the
+    // source order line's unit_cost_at_request (0044) for the digest/summary.
+    await this.publishReturnClosed(updated);
+
     return updated;
+  }
+
+  /**
+   * Best-effort publish of the `return.closed` outbox event. Computes the
+   * line count + credit total from return_lines joined to their source order
+   * lines (unit_cost_at_request). Failures are swallowed (reported, not thrown)
+   * so they never undo a close whose disposition already committed — exactly
+   * like the receipt.posted publish in receiving.ts.
+   */
+  private async publishReturnClosed(ret: ReturnRow): Promise<void> {
+    try {
+      const { data: lines, error: linesError } = await this.ctx.supabase
+        .from('return_lines')
+        .select(
+          'quantity, order_request_line:order_request_lines!order_request_line_id (unit_cost_at_request)',
+        )
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('return_id', ret.id);
+      if (linesError) return;
+
+      const rows = (lines as Array<{
+        quantity: number | null;
+        order_request_line:
+          | { unit_cost_at_request: number | null }
+          | { unit_cost_at_request: number | null }[]
+          | null;
+      }> | null) ?? [];
+
+      let total = 0;
+      for (const row of rows) {
+        const ol = Array.isArray(row.order_request_line)
+          ? (row.order_request_line[0] ?? null)
+          : (row.order_request_line ?? null);
+        total += (Number(row.quantity) || 0) * (Number(ol?.unit_cost_at_request) || 0);
+      }
+
+      await this.ctx.supabase.rpc('publish_outbox', {
+        p_org_id: this.ctx.organizationId,
+        p_topic: 'return.closed',
+        p_aggregate_type: 'return',
+        p_aggregate_id: ret.id,
+        p_payload: {
+          orderRequestId: ret.order_request_id,
+          returnNumber: ret.return_number,
+          lineCount: rows.length,
+          total: Math.round((total + Number.EPSILON) * 100) / 100,
+        },
+        p_dedupe_key: `return.closed:${ret.id}`,
+      });
+    } catch {
+      // Best-effort: a publish failure must not fail an already-committed close.
+    }
   }
 
   /**

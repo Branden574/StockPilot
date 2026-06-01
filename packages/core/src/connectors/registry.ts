@@ -6,7 +6,7 @@ export const CONNECTOR_REGISTRY: Record<ConnectorProviderId, ConnectorMeta> = {
     id: 'quickbooks',
     title: 'QuickBooks Online',
     modes: ['push'],
-    subscribedTopics: ['receipt.posted'],
+    subscribedTopics: ['receipt.posted', 'return.closed'],
     requiresModule: 'integrations',
     oauth: {
       authorizeBase: 'https://appcenter.intuit.com/connect/oauth2',
