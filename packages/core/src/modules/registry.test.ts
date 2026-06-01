@@ -76,6 +76,28 @@ describe('MODULE_REGISTRY', () => {
     expect(modulesForPack('retail_backroom')).not.toContain('returns');
     expect(modulesForPack('light_3pl')).not.toContain('returns');
   });
+  it('planning is an optional module on by default for the supply-heavy packs only', () => {
+    const planning = MODULE_REGISTRY['planning' as ModuleId];
+    expect(planning).toBeDefined();
+    expect(planning.tier).toBe('optional');
+    // Reuses the PO permission — no new permission axis.
+    expect(planning.permissions).toEqual(['purchase_orders:manage']);
+    expect(planning.dependsOn).toEqual(expect.arrayContaining(['inventory', 'purchase_orders']));
+    expect(planning.surfaces).toEqual(['web']);
+    expect(planning.ownsTables).toEqual([]);
+    // On by default for distribution / agriculture_food / light_3pl.
+    expect(modulesForPack('distribution')).toContain('planning');
+    expect(modulesForPack('agriculture_food')).toContain('planning');
+    expect(modulesForPack('light_3pl')).toContain('planning');
+    // OFF (opt-in) for charter_school + retail_backroom.
+    expect(DEFAULT_MODULE_IDS).not.toContain('planning');
+    expect(modulesForPack('charter_school')).not.toContain('planning');
+    expect(modulesForPack('retail_backroom')).not.toContain('planning');
+    // Its single web placement's `requires` is in its permissions array.
+    const placement = planning.placements.find((p) => p.surface === 'web_sidebar');
+    expect(placement?.href).toBe('/dashboard/planning');
+    expect(placement?.requires).toBe('purchase_orders:manage');
+  });
   it('covers the current web sidebar hrefs', () => {
     const webHrefs = Object.values(MODULE_REGISTRY).flatMap((m) => m.placements)
       .filter((p) => p.surface === 'web_sidebar').map((p) => p.href);

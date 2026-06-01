@@ -160,6 +160,10 @@ export type AuditEvent =
   // organizations.domain_pack, and merged preset terminology defaults (only
   // where the org had not already customized them).
   | 'industry_pack.applied'
+  // Per-org demand-planning parameters (Phase 4). An admin changed the
+  // planning module's lead time / safety multiplier / velocity window, stored
+  // in organization_modules.settings for 'planning'.
+  | 'planning_params.updated'
   // MFA discrete events (replacing prior misuse of user.role.changed
   // and warehouse.updated for these forensic-relevant flows).
   | 'mfa.enrolled'
