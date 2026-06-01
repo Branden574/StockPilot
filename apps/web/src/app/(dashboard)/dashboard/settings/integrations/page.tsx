@@ -61,6 +61,15 @@ export default async function IntegrationsSettingsPage() {
     ? connections.find((c) => c.providerId === 'easypost') ?? null
     : null;
 
+  // Operator dead-letter view: failed exports + Replay. Spans BOTH providers, so
+  // surface it whenever the caller can manage EITHER enabled surface (the same
+  // condition that shows at least one card). listFailedSyncs() re-asserts the
+  // manage permission server-side; we only fetch when the UI would show it so a
+  // viewer never pays the query (and never sees raw error detail). `null` keeps
+  // the panel hidden entirely.
+  const canManageDeadLetter = showQbo || showEasyPost;
+  const failedSyncs = canManageDeadLetter ? (await svc.listFailedSyncs()).rows : null;
+
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -96,6 +105,7 @@ export default async function IntegrationsSettingsPage() {
               }
             : null
         }
+        failedSyncs={failedSyncs}
       />
     </div>
   );

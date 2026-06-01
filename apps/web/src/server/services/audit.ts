@@ -159,6 +159,9 @@ export type AuditEvent =
   // tears the connection down and destroys the Vault secret.
   | 'integration.connected'
   | 'integration.disconnected'
+  // An operator re-queued a dead-lettered/errored connector export from the
+  // Integrations settings dead-letter view (reset to status='pending').
+  | 'integration.sync_replayed'
   | 'shipping.rates_fetched'
   | 'shipping.label_purchased';
 

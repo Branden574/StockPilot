@@ -13,6 +13,7 @@ import {
   connectEasyPostAction,
   disconnectAction,
   disconnectEasyPostAction,
+  replaySyncAction,
   saveAccountMappingAction,
 } from '@/server/actions/connections';
 
@@ -28,6 +29,23 @@ interface SyncHealthRow {
   lastError: string | null;
   completedAt: string | null;
   createdAt: string;
+}
+
+/**
+ * A failed (dead-lettered or errored) sync row in the operator dead-letter view.
+ * Carries the row `id` so the Replay button can re-queue it.
+ */
+export interface FailedSyncRow {
+  id: string;
+  topic: string;
+  status: 'error' | 'dead';
+  attempts: number;
+  externalId: string | null;
+  lastError: string | null;
+  nextAttemptAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string | null;
 }
 
 /**
@@ -61,6 +79,14 @@ export interface QuickBooksPanelProps {
   health: SyncHealthRow[];
   /** EasyPost shipping connection; null hides the card. */
   easyPost?: EasyPostPanelProps | null;
+  /**
+   * Failed (dead-lettered/errored) connector exports for the operator
+   * dead-letter view. `null` hides the panel entirely — the caller lacks a
+   * manage permission for any enabled integration/shipping module. When present
+   * (even empty), the panel renders so an operator sees "no failures" rather
+   * than nothing.
+   */
+  failedSyncs?: FailedSyncRow[] | null;
 }
 
 const STATUS_BADGE: Record<
@@ -276,6 +302,8 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
 
       {props.easyPost && <EasyPostCard {...props.easyPost} />}
 
+      {props.failedSyncs != null && <DeadLetterCard rows={props.failedSyncs} />}
+
       {showQuickBooks && (
       <Card>
         <CardHeader>
@@ -323,6 +351,85 @@ function SyncStatusBadge({ status }: { status: SyncHealthRow['status'] }) {
     <Badge variant={map[status]} className="text-[10px] px-1.5 py-0 capitalize">
       {status}
     </Badge>
+  );
+}
+
+/**
+ * Operator dead-letter view: lists failed (error/dead) connector exports and
+ * offers a per-row Replay button that re-queues the event for the drainer. Only
+ * rendered when the caller can manage an enabled integration/shipping module
+ * (gated server-side; the page passes `failedSyncs` only then). Replay is also
+ * re-checked in the server action + RLS, so this UI is a convenience, not the
+ * security boundary.
+ */
+function DeadLetterCard({ rows }: { rows: FailedSyncRow[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Failed exports (dead-letter)</CardTitle>
+        <CardDescription>
+          Exports that errored or hit the retry limit — usually a bad account id or an expired
+          token. Fix the cause, then Replay to re-queue the export on the next sync.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {rows.length === 0 ? (
+          <p className="text-muted-foreground text-sm">No failed exports. Everything is in sync.</p>
+        ) : (
+          <ul className="divide-border divide-y rounded-md border">
+            {rows.map((row) => (
+              <DeadLetterRow key={row.id} row={row} />
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function DeadLetterRow({ row }: { row: FailedSyncRow }) {
+  const [replaying, startReplay] = React.useTransition();
+  const [replayed, setReplayed] = React.useState(false);
+
+  function handleReplay() {
+    startReplay(async () => {
+      const res = await replaySyncAction({ id: row.id });
+      if (res.ok) {
+        setReplayed(true);
+        toast.success('Export re-queued. It will retry on the next sync.');
+      } else {
+        toast.error(res.error.message);
+      }
+    });
+  }
+
+  return (
+    <li className="flex items-center justify-between gap-4 px-4 py-2.5">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium">{row.topic}</span>
+          <SyncStatusBadge status={replayed ? 'pending' : row.status} />
+          <span className="text-muted-foreground text-xs">
+            {row.attempts} attempt{row.attempts === 1 ? '' : 's'}
+          </span>
+        </div>
+        {row.externalId && (
+          <p className="text-muted-foreground truncate text-xs">External id: {row.externalId}</p>
+        )}
+        {row.lastError && <p className="text-destructive truncate text-xs">{row.lastError}</p>}
+        <p className="text-muted-foreground text-xs">{formatDate(row.updatedAt ?? row.createdAt)}</p>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={handleReplay}
+        disabled={replaying || replayed}
+        className="shrink-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        {replayed ? 'Re-queued' : replaying ? 'Replaying…' : 'Replay'}
+      </Button>
+    </li>
   );
 }
 
