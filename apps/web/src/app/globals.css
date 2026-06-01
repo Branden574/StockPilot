@@ -51,6 +51,16 @@
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
 
+  /* Recharts/shadcn chart series palette. Referenced by the chart
+     primitive (components/ui/chart.tsx) as var(--chart-N) and by Tailwind
+     consumers via `bg-chart-1` etc. Hues drawn from the editorial system:
+     mint accent → warm amber → terracotta → muted olive → slate ink. */
+  --color-chart-1: hsl(var(--chart-1));
+  --color-chart-2: hsl(var(--chart-2));
+  --color-chart-3: hsl(var(--chart-3));
+  --color-chart-4: hsl(var(--chart-4));
+  --color-chart-5: hsl(var(--chart-5));
+
   /* Editorial-only tokens (use directly via CSS, not Tailwind classes). */
   --ink: var(--ed-ink);
   --ink-2: var(--ed-ink-2);
@@ -116,6 +126,14 @@
     --input: 56 19% 89%;
     --ring: 80 7% 5%;
 
+    /* Chart series palette (light) — saturated enough to read against the
+       white card surface while staying within the warm editorial register. */
+    --chart-1: 165 38% 48%; /* mint accent (darkened for fill contrast) */
+    --chart-2: 38 60% 52%;  /* warning amber */
+    --chart-3: 18 65% 47%;  /* terracotta (matches destructive hue) */
+    --chart-4: 95 22% 45%;  /* muted olive */
+    --chart-5: 80 7% 35%;   /* slate ink */
+
     --radius: 0.4rem;
   }
 
@@ -164,6 +182,14 @@
     --border: 75 8% 14%;
     --input: 75 8% 14%;
     --ring: 56 17% 92%;
+
+    /* Chart series palette (dark) — lifted lightness so each hue reads on
+       the near-black card surface. */
+    --chart-1: 165 45% 60%; /* mint accent */
+    --chart-2: 38 70% 62%;  /* amber */
+    --chart-3: 12 70% 60%;  /* terracotta */
+    --chart-4: 95 28% 58%;  /* olive */
+    --chart-5: 56 12% 70%;  /* light slate */
   }
 }
 
