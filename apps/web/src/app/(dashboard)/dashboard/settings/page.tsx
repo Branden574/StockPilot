@@ -55,6 +55,14 @@ const RECOVERY_SECTIONS = [
   { href: '/dashboard/settings/recovery', title: 'Recovery', description: 'Restore soft-deleted items, categories, suppliers, and locations.' },
 ];
 
+// Industry template — one-click "set up as this industry" that turns on the
+// pack's module set + suggests labels (non-destructive). Same
+// `organization:update` gate as Modules; the underlying page redirects anyone
+// without that permission.
+const INDUSTRY_SECTIONS = [
+  { href: '/dashboard/settings/industry', title: 'Industry template', description: 'Set up StockPilot for your industry in one click — Books, Distribution, Apparel, Food & Ag, or 3PL.' },
+];
+
 // Module control plane — turn features on or off for the whole org.
 // Gated on `organization:update` so only admins and owners see the tile
 // (the underlying page redirects anyone without that permission anyway).
@@ -107,6 +115,7 @@ export default async function SettingsPage() {
     ...(hasPermission(ctx.role, 'activity_logs:read') ? ADMIN_SECTIONS : []),
     ...(hasPermission(ctx.role, 'ai:manage') ? AI_SECTIONS : []),
     ...(hasPermission(ctx.role, 'items:delete') ? RECOVERY_SECTIONS : []),
+    ...(hasPermission(ctx.role, 'organization:update') ? INDUSTRY_SECTIONS : []),
     ...(hasPermission(ctx.role, 'organization:update') ? MODULES_SECTIONS : []),
     ...(hasPermission(ctx.role, 'organization:update') ? NAVIGATION_SECTIONS : []),
     ...(hasPermission(ctx.role, 'organization:update') ? DASHBOARD_SECTIONS : []),
