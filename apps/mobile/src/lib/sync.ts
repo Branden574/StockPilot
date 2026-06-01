@@ -87,10 +87,21 @@ export async function isOnline(): Promise<boolean> {
   }
 }
 
-export async function pullSnapshot(): Promise<{ items: number; pos: number; counts: number; bundles: number } | null> {
+/**
+ * Pull the org snapshot into local SQLite.
+ *
+ * @param force When true, ignore the persisted `last_synced_at` cursor and
+ *   request a FULL snapshot (no `?since`). Used on an org switch: the cursor
+ *   belongs to the prior org's timeline, so a delta pull would be wrong — the
+ *   caller (`setActiveOrg`) has already wiped the local cache, so a full pull
+ *   re-scopes every table to the newly-active org.
+ */
+export async function pullSnapshot(
+  force = false,
+): Promise<{ items: number; pos: number; counts: number; bundles: number } | null> {
   if (!(await isOnline())) return null;
 
-  const since = await getMeta('last_synced_at');
+  const since = force ? null : await getMeta('last_synced_at');
   const path = since
     ? `/api/v1/mobile/snapshot?since=${encodeURIComponent(since)}`
     : '/api/v1/mobile/snapshot';
@@ -319,12 +330,15 @@ let inFlightSync: Promise<void> | null = null;
 /**
  * Run pull then push. Called on app open + foreground + a 60s timer.
  * Catches all errors so a failed sync never crashes the app shell.
+ *
+ * @param force Passed through to `pullSnapshot` — forces a full (no-`?since`)
+ *   pull. Used on an org switch after the local cache has been wiped.
  */
-export async function syncNow(): Promise<void> {
+export async function syncNow(force = false): Promise<void> {
   if (inFlightSync) return inFlightSync;
   inFlightSync = (async () => {
     try {
-      await pullSnapshot();
+      await pullSnapshot(force);
       await drainQueue();
     } catch (e) {
       console.warn('[sync] syncNow failed', e);
