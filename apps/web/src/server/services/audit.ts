@@ -145,6 +145,21 @@ export type AuditEvent =
   // Per-org dashboard customization (Phase 2). An admin saved or reset the
   // landing dashboard widget layout (show/hide + reorder) for the org.
   | 'dashboard_layout.updated'
+  // Per-org platform customization (Phase 3 T1). An admin created, edited, or
+  // archived a custom field DEFINITION for items (the typed extra-field
+  // registry stored in custom_field_definitions).
+  | 'custom_field_definition.created'
+  | 'custom_field_definition.updated'
+  | 'custom_field_definition.archived'
+  // Per-org platform customization (Phase 3 T2). An admin saved or reset the
+  // order status presentation config (label/color/sortOrder per status) — a
+  // SOFT override that never touches the status CHECK or the state machine.
+  | 'order_status_config.updated'
+  // Per-org platform customization (Phase 3 T3). An admin applied a one-click
+  // industry template: NON-DESTRUCTIVELY enabled the pack's module set, set
+  // organizations.domain_pack, and merged preset terminology defaults (only
+  // where the org had not already customized them).
+  | 'industry_pack.applied'
   // MFA discrete events (replacing prior misuse of user.role.changed
   // and warehouse.updated for these forensic-relevant flows).
   | 'mfa.enrolled'

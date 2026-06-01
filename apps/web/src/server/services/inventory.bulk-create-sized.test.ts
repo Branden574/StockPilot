@@ -44,14 +44,28 @@ const BASE_INPUT = {
  *   - stock_movements: the post-insert audit-log writeback. The service
  *     swallows movement-log errors, so an absent table just no-ops here.
  */
-function buildStub() {
+function buildStub(customFieldDefs: Array<Record<string, unknown>> = []) {
   const insertedItems: Array<Record<string, unknown>> = [];
   const insertedMovements: Array<Record<string, unknown>> = [];
   return {
     insertedItems,
     insertedMovements,
-     
+
     from(table: string): any {
+      if (table === 'custom_field_definitions') {
+        // CustomFieldsService.listDefinitions chains
+        // .select().eq().eq().eq?().order().order() then awaits the builder.
+        // Return a thenable that resolves the configured definition rows so
+        // assertCustomFieldsValid can run against the org's registry.
+        const result = { data: customFieldDefs, error: null };
+        const builder: any = {
+          select: () => builder,
+          eq: () => builder,
+          order: () => builder,
+          then: (cb: any) => cb(result),
+        };
+        return builder;
+      }
       if (table === 'inventory_items') {
         return {
           insert: (rows: Array<Record<string, unknown>>) => {
@@ -180,5 +194,87 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
     expect(skuXL.endsWith('-XL')).toBe(true);
     // Both variants share the SAME generated base.
     expect(skuL.replace(/-L$/, '')).toBe(skuXL.replace(/-XL$/, ''));
+  });
+
+  it('applies per-org customFields to every variant alongside the reserved size key', async () => {
+    const stub = buildStub([
+      {
+        id: 'd1',
+        organization_id: 'org-1',
+        entity: 'item',
+        field_key: 'material',
+        label: 'Material',
+        field_type: 'text',
+        options: null,
+        required: false,
+        sort_order: 0,
+        archived: false,
+      },
+    ]);
+    const svc = makeSvc(stub);
+
+    await svc.bulkCreateSizedVariants({
+      ...BASE_INPUT,
+      customFields: { material: 'cotton' },
+      variants: [
+        { size: 'S', quantity: 1 },
+        { size: 'M', quantity: 2 },
+      ],
+    });
+
+    expect(stub.insertedItems).toHaveLength(2);
+    for (const item of stub.insertedItems) {
+      const cf = item.custom_fields as Record<string, unknown>;
+      expect(cf.material).toBe('cotton');
+    }
+    expect((stub.insertedItems[0]?.custom_fields as Record<string, unknown>).size).toBe('S');
+    expect((stub.insertedItems[1]?.custom_fields as Record<string, unknown>).size).toBe('M');
+  });
+
+  it('strips reserved keys from customFields so they cannot clobber size/rack', async () => {
+    const stub = buildStub();
+    const svc = makeSvc(stub);
+
+    await svc.bulkCreateSizedVariants({
+      ...BASE_INPUT,
+      // A crafted payload trying to override the reserved variant keys.
+      customFields: { size: 'HACK', rack_number: '99', material: 'wool' },
+      variants: [{ size: 'L', quantity: 1 }],
+    });
+
+    const cf = stub.insertedItems[0]?.custom_fields as Record<string, unknown>;
+    // Reserved keys win (size from the variant), stray reserved key dropped...
+    expect(cf.size).toBe('L');
+    expect(cf.rack_number).toBeUndefined();
+    // ...but a non-reserved org key with no definition flows through untouched.
+    expect(cf.material).toBe('wool');
+  });
+
+  it('enforces a REQUIRED custom field on the sized-variant path (rejects, no write)', async () => {
+    const stub = buildStub([
+      {
+        id: 'd1',
+        organization_id: 'org-1',
+        entity: 'item',
+        field_key: 'material',
+        label: 'Material',
+        field_type: 'text',
+        options: null,
+        required: true,
+        sort_order: 0,
+        archived: false,
+      },
+    ]);
+    const svc = makeSvc(stub);
+
+    await expect(
+      svc.bulkCreateSizedVariants({
+        ...BASE_INPUT,
+        // Required `material` omitted -> the authoritative gate must reject.
+        customFields: { other: 'x' },
+        variants: [{ size: 'S', quantity: 1 }],
+      }),
+    ).rejects.toThrow(/required/i);
+    expect(stub.insertedItems).toHaveLength(0);
   });
 });

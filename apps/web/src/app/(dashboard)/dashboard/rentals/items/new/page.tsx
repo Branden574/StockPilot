@@ -9,6 +9,7 @@ import { createClient } from '@/lib/supabase/server';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
+import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -34,6 +35,7 @@ export default async function NewRentalItemPage() {
     chartersSvc,
     whChartersSvc,
     inventorySvc,
+    customFieldsSvc,
     forced,
     activeFilter,
     orgRow,
@@ -46,6 +48,7 @@ export default async function NewRentalItemPage() {
     ChartersService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
     InventoryService.forCurrentUser(),
+    CustomFieldsService.forCurrentUser(),
     forcedWarehouseId(),
     getActiveWarehouseFilter(),
     supabase
@@ -55,17 +58,27 @@ export default async function NewRentalItemPage() {
       .maybeSingle(),
   ]);
 
-  const [categories, locations, suppliers, tags, warehouses, charters, warehouseCharters, recent] =
-    await Promise.all([
-      categoriesSvc.list(),
-      locationsSvc.list(),
-      suppliersSvc.list(),
-      tagsSvc.list(),
-      warehousesSvc.list(),
-      chartersSvc.list(),
-      whChartersSvc.listPairs(),
-      inventorySvc.getRecentDefaults('product'),
-    ]);
+  const [
+    categories,
+    locations,
+    suppliers,
+    tags,
+    warehouses,
+    charters,
+    warehouseCharters,
+    recent,
+    customFieldDefs,
+  ] = await Promise.all([
+    categoriesSvc.list(),
+    locationsSvc.list(),
+    suppliersSvc.list(),
+    tagsSvc.list(),
+    warehousesSvc.list(),
+    chartersSvc.list(),
+    whChartersSvc.listPairs(),
+    inventorySvc.getRecentDefaults('product'),
+    customFieldsSvc.listDefinitions('item'),
+  ]);
 
   const warehouseIds = new Set(warehouses.map((w) => w.id));
   const locationIds = new Set(locations.map((l) => l.id));
@@ -128,6 +141,7 @@ export default async function NewRentalItemPage() {
             warehouseLabel={terminology.warehouse_singular}
             charterLabel={terminology.charter_singular}
             isRentalFixed={true}
+            customFieldDefs={customFieldDefs}
           />
         </CardContent>
       </Card>

@@ -9,6 +9,7 @@ import { createClient } from '@/lib/supabase/server';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
+import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -39,6 +40,7 @@ export default async function NewItemPage() {
     chartersSvc,
     whChartersSvc,
     inventorySvc,
+    customFieldsSvc,
     forced,
     activeFilter,
     orgRow,
@@ -51,6 +53,7 @@ export default async function NewItemPage() {
     ChartersService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
     InventoryService.forCurrentUser(),
+    CustomFieldsService.forCurrentUser(),
     forcedWarehouseId(),
     getActiveWarehouseFilter(),
     supabase
@@ -60,21 +63,31 @@ export default async function NewItemPage() {
       .maybeSingle(),
   ]);
 
-  const [categories, locations, suppliers, tags, warehouses, charters, warehouseCharters, recent] =
-    await Promise.all([
-      categoriesSvc.list(),
-      locationsSvc.list(),
-      suppliersSvc.list(),
-      tagsSvc.list(),
-      warehousesSvc.list(),
-      chartersSvc.list(),
-      whChartersSvc.listPairs(),
-      // Default warehouse + primary location to the user's most-recent
-      // item so the form pre-fills the picker for users who always add
-      // to the same warehouse. Scoped to product items (the books tab
-      // has its own page + scoped lookup).
-      inventorySvc.getRecentDefaults('product'),
-    ]);
+  const [
+    categories,
+    locations,
+    suppliers,
+    tags,
+    warehouses,
+    charters,
+    warehouseCharters,
+    recent,
+    customFieldDefs,
+  ] = await Promise.all([
+    categoriesSvc.list(),
+    locationsSvc.list(),
+    suppliersSvc.list(),
+    tagsSvc.list(),
+    warehousesSvc.list(),
+    chartersSvc.list(),
+    whChartersSvc.listPairs(),
+    // Default warehouse + primary location to the user's most-recent
+    // item so the form pre-fills the picker for users who always add
+    // to the same warehouse. Scoped to product items (the books tab
+    // has its own page + scoped lookup).
+    inventorySvc.getRecentDefaults('product'),
+    customFieldsSvc.listDefinitions('item'),
+  ]);
 
   // Resolve effective defaults. Precedence:
   //   1. forcedWarehouseId — warehouse-scoped users are locked here.
@@ -144,6 +157,7 @@ export default async function NewItemPage() {
             forcedWarehouseId={forced}
             warehouseLabel={terminology.warehouse_singular}
             charterLabel={terminology.charter_singular}
+            customFieldDefs={customFieldDefs}
           />
         </CardContent>
       </Card>

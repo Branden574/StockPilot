@@ -10,6 +10,7 @@ import { createClient } from '@/lib/supabase/server';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
+import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -54,6 +55,7 @@ export default async function EditBookPage({
     warehousesSvc,
     chartersSvc,
     whChartersSvc,
+    customFieldsSvc,
     forced,
     orgRow,
   ] = await Promise.all([
@@ -65,6 +67,7 @@ export default async function EditBookPage({
     WarehousesService.forCurrentUser(),
     ChartersService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
+    CustomFieldsService.forCurrentUser(),
     forcedWarehouseId(),
     supabase
       .from('organizations')
@@ -81,17 +84,27 @@ export default async function EditBookPage({
     throw e;
   }
 
-  const [categories, locations, suppliers, tags, itemTags, warehouses, charters, warehouseCharters] =
-    await Promise.all([
-      categoriesSvc.list(),
-      locationsSvc.list(),
-      suppliersSvc.list(),
-      tagsSvc.list(),
-      tagsSvc.listForItem(id),
-      warehousesSvc.list(),
-      chartersSvc.list(),
-      whChartersSvc.listPairs(),
-    ]);
+  const [
+    categories,
+    locations,
+    suppliers,
+    tags,
+    itemTags,
+    warehouses,
+    charters,
+    warehouseCharters,
+    customFieldDefs,
+  ] = await Promise.all([
+    categoriesSvc.list(),
+    locationsSvc.list(),
+    suppliersSvc.list(),
+    tagsSvc.list(),
+    tagsSvc.listForItem(id),
+    warehousesSvc.list(),
+    chartersSvc.list(),
+    whChartersSvc.listPairs(),
+    customFieldsSvc.listDefinitions('item'),
+  ]);
 
   const terminology = resolveTerminology(
     (orgRow.data?.terminology as Partial<{
@@ -163,6 +176,7 @@ export default async function EditBookPage({
             warehouseLabel={terminology.warehouse_singular}
             charterLabel={terminology.charter_singular}
             returnHref={backHref}
+            customFieldDefs={customFieldDefs}
           />
         </CardContent>
       </Card>
