@@ -770,6 +770,99 @@ export class ShippingService {
     return null;
   }
 
+  /**
+   * SERVICE-ROLE reaper recovery for a single row stranded in 'purchasing'.
+   * Runs WITHOUT a ServiceContext — driven by the reap-stuck-shipments cron,
+   * which has no user session — so it takes the service-role admin client and
+   * the stuck `carrier_shipments` row directly. It resolves the row's org's
+   * active EasyPost connection + Vault key, GETs the EasyPost shipment, and:
+   *   • postage_label present → finalize to 'purchased' (the buy was charged).
+   *   • no postage_label → reset to 'draft' so the order can be re-bought.
+   * Returns the new status the row was moved to ('purchased' | 'draft'), or
+   * 'skipped' when the row can't be reconciled (no easypost id, or the org has
+   * no active EasyPost connection / key — left 'purchasing' for an operator).
+   *
+   * SAFETY: like reconcilePurchasing, this NEVER re-buys — it only reads the
+   * EasyPost shipment and copies the already-charged label, or reopens a row
+   * that definitively never got one. All transitions are compare-and-swaps
+   * scoped to the row's own id+org WHERE status='purchasing', so a concurrent
+   * operator/buy that already moved the row makes the reaper a no-op.
+   */
+  static async reapStuckShipment(
+    admin: ReturnType<typeof createAdminClient>,
+    row: CarrierShipmentRow,
+  ): Promise<'purchased' | 'draft' | 'skipped'> {
+    // Resolve the org's active EasyPost connection + Vault key directly (no
+    // ServiceContext). Mirrors the connection/key half of resolveShippingContext
+    // but scoped by the row's organization_id via the service-role client.
+    const { data: conn, error: connError } = await admin
+      .from('org_connections')
+      .select('id, secret_id')
+      .eq('organization_id', row.organization_id)
+      .eq('provider_id', 'easypost')
+      .eq('status', 'active')
+      .maybeSingle();
+    if (connError) throw new ServiceError('internal_error', connError.message);
+    const connection = conn as { id: string; secret_id: string | null } | null;
+
+    // No EasyPost id, or no active connection/key to reconcile against. We can't
+    // safely confirm whether the carrier charged, so DO NOT reset to 'draft'
+    // (that could re-buy an already-charged label). Leave the row 'purchasing'
+    // for an operator to resolve.
+    if (!row.easypost_shipment_id || !connection || !connection.secret_id) {
+      return 'skipped';
+    }
+
+    const secrets = await getConnectionSecret(admin as never, connection.secret_id);
+    const apiKey = typeof secrets.apiKey === 'string' ? secrets.apiKey : null;
+    if (!apiKey) return 'skipped';
+
+    const client = new EasyPostClient(apiKey);
+    const shipment = await client.retrieveShipment(row.easypost_shipment_id);
+
+    const postageLabel =
+      (shipment.postage_label as Record<string, unknown> | undefined) ?? undefined;
+    if (postageLabel && postageLabel.label_url) {
+      const selectedRate = (shipment.selected_rate as Record<string, unknown> | undefined) ?? {};
+      const rateStr = selectedRate.rate;
+      const rateCents =
+        rateStr === undefined || rateStr === null ? null : Math.round(Number(rateStr) * 100);
+      const tracker = (shipment.tracker as Record<string, unknown> | undefined) ?? {};
+      const { error: finalizeError } = await admin
+        .from('carrier_shipments')
+        .update({
+          status: 'purchased' as const,
+          label_url: (postageLabel.label_url as string | undefined) ?? null,
+          tracking_code: (shipment.tracking_code as string | undefined) ?? null,
+          tracking_url:
+            (tracker.public_url as string | undefined) ??
+            (shipment.tracking_url as string | undefined) ??
+            null,
+          carrier: (selectedRate.carrier as string | undefined) ?? null,
+          service: (selectedRate.service as string | undefined) ?? null,
+          rate_cents: rateCents,
+          currency: (selectedRate.currency as string | undefined) ?? row.currency ?? 'USD',
+          easypost_rate_id: (selectedRate.id as string | undefined) ?? row.easypost_rate_id ?? null,
+          purchased_at: new Date().toISOString(),
+        })
+        .eq('organization_id', row.organization_id)
+        .eq('id', row.id)
+        .eq('status', 'purchasing');
+      if (finalizeError) throw new ServiceError('internal_error', finalizeError.message);
+      return 'purchased';
+    }
+
+    // No label at the carrier → the buy never completed; reopen for a clean re-buy.
+    const { error: resetError } = await admin
+      .from('carrier_shipments')
+      .update({ status: 'draft', purchased_by: null })
+      .eq('organization_id', row.organization_id)
+      .eq('id', row.id)
+      .eq('status', 'purchasing');
+    if (resetError) throw new ServiceError('internal_error', resetError.message);
+    return 'draft';
+  }
+
   /** Read the single 'purchased' row for an order via the admin client, or null. */
   private async findPurchased(orderRequestId: string): Promise<CarrierShipmentRow | null> {
     const { data, error } = await this.admin
