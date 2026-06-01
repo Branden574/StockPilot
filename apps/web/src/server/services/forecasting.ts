@@ -96,7 +96,7 @@ export function computeReorderSuggestion(
       `At ${velocity.unitsOutPerDay.toFixed(2)} units/day over ${velocity.windowDays} days, ` +
       `you'll burn ${(velocity.unitsOutPerDay * leadTimeDays).toFixed(0)} units during a ` +
       `${leadTimeDays}-day lead time. Reorder point ${suggestedReorderPoint} adds a ` +
-      `${(safetyMultiplier - 1) * 100}% safety buffer. Reorder qty ${suggestedReorderQty} ` +
+      `${Math.round((safetyMultiplier - 1) * 100)}% safety buffer. Reorder qty ${suggestedReorderQty} ` +
       `covers the next ~${DEFAULT_REORDER_QTY_DAYS} days of demand.`;
   }
 
@@ -187,23 +187,37 @@ export async function getBulkItemVelocities(
   const result = new Map<string, VelocitySnapshot>();
   if (items.length === 0) return result;
 
-  const ids = items.map((i) => i.id);
   const since = new Date(Date.now() - windowDays * DAY_MS).toISOString();
 
-  const { data, error } = await supabase
-    .from('stock_movements')
-    .select('item_id, quantity_change')
-    .eq('organization_id', orgId)
-    .in('item_id', ids)
-    .lt('quantity_change', 0)
-    .gte('created_at', since);
-  if (error) throw new ServiceError('internal_error', error.message);
-
-  // Sum |quantity_change| per item id from the one result set.
+  // Sum |quantity_change| per item over the window. PostgREST caps a response at
+  // max_rows (1000), so a single un-paginated scan would SILENTLY undercount any
+  // org with >1000 outbound movements in the window — making every velocity (and
+  // thus every reorder suggestion) come out too low. Page through in 1000-row
+  // chunks and accumulate until a short page signals the end (same pattern as
+  // order-requests / valuation / the outbox drainer).
+  //
+  // Filtered by org + outbound + window only (no `item_id IN (...)` — that list
+  // can be 5000 uuids and blow the query-string limit). Movements for items
+  // outside the candidate set just add unused entries to `totals`; we only read
+  // totals.get(item.id) for our candidates below, so they're harmless.
+  const PAGE = 1000;
   const totals = new Map<string, number>();
-  for (const m of (data ?? []) as Array<{ item_id: string; quantity_change: number }>) {
-    const out = Math.abs(Number(m.quantity_change) || 0);
-    totals.set(m.item_id, (totals.get(m.item_id) ?? 0) + out);
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('stock_movements')
+      .select('item_id, quantity_change')
+      .eq('organization_id', orgId)
+      .lt('quantity_change', 0)
+      .gte('created_at', since)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new ServiceError('internal_error', error.message);
+    const rows = (data ?? []) as Array<{ item_id: string; quantity_change: number }>;
+    for (const m of rows) {
+      const out = Math.abs(Number(m.quantity_change) || 0);
+      totals.set(m.item_id, (totals.get(m.item_id) ?? 0) + out);
+    }
+    if (rows.length < PAGE) break;
   }
 
   const now = Date.now();
