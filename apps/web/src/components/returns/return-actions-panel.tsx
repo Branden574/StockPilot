@@ -1,10 +1,21 @@
 'use client';
 
-import { Check, CheckCircle2, Loader2, PackageCheck, X, XCircle } from 'lucide-react';
+import {
+  Check,
+  CheckCircle2,
+  ExternalLink,
+  FileDown,
+  Loader2,
+  PackageCheck,
+  Truck,
+  X,
+  XCircle,
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -16,8 +27,10 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { formatCurrency } from '@/lib/utils';
 import {
   approveReturnAction,
+  buyReturnLabelAction,
   cancelReturnAction,
   closeReturnAction,
   denyReturnAction,
@@ -26,16 +39,43 @@ import {
 
 import type { ReturnStatus } from '@/server/services/returns';
 
+/** The subset of the return label (carrier_shipments) the panel renders. */
+interface ReturnLabel {
+  status: string;
+  carrier: string | null;
+  service: string | null;
+  rate_cents: number | null;
+  currency: string | null;
+  tracking_code: string | null;
+  tracking_url: string | null;
+  label_url: string | null;
+}
+
 interface Props {
   returnId: string;
   status: ReturnStatus;
+  /**
+   * True when the shipping module is enabled AND the viewer holds
+   * shipping:manage — only then is the "Buy return label" affordance shown.
+   */
+  canManageShipping?: boolean;
+  /** The already-purchased reverse label, if one exists. */
+  returnLabel?: ReturnLabel | null;
 }
 
-type BusyKey = 'approve' | 'deny' | 'receive' | 'close' | 'cancel' | null;
+type BusyKey = 'approve' | 'deny' | 'receive' | 'close' | 'cancel' | 'returnLabel' | null;
 
 const TERMINAL: ReturnStatus[] = ['closed', 'denied', 'cancelled'];
 
-export function ReturnActionsPanel({ returnId, status }: Props) {
+/** Statuses at which a reverse label can be bought. */
+const LABELABLE: ReturnStatus[] = ['approved', 'received'];
+
+export function ReturnActionsPanel({
+  returnId,
+  status,
+  canManageShipping = false,
+  returnLabel = null,
+}: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
   const [denyOpen, setDenyOpen] = React.useState(false);
@@ -94,6 +134,17 @@ export function ReturnActionsPanel({ returnId, status }: Props) {
   async function cancel() {
     await run('cancel', () => cancelReturnAction(returnId), 'Return cancelled.');
   }
+
+  async function buyReturnLabel() {
+    await run(
+      'returnLabel',
+      () => buyReturnLabelAction(returnId),
+      'Return label purchased.',
+    );
+  }
+
+  const showLabelSection =
+    canManageShipping && (LABELABLE.includes(status) || returnLabel !== null);
 
   return (
     <section className="bg-card rounded-xl border">
@@ -168,13 +219,103 @@ export function ReturnActionsPanel({ returnId, status }: Props) {
             </Button>
           )}
 
-          {TERMINAL.includes(status) && (
+          {TERMINAL.includes(status) && !showLabelSection && (
             <div className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
               <CheckCircle2 className="h-3.5 w-3.5" />
               No further actions — this return is in a terminal state.
             </div>
           )}
         </div>
+
+        {/* Reverse-label section: buy/show the RMA return label. Gated on the
+            shipping module + shipping:manage (resolved server-side). */}
+        {showLabelSection && (
+          <div className="border-border space-y-3 border-t pt-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-medium">Return label</h3>
+                <p className="text-muted-foreground mt-0.5 text-[11.5px]">
+                  A reverse carrier label so the item ships back to your
+                  warehouse.
+                </p>
+              </div>
+              {!returnLabel && LABELABLE.includes(status) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={buyReturnLabel}
+                  disabled={busy !== null}
+                >
+                  {busy === 'returnLabel' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Truck className="h-3.5 w-3.5" />
+                  )}
+                  Buy return label
+                </Button>
+              )}
+            </div>
+
+            {returnLabel ? (
+              <dl className="space-y-2 text-[12px]">
+                <div className="flex items-center justify-between gap-3">
+                  <dt className="text-muted-foreground">Carrier</dt>
+                  <dd className="text-right">
+                    {returnLabel.carrier ?? '—'}
+                    {returnLabel.service ? (
+                      <span className="text-muted-foreground"> · {returnLabel.service}</span>
+                    ) : null}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <dt className="text-muted-foreground">Tracking #</dt>
+                  <dd className="text-right font-mono">
+                    {returnLabel.tracking_url && returnLabel.tracking_code ? (
+                      <a
+                        href={returnLabel.tracking_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 hover:underline"
+                      >
+                        {returnLabel.tracking_code}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : (
+                      (returnLabel.tracking_code ?? '—')
+                    )}
+                  </dd>
+                </div>
+                {returnLabel.rate_cents != null && (
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="text-muted-foreground">Cost</dt>
+                    <dd className="text-right tabular-nums">
+                      {formatCurrency(
+                        returnLabel.rate_cents / 100,
+                        returnLabel.currency ?? 'USD',
+                      )}
+                    </dd>
+                  </div>
+                )}
+                {returnLabel.label_url && (
+                  <div className="pt-1">
+                    <Button variant="outline" size="sm" asChild>
+                      <a href={returnLabel.label_url} target="_blank" rel="noopener noreferrer">
+                        <FileDown className="h-3.5 w-3.5" />
+                        Download return label
+                      </a>
+                    </Button>
+                  </div>
+                )}
+              </dl>
+            ) : (
+              !LABELABLE.includes(status) && (
+                <Badge variant="outline" className="text-muted-foreground">
+                  No return label.
+                </Badge>
+              )
+            )}
+          </div>
+        )}
       </div>
 
       {/* Deny-reason dialog */}

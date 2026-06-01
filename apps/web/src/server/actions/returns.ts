@@ -9,6 +9,7 @@ import {
   type ReturnRow,
   type ReturnWithLines,
 } from '@/server/services/returns';
+import { ShippingService, type CarrierShipmentRow } from '@/server/services/shipping';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -147,6 +148,27 @@ export async function cancelReturnAction(id: string): Promise<ActionResult<Retur
     const row = await svc.cancel(id);
     revalidateReturn(id);
     return ok(row);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/**
+ * Buy a reverse (RMA) EasyPost label for an approved/received return. Delegates
+ * to ShippingService.buyReturnLabel, which gates on the `shipping` module being
+ * enabled AND `shipping:manage` (owner/admin) — independently of the `returns`
+ * gate already applied to render this page — and is idempotent (an existing
+ * purchased return label short-circuits, so a retry never double-charges).
+ */
+export async function buyReturnLabelAction(
+  id: string,
+): Promise<ActionResult<CarrierShipmentRow>> {
+  if (!idSchema.safeParse(id).success) return err('validation_error', 'Invalid return id');
+  try {
+    const svc = await ShippingService.forCurrentUser();
+    const shipment = await svc.buyReturnLabel(id);
+    revalidateReturn(id);
+    return ok(shipment);
   } catch (e) {
     return toResult(e);
   }

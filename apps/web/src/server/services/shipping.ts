@@ -65,6 +65,13 @@ export interface CarrierShipmentRow {
   from_address: Record<string, unknown> | null;
   to_address: Record<string, unknown> | null;
   parcel: Record<string, unknown> | null;
+  /**
+   * 'outbound' = the forward delivery label (warehouse → charter); 'return' =
+   * a reverse RMA label (charter → warehouse, EasyPost is_return:true). The 0156
+   * per-direction partial unique index lets one active outbound AND one active
+   * return label coexist per order. Legacy rows default to 'outbound'.
+   */
+  direction: 'outbound' | 'return';
   status:
     | 'draft'
     | 'purchasing'
@@ -351,6 +358,7 @@ export class ShippingService {
         order_request_id: resolved.orderRequestId,
         connection_id: resolved.connectionId,
         status: 'draft',
+        direction: 'outbound',
         from_address: resolved.fromAddress,
         to_address: resolved.toAddress,
         parcel: easypostParcel,
@@ -438,17 +446,20 @@ export class ShippingService {
     assertModuleEnabled(this.ctx, 'shipping');
     assertPermission(this.ctx, 'shipping:manage');
 
-    // Idempotency guard FIRST: a purchased row blocks a re-buy. Read via the
-    // admin client so the check sees rows regardless of the user's RLS path.
-    const purchased = await this.findPurchased(orderRequestId);
+    // Idempotency guard FIRST: a purchased OUTBOUND row blocks a re-buy. Read via
+    // the admin client so the check sees rows regardless of the user's RLS path.
+    // Scoped to direction='outbound' so a return label (0156) on the same order
+    // is never mistaken for the forward label.
+    const purchased = await this.findPurchased(orderRequestId, 'outbound');
     if (purchased) return purchased;
 
-    // Load the most-recent draft for this order.
+    // Load the most-recent OUTBOUND draft for this order.
     const { data: draft, error: draftError } = await this.admin
       .from('carrier_shipments')
       .select('*')
       .eq('organization_id', this.ctx.organizationId)
       .eq('order_request_id', orderRequestId)
+      .eq('direction', 'outbound')
       .eq('status', 'draft')
       .order('created_at', { ascending: false })
       .limit(1)
@@ -497,7 +508,7 @@ export class ShippingService {
       // another claim already occupies this order's active-buy slot. Treat as a
       // lost race, NOT a 500.
       if (claimError.code === '23505') {
-        return await this.resolveLostClaim(orderRequestId);
+        return await this.resolveLostClaim(orderRequestId, 'outbound');
       }
       throw new ServiceError('internal_error', claimError.message);
     }
@@ -505,7 +516,7 @@ export class ShippingService {
     if (claimedRows.length === 0) {
       // Zero rows updated: the row was no longer 'draft' (a concurrent/prior buy
       // already claimed it). Resolve idempotently.
-      return await this.resolveLostClaim(orderRequestId);
+      return await this.resolveLostClaim(orderRequestId, 'outbound');
     }
 
     // We OWN the 'purchasing' claim. Buy the label, passing the row id as an
@@ -716,6 +727,7 @@ export class ShippingService {
       .select('*')
       .eq('organization_id', this.ctx.organizationId)
       .eq('order_request_id', orderRequestId)
+      .eq('direction', 'outbound')
       .eq('status', 'purchasing')
       .order('created_at', { ascending: false })
       .limit(1)
@@ -723,8 +735,8 @@ export class ShippingService {
     if (stuckError) throw new ServiceError('internal_error', stuckError.message);
     const stuckRow = stuck as CarrierShipmentRow | null;
     if (!stuckRow) {
-      // Nothing stranded — return the purchased row if the buy already completed.
-      return await this.findPurchased(orderRequestId);
+      // Nothing stranded — return the purchased OUTBOUND row if the buy completed.
+      return await this.findPurchased(orderRequestId, 'outbound');
     }
     if (!stuckRow.easypost_shipment_id) {
       // No EasyPost id to reconcile against → it never reached the carrier; reopen.
@@ -863,13 +875,22 @@ export class ShippingService {
     return 'draft';
   }
 
-  /** Read the single 'purchased' row for an order via the admin client, or null. */
-  private async findPurchased(orderRequestId: string): Promise<CarrierShipmentRow | null> {
+  /**
+   * Read the single 'purchased' row for an order via the admin client, or null.
+   * Scoped to a single `direction` ('outbound' delivery label vs 'return' RMA
+   * label) so the per-direction unique slot (0156) is honored: an outbound buy's
+   * idempotency guard never short-circuits on a return label and vice-versa.
+   */
+  private async findPurchased(
+    orderRequestId: string,
+    direction: 'outbound' | 'return',
+  ): Promise<CarrierShipmentRow | null> {
     const { data, error } = await this.admin
       .from('carrier_shipments')
       .select('*')
       .eq('organization_id', this.ctx.organizationId)
       .eq('order_request_id', orderRequestId)
+      .eq('direction', direction)
       .eq('status', 'purchased')
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
@@ -878,12 +899,15 @@ export class ShippingService {
 
   /**
    * Resolve a lost claim (zero-row claim OR 23505 unique violation): a
-   * concurrent/prior buy won the order's active-buy slot. Return its 'purchased'
-   * row if it has completed, otherwise throw a clear retryable error — never
-   * reaching EasyPost.
+   * concurrent/prior buy won the order's active-buy slot for this `direction`.
+   * Return its 'purchased' row if it has completed, otherwise throw a clear
+   * retryable error — never reaching EasyPost.
    */
-  private async resolveLostClaim(orderRequestId: string): Promise<CarrierShipmentRow> {
-    const winner = await this.findPurchased(orderRequestId);
+  private async resolveLostClaim(
+    orderRequestId: string,
+    direction: 'outbound' | 'return',
+  ): Promise<CarrierShipmentRow> {
+    const winner = await this.findPurchased(orderRequestId, direction);
     if (winner) return winner;
     throw new ServiceError(
       'validation_error',
@@ -916,6 +940,10 @@ export class ShippingService {
       .select('*')
       .eq('organization_id', this.ctx.organizationId)
       .eq('order_request_id', orderRequestId)
+      // The order page's Shipping panel surfaces the FORWARD delivery label;
+      // scope to direction='outbound' so a return label (0156) is never shown
+      // here as "the shipment". Return labels surface on the return detail page.
+      .eq('direction', 'outbound')
       .in('status', ['purchased', 'in_transit', 'delivered', 'returned', 'failure', 'cancelled'])
       .order('created_at', { ascending: false })
       .limit(1)
@@ -923,4 +951,265 @@ export class ShippingService {
     if (error) throw new ServiceError('internal_error', error.message);
     return (data as CarrierShipmentRow | null) ?? null;
   }
+
+  /**
+   * Member-level read of the RETURN (reverse) label for a return. Resolves the
+   * return's order_request_id, then returns the latest active direction='return'
+   * row (status NOT IN draft/purchasing) — the purchased return label + its
+   * tracking — or null when none exists yet. Drives the return detail page's
+   * "Return label" section. Reads ride the user's RLS.
+   */
+  async getReturnLabel(returnId: string): Promise<CarrierShipmentRow | null> {
+    assertModuleEnabled(this.ctx, 'shipping');
+
+    const { data: ret, error: retError } = await this.ctx.supabase
+      .from('returns')
+      .select('order_request_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', returnId)
+      .maybeSingle();
+    if (retError) throw new ServiceError('internal_error', retError.message);
+    if (!ret) return null;
+    const orderRequestId = (ret as { order_request_id: string }).order_request_id;
+
+    const { data, error } = await this.ctx.supabase
+      .from('carrier_shipments')
+      .select('*')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('order_request_id', orderRequestId)
+      .eq('direction', 'return')
+      .in('status', ['purchased', 'in_transit', 'delivered', 'returned', 'failure', 'cancelled'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    return (data as CarrierShipmentRow | null) ?? null;
+  }
+
+  /**
+   * Buy a REVERSE (RMA) label for an approved/received return. Mirrors
+   * `buyLabel`'s claim/idempotency design, but the return label differs in two
+   * ways:
+   *
+   *   • REVERSED addresses + is_return:true — the parcel travels BACK from the
+   *     charter (the destination of the forward delivery) to the warehouse
+   *     origin, so the EasyPost shipment's to_address = warehouse, from_address =
+   *     charter, with is_return:true. We resolve the SAME order context as the
+   *     forward label and simply swap from/to.
+   *
+   *   • One-shot create+buy (no separate rate-shop). There is no return-rate
+   *     dialog — we createShipment, then buy the cheapest returned rate.
+   *
+   * DOUBLE-BUY SAFETY is identical to `buyLabel` and anchored at the DATABASE by
+   * the 0156 per-direction partial unique index (one active OUTBOUND and one
+   * active RETURN per order can coexist, but never two of the same direction):
+   *   1. Idempotent short-circuit on an existing direction='return' 'purchased'
+   *      row for the order.
+   *   2. RESOLVE the EasyPost key/addresses BEFORE inserting/claiming, so a
+   *      resolve failure can never strand a row mid-buy.
+   *   3. Insert a direction='return' draft, createShipment (non-billable), then
+   *      CLAIM the draft 'draft'→'purchasing'. A second concurrent return-label
+   *      claim raises 23505 on the per-direction unique index and is resolved
+   *      idempotently (never a second EasyPost charge).
+   *   4. Only the claim winner calls `buyShipment`, keyed with the row id as an
+   *      Idempotency-Key.
+   *   5. SUCCESS → finalize to 'purchased'. FAILURE → the SAME handleBuyFailure
+   *      branch as the forward buy (definitive 4xx rolls back to 'draft';
+   *      ambiguous failure reconciles via a GET; both compare-and-swap on the
+   *      claimed row's own id, so they are direction-agnostic and safe).
+   */
+  async buyReturnLabel(returnId: string): Promise<CarrierShipmentRow> {
+    assertModuleEnabled(this.ctx, 'shipping');
+    assertPermission(this.ctx, 'shipping:manage');
+
+    // 1. Load the return (org-scoped) and assert it is at a stage where a return
+    //    label makes sense (approved or received). The return is the link to its
+    //    order_request_id, which drives the reversed shipping context.
+    const { data: ret, error: retError } = await this.ctx.supabase
+      .from('returns')
+      .select('id, organization_id, order_request_id, status')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', returnId)
+      .maybeSingle();
+    if (retError) throw new ServiceError('internal_error', retError.message);
+    if (!ret) throw new ServiceError('not_found', 'Return not found.');
+    const returnRow = ret as {
+      id: string;
+      order_request_id: string;
+      status: string;
+    };
+    if (returnRow.status !== 'approved' && returnRow.status !== 'received') {
+      throw new ServiceError(
+        'validation_error',
+        'A return label can only be bought for an approved or received return.',
+      );
+    }
+
+    const orderRequestId = returnRow.order_request_id;
+
+    // 2. Idempotency guard FIRST: an existing direction='return' 'purchased' row
+    //    blocks a re-buy. Independent of any forward (outbound) label.
+    const existing = await this.findPurchased(orderRequestId, 'return');
+    if (existing) return existing;
+
+    // 3. RESOLVE the forward order context BEFORE inserting/claiming (so a
+    //    resolve failure leaves nothing mid-buy), then REVERSE the addresses:
+    //    the return travels charter → warehouse.
+    const resolved = await this.resolveShippingContext(orderRequestId);
+    const returnToAddress = resolved.fromAddress; // warehouse origin
+    const returnFromAddress = resolved.toAddress; // charter destination
+    const client = new EasyPostClient(resolved.apiKey);
+
+    // Insert the direction='return' draft FIRST (service-role admin client — see
+    // class doc), so the billable EasyPost Shipment is never orphaned without a
+    // local row. The easypost_shipment_id is patched in after createShipment.
+    const { data: inserted, error: insertError } = await this.admin
+      .from('carrier_shipments')
+      .insert({
+        organization_id: this.ctx.organizationId,
+        order_request_id: orderRequestId,
+        connection_id: resolved.connectionId,
+        status: 'draft',
+        direction: 'return',
+        from_address: returnFromAddress,
+        to_address: returnToAddress,
+      })
+      .select('*')
+      .single();
+    if (insertError) throw new ServiceError('internal_error', insertError.message);
+    const draftRow = inserted as CarrierShipmentRow;
+
+    // createShipment with is_return:true + reversed addresses (non-billable).
+    let shipment: Record<string, unknown>;
+    try {
+      shipment = await client.createShipment({
+        shipment: {
+          to_address: returnToAddress,
+          from_address: returnFromAddress,
+          is_return: true,
+        },
+      });
+    } catch (err) {
+      // The Shipment was never created → no charge possible. Reopen/close out the
+      // draft so it does not occupy state, then surface the error.
+      await this.discardReturnDraft(draftRow.id);
+      throw new ServiceError(
+        'validation_error',
+        `Could not create the return shipment at the carrier: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    const easypostShipmentId = String(shipment.id ?? '');
+    const rates = Array.isArray(shipment.rates)
+      ? (shipment.rates as Array<Record<string, unknown>>)
+      : [];
+    const cheapest = pickCheapestRate(rates);
+    if (!easypostShipmentId || !cheapest) {
+      await this.discardReturnDraft(draftRow.id);
+      throw new ServiceError(
+        'validation_error',
+        'No return rates were available for this shipment.',
+      );
+    }
+
+    // Patch the draft with the EasyPost shipment id BEFORE claiming so the
+    // reconcile/recovery paths can find this row.
+    const { error: patchError } = await this.admin
+      .from('carrier_shipments')
+      .update({ easypost_shipment_id: easypostShipmentId })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', draftRow.id);
+    if (patchError) throw new ServiceError('internal_error', patchError.message);
+    const draftWithEasypost: CarrierShipmentRow = {
+      ...draftRow,
+      easypost_shipment_id: easypostShipmentId,
+    };
+
+    // CLAIM: 'draft'→'purchasing' BEFORE the billable buy. The 0156 per-direction
+    // unique index makes a second concurrent return-label claim for this order
+    // raise 23505, which resolveLostClaim handles idempotently.
+    const { data: claimed, error: claimError } = await this.admin
+      .from('carrier_shipments')
+      .update({ status: 'purchasing', purchased_by: this.ctx.userId })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', draftWithEasypost.id)
+      .eq('status', 'draft')
+      .select('id');
+    if (claimError) {
+      if (claimError.code === '23505') {
+        return await this.resolveLostClaim(orderRequestId, 'return');
+      }
+      throw new ServiceError('internal_error', claimError.message);
+    }
+    const claimedRows = (claimed as Array<{ id: string }> | null) ?? [];
+    if (claimedRows.length === 0) {
+      return await this.resolveLostClaim(orderRequestId, 'return');
+    }
+
+    // We OWN the claim — buy the cheapest return rate, keyed with the row id.
+    let bought: Record<string, unknown>;
+    try {
+      bought = await client.buyShipment(easypostShipmentId, cheapest.id, draftWithEasypost.id);
+    } catch (err) {
+      // SAME failure handling as the forward buy. handleBuyFailure compares-and-
+      // swaps on the claimed row's own id, so it is direction-agnostic.
+      return await this.handleBuyFailure(orderRequestId, draftWithEasypost, client, err);
+    }
+
+    const updated = await this.finalizePurchased(draftWithEasypost, bought, cheapest.id);
+
+    void audit(
+      {
+        event: 'shipping.return_label_purchased',
+        entityType: 'carrier_shipment',
+        entityId: draftWithEasypost.id,
+        extra: {
+          returnId,
+          orderRequestId,
+          carrier: updated.carrier,
+          rateCents: updated.rate_cents,
+        },
+      },
+      this.ctx,
+    );
+
+    return updated;
+  }
+
+  /**
+   * Best-effort cleanup of a just-inserted direction='return' draft that could
+   * not progress (createShipment failed, or no rates). The row is still 'draft'
+   * (it never reached 'purchasing'), so it occupies NO active slot and a failed
+   * delete is non-fatal — we mark it 'cancelled' to keep it from lingering as a
+   * stale draft. Never throws: the caller surfaces the real error.
+   */
+  private async discardReturnDraft(id: string): Promise<void> {
+    await this.admin
+      .from('carrier_shipments')
+      .update({ status: 'cancelled' })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .eq('status', 'draft');
+  }
+}
+
+/**
+ * Pick the cheapest rate from an EasyPost Shipment `rates[]`, parsing the
+ * decimal `rate` string. Returns the flattened rate (with its EasyPost id) or
+ * null when there are no usable rates.
+ */
+function pickCheapestRate(
+  rates: Array<Record<string, unknown>>,
+): { id: string; rate: number } | null {
+  let best: { id: string; rate: number } | null = null;
+  for (const r of rates) {
+    const id = typeof r.id === 'string' ? r.id : '';
+    if (!id) continue;
+    const rate = Number(r.rate);
+    if (!Number.isFinite(rate)) continue;
+    if (!best || rate < best.rate) best = { id, rate };
+  }
+  return best;
 }

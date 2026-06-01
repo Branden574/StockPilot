@@ -21,6 +21,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { RMAService } from '@/server/services/returns';
+import { ShippingService, type CarrierShipmentRow } from '@/server/services/shipping';
 
 import { hasPermission } from '@stockpilot/core';
 
@@ -69,6 +70,22 @@ export default async function ReturnDetailPage({
   }
 
   const totalQty = detail.lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
+
+  // Shipping (reverse-label) affordance: gated on the shipping module being
+  // enabled AND the viewer holding shipping:manage (owner/admin). Independent of
+  // the returns gate above. Shown only once a return is approved/received.
+  const shippingAccess = await checkModuleAccess('shipping');
+  const canManageShipping =
+    shippingAccess.enabled && hasPermission(ctx.role, 'shipping:manage');
+  let returnLabel: CarrierShipmentRow | null = null;
+  if (shippingAccess.enabled) {
+    try {
+      const shippingSvc = await ShippingService.forCurrentUser();
+      returnLabel = await shippingSvc.getReturnLabel(detail.id);
+    } catch {
+      returnLabel = null;
+    }
+  }
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -189,7 +206,25 @@ export default async function ReturnDetailPage({
             </section>
           )}
 
-          <ReturnActionsPanel returnId={detail.id} status={detail.status} />
+          <ReturnActionsPanel
+            returnId={detail.id}
+            status={detail.status}
+            canManageShipping={canManageShipping}
+            returnLabel={
+              returnLabel
+                ? {
+                    status: returnLabel.status,
+                    carrier: returnLabel.carrier,
+                    service: returnLabel.service,
+                    rate_cents: returnLabel.rate_cents,
+                    currency: returnLabel.currency,
+                    tracking_code: returnLabel.tracking_code,
+                    tracking_url: returnLabel.tracking_url,
+                    label_url: returnLabel.label_url,
+                  }
+                : null
+            }
+          />
         </div>
 
         <aside className="space-y-4">
