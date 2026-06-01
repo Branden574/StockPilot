@@ -91,17 +91,23 @@ insert into public.warehouses (id, organization_id, name, code, status)
   on conflict (id) do nothing;
 
 -- Items. quantity_on_hand is the POST-fulfilment level (units already shipped).
+-- warehouse_id is REQUIRED for visibility: inventory_items_select (0129/0140)
+-- gates reads on user_can_access_inventory(auth.uid(), warehouse_id, ...), which
+-- resolves the org THROUGH the warehouse. A NULL warehouse_id means the manager
+-- (whose access derives from org membership via that warehouse) can't see the
+-- row, so the quantity_on_hand readbacks would return NULL under the
+-- authenticated role even though the inventory math is correct.
 insert into public.inventory_items
-  (id, organization_id, name, sku, quantity_on_hand, status)
+  (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status)
   values
-    (:item_restock, :org_id, 'Restock Widget', 'SKU-RESTOCK', 100, 'active'),
-    (:item_scrap,   :org_id, 'Scrap Widget',   'SKU-SCRAP',   100, 'active'),
-    (:item_over,    :org_id, 'Over Widget',    'SKU-OVER',    100, 'active'),
-    (:item_cross,   :org_id, 'Cross Widget',   'SKU-CROSS',   100, 'active'),
-    (:item_other,   :org_id, 'Other Widget',   'SKU-OTHER',   100, 'active'),
-    (:item_durable, :org_id, 'Durable Widget', 'SKU-DURABLE', 100, 'active'),
-    (:item_idem,    :org_id, 'Idem Widget',    'SKU-IDEM',    100, 'active'),
-    (:item_cancel,  :org_id, 'Cancel Widget',  'SKU-CANCEL',  100, 'active')
+    (:item_restock, :org_id, :wh_id, 'Restock Widget', 'SKU-RESTOCK', 100, 'active'),
+    (:item_scrap,   :org_id, :wh_id, 'Scrap Widget',   'SKU-SCRAP',   100, 'active'),
+    (:item_over,    :org_id, :wh_id, 'Over Widget',    'SKU-OVER',    100, 'active'),
+    (:item_cross,   :org_id, :wh_id, 'Cross Widget',   'SKU-CROSS',   100, 'active'),
+    (:item_other,   :org_id, :wh_id, 'Other Widget',   'SKU-OTHER',   100, 'active'),
+    (:item_durable, :org_id, :wh_id, 'Durable Widget', 'SKU-DURABLE', 100, 'active'),
+    (:item_idem,    :org_id, :wh_id, 'Idem Widget',    'SKU-IDEM',    100, 'active'),
+    (:item_cancel,  :org_id, :wh_id, 'Cancel Widget',  'SKU-CANCEL',  100, 'active')
   on conflict (id) do nothing;
 
 -- A fulfilled order_request. The current status CHECK (0120 superseded the
