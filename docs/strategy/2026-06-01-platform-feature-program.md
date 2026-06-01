@@ -1,0 +1,17 @@
+# StockPilot Platform Feature Program — 2026-06-01
+
+From the feature-opportunity deep dive (workflow w4uun1uwc) re-cast through the multi-industry platform vision ([[project_product_vision_multi_industry]]). Goal: a configurable, investor-facing, multi-vertical inventory platform. Every phase ships as **toggleable modules / composable dashboard widgets** so the system molds per industry without code. Built in phases (spec → review-gated subagent build → ship, reporting between).
+
+## Phases
+1. **Analytics dashboard + cost-trend** *(START)* — Recharts (via shadcn chart primitive) **composable widgets**: inventory value over time (line/area, from the `stock_movements` ledger), value by category/warehouse (pie/donut, from `inventoryValuation`), movement volume by type (bar), switchable types; + a **supplier cost-history trend** built from our own `purchase_order_items`/`receipt_lines` unit_cost (NO scraping). Widgets are self-contained → they become the configurable dashboard in Phase 2. Recharts loaded as a **lazy client island** to protect the dashboard load-perf we just optimized. value high / effort small / feasibility easy / **all verticals**.
+2. **Customizable dashboard layout + per-org nav** — let each org pick/arrange the Phase-1 widgets (persisted per org) + a per-org nav override layer (reorder/rename/hide/custom links on top of the module-derived nav). Vectors #3/#4 in full.
+3. **Platform customization (the moat)** — custom-fields UI (define fields per item/order), configurable order/workflow statuses, and one-click **per-industry templates** ("set up as Apparel / Food / Ag / Books / 3PL" → flips the right modules + fields + workflow defaults). Vector #2.
+4. **Demand forecasting + auto-reorder** — a `planning` module: demand from movement history/seasonality, dynamic reorder point + safety stock, auto-draft POs (builds on the shipped reorder→draft-PO). Closes the #1 competitor gap; horizontal.
+5. **Vertical-proof modules** (off-by-default, prove multi-industry) — apparel variants (size/color matrix; `supports_sizes` exists), food lot/expiry/FEFO + recalls, ag harvest-lot traceability.
+6. **B2B portal + open API/webhooks/Zapier + price-monitoring connector** — authenticated branded catalog w/ per-customer price lists + reorder; REST API + outbound webhooks (`api_access` module id reserved); external price monitoring (Keepa/ISBN feeds) via the framework's unused `scheduledPull` seam, gated as an off-by-default `price_tracking` module.
+
+## Verdicts on the two explicit asks
+- **Switchable line/pie + value-over-time charts:** not present today (hand-rolled SVG only); add Recharts via the shadcn chart primitive; reconstruct from the ledger on the fly for v1; defer a daily `inventory_value_history` snapshot table until long ranges (365d+) need finance-grade history.
+- **Paste-a-URL price tracking:** DON'T lead with URL scraping (fragile selectors, ToS/anti-bot, maintenance treadmill). v1 = supplier cost-history from our OWN PO/receipt unit_cost (zero risk). v2 = a `price_tracking` connector (Keepa for Amazon, an ISBN feed like Ingram/Baker & Taylor for books) via `scheduledPull`.
+
+Competitive note: our differentiators competitors lack = entitlement-module gating + RBAC, public request portal, AI shelf-scan, charters/rentals. The cross-competitor gaps = BI dashboards (Phase 1), forecasting (Phase 4), open API (Phase 6) — all on this program.
