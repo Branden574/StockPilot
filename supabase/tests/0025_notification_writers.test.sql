@@ -35,9 +35,9 @@ insert into public.organization_members (organization_id, user_id, role, accepte
          (:org_id, :staff_id, 'staff', now())
   on conflict do nothing;
 
--- Warehouse.
-insert into public.warehouses (id, organization_id, name, status)
-  values (:wh_id, :org_id, 'Main', 'active')
+-- Warehouse. `code` is NOT NULL and unique per org (0007_internal_company.sql).
+insert into public.warehouses (id, organization_id, name, code, status)
+  values (:wh_id, :org_id, 'Main', 'MAIN', 'active')
   on conflict (id) do nothing;
 
 -- Item with reorder_point = 5, starting at 10.
@@ -121,9 +121,11 @@ select is(
 -- Test 6: PO status change notifies the creator + owner.
 -- ─────────────────────────────────────────────────────────────────────
 
+-- purchase_orders has no warehouse_id column (it scopes via
+-- destination_location_id); omit it from the fixture.
 insert into public.purchase_orders
-  (id, organization_id, po_number, status, created_by, warehouse_id)
-  values (:po_id, :org_id, 'PO-001', 'draft', :owner_id, :wh_id)
+  (id, organization_id, po_number, status, created_by)
+  values (:po_id, :org_id, 'PO-001', 'draft', :owner_id)
   on conflict (id) do nothing;
 
 update public.purchase_orders set status = 'ordered' where id = :po_id;
