@@ -23,6 +23,7 @@
     "db:reset": "supabase db reset",
     "db:push": "supabase db push",
     "db:migrate": "supabase migration up",
+    "db:test": "supabase test db",
     "prepare": "husky || true"
   },
   "devDependencies": {
@@ -32,6 +33,7 @@
     "lint-staged": "^15.2.10",
     "prettier": "^3.3.3",
     "prettier-plugin-tailwindcss": "^0.6.8",
+    "supabase": "^2.102.0",
     "turbo": "^2.9.8",
     "typescript": "^5.6.3"
   },
