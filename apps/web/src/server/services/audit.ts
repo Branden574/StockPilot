@@ -163,7 +163,15 @@ export type AuditEvent =
   // Integrations settings dead-letter view (reset to status='pending').
   | 'integration.sync_replayed'
   | 'shipping.rates_fetched'
-  | 'shipping.label_purchased';
+  | 'shipping.label_purchased'
+  // Returns / RMA (Phase A). Each lifecycle transition is audited so the
+  // restock/scrap disposition that moves inventory is fully traceable.
+  | 'return.created'
+  | 'return.approved'
+  | 'return.denied'
+  | 'return.received'
+  | 'return.closed'
+  | 'return.cancelled';
 
 interface AuditPayload {
   event: AuditEvent;

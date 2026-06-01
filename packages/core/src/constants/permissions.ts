@@ -69,6 +69,13 @@ export const PERMISSIONS = [
   // must not be able to wire up the carrier or spend on labels. Gated by the
   // off-by-default `shipping` module. Mirrors `integrations:manage`.
   'shipping:manage',
+  // Returns / RMA. Create a return from a fulfilled order, approve/deny it,
+  // receive it (which pushes inventory back via restock or writes it off via
+  // scrap), and close it. Granted to owner + admin (via ALL_PERMISSIONS) AND
+  // MANAGER — warehouse managers physically handle returned goods and run the
+  // disposition — but NOT staff/viewer. Gated by the off-by-default `returns`
+  // module.
+  'returns:manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -108,6 +115,10 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'schedule:manage',
     'rentals:create',
     'rentals:manage',
+    // Warehouse managers physically receive returned goods and run the
+    // restock/scrap disposition, so they get full returns control. Staff and
+    // viewers do not.
+    'returns:manage',
   ],
   staff: [
     'members:read',
@@ -361,6 +372,13 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     description: 'Connect a carrier (EasyPost), buy shipping labels, and view tracking.',
   },
 
+  'returns:manage': {
+    group: 'Returns',
+    label: 'Manage returns',
+    description:
+      'Create a return from a fulfilled order, approve/deny it, receive it (restock or scrap), and close it.',
+  },
+
   'rentals:create': {
     group: 'Rentals',
     label: 'Check items out and back in',
@@ -383,6 +401,7 @@ export const PERMISSION_GROUP_ORDER: ReadonlyArray<string> = [
   'Suppliers',
   'Purchase orders',
   'Order requests',
+  'Returns',
   'Cycle counts',
   'Bundles',
   'Schedule',
