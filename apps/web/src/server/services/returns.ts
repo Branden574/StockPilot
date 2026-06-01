@@ -124,6 +124,17 @@ export interface ListReturnsFilters {
   orderRequestId?: string;
 }
 
+/** A still-returnable source line on a fulfilled order (drives the create dialog). */
+export interface ReturnableLine {
+  orderRequestLineId: string;
+  itemId: string;
+  itemName: string | null;
+  itemSku: string | null;
+  quantityFulfilled: number;
+  /** Fulfilled minus what live (non-cancelled/denied) returns already claimed. */
+  quantityRemaining: number;
+}
+
 const createLineSchema = z.object({
   orderRequestLineId: z.string().uuid(),
   quantity: z.number().positive(),
@@ -208,6 +219,95 @@ export class RMAService {
       ...(header as ReturnRow),
       lines: (lines as ReturnLineRow[] | null) ?? [],
     };
+  }
+
+  /**
+   * The returnable lines for a fulfilled order, with the remaining returnable
+   * quantity per source line (quantity_fulfilled minus what live returns —
+   * not cancelled / denied — already claimed). Drives the "Create return"
+   * dialog: it pre-fills each line to its remaining-returnable default and
+   * caps the input. Returns an empty array (not an error) when the order is
+   * not returnable, so the caller can simply hide the affordance.
+   *
+   * This mirrors the createFromOrder over-return validation so the UI and the
+   * write path agree on what's returnable; the DB cap trigger remains the
+   * authoritative backstop.
+   */
+  async returnableLinesForOrder(orderRequestId: string): Promise<ReturnableLine[]> {
+    this.gate();
+
+    const { data: order, error: orderError } = await this.ctx.supabase
+      .from('order_requests')
+      .select('id, status')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', orderRequestId)
+      .maybeSingle();
+    if (orderError) throw new ServiceError('internal_error', orderError.message);
+    if (!order) return [];
+    if (!RETURNABLE_ORDER_STATUSES.has((order as { status: string }).status)) return [];
+
+    const { data: orderLines, error: linesError } = await this.ctx.supabase
+      .from('order_request_lines')
+      .select(
+        `id, item_id, quantity_fulfilled,
+         item:inventory_items!item_id (id, name, sku)`,
+      )
+      .eq('order_request_id', orderRequestId);
+    if (linesError) throw new ServiceError('internal_error', linesError.message);
+
+    const lineRows = (orderLines as Array<{
+      id: string;
+      item_id: string;
+      quantity_fulfilled: number | null;
+      item:
+        | { id: string; name: string; sku: string | null }
+        | { id: string; name: string; sku: string | null }[]
+        | null;
+    }> | null) ?? [];
+
+    const lineIds = lineRows.map((l) => l.id);
+    const alreadyReturnedByLine = new Map<string, number>();
+    if (lineIds.length > 0) {
+      const { data: priorLines, error: priorError } = await this.ctx.supabase
+        .from('return_lines')
+        .select('order_request_line_id, quantity, returns!inner(status)')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('order_request_line_id', lineIds);
+      if (priorError) throw new ServiceError('internal_error', priorError.message);
+
+      for (const pl of (priorLines as Array<{
+        order_request_line_id: string;
+        quantity: number | null;
+        returns: { status: ReturnStatus } | { status: ReturnStatus }[] | null;
+      }> | null) ?? []) {
+        const rel = Array.isArray(pl.returns) ? pl.returns[0] : pl.returns;
+        const status = rel?.status;
+        if (status === 'cancelled' || status === 'denied') continue;
+        alreadyReturnedByLine.set(
+          pl.order_request_line_id,
+          (alreadyReturnedByLine.get(pl.order_request_line_id) ?? 0) +
+            (Number(pl.quantity) || 0),
+        );
+      }
+    }
+
+    const out: ReturnableLine[] = [];
+    for (const l of lineRows) {
+      const fulfilled = Number(l.quantity_fulfilled) || 0;
+      if (fulfilled <= 0) continue;
+      const remaining = fulfilled - (alreadyReturnedByLine.get(l.id) ?? 0);
+      if (remaining <= 0) continue;
+      const item = Array.isArray(l.item) ? (l.item[0] ?? null) : (l.item ?? null);
+      out.push({
+        orderRequestLineId: l.id,
+        itemId: l.item_id,
+        itemName: item?.name ?? null,
+        itemSku: item?.sku ?? null,
+        quantityFulfilled: fulfilled,
+        quantityRemaining: remaining,
+      });
+    }
+    return out;
   }
 
   // ── Create ───────────────────────────────────────────────────────────
