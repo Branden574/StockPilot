@@ -4,23 +4,12 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
-// Mutable session state so per-test role overrides work.
+// Mutable session/MFA state so per-test role + AAL overrides work.
 const sessionState = {
   role: 'owner' as 'owner' | 'admin' | 'manager' | 'staff' | 'viewer',
+  mfaRequired: false,
+  mfaSatisfied: true,
 };
-
-vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({
-    userId: 'user-1',
-    email: 'u@e.com',
-    fullName: null,
-    avatarUrl: null,
-    defaultOrganizationId: 'org-1',
-    organizationId: 'org-1',
-    organizationName: 'Test',
-    role: sessionState.role,
-  })),
-}));
 
 const stubHolder: { stub: ReturnType<typeof makeSupabaseStub> | null } = {
   stub: null,
@@ -34,6 +23,27 @@ vi.mock('@/server/services/audit', () => ({
   audit: vi.fn(async () => undefined),
 }));
 
+// Resolve org context through `withContext` (the real action does too) so
+// the resolved `mfaRequired`/`mfaSatisfied` booleans flow into the MFA gate.
+// Mirrors profile.test.ts.
+vi.mock('@/server/services/context', async () => {
+  const actual = await vi.importActual<typeof import('@/server/services/context')>(
+    '@/server/services/context',
+  );
+  return {
+    ...actual,
+    withContext: vi.fn(async () => ({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      role: sessionState.role,
+      supabase: stubHolder.stub!.client,
+      mfaRequired: sessionState.mfaRequired,
+      mfaSatisfied: sessionState.mfaSatisfied,
+      enabledModules: new Set(),
+    })),
+  };
+});
+
 import { audit } from '@/server/services/audit';
 import type { ModuleId } from '@stockpilot/core';
 
@@ -43,7 +53,106 @@ describe('setModuleEnabledAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionState.role = 'owner';
+    sessionState.mfaRequired = false;
+    sessionState.mfaSatisfied = true;
     stubHolder.stub = null;
+  });
+
+  it('rejects an AAL1 session when the org requires MFA (forbidden, no write)', async () => {
+    // Org policy requires MFA and the session has NOT stepped up to AAL2.
+    sessionState.role = 'owner';
+    sessionState.mfaRequired = true;
+    sessionState.mfaSatisfied = false;
+
+    const upsertSpy = vi.fn((..._args: unknown[]) => ({
+      then: (resolve: (v: { error: null }) => void) => resolve({ error: null }),
+    }));
+    stubHolder.stub = makeSupabaseStub({
+      'organization_modules.select': { data: [], error: null },
+    });
+    const originalFrom = stubHolder.stub.client.from.bind(stubHolder.stub.client);
+    stubHolder.stub.client.from = vi.fn((table: string) => {
+      const chain = originalFrom(table);
+      if (table === 'organization_modules') {
+        return new Proxy(chain as object, {
+          get(target, prop: string) {
+            if (prop === 'upsert') return upsertSpy;
+            return (target as Record<string, unknown>)[prop];
+          },
+        });
+      }
+      return chain;
+    });
+
+    const result = await setModuleEnabledAction({ moduleId: 'receiving', enabled: true });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('forbidden');
+    // Fail CLOSED: no module write happened.
+    expect(upsertSpy).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('allows an AAL2 session even when the org requires MFA', async () => {
+    sessionState.role = 'owner';
+    sessionState.mfaRequired = true;
+    sessionState.mfaSatisfied = true; // stepped up to AAL2
+
+    const upsertSpy = vi.fn((..._args: unknown[]) => ({
+      then: (resolve: (v: { error: null }) => void) => resolve({ error: null }),
+    }));
+    stubHolder.stub = makeSupabaseStub({
+      'organization_modules.select': { data: [], error: null },
+    });
+    const originalFrom = stubHolder.stub.client.from.bind(stubHolder.stub.client);
+    stubHolder.stub.client.from = vi.fn((table: string) => {
+      const chain = originalFrom(table);
+      if (table === 'organization_modules') {
+        return new Proxy(chain as object, {
+          get(target, prop: string) {
+            if (prop === 'upsert') return upsertSpy;
+            return (target as Record<string, unknown>)[prop];
+          },
+        });
+      }
+      return chain;
+    });
+
+    const result = await setModuleEnabledAction({ moduleId: 'receiving', enabled: true });
+
+    expect(result.ok).toBe(true);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows an AAL1 session when the org does NOT require MFA', async () => {
+    sessionState.role = 'owner';
+    sessionState.mfaRequired = false; // policy optional -> AAL1 is fine
+    sessionState.mfaSatisfied = false;
+
+    const upsertSpy = vi.fn((..._args: unknown[]) => ({
+      then: (resolve: (v: { error: null }) => void) => resolve({ error: null }),
+    }));
+    stubHolder.stub = makeSupabaseStub({
+      'organization_modules.select': { data: [], error: null },
+    });
+    const originalFrom = stubHolder.stub.client.from.bind(stubHolder.stub.client);
+    stubHolder.stub.client.from = vi.fn((table: string) => {
+      const chain = originalFrom(table);
+      if (table === 'organization_modules') {
+        return new Proxy(chain as object, {
+          get(target, prop: string) {
+            if (prop === 'upsert') return upsertSpy;
+            return (target as Record<string, unknown>)[prop];
+          },
+        });
+      }
+      return chain;
+    });
+
+    const result = await setModuleEnabledAction({ moduleId: 'receiving', enabled: true });
+
+    expect(result.ok).toBe(true);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
   });
 
   it('rejects core moduleId (inventory) as validation_error', async () => {

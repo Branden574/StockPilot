@@ -3,10 +3,8 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { requireOrgContext } from '@/lib/auth/session';
-import { createClient } from '@/lib/supabase/server';
 import { audit } from '@/server/services/audit';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, withContext } from '@/server/services/context';
 
 import {
   MODULE_REGISTRY,
@@ -32,11 +30,23 @@ export async function setModuleEnabledAction(
     return err('validation_error', 'Core modules are always enabled.');
 
   try {
-    const ctx = await requireOrgContext();
+    // Resolve through `withContext()` (not `requireOrgContext()`) so the
+    // org's MFA policy is honored. Toggling modules — especially DISABLING
+    // an integration mid-drain — is a privileged org mutation, so it must
+    // ride the SAME org-MFA gate that `assertPermission` enforces inside
+    // services. An admin on an AAL1 session in an mfa-required org would
+    // otherwise bypass the documented MFA gate. Fail CLOSED.
+    const ctx = await withContext();
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+      return err(
+        'forbidden',
+        'Multi-factor authentication required. Enroll in MFA before performing this action.',
+      );
+    }
     if (ctx.role !== 'owner' && ctx.role !== 'admin')
       return err('forbidden', 'Only owners and admins can change modules.');
 
-    const supabase = await createClient();
+    const supabase = ctx.supabase;
     const { data: rows, error: selectError } = await supabase
       .from('organization_modules')
       .select('module_id, enabled')
