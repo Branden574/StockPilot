@@ -114,7 +114,7 @@ export function CostTrendWidget({ series, className, height = 240 }: CostTrendWi
           <YAxis
             tickLine={false}
             axisLine={false}
-            width={56}
+            width={72}
             tickFormatter={(v: number) => formatCurrency(v).replace(/\.00$/, '')}
           />
           <ChartTooltip
