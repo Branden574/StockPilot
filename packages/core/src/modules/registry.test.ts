@@ -60,6 +60,22 @@ describe('MODULE_REGISTRY', () => {
     expect(modulesForPack('retail_backroom')).not.toContain('shipping');
     expect(modulesForPack('light_3pl')).not.toContain('shipping');
   });
+  it('returns is an optional, OFF-by-default module (not in any pack)', () => {
+    const returns = MODULE_REGISTRY['returns' as ModuleId];
+    expect(returns).toBeDefined();
+    expect(returns.tier).toBe('optional');
+    expect(returns.defaultOnFor).toEqual([]);
+    expect(returns.permissions).toContain('returns:manage');
+    expect(returns.ownsTables).toEqual(expect.arrayContaining(['returns', 'return_lines']));
+    expect(returns.apiPrefixes).toContain('/api/returns');
+    expect(DEFAULT_MODULE_IDS).not.toContain('returns');
+    // OFF for every pack — never auto-enabled.
+    expect(modulesForPack('charter_school')).not.toContain('returns');
+    expect(modulesForPack('distribution')).not.toContain('returns');
+    expect(modulesForPack('agriculture_food')).not.toContain('returns');
+    expect(modulesForPack('retail_backroom')).not.toContain('returns');
+    expect(modulesForPack('light_3pl')).not.toContain('returns');
+  });
   it('covers the current web sidebar hrefs', () => {
     const webHrefs = Object.values(MODULE_REGISTRY).flatMap((m) => m.placements)
       .filter((p) => p.surface === 'web_sidebar').map((p) => p.href);
