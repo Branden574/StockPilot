@@ -19,6 +19,9 @@ import type { NavSectionKey } from '../modules/registry';
 import type { ResolvedNavItem, ResolvedNavSection } from '../modules/resolve';
 import { SECTION_ORDER } from '../modules/resolve';
 
+// Per-org custom field definitions for items (registry types + pure validator).
+export * from './custom-fields';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
