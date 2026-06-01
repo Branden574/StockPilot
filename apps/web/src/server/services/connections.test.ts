@@ -512,6 +512,166 @@ describe('ConnectionsService.disconnect', () => {
   });
 });
 
+describe('ConnectionsService.listFailedSyncs (dead-letter view)', () => {
+  function failedStub() {
+    return makeSupabaseStub({
+      'connection_sync_log.select': {
+        data: [
+          {
+            id: 'sync-dead-1',
+            topic: 'receipt.posted',
+            status: 'dead',
+            attempts: 8,
+            external_id: null,
+            last_error: 'QBO 400: invalid account id',
+            next_attempt_at: null,
+            completed_at: null,
+            created_at: '2026-05-30T00:00:00Z',
+            updated_at: '2026-05-30T01:00:00Z',
+          },
+        ],
+        error: null,
+      },
+    });
+  }
+
+  it('returns only this org\'s failed rows, scoped + status-filtered', async () => {
+    const stub = failedStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'admin',
+        enabledModules: new Set<ModuleId>(['integrations']),
+      }),
+    );
+
+    const { rows } = await svc.listFailedSyncs();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: 'sync-dead-1', status: 'dead', attempts: 8 });
+
+    // The query is org-scoped and restricted to error/dead rows.
+    const chain = stub.chains.get('connection_sync_log.select') ?? [];
+    expect(chain).toContain('eq');
+    expect(chain).toContain('in');
+    const args = stub.chainArgs.get('connection_sync_log.select') ?? [];
+    expect(args).toContainEqual(['organization_id', 'org-test']);
+    expect(args).toContainEqual(['status', ['error', 'dead']]);
+  });
+
+  it('throws forbidden when the caller lacks the manage permission', async () => {
+    const stub = failedStub();
+    const svc = new ConnectionsService(
+      // staff has neither integrations:manage nor shipping:manage.
+      makeServiceContext(stub.client, {
+        role: 'staff',
+        enabledModules: new Set<ModuleId>(['integrations']),
+      }),
+    );
+    await expect(svc.listFailedSyncs()).rejects.toMatchObject({ code: 'forbidden' });
+    // Gated before any DB read.
+    expect(stub.fromCalls).not.toContain('connection_sync_log');
+  });
+
+  it('throws module_disabled when NEITHER integrations nor shipping is enabled', async () => {
+    const stub = failedStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(),
+      }),
+    );
+    await expect(svc.listFailedSyncs()).rejects.toMatchObject({ code: 'module_disabled' });
+  });
+
+  it('is reachable for a shipping-only org with shipping:manage', async () => {
+    const stub = failedStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(['shipping']),
+      }),
+    );
+    const { rows } = await svc.listFailedSyncs();
+    expect(rows).toHaveLength(1);
+  });
+});
+
+describe('ConnectionsService.replaySync', () => {
+  it('flips a dead row to pending (attempts=0, next_attempt_at=null), org-scoped', async () => {
+    const stub = makeSupabaseStub({
+      'connection_sync_log.update': { data: [{ id: 'sync-dead-1' }], error: null },
+    });
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'admin',
+        enabledModules: new Set<ModuleId>(['integrations']),
+      }),
+    );
+
+    await svc.replaySync('sync-dead-1');
+
+    const updateArgs = stub.chainArgsAll.get('connection_sync_log.update')?.[0]?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(updateArgs.status).toBe('pending');
+    expect(updateArgs.attempts).toBe(0);
+    expect(updateArgs.next_attempt_at).toBeNull();
+
+    // Org-scoped + status-restricted UPDATE (only error/dead rows are replayable).
+    const chain = stub.chains.get('connection_sync_log.update') ?? [];
+    expect(chain).toContain('in');
+    const filterArgs = stub.chainArgs.get('connection_sync_log.update') ?? [];
+    expect(filterArgs).toContainEqual(['id', 'sync-dead-1']);
+    expect(filterArgs).toContainEqual(['organization_id', 'org-test']);
+    expect(filterArgs).toContainEqual(['status', ['error', 'dead']]);
+
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(audit).mock.calls[0]?.[0].event).toBe('integration.sync_replayed');
+  });
+
+  it('throws not_found when no replayable row matches (other-org / not failed)', async () => {
+    const stub = makeSupabaseStub({
+      // RLS / filters matched nothing → maybeSingle resolves null.
+      'connection_sync_log.update': { data: [], error: null },
+    });
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'admin',
+        enabledModules: new Set<ModuleId>(['integrations']),
+      }),
+    );
+    await expect(svc.replaySync('missing-id')).rejects.toMatchObject({ code: 'not_found' });
+    // No audit emitted on a no-op replay.
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('throws forbidden when the caller lacks the manage permission', async () => {
+    const stub = makeSupabaseStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'staff',
+        enabledModules: new Set<ModuleId>(['integrations']),
+      }),
+    );
+    await expect(svc.replaySync('sync-dead-1')).rejects.toMatchObject({ code: 'forbidden' });
+    // Gated before any DB write.
+    expect(stub.fromCalls).not.toContain('connection_sync_log');
+  });
+
+  it('throws module_disabled when NEITHER integrations nor shipping is enabled', async () => {
+    const stub = makeSupabaseStub();
+    const svc = new ConnectionsService(
+      makeServiceContext(stub.client, {
+        role: 'owner',
+        enabledModules: new Set<ModuleId>(),
+      }),
+    );
+    await expect(svc.replaySync('sync-dead-1')).rejects.toMatchObject({ code: 'module_disabled' });
+    expect(stub.fromCalls).not.toContain('connection_sync_log');
+  });
+});
+
 describe('ConnectionsService.saveAccountMapping', () => {
   it('persists the QBO account ids into settings.accountIds', async () => {
     const stub = makeSupabaseStub({
