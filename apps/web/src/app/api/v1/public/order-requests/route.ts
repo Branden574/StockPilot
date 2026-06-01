@@ -23,8 +23,11 @@ export const dynamic = 'force-dynamic';
  * only thing standing between a stranger and our DB, so each step
  * runs BEFORE any write.
  *
- * Rate-limited to 10 requests per IP per hour (in-memory; v1.1 will
- * promote this to a Supabase-backed bucket — see `lib/rate-limit.ts`).
+ * Rate-limited via three independent Supabase-backed buckets (migration
+ * 0048, see `lib/rate-limit.ts`), all in fail-CLOSED mode: per-IP
+ * (10/hr), per-email (5/hr), and per-token (60/hr). A denial returns 429
+ * and is metered through `reportError` at warning level so abuse is
+ * observable.
  */
 
 const lineSchema = z.object({
@@ -219,6 +222,30 @@ export async function POST(req: NextRequest) {
         : null;
   if (denied) {
     const retryAfter = Math.max(1, Math.ceil((denied.resetAt - Date.now()) / 1000));
+    // Meter the HIT so abuse is observable. This is the load-bearing
+    // signal for "someone is hammering the public form" — without it a
+    // sustained attack is invisible until a manager notices the missing
+    // submissions (or the absence of complaints). `reportError` at
+    // `warning` level routes to the same webhook/console sink as the
+    // rest of the app. Extras are non-PII: which bucket tripped, the
+    // current count, and a token prefix only (never the full token,
+    // requester email, or raw IP). Best-effort — never let the metric
+    // throw and turn a clean 429 into a 500.
+    const trippedBucket = !ipLimit.allowed
+      ? 'ip'
+      : !emailLimit.allowed
+        ? 'email'
+        : 'token';
+    void reportError(new Error(`public order-request rate limit hit (${trippedBucket})`), {
+      tag: 'public.order-requests.rate-limited',
+      level: 'warning',
+      extra: {
+        bucket: trippedBucket,
+        count: denied.count,
+        retryAfterSeconds: retryAfter,
+        tokenPrefix: body.token.slice(0, 8),
+      },
+    });
     return NextResponse.json(
       {
         error: 'rate_limited',
