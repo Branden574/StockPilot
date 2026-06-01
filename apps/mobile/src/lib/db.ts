@@ -195,8 +195,17 @@ export async function setMeta(key: string, value: string): Promise<void> {
   );
 }
 
-export async function wipeForSignOut(): Promise<void> {
-  const db = await getDb();
+/**
+ * Clears every per-org cached data table (items, warehouses, POs + lines,
+ * cycle counts + lines, bundles + components) and resets the sync cursor
+ * (`last_synced_at`) plus the persisted `enabled_modules` set. Shared by
+ * `deleteOrgData` (org switch) and `wipeForSignOut` (sign-out).
+ *
+ * Deliberately does NOT touch `pending_actions` — see the note on
+ * `deleteOrgData` for the org-keying limitation. Callers that truly want a
+ * full reset (sign-out) drop pending separately.
+ */
+async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.execAsync(`
     delete from items;
     delete from warehouses;
@@ -206,8 +215,44 @@ export async function wipeForSignOut(): Promise<void> {
     delete from cycle_count_lines;
     delete from bundles;
     delete from bundle_components;
-    delete from pending_actions;
     delete from meta where key = 'last_synced_at';
     delete from meta where key = 'enabled_modules';
   `);
+}
+
+/**
+ * Wipe the local SQLite cache for an ORG SWITCH (multi-org device isolation).
+ *
+ * Clears all per-org cached data tables and resets the delta cursor
+ * (`last_synced_at`) so the next snapshot pull MUST be unconditional (no
+ * `?since`) and therefore scoped entirely to the newly-active org. Without
+ * this, a multi-org user transiently sees the previous org's
+ * items/POs/counts/bundles, and the `?since` cursor is wrong (it belongs to
+ * the prior org's timeline).
+ *
+ * Also clears the persisted `enabled_modules` so the drawer/tab gating
+ * re-derives from the new org's snapshot rather than the prior org's set.
+ *
+ * KNOWN LIMITATION — pending_actions are NOT org-keyed: the table has no
+ * organization_id column, so we cannot reliably know which org a queued
+ * offline write (receive_po_line / record_count / distribute_bundle / …)
+ * belongs to. Rather than SILENTLY DROP a pending write on switch — which
+ * could lose a user's queued PO receipt or count — we PRESERVE the queue as-is.
+ * Each drain endpoint is independently server-side gated (assertModuleEnabled
+ * + per-warehouse access + RLS), so a stale cross-org row 4xxs and lands in the
+ * queue UI as "failed" rather than mutating the wrong org's data. Properly
+ * scoping the outbox per org (add organization_id + flush-on-switch) is a
+ * follow-up.
+ */
+export async function deleteOrgData(): Promise<void> {
+  const db = await getDb();
+  await clearOrgScopedTables(db);
+}
+
+export async function wipeForSignOut(): Promise<void> {
+  const db = await getDb();
+  await clearOrgScopedTables(db);
+  // Sign-out is a full reset: the user (and any queued writes) are leaving the
+  // device session entirely, so the pending outbox is dropped here too.
+  await db.execAsync('delete from pending_actions;');
 }

@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as React from 'react';
 
 import { useAuth } from './auth-context';
+import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
 import { syncNow } from './sync';
 import { supabase } from './supabase';
@@ -138,6 +139,17 @@ async function hydrate(userId: string) {
 export async function setActiveOrg(orgId: string): Promise<void> {
   if (orgId === cached.activeOrgId) return;
   await AsyncStorage.setItem(ORG_STORAGE_KEY, orgId);
+  // Multi-org device isolation: wipe the prior org's cached SQLite tables and
+  // reset the delta cursor BEFORE the pull below. Without this, the local
+  // items/POs/counts/bundles lists would transiently show the previous org's
+  // rows, and pullSnapshot's `?since` cursor (from the prior org's timeline)
+  // would be wrong. deleteOrgData deliberately preserves pending_actions (the
+  // outbox is not org-keyed — see its doc comment).
+  try {
+    await deleteOrgData();
+  } catch (err) {
+    console.warn('[workspace] deleteOrgData on org switch failed', err);
+  }
   const orgRow = cached.orgs.find((o) => o.id === orgId) ?? null;
   publish({
     activeOrgId: orgId,
@@ -157,21 +169,19 @@ export async function setActiveOrg(orgId: string): Promise<void> {
     activeWarehouseId,
     activeWarehouseName: activeWarehouse?.name ?? null,
   });
-  // Pull a fresh snapshot scoped to the new org (api.ts now sends
-  // X-Organization-Id from the persisted activeOrgId), then notify
-  // useEnabledModules hooks so the drawer + tabs refresh without remount.
-  // Fire-and-forget: syncNow swallows its own errors, so on failure the
-  // refresh simply doesn't fire and the existing entitlement set persists
-  // until the next background sync — no unhandled rejection.
+  // Pull a FULL snapshot scoped to the new org (api.ts sends
+  // X-Organization-Id from the persisted activeOrgId). We pass force=true so
+  // the pull ignores the prior org's `last_synced_at` cursor (just cleared by
+  // deleteOrgData) and re-scopes every local table to the newly-active org.
+  // Then notify useEnabledModules hooks so the drawer + tabs refresh without a
+  // remount.
   //
-  // KNOWN LIMITATION (out of scope here — entitlements only): the local
-  // SQLite item/PO/count tables are NOT yet wiped/re-scoped on an org switch,
-  // and pullSnapshot sends `?since=<last_synced_at>` from the previous org's
-  // timeline. So for a true multi-org user, the NAV updates correctly but the
-  // cached data lists can show the prior org's rows until a full resync. Full
-  // multi-org device data-isolation (wipe + unconditional first pull on switch)
-  // is a separate effort; harmless today since prod is single-org.
-  void syncNow().then(() => refreshEnabledModules());
+  // Fire-and-forget: syncNow swallows its own errors, so on failure the refresh
+  // simply doesn't fire and the (now-empty) cache is repopulated by the next
+  // background sync — no unhandled rejection. The local tables were already
+  // wiped above, so a failed pull leaves an empty cache for the NEW org rather
+  // than stale rows from the PREVIOUS one.
+  void syncNow(true).then(() => refreshEnabledModules());
 }
 
 export async function setActiveWarehouse(warehouseId: string | null): Promise<void> {
