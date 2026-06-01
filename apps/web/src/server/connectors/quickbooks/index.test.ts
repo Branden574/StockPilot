@@ -349,3 +349,174 @@ describe('quickbooksConnector via runDrain (integration) — Step 6', () => {
     expect(postSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── return.closed → QBO CreditMemo (Phase B) ───────────────────────────────
+
+const returnEvent: OutboxEvent = {
+  id: 'evt-2',
+  organizationId: 'org-1',
+  topic: 'return.closed',
+  aggregateType: 'return',
+  aggregateId: 'ret-1',
+  payload: {},
+  dedupeKey: 'return.closed:ret-1',
+  createdAt: new Date().toISOString(),
+};
+
+const returnConn: ConnectionRef = {
+  ...conn,
+  settings: { env: 'sandbox', accountIds: { returnCredit: 'acct-47' } },
+};
+
+describe('quickbooksConnector.handleOutboxEvent — return.closed → CreditMemo', () => {
+  beforeEach(() => {
+    // The default postSpy returns a Bill; for the CreditMemo path return a
+    // CreditMemo so the connector can read CreditMemo.Id.
+    postSpy.mockReset().mockResolvedValue({ CreditMemo: { Id: 'qbo-cm-5' } });
+  });
+
+  it('posts a single CreditMemo, returns its id, and maps return→CreditMemo.Id (idempotent requestid)', async () => {
+    const admin = makeAdmin({
+      tables: {
+        returns: { data: { id: 'ret-1', return_number: 'RMA-1' }, error: null },
+        return_lines: {
+          data: [
+            { quantity: 2, order_request_line: { unit_cost_at_request: 5 } },
+            { quantity: 1, order_request_line: { unit_cost_at_request: 3 } },
+          ],
+          error: null,
+        },
+      },
+    });
+    const deps = makeDeps({ admin });
+
+    const res = await quickbooksConnector.handleOutboxEvent(returnEvent, returnConn, {} as any, deps);
+
+    expect(res).toEqual({ ok: true, externalId: 'qbo-cm-5' });
+    // 2*5 + 1*3 = 13
+    expect(postSpy).toHaveBeenCalledTimes(1);
+    expect(postSpy).toHaveBeenCalledWith(
+      '/creditmemo',
+      expect.objectContaining({ Line: [expect.objectContaining({ Amount: 13 })] }),
+      'return-ret-1',
+    );
+    expect(deps.putMapping).toHaveBeenCalledWith(
+      'conn-1',
+      'org-1',
+      'return',
+      'ret-1',
+      'qbo-cm-5',
+    );
+  });
+
+  it('fails NON-retryably when returnCredit account is not configured', async () => {
+    const connNoAccount: ConnectionRef = { ...conn, settings: { env: 'sandbox', accountIds: {} } };
+    const res = await quickbooksConnector.handleOutboxEvent(
+      returnEvent,
+      connNoAccount,
+      {} as any,
+      makeDeps({ admin: makeAdmin({}) }),
+    );
+    expect(res).toEqual({
+      ok: false,
+      retryable: false,
+      error: 'returnCredit account not configured',
+    });
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('THROWS (does not ack) on a transient returns read error', async () => {
+    const admin = makeAdmin({
+      tables: { returns: { data: null, error: { message: 'returns boom' } } },
+    });
+    await expect(
+      quickbooksConnector.handleOutboxEvent(returnEvent, returnConn, {} as any, makeDeps({ admin })),
+    ).rejects.toThrow(/returns boom/);
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('acks (ok:true) only when the return is genuinely absent (no error, null row)', async () => {
+    const admin = makeAdmin({ tables: { returns: { data: null, error: null } } });
+    const res = await quickbooksConnector.handleOutboxEvent(
+      returnEvent,
+      returnConn,
+      {} as any,
+      makeDeps({ admin }),
+    );
+    expect(res).toEqual({ ok: true });
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('THROWS on a transient return_lines read error', async () => {
+    const admin = makeAdmin({
+      tables: {
+        returns: { data: { id: 'ret-1', return_number: 'RMA-1' }, error: null },
+        return_lines: { data: null, error: { message: 'lines boom' } },
+      },
+    });
+    await expect(
+      quickbooksConnector.handleOutboxEvent(returnEvent, returnConn, {} as any, makeDeps({ admin })),
+    ).rejects.toThrow(/lines boom/);
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('acks without POSTing when the credited total rounds to $0.00', async () => {
+    const admin = makeAdmin({
+      tables: {
+        returns: { data: { id: 'ret-1', return_number: 'RMA-1' }, error: null },
+        return_lines: {
+          data: [{ quantity: 1, order_request_line: { unit_cost_at_request: 0 } }],
+          error: null,
+        },
+      },
+    });
+    const res = await quickbooksConnector.handleOutboxEvent(
+      returnEvent,
+      returnConn,
+      {} as any,
+      makeDeps({ admin }),
+    );
+    expect(res).toEqual({ ok: true });
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('classifies a 5xx CreditMemo POST error as retryable', async () => {
+    postSpy.mockReset().mockRejectedValue(Object.assign(new Error('qbo down'), { status: 503 }));
+    const admin = makeAdmin({
+      tables: {
+        returns: { data: { id: 'ret-1', return_number: 'RMA-1' }, error: null },
+        return_lines: {
+          data: [{ quantity: 1, order_request_line: { unit_cost_at_request: 9 } }],
+          error: null,
+        },
+      },
+    });
+    const res = await quickbooksConnector.handleOutboxEvent(
+      returnEvent,
+      returnConn,
+      {} as any,
+      makeDeps({ admin }),
+    );
+    expect(res).toMatchObject({ ok: false, retryable: true });
+  });
+
+  it('classifies a 400 CreditMemo POST error as NON-retryable', async () => {
+    postSpy.mockReset().mockRejectedValue(Object.assign(new Error('bad request'), { status: 400 }));
+    const admin = makeAdmin({
+      tables: {
+        returns: { data: { id: 'ret-1', return_number: 'RMA-1' }, error: null },
+        return_lines: {
+          data: [{ quantity: 1, order_request_line: { unit_cost_at_request: 9 } }],
+          error: null,
+        },
+      },
+    });
+    const res = await quickbooksConnector.handleOutboxEvent(
+      returnEvent,
+      returnConn,
+      {} as any,
+      makeDeps({ admin }),
+    );
+    expect(res).toMatchObject({ ok: false, retryable: false });
+  });
+});

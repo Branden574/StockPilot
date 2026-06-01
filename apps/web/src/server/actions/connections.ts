@@ -30,6 +30,10 @@ const accountMappingSchema = z.object({
   billExpense: z.string().max(64).trim(),
   inventoryAsset: z.string().max(64).trim(),
   valuationOffset: z.string().max(64).trim(),
+  // Account a closed return's CreditMemo is booked against (Phase B). Optional
+  // with a default so saving a mapping from an older form (pre-returnCredit)
+  // still parses and just leaves it blank.
+  returnCredit: z.string().max(64).trim().default(''),
 });
 
 function toActionError(e: unknown): ActionResult<never> {
@@ -136,14 +140,20 @@ export async function saveAccountMappingAction(
     billExpense: string;
     inventoryAsset: string;
     valuationOffset: string;
+    returnCredit?: string;
   },
 ): Promise<ActionResult> {
   const parsed = accountMappingSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid account mapping');
-  const { provider, billExpense, inventoryAsset, valuationOffset } = parsed.data;
+  const { provider, billExpense, inventoryAsset, valuationOffset, returnCredit } = parsed.data;
   try {
     const svc = await ConnectionsService.forCurrentUser();
-    await svc.saveAccountMapping(provider, { billExpense, inventoryAsset, valuationOffset });
+    await svc.saveAccountMapping(provider, {
+      billExpense,
+      inventoryAsset,
+      valuationOffset,
+      returnCredit,
+    });
     revalidatePath('/dashboard/settings/integrations');
     return ok(undefined);
   } catch (e) {

@@ -24,6 +24,8 @@ export interface AccountMapping {
   billExpense: string;
   inventoryAsset: string;
   valuationOffset: string;
+  /** Account a closed return's CreditMemo is booked against (Phase B). */
+  returnCredit: string;
 }
 
 /** One health row from connection_sync_log surfaced to the settings UI. */
@@ -575,12 +577,18 @@ export class ConnectionsService {
     if (!row) throw new ServiceError('not_found', `No ${provider} connection to configure.`);
 
     const current = ((row as { settings: Record<string, unknown> | null }).settings) ?? {};
+    // Merge with any existing accountIds (e.g. a defaultVendorId/defaultCustomerId
+    // set out of band) so saving the mapped fields never clobbers them.
+    const currentAccountIds =
+      (current.accountIds as Record<string, unknown> | undefined) ?? {};
     const nextSettings = {
       ...current,
       accountIds: {
+        ...currentAccountIds,
         billExpense: mapping.billExpense.trim(),
         inventoryAsset: mapping.inventoryAsset.trim(),
         valuationOffset: mapping.valuationOffset.trim(),
+        returnCredit: mapping.returnCredit.trim(),
       },
     };
 

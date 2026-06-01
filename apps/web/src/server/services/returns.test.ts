@@ -393,6 +393,46 @@ describe('RMAService lifecycle transitions', () => {
     expect(dispositionCalls[0]?.args).toMatchObject({ p_return_id: 'ret-1' });
   });
 
+  it('close: publishes a return.closed outbox event with the credit total (Phase B)', async () => {
+    const stub = makeReturnStub('received', {
+      'rpc:process_return_disposition': {
+        data: {
+          id: 'ret-1',
+          organization_id: 'org-test',
+          order_request_id: ORDER_ID,
+          return_number: 'RMA-1',
+          status: 'closed',
+        },
+        error: null,
+      },
+      // publishReturnClosed reads the lines (joined to the source order line's
+      // unit_cost_at_request) to compute the informational total.
+      'return_lines.select': {
+        data: [
+          { quantity: 2, order_request_line: { unit_cost_at_request: 5 } },
+          { quantity: 1, order_request_line: { unit_cost_at_request: 3 } },
+        ],
+        error: null,
+      },
+      'rpc:publish_outbox': { data: null, error: null },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    await svc.close('ret-1');
+
+    const publish = stub.rpcCalls.find((c) => c.name === 'publish_outbox');
+    expect(publish).toBeTruthy();
+    expect(publish?.args).toMatchObject({
+      p_topic: 'return.closed',
+      p_aggregate_type: 'return',
+      p_aggregate_id: 'ret-1',
+      p_dedupe_key: 'return.closed:ret-1',
+      p_payload: { orderRequestId: ORDER_ID, lineCount: 2, total: 13 },
+    });
+  });
+
   it('close: a second close on an already-closed return is rejected (disposition applied once)', async () => {
     const stub = makeReturnStub('closed');
     const svc = new RMAService(

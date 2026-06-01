@@ -37,7 +37,12 @@ export async function POST(
   }
 
   const body = (await req.json().catch(() => null)) as
-    | { billExpense?: unknown; inventoryAsset?: unknown; valuationOffset?: unknown }
+    | {
+        billExpense?: unknown;
+        inventoryAsset?: unknown;
+        valuationOffset?: unknown;
+        returnCredit?: unknown;
+      }
     | null;
   if (
     !body ||
@@ -60,6 +65,9 @@ export async function POST(
       billExpense: body.billExpense,
       inventoryAsset: body.inventoryAsset,
       valuationOffset: body.valuationOffset,
+      // Optional on this surface; the web Integrations form is the primary
+      // editor. Blank leaves the CreditMemo export gracefully unconfigured.
+      returnCredit: nonEmptyString(body.returnCredit) ? body.returnCredit : '',
     });
     return NextResponse.json({ ok: true });
   } catch (e) {

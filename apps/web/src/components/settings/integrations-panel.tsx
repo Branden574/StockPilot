@@ -75,7 +75,12 @@ export interface QuickBooksPanelProps {
   lastConnectedAt: string | null;
   lastSyncedAt: string | null;
   lastError: string | null;
-  accountIds: { billExpense?: string; inventoryAsset?: string; valuationOffset?: string };
+  accountIds: {
+    billExpense?: string;
+    inventoryAsset?: string;
+    valuationOffset?: string;
+    returnCredit?: string;
+  };
   health: SyncHealthRow[];
   /** EasyPost shipping connection; null hides the card. */
   easyPost?: EasyPostPanelProps | null;
@@ -122,6 +127,7 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
   const [valuationOffset, setValuationOffset] = React.useState(
     props.accountIds.valuationOffset ?? '',
   );
+  const [returnCredit, setReturnCredit] = React.useState(props.accountIds.returnCredit ?? '');
 
   function handleConnect() {
     startConnect(async () => {
@@ -154,6 +160,7 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
         billExpense,
         inventoryAsset,
         valuationOffset,
+        returnCredit,
       });
       if (res.ok) {
         toast.success('Account mapping saved.');
@@ -285,6 +292,19 @@ export function IntegrationsPanel(props: QuickBooksPanelProps) {
                 placeholder="e.g. 90"
                 inputMode="numeric"
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="qbo-return-credit">Return credit account ID</Label>
+              <Input
+                id="qbo-return-credit"
+                value={returnCredit}
+                onChange={(e) => setReturnCredit(e.target.value)}
+                placeholder="e.g. 47"
+                inputMode="numeric"
+              />
+              <p className="text-muted-foreground text-xs">
+                Closed returns post as CreditMemos against this account.
+              </p>
             </div>
             <Button
               type="submit"
