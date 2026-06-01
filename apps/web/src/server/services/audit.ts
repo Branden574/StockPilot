@@ -142,6 +142,9 @@ export type AuditEvent =
   // Per-org dashboard customization (Phase 2). An admin saved or reset the
   // sidebar nav overrides (hide/rename/reorder/custom links) for the org.
   | 'nav_overrides.updated'
+  // Per-org dashboard customization (Phase 2). An admin saved or reset the
+  // landing dashboard widget layout (show/hide + reorder) for the org.
+  | 'dashboard_layout.updated'
   // MFA discrete events (replacing prior misuse of user.role.changed
   // and warehouse.updated for these forensic-relevant flows).
   | 'mfa.enrolled'
