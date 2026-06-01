@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -36,6 +37,7 @@ interface PendingConfirm {
 }
 
 export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
+  const router = useRouter();
   const [enabled, setEnabled] = React.useState<Set<ModuleId>>(() => new Set(enabledIds));
   const [pending, startTransition] = React.useTransition();
   // Which module toggle is currently in-flight, so we can grey it out.
@@ -68,6 +70,12 @@ export function ModuleToggles({ modules, enabledIds }: ModuleTogglesProps) {
       setSavingId(null);
       if (res.ok) {
         setEnabled(new Set(res.data.enabled));
+        // Re-render the server tree (dashboard layout → DashboardShell →
+        // Sidebar) so the module-derived nav adds/removes the link IMMEDIATELY,
+        // without a manual reload. The optimistic setEnabled above only updates
+        // this settings list; the sidebar reads its module set on the server,
+        // so it needs this soft RSC refresh to reflect the toggle live.
+        router.refresh();
         toast.success(
           next ? `${MODULE_REGISTRY[moduleId].title} enabled.` : `${MODULE_REGISTRY[moduleId].title} disabled.`,
         );
