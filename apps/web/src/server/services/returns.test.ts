@@ -339,7 +339,10 @@ describe('RMAService lifecycle transitions', () => {
     await expect(svc.deny('ret-1', 'duplicate request')).resolves.toBeTruthy();
     const payload = stub.chainArgs.get('returns.update')?.[0]?.[0] as Record<string, unknown>;
     expect(payload.status).toBe('denied');
-    expect(payload.notes).toBe('duplicate request');
+    // The reason goes to the dedicated denial_reason column (0154), NOT notes —
+    // so it can't clobber creation-time notes from createFromOrder.
+    expect(payload.denial_reason).toBe('duplicate request');
+    expect(payload.notes).toBeUndefined();
   });
 });
 
