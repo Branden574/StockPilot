@@ -37,6 +37,14 @@ export interface OrgRow {
    */
   nav_overrides: unknown;
   dashboard_layout: unknown;
+  /**
+   * Per-org SOFT order status presentation override (label/color/sortOrder per
+   * status key), added by migration 0160. Typed `unknown` so the pure
+   * `resolveOrderStatusConfig` in @stockpilot/core stays the single validator
+   * (fails CLOSED to canonical defaults on null/garbage). Read off the cached
+   * org row → zero extra round-trips (preserves load-perf).
+   */
+  order_status_config: unknown;
 }
 
 export const getOrgRowForRequest = cache(
@@ -44,7 +52,9 @@ export const getOrgRowForRequest = cache(
     const supabase = await createClient();
     const { data } = await supabase
       .from('organizations')
-      .select('terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout')
+      .select(
+        'terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout, order_status_config',
+      )
       .eq('id', organizationId)
       .maybeSingle();
     return (data as OrgRow | null) ?? null;

@@ -151,6 +151,10 @@ export type AuditEvent =
   | 'custom_field_definition.created'
   | 'custom_field_definition.updated'
   | 'custom_field_definition.archived'
+  // Per-org platform customization (Phase 3 T2). An admin saved or reset the
+  // order status presentation config (label/color/sortOrder per status) — a
+  // SOFT override that never touches the status CHECK or the state machine.
+  | 'order_status_config.updated'
   // MFA discrete events (replacing prior misuse of user.role.changed
   // and warehouse.updated for these forensic-relevant flows).
   | 'mfa.enrolled'

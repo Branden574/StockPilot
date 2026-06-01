@@ -83,6 +83,14 @@ const CUSTOM_FIELDS_SECTIONS = [
   { href: '/dashboard/settings/custom-fields', title: 'Custom fields', description: 'Define extra item fields — warranty, voltage, color, and more.' },
 ];
 
+// Order statuses — rename + recolor the order request status badges for the
+// whole org (a soft presentation override; the workflow is unchanged). Same
+// `organization:update` gate as Modules / Navigation; the underlying page
+// redirects anyone without that permission.
+const ORDER_STATUS_SECTIONS = [
+  { href: '/dashboard/settings/order-statuses', title: 'Order statuses', description: 'Rename and recolor the status badges shown on order requests.' },
+];
+
 // Integrations control plane — connect external tools (QuickBooks Online).
 // Gated on `integrations:manage` (owner+admin); the underlying page also
 // redirects anyone without that permission.
@@ -103,6 +111,7 @@ export default async function SettingsPage() {
     ...(hasPermission(ctx.role, 'organization:update') ? NAVIGATION_SECTIONS : []),
     ...(hasPermission(ctx.role, 'organization:update') ? DASHBOARD_SECTIONS : []),
     ...(hasPermission(ctx.role, 'organization:update') ? CUSTOM_FIELDS_SECTIONS : []),
+    ...(hasPermission(ctx.role, 'organization:update') ? ORDER_STATUS_SECTIONS : []),
     ...(hasPermission(ctx.role, 'integrations:manage') ? INTEGRATIONS_SECTIONS : []),
   ];
   return (
