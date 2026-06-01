@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 
 import { audit } from './audit';
@@ -769,12 +770,279 @@ export class RMAService {
    * key); it's a display handle. Format: RMA-<yyyymmdd>-<6 hex>.
    */
   private generateReturnNumber(): string {
-    const now = new Date();
-    const ymd = now.toISOString().slice(0, 10).replace(/-/g, '');
-    const rand = Math.floor(Math.random() * 0xffffff)
-      .toString(16)
-      .padStart(6, '0')
-      .toUpperCase();
-    return `RMA-${ymd}-${rand}`;
+    return generateReturnNumber();
   }
+}
+
+/** Shared RMA-number generator (also used by the requester portal path). */
+function generateReturnNumber(): string {
+  const now = new Date();
+  const ymd = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const rand = Math.floor(Math.random() * 0xffffff)
+    .toString(16)
+    .padStart(6, '0')
+    .toUpperCase();
+  return `RMA-${ymd}-${rand}`;
+}
+
+// ── Requester-initiated return portal (PUBLIC, UNAUTHENTICATED) ──────────────
+
+/**
+ * Input the public `/returns/request/[token]` page POSTs. The token is the
+ * per-order `order_requests.return_token` (0156); it is the ONLY authorization
+ * the anonymous requester carries, so every field below is treated as hostile
+ * and re-validated server-side against the order the token resolves to. The
+ * client picks lines + quantities + a reason — but the service NEVER trusts the
+ * quantities or the item identity: it stamps item_id from the source line and
+ * caps each quantity by the DURABLE budget read straight off the order line.
+ */
+const requesterLineSchema = z.object({
+  orderRequestLineId: z.string().uuid(),
+  quantity: z.number().positive(),
+});
+
+const requesterReturnSchema = z.object({
+  reasonCode: z.enum(['damaged', 'wrong_item', 'end_of_year', 'overage', 'other']).optional(),
+  notes: z.string().max(2000).optional(),
+  lines: z.array(requesterLineSchema).min(1).max(100),
+});
+
+export type RequesterReturnInput = z.infer<typeof requesterReturnSchema>;
+
+/** The minimal, token-scoped order context the public page renders. */
+export interface RequesterReturnOrderContext {
+  orderRequestId: string;
+  organizationId: string;
+  requesterEmail: string | null;
+  requesterName: string | null;
+  lines: ReturnableLine[];
+}
+
+/**
+ * Resolve a `return_token` to its single order's still-returnable lines, using
+ * the service-role admin client (the requester has no JWT). Returns null when
+ * the token is unknown/expired, the order is not returnable, or the org no
+ * longer has the `returns` module enabled — every one of those is a closed-door
+ * 404 on the public surface so we never leak which tokens are live. The token
+ * scopes to EXACTLY ONE order (partial-unique index, 0156); we select by token
+ * and read only that row's lines, so no cross-order data is ever exposed.
+ *
+ * `quantityRemaining` is the DURABLE budget (quantity_fulfilled -
+ * returned_quantity) read directly off each source line — the same number the
+ * staff path enforces. It is NOT a SUM over prior return rows.
+ */
+export async function loadRequesterReturnContext(
+  admin: SupabaseClient,
+  token: string,
+): Promise<RequesterReturnOrderContext | null> {
+  // A return_token is a uuid (0156). Reject anything that can't be one BEFORE
+  // hitting the DB so a malformed token is a cheap 404, not a 500.
+  if (!token || !/^[0-9a-fA-F-]{36}$/.test(token)) return null;
+
+  const { data: order, error: orderError } = await admin
+    .from('order_requests')
+    .select('id, organization_id, status, requester_email, requester_name')
+    .eq('return_token', token)
+    .maybeSingle();
+  if (orderError || !order) return null;
+
+  const o = order as {
+    id: string;
+    organization_id: string;
+    status: string;
+    requester_email: string | null;
+    requester_name: string | null;
+  };
+  if (!RETURNABLE_ORDER_STATUSES.has(o.status)) return null;
+
+  // The org must still have the returns module enabled. Mirror the public
+  // order-request route's direct organization_modules check (no ServiceContext
+  // on this anonymous path). 404 (return null) rather than 403 so we don't
+  // leak that the org exists with the feature off.
+  const { data: modRow, error: modErr } = await admin
+    .from('organization_modules')
+    .select('module_id')
+    .eq('organization_id', o.organization_id)
+    .eq('module_id', 'returns')
+    .eq('enabled', true)
+    .maybeSingle();
+  if (modErr || !modRow) return null;
+
+  const { data: orderLines, error: linesError } = await admin
+    .from('order_request_lines')
+    .select(
+      `id, item_id, quantity_fulfilled, returned_quantity,
+       item:inventory_items!item_id (id, name, sku)`,
+    )
+    .eq('order_request_id', o.id);
+  if (linesError) return null;
+
+  const lineRows = (orderLines as Array<{
+    id: string;
+    item_id: string;
+    quantity_fulfilled: number | null;
+    returned_quantity: number | null;
+    item:
+      | { id: string; name: string; sku: string | null }
+      | { id: string; name: string; sku: string | null }[]
+      | null;
+  }> | null) ?? [];
+
+  const lines: ReturnableLine[] = [];
+  for (const l of lineRows) {
+    const fulfilled = Number(l.quantity_fulfilled) || 0;
+    if (fulfilled <= 0) continue;
+    const remaining = fulfilled - (Number(l.returned_quantity) || 0);
+    if (remaining <= 0) continue;
+    const item = Array.isArray(l.item) ? (l.item[0] ?? null) : (l.item ?? null);
+    lines.push({
+      orderRequestLineId: l.id,
+      itemId: l.item_id,
+      itemName: item?.name ?? null,
+      itemSku: item?.sku ?? null,
+      quantityFulfilled: fulfilled,
+      quantityRemaining: remaining,
+    });
+  }
+
+  return {
+    orderRequestId: o.id,
+    organizationId: o.organization_id,
+    requesterEmail: o.requester_email,
+    requesterName: o.requester_name,
+    lines,
+  };
+}
+
+/**
+ * Create a `source='requester'`, `status='requested'` return from the public
+ * portal. PUBLIC + UNAUTHENTICATED: the `token` is the only authorization, so
+ * this RE-VALIDATES everything server-side against the order the token resolves
+ * to — never trusting the client:
+ *
+ *   • The token must resolve to exactly one returnable order (else not_found).
+ *   • Every submitted line must belong to THAT order (else validation_error).
+ *   • Each quantity is capped by the DURABLE budget (quantity_fulfilled -
+ *     returned_quantity) read straight off the source line — the same cap the
+ *     staff path enforces. The DB cap trigger (0153) remains the authoritative
+ *     backstop; this is the friendly early reject.
+ *   • item_id is STAMPED from the source line (the client never chooses it), so
+ *     a requester can never restock a different item than was fulfilled.
+ *   • requester_email / requester_name are taken from the ORDER, not the client,
+ *     so a stranger with a leaked token can't graft an arbitrary identity onto
+ *     the return.
+ *
+ * It lands in the staff approval queue (status='requested'); no inventory moves
+ * until a staff member approves + receives + closes it through the gated
+ * RMAService. requested_by is null (no authenticated user). Uses the admin
+ * client (RLS bypass) because the requester has no Supabase JWT.
+ */
+export async function createRequesterReturn(
+  admin: SupabaseClient,
+  token: string,
+  input: RequesterReturnInput,
+): Promise<{ id: string; returnNumber: string | null; organizationId: string }> {
+  const parsed = requesterReturnSchema.parse(input);
+
+  // 1. Re-resolve the token → order + returnable lines, server-side. This is
+  //    the authoritative check; whatever the client rendered is irrelevant.
+  const ctx = await loadRequesterReturnContext(admin, token);
+  if (!ctx) {
+    throw new ServiceError('not_found', 'This return link is invalid or has expired.');
+  }
+
+  const remainingByLine = new Map<string, ReturnableLine>();
+  for (const l of ctx.lines) remainingByLine.set(l.orderRequestLineId, l);
+
+  // 2. Validate each submitted line against the durable budget + belonging.
+  const seen = new Set<string>();
+  for (const line of parsed.lines) {
+    if (seen.has(line.orderRequestLineId)) {
+      throw new ServiceError(
+        'validation_error',
+        'Each order line may appear at most once in a return.',
+      );
+    }
+    seen.add(line.orderRequestLineId);
+
+    const src = remainingByLine.get(line.orderRequestLineId);
+    if (!src) {
+      throw new ServiceError(
+        'validation_error',
+        'One or more lines do not belong to this order or are no longer returnable.',
+      );
+    }
+    if (line.quantity > src.quantityRemaining) {
+      throw new ServiceError(
+        'validation_error',
+        `Cannot return ${line.quantity}; only ${src.quantityRemaining} of ${src.quantityFulfilled} fulfilled remain returnable for this line.`,
+        {
+          orderRequestLineId: line.orderRequestLineId,
+          remaining: src.quantityRemaining,
+          requested: line.quantity,
+        },
+      );
+    }
+  }
+
+  // 3. Insert the 'requested' header. source='requester'; requester identity is
+  //    copied from the ORDER, never the client. requested_by is null.
+  const { data: inserted, error: insertError } = await admin
+    .from('returns')
+    .insert({
+      organization_id: ctx.organizationId,
+      order_request_id: ctx.orderRequestId,
+      return_number: generateReturnNumber(),
+      status: 'requested',
+      source: 'requester',
+      reason_code: parsed.reasonCode ?? null,
+      notes: parsed.notes ?? null,
+      requested_by: null,
+      requester_email: ctx.requesterEmail,
+      requester_name: ctx.requesterName,
+    })
+    .select('id, return_number, organization_id')
+    .single();
+  if (insertError || !inserted) {
+    throw new ServiceError('internal_error', insertError?.message ?? 'Could not create return.');
+  }
+  const header = inserted as { id: string; return_number: string | null; organization_id: string };
+
+  // 4. Insert the lines. item_id is STAMPED from the source line (the client's
+  //    item choice is ignored entirely). The DB cap trigger backstops a race.
+  const lineRows = parsed.lines.map((line) => {
+    const src = remainingByLine.get(line.orderRequestLineId)!;
+    return {
+      return_id: header.id,
+      organization_id: ctx.organizationId,
+      order_request_line_id: line.orderRequestLineId,
+      item_id: src.itemId,
+      quantity: line.quantity,
+      // Requester returns default to 'restock' — staff choose the real
+      // disposition (restock vs scrap) at receive/close time. The requester
+      // never decides whether goods are scrapped.
+      disposition: 'restock' as const,
+    };
+  });
+
+  const { error: linesError } = await admin.from('return_lines').insert(lineRows);
+  if (linesError) {
+    // Roll back the orphan header so a line-insert failure doesn't strand a
+    // return with no lines (mirrors the public order-request route's pattern).
+    await admin.from('returns').delete().eq('id', header.id);
+    const msg = linesError.message ?? '';
+    if (msg.includes('return_exceeds_fulfilled')) {
+      throw new ServiceError(
+        'validation_error',
+        'This return would exceed the fulfilled quantity for one or more lines.',
+      );
+    }
+    throw new ServiceError('internal_error', msg);
+  }
+
+  return {
+    id: header.id,
+    returnNumber: header.return_number,
+    organizationId: header.organization_id,
+  };
 }

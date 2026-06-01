@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
+import { sendEmail } from '@/lib/email/resend';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -155,6 +156,46 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Returns Phase B (B4): the order just became 'completed' and is therefore
+  // RETURNABLE. If the org has the off-by-default `returns` module enabled,
+  // mint a per-order return_token (0156) so the requester can be emailed a
+  // self-service return link (/returns/request/<token>). Best-effort and
+  // idempotent — we only set the token when it's still NULL, so a replayed
+  // sign (already guarded against double-completion by the RPC) never rotates
+  // an issued token. A failure here must NOT fail the signature.
+  try {
+    const { data: modRow } = await admin
+      .from('organization_modules')
+      .select('module_id')
+      .eq('organization_id', order.organization_id)
+      .eq('module_id', 'returns')
+      .eq('enabled', true)
+      .maybeSingle();
+    if (modRow) {
+      const newToken = crypto.randomUUID();
+      // Only stamp + email when the token was still NULL — the .select()
+      // returns zero rows on a replay (token already set), so a repeated
+      // sign never re-sends the return link.
+      const { data: tokened } = await admin
+        .from('order_requests')
+        .update({ return_token: newToken })
+        .eq('id', order.id)
+        .is('return_token', null)
+        .select('id')
+        .maybeSingle();
+      if (tokened && order.requester_email) {
+        await sendReturnLinkEmail({
+          to: order.requester_email,
+          recipientName: order.requester_name,
+          appUrl: env.NEXT_PUBLIC_APP_URL,
+          token: newToken,
+        });
+      }
+    }
+  } catch {
+    /* non-fatal — the order is completed regardless of token issuance */
+  }
+
   // Fetch the full row for the completion email payload. Done AFTER
   // the RPC succeeds so the email reflects the final completed state.
   const { data: fullRow } = await admin
@@ -206,4 +247,49 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
+}
+
+/**
+ * Lightweight return-link email (Returns Phase B, B4). Sent once, when a
+ * completed order first gets a return_token issued, to the order's requester.
+ * Deliberately uses the bare `sendEmail` (not the heavier order-request
+ * templates) so the return portal can ship without coupling to in-flight
+ * template work. Best-effort: the caller wraps it so a send failure never
+ * fails the signature.
+ */
+async function sendReturnLinkEmail(args: {
+  to: string;
+  recipientName: string | null;
+  appUrl: string;
+  token: string;
+}): Promise<void> {
+  const firstName = args.recipientName?.split(' ')[0] ?? 'there';
+  const base = args.appUrl.replace(/\/+$/, '');
+  const url = `${base}/returns/request/${args.token}`;
+  const safeName = escapeHtml(firstName);
+  const safeUrl = escapeHtml(url);
+  await sendEmail({
+    to: args.to,
+    subject: 'Need to return anything from your order?',
+    html:
+      `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:480px;margin:0 auto;color:#111">` +
+      `<p>Hi ${safeName},</p>` +
+      `<p>Your order is complete. If you need to send anything back, you can start a return request below — the warehouse team will review it.</p>` +
+      `<p><a href="${safeUrl}" style="display:inline-block;background:#111;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Request a return</a></p>` +
+      `<p style="color:#666;font-size:12px">Or paste this link into your browser:<br>${safeUrl}</p>` +
+      `</div>`,
+    text:
+      `Hi ${firstName},\n\nYour order is complete. If you need to send anything back, ` +
+      `start a return request here:\n${url}\n\nThe warehouse team will review it.`,
+  });
+}
+
+/** Minimal HTML escaping for the few interpolated values above. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
