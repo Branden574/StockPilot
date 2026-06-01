@@ -150,6 +150,34 @@ export interface SupplierScorecardReport {
   totalOpenValue: number;
 }
 
+export interface CostHistoryPoint {
+  /** ISO timestamp this unit cost was committed/observed. */
+  date: string;
+  /** Unit cost we paid (or committed to pay), in org currency. */
+  unitCost: number;
+  /** Where the price came from: a PO line we ordered, or a posted receipt. */
+  source: 'purchase_order' | 'receipt';
+}
+
+export interface SupplierCostSeries {
+  /** Supplier id, or '__none' when a PO/receipt carried no supplier. */
+  supplierId: string;
+  supplierName: string;
+  /** Chronological (oldest → newest) unit-cost observations. */
+  points: CostHistoryPoint[];
+}
+
+export interface ItemCostHistory {
+  itemId: string;
+  series: SupplierCostSeries[];
+  /** Most recent unit cost across all suppliers (null when no history). */
+  lastUnitCost: number | null;
+  /** Simple mean of every observed unit cost (null when no history). */
+  avgUnitCost: number | null;
+  /** Total number of price observations across all suppliers. */
+  pointCount: number;
+}
+
 export class ReportsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -658,6 +686,202 @@ export class ReportsService {
       totalPos: rows.reduce((s, r) => s + r.totalPos, 0),
       totalSpend: rows.reduce((s, r) => s + r.totalSpend, 0),
       totalOpenValue: rows.reduce((s, r) => s + r.openValue, 0),
+    };
+  }
+
+  /**
+   * Cost history for a single item — the chronological unit_cost we have
+   * committed to (PO lines) and actually paid (posted receipt lines) over
+   * time, grouped per supplier. This is "what we've paid for this item",
+   * built only from our OWN data; no scraping, no migration.
+   *
+   * Two sources are merged:
+   *   - purchase_order_items.unit_cost, dated by the parent PO's
+   *     ordered_at (fallback created_at) and attributed to the PO's
+   *     supplier_id.
+   *   - receipt_lines.unit_cost, dated by the parent receipt's received_at
+   *     and attributed to the receipt's PO supplier_id.
+   *
+   * Org-scoping: purchase_order_items rows carry organization_id directly.
+   * receipt_lines do NOT, so we org-scope them via their parent receipt
+   * (and RLS enforces the same boundary regardless). We only consider
+   * receipts in the 'posted' state — drafts/reversals aren't money we paid.
+   */
+  async itemCostHistory(itemId: string): Promise<ItemCostHistory> {
+    // ── 1. PO lines: unit_cost committed at order time ──────────────────
+    // purchase_order_items.organization_id is the authoritative org scope;
+    // we embed the parent PO purely for its date + supplier attribution.
+    const { data: poRows, error: poErr } = await this.ctx.supabase
+      .from('purchase_order_items')
+      .select(
+        `unit_cost, purchase_order_id,
+         po:purchase_orders!purchase_order_id (
+           id, supplier_id, ordered_at, created_at,
+           supplier:suppliers!supplier_id (name)
+         )`,
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('item_id', itemId)
+      .limit(10_000);
+    if (poErr) throw new ServiceError('internal_error', poErr.message);
+
+    type PoLine = {
+      unit_cost: number;
+      purchase_order_id: string;
+      po:
+        | {
+            id: string;
+            supplier_id: string | null;
+            ordered_at: string | null;
+            created_at: string;
+            supplier: { name: string } | { name: string }[] | null;
+          }
+        | {
+            id: string;
+            supplier_id: string | null;
+            ordered_at: string | null;
+            created_at: string;
+            supplier: { name: string } | { name: string }[] | null;
+          }[]
+        | null;
+    };
+
+    // ── 2. Receipt lines: unit_cost actually paid at receive time ───────
+    // receipt_lines carry no organization_id, so scope through the parent
+    // receipt's organization_id (RLS enforces this too). The supplier is
+    // resolved off the receipt's PO.
+    const { data: rcRows, error: rcErr } = await this.ctx.supabase
+      .from('receipt_lines')
+      .select(
+        `unit_cost, item_id,
+         receipt:receipts!receipt_id (
+           id, organization_id, status, received_at,
+           po:purchase_orders!purchase_order_id (
+             supplier_id,
+             supplier:suppliers!supplier_id (name)
+           )
+         )`,
+      )
+      .eq('item_id', itemId)
+      .eq('receipt.organization_id', this.ctx.organizationId)
+      .eq('receipt.status', 'posted')
+      .limit(10_000);
+    if (rcErr) throw new ServiceError('internal_error', rcErr.message);
+
+    type ReceiptLine = {
+      unit_cost: number;
+      item_id: string;
+      receipt:
+        | {
+            id: string;
+            organization_id: string;
+            status: string;
+            received_at: string;
+            po:
+              | { supplier_id: string | null; supplier: { name: string } | { name: string }[] | null }
+              | { supplier_id: string | null; supplier: { name: string } | { name: string }[] | null }[]
+              | null;
+          }
+        | {
+            id: string;
+            organization_id: string;
+            status: string;
+            received_at: string;
+            po:
+              | { supplier_id: string | null; supplier: { name: string } | { name: string }[] | null }
+              | { supplier_id: string | null; supplier: { name: string } | { name: string }[] | null }[]
+              | null;
+          }[]
+        | null;
+    };
+
+    const NO_SUPPLIER = '__none';
+    // Per-supplier accumulator: keep the display name + the raw points.
+    const bySupplier = new Map<
+      string,
+      { supplierId: string; supplierName: string; points: CostHistoryPoint[] }
+    >();
+    const ensure = (id: string | null, name: string | null) => {
+      const key = id ?? NO_SUPPLIER;
+      let entry = bySupplier.get(key);
+      if (!entry) {
+        entry = {
+          supplierId: key,
+          supplierName: name?.trim() || 'No supplier',
+          points: [],
+        };
+        bySupplier.set(key, entry);
+      } else if ((!entry.supplierName || entry.supplierName === 'No supplier') && name?.trim()) {
+        // Backfill a name if a later row carried one the first didn't.
+        entry.supplierName = name.trim();
+      }
+      return entry;
+    };
+
+    let sum = 0;
+    let count = 0;
+    let lastDate: string | null = null;
+    let lastUnitCost: number | null = null;
+    const observe = (point: CostHistoryPoint, supplierId: string | null, supplierName: string | null) => {
+      if (!Number.isFinite(point.unitCost)) return;
+      ensure(supplierId, supplierName).points.push(point);
+      sum += point.unitCost;
+      count += 1;
+      if (!lastDate || point.date > lastDate) {
+        lastDate = point.date;
+        lastUnitCost = point.unitCost;
+      }
+    };
+
+    for (const r of (poRows ?? []) as PoLine[]) {
+      const po = Array.isArray(r.po) ? r.po[0] : r.po;
+      if (!po) continue; // orphaned line (shouldn't happen with the NOT NULL FK)
+      const supplier = Array.isArray(po.supplier) ? po.supplier[0] : po.supplier;
+      const date = po.ordered_at ?? po.created_at;
+      observe(
+        { date, unitCost: Number(r.unit_cost) || 0, source: 'purchase_order' },
+        po.supplier_id ?? null,
+        supplier?.name ?? null,
+      );
+    }
+
+    for (const r of (rcRows ?? []) as ReceiptLine[]) {
+      const receipt = Array.isArray(r.receipt) ? r.receipt[0] : r.receipt;
+      // Defensive: the .eq('receipt.organization_id', …) filter only
+      // restricts the embedded join, so a row whose receipt was filtered
+      // out comes back with receipt === null. Skip those.
+      if (!receipt) continue;
+      const po = Array.isArray(receipt.po) ? receipt.po[0] : receipt.po;
+      const supplier = po ? (Array.isArray(po.supplier) ? po.supplier[0] : po.supplier) : null;
+      observe(
+        { date: receipt.received_at, unitCost: Number(r.unit_cost) || 0, source: 'receipt' },
+        po?.supplier_id ?? null,
+        supplier?.name ?? null,
+      );
+    }
+
+    // Sort each supplier's points chronologically, then order suppliers by
+    // their most-recent observation so the legend leads with the supplier
+    // we bought from last.
+    const series: SupplierCostSeries[] = [...bySupplier.values()]
+      .map((s) => ({
+        supplierId: s.supplierId,
+        supplierName: s.supplierName,
+        points: s.points.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)),
+      }))
+      .filter((s) => s.points.length > 0)
+      .sort((a, b) => {
+        const al = a.points[a.points.length - 1]!.date;
+        const bl = b.points[b.points.length - 1]!.date;
+        return al < bl ? 1 : al > bl ? -1 : 0;
+      });
+
+    return {
+      itemId,
+      series,
+      lastUnitCost,
+      avgUnitCost: count > 0 ? sum / count : null,
+      pointCount: count,
     };
   }
 

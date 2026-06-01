@@ -20,6 +20,12 @@ import Link from 'next/link';
 
 import { BigChart } from '@/components/dashboard/big-chart';
 import { MiniBarChart } from '@/components/dashboard/mini-bar-chart';
+import { AnalyticsSection } from '@/components/dashboard/charts/analytics-section';
+import {
+  toBreakdownSlices,
+  toMovementBars,
+  toValueSeries,
+} from '@/components/dashboard/charts/widget-data';
 import { EmptyState } from '@/components/ui/empty-state';
 import { GetStartedChecklist } from '@/components/dashboard/get-started-checklist';
 import { StatCard } from '@/components/dashboard/stat-card';
@@ -39,6 +45,7 @@ import {
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
+import { ReportsService } from '@/server/services/reports';
 import { requireOrgContext } from '@/lib/auth/session';
 import {
   getMfaFactorsForRequest,
@@ -261,6 +268,12 @@ async function DashboardBody({
     pendingApprovals,
     awaitingSignature,
     teamCountRes,
+    // Analytics-section inputs. history90 powers the value widget's 90d
+    // range toggle (history above is the 30d series the StatCards reuse);
+    // valuation feeds the category/warehouse breakdown donut. Both join the
+    // single fan-out so they don't add a serial round trip.
+    history90,
+    valuation,
     // Request-cached: warehousesList + mfaFactors are already fetched by the
     // dashboard layout (and the shell, for orgRow) in the same render.
     // React.cache() guarantees we get that result without a second Supabase
@@ -296,6 +309,12 @@ async function DashboardBody({
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', ctx.organizationId)
       .not('accepted_at', 'is', null),
+    getDashboardHistory({ warehouseId: warehouseFilter ?? undefined, rangeDays: 90 }),
+    // Valuation is org-wide (not warehouse-scoped) by design — the breakdown
+    // donut shows the whole org's value split by category/warehouse, which is
+    // most useful unfiltered. The byWarehouse rollup already answers the
+    // per-warehouse question inside the widget.
+    ReportsService.forCurrentUser().then((svc) => svc.inventoryValuation()),
     getWarehousesForRequest(ctx.organizationId),
     getMfaFactorsForRequest(),
   ]);
@@ -370,6 +389,19 @@ async function DashboardBody({
     share: b.share,
     val: b.count,
   }));
+
+  // ── Analytics-section widget data ──────────────────────────────────────
+  // Map the already-fetched server data into JSON-serializable chart series
+  // for the lazy Recharts island. `history` is the 30d series; `history90`
+  // the 90d one — both feed the value widget's range toggle. The breakdown
+  // donut + movement bars map from the valuation report and 30-day metrics.
+  const analyticsValueSeries = {
+    30: toValueSeries(history),
+    90: toValueSeries(history90),
+  };
+  const analyticsByCategory = toBreakdownSlices(valuation, 'category');
+  const analyticsByWarehouse = toBreakdownSlices(valuation, 'warehouse');
+  const analyticsMovementBars = toMovementBars(metrics);
 
   // dailyCounts[29] is the rolling 24h ending at request time; [28] is the
   // 24h before that. Use the difference for a real delta on the
@@ -706,6 +738,32 @@ async function DashboardBody({
             </div>
           </div>
         </Card>
+      </div>
+
+      {/* ──────────────── Analytics — lazy Recharts island ──────────────────
+       *
+       * Composable chart widgets (inventory value over time, value breakdown
+       * donut, movement-volume bars). Rendered via AnalyticsSection, which
+       * lazy-loads the Recharts grid client-side (next/dynamic, ssr:false)
+       * with a skeleton fallback — so this heavy, client-only payload
+       * hydrates AFTER the shell + table stream and paint. The data below is
+       * already mapped to JSON-serializable series on the server.
+       */}
+      <div className="mt-2 mb-4 flex items-end justify-between gap-3 border-b border-border pb-2">
+        <div>
+          <h2 className="font-display text-[18px] font-medium tracking-[-0.015em]">Analytics</h2>
+          <p className="text-[12px] text-[var(--ed-ink-3)]">
+            Value trend, composition, and movement volume.
+          </p>
+        </div>
+      </div>
+      <div className="mb-4">
+        <AnalyticsSection
+          valueSeries={analyticsValueSeries}
+          byCategory={analyticsByCategory}
+          byWarehouse={analyticsByWarehouse}
+          movementBars={analyticsMovementBars}
+        />
       </div>
 
       {/* ──────────────── Recent activity — context, not lead ───────────────
