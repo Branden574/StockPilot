@@ -23,6 +23,12 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: true,
     bundleIdentifier: 'app.stockpilot.mobile',
+    // Do NOT hand-edit this for releases. eas.json `production` sets
+    // `autoIncrement: true` with `cli.appVersionSource: 'remote'`, so EAS owns
+    // the real build number remotely (it bumps on every production build). This
+    // literal '1' is only the local/dev fallback; bumping it by hand has no
+    // effect on store builds and just creates confusing drift. See
+    // docs/runbooks/mobile-ota.md.
     buildNumber: '1',
     infoPlist: {
       NSCameraUsageDescription: 'StockPilot uses the camera to scan barcodes and QR codes.',
