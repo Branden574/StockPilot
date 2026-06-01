@@ -19,11 +19,12 @@ import type { CustomFieldDefinition } from '@stockpilot/core';
  *
  * It reads the current `custom_fields` object and renders one input per
  * definition, writing back into a COPY of that object under each definition's
- * `fieldKey`. It NEVER touches reserved/hardcoded keys (book_rack_number,
- * rack_number, size, author, ...) — those are owned by the item form's
- * purpose-built inputs, and a definition can never claim a reserved key (the
- * settings editor + action reject them). So this sits ALONGSIDE the existing
- * rack/author handling without clobbering it.
+ * `fieldKey`. It NEVER touches reserved/hardcoded keys (book_rack_*, rack_*,
+ * book_crate_*, book_grade, size, author, isbn/isbn13/isbn10) — those are owned
+ * by the item form's purpose-built inputs, and a definition can never claim a
+ * reserved key: the action + service reject the FULL set in @stockpilot/core's
+ * RESERVED_CUSTOM_FIELD_KEYS at definition time. So this sits ALONGSIDE the
+ * existing rack/crate/grade/author handling without clobbering it.
  *
  * The form owns the source of truth; this component is controlled. On every
  * edit it emits the full next `custom_fields` object so the parent can fold it
@@ -115,7 +116,20 @@ export function CustomFieldsInputs({
                 value={
                   current === undefined || current === null ? '' : String(current)
                 }
-                onChange={(e) => set(def.fieldKey, e.target.value)}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  // For number fields persist a real number so the stored jsonb
+                  // type matches the field's declared type. A non-finite /
+                  // partial entry (e.g. "" or "1.") falls back to the raw string
+                  // — set() clears empties and the server validator accepts
+                  // numeric strings, so nothing breaks mid-typing.
+                  if (def.fieldType === 'number' && raw.trim() !== '') {
+                    const num = Number(raw);
+                    set(def.fieldKey, Number.isFinite(num) ? num : raw);
+                  } else {
+                    set(def.fieldKey, raw);
+                  }
+                }}
               />
             )}
           </div>

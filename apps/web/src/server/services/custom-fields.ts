@@ -2,11 +2,17 @@ import 'server-only';
 
 import {
   CUSTOM_FIELD_TYPES,
+  RESERVED_CUSTOM_FIELD_KEYS,
   isSnakeCaseKey,
   type CustomFieldDefinition,
   type CustomFieldOption,
   type CustomFieldType,
 } from '@stockpilot/core';
+
+// Re-export the canonical reserved-key set so existing importers (server
+// action, tests) keep their import path working. The single source of truth
+// lives in @stockpilot/core/customization/custom-fields.
+export { RESERVED_CUSTOM_FIELD_KEYS };
 
 import { ServiceError, withContext, type ServiceContext } from './context';
 
@@ -43,23 +49,6 @@ export interface UpdateCustomFieldInput {
   required?: boolean;
   sortOrder?: number;
 }
-
-/**
- * Reserved custom_fields keys owned by hardcoded item-form behavior (rack
- * inputs, sized bulk-create, book author). A custom field definition may NEVER
- * claim one of these, or the registry-driven inputs would clobber the
- * form's purpose-built handling. Mirrors the keys documented in the inventory
- * service + item-form (book_rack_number/book_rack_row/rack_number/rack_row/
- * size/author).
- */
-export const RESERVED_CUSTOM_FIELD_KEYS: ReadonlySet<string> = new Set<string>([
-  'book_rack_number',
-  'book_rack_row',
-  'rack_number',
-  'rack_row',
-  'size',
-  'author',
-]);
 
 function mapRow(row: CustomFieldDefinitionRow): CustomFieldDefinition {
   return {

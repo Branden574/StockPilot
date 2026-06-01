@@ -557,6 +557,12 @@ export function ItemForm({
         reorderPoint: values.reorderPoint,
         reorderQuantity: values.reorderQuantity,
         unitOfMeasure: values.unitOfMeasure,
+        // Per-org custom fields entered in the "Additional fields" section apply
+        // to every variant. The service strips reserved keys + runs the
+        // authoritative required-field gate, so this path no longer silently
+        // drops them. Pass undefined when empty to keep the payload lean.
+        customFields:
+          Object.keys(customFieldValues).length > 0 ? customFieldValues : undefined,
         variants: selectedSizes,
       } as Parameters<typeof bulkCreateSizedVariantsAction>[0]);
       if (!res.ok) {
@@ -629,8 +635,11 @@ export function ItemForm({
           // the keys still present in customFieldValues).
           for (const def of customFieldDefs) delete baseCf[def.fieldKey];
           // Generic per-org custom fields write last under their own keys.
-          // They can never collide with the reserved book_*/author keys (the
-          // settings editor forbids defining a reserved key), so this is safe.
+          // They can never collide with a reserved key (book_*/author/size/
+          // isbn*/rack_* — the full set in @stockpilot/core's
+          // RESERVED_CUSTOM_FIELD_KEYS, which the action + service reject at
+          // definition time), so the dedicated inputs below never fight a
+          // generic input over the same jsonb key.
           return {
             ...values,
             itemType: 'book' as const,
