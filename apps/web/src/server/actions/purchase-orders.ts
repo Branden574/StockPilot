@@ -170,3 +170,42 @@ export async function createDraftPosFromItemsAction(
   }
 }
 
+interface ReorderDraftPosResultData {
+  /** IDs of the draft POs that were successfully created. */
+  createdPoIds: string[];
+  /** Items with no supplier that landed on the unassigned draft PO. */
+  unassignedCount: number;
+  /** Below-par items that couldn't be processed (a supplier's PO failed). */
+  skipped: number;
+  /** Per-supplier failures (other suppliers' drafts may still exist). */
+  supplierFailures: Array<{ supplierId: string | null; supplierName: string; error: string }>;
+  /** Distinct real suppliers attempted (excludes the unassigned bucket). */
+  supplierCount: number;
+}
+
+/**
+ * Reorder automation — the last mile. Recomputes the reorder forecast
+ * (items at or below their reorder point), groups them by supplier, and
+ * creates one editable DRAFT purchase order per supplier with line
+ * quantities pre-filled to the deficit needed to bring each item back to
+ * target. Items with no supplier are collected onto a single "unassigned"
+ * draft so nothing is dropped.
+ *
+ * Drafts are NOT auto-sent — the reorder-forecast report routes the user to
+ * the created drafts for review/edit. Powers the "Draft PO from reorder
+ * suggestions" button. Org-scoped + gated inside the service.
+ */
+export async function createDraftPosFromReorderForecastAction(): Promise<
+  ActionResult<ReorderDraftPosResultData>
+> {
+  try {
+    const svc = await PurchaseOrdersService.forCurrentUser();
+    const result = await svc.createDraftsFromReorderForecast();
+    revalidatePath('/dashboard/purchase-orders');
+    revalidatePath('/dashboard/reports/reorder-forecast');
+    return ok(result);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+

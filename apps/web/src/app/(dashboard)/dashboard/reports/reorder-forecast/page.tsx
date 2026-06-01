@@ -1,6 +1,7 @@
 import { Download } from 'lucide-react';
 import Link from 'next/link';
 
+import { DraftPosFromReorderButton } from '@/components/reports/draft-pos-from-reorder-button';
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -37,6 +38,7 @@ export default async function ReorderForecastPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <DraftPosFromReorderButton itemCount={data.totalItems} />
             <Button asChild variant="outline">
               <a href="/api/reports/reorder-forecast/csv">
                 <Download className="h-4 w-4" /> CSV
