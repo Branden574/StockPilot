@@ -114,6 +114,9 @@ const bulkCreateSizedSchema = z.object({
   unitOfMeasure: z.string().min(1).max(40),
   rackNumber: z.string().max(50).nullable().optional(),
   rackRow: z.string().max(10).nullable().optional(),
+  // Per-org custom field values applied to every created variant. The service
+  // strips reserved keys and runs the authoritative validator (assertCustomFieldsValid).
+  customFields: z.record(z.string(), z.unknown()).nullable().optional(),
   variants: z
     .array(
       z.object({
