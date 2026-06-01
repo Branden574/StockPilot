@@ -105,4 +105,18 @@ apps/mobile/android/
 # / "pnpm-lock 3.yaml" siblings are junk.
 pnpm-lock\ *.yaml
 "pnpm-lock 2.yaml"
+
+# iCloud Drive / Finder duplicate-copy artifacts ("Name 2.ext", "Name 3.tsx", …)
+# created when the synced working tree conflicts mid-write. These are never
+# source — ignore them so they can't be `git add .`'d into a build break or
+# pollute a duplicate migration. (Already-tracked files are unaffected.)
+* [2-9].ts
+* [2-9].tsx
+* [2-9].js
+* [2-9].jsx
+* [2-9].mjs
+* [2-9].cjs
+* [2-9].sql
+* [2-9].json
+
 secrets/
