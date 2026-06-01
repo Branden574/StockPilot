@@ -29,6 +29,12 @@ interface DashboardShellProps {
   role: Role;
   /** Module IDs enabled for this org (serialized as strings for the RSC boundary). */
   enabledModules: string[];
+  /**
+   * Raw per-org `nav_overrides` jsonb from the organizations row. Untrusted —
+   * typed `unknown` and validated downstream by `applyNavOverrides` (fails
+   * CLOSED to the derived nav on null/garbage).
+   */
+  navOverrides: unknown;
   warehouseFilter?: {
     warehouses: Array<{ id: string; name: string }>;
     activeId: string | null;
@@ -51,6 +57,7 @@ export function DashboardShell({
   userRole,
   role,
   enabledModules,
+  navOverrides,
   warehouseFilter,
 }: DashboardShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
@@ -126,6 +133,7 @@ export function DashboardShell({
         userRole={userRole}
         role={role}
         enabledModules={enabledModules}
+        navOverrides={navOverrides}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -174,6 +182,7 @@ export function DashboardShell({
               userRole={userRole}
               role={role}
               enabledModules={enabledModules}
+              navOverrides={navOverrides}
               onNavigate={() => setMobileNavOpen(false)}
             />
           </SheetContent>

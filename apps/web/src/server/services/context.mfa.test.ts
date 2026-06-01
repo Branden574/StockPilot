@@ -69,7 +69,14 @@ import type { ModuleId } from '@stockpilot/core';
 
 const orgRow = (
   mfaPolicy: OrgRow['mfa_policy'],
-): OrgRow => ({ terminology: null, mfa_policy: mfaPolicy, logo_url: null, timezone: null });
+): OrgRow => ({
+  terminology: null,
+  mfa_policy: mfaPolicy,
+  logo_url: null,
+  timezone: null,
+  nav_overrides: null,
+  dashboard_layout: null,
+});
 
 // `withContext` is wrapped in React.cache; outside a request scope cache()
 // behaves as a process-level memo keyed on (no) args. Use a UNIQUE orgId

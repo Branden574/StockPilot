@@ -182,6 +182,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         userRole={`${ROLE_LABELS[ctx.role].label} · ${ctx.organizationName}`}
         role={ctx.role}
         enabledModules={enabledModules}
+        navOverrides={orgRow?.nav_overrides ?? null}
         warehouseFilter={warehouseFilter}
       >
         {showMfaBanner && <MfaRequiredBanner />}
