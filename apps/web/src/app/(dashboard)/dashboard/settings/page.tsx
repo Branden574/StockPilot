@@ -69,6 +69,13 @@ const NAVIGATION_SECTIONS = [
   { href: '/dashboard/settings/navigation', title: 'Navigation', description: 'Customize the sidebar — hide, rename, and reorder items or add custom links.' },
 ];
 
+// Dashboard customization — choose which landing-page cards show and in what
+// order for the whole org. Same `organization:update` gate as Modules /
+// Navigation; the underlying page redirects anyone without that permission.
+const DASHBOARD_SECTIONS = [
+  { href: '/dashboard/settings/dashboard', title: 'Dashboard', description: 'Choose which cards appear on the dashboard and in what order.' },
+];
+
 // Integrations control plane — connect external tools (QuickBooks Online).
 // Gated on `integrations:manage` (owner+admin); the underlying page also
 // redirects anyone without that permission.
@@ -87,6 +94,7 @@ export default async function SettingsPage() {
     ...(hasPermission(ctx.role, 'items:delete') ? RECOVERY_SECTIONS : []),
     ...(hasPermission(ctx.role, 'organization:update') ? MODULES_SECTIONS : []),
     ...(hasPermission(ctx.role, 'organization:update') ? NAVIGATION_SECTIONS : []),
+    ...(hasPermission(ctx.role, 'organization:update') ? DASHBOARD_SECTIONS : []),
     ...(hasPermission(ctx.role, 'integrations:manage') ? INTEGRATIONS_SECTIONS : []),
   ];
   return (
