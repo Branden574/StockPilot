@@ -112,14 +112,18 @@ insert into public.inventory_items
 -- legal source for the cancel test because cancel_order_request only refuses
 -- 'completed'/'denied'/'cancelled' (0155) and the order_requests transition
 -- guard (0120) allows in_transit -> cancelled.
+-- fulfillment_type='pickup' is required: it defaults to 'delivery' (0109) and
+-- order_requests_delivery_target_chk (0110) then demands a delivery_charter_id.
+-- A returns test doesn't care about delivery, so 'pickup' (which the check
+-- requires to have NO charter) is the minimal valid choice.
 insert into public.order_requests
-  (id, organization_id, warehouse_id, status, requester_user_id, source)
-  values (:order_id, :org_id, :wh_id, 'in_transit', :mgr_id, 'internal')
+  (id, organization_id, warehouse_id, status, requester_user_id, source, fulfillment_type)
+  values (:order_id, :org_id, :wh_id, 'in_transit', :mgr_id, 'internal', 'pickup')
   on conflict (id) do nothing;
 
 insert into public.order_requests
-  (id, organization_id, warehouse_id, status, requester_user_id, source)
-  values (:order_cancel, :org_id, :wh_id, 'in_transit', :mgr_id, 'internal')
+  (id, organization_id, warehouse_id, status, requester_user_id, source, fulfillment_type)
+  values (:order_cancel, :org_id, :wh_id, 'in_transit', :mgr_id, 'internal', 'pickup')
   on conflict (id) do nothing;
 
 -- Source lines. quantity_fulfilled simulates the fulfilment decrement; the
