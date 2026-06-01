@@ -535,7 +535,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // On by default for the supply-heavy packs that buy to replenish.
     defaultOnFor: ['distribution', 'agriculture_food', 'light_3pl'],
     placements: [
-      // Sits just below Suppliers (140) in the Inventory section.
+      // Sits just below Purchase orders (110) in the Inventory section, ahead
+      // of PO imports (120).
       { surface: 'web_sidebar', section: 'inventory', label: 'Reorder Planning', href: '/dashboard/planning', iconName: 'TrendingUp', defaultSortOrder: 115, requires: 'purchase_orders:manage' },
     ],
   },
