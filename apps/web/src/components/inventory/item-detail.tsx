@@ -1,4 +1,4 @@
-import { Box, Boxes, DollarSign, GraduationCap, Hash, History, MapPin, Printer, Tag, Truck } from 'lucide-react';
+import { Box, Boxes, DollarSign, GraduationCap, Hash, History, LineChart, MapPin, Printer, Tag, Truck } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -19,6 +19,12 @@ const ImageUploader = dynamic(() =>
     default: m.ImageUploader,
   })),
 );
+// CostTrendIsland lazy-loads Recharts as a client island (ssr:false) so the
+// server shell never pulls Recharts onto the item-detail critical path — the
+// chart hydrates after the page paints. item-detail is a server component, so
+// importing the client island (which holds the next/dynamic call) is the safe
+// boundary here.
+import { CostTrendIsland } from '@/components/dashboard/charts/cost-trend-island';
 import { ItemDetailTabs } from '@/components/inventory/item-detail-tabs';
 import {
   parseDetailTab,
@@ -35,6 +41,7 @@ import { ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
+import { ReportsService } from '@/server/services/reports';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
@@ -69,13 +76,14 @@ interface ItemDetailProps {
 export async function ItemDetail({ id, backHref, backLabel, editHref, tab, returnParam }: ItemDetailProps) {
   const activeTab: DetailTabId = parseDetailTab(tab);
 
-  const [ctx, inventorySvc, activitySvc, imagesSvc, locationsSvc] =
+  const [ctx, inventorySvc, activitySvc, imagesSvc, locationsSvc, reportsSvc] =
     await Promise.all([
       withContext(),
       InventoryService.forCurrentUser(),
       ActivityService.forCurrentUser(),
       ItemImagesService.forCurrentUser(),
       LocationsService.forCurrentUser(),
+      ReportsService.forCurrentUser(),
     ]);
 
   let item;
@@ -93,29 +101,34 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // fan out alongside.
   const categoryIdForFetch = (item.category_id as string | null) ?? null;
   const supplierIdForFetch = (item.supplier_id as string | null) ?? null;
-  const [categoryRow, supplierRow, locations, activity, imageRows] = await Promise.all([
-    categoryIdForFetch
-      ? ctx.supabase
-          .from('categories')
-          .select('id, name, color')
-          .eq('organization_id', ctx.organizationId)
-          .eq('id', categoryIdForFetch)
-          .maybeSingle()
-          .then((r) => r.data)
-      : Promise.resolve(null),
-    supplierIdForFetch
-      ? ctx.supabase
-          .from('suppliers')
-          .select('id, name')
-          .eq('organization_id', ctx.organizationId)
-          .eq('id', supplierIdForFetch)
-          .maybeSingle()
-          .then((r) => r.data)
-      : Promise.resolve(null),
-    locationsSvc.list(),
-    activitySvc.forItem(id, 50),
-    imagesSvc.list(id),
-  ]);
+  const [categoryRow, supplierRow, locations, activity, imageRows, costHistory] =
+    await Promise.all([
+      categoryIdForFetch
+        ? ctx.supabase
+            .from('categories')
+            .select('id, name, color')
+            .eq('organization_id', ctx.organizationId)
+            .eq('id', categoryIdForFetch)
+            .maybeSingle()
+            .then((r) => r.data)
+        : Promise.resolve(null),
+      supplierIdForFetch
+        ? ctx.supabase
+            .from('suppliers')
+            .select('id, name')
+            .eq('organization_id', ctx.organizationId)
+            .eq('id', supplierIdForFetch)
+            .maybeSingle()
+            .then((r) => r.data)
+        : Promise.resolve(null),
+      locationsSvc.list(),
+      activitySvc.forItem(id, 50),
+      imagesSvc.list(id),
+      // Per-supplier unit-cost trend from our own PO + receipt data. Fanned
+      // out alongside the other detail fetches; rendered as a lazy Recharts
+      // island so the server shell never imports Recharts.
+      reportsSvc.itemCostHistory(id),
+    ]);
   const signed = await imagesSvc.signedUrls(imageRows.map((r) => r.storage_path as string));
   const images = imageRows.map((r) => ({
     id: r.id as string,
@@ -429,6 +442,52 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               </CardContent>
             </Card>
           </div>
+
+          {/* Supplier cost trend — what we've paid for this item over time,
+              one line per supplier, built from our own PO + receipt unit_cost
+              (no external pricing). Hidden entirely when there's no history
+              so it never shows an empty card on freshly-created items. */}
+          {costHistory.pointCount > 0 && (
+            <Card className="mt-8">
+              <CardHeader>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <LineChart className="h-4 w-4" /> Cost trend
+                    </CardTitle>
+                    <p className="text-muted-foreground mt-1 text-xs">
+                      Unit cost paid over time, by supplier · from purchase orders &amp; receipts
+                    </p>
+                  </div>
+                  <div className="flex gap-4 text-right">
+                    {costHistory.lastUnitCost != null && (
+                      <div>
+                        <p className="text-muted-foreground text-[10.5px] font-semibold uppercase tracking-wider">
+                          Last paid
+                        </p>
+                        <p className="text-sm font-semibold tabular-nums">
+                          {formatCurrency(costHistory.lastUnitCost)}
+                        </p>
+                      </div>
+                    )}
+                    {costHistory.avgUnitCost != null && (
+                      <div>
+                        <p className="text-muted-foreground text-[10.5px] font-semibold uppercase tracking-wider">
+                          Average
+                        </p>
+                        <p className="text-sm font-semibold tabular-nums">
+                          {formatCurrency(costHistory.avgUnitCost)}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <CostTrendIsland series={costHistory.series} />
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="mt-8">
             <CardHeader>
