@@ -29,7 +29,7 @@ export type ModuleId =
   | 'reports' | 'notifications' | 'team' | 'settings' | 'admin_tools' | 'charters' | 'scan'
   | 'books' | 'rentals' | 'bundles' | 'orders' | 'cycle_counts' | 'procedures'
   | 'purchase_orders' | 'receiving' | 'po_imports' | 'suppliers' | 'schedule' | 'ai' | 'public_requests'
-  | 'integrations' | 'shipping' | 'returns'
+  | 'integrations' | 'shipping' | 'returns' | 'planning'
   | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'api_access';
 
 export interface NavPlacement {
@@ -516,6 +516,28 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // would surface a dead nav link in the app).
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 85, requires: 'returns:manage' },
+    ],
+  },
+
+  planning: {
+    id: 'planning',
+    tier: 'optional',
+    title: 'Demand Planning',
+    // Velocity-based reorder suggestions need both an item catalog
+    // (velocity source + reorder params) and the PO module (auto-draft target).
+    dependsOn: ['inventory', 'purchase_orders'],
+    // Reuse the existing PO permission — planning is a buyer/manager surface,
+    // not a new permission axis.
+    permissions: ['purchase_orders:manage'],
+    surfaces: ['web'],
+    apiPrefixes: [],
+    ownsTables: [],
+    // On by default for the supply-heavy packs that buy to replenish.
+    defaultOnFor: ['distribution', 'agriculture_food', 'light_3pl'],
+    placements: [
+      // Sits just below Purchase orders (110) in the Inventory section, ahead
+      // of PO imports (120).
+      { surface: 'web_sidebar', section: 'inventory', label: 'Reorder Planning', href: '/dashboard/planning', iconName: 'TrendingUp', defaultSortOrder: 115, requires: 'purchase_orders:manage' },
     ],
   },
 
