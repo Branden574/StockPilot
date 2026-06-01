@@ -15,9 +15,11 @@ import type {
   TransferStockInput,
   UpdateItemInput,
 } from '@stockpilot/core';
+import { validateCustomFields } from '@stockpilot/core';
 
 import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 import { audit } from './audit';
+import { CustomFieldsService } from './custom-fields';
 import { TagsService } from './tags';
 import { UserCategoriesService } from './user-categories';
 
@@ -163,6 +165,26 @@ export class InventoryService {
 
   static async forCurrentUser() {
     return new InventoryService(await withContext());
+  }
+
+  /**
+   * Validate the item's custom_fields against the org's ACTIVE custom field
+   * definitions (the per-org registry from migration 0159). Authoritative
+   * server-side gate — the item form runs the same pure validator for instant
+   * feedback, but a crafted payload can't store a value that violates a
+   * definition. Only DEFINED keys are checked; reserved/hardcoded keys
+   * (rack number/row, size, author, etc.) and any stray keys are left untouched, so this
+   * never breaks existing data. A no-definitions org is a cheap no-op (one
+   * RLS-scoped read returning zero rows).
+   */
+  private async assertCustomFieldsValid(
+    customFields: Record<string, unknown> | null | undefined,
+  ): Promise<void> {
+    if (!customFields || Object.keys(customFields).length === 0) return;
+    const defs = await new CustomFieldsService(this.ctx).listDefinitions('item');
+    if (defs.length === 0) return;
+    const result = validateCustomFields(defs, customFields);
+    if (!result.ok) throw new ServiceError('validation_error', result.error);
   }
 
   async list(filters: ItemListFilters = {}) {
@@ -674,6 +696,10 @@ export class InventoryService {
   async create(input: CreateItemInput) {
     assertPermission(this.ctx, 'items:create');
     await assertPlanLimit(this.ctx, 'items');
+
+    // Reject any custom_fields value that violates the org's field definitions
+    // before we touch the DB (mirrors the form's client-side check).
+    await this.assertCustomFieldsValid(input.customFields);
 
     const sku = (input.sku && input.sku.trim()) || generateSku();
 
@@ -1302,7 +1328,11 @@ export class InventoryService {
     if (patch.trackingType !== undefined) updates.tracking_type = patch.trackingType;
     if (patch.itemType !== undefined) updates.item_type = patch.itemType;
     if (patch.status !== undefined) updates.status = patch.status;
-    if (patch.customFields !== undefined) updates.custom_fields = patch.customFields;
+    if (patch.customFields !== undefined) {
+      // Authoritative server-side validation against the org's field defs.
+      await this.assertCustomFieldsValid(patch.customFields);
+      updates.custom_fields = patch.customFields;
+    }
 
     if (patch.warehouseId !== undefined && patch.warehouseId !== currentWarehouseId) {
       const forced = await forcedWarehouseId(this.ctx);

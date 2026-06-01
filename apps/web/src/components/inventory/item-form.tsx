@@ -9,6 +9,7 @@ import { Controller, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
+import { CustomFieldsInputs } from '@/components/inventory/custom-fields-inputs';
 // Dynamic import + conditional render: IsbnScanner pulls in the
 // Dialog tree and BarcodeDetector usage; only ships in the bundle
 // when the user actually opens the scanner. ssr:false because the
@@ -45,7 +46,12 @@ import {
 import { createImageUploadAction, recordImageAction } from '@/server/actions/item-images';
 import { setItemTagsAction } from '@/server/actions/tags';
 
-import { createItemSchema, type CreateItemInput, type UpdateItemInput } from '@stockpilot/core';
+import {
+  createItemSchema,
+  type CreateItemInput,
+  type CustomFieldDefinition,
+  type UpdateItemInput,
+} from '@stockpilot/core';
 
 type SizeCode = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL' | 'XXXXXL';
 const ALL_SIZES: ReadonlyArray<SizeCode> = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL'];
@@ -117,6 +123,12 @@ interface ItemFormProps {
    * belong to the rental catalog. Default: undefined (behaves as false).
    */
   isRentalFixed?: boolean;
+  /**
+   * The org's ACTIVE item custom field definitions. Rendered by
+   * <CustomFieldsInputs> alongside the hardcoded rack/author inputs. Empty
+   * array (or omitted) → no generic custom fields shown.
+   */
+  customFieldDefs?: CustomFieldDefinition[];
 }
 
 export function ItemForm({
@@ -136,6 +148,7 @@ export function ItemForm({
   returnHref,
   onDone,
   isRentalFixed = false,
+  customFieldDefs = [],
 }: ItemFormProps) {
   const router = useRouter();
   const isEdit = Boolean(defaults?.id);
@@ -256,6 +269,19 @@ export function ItemForm({
   const [grade, setGrade] = React.useState<string>(
     isBook ? String(cfDefault.book_grade ?? '') : '',
   );
+  // Generic per-org custom field values. Seeded from the item's stored
+  // custom_fields, scoped to the keys this org has defined (reserved/hardcoded
+  // keys like rack_*/author are handled by their own inputs above and are
+  // never definable, so there's no overlap). The component edits a copy and
+  // emits the full next object; we merge it into customFields at submit.
+  const [customFieldValues, setCustomFieldValues] = React.useState<Record<string, unknown>>(() => {
+    const seed: Record<string, unknown> = {};
+    for (const def of customFieldDefs) {
+      if (def.archived) continue;
+      if (cfDefault[def.fieldKey] !== undefined) seed[def.fieldKey] = cfDefault[def.fieldKey];
+    }
+    return seed;
+  });
   const [scannerOpen, setScannerOpen] = React.useState(false);
   /**
    * Size-variant selection. Only meaningful when the chosen category has
@@ -598,11 +624,19 @@ export function ItemForm({
           const baseCf = { ...(values.customFields ?? {}) } as Record<string, unknown>;
           delete baseCf.book_rack_number;
           delete baseCf.book_rack_row;
+          // Drop every defined custom-field key first so clearing an input on
+          // edit actually removes the stored value (the spread below only adds
+          // the keys still present in customFieldValues).
+          for (const def of customFieldDefs) delete baseCf[def.fieldKey];
+          // Generic per-org custom fields write last under their own keys.
+          // They can never collide with the reserved book_*/author keys (the
+          // settings editor forbids defining a reserved key), so this is safe.
           return {
             ...values,
             itemType: 'book' as const,
             customFields: {
               ...baseCf,
+              ...customFieldValues,
               ...(author.trim() ? { author: author.trim() } : {}),
               ...(num ? { book_rack_number: num } : {}),
               ...(row ? { book_rack_row: row } : {}),
@@ -623,6 +657,9 @@ export function ItemForm({
           const baseCf = { ...(values.customFields ?? {}) } as Record<string, unknown>;
           delete baseCf.rack_number;
           delete baseCf.rack_row;
+          // Drop every defined custom-field key first so clearing an input on
+          // edit actually removes the stored value.
+          for (const def of customFieldDefs) delete baseCf[def.fieldKey];
           // Auto-derive bin_location from rack so order pick + cycle-
           // count flows that read bin_location keep working. Format
           // matches the human label users would type: '38-A' or '38'.
@@ -635,6 +672,7 @@ export function ItemForm({
             binLocation: composedBin,
             customFields: {
               ...baseCf,
+              ...customFieldValues,
               ...(num ? { rack_number: num } : {}),
               ...(row ? { rack_row: row } : {}),
             },
@@ -1094,6 +1132,17 @@ export function ItemForm({
           </>
         )}
       </Section>
+
+      {customFieldDefs.some((d) => !d.archived) && (
+        <Section title="Additional fields">
+          <CustomFieldsInputs
+            definitions={customFieldDefs}
+            values={customFieldValues}
+            onChange={setCustomFieldValues}
+            disabled={isSubmitting}
+          />
+        </Section>
+      )}
 
       <Section title={`${warehouseLabel} & ${charterLabel.toLowerCase()}`}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
