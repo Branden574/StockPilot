@@ -164,6 +164,8 @@ export type AuditEvent =
   | 'integration.sync_replayed'
   | 'shipping.rates_fetched'
   | 'shipping.label_purchased'
+  // Returns / RMA (Phase B): a reverse (RMA) label was bought for a return.
+  | 'shipping.return_label_purchased'
   // Returns / RMA (Phase A). Each lifecycle transition is audited so the
   // restock/scrap disposition that moves inventory is fully traceable.
   | 'return.created'

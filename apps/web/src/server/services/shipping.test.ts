@@ -721,6 +721,150 @@ describe('ShippingService.buyLabel', () => {
   });
 });
 
+describe('ShippingService.buyReturnLabel', () => {
+  const approvedReturn = {
+    id: 'ret-1',
+    organization_id: 'org-test',
+    order_request_id: 'order-1',
+    status: 'approved' as const,
+  };
+
+  /**
+   * The return-label flow does its own one-shot createShipment (no separate
+   * rate-shop step), claims a direction='return' row into 'purchasing', then
+   * buys the cheapest rate. The default createShipment return already carries
+   * rates; buyShipment returns the purchased shipment. Build on the full
+   * delivery stub so resolveShippingContext (order/charter/warehouse/connection)
+   * succeeds, and add a returns.select result so the return loads.
+   */
+  function makeReturnStub(overrides: Record<string, unknown> = {}) {
+    return makeDeliveryStub({
+      'returns.select': { data: [approvedReturn], error: null },
+      ...overrides,
+    });
+  }
+
+  it('builds an is_return shipment with REVERSED addresses (to=warehouse, from=charter) and buys ONCE', async () => {
+    // carrier_shipments selects: (1) purchased-return guard -> none; the insert
+    // creates the draft, then the claim + finalize updates fire.
+    const stub = makeReturnStub({
+      'carrier_shipments.select': { data: [], error: null },
+      'carrier_shipments.insert': { data: [{ id: 'ret-ship-1' }], error: null },
+      'carrier_shipments.update': { data: [{ id: 'ret-ship-1' }], error: null },
+    });
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.buyReturnLabel('ret-1');
+
+    // ONE createShipment with is_return:true and the addresses SWAPPED relative
+    // to the outbound label: to = warehouse origin, from = charter destination.
+    expect(createShipmentSpy).toHaveBeenCalledTimes(1);
+    const body = createShipmentSpy.mock.calls[0]?.[0] as {
+      shipment: {
+        is_return?: boolean;
+        to_address: Record<string, unknown>;
+        from_address: Record<string, unknown>;
+      };
+    };
+    expect(body.shipment.is_return).toBe(true);
+    // to_address = warehouse origin (reversed).
+    expect(body.shipment.to_address).toMatchObject({ street1: '100 Depot Rd', city: 'Austin', zip: '78701' });
+    // from_address = charter destination (reversed).
+    expect(body.shipment.from_address).toMatchObject({ street1: '200 Campus Way', city: 'Dallas', zip: '75201' });
+
+    // EasyPost buy invoked ONCE, keyed with the draft row id as the
+    // Idempotency-Key, against the created shipment's cheapest rate (rate_1, $8.45).
+    expect(buyShipmentSpy).toHaveBeenCalledTimes(1);
+    expect(buyShipmentSpy).toHaveBeenCalledWith('shp_easypost_1', 'rate_1', 'ret-ship-1');
+
+    // The draft was inserted with direction='return' (independent of any outbound
+    // label, per the 0156 per-direction unique index).
+    const insertPayload = stub.chainArgsAll.get('carrier_shipments.insert')?.[0]?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(insertPayload).toMatchObject({
+      order_request_id: 'order-1',
+      direction: 'return',
+      status: 'draft',
+    });
+
+    expect(result).toBeTruthy();
+  });
+
+  it('is idempotent: returns the existing purchased return label without a second buy', async () => {
+    const purchasedReturn = {
+      id: 'ret-ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      direction: 'return',
+      status: 'purchased',
+      easypost_shipment_id: 'shp_easypost_1',
+      label_url: 'https://easypost/return-label.pdf',
+      tracking_code: '1ZRET',
+    };
+    const stub = makeReturnStub({
+      'carrier_shipments.select': { data: [purchasedReturn], error: null },
+    });
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    const result = await svc.buyReturnLabel('ret-1');
+
+    expect(result).toMatchObject({ id: 'ret-ship-1', status: 'purchased', direction: 'return' });
+    // The idempotency guard short-circuits BEFORE any EasyPost call.
+    expect(createShipmentSpy).not.toHaveBeenCalled();
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a return that is not approved/received', async () => {
+    const stub = makeReturnStub({
+      'returns.select': {
+        data: [{ ...approvedReturn, status: 'requested' }],
+        error: null,
+      },
+    });
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    await expect(svc.buyReturnLabel('ret-1')).rejects.toMatchObject({ code: 'validation_error' });
+    expect(createShipmentSpy).not.toHaveBeenCalled();
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+  });
+
+  it('throws not_found for a missing return', async () => {
+    const stub = makeReturnStub({ 'returns.select': { data: [], error: null } });
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+
+    await expect(svc.buyReturnLabel('ret-1')).rejects.toMatchObject({ code: 'not_found' });
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+  });
+
+  it('blocks a manager (no shipping:manage) from buying a return label', async () => {
+    const stub = makeReturnStub();
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: SHIPPING_MODULES }),
+    );
+    await expect(svc.buyReturnLabel('ret-1')).rejects.toMatchObject({ code: 'forbidden' });
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+  });
+
+  it('throws module_disabled when shipping is off', async () => {
+    const stub = makeReturnStub();
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: new Set<ModuleId>() }),
+    );
+    await expect(svc.buyReturnLabel('ret-1')).rejects.toMatchObject({ code: 'module_disabled' });
+    expect(buyShipmentSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('ShippingService.reconcilePurchasing (stuck-row recovery)', () => {
   const stuckRow = {
     id: 'ship-1',
