@@ -1,38 +1,33 @@
 import { Suspense } from 'react';
 import {
-  Activity,
   AlertTriangle,
-  ArrowUpRight,
-  Boxes,
-  CheckCircle2,
-  ChevronRight,
   ClipboardCheck,
   ClipboardList,
-  DollarSign,
   Download,
-  PackageCheck,
   PenLine,
   Plus,
-  type LucideIcon,
   Zap,
 } from 'lucide-react';
 import Link from 'next/link';
 
-import { BigChart } from '@/components/dashboard/big-chart';
-import { MiniBarChart } from '@/components/dashboard/mini-bar-chart';
-import { AnalyticsSection } from '@/components/dashboard/charts/analytics-section';
 import {
   toBreakdownSlices,
   toMovementBars,
   toValueSeries,
 } from '@/components/dashboard/charts/widget-data';
-import { EmptyState } from '@/components/ui/empty-state';
-import { GetStartedChecklist } from '@/components/dashboard/get-started-checklist';
-import { StatCard } from '@/components/dashboard/stat-card';
+import {
+  renderDashboardWidgets,
+  type AttentionItem,
+  type DashboardWidgetProps,
+} from '@/components/dashboard/widgets';
 import { Button } from '@/components/ui/button';
-import { Sparkline } from '@/components/ui/sparkline';
-import { StockBar } from '@/components/ui/stock-bar';
-import { hasPermission, isManagerOrAbove } from '@stockpilot/core';
+import {
+  DASHBOARD_WIDGETS,
+  hasPermission,
+  isManagerOrAbove,
+  resolveDashboardWidgets,
+  type DashboardLayout,
+} from '@stockpilot/core';
 import {
   getDashboardActions,
   getDashboardHistory,
@@ -54,8 +49,6 @@ import {
 } from '@/lib/dashboard/request-cache';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
-import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
-import { cn } from '@/lib/utils';
 
 /**
  * Returns the morning/afternoon/evening greeting word + the long-form
@@ -93,23 +86,9 @@ function buildGreeting(timezone: string | null): { word: string; dateLabel: stri
 // Note: the long-form date is now built per-request inside buildGreeting()
 // so it can use the org's saved timezone. There's no longer a module-level
 // formatter — every dashboard render needs the tz before formatting.
-
-interface AttentionItem {
-  id: string;
-  icon: LucideIcon;
-  title: string;
-  detail: string;
-  href: string;
-  /**
-   * Priority rank — lower wins. Encodes the spec order: low-stock,
-   * overdue POs, pending approvals, in-progress cycle counts, orders
-   * awaiting signature. When multiple categories have non-zero counts the list
-   * sorts by this rank, so the lead row is always the most urgent
-   * surface (stockouts first, paperwork last).
-   */
-  rank: number;
-  tone: 'danger' | 'warn' | 'neutral';
-}
+//
+// AttentionItem now lives in components/dashboard/widgets/shared.tsx (moved
+// with the NeedsAttentionHero it feeds) and is imported above.
 
 export default async function DashboardHome() {
   // Resolve the topbar warehouse filter once and pass it into every
@@ -274,12 +253,14 @@ async function DashboardBody({
     // single fan-out so they don't add a serial round trip.
     history90,
     valuation,
-    // Request-cached: warehousesList + mfaFactors are already fetched by the
-    // dashboard layout (and the shell, for orgRow) in the same render.
-    // React.cache() guarantees we get that result without a second Supabase
-    // round-trip per page render.
+    // Request-cached: warehousesList + mfaFactors + orgRow are already fetched
+    // by the dashboard layout (and the shell, for orgRow) in the same render.
+    // React.cache() guarantees we get those results without a second Supabase
+    // round-trip per page render. orgRow carries the per-org dashboard_layout
+    // jsonb that drives the widget order/visibility below.
     warehousesList,
     mfaFactors,
+    orgRow,
   ] = await Promise.all([
     getDashboardSummary({ warehouseId: warehouseFilter ?? undefined }),
     getLowStockItems(5, { warehouseId: warehouseFilter ?? undefined }),
@@ -317,6 +298,7 @@ async function DashboardBody({
     ReportsService.forCurrentUser().then((svc) => svc.inventoryValuation()),
     getWarehousesForRequest(ctx.organizationId),
     getMfaFactorsForRequest(),
+    getOrgRowForRequest(ctx.organizationId),
   ]);
   const warehouseCount = warehousesList.length;
   const teamCount = teamCountRes.count ?? 0;
@@ -548,630 +530,60 @@ async function DashboardBody({
       ? 'Everything looks healthy.'
       : `${attentionItemCount} thing${attentionItemCount === 1 ? '' : 's'} need${attentionItemCount === 1 ? 's' : ''} attention today.`;
 
-  return (
-    <>
-      {!checklistComplete && (
-        <div className="mb-5">
-          <GetStartedChecklist steps={checklistSteps} />
-        </div>
-      )}
-      {/* ──────────────── Morning briefing — hero attention ──────────────────
-       *
-       * The greeting + action buttons already painted in the shell above.
-       * This streamed block carries the data-driven briefing sentence + the
-       * attention list ("where should they click right now").
-       */}
-      <section className="mb-6">
-        <p className="mb-4 text-[14px] text-[var(--ed-ink-3)]">{briefingSentence}</p>
-        <NeedsAttentionHero items={attentionItems} />
-      </section>
+  // ── Compose the single, already-computed widget props bag ──────────────
+  // Every widget reads its slice from this; none of them fetch data, so the
+  // parallel fan-out above is unchanged and the load-perf work is preserved.
+  const widgetProps: DashboardWidgetProps = {
+    checklistSteps,
+    checklistComplete,
+    attentionItems,
+    briefingSentence,
+    healthRate,
+    attentionStockCount,
+    outOfStockCount: summary.outOfStockCount,
+    valuePerSku,
+    movements7d,
+    itemCount: summary.itemCount,
+    lowStockCount: summary.lowStockCount,
+    openPoCount: actions.openPoCount,
+    openCycleCount: actions.openCycleCount,
+    inventoryValue: summary.inventoryValue,
+    inventoryValueSeries,
+    inventoryValueDelta,
+    itemCountSeries,
+    itemCountDelta,
+    lowOutSeries,
+    lowOutDelta,
+    dailyCounts: metrics.dailyCounts,
+    movementsToday,
+    movementsDelta: {
+      label: movementsDeltaLabel,
+      direction: movementsDeltaDirection,
+    },
+    warehouseFilter,
+    valueSeries,
+    barValues,
+    breakdownRows,
+    analytics: {
+      valueSeries: analyticsValueSeries,
+      byCategory: analyticsByCategory,
+      byWarehouse: analyticsByWarehouse,
+      movementBars: analyticsMovementBars,
+    },
+    lowStock,
+    lowStockTrends,
+    recentMovements: recentMovements as DashboardWidgetProps['recentMovements'],
+  };
 
-      <div className="mb-4 flex items-end justify-between gap-3 border-b border-border pb-2">
-        <div>
-          <h2 className="font-display text-[18px] font-medium tracking-[-0.015em]">
-            30-day trends
-          </h2>
-          <p className="text-[12px] text-[var(--ed-ink-3)]">
-            Inventory value, on-hand counts, and movement velocity over the last month.
-          </p>
-        </div>
-        <div className="hidden grid-cols-4 gap-2 sm:grid sm:max-w-xl sm:flex-1">
-          <StatusMetric
-            label="Health"
-            value={`${healthRate}%`}
-            tone={attentionStockCount > 0 ? 'warn' : 'good'}
-          />
-          <StatusMetric
-            label="Critical"
-            value={formatNumber(summary.outOfStockCount)}
-            tone="danger"
-          />
-          <StatusMetric label="Avg value / SKU" value={formatCurrency(valuePerSku)} />
-          <StatusMetric label="Activity (7d)" value={formatNumber(movements7d)} />
-        </div>
-      </div>
-
-      {/* Shift command — moved below the hero so the morning glance reads
-       * top-to-bottom: who/why first, then "where to click next". */}
-      <aside className="mb-4 bg-card rounded-lg border border-[var(--ed-line-strong)] p-4 shadow-[0_14px_44px_rgba(14,15,13,0.06)]">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="font-display text-[14px] font-medium tracking-[-0.01em]">
-              Shift command
-            </div>
-            <p className="mt-0.5 text-[12px] text-[var(--ed-ink-3)]">
-              Fast paths for the next inventory action.
-            </p>
-          </div>
-          <span className="border-border bg-background inline-flex h-6 items-center gap-1.5 rounded-full border px-2 text-[11px] text-[var(--ed-ink-3)]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]" />
-            Live
-          </span>
-        </div>
-
-        <div className="divide-border border-border bg-background mt-4 grid grid-cols-3 divide-x overflow-hidden rounded-md border">
-          <MiniReadout label="SKUs" value={formatNumber(summary.itemCount)} />
-          <MiniReadout label="Low" value={formatNumber(summary.lowStockCount)} />
-          <MiniReadout label="Out" value={formatNumber(summary.outOfStockCount)} />
-        </div>
-
-        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-          <QuickAction
-            href="/dashboard/inventory?stock=low&type=all"
-            icon={AlertTriangle}
-            label="Review low stock"
-            badge={
-              summary.lowStockCount + summary.outOfStockCount > 0
-                ? formatNumber(summary.lowStockCount + summary.outOfStockCount)
-                : undefined
-            }
-          />
-          <QuickAction
-            href="/dashboard/purchase-orders"
-            icon={ClipboardList}
-            label="Open purchase orders"
-            badge={actions.openPoCount > 0 ? formatNumber(actions.openPoCount) : undefined}
-          />
-          <QuickAction
-            href="/dashboard/cycle-counts"
-            icon={ClipboardCheck}
-            label="Cycle counts in progress"
-            badge={actions.openCycleCount > 0 ? formatNumber(actions.openCycleCount) : undefined}
-          />
-          <QuickAction
-            href="/dashboard/purchase-orders/new"
-            icon={Zap}
-            label="Create receiving run"
-          />
-          <QuickAction href="/dashboard/reports" icon={ArrowUpRight} label="Open reports" />
-        </div>
-      </aside>
-
-      {/* Stat row */}
-      <div className="mb-4 grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="Inventory value"
-          value={formatCurrency(summary.inventoryValue)}
-          delta={{ value: inventoryValueDelta.label, direction: inventoryValueDelta.direction }}
-          series={inventoryValueSeries.slice(-14)}
-          foot="vs. 30 days ago"
-          icon={DollarSign}
-        />
-        <StatCard
-          label="Items on hand"
-          value={formatNumber(summary.itemCount)}
-          delta={{ value: itemCountDelta.label, direction: itemCountDelta.direction }}
-          series={itemCountSeries.slice(-14)}
-          foot={`${summary.itemCount} active SKUs`}
-          icon={PackageCheck}
-        />
-        <StatCard
-          label="Low / out of stock"
-          value={formatNumber(summary.lowStockCount + summary.outOfStockCount)}
-          delta={{ value: lowOutDelta.label, direction: lowOutDelta.direction }}
-          series={lowOutSeries.slice(-14)}
-          foot={`${summary.outOfStockCount} critical · ${summary.lowStockCount} below par`}
-          icon={AlertTriangle}
-        />
-        <StatCard
-          label="Movements today"
-          value={formatNumber(movementsToday)}
-          delta={{ value: movementsDeltaLabel, direction: movementsDeltaDirection }}
-          series={metrics.dailyCounts.slice(-14)}
-          foot={
-            warehouseFilter
-              ? 'in selected warehouse · last 24h'
-              : 'across all locations · last 24h'
-          }
-          icon={Activity}
-        />
-      </div>
-
-      {/* Big chart + movement breakdown */}
-      <div className="mb-4 grid grid-cols-1 gap-3.5 lg:grid-cols-12">
-        <Card className="lg:col-span-9">
-          <CardHead
-            title="Inventory value · 30 days"
-            subtitle="USD · cost basis · all locations"
-            chips={['All locations', 'Cost basis', '+ Compare']}
-          />
-          <BigChart data={valueSeries} height={300} />
-          <div className="flex justify-between px-5 pb-3.5 font-mono text-[11px] text-[var(--ed-ink-4)]">
-            <span>30 days ago</span>
-            <span>3 weeks ago</span>
-            <span>2 weeks ago</span>
-            <span>1 week ago</span>
-            <span>Today</span>
-          </div>
-        </Card>
-
-        <Card className="lg:col-span-3">
-          <CardHead title="Movements · 30 days" subtitle="Receive · sale · transfer · adjust" />
-          <div className="px-5 pb-4">
-            <MiniBarChart values={barValues} height={120} />
-            <hr className="border-border my-4" />
-            <div className="flex flex-col gap-3">
-              {breakdownRows.length === 0 && (
-                <p className="text-muted-foreground py-1 text-[12px]">
-                  No movements in the last 30 days.
-                </p>
-              )}
-              {breakdownRows.map((r) => (
-                <div key={r.label} className="flex items-center justify-between">
-                  <span className="text-[12.5px]">{r.label}</span>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="bg-muted block h-1.5 w-20 overflow-hidden rounded-full"
-                      aria-hidden
-                    >
-                      <span
-                        className="block h-full rounded-full bg-[var(--ed-ink-2)]"
-                        style={{ width: `${r.share * 100}%` }}
-                      />
-                    </span>
-                    <span className="w-6 text-right font-mono text-[11.5px] tabular-nums text-[var(--ed-ink-3)]">
-                      {r.val}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Card>
-      </div>
-
-      {/* ──────────────── Analytics — lazy Recharts island ──────────────────
-       *
-       * Composable chart widgets (inventory value over time, value breakdown
-       * donut, movement-volume bars). Rendered via AnalyticsSection, which
-       * lazy-loads the Recharts grid client-side (next/dynamic, ssr:false)
-       * with a skeleton fallback — so this heavy, client-only payload
-       * hydrates AFTER the shell + table stream and paint. The data below is
-       * already mapped to JSON-serializable series on the server.
-       */}
-      <div className="mt-2 mb-4 flex items-end justify-between gap-3 border-b border-border pb-2">
-        <div>
-          <h2 className="font-display text-[18px] font-medium tracking-[-0.015em]">Analytics</h2>
-          <p className="text-[12px] text-[var(--ed-ink-3)]">
-            Value trend, composition, and movement volume.
-          </p>
-        </div>
-      </div>
-      <div className="mb-4">
-        <AnalyticsSection
-          valueSeries={analyticsValueSeries}
-          byCategory={analyticsByCategory}
-          byWarehouse={analyticsByWarehouse}
-          movementBars={analyticsMovementBars}
-        />
-      </div>
-
-      {/* ──────────────── Recent activity — context, not lead ───────────────
-       *
-       * Low-stock detail table + today's movement feed. The hero up top
-       * already surfaced the "act now" version of the low-stock signal —
-       * this section gives the operator the full table so they can drill
-       * into individual SKUs.
-       */}
-      <div className="mt-2 mb-4 flex items-end justify-between gap-3 border-b border-border pb-2">
-        <div>
-          <h2 className="font-display text-[18px] font-medium tracking-[-0.015em]">
-            Recent activity
-          </h2>
-          <p className="text-[12px] text-[var(--ed-ink-3)]">
-            Low-stock detail and the live movement feed.
-          </p>
-        </div>
-      </div>
-      <div className="grid grid-cols-1 gap-3.5 lg:grid-cols-12">
-        <Card className="lg:col-span-7">
-          <CardHead
-            title="Low-stock detail"
-            subtitle="Items below reorder point"
-            action={
-              <Link
-                href="/dashboard/inventory?stock=low&type=all"
-                className="border-border bg-card inline-flex h-6 items-center gap-1 rounded-md border px-2.5 text-[12px] hover:border-[var(--ed-line-strong)]"
-              >
-                View all <ChevronRight className="h-3 w-3" />
-              </Link>
-            }
-          />
-          {lowStock.length === 0 && summary.itemCount === 0 ? (
-            <div className="px-5 pb-6">
-              <EmptyState
-                icon={Boxes}
-                title="No inventory yet"
-                description="Add your first item to start tracking stock, locations, and movements."
-                cta={{ label: 'Add your first item', href: '/dashboard/inventory/new' }}
-                size="sm"
-              />
-            </div>
-          ) : lowStock.length === 0 ? (
-            <p className="px-5 pb-5 text-[12.5px] text-[var(--ed-ink-3)]">
-              Nothing below reorder point. Quiet shift.
-            </p>
-          ) : (
-            <table className="w-full text-[12.5px]">
-              <thead>
-                <tr className="border-border border-b">
-                  {['Item', 'On hand', 'Reorder', 'Coverage', '14-day', ''].map((h, i) => (
-                    <th
-                      key={h || i}
-                      className={cn(
-                        'h-9 px-3 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)]',
-                        (i === 1 || i === 2 || i === 4) && 'text-right',
-                      )}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {lowStock.map((row) => {
-                  const par = Math.max(row.reorder_point * 4, row.quantity_on_hand * 1.5, 10);
-                  const status: 'ok' | 'warn' | 'crit' =
-                    row.quantity_on_hand <= 0 ? 'crit' : 'warn';
-                  return (
-                    <tr
-                      key={row.id}
-                      className="border-border hover:bg-muted/50 border-b last:border-0"
-                    >
-                      <td className="py-2.5 pl-3 pr-3">
-                        <div className="flex items-center gap-2.5">
-                          <span
-                            aria-hidden
-                            className="border-border h-7 w-7 shrink-0 rounded-[5px] border"
-                            style={{
-                              background:
-                                'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
-                            }}
-                          />
-                          <div>
-                            <Link
-                              href={`/dashboard/inventory/${row.id}`}
-                              className="font-medium hover:underline"
-                            >
-                              {row.name}
-                            </Link>
-                            <div className="font-mono text-[10.5px] text-[var(--ed-ink-3)]">
-                              {row.sku}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 text-right font-mono tabular-nums">
-                        {formatNumber(row.quantity_on_hand)}
-                      </td>
-                      <td className="px-3 text-right font-mono tabular-nums text-[var(--ed-ink-3)]">
-                        {formatNumber(row.reorder_point)}
-                      </td>
-                      <td className="px-3">
-                        <StockBar stock={row.quantity_on_hand} par={par} status={status} />
-                      </td>
-                      <td className="px-3 text-right">
-                        <Sparkline
-                          data={
-                            lowStockTrends.get(row.id)?.qtySeries ??
-                            new Array<number>(14).fill(row.quantity_on_hand)
-                          }
-                          width={70}
-                          height={20}
-                        />
-                      </td>
-                      <td className="px-3 text-right">
-                        <span
-                          className={cn(
-                            'inline-flex h-5 items-center gap-1 rounded-[4px] px-1.5 text-[11px] font-medium',
-                            status === 'crit'
-                              ? 'bg-[hsl(var(--destructive)/0.16)] text-[hsl(var(--destructive))]'
-                              : 'bg-[hsl(var(--warning)/0.18)] text-[hsl(var(--warning-foreground))]',
-                          )}
-                        >
-                          <span className="h-1 w-1 rounded-full bg-current" />
-                          {status === 'crit' ? 'Out' : 'Low'}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </Card>
-
-        <Card className="lg:col-span-5">
-          <CardHead title="Today's activity" subtitle="Live · across all locations" />
-          {recentMovements.length === 0 ? (
-            <p className="px-5 pb-5 text-[12.5px] text-[var(--ed-ink-3)]">
-              No movements yet. Adjust stock from any item to see entries here.
-            </p>
-          ) : (
-            <ul>
-              {recentMovements.map((m, i) => {
-                const item = m.item;
-                const change = Number(m.quantity_change);
-                return (
-                  <li
-                    key={m.id as string}
-                    className={cn(
-                      'grid items-center gap-3 px-5 py-2.5',
-                      i < recentMovements.length - 1 && 'border-border border-b',
-                    )}
-                    style={{ gridTemplateColumns: '60px 1fr auto' }}
-                  >
-                    <div className="font-mono text-[10.5px] text-[var(--ed-ink-3)]">
-                      {formatRelative(m.created_at as string)
-                        .replace(' ago', '')
-                        .replace(/seconds?/, 's')
-                        .replace(/minutes?/, 'm')
-                        .replace(/hours?/, 'h')
-                        .replace(/days?/, 'd')}
-                    </div>
-                    <div>
-                      <div className="text-[12.5px]">
-                        <span
-                          className={cn(
-                            'mr-1.5 inline-flex h-[18px] items-center rounded-[4px] px-1.5 text-[10px] font-medium',
-                            change > 0
-                              ? 'bg-[hsl(var(--accent)/0.18)] text-[hsl(var(--accent-foreground))]'
-                              : 'bg-muted text-[var(--ed-ink-3)]',
-                          )}
-                        >
-                          {(m.movement_type as string).replace('_', ' ')}
-                        </span>
-                        {item?.name ?? 'Unknown'}
-                      </div>
-                      <div className="mt-0.5 font-mono text-[10.5px] text-[var(--ed-ink-3)]">
-                        {m.actor?.fullName ?? m.actor?.email ?? (m.user_id ? 'Unknown' : 'System')}
-                        {((m.reason as string | null) ?? null) && (
-                          <>
-                            {' · '}
-                            {m.reason as string}
-                          </>
-                        )}
-                      </div>
-                    </div>
-                    <div
-                      className={cn(
-                        'font-mono text-[13px] font-medium tabular-nums',
-                        change > 0
-                          ? 'text-[hsl(var(--accent-foreground))]'
-                          : 'text-[var(--ed-ink-3)]',
-                      )}
-                    >
-                      {change > 0 ? '+' : ''}
-                      {formatNumber(change)}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </Card>
-      </div>
-    </>
+  // Resolve the ordered, visible widget id list from the per-org layout (read
+  // off the request-cached org row; the editor that writes it ships in T3b).
+  // FAIL-CLOSED: a null / empty / malformed layout yields the catalog default
+  // order — pixel-identical to the pre-refactor dashboard. Never blanks.
+  const layout = (orgRow?.dashboard_layout ?? null) as DashboardLayout | null;
+  const widgetIds = resolveDashboardWidgets(
+    layout,
+    DASHBOARD_WIDGETS.map((w) => w.id),
   );
-}
 
-/**
- * Vertically-stacked attention list. Each row is a journalistic
- * "headline + dek + take a look →" so the operator can scan top-to-bottom
- * without having to parse a grid of pill counters. Renders the "all clear"
- * card when the items array is empty.
- */
-function NeedsAttentionHero({ items }: { items: AttentionItem[] }) {
-  if (items.length === 0) {
-    return (
-      <div className="border-border bg-card flex items-center gap-4 rounded-xl border p-5 shadow-[0_10px_34px_rgba(14,15,13,0.045)]">
-        <span
-          aria-hidden
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--accent)/0.16)]"
-        >
-          <CheckCircle2 className="h-5 w-5 text-[hsl(var(--accent-foreground))]" />
-        </span>
-        <div className="min-w-0">
-          <div className="font-display text-[15px] font-medium tracking-[-0.01em]">
-            All clear — nothing needs attention today.
-          </div>
-          <p className="text-[12.5px] text-[var(--ed-ink-3)]">
-            No low stock, no overdue POs, no pending approvals, no open counts, no
-            orders awaiting signature. The numbers below are just context.
-          </p>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <ul className="border-border bg-card divide-y divide-border overflow-hidden rounded-xl border shadow-[0_10px_34px_rgba(14,15,13,0.045)]">
-      {items.map((item) => {
-        const Icon = item.icon;
-        return (
-          <li key={item.id}>
-            <Link
-              href={item.href}
-              className="hover:bg-muted/60 group flex items-start gap-4 px-5 py-4 transition-colors"
-            >
-              <span
-                aria-hidden
-                className={cn(
-                  'mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
-                  item.tone === 'danger' && 'bg-[hsl(var(--destructive)/0.14)]',
-                  item.tone === 'warn' && 'bg-[hsl(var(--warning)/0.18)]',
-                  item.tone === 'neutral' && 'bg-muted',
-                )}
-              >
-                <Icon
-                  className={cn(
-                    'h-4 w-4',
-                    item.tone === 'danger' && 'text-[hsl(var(--destructive))]',
-                    item.tone === 'warn' && 'text-[hsl(var(--warning-foreground))]',
-                    item.tone === 'neutral' && 'text-[var(--ed-ink-3)]',
-                  )}
-                />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="font-display text-[14.5px] font-medium tracking-[-0.005em]">
-                  {item.title}
-                </div>
-                <p className="mt-0.5 text-[12.5px] text-[var(--ed-ink-3)]">{item.detail}</p>
-              </div>
-              <span className="mt-1 inline-flex shrink-0 items-center gap-1 text-[12px] font-medium text-[var(--ed-ink-2)] group-hover:text-foreground">
-                Take a look <ChevronRight className="h-3.5 w-3.5" />
-              </span>
-            </Link>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function StatusMetric({
-  label,
-  value,
-  tone = 'neutral',
-}: {
-  label: string;
-  value: string;
-  tone?: 'neutral' | 'good' | 'warn' | 'danger';
-}) {
-  return (
-    <div className="border-border bg-card rounded-md border px-3 py-2.5">
-      <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
-        {label}
-      </div>
-      <div
-        className={cn(
-          'mt-1 font-mono text-[18px] font-medium tabular-nums leading-none',
-          // Use the standalone hue vars (`--accent`, `--warning`) not the
-          // *-foreground vars — those are designed for text painted ON a
-          // colored background and are near-black/near-white, which goes
-          // invisible when used as standalone text on the card surface.
-          tone === 'good' && 'text-[hsl(var(--accent))]',
-          tone === 'warn' && 'text-[hsl(var(--warning))]',
-          tone === 'danger' && 'text-[hsl(var(--destructive))]',
-        )}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function MiniReadout({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="px-3 py-2.5">
-      <div className="font-mono text-[16px] font-medium tabular-nums leading-none">{value}</div>
-      <div className="mt-1 text-[10.5px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
-        {label}
-      </div>
-    </div>
-  );
-}
-
-function QuickAction({
-  href,
-  icon: Icon,
-  label,
-  badge,
-}: {
-  href: string;
-  icon: LucideIcon;
-  label: string;
-  /** Optional count pill rendered before the chevron (e.g. open PO count). */
-  badge?: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className="border-border bg-background hover:bg-muted flex min-h-9 items-center justify-between gap-3 rounded-md border px-3 text-[12.5px] transition-colors hover:border-[var(--ed-line-strong)]"
-    >
-      <span className="flex min-w-0 items-center gap-2">
-        <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--ed-ink-3)]" />
-        <span className="truncate">{label}</span>
-      </span>
-      <span className="flex shrink-0 items-center gap-1.5">
-        {badge && (
-          <span className="border-border bg-card text-foreground inline-flex h-5 min-w-[20px] items-center justify-center rounded-full border px-1.5 font-mono text-[10.5px] tabular-nums">
-            {badge}
-          </span>
-        )}
-        <ChevronRight className="h-3.5 w-3.5 text-[var(--ed-ink-4)]" />
-      </span>
-    </Link>
-  );
-}
-
-function Card({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <div
-      className={cn(
-        'border-border bg-card overflow-hidden rounded-lg border shadow-[0_10px_34px_rgba(14,15,13,0.045)]',
-        className,
-      )}
-    >
-      {children}
-    </div>
-  );
-}
-
-function CardHead({
-  title,
-  subtitle,
-  chips,
-  action,
-}: {
-  title: string;
-  subtitle?: string;
-  chips?: string[];
-  action?: React.ReactNode;
-}) {
-  return (
-    <div className="border-border flex flex-wrap items-start justify-between gap-x-3 gap-y-2 border-b px-5 py-3.5 sm:items-center">
-      <div className="min-w-0">
-        <div className="font-display text-[14px] font-medium tracking-[-0.01em]">{title}</div>
-        {subtitle && <div className="text-[12px] text-[var(--ed-ink-3)]">{subtitle}</div>}
-      </div>
-      {chips && (
-        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-          {chips.map((c) => (
-            <span
-              key={c}
-              className={cn(
-                'inline-flex h-6 shrink-0 items-center rounded-full border px-2.5 text-[11.5px]',
-                c.startsWith('+')
-                  ? 'border-border border-dashed text-[var(--ed-ink-3)]'
-                  : 'border-border bg-background text-[var(--ed-ink-2)]',
-              )}
-            >
-              {c}
-            </span>
-          ))}
-        </div>
-      )}
-      {action}
-    </div>
-  );
+  return <>{renderDashboardWidgets(widgetIds, widgetProps)}</>;
 }

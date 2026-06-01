@@ -10,7 +10,7 @@ import { OrgSwitcher } from '@/components/dashboard/org-switcher';
 import { IconMark } from '@/components/ui/icon-mark';
 import { cn } from '@/lib/utils';
 
-import { DEFAULT_MODULE_IDS, type ModuleId, type Role } from '@stockpilot/core';
+import { DEFAULT_MODULE_IDS, type ModuleId, type NavOverrides, type Role } from '@stockpilot/core';
 
 interface SidebarProps {
   className?: string;
@@ -29,6 +29,13 @@ interface SidebarProps {
    * sidebar (and tests that omit it) renders today's grandfathered nav.
    */
   enabledModules?: string[];
+  /**
+   * Raw per-org `nav_overrides` jsonb (untrusted). Passed straight into
+   * `navForRole` → `applyNavOverrides`, which validates it and fails CLOSED to
+   * the derived nav on null/garbage. Typed `unknown` because it crosses the RSC
+   * boundary as plain JSON from the DB.
+   */
+  navOverrides?: unknown;
   onNavigate?: () => void;
 }
 
@@ -42,13 +49,19 @@ export function Sidebar({
   userRole,
   role,
   enabledModules,
+  navOverrides,
   onNavigate,
 }: SidebarProps) {
   const moduleSet = React.useMemo(
     () => new Set((enabledModules ?? DEFAULT_MODULE_IDS) as ModuleId[]),
     [enabledModules],
   );
-  const sections: NavSection[] = navForRole(role, moduleSet);
+  // `applyNavOverrides` (inside navForRole) validates the override shape and
+  // fails CLOSED to the derived nav on null/garbage, so the cast is safe.
+  const sections: NavSection[] = React.useMemo(
+    () => navForRole(role, moduleSet, (navOverrides as NavOverrides | null) ?? null),
+    [role, moduleSet, navOverrides],
+  );
   const pathname = usePathname();
   const router = useRouter();
   const initials = (userName || 'U')
