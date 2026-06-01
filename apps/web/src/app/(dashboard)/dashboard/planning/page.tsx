@@ -2,6 +2,7 @@ import { TrendingUp } from 'lucide-react';
 import Link from 'next/link';
 
 import { DraftPosFromReorderButton } from '@/components/reports/draft-pos-from-reorder-button';
+import { PlanningParamsPanel } from '@/components/settings/planning-params-panel';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -29,7 +30,10 @@ export default async function PlanningPage() {
   }
 
   const svc = await PlanningService.forCurrentUser();
-  const suggestions = await svc.getReorderSuggestions();
+  const [suggestions, params] = await Promise.all([
+    svc.getReorderSuggestions(),
+    svc.readParams(),
+  ]);
 
   // The auto-draft path uses the canonical below-par filter (reorder_point > 0,
   // on-hand at/below it); count those here so the button mirrors what it will do.
@@ -118,6 +122,12 @@ export default async function PlanningPage() {
           </Table>
         </CardContent>
       </Card>
+
+      {moduleAccess.canManage && (
+        <div className="mt-6">
+          <PlanningParamsPanel initial={params} />
+        </div>
+      )}
     </div>
   );
 }
