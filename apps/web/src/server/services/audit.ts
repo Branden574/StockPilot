@@ -139,6 +139,9 @@ export type AuditEvent =
   | 'module.disabled'
   | 'organization.mfa_policy.changed'
   | 'organization.public_request_token.rotated'
+  // Per-org dashboard customization (Phase 2). An admin saved or reset the
+  // sidebar nav overrides (hide/rename/reorder/custom links) for the org.
+  | 'nav_overrides.updated'
   // MFA discrete events (replacing prior misuse of user.role.changed
   // and warehouse.updated for these forensic-relevant flows).
   | 'mfa.enrolled'
