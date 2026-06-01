@@ -5,13 +5,23 @@
 -- inventory back (restock) or writes it off (scrap) when a return is received.
 --
 -- Inventory correctness is paramount:
---   • NEVER restock more than was fulfilled — the service layer validates
---     quantity <= order_request_lines.quantity_fulfilled at create time; this
---     migration enforces quantity > 0 and a per-line uniqueness constraint so a
---     line can't be doubled up inside one return.
+--   • NEVER restock more than was fulfilled — enforced AT THE DATABASE LAYER,
+--     independent of any service. A deferred constraint trigger on return_lines
+--     (return_lines_enforce_fulfilled_cap) sums quantity across ALL non-cancelled,
+--     non-denied returns for the same order_request_line_id and rejects an insert
+--     that would push the total over order_request_lines.quantity_fulfilled. This
+--     bounds the cumulative returned quantity across an UNBOUNDED number of returns
+--     for the same line — the per-line UNIQUE constraint only stops a duplicate
+--     inside ONE return, so it cannot bound the cross-return aggregate on its own.
+--     quantity > 0 (CHECK) remains the floor.
 --   • NEVER apply a disposition twice — return_lines.applied is a one-way latch
 --     flipped inside process_return_disposition; the RPC skips already-applied
 --     lines, so re-running it (idempotent) is a no-op for settled lines.
+--   • Inventory only moves for a RECEIVED return — process_return_disposition
+--     guards v_return.status = 'received' and flips it to 'closed' in the same
+--     transaction as the inventory write, so an unapproved/unreceived/denied/
+--     cancelled return can never push stock (mirrors cancel_order_request's
+--     invalid_status_transition guard in 0137).
 --
 -- Stock semantics (confirmed seam):
 --   RESTOCK = +quantity, movement_type 'return'
@@ -87,7 +97,7 @@ create table if not exists public.return_lines (
   organization_id       uuid not null references public.organizations(id) on delete cascade,
   order_request_line_id uuid not null references public.order_request_lines(id),
   item_id               uuid not null references public.inventory_items(id),
-  quantity              numeric not null check (quantity > 0),
+  quantity              numeric(14,4) not null check (quantity > 0),
   disposition           text not null check (disposition in ('restock','scrap')),
   applied               boolean not null default false,
   created_at            timestamptz not null default now(),
@@ -96,6 +106,79 @@ create table if not exists public.return_lines (
 
 create index if not exists return_lines_return_idx
   on public.return_lines (return_id);
+
+-- Index supporting the cross-return aggregate cap below (sum by source line).
+create index if not exists return_lines_order_request_line_idx
+  on public.return_lines (order_request_line_id);
+
+-- 2a. Fulfilled cap — DB-level guard against inventory inflation. ------------
+-- The per-line UNIQUE(return_id, order_request_line_id) only stops a line being
+-- doubled WITHIN ONE return; it does NOTHING to stop a SECOND (or Nth) return
+-- being opened for the same order_request_line_id, each restocking the full
+-- fulfilled quantity and inflating quantity_on_hand without bound. cancel_order
+-- (0137) avoids this by ZEROING quantity_fulfilled after restoring; the returns
+-- flow never decrements it, so the DB must remember prior returns itself.
+--
+-- This trigger fires per inserted/updated return_line and rejects it if the
+-- cumulative quantity across ALL returns for the same source line — excluding
+-- only returns that were never realized (cancelled/denied) — would exceed
+-- order_request_lines.quantity_fulfilled. We lock the parent order_request_lines
+-- row FOR UPDATE first so concurrent inserts for the same source line serialize
+-- (otherwise two transactions could each pass the SUM check and jointly exceed
+-- the cap). Defined as a CONSTRAINT TRIGGER so it can be reasoned about as an
+-- integrity rule; it fires AFTER ROW with the lock taken inside.
+create or replace function public.tg_return_lines_enforce_fulfilled_cap()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_fulfilled numeric(14,4);
+  v_returned  numeric(14,4);
+begin
+  -- Lock the source line so concurrent inserts for the same line serialize.
+  select orl.quantity_fulfilled
+    into v_fulfilled
+  from public.order_request_lines orl
+  where orl.id = new.order_request_line_id
+  for update;
+
+  if not found then
+    raise exception 'order_request_line_not_found'
+      using errcode = 'P0002', detail = new.order_request_line_id::text;
+  end if;
+
+  -- Sum all return_lines for this source line across returns that are still
+  -- live (anything not cancelled/denied counts toward the cap). The row being
+  -- inserted/updated is already visible to this AFTER trigger, so NEW is
+  -- included in the sum — do not add it again.
+  select coalesce(sum(rl.quantity), 0)
+    into v_returned
+  from public.return_lines rl
+  join public.returns r on r.id = rl.return_id
+  where rl.order_request_line_id = new.order_request_line_id
+    and r.status not in ('cancelled', 'denied');
+
+  if v_returned > v_fulfilled then
+    raise exception 'return_exceeds_fulfilled'
+      using errcode = 'P0001',
+            detail = format(
+              'order_request_line %s: returned %s exceeds fulfilled %s',
+              new.order_request_line_id, v_returned, v_fulfilled
+            );
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.tg_return_lines_enforce_fulfilled_cap() from public, anon;
+
+drop trigger if exists return_lines_enforce_fulfilled_cap on public.return_lines;
+create constraint trigger return_lines_enforce_fulfilled_cap
+  after insert or update of quantity, order_request_line_id on public.return_lines
+  for each row execute function public.tg_return_lines_enforce_fulfilled_cap();
 
 -- RLS -----------------------------------------------------------------------
 alter table public.returns      enable row level security;
@@ -128,9 +211,13 @@ grant select, insert, update, delete on public.return_lines to authenticated;
 
 -- 3. process_return_disposition — apply restock/scrap per line. --------------
 -- Mirrors cancel_order_request (0137): lock the header, authorize against the
--- header org, loop unapplied lines in a stable order, mutate inventory + ledger
--- inline (stamping the reference columns adjust_stock can't), latch applied.
--- Idempotent: already-applied lines are skipped, so a re-run is a no-op.
+-- header org, GUARD status='received' (invalid_status_transition otherwise),
+-- loop unapplied lines in a stable order, mutate inventory + ledger inline
+-- (stamping the reference columns adjust_stock can't), latch applied, then flip
+-- the return to 'closed' (closed_by/closed_at) in the same transaction so the
+-- received->closed move is atomic with the inventory write. Idempotent on the
+-- line latch: already-applied lines are skipped; a second call is rejected by
+-- the status guard once the return is 'closed'.
 create or replace function public.process_return_disposition(p_return_id uuid)
 returns public.returns
 language plpgsql
@@ -160,6 +247,19 @@ begin
 
   if not public.has_org_role(v_return.organization_id, 'manager') then
     raise exception 'forbidden' using errcode = '42501';
+  end if;
+
+  -- Status gate: inventory only moves for a return that has actually been
+  -- received. A return still in 'requested'/'approved' (never received) or in
+  -- 'denied'/'cancelled' must never push stock — that would let a manager skip
+  -- the approval/receipt workflow. 'closed' is already settled (this RPC moved
+  -- it there); re-calling on a closed return is a no-op because every line's
+  -- applied latch is true, but we still reject the transition explicitly so the
+  -- received->closed move is the only path that mutates inventory. Mirrors
+  -- cancel_order_request's invalid_status_transition guard (0137).
+  if v_return.status <> 'received' then
+    raise exception 'invalid_status_transition'
+      using errcode = 'P0001', detail = v_return.status;
   end if;
 
   -- order by item_id keeps the per-item row-lock order stable across concurrent
@@ -223,6 +323,15 @@ begin
       set applied = true
       where id = v_line.line_id;
   end loop;
+
+  -- Make the received->closed transition atomic with the inventory write: once
+  -- stock has moved the return is settled, so close it in the same transaction.
+  -- (The status guard above ensures we only ever reach here from 'received'.)
+  update public.returns
+    set status    = 'closed',
+        closed_by = v_user,
+        closed_at = now()
+  where id = p_return_id;
 
   select * into v_return from public.returns where id = p_return_id;
   return v_return;
