@@ -426,45 +426,77 @@ export class OrderRequestsService {
 
     const cap = Math.min(Math.max(1, filters.cap ?? 10_000), 50_000);
 
-    let q = this.ctx.supabase
-      .from('order_requests')
-      .select(
-        `id, status, warehouse_id, requester_user_id, requester_email,
-         requester_name, requester_org_label, source, notes,
-         created_at, updated_at, approved_at, delivered_at, completed_at,
-         fulfillment_type, delivery_charter_id,
-         warehouse:warehouses!warehouse_id (name),
-         charter:charters!delivery_charter_id (name, code),
-         lines:order_request_lines (quantity_requested, unit_cost_at_request),
-         requester:user_profiles!requester_user_id (full_name, email)`,
-        { count: 'exact' },
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false });
+    // PostgREST clamps any single response to `[api] max_rows` (1000;
+    // supabase/config.toml:10, also the hosted default). A naive
+    // `.range(0, cap-1)` therefore SILENTLY returns only the newest 1000
+    // rows for any org with >1000 matching orders — the same head-of-line
+    // truncation class migration 0148 fixed for the connector drainer.
+    // So we paginate in <=PAGE_SIZE batches with .range(), looping until
+    // we've assembled every filtered row up to `cap`. The first page
+    // carries the exact `count`, which we use both to size the loop and
+    // to report the true total back to the caller (for the truncation
+    // sentinel). PAGE_SIZE is kept <= the Data-API max_rows so each page
+    // is returned in full.
+    const PAGE_SIZE = 1000;
 
-    if (filters.status) {
-      const arr = Array.isArray(filters.status) ? filters.status : [filters.status];
-      q = q.in('status', arr);
-    } else {
-      // Same anti-spam exclusion as list(): hide public-submit limbo rows
-      // unless a caller explicitly asks for them.
-      q = q.neq('status', 'pending_confirmation');
+    const rawRows: Record<string, unknown>[] = [];
+    let total = 0;
+    let offset = 0;
+    while (offset < cap) {
+      const pageEnd = Math.min(offset + PAGE_SIZE, cap) - 1;
+      let q = this.ctx.supabase
+        .from('order_requests')
+        .select(
+          `id, status, warehouse_id, requester_user_id, requester_email,
+           requester_name, requester_org_label, source, notes,
+           created_at, updated_at, approved_at, delivered_at, completed_at,
+           fulfillment_type, delivery_charter_id,
+           warehouse:warehouses!warehouse_id (name),
+           charter:charters!delivery_charter_id (name, code),
+           lines:order_request_lines (quantity_requested, unit_cost_at_request),
+           requester:user_profiles!requester_user_id (full_name, email)`,
+          // Only the first page needs the exact count — it's stable across
+          // the loop and re-counting each page would be wasted work.
+          offset === 0 ? { count: 'exact' } : undefined,
+        )
+        .eq('organization_id', this.ctx.organizationId)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false });
+
+      if (filters.status) {
+        const arr = Array.isArray(filters.status) ? filters.status : [filters.status];
+        q = q.in('status', arr);
+      } else {
+        // Same anti-spam exclusion as list(): hide public-submit limbo rows
+        // unless a caller explicitly asks for them.
+        q = q.neq('status', 'pending_confirmation');
+      }
+      if (filters.requesterUserId) q = q.eq('requester_user_id', filters.requesterUserId);
+      if (filters.warehouseId) q = q.eq('warehouse_id', filters.warehouseId);
+      if (filters.deliveryCharterId) q = q.eq('delivery_charter_id', filters.deliveryCharterId);
+      if (filters.fulfillmentType) q = q.eq('fulfillment_type', filters.fulfillmentType);
+      if (filters.since) q = q.gte('created_at', filters.since);
+      if (filters.until) q = q.lt('created_at', filters.until);
+
+      q = q.range(offset, pageEnd);
+
+      const { data, error, count } = await q;
+      if (error) throw new ServiceError('internal_error', error.message);
+      if (offset === 0) total = count ?? 0;
+
+      const page = (data ?? []) as Record<string, unknown>[];
+      for (const r of page) rawRows.push(r);
+
+      // Stop when the DB returned a short page (no more rows) or we've
+      // pulled everything the exact count promised. Without the short-page
+      // guard a count that lags behind a concurrent delete could loop us
+      // into an empty fetch.
+      if (page.length < pageEnd - offset + 1) break;
+      if (total > 0 && rawRows.length >= Math.min(total, cap)) break;
+      offset += PAGE_SIZE;
     }
-    if (filters.requesterUserId) q = q.eq('requester_user_id', filters.requesterUserId);
-    if (filters.warehouseId) q = q.eq('warehouse_id', filters.warehouseId);
-    if (filters.deliveryCharterId) q = q.eq('delivery_charter_id', filters.deliveryCharterId);
-    if (filters.fulfillmentType) q = q.eq('fulfillment_type', filters.fulfillmentType);
-    if (filters.since) q = q.gte('created_at', filters.since);
-    if (filters.until) q = q.lt('created_at', filters.until);
 
-    q = q.range(0, cap - 1);
-
-    const { data, error, count } = await q;
-    if (error) throw new ServiceError('internal_error', error.message);
-
-    const rows = (data ?? []).map((row): OrderExportRow => {
-      const r = row as Record<string, unknown>;
+    const rows = rawRows.map((r): OrderExportRow => {
       const flatten = <T>(field: unknown): T | null =>
         Array.isArray(field) ? ((field[0] as T | undefined) ?? null) : ((field as T) ?? null);
       const wh = flatten<{ name?: string | null }>(r.warehouse);
@@ -517,7 +549,12 @@ export class OrderRequestsService {
       };
     });
 
-    return { rows, total: count ?? rows.length };
+    // `total` is the EXACT count from the first page (the real number of
+    // matching rows, which may exceed `cap`). The route uses
+    // `total > rows.length` to decide whether to print a truncation
+    // sentinel; with batching, rows.length now reaches min(total, cap)
+    // rather than being silently clipped to 1000.
+    return { rows, total: total || rows.length };
   }
 
   async pendingCount(): Promise<number> {

@@ -145,13 +145,49 @@ describe('GET /api/orders/export.csv', () => {
     );
   });
 
-  it('appends a truncation sentinel when the cap clipped the result', async () => {
+  it('appends a truncation sentinel reflecting the actual returned row count', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('owner'));
+    // 1 row returned, 99999 matching — the sentinel must report what was
+    // actually exported (1), not the intended ROW_CAP, so it can't claim
+    // completeness it doesn't have.
     stubExportRows([SAMPLE_ROW], 99_999);
 
     const res = await GET(buildRequest());
     const body = await res.text();
-    expect(body).toContain('# truncated at 10000 rows of 99999');
+    expect(body).toContain('# truncated: exported 1 of 99999 rows');
+  });
+
+  it('omits the truncation sentinel when every matching row was returned', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('owner'));
+    stubExportRows([SAMPLE_ROW], 1);
+
+    const res = await GET(buildRequest());
+    const body = await res.text();
+    expect(body).not.toContain('# truncated');
+  });
+
+  it('ignores an explicit pending_confirmation status (public-submit limbo the list never shows)', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('manager'));
+    const exportRows = stubExportRows([]);
+
+    await GET(buildRequest('?status=pending_confirmation'));
+
+    // resolveStatusFilter drops pending_confirmation, so the route passes
+    // no status and the service applies its default limbo exclusion.
+    expect(exportRows).toHaveBeenCalledWith(
+      expect.objectContaining({ status: undefined }),
+    );
+  });
+
+  it('passes an explicit selectable status through to the service', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('manager'));
+    const exportRows = stubExportRows([]);
+
+    await GET(buildRequest('?status=approved'));
+
+    expect(exportRows).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'approved' }),
+    );
   });
 
   it('maps a module_disabled ServiceError to 403', async () => {

@@ -42,8 +42,14 @@ const STATUS_TABS: Record<string, OrderRequestStatus | OrderRequestStatus[]> = {
   denied_cancelled: ['denied', 'cancelled'],
 };
 
-const ALL_STATUSES = new Set<OrderRequestStatus>([
-  'pending_confirmation',
+// Statuses an explicit ?status=<status> param may select. Deliberately
+// EXCLUDES 'pending_confirmation': those are public-submit limbo rows the
+// on-screen orders list never shows (list()/exportRows() only surface them
+// when a caller opts in, and the orders page UI cannot select that status
+// at all — isStatusTab rejects it). Keeping the export's accepted-status
+// set aligned with what the list can show prevents a manager from
+// exporting limbo rows that never appear on screen.
+const EXPORTABLE_STATUSES = new Set<OrderRequestStatus>([
   'pending_approval',
   'approved',
   'pick_slip_generated',
@@ -81,7 +87,7 @@ function resolveStatusFilter(
 ): OrderRequestStatus | OrderRequestStatus[] | undefined {
   if (!raw) return undefined;
   if (raw in STATUS_TABS) return STATUS_TABS[raw];
-  if (ALL_STATUSES.has(raw as OrderRequestStatus)) return raw as OrderRequestStatus;
+  if (EXPORTABLE_STATUSES.has(raw as OrderRequestStatus)) return raw as OrderRequestStatus;
   return undefined;
 }
 
@@ -147,8 +153,14 @@ export async function GET(request: Request) {
     }));
 
     let body = toCsv([...HEADERS], csvRows);
+    // Base the sentinel on what was ACTUALLY returned, not the intended
+    // ROW_CAP. exportRows() now paginates past the 1000-row Data-API cap,
+    // so rows.length reaches min(total, ROW_CAP); when total still exceeds
+    // it, rows 1..rows.length are present and the rest are omitted. Report
+    // the real returned count so the footer can't claim completeness it
+    // doesn't have.
     if (total > rows.length) {
-      body += `\n# truncated at ${ROW_CAP} rows of ${total}`;
+      body += `\n# truncated: exported ${rows.length} of ${total} rows`;
     }
 
     return new NextResponse(body, {
