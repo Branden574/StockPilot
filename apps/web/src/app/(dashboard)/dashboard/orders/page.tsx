@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Package, ShoppingCart, Truck } from 'lucide-react';
+import { Download, Package, ShoppingCart, Truck } from 'lucide-react';
 import Link from 'next/link';
 
 export const metadata: Metadata = { title: 'Orders' };
@@ -132,9 +132,29 @@ export default async function OrdersPage({
               : 'Track the orders you have placed.'}
           </p>
         </div>
-        <Button asChild variant="gradient">
-          <Link href="/dashboard/orders/new">+ Place order</Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Export the org-wide order history. Gated on orders:approve
+              (manager+) — the same permission that lets this page show
+              every org order; requesters without it only see their own
+              requests and have nothing org-wide to export. The link
+              carries the active status tab so the CSV matches what's on
+              screen. */}
+          {canApprove && (
+            <Button asChild variant="outline">
+              <a
+                href={`/api/orders/export.csv?status=${tab}`}
+                download
+                aria-label="Export orders to CSV"
+              >
+                <Download className="mr-1.5 h-4 w-4" />
+                Export CSV
+              </a>
+            </Button>
+          )}
+          <Button asChild variant="gradient">
+            <Link href="/dashboard/orders/new">+ Place order</Link>
+          </Button>
+        </div>
       </div>
 
       {canApprove && (
