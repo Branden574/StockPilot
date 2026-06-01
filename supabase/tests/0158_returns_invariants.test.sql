@@ -34,7 +34,11 @@ select plan(27);
 \set item_scrap   '\'d2222222-2222-2222-2222-222222222222\''
 \set item_over    '\'d3333333-3333-3333-3333-333333333333\''
 \set item_cross   '\'d4444444-4444-4444-4444-444444444444\''
-\set item_other   '\'d4999999-9999-9999-9999-999999999999\''  -- the WRONG item for cross test
+-- item_other is the WRONG item for the cross-item mismatch test. NOTE: the
+-- trailing comment MUST live on its own line — psql's \set swallows the rest of
+-- the line into the variable value, so an inline comment here would be
+-- interpolated into the INSERT and break the VALUES tuple.
+\set item_other   '\'d4999999-9999-9999-9999-999999999999\''
 \set item_durable '\'d5555555-5555-5555-5555-555555555555\''
 \set item_idem    '\'d6666666-6666-6666-6666-666666666666\''
 \set item_cancel  '\'d7777777-7777-7777-7777-777777777777\''
@@ -100,18 +104,22 @@ insert into public.inventory_items
     (:item_cancel,  :org_id, 'Cancel Widget',  'SKU-CANCEL',  100, 'active')
   on conflict (id) do nothing;
 
--- A completed order_request. The status CHECK (0044) admits ready_for_delivery /
--- delivered as the "done" states; we use ready_for_delivery for the lines that
--- only need a parent, and a SEPARATE order for the cancel test (so cancelling it
--- can't disturb the other invariants).
+-- A fulfilled order_request. The current status CHECK (0120 superseded the
+-- 0044 set — 'ready_for_delivery'/'delivered' were RENAMED away) admits
+-- 'in_transit' as a post-fulfilment, still-live state. We use 'in_transit' for
+-- the lines that only need a parent, and a SEPARATE order for the cancel test
+-- (so cancelling it can't disturb the other invariants). 'in_transit' is a
+-- legal source for the cancel test because cancel_order_request only refuses
+-- 'completed'/'denied'/'cancelled' (0155) and the order_requests transition
+-- guard (0120) allows in_transit -> cancelled.
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, requester_user_id, source)
-  values (:order_id, :org_id, :wh_id, 'ready_for_delivery', :mgr_id, 'internal')
+  values (:order_id, :org_id, :wh_id, 'in_transit', :mgr_id, 'internal')
   on conflict (id) do nothing;
 
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, requester_user_id, source)
-  values (:order_cancel, :org_id, :wh_id, 'ready_for_delivery', :mgr_id, 'internal')
+  values (:order_cancel, :org_id, :wh_id, 'in_transit', :mgr_id, 'internal')
   on conflict (id) do nothing;
 
 -- Source lines. quantity_fulfilled simulates the fulfilment decrement; the
