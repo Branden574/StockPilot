@@ -24,7 +24,10 @@ export interface AccountMapping {
   billExpense: string;
   inventoryAsset: string;
   valuationOffset: string;
-  /** Account a closed return's CreditMemo is booked against (Phase B). */
+  /**
+   * GL account a closed return's value is CREDITED to (Phase B). Booked as a
+   * balanced JournalEntry whose offsetting DEBIT is the inventoryAsset account.
+   */
   returnCredit: string;
 }
 
@@ -577,8 +580,9 @@ export class ConnectionsService {
     if (!row) throw new ServiceError('not_found', `No ${provider} connection to configure.`);
 
     const current = ((row as { settings: Record<string, unknown> | null }).settings) ?? {};
-    // Merge with any existing accountIds (e.g. a defaultVendorId/defaultCustomerId
-    // set out of band) so saving the mapped fields never clobbers them.
+    // Merge with any existing accountIds (e.g. a defaultVendorId set out of
+    // band, or the valuation bookkeeping fields) so saving the mapped fields
+    // never clobbers them.
     const currentAccountIds =
       (current.accountIds as Record<string, unknown> | undefined) ?? {};
     const nextSettings = {

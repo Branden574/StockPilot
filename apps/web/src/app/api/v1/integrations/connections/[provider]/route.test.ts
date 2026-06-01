@@ -164,7 +164,7 @@ describe('POST /api/v1/integrations/connections/[provider]/account-mapping', () 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     // returnCredit (Phase B) is optional on this surface — when the body omits
-    // it the route forwards '' so the CreditMemo export stays unconfigured.
+    // it the route forwards '' so the return JournalEntry export stays unconfigured.
     expect(saveAccountMapping).toHaveBeenCalledWith('quickbooks', {
       ...validMapping,
       returnCredit: '',

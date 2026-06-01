@@ -585,7 +585,7 @@ export class RMAService {
    * status='received', so the disposition can never be applied twice.
    *
    * On a successful close we publish a `return.closed` outbox event (Phase B)
-   * so the QuickBooks connector can book a CreditMemo. Mirrors
+   * so the QuickBooks connector can book a JournalEntry. Mirrors
    * receiving.ts:188 (receipt.posted → Bill): the payload carries summary
    * fields only (no line items — the connector rehydrates return_lines by
    * aggregate id), and a stable dedupe key keeps a replayed close from queueing
@@ -628,7 +628,7 @@ export class RMAService {
       this.ctx,
     );
 
-    // Publish return.closed for downstream connectors (QBO CreditMemo). The
+    // Publish return.closed for downstream connectors (QBO JournalEntry). The
     // payload total is informational (the connector recomputes from the lines
     // it rehydrates); we derive it here from each return line's quantity ×ⁿ the
     // source order line's unit_cost_at_request (0044) for the digest/summary.
@@ -640,9 +640,11 @@ export class RMAService {
   /**
    * Best-effort publish of the `return.closed` outbox event. Computes the
    * line count + credit total from return_lines joined to their source order
-   * lines (unit_cost_at_request). Failures are swallowed (reported, not thrown)
-   * so they never undo a close whose disposition already committed — exactly
-   * like the receipt.posted publish in receiving.ts.
+   * lines (unit_cost_at_request). Failures are silently swallowed (NOT thrown,
+   * and NOT reported) so they never undo a close whose disposition already
+   * committed — exactly like the receipt.posted publish in receiving.ts. The
+   * trade-off is no telemetry on a dropped publish; an unpublished close is
+   * recoverable by re-closing or a manual outbox backfill.
    */
   private async publishReturnClosed(ret: ReturnRow): Promise<void> {
     try {
