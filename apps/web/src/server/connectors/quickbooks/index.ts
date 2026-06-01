@@ -13,29 +13,53 @@ import { env } from '@/lib/env';
 
 import { buildBillFromReceipt, resolveVendor, round2, type BillLine } from './bill';
 import { QboClient, type QboEnv } from './client';
+import { buildCreditMemoFromReturn, type CreditMemoLine } from './creditmemo';
 import { refreshTokens } from './oauth';
 
+/** QBO settings persisted on the connection (see ConnectionsService). */
+interface QboSettings {
+  env?: QboEnv;
+  accountIds?: {
+    billExpense?: string;
+    defaultVendorId?: string;
+    returnCredit?: string;
+    /** Optional generic customer to credit returns against. */
+    defaultCustomerId?: string;
+  };
+}
+
+/** Classify a thrown QBO error as transient (retryable) vs caller-error. */
+function isRetryableQboError(e: unknown): boolean {
+  const status = (e as { status?: number })?.status ?? 0;
+  // 429 (rate limit) / 5xx (server) / 401 (token, refreshed next tick) are
+  // transient → retryable. Other 4xx are caller errors → not retryable.
+  return status === 429 || status >= 500 || status === 401;
+}
+
 /**
- * QuickBooks Online connector. ONE-WAY EXPORT ONLY (push mode): on a posted
- * receipt it creates a QBO Bill against the configured expense account, never
- * writing QBO data back into StockPilot and never mutating items/books/receiving.
+ * QuickBooks Online connector. ONE-WAY EXPORT ONLY (push mode):
+ *  - on a posted receipt it creates a QBO Bill against the configured expense
+ *    account;
+ *  - on a closed return it creates a QBO CreditMemo against the configured
+ *    returnCredit account.
+ * It never writes QBO data back into StockPilot and never mutates
+ * items/books/receiving/returns.
  *
  * Slots into the framework seams built in Tasks 1-8:
  *  - the drainer (drainer.ts) calls `refreshAuth` when the access token is near
  *    expiry, persists the rotated secret to Vault, then dispatches
  *    `handleOutboxEvent` with the injected `ConnectorDeps` (admin + mapping
  *    helpers).
- *  - the `receipt.posted` outbox payload carries NO line items, so the handler
- *    rehydrates receipt → purchase_orders → suppliers and receipt_lines by
- *    aggregate id (= receipt id) before building the Bill.
- *  - idempotency is provided two ways: the QBO `requestid` (rcpt-<id>) dedupes
- *    the Bill create on replay, and `connection_sync_log` (managed by the
- *    drainer) won't re-dispatch a row already marked success.
+ *  - the `receipt.posted` / `return.closed` outbox payloads carry NO line items,
+ *    so the handler rehydrates by aggregate id before building the document.
+ *  - idempotency is provided two ways: the QBO `requestid` (rcpt-<id> /
+ *    return-<id>) dedupes the create on replay, and `connection_sync_log`
+ *    (managed by the drainer) won't re-dispatch a row already marked success.
  */
 export const quickbooksConnector: Connector = {
   id: 'quickbooks',
   modes: ['push'],
-  subscribedTopics: ['receipt.posted'],
+  subscribedTopics: ['receipt.posted', 'return.closed'],
 
   /**
    * Refresh the access token. Intuit ROTATES the refresh token on most
@@ -59,13 +83,32 @@ export const quickbooksConnector: Connector = {
     secrets: ConnectorSecrets,
     deps: ConnectorDeps,
   ): Promise<PushResult> {
-    // Not our topic / nothing to act on — ack so the ledger marks it done.
-    if (event.topic !== 'receipt.posted' || !event.aggregateId) return { ok: true };
+    // Nothing to act on without an aggregate id — ack so the ledger marks it done.
+    if (!event.aggregateId) return { ok: true };
 
-    const settings = conn.settings as {
-      env?: QboEnv;
-      accountIds?: { billExpense?: string; defaultVendorId?: string };
-    };
+    if (event.topic === 'receipt.posted') {
+      return handleReceiptPosted(event, conn, secrets, deps);
+    }
+    if (event.topic === 'return.closed') {
+      return handleReturnClosed(event, conn, secrets, deps);
+    }
+    // Not our topic — ack so the ledger marks it done.
+    return { ok: true };
+  },
+};
+
+/**
+ * receipt.posted → QBO Bill. Rehydrates receipt → purchase_orders → suppliers
+ * and receipt_lines by aggregate id (the payload has no line items), then POSTs
+ * a single-line account-based Bill. Idempotent on the `rcpt-<id>` requestid.
+ */
+async function handleReceiptPosted(
+  event: OutboxEvent,
+  conn: ConnectionRef,
+  secrets: ConnectorSecrets,
+  deps: ConnectorDeps,
+): Promise<PushResult> {
+    const settings = conn.settings as QboSettings;
 
     // GRACEFUL CONFIG GAP: the admin must have set the expense account in the
     // Integrations panel. Without it we can't book the Bill — fail
@@ -168,11 +211,115 @@ export const quickbooksConnector: Connector = {
       const externalId = (created.Bill as { Id?: string } | undefined)?.Id;
       return { ok: true, externalId };
     } catch (e: unknown) {
-      const status = (e as { status?: number })?.status ?? 0;
-      // 429 (rate limit) / 5xx (server) / 401 (token, refreshed next tick) are
-      // transient → retryable. Other 4xx are caller errors → not retryable.
-      const retryable = status === 429 || status >= 500 || status === 401;
-      return { ok: false, retryable, error: e instanceof Error ? e.message : 'qbo bill failed' };
+      return {
+        ok: false,
+        retryable: isRetryableQboError(e),
+        error: e instanceof Error ? e.message : 'qbo bill failed',
+      };
     }
-  },
-};
+}
+
+/**
+ * return.closed → QBO CreditMemo. The payload carries NO line items (like
+ * receipt.posted), so rehydrate the return + its return_lines (joined to the
+ * source order line for unit_cost_at_request) by aggregate id, then POST a
+ * single-line account-based CreditMemo against the configured `returnCredit`
+ * account. Idempotent on the `return-<id>` requestid; the return→CreditMemo.Id
+ * link is persisted via deps.putMapping(entity_type='return').
+ *
+ * FAIL-CLOSED reads mirror the Bill path: a transient DB error THROWS so the
+ * drainer records a retryable row + backoff; we only ACK (ok:true) when the read
+ * SUCCEEDED and the row is genuinely absent (error null AND data null).
+ */
+async function handleReturnClosed(
+  event: OutboxEvent,
+  conn: ConnectionRef,
+  secrets: ConnectorSecrets,
+  deps: ConnectorDeps,
+): Promise<PushResult> {
+  const settings = conn.settings as QboSettings;
+
+  // GRACEFUL CONFIG GAP: the admin must have set the returnCredit account in
+  // the Integrations panel. Without it we can't book the CreditMemo — fail
+  // non-retryably (retrying won't fix a missing config), mirroring the Bill
+  // expense-account gap.
+  const returnCreditAccountId = settings.accountIds?.returnCredit;
+  if (!returnCreditAccountId) {
+    return { ok: false, retryable: false, error: 'returnCredit account not configured' };
+  }
+
+  const admin = deps.admin as { from: (t: string) => any };
+
+  // Rehydrate the return header (org-scope is enforced by the connection; the
+  // drainer only dispatches this org's events). FAIL-CLOSED: throw on a
+  // transient error, ACK only on a genuinely-absent row.
+  const { data: ret, error: retErr } = await admin
+    .from('returns')
+    .select('id, return_number')
+    .eq('id', event.aggregateId)
+    .maybeSingle();
+  if (retErr) throw new Error(`returns select: ${retErr.message}`);
+  if (!ret) return { ok: true };
+
+  // Rehydrate the lines + each source order line's unit cost (the CreditMemo
+  // amount = Σ quantity × unit_cost_at_request).
+  const { data: lines, error: linesErr } = await admin
+    .from('return_lines')
+    .select('quantity, order_request_line:order_request_lines!order_request_line_id (unit_cost_at_request)')
+    .eq('return_id', ret.id);
+  if (linesErr) throw new Error(`return_lines select: ${linesErr.message}`);
+
+  const creditLines: CreditMemoLine[] = (
+    (lines ?? []) as Array<{
+      quantity: unknown;
+      order_request_line:
+        | { unit_cost_at_request: unknown }
+        | { unit_cost_at_request: unknown }[]
+        | null;
+    }>
+  ).map((l) => {
+    const ol = Array.isArray(l.order_request_line)
+      ? (l.order_request_line[0] ?? null)
+      : (l.order_request_line ?? null);
+    return {
+      quantity: Number(l.quantity) || 0,
+      unitCost: Number(ol?.unit_cost_at_request) || 0,
+    };
+  });
+
+  // ZERO-AMOUNT SHORT-CIRCUIT: a return whose credited total rounds to $0.00
+  // (e.g. zero-cost lines) has nothing to book; QBO rejects a $0 CreditMemo
+  // with a non-retryable 4xx. Gate on the SAME round2 the builder uses so a
+  // sub-cent total is acked, not posted.
+  const totalAmount = creditLines.reduce((sum, l) => sum + l.quantity * l.unitCost, 0);
+  if (round2(totalAmount) <= 0) return { ok: true };
+
+  const qboEnv: QboEnv = settings.env ?? env.QBO_ENV;
+  const client = new QboClient(conn.externalAccountId!, secrets, qboEnv);
+
+  try {
+    const body = buildCreditMemoFromReturn({
+      // Optional generic customer; QBO books against the company default if absent.
+      customerId: settings.accountIds?.defaultCustomerId,
+      returnCreditAccountId,
+      lines: creditLines,
+    });
+
+    const requestId = `return-${ret.id}`.slice(0, 50);
+    const created = await client.post('/creditmemo', body, requestId);
+    const externalId = (created.CreditMemo as { Id?: string } | undefined)?.Id;
+
+    // Persist the return→CreditMemo link so the export is traceable + a future
+    // pull/update path can find it. Best-effort within the success path.
+    if (externalId) {
+      await deps.putMapping(conn.id, conn.organizationId, 'return', ret.id, externalId);
+    }
+    return { ok: true, externalId };
+  } catch (e: unknown) {
+    return {
+      ok: false,
+      retryable: isRetryableQboError(e),
+      error: e instanceof Error ? e.message : 'qbo credit memo failed',
+    };
+  }
+}

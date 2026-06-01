@@ -692,6 +692,7 @@ describe('ConnectionsService.saveAccountMapping', () => {
       billExpense: '54',
       inventoryAsset: '81',
       valuationOffset: '90',
+      returnCredit: '47',
     });
 
     const updateArgs = stub.chainArgsAll.get('org_connections.update')?.[0]?.[0]?.[0] as {
@@ -700,7 +701,12 @@ describe('ConnectionsService.saveAccountMapping', () => {
     expect(updateArgs.settings).toMatchObject({
       // Existing non-secret settings preserved (merge, not clobber).
       env: 'sandbox',
-      accountIds: { billExpense: '54', inventoryAsset: '81', valuationOffset: '90' },
+      accountIds: {
+        billExpense: '54',
+        inventoryAsset: '81',
+        valuationOffset: '90',
+        returnCredit: '47',
+      },
     });
   });
 
@@ -717,6 +723,7 @@ describe('ConnectionsService.saveAccountMapping', () => {
         billExpense: '',
         inventoryAsset: '',
         valuationOffset: '',
+        returnCredit: '',
       }),
     ).rejects.toBeInstanceOf(ServiceError);
   });
