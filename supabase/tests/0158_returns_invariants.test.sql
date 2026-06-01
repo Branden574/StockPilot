@@ -34,7 +34,11 @@ select plan(27);
 \set item_scrap   '\'d2222222-2222-2222-2222-222222222222\''
 \set item_over    '\'d3333333-3333-3333-3333-333333333333\''
 \set item_cross   '\'d4444444-4444-4444-4444-444444444444\''
-\set item_other   '\'d4999999-9999-9999-9999-999999999999\''  -- the WRONG item for cross test
+-- item_other is the WRONG item for the cross-item mismatch test. NOTE: the
+-- trailing comment MUST live on its own line — psql's \set swallows the rest of
+-- the line into the variable value, so an inline comment here would be
+-- interpolated into the INSERT and break the VALUES tuple.
+\set item_other   '\'d4999999-9999-9999-9999-999999999999\''
 \set item_durable '\'d5555555-5555-5555-5555-555555555555\''
 \set item_idem    '\'d6666666-6666-6666-6666-666666666666\''
 \set item_cancel  '\'d7777777-7777-7777-7777-777777777777\''
@@ -87,31 +91,45 @@ insert into public.warehouses (id, organization_id, name, code, status)
   on conflict (id) do nothing;
 
 -- Items. quantity_on_hand is the POST-fulfilment level (units already shipped).
+-- warehouse_id is REQUIRED for visibility: inventory_items_select (0129/0140)
+-- gates reads on user_can_access_inventory(auth.uid(), warehouse_id, ...), which
+-- resolves the org THROUGH the warehouse. A NULL warehouse_id means the manager
+-- (whose access derives from org membership via that warehouse) can't see the
+-- row, so the quantity_on_hand readbacks would return NULL under the
+-- authenticated role even though the inventory math is correct.
 insert into public.inventory_items
-  (id, organization_id, name, sku, quantity_on_hand, status)
+  (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status)
   values
-    (:item_restock, :org_id, 'Restock Widget', 'SKU-RESTOCK', 100, 'active'),
-    (:item_scrap,   :org_id, 'Scrap Widget',   'SKU-SCRAP',   100, 'active'),
-    (:item_over,    :org_id, 'Over Widget',    'SKU-OVER',    100, 'active'),
-    (:item_cross,   :org_id, 'Cross Widget',   'SKU-CROSS',   100, 'active'),
-    (:item_other,   :org_id, 'Other Widget',   'SKU-OTHER',   100, 'active'),
-    (:item_durable, :org_id, 'Durable Widget', 'SKU-DURABLE', 100, 'active'),
-    (:item_idem,    :org_id, 'Idem Widget',    'SKU-IDEM',    100, 'active'),
-    (:item_cancel,  :org_id, 'Cancel Widget',  'SKU-CANCEL',  100, 'active')
+    (:item_restock, :org_id, :wh_id, 'Restock Widget', 'SKU-RESTOCK', 100, 'active'),
+    (:item_scrap,   :org_id, :wh_id, 'Scrap Widget',   'SKU-SCRAP',   100, 'active'),
+    (:item_over,    :org_id, :wh_id, 'Over Widget',    'SKU-OVER',    100, 'active'),
+    (:item_cross,   :org_id, :wh_id, 'Cross Widget',   'SKU-CROSS',   100, 'active'),
+    (:item_other,   :org_id, :wh_id, 'Other Widget',   'SKU-OTHER',   100, 'active'),
+    (:item_durable, :org_id, :wh_id, 'Durable Widget', 'SKU-DURABLE', 100, 'active'),
+    (:item_idem,    :org_id, :wh_id, 'Idem Widget',    'SKU-IDEM',    100, 'active'),
+    (:item_cancel,  :org_id, :wh_id, 'Cancel Widget',  'SKU-CANCEL',  100, 'active')
   on conflict (id) do nothing;
 
--- A completed order_request. The status CHECK (0044) admits ready_for_delivery /
--- delivered as the "done" states; we use ready_for_delivery for the lines that
--- only need a parent, and a SEPARATE order for the cancel test (so cancelling it
--- can't disturb the other invariants).
+-- A fulfilled order_request. The current status CHECK (0120 superseded the
+-- 0044 set — 'ready_for_delivery'/'delivered' were RENAMED away) admits
+-- 'in_transit' as a post-fulfilment, still-live state. We use 'in_transit' for
+-- the lines that only need a parent, and a SEPARATE order for the cancel test
+-- (so cancelling it can't disturb the other invariants). 'in_transit' is a
+-- legal source for the cancel test because cancel_order_request only refuses
+-- 'completed'/'denied'/'cancelled' (0155) and the order_requests transition
+-- guard (0120) allows in_transit -> cancelled.
+-- fulfillment_type='pickup' is required: it defaults to 'delivery' (0109) and
+-- order_requests_delivery_target_chk (0110) then demands a delivery_charter_id.
+-- A returns test doesn't care about delivery, so 'pickup' (which the check
+-- requires to have NO charter) is the minimal valid choice.
 insert into public.order_requests
-  (id, organization_id, warehouse_id, status, requester_user_id, source)
-  values (:order_id, :org_id, :wh_id, 'ready_for_delivery', :mgr_id, 'internal')
+  (id, organization_id, warehouse_id, status, requester_user_id, source, fulfillment_type)
+  values (:order_id, :org_id, :wh_id, 'in_transit', :mgr_id, 'internal', 'pickup')
   on conflict (id) do nothing;
 
 insert into public.order_requests
-  (id, organization_id, warehouse_id, status, requester_user_id, source)
-  values (:order_cancel, :org_id, :wh_id, 'ready_for_delivery', :mgr_id, 'internal')
+  (id, organization_id, warehouse_id, status, requester_user_id, source, fulfillment_type)
+  values (:order_cancel, :org_id, :wh_id, 'in_transit', :mgr_id, 'internal', 'pickup')
   on conflict (id) do nothing;
 
 -- Source lines. quantity_fulfilled simulates the fulfilment decrement; the
