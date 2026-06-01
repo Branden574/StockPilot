@@ -105,6 +105,30 @@ export async function disconnectEasyPostAction(): Promise<ActionResult> {
   }
 }
 
+const replaySyncSchema = z.object({
+  id: z.string().uuid('Invalid sync id.'),
+});
+
+/**
+ * Replays a dead-lettered/errored connector export: resets the
+ * connection_sync_log row to 'pending' so the drainer re-picks it. Org-scoped +
+ * admin-gated (integrations:manage OR shipping:manage) inside the service.
+ */
+export async function replaySyncAction(
+  input: { id: string },
+): Promise<ActionResult> {
+  const parsed = replaySyncSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid sync id');
+  try {
+    const svc = await ConnectionsService.forCurrentUser();
+    await svc.replaySync(parsed.data.id);
+    revalidatePath('/dashboard/settings/integrations');
+    return ok(undefined);
+  } catch (e) {
+    return toActionError(e);
+  }
+}
+
 /** Persists the QBO chart-of-accounts mapping into settings.accountIds. */
 export async function saveAccountMappingAction(
   input: {

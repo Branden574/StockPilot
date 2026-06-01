@@ -8,7 +8,7 @@ import { deleteConnectionSecret, putConnectionSecret } from '@/server/connectors
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
-import { CONNECTOR_REGISTRY, type ConnectorProviderId } from '@stockpilot/core';
+import { CONNECTOR_REGISTRY, hasPermission, type ConnectorProviderId } from '@stockpilot/core';
 
 /**
  * Non-secret QBO chart-of-accounts ids stored under
@@ -35,6 +35,24 @@ export interface SyncHealthRow {
   lastError: string | null;
   completedAt: string | null;
   createdAt: string;
+}
+
+/**
+ * One failed (dead-lettered or errored) sync-log row surfaced to the operator
+ * dead-letter view. Carries the row `id` (replay handle) on top of the
+ * SyncHealthRow fields.
+ */
+export interface FailedSyncRow {
+  id: string;
+  topic: string;
+  status: 'error' | 'dead';
+  attempts: number;
+  externalId: string | null;
+  lastError: string | null;
+  nextAttemptAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string | null;
 }
 
 export interface ConnectionView {
@@ -144,6 +162,127 @@ export class ConnectionsService {
     );
 
     return { connections, health };
+  }
+
+  /**
+   * Shared gate for the operator dead-letter surface (list + replay). Reading
+   * or replaying a failed sync is an ADMIN action — broader than the
+   * member-level `list()` health read — because it exposes raw `last_error`
+   * strings and lets the operator re-trigger an external export. Require the
+   * `integrations:manage` OR `shipping:manage` capability (the surface spans
+   * QBO exports and EasyPost shipping), gated by which module is enabled.
+   *
+   * FAIL-CLOSED: if NEITHER module is enabled, throw module_disabled
+   * (assertModuleEnabled names `integrations` as the primary owner). If a module
+   * IS enabled but the caller holds NEITHER manage permission, throw forbidden.
+   * assertPermission also applies the MFA step-up gate.
+   */
+  private assertSyncLogManage(): void {
+    const hasIntegrations = this.ctx.enabledModules.has('integrations');
+    const hasShipping = this.ctx.enabledModules.has('shipping');
+    if (!hasIntegrations && !hasShipping) {
+      assertModuleEnabled(this.ctx, 'integrations');
+    }
+    // Require AT LEAST ONE manage permission. Try the permission that matches an
+    // enabled module first so the thrown message is the relevant one; an admin
+    // with either capability passes. assertPermission throws forbidden (or the
+    // MFA-required forbidden) when the role lacks the permission.
+    const canIntegrations =
+      hasIntegrations && hasPermission(this.ctx.role, 'integrations:manage');
+    const canShipping = hasShipping && hasPermission(this.ctx.role, 'shipping:manage');
+    if (canIntegrations || canShipping) {
+      // Still run the MFA gate via assertPermission against a permission the
+      // caller demonstrably holds (no extra failure surface).
+      assertPermission(this.ctx, canIntegrations ? 'integrations:manage' : 'shipping:manage');
+      return;
+    }
+    // Neither manage permission held: surface forbidden naming the enabled
+    // module's manage permission.
+    assertPermission(this.ctx, hasIntegrations ? 'integrations:manage' : 'shipping:manage');
+  }
+
+  /**
+   * Lists this org's FAILED sync-log rows (status in 'error','dead') — the
+   * operator dead-letter view. Unlike `list()` (member-level health), this is
+   * gated on the manage permission (see assertSyncLogManage): the raw error
+   * detail + the replay capability are admin-only. Newest first.
+   */
+  async listFailedSyncs(limit = 50): Promise<{ rows: FailedSyncRow[] }> {
+    this.assertSyncLogManage();
+
+    const { data, error } = await this.ctx.supabase
+      .from('connection_sync_log')
+      .select(
+        'id, topic, status, attempts, external_id, last_error, next_attempt_at, completed_at, created_at, updated_at',
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .in('status', ['error', 'dead'])
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
+      .limit(Math.min(Math.max(limit, 1), 200));
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    const rows: FailedSyncRow[] = ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+      id: r.id as string,
+      topic: r.topic as string,
+      status: r.status as FailedSyncRow['status'],
+      attempts: (r.attempts as number | null) ?? 0,
+      externalId: (r.external_id as string | null) ?? null,
+      lastError: (r.last_error as string | null) ?? null,
+      nextAttemptAt: (r.next_attempt_at as string | null) ?? null,
+      completedAt: (r.completed_at as string | null) ?? null,
+      createdAt: r.created_at as string,
+      updatedAt: (r.updated_at as string | null) ?? null,
+    }));
+    return { rows };
+  }
+
+  /**
+   * Replays a dead-lettered/errored sync-log row: resets it to status='pending',
+   * attempts=0, next_attempt_at=null so the cron drainer re-picks it on the next
+   * tick. Org-scoped + admin-gated (assertSyncLogManage). Only 'dead'/'error'
+   * rows are eligible — a not-yet-terminal ('pending') or already-'success' row
+   * is left untouched and reported as not_found, so an operator can't replay a
+   * still-in-flight delivery or re-fire a completed export.
+   *
+   * Security: the UPDATE rides the user's (authenticated) request client, so the
+   * 0152 admin-only RLS policy (org-scoped, with-check status='pending') is the
+   * load-bearing boundary; the .eq(organization_id)/.in(status) filters here are
+   * defense in depth + give a clean not_found when the row isn't eligible.
+   */
+  async replaySync(id: string): Promise<void> {
+    this.assertSyncLogManage();
+
+    const { data, error } = await this.ctx.supabase
+      .from('connection_sync_log')
+      .update({
+        status: 'pending',
+        attempts: 0,
+        next_attempt_at: null,
+        last_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('organization_id', this.ctx.organizationId)
+      .in('status', ['error', 'dead'])
+      .select('id')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    // No row updated → the id doesn't exist for this org, isn't in a replayable
+    // state, or RLS hid it. Surface not_found rather than a silent success.
+    if (!data) {
+      throw new ServiceError('not_found', 'No replayable failed sync was found for that id.');
+    }
+
+    void audit(
+      {
+        event: 'integration.sync_replayed',
+        entityType: 'connection_sync_log',
+        entityId: id,
+        extra: {},
+      },
+      this.ctx,
+    );
   }
 
   /**
