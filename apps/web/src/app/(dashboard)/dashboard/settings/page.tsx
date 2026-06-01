@@ -55,6 +55,14 @@ const RECOVERY_SECTIONS = [
   { href: '/dashboard/settings/recovery', title: 'Recovery', description: 'Restore soft-deleted items, categories, suppliers, and locations.' },
 ];
 
+// Industry template — one-click "set up as this industry" that turns on the
+// pack's module set + suggests labels (non-destructive). Same
+// `organization:update` gate as Modules; the underlying page redirects anyone
+// without that permission.
+const INDUSTRY_SECTIONS = [
+  { href: '/dashboard/settings/industry', title: 'Industry template', description: 'Set up StockPilot for your industry in one click — Books, Distribution, Apparel, Food & Ag, or 3PL.' },
+];
+
 // Module control plane — turn features on or off for the whole org.
 // Gated on `organization:update` so only admins and owners see the tile
 // (the underlying page redirects anyone without that permission anyway).
@@ -76,6 +84,21 @@ const DASHBOARD_SECTIONS = [
   { href: '/dashboard/settings/dashboard', title: 'Dashboard', description: 'Choose which cards appear on the dashboard and in what order.' },
 ];
 
+// Custom fields — per-org typed extra fields captured on every item. Same
+// `organization:update` gate as Modules / Navigation; the underlying page
+// redirects anyone without that permission.
+const CUSTOM_FIELDS_SECTIONS = [
+  { href: '/dashboard/settings/custom-fields', title: 'Custom fields', description: 'Define extra item fields — warranty, voltage, color, and more.' },
+];
+
+// Order statuses — rename + recolor the order request status badges for the
+// whole org (a soft presentation override; the workflow is unchanged). Same
+// `organization:update` gate as Modules / Navigation; the underlying page
+// redirects anyone without that permission.
+const ORDER_STATUS_SECTIONS = [
+  { href: '/dashboard/settings/order-statuses', title: 'Order statuses', description: 'Rename and recolor the status badges shown on order requests.' },
+];
+
 // Integrations control plane — connect external tools (QuickBooks Online).
 // Gated on `integrations:manage` (owner+admin); the underlying page also
 // redirects anyone without that permission.
@@ -92,9 +115,12 @@ export default async function SettingsPage() {
     ...(hasPermission(ctx.role, 'activity_logs:read') ? ADMIN_SECTIONS : []),
     ...(hasPermission(ctx.role, 'ai:manage') ? AI_SECTIONS : []),
     ...(hasPermission(ctx.role, 'items:delete') ? RECOVERY_SECTIONS : []),
+    ...(hasPermission(ctx.role, 'organization:update') ? INDUSTRY_SECTIONS : []),
     ...(hasPermission(ctx.role, 'organization:update') ? MODULES_SECTIONS : []),
     ...(hasPermission(ctx.role, 'organization:update') ? NAVIGATION_SECTIONS : []),
     ...(hasPermission(ctx.role, 'organization:update') ? DASHBOARD_SECTIONS : []),
+    ...(hasPermission(ctx.role, 'organization:update') ? CUSTOM_FIELDS_SECTIONS : []),
+    ...(hasPermission(ctx.role, 'organization:update') ? ORDER_STATUS_SECTIONS : []),
     ...(hasPermission(ctx.role, 'integrations:manage') ? INTEGRATIONS_SECTIONS : []),
   ];
   return (

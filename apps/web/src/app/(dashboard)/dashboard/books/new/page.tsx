@@ -9,6 +9,7 @@ import { createClient } from '@/lib/supabase/server';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
+import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -37,6 +38,7 @@ export default async function NewBookPage() {
     chartersSvc,
     whChartersSvc,
     inventorySvc,
+    customFieldsSvc,
     forced,
     activeFilter,
     orgRow,
@@ -49,6 +51,7 @@ export default async function NewBookPage() {
     ChartersService.forCurrentUser(),
     WarehouseChartersService.forCurrentUser(),
     InventoryService.forCurrentUser(),
+    CustomFieldsService.forCurrentUser(),
     forcedWarehouseId(),
     getActiveWarehouseFilter(),
     supabase
@@ -58,20 +61,30 @@ export default async function NewBookPage() {
       .maybeSingle(),
   ]);
 
-  const [categories, locations, suppliers, tags, warehouses, charters, warehouseCharters, recent] =
-    await Promise.all([
-      categoriesSvc.list(),
-      locationsSvc.list(),
-      suppliersSvc.list(),
-      tagsSvc.list(),
-      warehousesSvc.list(),
-      chartersSvc.list(),
-      whChartersSvc.listPairs(),
-      // Default warehouse + primary location to the user's most-recent
-      // book so the form pre-fills the picker. Scoped to itemType='book'
-      // so this doesn't bleed defaults from the products tab.
-      inventorySvc.getRecentDefaults('book'),
-    ]);
+  const [
+    categories,
+    locations,
+    suppliers,
+    tags,
+    warehouses,
+    charters,
+    warehouseCharters,
+    recent,
+    customFieldDefs,
+  ] = await Promise.all([
+    categoriesSvc.list(),
+    locationsSvc.list(),
+    suppliersSvc.list(),
+    tagsSvc.list(),
+    warehousesSvc.list(),
+    chartersSvc.list(),
+    whChartersSvc.listPairs(),
+    // Default warehouse + primary location to the user's most-recent
+    // book so the form pre-fills the picker. Scoped to itemType='book'
+    // so this doesn't bleed defaults from the products tab.
+    inventorySvc.getRecentDefaults('book'),
+    customFieldsSvc.listDefinitions('item'),
+  ]);
 
   // Same defaults resolution as /dashboard/inventory/new — see that
   // file for the precedence rationale.
@@ -133,6 +146,7 @@ export default async function NewBookPage() {
             forcedWarehouseId={forced}
             warehouseLabel={terminology.warehouse_singular}
             charterLabel={terminology.charter_singular}
+            customFieldDefs={customFieldDefs}
           />
         </CardContent>
       </Card>

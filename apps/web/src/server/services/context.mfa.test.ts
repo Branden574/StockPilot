@@ -76,6 +76,7 @@ const orgRow = (
   timezone: null,
   nav_overrides: null,
   dashboard_layout: null,
+  order_status_config: null,
 });
 
 // `withContext` is wrapped in React.cache; outside a request scope cache()
