@@ -4,16 +4,43 @@
 -- Adds the RMA header + line tables and the disposition RPC that pushes
 -- inventory back (restock) or writes it off (scrap) when a return is received.
 --
--- Inventory correctness is paramount:
---   • NEVER restock more than was fulfilled — enforced AT THE DATABASE LAYER,
---     independent of any service. A deferred constraint trigger on return_lines
---     (return_lines_enforce_fulfilled_cap) sums quantity across ALL non-cancelled,
---     non-denied returns for the same order_request_line_id and rejects an insert
---     that would push the total over order_request_lines.quantity_fulfilled. This
---     bounds the cumulative returned quantity across an UNBOUNDED number of returns
---     for the same line — the per-line UNIQUE constraint only stops a duplicate
---     inside ONE return, so it cannot bound the cross-return aggregate on its own.
---     quantity > 0 (CHECK) remains the floor.
+-- Inventory correctness is paramount. The CORRECT inventory model:
+--
+--   Order fulfilment ALREADY decremented inventory_items.quantity_on_hand by
+--   order_request_lines.quantity_fulfilled (complete_picking, 0xxx; proof:
+--   cancel_order_request 0137 RESTORES quantity_fulfilled>0 lines with a 'return'
+--   movement). So a returned unit is a unit that already LEFT on-hand. Therefore:
+--     • RESTOCK = adjust the on-hand by +qty as a 'return' movement — the unit
+--       re-enters sellable stock (net vs the fulfilment decrement = back to
+--       original). CORRECT.
+--     • SCRAP   = NET-ZERO on quantity_on_hand. The unit was already decremented
+--       at fulfilment and is now destroyed, so it must NOT be decremented AGAIN
+--       (a bare -qty 'loss' would be a DOUBLE-DECREMENT bug). We record it as
+--       received-then-written-off: +qty 'return' THEN -qty 'loss' (net 0, full
+--       audit trail) so on-hand is conserved.
+--
+--   DURABLE BUDGET (the over-return cap):
+--     • order_request_lines.returned_quantity (numeric not null default 0) is the
+--       running total of units already returned against that source line, ACROSS
+--       BOTH dispositions (you cannot return the same fulfilled unit twice whether
+--       restocked or scrapped). It is incremented at APPLY-TIME inside
+--       process_return_disposition (idempotent via the per-line `applied` latch),
+--       so the budget lives on the IMMUTABLE source line, not on the mutable
+--       return rows. Flipping or deleting a return header can therefore NEVER free
+--       budget that was already consumed.
+--     • The amount a source line can still be returned = quantity_fulfilled
+--       - returned_quantity. The INSERT cap trigger
+--       (return_lines_enforce_fulfilled_cap) rejects any new/updated line that
+--       would push (returned_quantity + the still-pending unapplied live lines for
+--       that source line) over quantity_fulfilled — NOT a status-dependent SUM
+--       over all return rows (that aggregate is freed by a cancel/delete and was
+--       the inflation hole). The per-line UNIQUE only stops a duplicate inside ONE
+--       return; the budget bounds the cross-return aggregate. quantity > 0 (CHECK)
+--       is the floor.
+--   • ITEM IDENTITY — return_lines.item_id MUST equal the referenced
+--     order_request_line's item_id. Enforced in the same cap/validation trigger
+--     (raise 'return_item_mismatch' on mismatch) so no path can restock a
+--     different item than the one fulfilled on that source line.
 --   • NEVER apply a disposition twice — return_lines.applied is a one-way latch
 --     flipped inside process_return_disposition; the RPC skips already-applied
 --     lines, so re-running it (idempotent) is a no-op for settled lines.
@@ -25,7 +52,7 @@
 --
 -- Stock semantics (confirmed seam):
 --   RESTOCK = +quantity, movement_type 'return'
---   SCRAP   = -quantity, movement_type 'loss'
+--   SCRAP   = +quantity 'return' THEN -quantity 'loss' (NET-ZERO)
 --   Every movement is stamped reference_type='return', reference_id=<return id>.
 --
 -- process_return_disposition mirrors cancel_order_request (0137): SECURITY
@@ -49,6 +76,16 @@
 -- The 'returns' module is grandfathered OFF for every existing org (mirrors the
 -- 0147 'integrations' seed): brand-new functionality, explicit opt-in.
 -- ============================================================================
+
+-- 0. Durable per-source-line return budget. ----------------------------------
+-- order_request_lines.returned_quantity is the running total of units already
+-- returned against that line (across BOTH dispositions). Incremented at
+-- apply-time in process_return_disposition (idempotent via the line `applied`
+-- latch); read by the INSERT cap trigger and createFromOrder as
+-- (quantity_fulfilled - returned_quantity). Lives on the immutable source line
+-- so flipping/deleting a return header cannot free already-consumed budget.
+alter table public.order_request_lines
+  add column if not exists returned_quantity numeric(14,4) not null default 0;
 
 -- 1. returns — RMA header. ---------------------------------------------------
 create table if not exists public.returns (
@@ -111,22 +148,36 @@ create index if not exists return_lines_return_idx
 create index if not exists return_lines_order_request_line_idx
   on public.return_lines (order_request_line_id);
 
--- 2a. Fulfilled cap — DB-level guard against inventory inflation. ------------
--- The per-line UNIQUE(return_id, order_request_line_id) only stops a line being
--- doubled WITHIN ONE return; it does NOTHING to stop a SECOND (or Nth) return
--- being opened for the same order_request_line_id, each restocking the full
--- fulfilled quantity and inflating quantity_on_hand without bound. cancel_order
--- (0137) avoids this by ZEROING quantity_fulfilled after restoring; the returns
--- flow never decrements it, so the DB must remember prior returns itself.
+-- 2a. Fulfilled cap + item identity — DB-level guard against inventory ------
+--     inflation and item substitution.
 --
--- This trigger fires per inserted/updated return_line and rejects it if the
--- cumulative quantity across ALL returns for the same source line — excluding
--- only returns that were never realized (cancelled/denied) — would exceed
--- order_request_lines.quantity_fulfilled. We lock the parent order_request_lines
--- row FOR UPDATE first so concurrent inserts for the same source line serialize
--- (otherwise two transactions could each pass the SUM check and jointly exceed
--- the cap). Defined as a CONSTRAINT TRIGGER so it can be reasoned about as an
--- integrity rule; it fires AFTER ROW with the lock taken inside.
+-- DURABLE-BUDGET cap (NOT a status-dependent SUM). The amount a source line can
+-- still be returned is (quantity_fulfilled - returned_quantity), where
+-- returned_quantity is the running total ALREADY APPLIED (incremented inside
+-- process_return_disposition). On top of that durable consumption, the still-
+-- PENDING (unapplied, live) return_lines for the same source line are committed
+-- demand that has not yet consumed budget; they must also fit. So this trigger
+-- rejects any new/updated line that would push
+--   returned_quantity + SUM(pending unapplied live return_lines)  >  quantity_fulfilled.
+-- Because returned_quantity is incremented exactly as a line flips
+-- unapplied→applied, returned_quantity + pending_sum is conserved across an
+-- apply — the cap is invariant under disposition. Crucially the budget lives on
+-- the IMMUTABLE source line, so flipping a return to cancelled/denied or DELETEing
+-- it (blocked in 0154, but defence in depth) can only ever REMOVE pending demand,
+-- never reclaim already-consumed (applied) budget. The old SUM-over-all-live-rows
+-- aggregate was the inflation hole: a cancel→revive freed budget that stock had
+-- already moved against.
+--
+-- ITEM IDENTITY: return_lines.item_id MUST equal the source order_request_line's
+-- item_id — otherwise a return could restock a DIFFERENT item than the one that
+-- was fulfilled (inventory fabrication). We re-check it here against the locked
+-- source line so neither the service nor the raw data API can substitute.
+--
+-- We lock the parent order_request_lines row FOR UPDATE first so concurrent
+-- inserts for the same source line serialize (otherwise two transactions could
+-- each pass the check and jointly exceed the cap). Defined as a CONSTRAINT
+-- TRIGGER so it reads as an integrity rule; it fires AFTER ROW with the lock
+-- taken inside, so NEW is already visible to the pending sum.
 create or replace function public.tg_return_lines_enforce_fulfilled_cap()
 returns trigger
 language plpgsql
@@ -136,10 +187,13 @@ as $$
 declare
   v_fulfilled numeric(14,4);
   v_returned  numeric(14,4);
+  v_item      uuid;
+  v_pending   numeric(14,4);
 begin
-  -- Lock the source line so concurrent inserts for the same line serialize.
-  select orl.quantity_fulfilled
-    into v_fulfilled
+  -- Lock the source line so concurrent inserts for the same line serialize, and
+  -- read both halves of the durable budget plus the canonical fulfilled item.
+  select orl.quantity_fulfilled, orl.returned_quantity, orl.item_id
+    into v_fulfilled, v_returned, v_item
   from public.order_request_lines orl
   where orl.id = new.order_request_line_id
   for update;
@@ -149,23 +203,35 @@ begin
       using errcode = 'P0002', detail = new.order_request_line_id::text;
   end if;
 
-  -- Sum all return_lines for this source line across returns that are still
-  -- live (anything not cancelled/denied counts toward the cap). The row being
-  -- inserted/updated is already visible to this AFTER trigger, so NEW is
-  -- included in the sum — do not add it again.
+  -- Item identity: the returned item must be the one fulfilled on this line.
+  if new.item_id <> v_item then
+    raise exception 'return_item_mismatch'
+      using errcode = 'P0001',
+            detail = format(
+              'order_request_line %s fulfilled item %s, return line claims %s',
+              new.order_request_line_id, v_item, new.item_id
+            );
+  end if;
+
+  -- Pending (unapplied) demand for this source line across all live (not
+  -- cancelled/denied) returns. Applied lines already consumed returned_quantity,
+  -- so they are EXCLUDED here to avoid double-counting. The row being
+  -- inserted/updated is already visible to this AFTER trigger and is unapplied at
+  -- insert time, so NEW is included via the predicate — do not add it again.
   select coalesce(sum(rl.quantity), 0)
-    into v_returned
+    into v_pending
   from public.return_lines rl
   join public.returns r on r.id = rl.return_id
   where rl.order_request_line_id = new.order_request_line_id
+    and rl.applied = false
     and r.status not in ('cancelled', 'denied');
 
-  if v_returned > v_fulfilled then
+  if v_returned + v_pending > v_fulfilled then
     raise exception 'return_exceeds_fulfilled'
       using errcode = 'P0001',
             detail = format(
-              'order_request_line %s: returned %s exceeds fulfilled %s',
-              new.order_request_line_id, v_returned, v_fulfilled
+              'order_request_line %s: returned %s + pending %s exceeds fulfilled %s',
+              new.order_request_line_id, v_returned, v_pending, v_fulfilled
             );
   end if;
 
@@ -177,32 +243,55 @@ revoke all on function public.tg_return_lines_enforce_fulfilled_cap() from publi
 
 drop trigger if exists return_lines_enforce_fulfilled_cap on public.return_lines;
 create constraint trigger return_lines_enforce_fulfilled_cap
-  after insert or update of quantity, order_request_line_id on public.return_lines
+  after insert or update of quantity, order_request_line_id, item_id on public.return_lines
   for each row execute function public.tg_return_lines_enforce_fulfilled_cap();
 
 -- RLS -----------------------------------------------------------------------
 alter table public.returns      enable row level security;
 alter table public.return_lines enable row level security;
 
--- returns: member read, manager write.
+-- returns: member read, manager INSERT + UPDATE. We DELIBERATELY do NOT grant
+-- DELETE — split the write into separate `for insert` + `for update` policies
+-- (the 0119 order_requests pattern) rather than a blanket `for all`, which
+-- includes DELETE. With no permissive DELETE policy, RLS denies DELETE by
+-- default; 0154 adds an explicit `for delete using(false)` on top as
+-- self-documenting insurance. Returns are state-managed (cancel flips
+-- status='cancelled'); deleting a live return would silently drop its pending
+-- return_lines and let a fresh full return be opened, re-inflating inventory.
 drop policy if exists returns_select on public.returns;
 create policy returns_select on public.returns
   for select to authenticated using ((select public.is_org_member(organization_id)));
 
+-- Drop the legacy blanket policy name in case an earlier draft created it.
 drop policy if exists returns_write on public.returns;
-create policy returns_write on public.returns
-  for all to authenticated
+
+drop policy if exists returns_insert on public.returns;
+create policy returns_insert on public.returns
+  for insert to authenticated
+  with check ((select public.has_org_role(organization_id, 'manager')));
+
+drop policy if exists returns_update on public.returns;
+create policy returns_update on public.returns
+  for update to authenticated
   using ((select public.has_org_role(organization_id, 'manager')))
   with check ((select public.has_org_role(organization_id, 'manager')));
 
--- return_lines: member read, manager write (gated by its own organization_id).
+-- return_lines: member read, manager INSERT + UPDATE (gated by its own
+-- organization_id). Same split — no DELETE grant.
 drop policy if exists return_lines_select on public.return_lines;
 create policy return_lines_select on public.return_lines
   for select to authenticated using ((select public.is_org_member(organization_id)));
 
 drop policy if exists return_lines_write on public.return_lines;
-create policy return_lines_write on public.return_lines
-  for all to authenticated
+
+drop policy if exists return_lines_insert on public.return_lines;
+create policy return_lines_insert on public.return_lines
+  for insert to authenticated
+  with check ((select public.has_org_role(organization_id, 'manager')));
+
+drop policy if exists return_lines_update on public.return_lines;
+create policy return_lines_update on public.return_lines
+  for update to authenticated
   using ((select public.has_org_role(organization_id, 'manager')))
   with check ((select public.has_org_role(organization_id, 'manager')));
 
@@ -213,11 +302,20 @@ grant select, insert, update, delete on public.return_lines to authenticated;
 -- Mirrors cancel_order_request (0137): lock the header, authorize against the
 -- header org, GUARD status='received' (invalid_status_transition otherwise),
 -- loop unapplied lines in a stable order, mutate inventory + ledger inline
--- (stamping the reference columns adjust_stock can't), latch applied, then flip
--- the return to 'closed' (closed_by/closed_at) in the same transaction so the
--- received->closed move is atomic with the inventory write. Idempotent on the
--- line latch: already-applied lines are skipped; a second call is rejected by
--- the status guard once the return is 'closed'.
+-- (stamping the reference columns adjust_stock can't), increment the source
+-- line's returned_quantity, latch applied, then flip the return to 'closed'
+-- (closed_by/closed_at) in the same transaction so the received->closed move is
+-- atomic with the inventory write. Idempotent on the line latch: already-applied
+-- lines are skipped; a second call is rejected by the status guard once the
+-- return is 'closed'.
+--
+-- Inventory model (see header): both dispositions begin from the fact that the
+-- unit ALREADY left on-hand at fulfilment.
+--   RESTOCK → +qty 'return' (unit re-enters sellable stock).
+--   SCRAP   → +qty 'return' THEN -qty 'loss' (NET-ZERO: receive-then-write-off,
+--             so on-hand is conserved and we do NOT double-decrement).
+-- Every applied line ALSO increments order_request_lines.returned_quantity by
+-- the line quantity — the durable budget the cap trigger reads.
 create or replace function public.process_return_disposition(p_return_id uuid)
 returns public.returns
 language plpgsql
@@ -231,8 +329,6 @@ declare
   v_item    public.inventory_items%rowtype;
   v_prev    numeric;
   v_new     numeric;
-  v_delta   numeric;
-  v_movement text;
 begin
   if v_user is null then
     raise exception 'unauthenticated' using errcode = '42501';
@@ -265,23 +361,14 @@ begin
   -- order by item_id keeps the per-item row-lock order stable across concurrent
   -- calls touching the same item (matches complete_picking / cancel_order_request).
   for v_line in
-    select rl.id as line_id, rl.item_id, rl.quantity, rl.disposition
+    select rl.id as line_id, rl.item_id, rl.quantity, rl.disposition,
+           rl.order_request_line_id
     from public.return_lines rl
     where rl.return_id = p_return_id
       and rl.applied = false
     order by rl.item_id
   loop
-    -- RESTOCK = +qty 'return'; SCRAP = -qty 'loss'.
-    if v_line.disposition = 'restock' then
-      v_delta    := v_line.quantity;
-      v_movement := 'return';
-    else
-      v_delta    := -v_line.quantity;
-      v_movement := 'loss';
-    end if;
-
-    -- Atomic on-hand change (mirrors adjust_stock's body so we can also stamp
-    -- reference_type/reference_id on the ledger row).
+    -- Lock the item once for the whole (possibly two-movement) disposition.
     select * into v_item
     from public.inventory_items
     where id = v_line.item_id
@@ -295,28 +382,57 @@ begin
       raise exception 'cross_org_item' using errcode = '42501';
     end if;
 
+    -- INVENTORY MODEL: the returned unit already left on-hand at fulfilment.
+    --   RESTOCK → +qty 'return' (re-enters sellable stock; net vs fulfilment = 0).
+    --   SCRAP   → +qty 'return' THEN -qty 'loss' (NET-ZERO receive-then-write-off;
+    --             a bare -qty would DOUBLE-DECREMENT a unit already gone).
+    -- Both record the receive leg as a 'return' movement first.
     v_prev := v_item.quantity_on_hand;
-    v_new  := v_prev + v_delta;
-    if v_new < 0 then
-      raise exception 'insufficient_stock' using errcode = 'P0001';
-    end if;
-
+    v_new  := v_prev + v_line.quantity;
     update public.inventory_items
-      set quantity_on_hand = v_new,
-          updated_at       = now(),
-          updated_by       = v_user
+      set quantity_on_hand = v_new, updated_at = now(), updated_by = v_user
     where id = v_line.item_id;
-
     insert into public.stock_movements (
       organization_id, item_id, movement_type,
       quantity_change, previous_quantity, new_quantity,
       reason, reference_type, reference_id, user_id
     ) values (
-      v_return.organization_id, v_line.item_id, v_movement,
-      v_delta, v_prev, v_new,
+      v_return.organization_id, v_line.item_id, 'return',
+      v_line.quantity, v_prev, v_new,
       'Return ' || v_line.disposition || ' (return ' || p_return_id::text || ')',
       'return', p_return_id, v_user
     );
+
+    -- SCRAP: immediately write the received unit off as a 'loss' so the net
+    -- effect on on-hand is zero (the unit is destroyed, it was never sellable).
+    if v_line.disposition = 'scrap' then
+      v_prev := v_new;
+      v_new  := v_prev - v_line.quantity;
+      if v_new < 0 then
+        raise exception 'insufficient_stock' using errcode = 'P0001';
+      end if;
+      update public.inventory_items
+        set quantity_on_hand = v_new, updated_at = now(), updated_by = v_user
+      where id = v_line.item_id;
+      insert into public.stock_movements (
+        organization_id, item_id, movement_type,
+        quantity_change, previous_quantity, new_quantity,
+        reason, reference_type, reference_id, user_id
+      ) values (
+        v_return.organization_id, v_line.item_id, 'loss',
+        -v_line.quantity, v_prev, v_new,
+        'Return scrap write-off (return ' || p_return_id::text || ')',
+        'return', p_return_id, v_user
+      );
+    end if;
+
+    -- Consume the durable budget: this many units of the source line are now
+    -- permanently returned. The cap trigger reads (quantity_fulfilled -
+    -- returned_quantity); incrementing here (and only here) means a later
+    -- cancel/delete of any return header can never reclaim this.
+    update public.order_request_lines
+      set returned_quantity = returned_quantity + v_line.quantity
+    where id = v_line.order_request_line_id;
 
     -- One-way latch: never apply a disposition twice.
     update public.return_lines
