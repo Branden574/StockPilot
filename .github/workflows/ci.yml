@@ -59,3 +59,38 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: http://placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder
           NEXT_PUBLIC_APP_URL: http://localhost:3000
+
+  # ---------------------------------------------------------------------------
+  # pgTAP database tests (supabase/tests/*.test.sql). Boots the local Supabase
+  # stack via the pinned `supabase` CLI devDependency — `supabase start` applies
+  # every migration in supabase/migrations/ to a fresh Postgres (the same path as
+  # `db:reset`), and `supabase test db` runs the pgTAP suites (pgtap extension is
+  # bundled in the Supabase Postgres image) inside a rolled-back transaction.
+  # Needs Docker, which ubuntu-latest GitHub runners provide out of the box.
+  db-tests:
+    name: DB pgTAP tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Brings up Postgres + applies all supabase/migrations/*.sql.
+      - name: Start Supabase stack
+        run: pnpm exec supabase start
+
+      # Runs supabase/tests/*.test.sql via pg_prove against the started DB.
+      - name: Run pgTAP tests
+        run: pnpm exec supabase test db
+
+      - name: Stop Supabase stack
+        if: always()
+        run: pnpm exec supabase stop --no-backup
