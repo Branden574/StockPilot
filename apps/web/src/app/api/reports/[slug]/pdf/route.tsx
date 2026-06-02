@@ -498,7 +498,14 @@ export async function GET(
  * this, rows render the placeholder square. Keeps total PDF size and
  * fetch volume bounded even with very long reports.
  */
-const PDF_IMAGE_ROW_CAP = 100;
+// Photos are embedded for the first N rows (in report order). 100 was far too
+// low — a ~350-item inventory-valuation report showed photos only on the first
+// ~7 of 21 pages, the rest blank (no disclosure). Raised to 1000 so normal/large
+// reports show every photo; prefetchImagesAsDataUris now bounds fetch concurrency
+// so a 1000-image cold render stays well under the 60s function budget. Reports
+// above 1000 items still cap photos to the first 1000 (rare for an SMB inventory;
+// revisit with a footer disclosure / pagination if it ever bites).
+const PDF_IMAGE_ROW_CAP = 1000;
 
 /**
  * Resolves item ids → small (200px) image bytes encoded as data:URIs,
