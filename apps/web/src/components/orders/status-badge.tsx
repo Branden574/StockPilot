@@ -3,7 +3,7 @@
 import { Badge } from '@/components/ui/badge';
 import { useOrderStatusMeta } from '@/components/orders/order-status-config-provider';
 
-import type { OrderRequestStatus, OrderRequestSummary } from '@/server/services/order-requests';
+import type { OrderRequestStatus } from '@/server/services/order-requests';
 
 /**
  * Order status badge. Label + color come from the per-org
@@ -18,13 +18,9 @@ export function OrderStatusBadge({ status }: { status: OrderRequestStatus }) {
   return <Badge variant={meta.color}>{meta.label}</Badge>;
 }
 
-export function summaryRequesterLabel(r: OrderRequestSummary): string {
-  if (r.requesterName) {
-    return r.requesterOrgLabel
-      ? `${r.requesterName} · ${r.requesterOrgLabel}`
-      : r.requesterName;
-  }
-  if (r.requesterEmail) return r.requesterEmail;
-  if (r.requesterUserId) return 'Team member';
-  return 'External requester';
-}
+// NOTE: `summaryRequesterLabel` moved to ./requester-label (a server-safe,
+// non-'use client' module). It's a plain function the orders list Server
+// Component calls directly, and exporting it from THIS client module turned it
+// into a client reference that threw "Attempted to call summaryRequesterLabel()
+// from the server" on any populated orders tab. Keep server-called helpers out
+// of 'use client' files.
