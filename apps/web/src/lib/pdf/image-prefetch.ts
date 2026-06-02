@@ -39,10 +39,12 @@ async function ensurePdfCompatibleBytes(
       .jpeg({ quality: 80, mozjpeg: true })
       .toBuffer();
     return { bytes: jpegBytes, contentType: 'image/jpeg' };
-  } catch {
-    // sharp failed — log via the declaredContentType so we know which
-    // format tripped it. Caller treats null as "no image".
-    void declaredContentType;
+  } catch (err) {
+    // sharp failed — log which format tripped it so a blank image in a PDF
+    // is diagnosable instead of silent. Caller treats null as "no image".
+    console.warn(
+      `[pdf-image] transcode failed (declaredContentType=${declaredContentType}): ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }
@@ -69,32 +71,34 @@ async function ensurePdfCompatibleBytes(
  * URL rotation past 25 days, different transform width, etc.) misses
  * the cache and re-fetches cleanly.
  */
+// IMPORTANT: this cached fn THROWS on any failure instead of returning null.
+// `unstable_cache` does NOT persist a rejected promise, so a transient failure
+// (cold-start timeout, momentary quota blip, a 5xx) is NOT negatively cached —
+// the next render retries it. Returning null here previously poisoned the entry
+// for the full 25-day TTL, so a single hiccup blanked an item's image in every
+// PDF until someone bumped the cache-key version (the recurring v2/v3/v4 saga).
+// The caller (prefetchImagesAsDataUris) catches the throw → placeholder.
 const getCachedImageDataUri = unstable_cache(
-  async (url: string): Promise<string | null> => {
+  async (url: string): Promise<string> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), PER_IMAGE_TIMEOUT_MS);
     try {
       const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) return null;
+      if (!res.ok) throw new Error(`pdf-image fetch ${res.status}`);
       const rawBuf = Buffer.from(await res.arrayBuffer());
       const declaredCt = res.headers.get('content-type') ?? 'image/webp';
       const compat = await ensurePdfCompatibleBytes(rawBuf, declaredCt);
-      if (!compat) return null;
+      if (!compat) throw new Error('pdf-image undecodable bytes');
       const b64 = compat.bytes.toString('base64');
       return `data:${compat.contentType};base64,${b64}`;
-    } catch {
-      // Timeout / network blip / aborted — treat as no image.
-      return null;
     } finally {
       clearTimeout(timer);
     }
   },
-  // v4 (2026-05-20): bumped after adding WebP→JPEG transcoding via
-  // sharp. @react-pdf/image only decodes JPEG/PNG/SVG; any cache
-  // entries from v3 hold raw WebP bytes that @react-pdf can't read,
-  // which is why pick + packing slips were rendering empty image
-  // boxes with "invalid" src strings.
-  ['pdf-image-data-uri-v4'],
+  // v5 (2026-06-02): bumped to evict 25-day-poisoned null entries from earlier
+  // transient failures (the cause of "a lot of item images missing in PDFs"),
+  // AND the fn now throws-instead-of-caching-null so this stops recurring.
+  ['pdf-image-data-uri-v5'],
   { revalidate: DATA_URI_CACHE_TTL_SEC, tags: ['pdf-image-data-uri'] },
 );
 
@@ -126,8 +130,17 @@ export async function prefetchImagesAsDataUris<K>(
 
   await Promise.all(
     list.map(async ([key, url]) => {
-      const dataUri = await getCachedImageDataUri(url);
-      out.set(key, dataUri);
+      // getCachedImageDataUri throws on failure (so failures aren't negatively
+      // cached). Swallow here → null → consumer renders a placeholder, and the
+      // NEXT render retries the fetch instead of serving a stuck null.
+      try {
+        out.set(key, await getCachedImageDataUri(url));
+      } catch (err) {
+        console.warn(
+          `[pdf-image] prefetch failed for ${url.slice(0, 80)}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        out.set(key, null);
+      }
     }),
   );
   return out;
