@@ -130,11 +130,21 @@ export async function updateTerminologyAction(
       .eq('id', ctx.organizationId)
       .maybeSingle();
 
-    const { error } = await supabase
+    const { data: updatedRow, error } = await supabase
       .from('organizations')
       .update({ terminology: parsed.data })
-      .eq('id', ctx.organizationId);
+      .eq('id', ctx.organizationId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail CLOSED on a 0-row UPDATE (RLS no-match): no error + no row means
+    // nothing persisted, so don't report ok / audit a change that never landed.
+    if (!updatedRow) {
+      throw new ServiceError(
+        'internal_error',
+        'updateTerminologyAction did not persist: organization row was not updated (0 rows).',
+      );
+    }
 
     await audit({
       event: 'warehouse.updated',
@@ -202,11 +212,21 @@ export async function updateOrgPoTermsAction(
       return ok(undefined);
     }
 
-    const { error } = await supabase
+    const { data: updatedRow, error } = await supabase
       .from('organizations')
       .update({ po_terms: next })
-      .eq('id', ctx.organizationId);
+      .eq('id', ctx.organizationId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail CLOSED on a 0-row UPDATE (RLS no-match): no error + no row means
+    // nothing persisted, so don't report ok / audit a change that never landed.
+    if (!updatedRow) {
+      throw new ServiceError(
+        'internal_error',
+        'updateOrgPoTermsAction did not persist: organization row was not updated (0 rows).',
+      );
+    }
 
     await audit({
       event: 'warehouse.updated',
@@ -257,11 +277,21 @@ export async function updateOrgTimezoneAction(
       return ok(undefined);
     }
 
-    const { error } = await supabase
+    const { data: updatedRow, error } = await supabase
       .from('organizations')
       .update({ timezone: parsed.data.timezone })
-      .eq('id', ctx.organizationId);
+      .eq('id', ctx.organizationId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail CLOSED on a 0-row UPDATE (RLS no-match): no error + no row means
+    // nothing persisted, so don't report ok / audit a change that never landed.
+    if (!updatedRow) {
+      throw new ServiceError(
+        'internal_error',
+        'updateOrgTimezoneAction did not persist: organization row was not updated (0 rows).',
+      );
+    }
 
     await audit({
       event: 'organization.updated',
@@ -311,11 +341,21 @@ export async function renameOrganizationAction(input: {
       return ok(undefined);
     }
 
-    const { error } = await supabase
+    const { data: updatedRow, error } = await supabase
       .from('organizations')
       .update({ name: parsed.data.name })
-      .eq('id', ctx.organizationId);
+      .eq('id', ctx.organizationId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail CLOSED on a 0-row UPDATE (RLS no-match): no error + no row means
+    // nothing persisted, so don't report ok / audit a change that never landed.
+    if (!updatedRow) {
+      throw new ServiceError(
+        'internal_error',
+        'renameOrganizationAction did not persist: organization row was not updated (0 rows).',
+      );
+    }
 
     await audit({
       event: 'warehouse.updated',
