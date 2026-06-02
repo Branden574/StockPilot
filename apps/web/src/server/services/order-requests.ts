@@ -863,6 +863,13 @@ export class OrderRequestsService {
       throw new ServiceError('internal_error', msg);
     }
     const row = data as OrderRequestRow;
+    // Live tracking: drop any driver GPS point once the order is cancelled
+    // (best-effort — the public endpoint already gates on in_transit).
+    try {
+      await this.ctx.supabase.from('delivery_locations').delete().eq('order_request_id', id);
+    } catch {
+      /* non-fatal: no live point, or the table predates this org */
+    }
     await audit(
       {
         event: 'order_request.cancelled',
