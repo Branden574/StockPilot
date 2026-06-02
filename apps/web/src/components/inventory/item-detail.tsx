@@ -30,6 +30,7 @@ import {
   parseDetailTab,
   type DetailTabId,
 } from '@/components/inventory/item-detail-tabs-shared';
+import { MarketPricePanel } from '@/components/inventory/market-price-panel';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { StockTransferDialog } from '@/components/inventory/stock-transfer-dialog';
@@ -42,11 +43,13 @@ import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
+import { PriceTrackingService } from '@/server/services/price-tracking';
 import { ReportsService } from '@/server/services/reports';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
-import { hasPermission } from '@stockpilot/core';
+import { hasPermission, isLikelyIsbn } from '@stockpilot/core';
 
 
 interface ItemDetailProps {
@@ -200,6 +203,22 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   const canDuplicateItem = hasPermission(ctx.role, 'items:create');
   const canAdjustStock = hasPermission(ctx.role, 'stock:adjust');
   const canTransferStock = hasPermission(ctx.role, 'stock:transfer');
+
+  // ── Market price panel (Phase 6) ───────────────────────────────────
+  // Fully gated + isolated: only loads/renders when the optional
+  // `price_tracking` module is enabled AND the item is a book with an
+  // ISBN-ish barcode. The latest observation read is wrapped in .catch
+  // so a transient read failure never breaks the detail page. When the
+  // module is off, both `priceTrackingEnabled` is false and `marketPriceObs`
+  // stays null, so nothing renders and behavior is identical to before.
+  const itemBarcode = (item.barcode as string | null) ?? null;
+  const { enabled: priceTrackingEnabled } = await checkModuleAccess('price_tracking');
+  const showMarketPrice = priceTrackingEnabled && isLikelyIsbn(itemBarcode);
+  const marketPriceObs = showMarketPrice
+    ? await PriceTrackingService.forCurrentUser()
+        .then((s) => s.getLatestObservation(item.id as string))
+        .catch(() => null)
+    : null;
 
   return (
     <div className="container mx-auto max-w-5xl px-4 pb-6 sm:px-6 sm:pb-8">
@@ -487,6 +506,21 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               </Card>
             )}
           </div>
+
+          {/* Market price (Phase 6) — external Google Books list/retail by
+              ISBN, gated behind the optional price_tracking module + an
+              ISBN-ish barcode. Renders nothing (and loads nothing) when the
+              module is off, keeping item detail byte-identical otherwise. */}
+          {showMarketPrice && (
+            <div className="mt-8">
+              <MarketPricePanel
+                itemId={item.id as string}
+                initial={marketPriceObs}
+                ourRetail={(item.retail_price as number | null) ?? null}
+                ourCost={(item.unit_cost as number | null) ?? null}
+              />
+            </div>
+          )}
 
           {/* Supplier cost trend — what we've paid for this item over time,
               one line per supplier, built from our own PO + receipt unit_cost
