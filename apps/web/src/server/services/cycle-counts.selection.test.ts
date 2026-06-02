@@ -164,6 +164,60 @@ describe('CycleCountsService.start (selection scope)', () => {
   });
 });
 
+describe('CycleCountsService — manager-level permission floor for start/cancel', () => {
+  // cycle_counts INSERT/UPDATE RLS requires manager. A staff role holds
+  // stock:adjust but NOT cycle_counts:assign, so start()/cancel() must reject
+  // with a clean `forbidden` BEFORE any DB round-trip (previously staff got an
+  // opaque internal_error 500 on start, or a misleading conflict on cancel).
+  it('start() throws forbidden for a staff-role context', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [{ id: 'i1', quantity_on_hand: 5, warehouse_id: 'wh-a' }],
+        error: null,
+      },
+      'cycle_counts.insert': { data: [{ id: 'cc-1' }], error: null },
+    });
+    const svc = new CycleCountsService(makeServiceContext(stub.client, { role: 'staff' }));
+
+    await expect(
+      svc.start({ scope: 'selection', warehouseId: null, itemIds: ['i1'] }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    // Rejected before touching the DB.
+    expect(stub.fromCalls).not.toContain('inventory_items');
+    expect(stub.fromCalls).not.toContain('cycle_counts');
+  });
+
+  it('cancel() throws forbidden for a staff-role context', async () => {
+    const stub = makeSupabaseStub({
+      'cycle_counts.update': { data: [{ id: 'cc-1' }], error: null },
+    });
+    const svc = new CycleCountsService(makeServiceContext(stub.client, { role: 'staff' }));
+
+    await expect(svc.cancel('cc-1')).rejects.toMatchObject({ code: 'forbidden' });
+    // Rejected before touching the DB.
+    expect(stub.fromCalls).not.toContain('cycle_counts');
+  });
+
+  it('start() does NOT reject for a manager-role context (permission floor met)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [{ id: 'i1', quantity_on_hand: 5, warehouse_id: 'wh-a' }],
+        error: null,
+      },
+      'cycle_counts.insert': { data: [{ id: 'cc-1' }], error: null },
+      'cycle_count_lines.insert': { data: null, error: null },
+    });
+    const svc = new CycleCountsService(makeServiceContext(stub.client, { role: 'manager' }));
+
+    const result = await svc.start({
+      scope: 'selection',
+      warehouseId: null,
+      itemIds: ['i1'],
+    });
+    expect(result.id).toBe('cc-1');
+  });
+});
+
 describe('CycleCountsService.itemsInScopeCount', () => {
   it('returns 0 for a selection-scoped count (no "new items" concept)', async () => {
     const stub = makeSupabaseStub({
