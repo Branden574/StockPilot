@@ -5,6 +5,7 @@ import { ItemForm } from '@/components/inventory/item-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
@@ -86,6 +87,8 @@ export default async function NewBookPage() {
     customFieldsSvc.listDefinitions('item'),
   ]);
 
+  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+
   // Same defaults resolution as /dashboard/inventory/new — see that
   // file for the precedence rationale.
   const warehouseIds = new Set(warehouses.map((w) => w.id));
@@ -147,6 +150,7 @@ export default async function NewBookPage() {
             warehouseLabel={terminology.warehouse_singular}
             charterLabel={terminology.charter_singular}
             customFieldDefs={customFieldDefs}
+            lotSerialEnabled={lotSerialEnabled}
           />
         </CardContent>
       </Card>

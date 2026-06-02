@@ -77,6 +77,8 @@ interface StagedImage {
 
 export interface ItemFormDefaults extends Partial<CreateItemInput> {
   id?: string;
+  shelfLifeDays?: number | null;
+  expiryPolicy?: 'none' | 'warn' | 'block';
 }
 
 interface ItemFormProps {
@@ -129,6 +131,8 @@ interface ItemFormProps {
    * array (or omitted) → no generic custom fields shown.
    */
   customFieldDefs?: CustomFieldDefinition[];
+  /** Phase 5: when true, show the Lot & expiry section (lot_serial module on). */
+  lotSerialEnabled?: boolean;
 }
 
 export function ItemForm({
@@ -149,6 +153,7 @@ export function ItemForm({
   onDone,
   isRentalFixed = false,
   customFieldDefs = [],
+  lotSerialEnabled = false,
 }: ItemFormProps) {
   const router = useRouter();
   const isEdit = Boolean(defaults?.id);
@@ -220,6 +225,8 @@ export function ItemForm({
       unitOfMeasure: defaults?.unitOfMeasure ?? 'unit',
       binLocation: defaults?.binLocation ?? '',
       trackingType: defaults?.trackingType ?? 'none',
+      shelfLifeDays: defaults?.shelfLifeDays ?? null,
+      expiryPolicy: defaults?.expiryPolicy ?? 'warn',
       itemType: defaults?.itemType ?? itemType,
       status: defaults?.status ?? 'active',
       customFields: defaults?.customFields ?? {},
@@ -1364,6 +1371,67 @@ export function ItemForm({
           dialog's lot/serial capture only fires when an item has
           tracking_type set, so removing the field is safe.
         */}
+        {lotSerialEnabled && (
+          <div className="space-y-3 rounded-md border border-amber-200 bg-amber-50/30 p-3 dark:border-amber-900/40 dark:bg-amber-950/20">
+            <div className="space-y-1.5">
+              <Label>Lot / serial tracking</Label>
+              <Select
+                value={watch('trackingType') ?? 'none'}
+                onValueChange={(v) =>
+                  setValue('trackingType', v as 'none' | 'lot' | 'serial', { shouldDirty: true })
+                }
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None</SelectItem>
+                  <SelectItem value="lot">Lot (expiry / FEFO)</SelectItem>
+                  <SelectItem value="serial">Serial</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-[11px]">
+                Lot-tracked items capture lot numbers + expiry at receiving and appear in aging / recall reports.
+              </p>
+            </div>
+            {watch('trackingType') === 'lot' && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label>Shelf life (days)</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={watch('shelfLifeDays') ?? ''}
+                    onChange={(e) =>
+                      setValue('shelfLifeDays', e.target.value === '' ? null : Number(e.target.value), {
+                        shouldDirty: true,
+                      })
+                    }
+                    placeholder="e.g. 30"
+                  />
+                  <p className="text-muted-foreground text-[11px]">
+                    Used to estimate expiry when a lot has no explicit date.
+                  </p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Expiry policy</Label>
+                  <Select
+                    value={watch('expiryPolicy') ?? 'warn'}
+                    onValueChange={(v) =>
+                      setValue('expiryPolicy', v as 'none' | 'warn' | 'block', { shouldDirty: true })
+                    }
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Track only</SelectItem>
+                      <SelectItem value="warn">Warn (default)</SelectItem>
+                      <SelectItem value="block">Block expired picks</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {isEdit && (
           <p className="text-xs text-muted-foreground">
             On hand is locked here so every change goes through a stock
