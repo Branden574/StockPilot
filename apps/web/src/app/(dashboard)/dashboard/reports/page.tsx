@@ -2,12 +2,14 @@ import {
   AlertTriangle,
   ArrowLeftRight,
   BarChart3,
+  CalendarClock,
   ChevronRight,
   Clock,
   DollarSign,
   MinusCircle,
   Package,
   PackageX,
+  Recycle,
   TrendingUp,
   Truck,
 } from 'lucide-react';
@@ -15,6 +17,7 @@ import Link from 'next/link';
 
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 
 interface Report {
   slug: string;
@@ -82,6 +85,24 @@ const REPORTS: Report[] = [
 
 export default async function ReportsPage() {
   await requireOrgContext();
+  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+  const reports: Report[] = lotSerialEnabled
+    ? [
+        ...REPORTS,
+        {
+          slug: 'lot-expiry',
+          name: 'Aging & expiry',
+          desc: 'Lots by days-to-expiry · near-expiry & expired flagged',
+          icon: CalendarClock,
+        },
+        {
+          slug: 'lot-trace',
+          name: 'Recall / lot trace',
+          desc: 'Trace a lot number across receipts + picks',
+          icon: Recycle,
+        },
+      ]
+    : REPORTS;
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -89,14 +110,14 @@ export default async function ReportsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Reports</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            {REPORTS.length} pre-baked reports — every one is exportable to CSV.
+            {reports.length} pre-baked reports — every one is exportable to CSV.
           </p>
         </div>
         <PdfDownloadDropdown baseUrl="/api/reports/inventory-snapshot/pdf" />
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {REPORTS.map((r) => (
+        {reports.map((r) => (
           <Link
             key={r.slug}
             href={`/dashboard/reports/${r.slug}`}
