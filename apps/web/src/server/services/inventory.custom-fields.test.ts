@@ -25,6 +25,7 @@ vi.mock('./context', () => ({
   },
   assertPermission: vi.fn(),
   assertPlanLimit: vi.fn(async () => undefined),
+  assertModuleEnabled: vi.fn(),
 }));
 vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => ({ hasAllAccess: true, readableIds: [] })),

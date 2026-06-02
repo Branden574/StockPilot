@@ -5,6 +5,7 @@ import { ItemForm } from '@/components/inventory/item-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
@@ -80,6 +81,8 @@ export default async function NewRentalItemPage() {
     customFieldsSvc.listDefinitions('item'),
   ]);
 
+  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+
   const warehouseIds = new Set(warehouses.map((w) => w.id));
   const locationIds = new Set(locations.map((l) => l.id));
   const defaultWarehouseId =
@@ -142,6 +145,7 @@ export default async function NewRentalItemPage() {
             charterLabel={terminology.charter_singular}
             isRentalFixed={true}
             customFieldDefs={customFieldDefs}
+            lotSerialEnabled={lotSerialEnabled}
           />
         </CardContent>
       </Card>
