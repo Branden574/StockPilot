@@ -80,7 +80,7 @@ function RentalCreateFormInner({
     (async () => {
       try {
         const res = await fetch(
-          `/api/orders/catalog-thumbnails?warehouseId=${encodeURIComponent(warehouseId)}`,
+          `/api/orders/catalog-thumbnails?warehouseId=${encodeURIComponent(warehouseId)}&includeRentals=1`,
           { credentials: 'same-origin' },
         );
         if (!res.ok) return;
