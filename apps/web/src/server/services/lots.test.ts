@@ -86,6 +86,67 @@ describe('LotsService.getAgingInventory', () => {
     expect(hasPostedFilter).toBe(true);
   });
 
+  it('paginates the lot + pick scans past the 1000-row PostgREST cap (no dropped soonest-expiring lot)', async () => {
+    // The Data API clamps any single response to max_rows=1000. A truncated lot
+    // scan can omit the soonest-expiring lot entirely (food-safety hazard), so
+    // both the receipt_line_lots scan and the lot_pick_events scan must loop
+    // with .range(). Hand the stub successive 1000-row pages where the
+    // soonest-expiring lot is the VERY LAST one (only visible if pagination
+    // assembles every page).
+    const PAGE = 1000;
+    const TOTAL = 2300;
+    let lotPage = 0;
+    let pickPage = 0;
+    const stub = makeSupabaseStub({
+      'receipt_line_lots.select': () => {
+        const start = lotPage * PAGE;
+        const rows: Record<string, unknown>[] = [];
+        for (let i = start; i < Math.min(start + PAGE, TOTAL); i += 1) {
+          // The last lot (i === TOTAL-1) expires soonest; everything else is far out.
+          const expiration = i === TOTAL - 1 ? '2000-01-01' : '2099-01-01';
+          rows.push({
+            lot_number: `L${i}`,
+            expiration_date: expiration,
+            qty_base: 10,
+            created_at: '2026-05-01T00:00:00Z',
+            receipt_lines: {
+              item_id: `item-${i}`,
+              receipts: { organization_id: 'org-test', status: 'posted' },
+              inventory_items: { name: `Item ${i}`, sku: `S${i}`, shelf_life_days: null },
+            },
+          });
+        }
+        lotPage += 1;
+        return { data: rows, error: null };
+      },
+      'lot_pick_events.select': () => {
+        // Two pages of pick events (1000 + 200) to exercise the pickTotals loop;
+        // none reduce the lots to zero, so all lots survive.
+        const PICK_TOTAL = 1200;
+        const start = pickPage * PAGE;
+        const rows: Record<string, unknown>[] = [];
+        for (let i = start; i < Math.min(start + PAGE, PICK_TOTAL); i += 1) {
+          rows.push({ item_id: `item-${i}`, lot_number: `L${i}`, qty: 1 });
+        }
+        pickPage += 1;
+        return { data: rows, error: null };
+      },
+    });
+    const svc = new LotsService(makeServiceContext(stub.client, { enabledModules: withLotSerial() }));
+    const rows = await svc.getAgingInventory();
+
+    // Every lot surfaced (none truncated), and the soonest-expiring lot — the
+    // very last page's row — sorts first under FEFO.
+    expect(rows).toHaveLength(TOTAL);
+    expect(rows[0]?.lotNumber).toBe(`L${TOTAL - 1}`);
+    expect(rows[0]?.bucket).toBe('expired');
+    // Both scans looped across multiple .range() pages.
+    const lotRanges = stub.chainArgsAll.get('receipt_line_lots.select') ?? [];
+    const pickRanges = stub.chainArgsAll.get('lot_pick_events.select') ?? [];
+    expect(lotRanges.length).toBeGreaterThanOrEqual(3); // 1000 + 1000 + 300
+    expect(pickRanges.length).toBeGreaterThanOrEqual(2); // 1000 + 200
+  });
+
   it('keeps the earliest non-null expiration when merging duplicate (item,lot) rows', async () => {
     const stub = makeSupabaseStub({
       'receipt_line_lots.select': {

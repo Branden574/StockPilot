@@ -114,7 +114,21 @@ export class CustomFieldsService {
     query = query.order('sort_order', { ascending: true }).order('label', { ascending: true });
 
     const { data, error } = await query;
-    if (error) throw new ServiceError('internal_error', error.message);
+    // Fail CLOSED on a READ error: mirror getModulesForRequest
+    // (lib/dashboard/request-cache.ts) — log and return a safe default
+    // ([]) instead of throwing. The `custom_field_definitions` table may be
+    // missing (migration 0159 not applied: deploy-before-migrate, rollback,
+    // preview branches, fresh/local/CI DBs) or any read may transiently fail.
+    // Throwing here would crash EVERY page that lists definitions (item
+    // create/edit/detail, books create/edit, rentals new, the settings page)
+    // AND the item create/update WRITE path (InventoryService
+    // .assertCustomFieldsValid calls this). Every caller tolerates [] (no
+    // custom fields shown / validation skipped), so [] is the safe floor.
+    // Writes (createDefinition/updateDefinition/archiveDefinition) still throw.
+    if (error) {
+      console.error('[CustomFieldsService.listDefinitions] read failed:', error);
+      return [];
+    }
     return ((data ?? []) as CustomFieldDefinitionRow[]).map(mapRow);
   }
 
