@@ -363,8 +363,13 @@ Run: `sed -n '35,70p' packages/core/src/schemas/inventory.ts`
     (v) => (v === '' || v === null ? null : v),
     z.coerce.number().int().positive().nullable().optional(),
   ),
-  /** Phase 5: near/expired lot behavior. 'block' rejects FEFO picks of expired lots. */
-  expiryPolicy: z.enum(['none', 'warn', 'block']).default('warn'),
+  /**
+   * Phase 5: near/expired lot behavior. 'block' rejects FEFO picks of expired lots.
+   * OPTIONAL (not .default) so existing CreateItemInput construction sites
+   * (import.ts, po-imports.ts) need no change; the 'warn' default is applied by
+   * InventoryService (`input.expiryPolicy ?? 'warn'`) and the DB column default.
+   */
+  expiryPolicy: z.enum(['none', 'warn', 'block']).optional(),
 ```
 
 (`updateItemSchema = createItemSchema.partial()` already picks these up.)
