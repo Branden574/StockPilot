@@ -64,6 +64,12 @@ export function hashReceiptRequest(input: PostReceiptInput): string {
         unitCost:
           l.unitCost === undefined ? null : Number(l.unitCost).toFixed(4),
         notes: l.notes ?? null,
+        lots: (l.lots ?? []).map((lot) => ({
+          lotNumber: lot.lotNumber,
+          expirationDate: lot.expirationDate ?? null,
+          qtyBase: Number(lot.qtyBase).toFixed(4),
+        })),
+        serials: l.serials ?? [],
       })),
   });
   return createHash('sha256').update(normalized).digest('hex');
@@ -125,6 +131,12 @@ export class ReceivingService {
         qty_rejected: l.qtyRejected ?? 0,
         unit_cost: l.unitCost ?? 0,
         notes: l.notes ?? null,
+        lots: l.lots?.map((lot) => ({
+          lot_number: lot.lotNumber,
+          expiration_date: lot.expirationDate ?? null,
+          qty_base: lot.qtyBase,
+        })),
+        serials: l.serials,
       })),
       p_idempotency_key: input.idempotencyKey,
       p_request_hash: requestHash,
