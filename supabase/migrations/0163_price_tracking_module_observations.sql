@@ -25,6 +25,7 @@ begin
   insert into public.organization_modules (organization_id, module_id, tier, enabled)
   select new.id, m.module_id, m.tier, m.enabled
   from (values
+    -- 12 core (enabled)
     ('overview','core', true),
     ('inventory','core', true),
     ('movements','core', true),
@@ -37,6 +38,7 @@ begin
     ('admin_tools','core', true),
     ('charters','core', true),
     ('scan','core', true),
+    -- 13 optional (enabled)
     ('books','optional', true),
     ('rentals','optional', true),
     ('bundles','optional', true),
@@ -50,6 +52,7 @@ begin
     ('schedule','optional', true),
     ('ai','optional', true),
     ('public_requests','optional', true),
+    -- net-new opt-in optional (OFF)
     ('planning','optional', false),
     ('lot_serial','premium', false),
     -- net-new opt-in optional (OFF)
