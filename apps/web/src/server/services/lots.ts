@@ -7,7 +7,7 @@ import {
   type ExpiryBucket,
 } from '@stockpilot/core';
 
-import { assertModuleEnabled, ServiceError, withContext, type ServiceContext } from './context';
+import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 export interface AgingLotRow {
   itemId: string;
@@ -59,7 +59,7 @@ interface RawLotRow {
   created_at: string;
   receipt_lines: {
     item_id: string;
-    receipts: { organization_id: string; receipt_number?: string | null } | null;
+    receipts: { organization_id: string; receipt_number?: string | null; status?: string | null } | null;
     inventory_items: { name: string; sku: string | null; shelf_life_days: number | null } | null;
   } | null;
 }
@@ -112,18 +112,29 @@ export class LotsService {
         `lot_number, expiration_date, qty_base, created_at,
          receipt_lines:receipt_line_id!inner (
            item_id,
-           receipts:receipt_id!inner ( organization_id, receipt_number ),
+           receipts:receipt_id!inner ( organization_id, receipt_number, status ),
            inventory_items:item_id ( name, sku, shelf_life_days )
          )`,
       )
-      .eq('receipt_lines.receipts.organization_id', this.ctx.organizationId);
+      .eq('receipt_lines.receipts.organization_id', this.ctx.organizationId)
+      // Exclude reversed/canceled/draft receipts — only posted receipts
+      // represent real on-hand stock. (receipt_line_lots rows are NOT
+      // removed on reversal, so without this they'd inflate aging.)
+      .eq('receipt_lines.receipts.status', 'posted');
     if (error) throw new ServiceError('internal_error', error.message);
 
     const picks = await this.pickTotals();
     const now = this.now();
 
-    // Aggregate received qty per (item, lot); keep latest item meta + min received date.
-    const agg = new Map<string, { row: RawLotRow; received: number; receivedAt: string }>();
+    // Aggregate received qty per (item, lot); keep latest item meta, min
+    // received date, and the EARLIEST non-null explicit expiration date across
+    // merged rows (FEFO is only safe if we treat the soonest-expiring sibling
+    // as the lot's expiry — keeping the first-seen row's date arbitrarily could
+    // under-state urgency).
+    const agg = new Map<
+      string,
+      { row: RawLotRow; received: number; receivedAt: string; expirationDate: string | null }
+    >();
     for (const raw of (data ?? []) as unknown as RawLotRow[]) {
       const itemId = raw.receipt_lines?.item_id;
       if (!itemId) continue;
@@ -133,20 +144,32 @@ export class LotsService {
       if (prev) {
         prev.received += received;
         if (raw.created_at < prev.receivedAt) prev.receivedAt = raw.created_at;
+        // Keep the earliest non-null expiration date.
+        if (
+          raw.expiration_date &&
+          (prev.expirationDate === null || raw.expiration_date < prev.expirationDate)
+        ) {
+          prev.expirationDate = raw.expiration_date;
+        }
       } else {
-        agg.set(key, { row: raw, received, receivedAt: raw.created_at });
+        agg.set(key, {
+          row: raw,
+          received,
+          receivedAt: raw.created_at,
+          expirationDate: raw.expiration_date,
+        });
       }
     }
 
     const rows: Array<AgingLotRow & { expiry: Date | null }> = [];
-    for (const [key, { row, received, receivedAt }] of agg) {
+    for (const [key, { row, received, receivedAt, expirationDate }] of agg) {
       const itemId = row.receipt_lines!.item_id;
       const item = row.receipt_lines!.inventory_items;
       const pickedQty = picks.get(key) ?? 0;
       const remaining = Math.max(0, received - pickedQty);
       if (remaining <= 0) continue;
       const expiry = computeLotExpiry(
-        { expirationDate: row.expiration_date, receivedAt },
+        { expirationDate, receivedAt },
         { shelfLifeDays: item?.shelf_life_days ?? null },
       );
       rows.push({
@@ -154,7 +177,7 @@ export class LotsService {
         itemName: item?.name ?? '—',
         sku: item?.sku ?? null,
         lotNumber: row.lot_number,
-        expirationDate: row.expiration_date,
+        expirationDate,
         effectiveExpiry: expiry ? expiry.toISOString() : null,
         bucket: expiryBucket(expiry, now),
         receivedQty: received,
@@ -166,23 +189,34 @@ export class LotsService {
     return sortLotsFefo(rows).map(({ expiry: _expiry, ...rest }) => rest);
   }
 
-  async getFefoSuggestion(itemId: string): Promise<FefoSuggestion[]> {
+  /**
+   * Batch FEFO suggestions for many items in ONE aging scan (avoids the
+   * pick-page N+1 of calling getAgingInventory once per item). Returns a map
+   * keyed by itemId; items with no remaining lots are simply absent.
+   */
+  async getFefoSuggestionsByItems(itemIds: string[]): Promise<Record<string, FefoSuggestion[]>> {
     assertModuleEnabled(this.ctx, 'lot_serial');
+    const wanted = new Set(itemIds);
     const all = await this.getAgingInventory();
-    return all
-      .filter((r) => r.itemId === itemId)
-      .map((r) => {
-        const expired = r.bucket === 'expired';
-        return {
-          lotNumber: r.lotNumber,
-          expirationDate: r.expirationDate,
-          effectiveExpiry: r.effectiveExpiry,
-          bucket: r.bucket,
-          remaining: r.remaining,
-          expired,
-          nearExpiry: expired || r.bucket === 'le7',
-        };
+    const out: Record<string, FefoSuggestion[]> = {};
+    for (const r of all) {
+      if (!wanted.has(r.itemId)) continue;
+      const expired = r.bucket === 'expired';
+      (out[r.itemId] ??= []).push({
+        lotNumber: r.lotNumber,
+        expirationDate: r.expirationDate,
+        effectiveExpiry: r.effectiveExpiry,
+        bucket: r.bucket,
+        remaining: r.remaining,
+        expired,
+        nearExpiry: expired || r.bucket === 'le7',
       });
+    }
+    return out;
+  }
+
+  async getFefoSuggestion(itemId: string): Promise<FefoSuggestion[]> {
+    return (await this.getFefoSuggestionsByItems([itemId]))[itemId] ?? [];
   }
 
   async traceLot(lotNumber: string): Promise<LotTraceResult> {
@@ -194,13 +228,16 @@ export class LotsService {
       .from('receipt_line_lots')
       .select(
         `lot_number, expiration_date, qty_base, created_at,
-         receipt_lines:receipt_line_id (
+         receipt_lines:receipt_line_id!inner (
            item_id,
-           receipts:receipt_id ( organization_id, receipt_number ),
+           receipts:receipt_id!inner ( organization_id, receipt_number, status ),
            inventory_items:item_id ( name )
          )`,
       )
       .eq('receipt_lines.receipts.organization_id', this.ctx.organizationId)
+      // Only trace through posted receipts — reversed/canceled receipts leave
+      // their receipt_line_lots rows behind and would otherwise show as live.
+      .eq('receipt_lines.receipts.status', 'posted')
       .ilike('lot_number', `%${term}%`);
     if (lotErr) throw new ServiceError('internal_error', lotErr.message);
 
@@ -239,6 +276,11 @@ export class LotsService {
     picks: Array<{ lotNumber: string; qty: number; expirationDate: string | null }>;
   }): Promise<void> {
     assertModuleEnabled(this.ctx, 'lot_serial');
+    // Recording a lot pick is part of the picking activity — mirror the pick
+    // flow's permission (OrderRequestsService.recordPickedLine uses
+    // 'items:update', which staff can perform). Migration 0162's
+    // lot_pick_events_write RLS floor is set to 'staff' to match.
+    assertPermission(this.ctx, 'items:update');
     const picks = input.picks.filter((p) => p.lotNumber.trim() && p.qty > 0);
     if (picks.length === 0) throw new ServiceError('validation_error', 'No lot picks to record.');
 
@@ -249,6 +291,7 @@ export class LotsService {
       .eq('id', input.itemId)
       .maybeSingle();
     if (itemErr) throw new ServiceError('internal_error', itemErr.message);
+    if (!item) throw new ServiceError('not_found', 'Item not found.');
     const policy = (item as { expiry_policy?: string } | null)?.expiry_policy ?? 'warn';
     const shelfLifeDays = (item as { shelf_life_days?: number | null } | null)?.shelf_life_days ?? null;
 
