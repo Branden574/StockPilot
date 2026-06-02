@@ -30,7 +30,7 @@ export type ModuleId =
   | 'books' | 'rentals' | 'bundles' | 'orders' | 'cycle_counts' | 'procedures'
   | 'purchase_orders' | 'receiving' | 'po_imports' | 'suppliers' | 'schedule' | 'ai' | 'public_requests'
   | 'integrations' | 'shipping' | 'returns' | 'planning'
-  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'api_access' | 'price_tracking' | 'live_tracking';
+  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'api_access' | 'price_tracking' | 'live_tracking' | 'zendesk';
 
 export interface NavPlacement {
   surface: NavSurface;
@@ -565,6 +565,21 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: ['delivery_locations'],
     defaultOnFor: [],
     placements: [],
+  },
+
+  zendesk: {
+    id: 'zendesk',
+    tier: 'optional',
+    title: 'Zendesk',
+    dependsOn: [],
+    permissions: ['integrations:manage'],
+    surfaces: ['web'],
+    apiPrefixes: [],
+    ownsTables: [],
+    defaultOnFor: [],
+    placements: [
+      { surface: 'web_sidebar', section: 'workspace', label: 'Zendesk', href: '/dashboard/zendesk', iconName: 'Zendesk', defaultSortOrder: 900 },
+    ],
   },
 
   // ── Premium modules (plan-gated; no nav) ───────────────────────────────
