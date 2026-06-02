@@ -550,7 +550,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     permissions: [],
     surfaces: ['web', 'mobile'],
     apiPrefixes: [],
-    ownsTables: ['lots', 'serials'],
+    ownsTables: ['receipt_line_lots', 'serial_registry', 'lot_pick_events'],
     minPlan: 'business',
     defaultOnFor: ['agriculture_food'],
     placements: [],
