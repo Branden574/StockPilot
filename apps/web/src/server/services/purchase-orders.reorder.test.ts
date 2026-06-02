@@ -220,4 +220,58 @@ describe('PurchaseOrdersService.createDraftsFromReorderForecast', () => {
     expect(result.supplierCount).toBe(0);
     expect(result.unassignedCount).toBe(0);
   });
+
+  it('paginates the candidate fetch past the 1000-row PostgREST cap (no silently-dropped below-par items)', async () => {
+    // PostgREST clamps any single response to max_rows=1000, so the old
+    // .limit(5000) returned only the first 1000 below-par items — items past
+    // 1000 got NO draft PO. Hand the stub successive 1000-row pages of
+    // below-par, unassigned (no-supplier) items and assert every one lands on
+    // the unassigned draft.
+    const PAGE = 1000;
+    const TOTAL = 2300;
+    let page = 0;
+    let poSeq = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': () => {
+        const start = page * PAGE;
+        const rows: Record<string, unknown>[] = [];
+        for (let i = start; i < Math.min(start + PAGE, TOTAL); i += 1) {
+          rows.push({
+            id: `item-${i.toString().padStart(6, '0')}`,
+            supplier_id: null,
+            reorder_point: 10,
+            reorder_quantity: 0,
+            quantity_on_hand: 0,
+            unit_cost: 1,
+          });
+        }
+        page += 1;
+        return { data: rows, error: null };
+      },
+      'suppliers.select': { data: [], error: null },
+      'purchase_orders.insert': () => {
+        poSeq += 1;
+        return { data: [{ id: `po-${poSeq}` }], error: null };
+      },
+      'purchase_order_items.insert': { data: null, error: null },
+      'locations.select': { data: null, error: null },
+      'rpc:next_po_number': () => ({ data: `PO-${poSeq + 1}`, error: null }),
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.createDraftsFromReorderForecast();
+
+    // All 2300 below-par items end up on the single unassigned draft PO.
+    expect(result.unassignedCount).toBe(TOTAL);
+    // At least three .range() pages were issued (1000 + 1000 + 300).
+    const ranges = stub.chainArgsAll.get('inventory_items.select') ?? [];
+    expect(ranges.length).toBeGreaterThanOrEqual(3);
+    // The last item (past the 1000 cap) made it onto an inserted line.
+    const insertArgs = stub.chainArgsAll.get('purchase_order_items.insert') ?? [];
+    const allLines = insertArgs.flatMap((argsList) => {
+      const rows = argsList[0]?.[0] as Array<{ item_id: string }>;
+      return rows ?? [];
+    });
+    expect(allLines.some((l) => l.item_id === 'item-002299')).toBe(true);
+  });
 });
