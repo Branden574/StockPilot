@@ -69,6 +69,13 @@ create trigger trg_seed_org_modules
   after insert on public.organizations
   for each row execute function public.seed_org_modules();
 
+-- ── 2b) Catalog-rotation cursor on inventory_items ──────────────────────────
+-- Stamped ONLY by the gated price_tracking write path (recordBookObservation)
+-- so the cron can `order by last_priced_at nulls first` and rotate fairly
+-- across catalogs larger than one run's limit. Nullable; never set elsewhere.
+alter table public.inventory_items
+  add column if not exists last_priced_at timestamptz;
+
 -- ── 3) item_price_observations (append-only history) ────────────────────────
 create table if not exists public.item_price_observations (
   id               uuid primary key default gen_random_uuid(),
