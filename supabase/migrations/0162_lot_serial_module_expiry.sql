@@ -114,6 +114,11 @@ create policy lot_pick_events_select on public.lot_pick_events
     )
   );
 
+-- Recording a lot pick is part of the staff picking workflow. The app-layer
+-- pick flow (OrderRequestsService.recordPickedLine) requires the 'items:update'
+-- permission, which staff hold; LotsService.recordLotPicks asserts the same.
+-- The RLS floor is therefore set to 'staff' so a legitimate picker isn't
+-- blocked at the database layer.
 drop policy if exists lot_pick_events_write on public.lot_pick_events;
 create policy lot_pick_events_write on public.lot_pick_events
-  for all using (public.has_org_role(organization_id, 'manager'));
+  for all using (public.has_org_role(organization_id, 'staff'));

@@ -6,6 +6,8 @@ vi.mock('@/server/services/lots', () => ({
 }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
+import { ServiceError } from '@/server/services/context';
+
 import { recordLotPicksAction } from './lots';
 
 describe('recordLotPicksAction', () => {
@@ -26,14 +28,13 @@ describe('recordLotPicksAction', () => {
     expect(recordLotPicks).toHaveBeenCalledOnce();
   });
 
-  it('maps a service ServiceError to err', async () => {
-    recordLotPicks.mockRejectedValueOnce(
-      Object.assign(new Error('blocked'), { name: 'ServiceError', code: 'validation_error' }),
-    );
+  it('maps a service ServiceError to err with its code', async () => {
+    recordLotPicks.mockRejectedValueOnce(new ServiceError('validation_error', 'blocked'));
     const res = await recordLotPicksAction({
       orderRequestId: 'o1', orderRequestLineId: 'l1', itemId: 'i1',
       picks: [{ lotNumber: 'A', qty: 1, expirationDate: '2000-01-01' }],
     });
     expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('validation_error');
   });
 });

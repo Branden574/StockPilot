@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -28,6 +29,7 @@ export function FefoLotHint({
   itemId: string;
   suggestions: FefoSuggestion[];
 }) {
+  const router = useRouter();
   const [qty, setQty] = React.useState<Record<string, number>>({});
   const [saving, setSaving] = React.useState(false);
   if (suggestions.length === 0) {
@@ -55,6 +57,9 @@ export function FefoLotHint({
     }
     toast.success('Lot picks recorded.');
     setQty({});
+    // Re-fetch the server component so displayed availability reflects the
+    // just-recorded picks.
+    router.refresh();
   }
 
   return (
