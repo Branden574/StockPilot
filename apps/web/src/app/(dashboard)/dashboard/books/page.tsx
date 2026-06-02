@@ -8,6 +8,7 @@ export const metadata: Metadata = { title: 'Books' };
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { BackfillCoversButton } from '@/components/books/backfill-covers-button';
+import { RefreshBookPricesButton } from '@/components/inventory/refresh-book-prices-button';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { BooksInventoryTable } from '@/components/books/books-inventory-table';
@@ -88,6 +89,10 @@ export default async function BooksPage({
   if (!moduleAccess.enabled) {
     return <ModuleNotEnabled moduleId="books" canManage={moduleAccess.canManage} />;
   }
+  // Phase 6: gate the bulk price-refresh action on the optional
+  // price_tracking module. When OFF, the button never renders and the
+  // page is identical to before.
+  const { enabled: priceTrackingEnabled } = await checkModuleAccess('price_tracking');
   const params = await searchParams;
 
   const lifecycleStatus =
@@ -131,6 +136,7 @@ export default async function BooksPage({
           {canCreate && lifecycleStatus !== 'archived' && (
             <>
               <BackfillCoversButton />
+              {priceTrackingEnabled && <RefreshBookPricesButton />}
               <Button asChild variant="outline">
                 <Link href="/dashboard/books/import">Bulk ISBN import</Link>
               </Button>
