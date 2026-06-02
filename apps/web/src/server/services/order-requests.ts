@@ -1346,6 +1346,26 @@ export class OrderRequestsService {
       this.ctx,
     );
     void this.notifyEmail(row, 'denied');
+
+    // Zendesk shell: a denied order is an "order problem" ticket (best-effort).
+    try {
+      await this.ctx.supabase.rpc('publish_outbox', {
+        p_org_id: this.ctx.organizationId,
+        p_topic: 'order.problem',
+        p_aggregate_type: 'order_request',
+        p_aggregate_id: id,
+        p_payload: {
+          orderRequestId: id,
+          requesterEmail: row.requester_email,
+          requesterName: row.requester_name,
+          reason,
+        },
+        p_dedupe_key: `order.problem:${id}`,
+      });
+    } catch {
+      /* best-effort */
+    }
+
     return row;
   }
 
