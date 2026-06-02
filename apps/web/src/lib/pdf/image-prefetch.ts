@@ -121,6 +121,13 @@ const getCachedImageDataUri = unstable_cache(
  * Caller passes `[key, signedUrl]` pairs; the key round-trips so the
  * consumer can map the result back to its row / item / whatever.
  */
+// Bound concurrent image fetches. A long report (now up to 1000 photos) must
+// not fire 1000 simultaneous storage requests on a cold render — that floods
+// the connection pool / risks 429s and the 8s-per-image timeout, blanking the
+// tail. A small worker pool keeps memory + connections sane while still finishing
+// a 1000-image cold render well under the 60s function budget (warm = cached).
+const PREFETCH_CONCURRENCY = 24;
+
 export async function prefetchImagesAsDataUris<K>(
   entries: Iterable<readonly [K, string]>,
 ): Promise<Map<K, string | null>> {
@@ -128,8 +135,12 @@ export async function prefetchImagesAsDataUris<K>(
   const list = Array.from(entries);
   if (list.length === 0) return out;
 
-  await Promise.all(
-    list.map(async ([key, url]) => {
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (cursor < list.length) {
+      const entry = list[cursor++];
+      if (!entry) break;
+      const [key, url] = entry;
       // getCachedImageDataUri throws on failure (so failures aren't negatively
       // cached). Swallow here → null → consumer renders a placeholder, and the
       // NEXT render retries the fetch instead of serving a stuck null.
@@ -141,7 +152,11 @@ export async function prefetchImagesAsDataUris<K>(
         );
         out.set(key, null);
       }
-    }),
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(PREFETCH_CONCURRENCY, list.length) }, () => worker()),
   );
   return out;
 }
