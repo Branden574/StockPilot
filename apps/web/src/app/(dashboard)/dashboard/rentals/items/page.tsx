@@ -125,11 +125,15 @@ export default async function RentalItemsPage({
   ]);
 
   const itemIdList = rentalItems.map((i) => i.id);
-  const [trends, imagesById] = await Promise.all([
+  const [trends, imagesById, reservedByItem] = await Promise.all([
     getItemTrends(
       rentalItems.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
     ),
     imagesSvc.primaryImagesWithThumbsForItems(itemIdList),
+    // Rentals reserve stock instead of decrementing on-hand — surface
+    // available + out-on-rental per row. Same active-reservation sum the
+    // /rentals/new catalog uses.
+    inventorySvc.reservedQuantityByItemIds(itemIdList),
   ]);
 
   const itemsWithImages = rentalItems.map((i) => {
@@ -245,6 +249,7 @@ export default async function RentalItemsPage({
             basePath="/dashboard/rentals/items"
             activeWarehouseId={null}
             currentUserId={sessionCtx.userId}
+            reservedByItem={reservedByItem}
           />
         )}
       </div>

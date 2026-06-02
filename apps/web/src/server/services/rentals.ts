@@ -208,9 +208,15 @@ export class RentalsService {
       .from('stock_reservations')
       .insert(reservationRows);
     if (resvErr) {
-      // Reservations failure isn't fatal — the rental is still recorded.
-      // Log but don't roll back; the operator can manually adjust if needed.
+      // Fail closed. Without the reservation, available-to-promise never
+      // drops (rentals reserve stock instead of decrementing on-hand), so
+      // a silently-unreserved rental is over-rentable. Roll back the just-
+      // created rental — rental_lines cascade-delete with it (0131:
+      // rental_lines.rental_id ON DELETE CASCADE) — and throw so the
+      // checkout fails loudly instead of leaving phantom availability.
       console.warn('[rentals] reservation insert failed', resvErr.message);
+      await this.ctx.supabase.from('rentals').delete().eq('id', rentalId);
+      throw new ServiceError('internal_error', resvErr.message);
     }
 
     void audit(

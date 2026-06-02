@@ -149,6 +149,13 @@ export interface InventoryTableProps {
   /** Current user id — used to decide whether to show owner-only
       actions (share toggle, delete) on org-shared saved views. */
   currentUserId?: string | null;
+  /** Active stock_reservations summed per item id. ONLY the rentals
+      items list passes this. Rentals reserve stock instead of
+      decrementing on-hand, so a row with reserved > 0 renders a small
+      secondary "{available} avail · {reserved} out" indicator under the
+      On hand cell. Absent (inventory + books lists) → the On hand cell
+      renders exactly as before, byte-identical. */
+  reservedByItem?: Map<string, number>;
 }
 
 interface SavedViewSummary {
@@ -264,6 +271,7 @@ export function InventoryTable({
   savedViewScope,
   activeWarehouseId = null,
   currentUserId = null,
+  reservedByItem,
 }: InventoryTableProps) {
   // Sparkline mode preference. localStorage-backed so it sticks across
   // reloads + tabs but doesn't pollute URLs (it's a personal preference,
@@ -1007,6 +1015,21 @@ export function InventoryTable({
                     })()}
                   <td className="px-3 text-right font-mono tabular-nums">
                     {formatNumber(item.quantity_on_hand)}
+                    {(() => {
+                      // Rentals-only: reserve-not-decrement model means a
+                      // checkout never lowers on-hand. Surface available +
+                      // out-on-rental under the qty so reserved stock is
+                      // visible. `reservedByItem` is undefined on the
+                      // inventory + books lists → nothing renders.
+                      const reserved = reservedByItem?.get(item.id) ?? 0;
+                      if (reserved <= 0) return null;
+                      const available = Math.max(0, item.quantity_on_hand - reserved);
+                      return (
+                        <div className="mt-0.5 text-[10.5px] font-normal leading-tight text-[var(--ed-ink-4)]">
+                          {formatNumber(available)} avail · {formatNumber(reserved)} out
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="px-3">
                     <StockBar stock={item.quantity_on_hand} par={par} status={status} />
