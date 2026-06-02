@@ -113,6 +113,10 @@ create policy item_price_observations_select on public.item_price_observations
     )
   );
 
+-- Floor = 'staff' to match the service gate (assertPermission items:update,
+-- which staff holds). Mirrors 0162's lot_pick_events fix — a 'manager' floor
+-- here would let a staff user clear the service gate then trip a raw RLS
+-- denial surfaced as internal_error.
 drop policy if exists item_price_observations_write on public.item_price_observations;
 create policy item_price_observations_write on public.item_price_observations
-  for all using (public.has_org_role(organization_id, 'manager'));
+  for all using (public.has_org_role(organization_id, 'staff'));
