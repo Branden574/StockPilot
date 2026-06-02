@@ -53,6 +53,18 @@ export const createItemSchema = z.object({
   binLocation: z.string().max(64).nullable().optional(),
   /** 'none' (default), 'lot', or 'serial'. Drives capture requirements at receive time. */
   trackingType: z.enum(['none', 'lot', 'serial']).default('none'),
+  /** Phase 5 (lot_serial module): per-item shelf life in days. */
+  shelfLifeDays: z.preprocess(
+    (v) => (v === '' || v === null ? null : v),
+    z.coerce.number().int().positive().nullable().optional(),
+  ),
+  /**
+   * Phase 5: near/expired lot behavior. 'block' rejects FEFO picks of expired
+   * lots. Optional (NOT defaulted) so existing CreateItemInput construction
+   * sites need no change; the default 'warn' is applied by InventoryService
+   * (`input.expiryPolicy ?? 'warn'`) and the DB column default.
+   */
+  expiryPolicy: z.enum(['none', 'warn', 'block']).optional(),
   /** 'product' (default), 'book', 'asset', or 'consumable'. Drives which UI tab the row appears under. */
   itemType: z.enum(['product', 'book', 'asset', 'consumable']).default('product'),
   customFields: z.record(z.string(), z.unknown()).default({}),
