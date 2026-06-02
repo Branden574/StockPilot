@@ -1,7 +1,7 @@
 import type { ModuleId } from '../modules/registry';
 
 export type ConnectorMode = 'push' | 'pull' | 'bidi' | 'webhook';
-export type ConnectorProviderId = 'quickbooks' | 'easypost'; // grows: 'amazon' | ...
+export type ConnectorProviderId = 'quickbooks' | 'easypost' | 'zendesk'; // grows: 'amazon' | ...
 
 export interface OutboxEvent {
   id: string;
