@@ -30,29 +30,36 @@ import { assertPermission, ServiceError, withContext, type ServiceContext } from
 const SIGNED_URL_TTL_SEC = 30 * 24 * 60 * 60;
 const SIGNED_URL_CACHE_SEC = 25 * 24 * 60 * 60;
 
-const getCachedItemImageSignedUrl = unstable_cache(
-  async (storagePath: string): Promise<string | null> => {
-    try {
-      const admin = createAdminClient();
-      const { data, error } = await admin.storage
-        .from('item-images')
-        .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC);
-      if (error || !data?.signedUrl) return null;
-      return data.signedUrl;
-    } catch {
-      return null;
+// THROWS on failure (no try/catch here) so `unstable_cache` does NOT persist a
+// null for the 25-day TTL — a transient signing/quota error self-heals on the
+// next call instead of poisoning the entry until a version bump. The public
+// wrapper below catches → null so callers are unchanged.
+const signItemImageMaster = unstable_cache(
+  async (storagePath: string): Promise<string> => {
+    const admin = createAdminClient();
+    const { data, error } = await admin.storage
+      .from('item-images')
+      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC);
+    if (error || !data?.signedUrl) {
+      throw new Error(`sign master failed: ${error?.message ?? 'no signedUrl'}`);
     }
+    return data.signedUrl;
   },
-  // Cache key prefix + the function arg(s) form the full key.
-  // Bump the version suffix when the URL shape changes (e.g. when
-  // moving to image-transformation URLs) to bust all stale entries.
-  // v2 (2026-05-20): bumped to bust any cached null entries from
-  // earlier failed signing attempts (e.g. before thumb_path was
-  // populated, or transient storage errors). Cache values are 25-day
-  // sticky, so version-bumping is the only reliable way to evict.
-  ['item-image-signed-url-v2'],
+  // v3 (2026-06-02): bumped to evict 25-day-poisoned null entries AND the fn now
+  // throws-instead-of-caching-null so transient failures stop sticking.
+  ['item-image-signed-url-v3'],
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
 );
+async function getCachedItemImageSignedUrl(storagePath: string): Promise<string | null> {
+  try {
+    return await signItemImageMaster(storagePath);
+  } catch (err) {
+    console.warn(
+      `[item-image] master sign failed (${storagePath}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
 
 /**
  * Signed URL that points at a server-side resized variant of the
@@ -67,27 +74,38 @@ const getCachedItemImageSignedUrl = unstable_cache(
  * Cached separately from the plain signed URL because the
  * transform params are part of the URL signature.
  */
-const getCachedItemImageTransformedSignedUrl = unstable_cache(
-  async (storagePath: string, width: number): Promise<string | null> => {
-    try {
-      const admin = createAdminClient();
-      const { data, error } = await admin.storage
-        .from('item-images')
-        .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
-          transform: { width, height: width, resize: 'cover' },
-        });
-      if (error || !data?.signedUrl) return null;
-      return data.signedUrl;
-    } catch {
-      return null;
+// THROWS on failure (see signItemImageMaster note) so transient transform/quota
+// errors aren't negatively cached for 25 days. Public wrapper catches → null.
+const signItemImageTransformed = unstable_cache(
+  async (storagePath: string, width: number): Promise<string> => {
+    const admin = createAdminClient();
+    const { data, error } = await admin.storage
+      .from('item-images')
+      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
+        transform: { width, height: width, resize: 'cover' },
+      });
+    if (error || !data?.signedUrl) {
+      throw new Error(`sign transform failed: ${error?.message ?? 'no signedUrl'}`);
     }
+    return data.signedUrl;
   },
-  // v2 (2026-05-20): companion bump to the plain signer above —
-  // any poisoned-null entries from quota hits / transient errors
-  // get evicted at the same time.
-  ['item-image-signed-url-transform-v2'],
+  // v3 (2026-06-02): companion bump to the plain signer; throws-instead-of-null.
+  ['item-image-signed-url-transform-v3'],
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
 );
+async function getCachedItemImageTransformedSignedUrl(
+  storagePath: string,
+  width: number,
+): Promise<string | null> {
+  try {
+    return await signItemImageTransformed(storagePath, width);
+  } catch (err) {
+    console.warn(
+      `[item-image] transform sign failed (${storagePath}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
 
 export class ItemImagesService {
   constructor(private readonly ctx: ServiceContext) {}
