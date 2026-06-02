@@ -699,7 +699,11 @@ export class InventoryService {
     // Phase 5: lot/serial tracking + shelf-life/expiry are gated behind the
     // lot_serial module. Fail closed — a disabled org cannot make an item
     // lot/serial-tracked or set expiry config.
-    if (input.trackingType !== 'none' || input.shelfLifeDays != null) {
+    if (
+      input.trackingType !== 'none' ||
+      input.shelfLifeDays != null ||
+      (input.expiryPolicy !== undefined && input.expiryPolicy !== 'warn')
+    ) {
       assertModuleEnabled(this.ctx, 'lot_serial');
     }
 

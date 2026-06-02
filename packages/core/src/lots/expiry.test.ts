@@ -42,6 +42,12 @@ describe('expiryBucket', () => {
   it('treats exactly-now as expired (boundary)', () => {
     expect(expiryBucket(new Date(now.getTime()), now)).toBe('expired');
   });
+
+  it('classifies bucket edges inclusively (the helper uses <=)', () => {
+    expect(expiryBucket(new Date(now.getTime() + 7 * DAY), now)).toBe('le7');
+    expect(expiryBucket(new Date(now.getTime() + 30 * DAY), now)).toBe('le30');
+    expect(expiryBucket(new Date(now.getTime() + 90 * DAY), now)).toBe('le90');
+  });
 });
 
 describe('sortLotsFefo', () => {
