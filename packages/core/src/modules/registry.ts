@@ -573,12 +573,13 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     title: 'Zendesk',
     dependsOn: [],
     permissions: ['integrations:manage'],
-    surfaces: ['web'],
+    surfaces: ['web', 'mobile'],
     apiPrefixes: [],
     ownsTables: [],
     defaultOnFor: [],
     placements: [
       { surface: 'web_sidebar', section: 'workspace', label: 'Zendesk', href: '/dashboard/zendesk', iconName: 'Zendesk', defaultSortOrder: 900 },
+      { surface: 'mobile_drawer', section: 'workspace', label: 'Zendesk', href: '/zendesk', iconName: 'Zendesk', defaultSortOrder: 900 },
     ],
   },
 
