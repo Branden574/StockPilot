@@ -84,6 +84,9 @@ const serverSchema = z.object({
       .filter(Boolean)
       .join(','),
   ),
+
+  // Google Books API key (optional — keyless works at low volume; set to raise quota).
+  GOOGLE_BOOKS_API_KEY: optionalSecret.transform((s) => s.trim()),
 });
 
 const clientSchema = z.object({

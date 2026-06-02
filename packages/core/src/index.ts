@@ -10,3 +10,4 @@ export * from './customization';
 export * from './connectors/types';
 export * from './connectors/registry';
 export * from './lots/expiry';
+export * from './pricing/google-books';
