@@ -101,7 +101,7 @@ export function CostTrendWidget({ series, className, height = 240 }: CostTrendWi
 
   return (
     <div className={cn('flex flex-col', className)}>
-      <ChartContainer config={config} className="aspect-auto w-full" style={{ height }}>
+      <ChartContainer config={config} className="aspect-auto w-full" style={{ height }} chartHeight={height}>
         <LineChart data={rows} margin={{ left: 4, right: 8, top: 8, bottom: 0 }} accessibilityLayer>
           <CartesianGrid vertical={false} strokeDasharray="2 4" />
           <XAxis
