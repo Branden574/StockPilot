@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { safeReturnPath } from '@/lib/safe-return-path';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
@@ -106,6 +107,8 @@ export default async function EditBookPage({
     customFieldsSvc.listDefinitions('item'),
   ]);
 
+  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+
   const terminology = resolveTerminology(
     (orgRow.data?.terminology as Partial<{
       charter_singular: string;
@@ -160,6 +163,12 @@ export default async function EditBookPage({
               trackingType:
                 ((item.tracking_type as 'none' | 'lot' | 'serial' | null | undefined) ??
                   'none') as 'none' | 'lot' | 'serial',
+              shelfLifeDays: (item.shelf_life_days as number | null | undefined) ?? null,
+              expiryPolicy:
+                ((item.expiry_policy as 'none' | 'warn' | 'block' | null | undefined) ?? 'warn') as
+                  | 'none'
+                  | 'warn'
+                  | 'block',
               status: item.status as 'active' | 'archived' | 'discontinued',
               customFields: (item.custom_fields as Record<string, unknown>) ?? {},
               itemType: 'book',
@@ -177,6 +186,7 @@ export default async function EditBookPage({
             charterLabel={terminology.charter_singular}
             returnHref={backHref}
             customFieldDefs={customFieldDefs}
+            lotSerialEnabled={lotSerialEnabled}
           />
         </CardContent>
       </Card>
