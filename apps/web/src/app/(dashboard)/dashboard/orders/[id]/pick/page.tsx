@@ -41,10 +41,8 @@ export default async function DigitalPickPage({
     );
     if (lotItemIds.length > 0) {
       const lotsSvc = await LotsService.forCurrentUser();
-      const entries = await Promise.all(
-        lotItemIds.map(async (itemId) => [itemId, await lotsSvc.getFefoSuggestion(itemId)] as const),
-      );
-      fefoByItemId = Object.fromEntries(entries);
+      // ONE aging scan for all lot-tracked items (avoids the per-item N+1).
+      fefoByItemId = await lotsSvc.getFefoSuggestionsByItems(lotItemIds);
     }
   }
 

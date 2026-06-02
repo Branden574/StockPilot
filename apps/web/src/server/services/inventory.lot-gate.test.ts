@@ -22,16 +22,24 @@ describe('InventoryService lot gate', () => {
     });
   });
 
-  it('allows tracking_type none when lot_serial is disabled', async () => {
-    // create() proceeds past the gate; we only assert the gate does NOT throw.
-    // (DB write is stubbed; a downstream null is acceptable for this assertion.)
-    const stub = makeSupabaseStub({
-      'inventory_items.insert': { data: { id: 'new' }, error: null },
+  it('rejects a non-default expiry_policy on create when lot_serial is disabled', async () => {
+    const stub = makeSupabaseStub({});
+    const svc = new InventoryService(makeServiceContext(stub.client)); // no lot_serial
+    // trackingType 'none', no shelfLifeDays — only the expiryPolicy trips the gate.
+    await expect(svc.create({ ...base, expiryPolicy: 'block' })).rejects.toMatchObject({
+      code: 'module_disabled',
     });
+  });
+
+  it('allows tracking_type none when lot_serial is disabled', async () => {
+    // create() proceeds past the gate; we only assert the gate does NOT fire.
+    // The stub returns nulls downstream so create() rejects on an unrelated
+    // warehouse/plan error — that's fine: it proves the gate did NOT throw
+    // module_disabled for a non-lot item.
+    const stub = makeSupabaseStub({});
     const svc = new InventoryService(makeServiceContext(stub.client));
-    // Should not throw module_disabled. Other downstream effects are out of scope.
-    await svc.create({ ...base }).catch((e) => {
-      expect((e as { code?: string }).code).not.toBe('module_disabled');
+    await expect(svc.create({ ...base })).rejects.not.toMatchObject({
+      code: 'module_disabled',
     });
   });
 });
