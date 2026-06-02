@@ -1,6 +1,7 @@
 import type { Connector, ConnectorProviderId } from '@stockpilot/core';
 
 import { quickbooksConnector } from './quickbooks';
+import { zendeskConnector } from './zendesk';
 
 /**
  * Connector implementation registry, keyed by provider id. `Partial` so the
@@ -10,4 +11,5 @@ import { quickbooksConnector } from './quickbooks';
  */
 export const CONNECTORS: Partial<Record<ConnectorProviderId, Connector>> = {
   quickbooks: quickbooksConnector,
+  zendesk: zendeskConnector,
 };

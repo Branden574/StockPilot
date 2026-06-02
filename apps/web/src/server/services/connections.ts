@@ -3,6 +3,7 @@ import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { env } from '@/lib/env';
 import { EasyPostApiError, EasyPostClient } from '@/server/connectors/easypost/client';
+import { ZendeskClient } from '@/server/connectors/zendesk/client';
 import { deleteConnectionSecret, putConnectionSecret } from '@/server/connectors/secret-store';
 
 import { audit } from './audit';
@@ -494,6 +495,95 @@ export class ConnectionsService {
     );
   }
 
+  /** Connect Zendesk via an API token (subdomain + agent email + token). */
+  async connectZendesk(input: { subdomain: string; email: string; apiToken: string }): Promise<void> {
+    assertModuleEnabled(this.ctx, 'zendesk');
+    assertPermission(this.ctx, 'integrations:manage');
+    const subdomain = input.subdomain.trim().replace(/^https?:\/\//i, '').replace(/\.zendesk\.com$/i, '');
+    const email = input.email.trim();
+    const apiToken = input.apiToken.trim();
+    if (!subdomain || !email || !apiToken) {
+      throw new ServiceError('validation_error', 'Subdomain, agent email, and API token are all required.');
+    }
+    try {
+      await new ZendeskClient({ subdomain, email, apiToken }).validateToken();
+    } catch {
+      throw new ServiceError('validation_error', 'Zendesk rejected these credentials. Check the subdomain, agent email, and API token.');
+    }
+
+    const { data: existing, error: selErr } = await this.ctx.supabase
+      .from('org_connections')
+      .select('id, settings, created_by')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('provider_id', 'zendesk')
+      .maybeSingle();
+    if (selErr) throw new ServiceError('internal_error', selErr.message);
+    const currentSettings = ((existing as { settings: Record<string, unknown> | null } | null)?.settings) ?? {};
+    const createdBy = ((existing as { created_by: string | null } | null)?.created_by) ?? this.ctx.userId;
+
+    const secretName = `connector:${(existing as { id: string } | null)?.id ?? `${this.ctx.organizationId}:zendesk`}`;
+    const secretId = await putConnectionSecret(createAdminClient() as never, secretName, {
+      accessToken: apiToken,
+      refreshToken: '',
+      expiresAt: '',
+    });
+
+    const { data: upserted, error: upErr } = await this.ctx.supabase
+      .from('org_connections')
+      .upsert(
+        {
+          organization_id: this.ctx.organizationId,
+          provider_id: 'zendesk',
+          status: 'active',
+          secret_id: secretId,
+          external_account_id: subdomain,
+          oauth_state: null,
+          settings: { ...currentSettings, subdomain, email },
+          created_by: createdBy,
+          last_connected_at: new Date().toISOString(),
+        },
+        { onConflict: 'organization_id,provider_id' },
+      )
+      .select('id')
+      .maybeSingle();
+    if (upErr) throw new ServiceError('internal_error', upErr.message);
+
+    void audit(
+      {
+        event: 'integration.connected',
+        entityType: 'org_connection',
+        entityId:
+          (upserted as { id: string } | null)?.id ??
+          (existing as { id: string } | null)?.id ??
+          null,
+        extra: { provider: 'zendesk' },
+      },
+      this.ctx,
+    );
+  }
+
+  /** Read this org's Zendesk connection (member-level). Null if never connected. */
+  async getZendeskConnection(): Promise<
+    { status: string; subdomain: string | null; lastConnectedAt: string | null; lastError: string | null } | null
+  > {
+    assertModuleEnabled(this.ctx, 'zendesk');
+    const { data, error } = await this.ctx.supabase
+      .from('org_connections')
+      .select('status, external_account_id, settings, last_connected_at, last_error')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('provider_id', 'zendesk')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) return null;
+    const r = data as { status: string; external_account_id: string | null; settings: Record<string, unknown> | null; last_connected_at: string | null; last_error: string | null };
+    return {
+      status: r.status,
+      subdomain: r.external_account_id ?? (r.settings?.subdomain as string | undefined) ?? null,
+      lastConnectedAt: r.last_connected_at,
+      lastError: r.last_error,
+    };
+  }
+
   /**
    * Disconnects a provider: sets status='disconnected' and nulls secret_id +
    * oauth_state, THEN deletes the Vault secret (service-role admin client).
@@ -518,6 +608,12 @@ export class ConnectionsService {
     if (provider === 'easypost') {
       assertModuleEnabled(this.ctx, 'shipping');
       assertPermission(this.ctx, 'shipping:manage');
+    } else if (provider === 'zendesk') {
+      // Zendesk lives under its own off-by-default `zendesk` module but reuses
+      // the `integrations:manage` capability (the same manage gate as the QBO
+      // integrations export).
+      assertModuleEnabled(this.ctx, 'zendesk');
+      assertPermission(this.ctx, 'integrations:manage');
     } else {
       assertModuleEnabled(this.ctx, 'integrations');
       assertPermission(this.ctx, 'integrations:manage');
