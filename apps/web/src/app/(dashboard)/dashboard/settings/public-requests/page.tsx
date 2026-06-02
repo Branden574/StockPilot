@@ -1,9 +1,11 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { PublicTokenControls } from '@/components/orders/public-token-controls';
 import { hasPermission } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { WarehousesService } from '@/server/services/warehouses';
 
@@ -11,6 +13,15 @@ export default async function PublicRequestsSettingsPage() {
   const ctx = await requireOrgContext();
   if (!hasPermission(ctx.role, 'orders:approve')) {
     redirect('/dashboard');
+  }
+
+  // Gate the page on the module: getPublicSettings() asserts public_requests is
+  // enabled and THROWS module_disabled otherwise. Without this gate that throw
+  // hit the dashboard error boundary ("Something broke loading this page") when
+  // the module was off. Render the graceful not-enabled state instead.
+  const access = await checkModuleAccess('public_requests');
+  if (!access.enabled) {
+    return <ModuleNotEnabled moduleId="public_requests" canManage={access.canManage} />;
   }
 
   const [orderSvc, warehousesSvc] = await Promise.all([
