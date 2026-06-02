@@ -9,3 +9,4 @@ export * from './modules/change-set';
 export * from './customization';
 export * from './connectors/types';
 export * from './connectors/registry';
+export * from './lots/expiry';
