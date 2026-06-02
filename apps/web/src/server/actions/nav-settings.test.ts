@@ -50,9 +50,14 @@ import { setNavOverridesAction } from './nav-settings';
 
 /** Build a stub that records the organizations.update payload. */
 function stubWithUpdateSpy() {
+  // The action appends `.select('id').maybeSingle()` and fails closed on a
+  // 0-row update, so the spy chain must terminate in a maybeSingle() resolving
+  // a row (the persisted-OK path).
   const updateSpy = vi.fn((..._args: unknown[]) => ({
     eq: vi.fn(() => ({
-      then: (resolve: (v: { error: null }) => void) => resolve({ error: null }),
+      select: vi.fn(() => ({
+        maybeSingle: vi.fn(() => Promise.resolve({ data: { id: 'org-1' }, error: null })),
+      })),
     })),
   }));
   const stub = makeSupabaseStub();

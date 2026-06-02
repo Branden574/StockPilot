@@ -368,6 +368,12 @@ export class CycleCountsService {
     assignedTo?: string | null;
   }): Promise<{ id: string; lineCount: number; skipped: number }> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
+    // The cycle_counts INSERT RLS requires manager-level access. Gate on the
+    // SAME permission assign() uses for header mutation so a staff caller gets
+    // a clean `forbidden` BEFORE the DB round-trip instead of an opaque
+    // internal_error 500 from the RLS-blocked insert. Keep stock:adjust too:
+    // it's the floor for the line writes + the downstream post() this enables.
+    assertPermission(this.ctx, 'cycle_counts:assign');
     assertPermission(this.ctx, 'stock:adjust');
     const scope = input.scope ?? 'warehouse';
 
@@ -801,6 +807,12 @@ export class CycleCountsService {
   /** Cancels the session without posting any adjustments. */
   async cancel(id: string): Promise<void> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
+    // The cycle_counts UPDATE RLS requires manager-level access. Gate on the
+    // SAME permission assign() uses so a staff caller gets a clean `forbidden`
+    // BEFORE the DB round-trip instead of the misleading "no longer open"
+    // conflict the RLS-blocked update would otherwise produce. Keep stock:adjust
+    // too as the established floor for cycle-count mutations.
+    assertPermission(this.ctx, 'cycle_counts:assign');
     assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(id);
     // Use .select().maybeSingle() so a stale page (someone else

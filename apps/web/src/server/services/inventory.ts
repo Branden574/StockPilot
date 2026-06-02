@@ -18,6 +18,7 @@ import type {
 import { RESERVED_CUSTOM_FIELD_KEYS, validateCustomFields } from '@stockpilot/core';
 
 import { assertModuleEnabled, assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRows } from './lib/paginate';
 import { audit } from './audit';
 import { CustomFieldsService } from './custom-fields';
 import { TagsService } from './tags';
@@ -401,102 +402,114 @@ export class InventoryService {
 
     // Build a parallel skinny query that mirrors every filter applied
     // above but selects only the three columns needed for the org-wide
-    // value sum. No pagination — we need the full filtered rowset to
-    // sum across all pages, not just the visible 50. The previous
-    // implementation summed only the current page's rows in the
-    // browser, which made the "$N on hand" footer wrong any time
-    // the total exceeded one page (215 SKUs / page=50 → undercounted
-    // by 4 pages of items). The DB cost is tiny because we're only
-    // pulling three numeric columns; even at 50k rows this is faster
-    // than rendering the page itself.
-    let sumQuery = this.ctx.supabase
-      .from('inventory_items')
-      .select('quantity_on_hand, unit_cost, reorder_point')
-      .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null);
-    if (!access.hasAllAccess) {
-      if (access.readableIds.length === 0) {
-        // Same early-return logic as the main query path above. We
-        // already returned earlier in this case; keep this guard for
-        // safety if the access guard moves.
-      } else {
-        sumQuery = sumQuery.in('warehouse_id', access.readableIds);
+    // value sum. We need the FULL filtered rowset to sum across all
+    // pages, not just the visible 50. The previous implementation summed
+    // only the current page's rows in the browser, which made the
+    // "$N on hand" footer wrong any time the total exceeded one page
+    // (215 SKUs / page=50 → undercounted by 4 pages of items).
+    //
+    // PostgREST clamps any single response to `[api] max_rows = 1000`, so
+    // even though we select only three numeric columns we must PAGINATE in
+    // 1000-row `.range()` windows with a stable `.order('id')` and
+    // accumulate — otherwise the footer silently undercounts for orgs with
+    // >1000 in-scope items, while `total` (count:'exact' on the main query)
+    // stays accurate, making the mismatch visible. (Same 1000-row cap class
+    // fixed in forecasting.ts / order-requests.ts.) The filters below mirror
+    // the main list query exactly; only the column projection and the
+    // pagination differ. Build per page so each `.range()` is applied to a
+    // fresh query (reusing one builder would stack range headers).
+    const buildSumPage = (from: number, to: number) => {
+      let sumQuery = this.ctx.supabase
+        .from('inventory_items')
+        .select('quantity_on_hand, unit_cost, reorder_point')
+        .eq('organization_id', this.ctx.organizationId)
+        .is('deleted_at', null);
+      if (!access.hasAllAccess) {
+        if (access.readableIds.length === 0) {
+          // Same early-return logic as the main query path above. We
+          // already returned earlier in this case; keep this guard for
+          // safety if the access guard moves.
+        } else {
+          sumQuery = sumQuery.in('warehouse_id', access.readableIds);
+        }
+      } else if (filters.warehouseId) {
+        sumQuery = sumQuery.eq('warehouse_id', filters.warehouseId);
       }
-    } else if (filters.warehouseId) {
-      sumQuery = sumQuery.eq('warehouse_id', filters.warehouseId);
-    }
-    if (!filters.status || filters.status === 'active') {
-      sumQuery = sumQuery.eq('status', 'active');
-    } else if (filters.status !== 'all') {
-      sumQuery = sumQuery.eq('status', filters.status);
-    }
-    if (filters.q && filters.q.trim()) {
-      const term = filters.q.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
-      if (term) {
-        sumQuery = sumQuery.or(
-          `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%,model_number.ilike.%${term}%`,
-        );
+      if (!filters.status || filters.status === 'active') {
+        sumQuery = sumQuery.eq('status', 'active');
+      } else if (filters.status !== 'all') {
+        sumQuery = sumQuery.eq('status', filters.status);
       }
-    }
-    if (filters.barcode && filters.barcode.trim()) {
-      sumQuery = sumQuery.eq('barcode', filters.barcode.trim());
-    }
-    if (filters.categoryIds && filters.categoryIds.length > 0) {
-      sumQuery = sumQuery.in('category_id', filters.categoryIds);
-    } else if (filters.categoryId) {
-      sumQuery = sumQuery.eq('category_id', filters.categoryId);
-    }
-    if (filters.locationIds && filters.locationIds.length > 0) {
-      sumQuery = sumQuery.in('primary_location_id', filters.locationIds);
-    } else if (filters.locationId) {
-      sumQuery = sumQuery.eq('primary_location_id', filters.locationId);
-    }
-    if (filters.supplierIds && filters.supplierIds.length > 0) {
-      sumQuery = sumQuery.in('supplier_id', filters.supplierIds);
-    } else if (filters.supplierId) {
-      sumQuery = sumQuery.eq('supplier_id', filters.supplierId);
-    }
-    if (filters.charterIds && filters.charterIds.length > 0) {
-      const includesGeneric = filters.charterIds.includes('generic');
-      const realIds = filters.charterIds.filter((id) => id !== 'generic');
-      if (includesGeneric && realIds.length > 0) {
-        const list = realIds.map((id) => `"${id}"`).join(',');
-        sumQuery = sumQuery.or(`charter_id.is.null,charter_id.in.(${list})`);
-      } else if (includesGeneric) {
-        sumQuery = sumQuery.is('charter_id', null);
-      } else if (realIds.length > 0) {
-        sumQuery = sumQuery.in('charter_id', realIds);
+      if (filters.q && filters.q.trim()) {
+        const term = filters.q.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
+        if (term) {
+          sumQuery = sumQuery.or(
+            `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%,model_number.ilike.%${term}%`,
+          );
+        }
       }
-    }
-    if (filters.outOfStock) sumQuery = sumQuery.lte('quantity_on_hand', 0);
-    if (filters.lowStock) {
-      sumQuery = sumQuery.or('reorder_point.gt.0,quantity_on_hand.lte.0');
-    }
-    if (filters.itemType === undefined) {
-      sumQuery = sumQuery.eq('item_type', 'product');
-    } else if (filters.itemType !== 'all') {
-      sumQuery = sumQuery.eq('item_type', filters.itemType);
-    }
-    if (!filters.includeRentals) {
-      sumQuery = sumQuery.eq('is_rental', false);
-    }
-    if (filters.createdSince) sumQuery = sumQuery.gte('created_at', filters.createdSince);
-    if (filters.createdUntil) sumQuery = sumQuery.lt('created_at', filters.createdUntil);
-    if (filters.updatedSince) sumQuery = sumQuery.gte('updated_at', filters.updatedSince);
-    if (filters.updatedUntil) sumQuery = sumQuery.lt('updated_at', filters.updatedUntil);
+      if (filters.barcode && filters.barcode.trim()) {
+        sumQuery = sumQuery.eq('barcode', filters.barcode.trim());
+      }
+      if (filters.categoryIds && filters.categoryIds.length > 0) {
+        sumQuery = sumQuery.in('category_id', filters.categoryIds);
+      } else if (filters.categoryId) {
+        sumQuery = sumQuery.eq('category_id', filters.categoryId);
+      }
+      if (filters.locationIds && filters.locationIds.length > 0) {
+        sumQuery = sumQuery.in('primary_location_id', filters.locationIds);
+      } else if (filters.locationId) {
+        sumQuery = sumQuery.eq('primary_location_id', filters.locationId);
+      }
+      if (filters.supplierIds && filters.supplierIds.length > 0) {
+        sumQuery = sumQuery.in('supplier_id', filters.supplierIds);
+      } else if (filters.supplierId) {
+        sumQuery = sumQuery.eq('supplier_id', filters.supplierId);
+      }
+      if (filters.charterIds && filters.charterIds.length > 0) {
+        const includesGeneric = filters.charterIds.includes('generic');
+        const realIds = filters.charterIds.filter((id) => id !== 'generic');
+        if (includesGeneric && realIds.length > 0) {
+          const list = realIds.map((id) => `"${id}"`).join(',');
+          sumQuery = sumQuery.or(`charter_id.is.null,charter_id.in.(${list})`);
+        } else if (includesGeneric) {
+          sumQuery = sumQuery.is('charter_id', null);
+        } else if (realIds.length > 0) {
+          sumQuery = sumQuery.in('charter_id', realIds);
+        }
+      }
+      if (filters.outOfStock) sumQuery = sumQuery.lte('quantity_on_hand', 0);
+      if (filters.lowStock) {
+        sumQuery = sumQuery.or('reorder_point.gt.0,quantity_on_hand.lte.0');
+      }
+      if (filters.itemType === undefined) {
+        sumQuery = sumQuery.eq('item_type', 'product');
+      } else if (filters.itemType !== 'all') {
+        sumQuery = sumQuery.eq('item_type', filters.itemType);
+      }
+      if (!filters.includeRentals) {
+        sumQuery = sumQuery.eq('is_rental', false);
+      }
+      if (filters.createdSince) sumQuery = sumQuery.gte('created_at', filters.createdSince);
+      if (filters.createdUntil) sumQuery = sumQuery.lt('created_at', filters.createdUntil);
+      if (filters.updatedSince) sumQuery = sumQuery.gte('updated_at', filters.updatedSince);
+      if (filters.updatedUntil) sumQuery = sumQuery.lt('updated_at', filters.updatedUntil);
+      // Stable sort keeps each row on exactly one page across the loop.
+      return sumQuery.order('id', { ascending: true }).range(from, to);
+    };
 
-    const [mainRes, sumRes] = await Promise.all([query, sumQuery]);
+    const [mainRes, sumRowsRaw] = await Promise.all([
+      query,
+      fetchAllRows<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }>(
+        (from, to) => buildSumPage(from, to),
+      ),
+    ]);
     const { data, error, count } = mainRes;
     if (error) throw new ServiceError('internal_error', error.message);
-    if (sumRes.error) throw new ServiceError('internal_error', sumRes.error.message);
 
     let rows = data ?? [];
     let totalCount = count ?? 0;
-    let sumRows = (sumRes.data ?? []) as Array<{
-      quantity_on_hand: number;
-      unit_cost: number;
-      reorder_point: number;
-    }>;
+    let sumRows = sumRowsRaw;
     if (filters.lowStock) {
       const filtered = rows.filter(
         (r: { quantity_on_hand: number; reorder_point: number }) =>
@@ -1392,6 +1405,7 @@ export class InventoryService {
       if (patch.expiryPolicy !== undefined) updates.expiry_policy = patch.expiryPolicy;
     }
     if (patch.itemType !== undefined) updates.item_type = patch.itemType;
+    if (patch.isRental !== undefined) updates.is_rental = patch.isRental;
     if (patch.status !== undefined) updates.status = patch.status;
     if (patch.customFields !== undefined) {
       // Authoritative server-side validation against the org's field defs.

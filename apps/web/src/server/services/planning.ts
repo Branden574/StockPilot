@@ -1,7 +1,8 @@
 import 'server-only';
 
-import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertModuleEnabled, assertPermission, withContext, type ServiceContext } from './context';
 import { computeReorderSuggestion, getBulkItemVelocities } from './forecasting';
+import { fetchAllRows } from './lib/paginate';
 import { PurchaseOrdersService } from './purchase-orders';
 
 /** Per-org planning parameters, stored in organization_modules.settings. */
@@ -73,7 +74,14 @@ export class PlanningService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('module_id', 'planning')
       .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
+    // Fail CLOSED to defaults: this method's contract is "never throws on a bad
+    // value" — a transient query error is just another bad value. Throwing here
+    // would take down the whole planning page (and the auto-draft PO run) over a
+    // params read, when sensible defaults exist. Log so it's not silent.
+    if (error) {
+      console.error('[PlanningService.readParams] settings read failed, using defaults:', error.message);
+      return { ...DEFAULT_PLANNING_PARAMS };
+    }
 
     const settings = (data as { settings?: unknown } | null)?.settings;
     const s = settings && typeof settings === 'object' ? (settings as Record<string, unknown>) : {};
@@ -101,19 +109,6 @@ export class PlanningService {
 
     const planningParams = await this.readParams();
 
-    // Bounded fetch of the candidate set. warehouseId is reserved for a future
-    // per-warehouse slice; velocity is org-scoped today, so we keep the filter
-    // signature stable without scoping the velocity calc yet.
-    const { data: rows, error } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('id, sku, name, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, supplier_id, created_at')
-      .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      .eq('is_rental', false)
-      .limit(MAX_ITEMS);
-    if (error) throw new ServiceError('internal_error', error.message);
-
     type Row = {
       id: string;
       sku: string | null;
@@ -125,7 +120,31 @@ export class PlanningService {
       supplier_id: string | null;
       created_at: string;
     };
-    const items = (rows ?? []) as Row[];
+
+    // Fetch the candidate set. warehouseId is reserved for a future
+    // per-warehouse slice; velocity is org-scoped today, so we keep the filter
+    // signature stable without scoping the velocity calc yet.
+    //
+    // PostgREST clamps any single response to `[api] max_rows = 1000`, so the
+    // former `.limit(MAX_ITEMS)` SILENTLY returned at most 1000 items — every
+    // candidate past the first 1000 got no reorder suggestion. Paginate in
+    // 1000-row `.range()` windows with a stable `.order('id')` and accumulate
+    // up to MAX_ITEMS (same cap class as forecasting.ts / order-requests.ts).
+    const items = await fetchAllRows<Row>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('inventory_items')
+          .select(
+            'id, sku, name, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, supplier_id, created_at',
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .is('deleted_at', null)
+          .eq('status', 'active')
+          .eq('is_rental', false)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: MAX_ITEMS },
+    );
     if (items.length === 0) return [];
 
     // Resolve supplier names in one round-trip.

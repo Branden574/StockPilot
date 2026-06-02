@@ -131,6 +131,19 @@ describe('PlanningService.readParams', () => {
     expect(params.safetyMultiplier).toBe(DEFAULT_PLANNING_PARAMS.safetyMultiplier); // garbage -> default
     expect(params.velocityWindowDays).toBe(DEFAULT_PLANNING_PARAMS.velocityWindowDays); // <=0 -> default
   });
+
+  it('fails CLOSED to defaults on a settings query error (never throws)', async () => {
+    const stub = makeSupabaseStub({
+      'organization_modules.select': {
+        data: null,
+        error: { message: 'connection reset' },
+      },
+    });
+    const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
+    // Contract is "never throws on a bad value" — a transient query error is
+    // just another bad value, so we return defaults instead of bubbling up.
+    await expect(svc.readParams()).resolves.toEqual(DEFAULT_PLANNING_PARAMS);
+  });
 });
 
 describe('PlanningService.getReorderSuggestions', () => {
@@ -202,6 +215,59 @@ describe('PlanningService.getReorderSuggestions', () => {
     const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
     await expect(svc.getReorderSuggestions()).resolves.toEqual([]);
     expect(getBulkItemVelocities).not.toHaveBeenCalled();
+  });
+
+  it('paginates the candidate fetch past the 1000-row PostgREST cap', async () => {
+    // The Data API clamps any single response to max_rows=1000. A candidate set
+    // of 2300 items must therefore be assembled across .range() pages — the old
+    // .limit(5000) silently returned only the first 1000, so items past 1000 got
+    // NO reorder suggestion. Hand the stub successive 1000-row pages.
+    const PAGE = 1000;
+    const TOTAL = 2300;
+    let page = 0;
+    const stub = makeSupabaseStub({
+      'organization_modules.select': { data: { settings: {} }, error: null },
+      'inventory_items.select': () => {
+        const start = page * PAGE;
+        const rows: Record<string, unknown>[] = [];
+        for (let i = start; i < Math.min(start + PAGE, TOTAL); i += 1) {
+          rows.push({
+            id: `item-${i.toString().padStart(6, '0')}`,
+            sku: `S${i}`,
+            name: `Item ${i}`,
+            quantity_on_hand: 1,
+            reorder_point: 5,
+            reorder_quantity: 0,
+            unit_cost: 1,
+            supplier_id: null,
+            created_at: '2020-01-01T00:00:00.000Z',
+          });
+        }
+        page += 1;
+        return { data: rows, error: null };
+      },
+      'suppliers.select': { data: [], error: null },
+    });
+    // Velocity + forecast: every item is a flat passthrough; the assertion is
+    // about completeness of the candidate set, not the math.
+    getBulkItemVelocities.mockImplementation(async (_s, _o, items: Array<{ id: string }>) => {
+      const m = new Map<string, ReturnType<typeof velocity>>();
+      for (const it of items) m.set(it.id, velocity(it.id, { unitsPerDay: 1, daysOfStock: 1 }));
+      return m;
+    });
+    computeReorderSuggestion.mockImplementation((v: ReturnType<typeof velocity>) =>
+      forecast(v, { suggestedReorderPoint: 5 }),
+    );
+
+    const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
+    const result = await svc.getReorderSuggestions();
+
+    // All 2300 candidates surfaced — not just the first 1000.
+    expect(result).toHaveLength(TOTAL);
+    expect(result.some((r) => r.itemId === 'item-002299')).toBe(true);
+    // At least three .range() pages were issued (1000 + 1000 + 300).
+    const ranges = stub.chainArgsAll.get('inventory_items.select') ?? [];
+    expect(ranges.length).toBeGreaterThanOrEqual(3);
   });
 });
 
