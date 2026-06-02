@@ -30,7 +30,7 @@ export type ModuleId =
   | 'books' | 'rentals' | 'bundles' | 'orders' | 'cycle_counts' | 'procedures'
   | 'purchase_orders' | 'receiving' | 'po_imports' | 'suppliers' | 'schedule' | 'ai' | 'public_requests'
   | 'integrations' | 'shipping' | 'returns' | 'planning'
-  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'api_access' | 'price_tracking';
+  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'api_access' | 'price_tracking' | 'live_tracking';
 
 export interface NavPlacement {
   surface: NavSurface;
@@ -550,6 +550,19 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     surfaces: ['web'],
     apiPrefixes: [],
     ownsTables: ['item_price_observations'],
+    defaultOnFor: [],
+    placements: [],
+  },
+
+  live_tracking: {
+    id: 'live_tracking',
+    tier: 'optional',
+    title: 'Live tracking',
+    dependsOn: ['orders'],
+    permissions: [],
+    surfaces: ['web'],
+    apiPrefixes: [],
+    ownsTables: ['delivery_locations'],
     defaultOnFor: [],
     placements: [],
   },
