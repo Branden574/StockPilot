@@ -14,6 +14,8 @@ export interface PriceObservationRow {
   title: string | null;
   authors: string | null;
   average_rating: number | null;
+  ratings_count: number | null;
+  categories: string | null;
   thumbnail_url: string | null;
   info_link: string | null;
   saleability: string | null;
@@ -23,6 +25,7 @@ export interface PriceObservationRow {
 interface BookItem {
   id: string;
   barcode: string | null;
+  last_priced_at?: string | null;
 }
 
 /**
@@ -58,6 +61,21 @@ export async function recordBookObservation(
     saleability: parsed.saleability,
   });
   if (error) throw new ServiceError('internal_error', error.message);
+
+  // Stamp the rotation cursor so the cron can fairly cycle catalogs >limit.
+  // Non-fatal: the price observation is already durably written, so a stamp
+  // hiccup must never lose it — log and continue. Uses the SAME client, so it
+  // works under both the admin (cron) and RLS (on-demand) paths. The stamp
+  // does NOT fire the search-vector trigger (scoped to name/sku/barcode/desc).
+  const { error: stampError } = await supabase
+    .from('inventory_items')
+    .update({ last_priced_at: new Date().toISOString() })
+    .eq('organization_id', orgId)
+    .eq('id', item.id);
+  if (stampError) {
+    // eslint-disable-next-line no-console
+    console.warn(`price-tracking: last_priced_at stamp failed for ${item.id}: ${stampError.message}`);
+  }
   return true;
 }
 
@@ -66,41 +84,40 @@ const DEFAULT_LIMIT = 300;
 
 /**
  * Batch-refresh book prices for one org. Client-agnostic (cron passes the admin
- * client; the service passes ctx.supabase). Pages active book items with an
- * ISBN-ish barcode, skips recently-observed, throttles, caps at `limit`.
+ * client; the service passes ctx.supabase). Selects active book items with an
+ * ISBN-ish barcode ordered by `last_priced_at` (nulls first → never-priced win,
+ * then oldest), so catalogs larger than `limit` rotate fairly across runs.
+ * Skips items priced within RECENT_MS, throttles, caps at `limit`, and stops
+ * gracefully at `deadlineMs` so a platform hard-kill never silently drops orgs.
  */
 export async function refreshBookPricesForOrg(
   supabase: { from: (t: string) => any },
   orgId: string,
   client: GoogleBooksClient,
-  opts: { limit?: number } = {},
+  opts: { limit?: number; deadlineMs?: number } = {},
 ): Promise<{ scanned: number; written: number; skipped: number }> {
   const limit = opts.limit ?? DEFAULT_LIMIT;
   const { data: items, error } = await supabase
     .from('inventory_items')
-    .select('id, barcode')
+    .select('id, barcode, last_priced_at')
     .eq('organization_id', orgId)
     .is('deleted_at', null)
     .eq('status', 'active')
     .eq('item_type', 'book')
     .not('barcode', 'is', null)
+    .order('last_priced_at', { ascending: true, nullsFirst: true })
     .limit(limit);
   if (error) throw new ServiceError('internal_error', error.message);
-
-  // Recently-observed item ids (one query) to skip.
-  const sinceIso = new Date(Date.now() - RECENT_MS).toISOString();
-  const { data: recent } = await supabase
-    .from('item_price_observations')
-    .select('item_id')
-    .eq('organization_id', orgId)
-    .gte('observed_at', sinceIso);
-  const recentIds = new Set((recent ?? []).map((r: { item_id: string }) => r.item_id));
 
   let written = 0;
   let skipped = 0;
   const list = (items ?? []) as BookItem[];
   for (const item of list) {
-    if (recentIds.has(item.id) || !isLikelyIsbn(item.barcode)) {
+    // Graceful stop under the platform kill — better to return partial counts
+    // than be hard-killed mid-loop with no result at all.
+    if (opts.deadlineMs && Date.now() > opts.deadlineMs) break;
+    const priced = item.last_priced_at ? Date.now() - new Date(item.last_priced_at).getTime() : Infinity;
+    if (priced < RECENT_MS || !isLikelyIsbn(item.barcode)) {
       skipped += 1;
       continue;
     }
@@ -142,10 +159,15 @@ export class PriceTrackingService {
     return this.getLatestObservation(itemId);
   }
 
-  async refreshOrgBookPrices(opts: { limit?: number } = {}) {
+  async refreshOrgBookPrices(opts: { limit?: number; deadlineMs?: number } = {}) {
     assertModuleEnabled(this.ctx, 'price_tracking');
     assertPermission(this.ctx, 'items:update');
-    return refreshBookPricesForOrg(this.ctx.supabase, this.ctx.organizationId, this.client, opts);
+    // Default deadline so the on-demand bulk action stops gracefully well under
+    // any request timeout rather than being hard-killed mid-loop.
+    return refreshBookPricesForOrg(this.ctx.supabase, this.ctx.organizationId, this.client, {
+      ...opts,
+      deadlineMs: opts.deadlineMs ?? Date.now() + 25_000,
+    });
   }
 
   async getLatestObservation(itemId: string): Promise<PriceObservationRow | null> {

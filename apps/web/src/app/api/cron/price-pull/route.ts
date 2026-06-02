@@ -46,9 +46,22 @@ export async function GET(req: Request) {
 
   const orgIds = Array.from(new Set((rows ?? []).map((r) => r.organization_id as string)));
   const results: Array<{ orgId: string; scanned: number; written: number; skipped: number }> = [];
+
+  // Global budget so one cron invocation can't exceed Vercel's maxDuration=60
+  // (an uncatchable hard-kill would silently skip the remaining orgs) or blow
+  // Google's daily quota. `deadlineMs` gives ~10s headroom; `GLOBAL_CAP` bounds
+  // total observations across ALL orgs this run.
+  const GLOBAL_CAP = 500; // total observations per cron invocation
+  const deadlineMs = Date.now() + 50_000; // headroom under maxDuration=60
+  let used = 0;
   for (const orgId of orgIds) {
+    if (Date.now() > deadlineMs || used >= GLOBAL_CAP) break;
     try {
-      const r = await refreshBookPricesForOrg(admin, orgId, googleBooksClient);
+      const r = await refreshBookPricesForOrg(admin, orgId, googleBooksClient, {
+        limit: Math.min(300, GLOBAL_CAP - used),
+        deadlineMs,
+      });
+      used += r.written;
       results.push({ orgId, ...r });
     } catch (e) {
       // FAIL-OPEN per org: report and continue; one org must not 500 the cron.
