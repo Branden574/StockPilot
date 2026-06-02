@@ -495,6 +495,28 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Zendesk shell: a new public order request opens a support ticket
+  // (best-effort; dormant until a zendesk connection is active). NOTE: fires at
+  // submit, before email confirmation — acceptable for v1; a follow-up could
+  // move this to the confirmation RPC to avoid unconfirmed/bot submissions.
+  try {
+    await admin.rpc('publish_outbox', {
+      p_org_id: organizationId,
+      p_topic: 'public_request.created',
+      p_aggregate_type: 'order_request',
+      p_aggregate_id: header.id,
+      p_payload: {
+        orderRequestId: header.id,
+        requesterEmail,
+        requesterName: body.requesterName,
+        status: 'pending_confirmation',
+      },
+      p_dedupe_key: `public_request.created:${header.id}`,
+    });
+  } catch {
+    /* best-effort: never fail the submission on a publish error */
+  }
+
   // 7. Send the confirm-click email. The row is sitting at
   // `pending_confirmation`; until the recipient clicks the link the
   // manager queue does not see it (the notify trigger skips the
