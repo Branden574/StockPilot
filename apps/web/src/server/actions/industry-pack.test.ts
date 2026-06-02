@@ -54,13 +54,23 @@ function setup(opts: {
   enabledModules?: string[];
   domainPack?: string | null;
   terminology?: Record<string, string> | null;
+  /** Row returned by the organizations UPDATE .select('id').maybeSingle().
+   *  `null` simulates a 0-row (RLS no-match) update. Defaults to a real row. */
+  updatedOrgRow?: { id: string } | null;
 }) {
   const upsertSpy = vi.fn((..._args: unknown[]) => ({
     then: (resolve: (v: { error: null }) => void) => resolve({ error: null }),
   }));
+  // The action now appends `.select('id').maybeSingle()` and fails closed on a
+  // 0-row update, so the spy's chain must terminate in a maybeSingle() that
+  // resolves a row. `updatedOrgRow` lets a test simulate the 0-row case.
+  const updatedOrgRow =
+    'updatedOrgRow' in opts ? opts.updatedOrgRow : { id: 'org-1' };
   const updateSpy = vi.fn((..._args: unknown[]) => ({
     eq: () => ({
-      then: (resolve: (v: { error: null }) => void) => resolve({ error: null }),
+      select: () => ({
+        maybeSingle: () => Promise.resolve({ data: updatedOrgRow, error: null }),
+      }),
     }),
   }));
 
@@ -273,5 +283,22 @@ describe('applyIndustryPackAction', () => {
     if (!result.ok) expect(result.error.code).toBe('internal_error');
     expect(upsertSpy).not.toHaveBeenCalled();
     expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails CLOSED on a 0-row organizations UPDATE (no error, no row persisted)', async () => {
+    // A row-count-0 update (RLS no-match) returns no error AND no row. The
+    // action must treat that as a failure rather than reporting ok — otherwise
+    // the UI shows the template Active while domain_pack never changed.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { updateSpy } = setup({ enabledModules: [], updatedOrgRow: null });
+
+    const result = await applyIndustryPackAction({ pack: 'distribution' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('internal_error');
+    // The update WAS attempted (we didn't bail before it) ...
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    // ... but the 0-row result means we must NOT have audited a phantom change.
+    expect(audit).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

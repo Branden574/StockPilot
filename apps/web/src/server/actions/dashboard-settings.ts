@@ -98,11 +98,22 @@ export async function setDashboardLayoutAction(
     }
 
     const supabase = ctx.supabase;
-    const { error } = await supabase
+    const { data: updatedRow, error } = await supabase
       .from('organizations')
       .update({ dashboard_layout: value })
-      .eq('id', ctx.organizationId);
+      .eq('id', ctx.organizationId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail CLOSED on a 0-row UPDATE (RLS no-match): no error + no row means
+    // nothing persisted. Without this, the action returns ok and the UI shows
+    // the saved layout while the row never changed.
+    if (!updatedRow) {
+      throw new ServiceError(
+        'internal_error',
+        'setDashboardLayoutAction did not persist: organization row was not updated (0 rows).',
+      );
+    }
 
     await audit({
       event: 'dashboard_layout.updated',
