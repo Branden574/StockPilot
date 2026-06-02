@@ -23,4 +23,13 @@ export const CONNECTOR_REGISTRY: Record<ConnectorProviderId, ConnectorMeta> = {
     subscribedTopics: [],
     requiresModule: 'shipping',
   },
+  zendesk: {
+    id: 'zendesk',
+    title: 'Zendesk',
+    // Push-only: create tickets from outbox events via the REST client.
+    // Inbound webhooks (ticket sync) are Phase 2. Auth = an API token in Vault.
+    modes: ['push'],
+    subscribedTopics: ['return.created', 'public_request.created', 'order.problem'],
+    requiresModule: 'zendesk',
+  },
 };

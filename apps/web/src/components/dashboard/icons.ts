@@ -28,6 +28,8 @@ import {
   Warehouse,
 } from 'lucide-react';
 
+import { ZendeskLogo } from './zendesk-logo';
+
 /**
  * Maps every `iconName` string used by the registry's `web_sidebar`
  * placements to its concrete lucide-react component. The registry stores
@@ -64,4 +66,5 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   Upload,
   Users,
   Warehouse,
+  Zendesk: ZendeskLogo,
 };
