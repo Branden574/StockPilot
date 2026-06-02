@@ -30,7 +30,7 @@ export type ModuleId =
   | 'books' | 'rentals' | 'bundles' | 'orders' | 'cycle_counts' | 'procedures'
   | 'purchase_orders' | 'receiving' | 'po_imports' | 'suppliers' | 'schedule' | 'ai' | 'public_requests'
   | 'integrations' | 'shipping' | 'returns' | 'planning'
-  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'api_access';
+  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'api_access' | 'price_tracking';
 
 export interface NavPlacement {
   surface: NavSurface;
@@ -539,6 +539,19 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
       // of PO imports (120).
       { surface: 'web_sidebar', section: 'inventory', label: 'Reorder Planning', href: '/dashboard/planning', iconName: 'TrendingUp', defaultSortOrder: 115, requires: 'purchase_orders:manage' },
     ],
+  },
+
+  price_tracking: {
+    id: 'price_tracking',
+    tier: 'optional',
+    title: 'Price monitoring',
+    dependsOn: ['inventory'],
+    permissions: [],
+    surfaces: ['web'],
+    apiPrefixes: [],
+    ownsTables: ['item_price_observations'],
+    defaultOnFor: [],
+    placements: [],
   },
 
   // ── Premium modules (plan-gated; no nav) ───────────────────────────────
