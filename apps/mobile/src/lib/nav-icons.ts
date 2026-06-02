@@ -28,6 +28,8 @@ import {
   Warehouse,
 } from 'lucide-react-native';
 
+import { ZendeskLogo } from '@/components/zendesk-logo';
+
 /**
  * Maps the lucide `iconName` strings carried by `mobile_drawer` placements in
  * the @stockpilot/core MODULE_REGISTRY to their concrete lucide-react-native
@@ -63,4 +65,8 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   Warehouse,
   Layers,
   FileLock,
+  // Zendesk uses a custom react-native-svg mark (not in lucide); cast to
+  // LucideIcon since it accepts the same { size, color } prop shape the
+  // drawer renders with.
+  Zendesk: ZendeskLogo as unknown as LucideIcon,
 };
