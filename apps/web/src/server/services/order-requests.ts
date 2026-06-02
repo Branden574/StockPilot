@@ -120,6 +120,9 @@ export interface OrderRequestLineWithItem extends OrderRequestLineRow {
      *  book_rack_* / book_crate_* keys for books. Pick-slip and
      *  packing-slip renderers read this. */
     custom_fields: Record<string, unknown> | null;
+    /** Phase 5 (lot_serial): "none" | "lot" | "serial" — drives the
+     *  advisory FEFO picking hint on the pick surface. */
+    tracking_type: string | null;
   } | null;
 }
 
@@ -604,7 +607,7 @@ export class OrderRequestsService {
           `id, order_request_id, item_id, quantity_requested,
            quantity_fulfilled, quantity_picked, unit_cost_at_request, notes,
            item:inventory_items!item_id (
-             id, name, sku, quantity_on_hand, barcode, model_number, item_type, custom_fields
+             id, name, sku, quantity_on_hand, barcode, model_number, item_type, custom_fields, tracking_type
            )`,
         )
         .eq('order_request_id', id),
@@ -631,6 +634,7 @@ export class OrderRequestsService {
       model_number: string | null;
       item_type: string | null;
       custom_fields: Record<string, unknown> | null;
+      tracking_type: string | null;
     };
     const flatLines: OrderRequestLineWithItem[] = (lines ?? []).map((row) => {
       const r = row as Record<string, unknown>;
