@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRows } from './lib/paginate';
 import { audit } from './audit';
 import { ItemImagesService } from './item-images';
 
@@ -423,21 +424,6 @@ export class PurchaseOrdersService {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
-    // Recompute the below-par set with the same filters the reorder-forecast
-    // report uses: active, non-deleted, non-rental, reorder_point > 0.
-    const { data: rows, error: fetchErr } = await this.ctx.supabase
-      .from('inventory_items')
-      .select(
-        'id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost',
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      .eq('is_rental', false)
-      .gt('reorder_point', 0)
-      .limit(5_000);
-    if (fetchErr) throw new ServiceError('internal_error', fetchErr.message);
-
     type Row = {
       id: string;
       supplier_id: string | null;
@@ -447,13 +433,35 @@ export class PurchaseOrdersService {
       unit_cost: number | null;
     };
 
+    // Recompute the below-par set with the same filters the reorder-forecast
+    // report uses: active, non-deleted, non-rental, reorder_point > 0.
+    // PostgREST clamps any single response to `[api] max_rows = 1000`, so the
+    // former `.limit(5_000)` SILENTLY returned at most 1000 candidates — every
+    // below-par item past the first 1000 got NO draft PO. Paginate in 1000-row
+    // `.range()` windows with a stable `.order('id')` and accumulate the full
+    // candidate set (same cap class as forecasting.ts / order-requests.ts).
+    const rows = await fetchAllRows<Row>((from, to) =>
+      this.ctx.supabase
+        .from('inventory_items')
+        .select(
+          'id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost',
+        )
+        .eq('organization_id', this.ctx.organizationId)
+        .is('deleted_at', null)
+        .eq('status', 'active')
+        .eq('is_rental', false)
+        .gt('reorder_point', 0)
+        .order('id', { ascending: true })
+        .range(from, to),
+    );
+
     // Build a prefilled line for each item that is at or below its reorder
     // point. Quantity = deficit to bring it back to target.
     type PreparedLine = { itemId: string; quantityOrdered: number; unitCost: number };
     const bySupplier = new Map<string, PreparedLine[]>();
     const unassigned: PreparedLine[] = [];
 
-    for (const raw of (rows ?? []) as Row[]) {
+    for (const raw of rows) {
       const qty = Number(raw.quantity_on_hand ?? 0);
       const reorderPoint = Number(raw.reorder_point ?? 0);
       if (qty > reorderPoint) continue; // healthy — skip
