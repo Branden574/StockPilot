@@ -1,4 +1,4 @@
-import { Box, Boxes, DollarSign, GraduationCap, Hash, History, LineChart, MapPin, Printer, Tag, Truck } from 'lucide-react';
+import { Box, Boxes, CalendarClock, DollarSign, GraduationCap, Hash, History, LineChart, MapPin, PackageCheck, Printer, Tag, Truck } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -75,9 +75,19 @@ interface ItemDetailProps {
    * "Edit" link so the edit page can offer the same round-trip back.
    */
   returnParam?: string;
+  /**
+   * Sum of ACTIVE stock_reservations against this item (rentals model:
+   * checking out a rental reserves stock instead of decrementing on-hand,
+   * so available = quantity_on_hand − reserved). ONLY the rentals item
+   * detail page passes this; when provided AND > 0, two extra rows
+   * ("Out on rental" + "Available") render under "On hand". Inventory and
+   * Books detail pages leave it undefined → nothing extra renders, byte-
+   * identical to before.
+   */
+  reservedQuantity?: number;
 }
 
-export async function ItemDetail({ id, backHref, backLabel, editHref, tab, returnParam }: ItemDetailProps) {
+export async function ItemDetail({ id, backHref, backLabel, editHref, tab, returnParam, reservedQuantity }: ItemDetailProps) {
   const activeTab: DetailTabId = parseDetailTab(tab);
 
   const [ctx, inventorySvc, activitySvc, imagesSvc, locationsSvc, reportsSvc, customFieldsSvc] =
@@ -348,6 +358,28 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     itemStatus={item.status as 'active' | 'archived' | 'discontinued'}
                   />
                 </DetailRow>
+                {/* Rentals reservation surface — only the rentals item detail
+                    page passes `reservedQuantity`. Checking out a rental
+                    reserves stock instead of decrementing on-hand, so without
+                    these rows a checkout looks invisible. Hidden entirely
+                    when the prop is absent (inventory/books) or zero. */}
+                {reservedQuantity !== undefined && reservedQuantity > 0 && (
+                  <>
+                    <DetailRow icon={CalendarClock} label="Out on rental">
+                      <span className="text-base font-semibold tabular-nums">
+                        {formatNumber(reservedQuantity)} {item.unit_of_measure as string}
+                      </span>
+                    </DetailRow>
+                    <DetailRow icon={PackageCheck} label="Available">
+                      <span className="text-base font-semibold tabular-nums">
+                        {formatNumber(
+                          Math.max(0, (item.quantity_on_hand as number) - reservedQuantity),
+                        )}{' '}
+                        {item.unit_of_measure as string}
+                      </span>
+                    </DetailRow>
+                  </>
+                )}
                 <DetailRow icon={DollarSign} label="Value">
                   <span className="text-base tabular-nums">{formatCurrency(value)}</span>
                   <span className="text-muted-foreground text-xs">

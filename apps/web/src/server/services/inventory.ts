@@ -706,6 +706,34 @@ export class InventoryService {
     return data;
   }
 
+  /**
+   * Sum of ACTIVE (not-yet-released) stock_reservations per item, keyed by
+   * item id. Mirrors the exact reservation math the /rentals/new catalog
+   * uses (no reference_type filter — total active reservations across every
+   * source so available-to-promise = quantity_on_hand − reserved). Items
+   * with no active reservations are omitted from the map, so callers should
+   * default a missing key to 0.
+   *
+   * RLS already scopes stock_reservations to the org; the explicit
+   * organization_id filter is belt-and-suspenders. Returns an empty map for
+   * an empty id list (no round-trip).
+   */
+  async reservedQuantityByItemIds(itemIds: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    if (itemIds.length === 0) return out;
+    const { data, error } = await this.ctx.supabase
+      .from('stock_reservations')
+      .select('item_id, quantity')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', itemIds)
+      .is('released_at', null);
+    if (error) throw new ServiceError('internal_error', error.message);
+    for (const r of (data ?? []) as Array<{ item_id: string; quantity: number }>) {
+      out.set(r.item_id, (out.get(r.item_id) ?? 0) + r.quantity);
+    }
+    return out;
+  }
+
   async create(input: CreateItemInput) {
     assertPermission(this.ctx, 'items:create');
 

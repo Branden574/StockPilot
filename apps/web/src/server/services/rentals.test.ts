@@ -31,6 +31,8 @@ interface MakeCtxOpts {
   rentalInsertError?: { message: string } | null;
   /** Error to return from rental_lines insert */
   linesInsertError?: { message: string } | null;
+  /** Error to return from stock_reservations insert */
+  reservationInsertError?: { message: string } | null;
   /** Error to return from rentals update (return/cancel) */
   rentalUpdateError?: { message: string } | null;
   /** Member full_name for borrower-name auto-fill */
@@ -48,6 +50,8 @@ interface MakeCtxOpts {
 
 function makeCtx(opts: MakeCtxOpts = {}) {
   const insertedRentalId = 'rental-id-1';
+  // Tracks rollback: which rental ids were deleted via .delete().eq('id', x).
+  const deletedRentalIds: string[] = [];
 
   const supabase = {
     from(table: string) {
@@ -118,7 +122,8 @@ function makeCtx(opts: MakeCtxOpts = {}) {
           // delete chain (rollback): .delete().eq('id', id)
           delete() {
             return {
-              eq(_col: string, _val: string) {
+              eq(_col: string, val: string) {
+                deletedRentalIds.push(val);
                 return Promise.resolve({ error: null });
               },
             };
@@ -143,7 +148,7 @@ function makeCtx(opts: MakeCtxOpts = {}) {
       if (table === 'stock_reservations') {
         return {
           insert(_rows: unknown) {
-            return Promise.resolve({ error: null });
+            return Promise.resolve({ error: opts.reservationInsertError ?? null });
           },
           update(_patch: unknown) {
             return {
@@ -228,6 +233,7 @@ function makeCtx(opts: MakeCtxOpts = {}) {
       mfaSatisfied: true,
     } as unknown as ConstructorParameters<typeof RentalsService>[0],
     insertedRentalId,
+    deletedRentalIds,
   };
 }
 
@@ -315,6 +321,23 @@ describe('RentalsService.create', () => {
     expect(payload.event).toBe('rental.created');
     expect(payload.entityType).toBe('rental');
     expect(payload.extra?.line_count).toBe(1);
+  });
+
+  it('fails closed when the reservation insert errors — rolls back the rental and throws', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { ctx, insertedRentalId, deletedRentalIds } = makeCtx({
+      inventoryItems: validInventoryItems,
+      reservationInsertError: { message: 'reservation boom' },
+    });
+    const svc = new RentalsService(ctx);
+    await expect(svc.create(validCreateInput)).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    // Just-created rental was rolled back (lines cascade-delete with it).
+    expect(deletedRentalIds).toContain(insertedRentalId);
+    // No success audit event for a failed checkout.
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   it('rejects items that are not rental items', async () => {
