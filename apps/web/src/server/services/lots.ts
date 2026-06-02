@@ -8,6 +8,7 @@ import {
 } from '@stockpilot/core';
 
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRows } from './lib/paginate';
 
 export interface AgingLotRow {
   itemId: string;
@@ -83,15 +84,24 @@ export class LotsService {
 
   /** Sum recorded picks keyed by `${itemId}::${lotNumber}` (optionally one item). */
   private async pickTotals(itemId?: string): Promise<Map<string, number>> {
-    let q = this.ctx.supabase
-      .from('lot_pick_events')
-      .select('item_id, lot_number, qty')
-      .eq('organization_id', this.ctx.organizationId);
-    if (itemId) q = q.eq('item_id', itemId);
-    const { data, error } = await q;
-    if (error) throw new ServiceError('internal_error', error.message);
+    // PostgREST clamps any single response to `[api] max_rows = 1000`, so an
+    // un-paginated scan would SILENTLY drop pick events past the first 1000 —
+    // under-counting picked qty and over-stating the remaining-on-hand used for
+    // aging/FEFO (a food-safety hazard: the soonest-expiring lot could look
+    // healthier than it is). Paginate in 1000-row `.range()` windows with a
+    // stable `.order('id')` and accumulate the full set.
+    const rows = await fetchAllRows<{ item_id: string; lot_number: string; qty: number }>(
+      (from, to) => {
+        let q = this.ctx.supabase
+          .from('lot_pick_events')
+          .select('item_id, lot_number, qty')
+          .eq('organization_id', this.ctx.organizationId);
+        if (itemId) q = q.eq('item_id', itemId);
+        return q.order('id', { ascending: true }).range(from, to);
+      },
+    );
     const totals = new Map<string, number>();
-    for (const r of (data ?? []) as Array<{ item_id: string; lot_number: string; qty: number }>) {
+    for (const r of rows) {
       const key = `${r.item_id}::${r.lot_number}`;
       totals.set(key, (totals.get(key) ?? 0) + Number(r.qty));
     }
@@ -106,22 +116,35 @@ export class LotsService {
     // receipt_line_lots (org membership via the receipts join), so org scoping is
     // belt-and-suspenders. If PostgREST rejects the nested filter at runtime, drop
     // the `.eq(...)` and rely on RLS alone (rows are already org-scoped).
-    const { data, error } = await this.ctx.supabase
-      .from('receipt_line_lots')
-      .select(
-        `lot_number, expiration_date, qty_base, created_at,
-         receipt_lines:receipt_line_id!inner (
-           item_id,
-           receipts:receipt_id!inner ( organization_id, receipt_number, status ),
-           inventory_items:item_id ( name, sku, shelf_life_days )
-         )`,
-      )
-      .eq('receipt_lines.receipts.organization_id', this.ctx.organizationId)
-      // Exclude reversed/canceled/draft receipts — only posted receipts
-      // represent real on-hand stock. (receipt_line_lots rows are NOT
-      // removed on reversal, so without this they'd inflate aging.)
-      .eq('receipt_lines.receipts.status', 'posted');
-    if (error) throw new ServiceError('internal_error', error.message);
+    // PostgREST clamps any single response to `[api] max_rows = 1000`, so an
+    // un-paginated scan SILENTLY drops lot rows past the first 1000 — and a
+    // truncated scan can omit the soonest-expiring lot entirely, corrupting the
+    // aging buckets + FEFO suggestion (food-safety hazard). Paginate in 1000-row
+    // `.range()` windows with a stable `.order('id')` (orders by the top-level
+    // receipt_line_lots.id) and accumulate the full rowset before aggregating.
+    const data = await fetchAllRows<RawLotRow>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('receipt_line_lots')
+          .select(
+            `lot_number, expiration_date, qty_base, created_at,
+             receipt_lines:receipt_line_id!inner (
+               item_id,
+               receipts:receipt_id!inner ( organization_id, receipt_number, status ),
+               inventory_items:item_id ( name, sku, shelf_life_days )
+             )`,
+          )
+          .eq('receipt_lines.receipts.organization_id', this.ctx.organizationId)
+          // Exclude reversed/canceled/draft receipts — only posted receipts
+          // represent real on-hand stock. (receipt_line_lots rows are NOT
+          // removed on reversal, so without this they'd inflate aging.)
+          .eq('receipt_lines.receipts.status', 'posted')
+          .order('id', { ascending: true })
+          // PostgREST types nested embeds as arrays; the runtime shape is the
+          // single related row we expect, hence the same `unknown` cast the
+          // pre-pagination code used.
+          .range(from, to) as unknown as PromiseLike<{ data: RawLotRow[] | null; error: { message: string } | null }>,
+    );
 
     const picks = await this.pickTotals();
     const now = this.now();
@@ -135,7 +158,7 @@ export class LotsService {
       string,
       { row: RawLotRow; received: number; receivedAt: string; expirationDate: string | null }
     >();
-    for (const raw of (data ?? []) as unknown as RawLotRow[]) {
+    for (const raw of data) {
       const itemId = raw.receipt_lines?.item_id;
       if (!itemId) continue;
       const key = `${itemId}::${raw.lot_number}`;
