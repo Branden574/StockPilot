@@ -2,6 +2,9 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
 import { DigitalPick } from '@/components/orders/digital-pick';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { LotsService } from '@/server/services/lots';
+import type { FefoSuggestion } from '@/server/services/lots';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 export const dynamic = 'force-dynamic';
@@ -23,6 +26,28 @@ export default async function DigitalPickPage({
     redirect(`/dashboard/orders/${id}`);
   }
 
+  // Phase 5: advisory FEFO picking hint. Only build the per-item suggestion
+  // map when the lot_serial module is enabled — fail closed otherwise so the
+  // existing pick/stock logic is completely untouched for non-food orgs.
+  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+  let fefoByItemId: Record<string, FefoSuggestion[]> = {};
+  if (lotSerialEnabled) {
+    const lotItemIds = Array.from(
+      new Set(
+        detail.lines
+          .filter((l) => l.item?.tracking_type === 'lot')
+          .map((l) => l.item!.id),
+      ),
+    );
+    if (lotItemIds.length > 0) {
+      const lotsSvc = await LotsService.forCurrentUser();
+      const entries = await Promise.all(
+        lotItemIds.map(async (itemId) => [itemId, await lotsSvc.getFefoSuggestion(itemId)] as const),
+      );
+      fefoByItemId = Object.fromEntries(entries);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6">
       <Link
@@ -39,7 +64,11 @@ export default async function DigitalPickPage({
         </p>
       </header>
       <div className="mt-6">
-        <DigitalPick orderId={id} initialLines={detail.lines} />
+        <DigitalPick
+          orderId={id}
+          initialLines={detail.lines}
+          lotSerial={lotSerialEnabled ? { enabled: true, fefoByItemId } : undefined}
+        />
       </div>
     </div>
   );
