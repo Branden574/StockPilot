@@ -156,6 +156,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Live tracking: the order just left in_transit (now completed) — purge the
+  // driver's live GPS point so no location lingers after delivery (best-effort).
+  try {
+    await admin.from('delivery_locations').delete().eq('order_request_id', order.id);
+  } catch {
+    /* non-fatal */
+  }
+
   // Returns Phase B (B4): the order just became 'completed' and is therefore
   // RETURNABLE. If the org has the off-by-default `returns` module enabled,
   // mint a per-order return_token (0156) so the requester can be emailed a

@@ -3,6 +3,7 @@
 import { CheckCircle2, Circle, XCircle } from 'lucide-react';
 import { useState } from 'react';
 
+import { DeliveryMap } from '@/components/orders/delivery-map';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -169,6 +170,10 @@ export function TrackForm({ initialToken, initialId, initialEmail }: Props) {
       ) : null}
 
       {result ? <TrackResultBlock result={result} /> : null}
+
+      {result?.status === 'in_transit' ? (
+        <DeliveryMap orderId={id.trim()} token={token.trim()} email={email.trim()} />
+      ) : null}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
+import { DeliveryLocationShare } from '@/components/orders/delivery-location-share';
 import { CreateReturnDialog } from '@/components/returns/create-return-dialog';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
@@ -101,6 +102,13 @@ export default async function OrderDetailPage({
     (canApprove ||
       (isAssignedDriver &&
         ['staged_for_delivery', 'in_transit'].includes(request.status)));
+
+  // Live tracking: the assigned driver can stream location only while in transit.
+  const showLiveTrackingShare =
+    isAssignedDriver &&
+    request.fulfillment_type === 'delivery' &&
+    request.status === 'in_transit' &&
+    (await checkModuleAccess('live_tracking')).enabled;
 
   // Phase 2A — packing slip generation. Manager+ only, and only while the
   // request is at a status where the service actually accepts the call.
@@ -338,6 +346,8 @@ export default async function OrderDetailPage({
               drivers={drivers}
             />
           )}
+
+          {showLiveTrackingShare && <DeliveryLocationShare orderId={id} />}
 
           {showShippingPanel && (
             <ShippingPanel
