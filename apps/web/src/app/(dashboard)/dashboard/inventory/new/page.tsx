@@ -5,6 +5,7 @@ import { ItemForm } from '@/components/inventory/item-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
@@ -89,6 +90,8 @@ export default async function NewItemPage() {
     customFieldsSvc.listDefinitions('item'),
   ]);
 
+  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+
   // Resolve effective defaults. Precedence:
   //   1. forcedWarehouseId — warehouse-scoped users are locked here.
   //   2. activeFilter — manager/admin sidebar warehouse dropdown.
@@ -158,6 +161,7 @@ export default async function NewItemPage() {
             warehouseLabel={terminology.warehouse_singular}
             charterLabel={terminology.charter_singular}
             customFieldDefs={customFieldDefs}
+            lotSerialEnabled={lotSerialEnabled}
           />
         </CardContent>
       </Card>

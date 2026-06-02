@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { FefoLotHint } from '@/components/orders/fefo-lot-hint';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
 import {
@@ -12,13 +13,15 @@ import {
   recordPickedLineAction,
 } from '@/server/actions/order-requests';
 import type { OrderRequestLineWithItem } from '@/server/services/order-requests';
+import type { FefoSuggestion } from '@/server/services/lots';
 
 interface DigitalPickProps {
   orderId: string;
   initialLines: OrderRequestLineWithItem[];
+  lotSerial?: { enabled: boolean; fefoByItemId: Record<string, FefoSuggestion[]> };
 }
 
-export function DigitalPick({ orderId, initialLines }: DigitalPickProps) {
+export function DigitalPick({ orderId, initialLines, lotSerial }: DigitalPickProps) {
   const router = useRouter();
   const [picked, setPicked] = React.useState<Record<string, number>>(() => {
     const out: Record<string, number> = {};
@@ -142,6 +145,14 @@ export function DigitalPick({ orderId, initialLines }: DigitalPickProps) {
                 )}
               </Button>
             </div>
+            {lotSerial?.enabled && line.item?.tracking_type === 'lot' && (
+              <FefoLotHint
+                orderId={orderId}
+                orderLineId={line.id}
+                itemId={line.item.id}
+                suggestions={lotSerial.fefoByItemId[line.item.id] ?? []}
+              />
+            )}
           </div>
         );
       })}

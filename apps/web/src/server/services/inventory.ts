@@ -17,7 +17,7 @@ import type {
 } from '@stockpilot/core';
 import { RESERVED_CUSTOM_FIELD_KEYS, validateCustomFields } from '@stockpilot/core';
 
-import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
+import { assertModuleEnabled, assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 import { audit } from './audit';
 import { CustomFieldsService } from './custom-fields';
 import { TagsService } from './tags';
@@ -695,6 +695,18 @@ export class InventoryService {
 
   async create(input: CreateItemInput) {
     assertPermission(this.ctx, 'items:create');
+
+    // Phase 5: lot/serial tracking + shelf-life/expiry are gated behind the
+    // lot_serial module. Fail closed — a disabled org cannot make an item
+    // lot/serial-tracked or set expiry config.
+    if (
+      input.trackingType !== 'none' ||
+      input.shelfLifeDays != null ||
+      (input.expiryPolicy !== undefined && input.expiryPolicy !== 'warn')
+    ) {
+      assertModuleEnabled(this.ctx, 'lot_serial');
+    }
+
     await assertPlanLimit(this.ctx, 'items');
 
     // Reject any custom_fields value that violates the org's field definitions
@@ -763,6 +775,8 @@ export class InventoryService {
         unit_of_measure: input.unitOfMeasure,
         bin_location: input.binLocation ?? null,
         tracking_type: input.trackingType,
+        shelf_life_days: input.shelfLifeDays ?? null,
+        expiry_policy: input.expiryPolicy ?? 'warn',
         item_type: input.itemType,
         custom_fields: input.customFields,
         status: input.status,
@@ -1327,6 +1341,15 @@ export class InventoryService {
   async update(id: string, patch: UpdateItemInput) {
     assertPermission(this.ctx, 'items:update');
 
+    // Phase 5: gate lot/serial + expiry edits behind the lot_serial module.
+    if (
+      (patch.trackingType !== undefined && patch.trackingType !== 'none') ||
+      patch.shelfLifeDays != null ||
+      (patch.expiryPolicy !== undefined && patch.expiryPolicy !== 'warn')
+    ) {
+      assertModuleEnabled(this.ctx, 'lot_serial');
+    }
+
     // Load current row to enforce warehouse-write access and to lock down
     // moves. Warehouse-scoped users cannot move an item to another warehouse;
     // managers/admins can only move it if they have write access to both.
@@ -1350,6 +1373,8 @@ export class InventoryService {
     if (patch.unitOfMeasure !== undefined) updates.unit_of_measure = patch.unitOfMeasure;
     if (patch.binLocation !== undefined) updates.bin_location = patch.binLocation ?? null;
     if (patch.trackingType !== undefined) updates.tracking_type = patch.trackingType;
+    if (patch.shelfLifeDays !== undefined) updates.shelf_life_days = patch.shelfLifeDays;
+    if (patch.expiryPolicy !== undefined) updates.expiry_policy = patch.expiryPolicy;
     if (patch.itemType !== undefined) updates.item_type = patch.itemType;
     if (patch.status !== undefined) updates.status = patch.status;
     if (patch.customFields !== undefined) {
