@@ -7,7 +7,8 @@ export const metadata: Metadata = { title: 'Orders' };
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { EmptyState } from '@/components/ui/empty-state';
-import { OrderStatusBadge, summaryRequesterLabel } from '@/components/orders/status-badge';
+import { OrderStatusBadge } from '@/components/orders/status-badge';
+import { summaryRequesterLabel } from '@/components/orders/requester-label';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -103,17 +104,32 @@ export default async function OrdersPage({
   const page = clampPage(params.page);
   const offset = (page - 1) * PAGE_SIZE;
 
-  const svc = await OrderRequestsService.forCurrentUser();
-
   let rows: OrderRequestSummary[] = [];
-  if (canApprove) {
-    rows = await svc.list({
-      status: TAB_FILTERS[tab],
-      limit: PAGE_SIZE + 1,
-      offset,
+  let loadFailed = false;
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    if (canApprove) {
+      rows = await svc.list({
+        status: TAB_FILTERS[tab],
+        limit: PAGE_SIZE + 1,
+        offset,
+      });
+    } else {
+      rows = await svc.myRequests();
+    }
+  } catch (error) {
+    // Fail CLOSED: a read error must NEVER crash the whole orders page
+    // (recurring bug pattern #1 — a thrown RSC read trips the dashboard
+    // error boundary). Log the real error server-side (visible in Vercel
+    // runtime logs, keyed near the digest) and degrade to an inline retry
+    // banner so the rest of the page (tabs, export, "Place order") still works.
+    console.error('[dashboard/orders] failed to load orders', {
+      tab,
+      page,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
     });
-  } else {
-    rows = await svc.myRequests();
+    loadFailed = true;
   }
 
   const hasNext = canApprove && rows.length > PAGE_SIZE;
@@ -183,7 +199,18 @@ export default async function OrdersPage({
       )}
 
       <div className="mt-6">
-        {visible.length === 0 ? (
+        {loadFailed ? (
+          <div className="bg-card border-destructive/40 rounded-xl border p-6 text-center">
+            <h2 className="text-destructive text-sm font-medium">We couldn&apos;t load orders</h2>
+            <p className="text-muted-foreground mx-auto mt-1 max-w-md text-sm">
+              Something went wrong loading this list. This is usually temporary — try again in a
+              moment, and switch tabs above to view other stages.
+            </p>
+            <Button asChild variant="outline" className="mt-4">
+              <Link href={`/dashboard/orders?status=${tab}`}>Try again</Link>
+            </Button>
+          </div>
+        ) : visible.length === 0 ? (
           canApprove ? (
             <EmptyState
               icon={ShoppingCart}
