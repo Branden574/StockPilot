@@ -9,6 +9,10 @@ describe('isLikelyIsbn', () => {
     expect(isLikelyIsbn('0306406152')).toBe(true);
     expect(isLikelyIsbn('0-306-40615-2')).toBe(true);
   });
+  it('accepts a 10-digit ISBN with an X check digit (with/without hyphens)', () => {
+    expect(isLikelyIsbn('080442957X')).toBe(true);
+    expect(isLikelyIsbn('0-8044-2957-X')).toBe(true);
+  });
   it('rejects non-ISBN barcodes and empties', () => {
     expect(isLikelyIsbn('ABC123')).toBe(false);
     expect(isLikelyIsbn('12345')).toBe(false);
@@ -59,8 +63,35 @@ describe('parseGoogleBooksVolume', () => {
     const got = parseGoogleBooksVolume(json);
     expect(got).toMatchObject({ title: 'NoSale', listPrice: null, retailPrice: null, saleability: 'NOT_FOR_SALE' });
   });
+  it('derives currency from listPrice when retailPrice is absent', () => {
+    const json = {
+      items: [
+        {
+          volumeInfo: { title: 'ListOnly' },
+          saleInfo: { saleability: 'FOR_SALE', listPrice: { amount: 12.5, currencyCode: 'EUR' } },
+        },
+      ],
+    };
+    const got = parseGoogleBooksVolume(json);
+    expect(got).toMatchObject({ listPrice: 12.5, retailPrice: null, currency: 'EUR' });
+  });
+  it('keeps a zero listPrice as 0 (not coerced to null)', () => {
+    const json = {
+      items: [
+        {
+          volumeInfo: { title: 'Free' },
+          saleInfo: { saleability: 'FOR_SALE', listPrice: { amount: 0, currencyCode: 'USD' } },
+        },
+      ],
+    };
+    expect(parseGoogleBooksVolume(json)?.listPrice).toBe(0);
+  });
   it('returns null when there are no items', () => {
     expect(parseGoogleBooksVolume({ totalItems: 0, items: [] })).toBeNull();
     expect(parseGoogleBooksVolume({})).toBeNull();
+  });
+  it('returns null when items is a non-array (number or string)', () => {
+    expect(parseGoogleBooksVolume({ items: 5 })).toBeNull();
+    expect(parseGoogleBooksVolume({ items: 'x' })).toBeNull();
   });
 });
