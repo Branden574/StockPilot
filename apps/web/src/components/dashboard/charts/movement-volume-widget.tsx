@@ -41,7 +41,7 @@ export function MovementVolumeWidget({ bars, className, height = 240 }: Movement
           No movements in the last 30 days.
         </p>
       ) : (
-        <ChartContainer config={CHART_CONFIG} className="aspect-auto w-full" style={{ height }}>
+        <ChartContainer config={CHART_CONFIG} className="aspect-auto w-full" style={{ height }} chartHeight={height}>
           <BarChart
             data={bars}
             margin={{ left: 4, right: 8, top: 8, bottom: 0 }}
