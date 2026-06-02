@@ -706,6 +706,11 @@ export class InventoryService {
     ) {
       assertModuleEnabled(this.ctx, 'lot_serial');
     }
+    // Only WRITE the lot_serial columns (migration 0162) when the module is
+    // enabled. With it off (prod default before 0162 is applied), the columns
+    // may not exist, so normal item CRUD must never reference them. Enabling
+    // the module is an operational opt-in that applies 0162 first.
+    const lotSerialEnabled = this.ctx.enabledModules.has('lot_serial');
 
     await assertPlanLimit(this.ctx, 'items');
 
@@ -775,8 +780,12 @@ export class InventoryService {
         unit_of_measure: input.unitOfMeasure,
         bin_location: input.binLocation ?? null,
         tracking_type: input.trackingType,
-        shelf_life_days: input.shelfLifeDays ?? null,
-        expiry_policy: input.expiryPolicy ?? 'warn',
+        ...(lotSerialEnabled
+          ? {
+              shelf_life_days: input.shelfLifeDays ?? null,
+              expiry_policy: input.expiryPolicy ?? 'warn',
+            }
+          : {}),
         item_type: input.itemType,
         custom_fields: input.customFields,
         status: input.status,
@@ -1349,6 +1358,11 @@ export class InventoryService {
     ) {
       assertModuleEnabled(this.ctx, 'lot_serial');
     }
+    // Only WRITE the lot_serial columns (0162) when the module is enabled — see
+    // create(). With it off (prod before 0162), the columns may not exist, so a
+    // normal item edit (the form submits expiryPolicy:'warn' by default) must
+    // not reference them.
+    const lotSerialEnabled = this.ctx.enabledModules.has('lot_serial');
 
     // Load current row to enforce warehouse-write access and to lock down
     // moves. Warehouse-scoped users cannot move an item to another warehouse;
@@ -1373,8 +1387,10 @@ export class InventoryService {
     if (patch.unitOfMeasure !== undefined) updates.unit_of_measure = patch.unitOfMeasure;
     if (patch.binLocation !== undefined) updates.bin_location = patch.binLocation ?? null;
     if (patch.trackingType !== undefined) updates.tracking_type = patch.trackingType;
-    if (patch.shelfLifeDays !== undefined) updates.shelf_life_days = patch.shelfLifeDays;
-    if (patch.expiryPolicy !== undefined) updates.expiry_policy = patch.expiryPolicy;
+    if (lotSerialEnabled) {
+      if (patch.shelfLifeDays !== undefined) updates.shelf_life_days = patch.shelfLifeDays;
+      if (patch.expiryPolicy !== undefined) updates.expiry_policy = patch.expiryPolicy;
+    }
     if (patch.itemType !== undefined) updates.item_type = patch.itemType;
     if (patch.status !== undefined) updates.status = patch.status;
     if (patch.customFields !== undefined) {
