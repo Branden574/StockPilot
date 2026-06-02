@@ -67,6 +67,50 @@ describe('LotsService.getAgingInventory', () => {
     const svc = new LotsService(makeServiceContext(stub.client, { enabledModules: withLotSerial() }));
     expect(await svc.getAgingInventory()).toEqual([]);
   });
+
+  it('wires the posted-only status filter on the lots query', async () => {
+    const stub = makeSupabaseStub({
+      'receipt_line_lots.select': { data: [], error: null },
+      'lot_pick_events.select': { data: [], error: null },
+    });
+    const svc = new LotsService(makeServiceContext(stub.client, { enabledModules: withLotSerial() }));
+    await svc.getAgingInventory();
+    // The mock ignores filters when resolving data, so assert the WIRING: the
+    // select chain must include an eq() on receipt_lines.receipts.status='posted'.
+    const argsList = stub.chainArgsAll.get('receipt_line_lots.select');
+    expect(argsList).toBeDefined();
+    const flat = argsList!.flat();
+    const hasPostedFilter = flat.some(
+      (a) => a[0] === 'receipt_lines.receipts.status' && a[1] === 'posted',
+    );
+    expect(hasPostedFilter).toBe(true);
+  });
+
+  it('keeps the earliest non-null expiration when merging duplicate (item,lot) rows', async () => {
+    const stub = makeSupabaseStub({
+      'receipt_line_lots.select': {
+        data: [
+          {
+            lot_number: 'A', expiration_date: '2026-09-01', qty_base: 3, created_at: '2026-05-01T00:00:00Z',
+            receipt_lines: { item_id: 'item-1', receipts: { organization_id: 'org-test', status: 'posted' },
+              inventory_items: { name: 'Milk', sku: 'MILK', shelf_life_days: null } },
+          },
+          {
+            lot_number: 'A', expiration_date: '2026-07-01', qty_base: 2, created_at: '2026-05-02T00:00:00Z',
+            receipt_lines: { item_id: 'item-1', receipts: { organization_id: 'org-test', status: 'posted' },
+              inventory_items: { name: 'Milk', sku: 'MILK', shelf_life_days: null } },
+          },
+        ],
+        error: null,
+      },
+      'lot_pick_events.select': { data: [], error: null },
+    });
+    const svc = new LotsService(makeServiceContext(stub.client, { enabledModules: withLotSerial() }));
+    const rows = await svc.getAgingInventory();
+    const a = rows.find((r) => r.lotNumber === 'A');
+    expect(a?.receivedQty).toBe(5); // 3 + 2 merged
+    expect(a?.expirationDate).toBe('2026-07-01'); // earliest, not first-seen
+  });
 });
 
 describe('LotsService.recordLotPicks', () => {
@@ -81,6 +125,19 @@ describe('LotsService.recordLotPicks', () => {
         picks: [{ lotNumber: 'A', qty: 1, expirationDate: '2000-01-01' }],
       }),
     ).rejects.toMatchObject({ code: 'validation_error' });
+  });
+
+  it('rejects a missing/foreign item with not_found', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: null, error: null },
+    });
+    const svc = new LotsService(makeServiceContext(stub.client, { enabledModules: withLotSerial() }));
+    await expect(
+      svc.recordLotPicks({
+        orderRequestId: 'o1', orderRequestLineId: 'l1', itemId: 'nope',
+        picks: [{ lotNumber: 'A', qty: 1, expirationDate: '2099-01-01' }],
+      }),
+    ).rejects.toMatchObject({ code: 'not_found' });
   });
 
   it('inserts pick events when policy allows (warn)', async () => {
