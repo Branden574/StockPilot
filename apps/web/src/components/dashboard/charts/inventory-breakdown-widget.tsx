@@ -84,7 +84,7 @@ export function InventoryBreakdownWidget({
         </p>
       ) : (
         <>
-          <ChartContainer config={config} className="mx-auto aspect-square" style={{ height }}>
+          <ChartContainer config={config} className="mx-auto aspect-auto w-full" style={{ height }} chartHeight={height}>
             <PieChart>
               <ChartTooltip
                 content={

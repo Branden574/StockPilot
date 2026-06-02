@@ -97,7 +97,7 @@ export function InventoryValueWidget({
           Not enough history to chart yet.
         </p>
       ) : (
-        <ChartContainer config={CHART_CONFIG} className="aspect-auto w-full" style={{ height }}>
+        <ChartContainer config={CHART_CONFIG} className="aspect-auto w-full" style={{ height }} chartHeight={height}>
           {type === 'area' ? (
             <AreaChart data={data} margin={{ left: 4, right: 8, top: 8, bottom: 0 }}>
               <CartesianGrid vertical={false} strokeDasharray="2 4" />

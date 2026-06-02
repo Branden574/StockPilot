@@ -83,9 +83,20 @@ function ChartContainer({
   children,
   config,
   style,
+  chartHeight,
   ...props
 }: React.ComponentProps<'div'> & {
   config: ChartConfig;
+  /**
+   * Pixel height handed straight to ResponsiveContainer. Threading a NUMERIC
+   * height makes recharts' first-render dimension calc positive, which silences
+   * the "The width(-1) and height(-1) of chart should be greater than 0" warning
+   * recharts 3.8.1 logs even in production (its isDev flag is hardcoded true).
+   * `minHeight` alone does NOT silence it — minHeight isn't part of the
+   * dimension calc — so callers that set a fixed pixel height on the wrapping
+   * div should also pass that same number here.
+   */
+  chartHeight?: number;
   children: React.ComponentProps<
     typeof RechartsPrimitive.ResponsiveContainer
   >['children'];
@@ -105,7 +116,11 @@ function ChartContainer({
         style={{ ...configToStyleVars(config), ...style }}
         {...props}
       >
-        <RechartsPrimitive.ResponsiveContainer>
+        <RechartsPrimitive.ResponsiveContainer
+          width="100%"
+          height={chartHeight ?? '100%'}
+          minHeight={chartHeight ?? 120}
+        >
           {children}
         </RechartsPrimitive.ResponsiveContainer>
       </div>
