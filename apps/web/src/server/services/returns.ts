@@ -508,6 +508,25 @@ export class RMAService {
       this.ctx,
     );
 
+    // Zendesk shell: surface a new return as a ticket (best-effort; dormant
+    // until a zendesk connection is active — the drainer skips otherwise).
+    try {
+      await this.ctx.supabase.rpc('publish_outbox', {
+        p_org_id: this.ctx.organizationId,
+        p_topic: 'return.created',
+        p_aggregate_type: 'return',
+        p_aggregate_id: header.id,
+        p_payload: {
+          returnId: header.id,
+          returnNumber: header.return_number,
+          orderRequestId,
+        },
+        p_dedupe_key: `return.created:${header.id}`,
+      });
+    } catch {
+      /* best-effort: a publish failure must not fail the created return */
+    }
+
     return { ...header, lines: (insertedLines as ReturnLineRow[] | null) ?? [] };
   }
 
