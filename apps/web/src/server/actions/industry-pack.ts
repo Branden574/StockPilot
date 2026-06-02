@@ -193,11 +193,23 @@ export async function applyIndustryPackAction(
     };
     if (terminologyChanged) orgUpdate.terminology = mergedTerminology;
 
-    const { error: updateError } = await supabase
+    const { data: updatedRow, error: updateError } = await supabase
       .from('organizations')
       .update(orgUpdate)
-      .eq('id', ctx.organizationId);
+      .eq('id', ctx.organizationId)
+      .select('id')
+      .maybeSingle();
     if (updateError) throw new ServiceError('internal_error', updateError.message);
+    // Fail CLOSED on a 0-row UPDATE: a row-count-0 update (RLS no-match) comes
+    // back with no error AND no row. Without this guard the action would return
+    // ok, the UI would show the industry template as Active, and audit would
+    // log it — but domain_pack never changed.
+    if (!updatedRow) {
+      throw new ServiceError(
+        'internal_error',
+        'applyIndustryPackAction did not persist: organization row was not updated (0 rows).',
+      );
+    }
 
     // --- Audit (before/after) ------------------------------------------------
     const afterEnabled = new Set(currentEnabled);
