@@ -42,6 +42,11 @@ const config: ExpoConfig = {
       // by Apple's export-compliance prompt at submit time; setting it
       // here means TestFlight/App Store builds skip the question.
       ITSAppUsesNonExemptEncryption: false,
+      NSLocationWhenInUseUsageDescription:
+        'StockPilot shares your location with the customer while you deliver their order.',
+      NSLocationAlwaysAndWhenInUseUsageDescription:
+        'StockPilot shares your location with the customer while you deliver their order, even when the app is in the background.',
+      UIBackgroundModes: ['location'],
     },
   },
   android: {
@@ -51,7 +56,15 @@ const config: ExpoConfig = {
       foregroundImage: './assets/icon.png',
       backgroundColor: '#0a0f1f',
     },
-    permissions: ['CAMERA', 'READ_MEDIA_IMAGES'],
+    permissions: [
+      'CAMERA',
+      'READ_MEDIA_IMAGES',
+      'ACCESS_FINE_LOCATION',
+      'ACCESS_COARSE_LOCATION',
+      'ACCESS_BACKGROUND_LOCATION',
+      'FOREGROUND_SERVICE',
+      'FOREGROUND_SERVICE_LOCATION',
+    ],
   },
   plugins: [
     'expo-router',
@@ -74,6 +87,18 @@ const config: ExpoConfig = {
     // so getExpoPushTokenAsync() fails on device and no token is ever
     // registered (the web then shows "No registered devices").
     'expo-notifications',
+    [
+      'expo-location',
+      {
+        locationWhenInUsePermission:
+          'StockPilot shares your location with the customer while you deliver their order.',
+        locationAlwaysAndWhenInUsePermission:
+          'StockPilot shares your location with the customer while you deliver their order, even when the app is in the background.',
+        isAndroidBackgroundLocationEnabled: true,
+        isIosBackgroundLocationEnabled: true,
+        isAndroidForegroundServiceEnabled: true,
+      },
+    ],
     [
       'expo-local-authentication',
       {
