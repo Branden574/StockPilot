@@ -87,6 +87,10 @@ const config: ExpoConfig = {
     // so getExpoPushTokenAsync() fails on device and no token is ever
     // registered (the web then shows "No registered devices").
     'expo-notifications',
+    // In-app browser (SFSafariViewController / Custom Tab) — used to open the
+    // public /orders/sign/<token> signature page when a packing-slip QR is
+    // scanned in-app, so signing stays inside StockPilot.
+    'expo-web-browser',
     [
       'expo-location',
       {
