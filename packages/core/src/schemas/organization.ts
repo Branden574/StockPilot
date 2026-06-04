@@ -35,11 +35,22 @@ export type InviteableRole = (typeof INVITEABLE_ROLES)[number];
 export const inviteMemberSchema = z.object({
   email: emailSchema,
   role: z.enum(INVITEABLE_ROLES).default('staff'),
+  // Single charter (back-compat). `charterIds` takes precedence when set.
   charterId: z.string().uuid().nullable().optional(),
+  // Multi-charter invite: charters this user will oversee for the warehouse.
+  charterIds: z.array(z.string().uuid()).optional(),
   warehouseId: z.string().uuid().nullable().optional(),
   message: z.string().max(2000).optional(),
 });
 export type InviteMemberInput = z.infer<typeof inviteMemberSchema>;
+
+export const setMemberChartersSchema = z.object({
+  userId: z.string().uuid(),
+  warehouseId: z.string().uuid(),
+  // Empty array = "all charters" (a single null-charter assignment row).
+  charterIds: z.array(z.string().uuid()),
+});
+export type SetMemberChartersInput = z.infer<typeof setMemberChartersSchema>;
 
 export const updateMemberRoleSchema = z.object({
   memberId: z.string().uuid(),

@@ -37,7 +37,8 @@ export class TeamService {
       .eq('organization_id', this.ctx.organizationId)
       .order('created_at', { ascending: true });
     if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []).map((m: Record<string, unknown>) => {
+
+    const members = (data ?? []).map((m: Record<string, unknown>) => {
       const userField = m.user;
       const userObj = Array.isArray(userField) ? userField[0] : userField;
       return {
@@ -56,8 +57,64 @@ export class TeamService {
                 avatar_url: ((userObj as { avatar_url?: string | null }).avatar_url ?? null) as string | null,
               }
             : null,
+        // Populated below from user_warehouse_assignments. A member's charters
+        // are warehouse-scoped, so each member surfaces a single primary
+        // warehouse + the charter_ids they oversee there (empty = all charters,
+        // i.e. a lone null-charter row). null warehouse = no assignment.
+        warehouse_id: null as string | null,
+        charter_ids: [] as string[],
       };
     });
+
+    // Second query: per-member warehouse assignments for THIS org. Keyed by
+    // (org, user, warehouse, charter); a member may have rows for multiple
+    // warehouses. We surface the primary warehouse (is_primary) — or the first
+    // by assignment order if none is flagged — and the charter_ids at it.
+    const userIds = members.map((m) => m.user_id);
+    if (userIds.length > 0) {
+      const { data: assignRows, error: assignErr } = await this.ctx.supabase
+        .from('user_warehouse_assignments')
+        .select('user_id, warehouse_id, charter_id, is_primary')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('user_id', userIds);
+      if (assignErr) throw new ServiceError('internal_error', assignErr.message);
+
+      // Group rows by user, then pick the primary warehouse (or first seen).
+      const byUser = new Map<
+        string,
+        Array<{ warehouse_id: string; charter_id: string | null; is_primary: boolean }>
+      >();
+      for (const row of (assignRows ?? []) as Array<{
+        user_id: string;
+        warehouse_id: string;
+        charter_id: string | null;
+        is_primary: boolean | null;
+      }>) {
+        const list = byUser.get(row.user_id) ?? [];
+        list.push({
+          warehouse_id: row.warehouse_id,
+          charter_id: row.charter_id,
+          is_primary: row.is_primary ?? false,
+        });
+        byUser.set(row.user_id, list);
+      }
+
+      for (const m of members) {
+        const rows = byUser.get(m.user_id);
+        if (!rows || rows.length === 0) continue;
+        const primaryWarehouse =
+          rows.find((r) => r.is_primary)?.warehouse_id ?? rows[0]?.warehouse_id;
+        if (!primaryWarehouse) continue;
+        m.warehouse_id = primaryWarehouse;
+        // charter_ids at the primary warehouse (drop the null-charter
+        // sentinel → empty list = "all charters").
+        m.charter_ids = rows
+          .filter((r) => r.warehouse_id === primaryWarehouse && r.charter_id)
+          .map((r) => r.charter_id as string);
+      }
+    }
+
+    return members;
   }
 
   async listPendingInvites() {
@@ -84,12 +141,25 @@ export class TeamService {
     organizationName: string;
     inviterName: string;
     charterId?: string | null;
+    /**
+     * Multi-charter invite: the charters this user will oversee for the
+     * assigned warehouse. Takes precedence over the single `charterId`
+     * when non-empty. On accept, one assignment row is created per charter.
+     */
+    charterIds?: string[];
     warehouseId?: string | null;
     message?: string;
   }) {
     assertPermission(this.ctx, 'members:invite');
 
     const normalizedEmail = params.email.toLowerCase().trim();
+
+    // Normalize the charter list: prefer the explicit multi list, else
+    // fall back to the single charterId (back-compat), else empty (= all
+    // charters). filter(Boolean) drops nulls/empties.
+    const charterIds = (
+      params.charterIds ?? (params.charterId ? [params.charterId] : [])
+    ).filter(Boolean) as string[];
 
     // For warehouse-scoped roles (staff/viewer), warehouse_id is required.
     if ((params.role === 'staff' || params.role === 'viewer') && !params.warehouseId) {
@@ -147,7 +217,11 @@ export class TeamService {
         expires_at: expiresAt,
         invited_by: this.ctx.userId,
         warehouse_id: params.warehouseId ?? null,
-        charter_id: params.charterId ?? null,
+        // Multi-charter list (preferred) + single charter_id (back-compat
+        // for older accept paths / readers). charter_ids takes precedence
+        // on accept when set.
+        charter_ids: charterIds.length > 0 ? charterIds : null,
+        charter_id: charterIds[0] ?? null,
         message: params.message ?? null,
       })
       .select('id, token')
@@ -414,6 +488,154 @@ export class TeamService {
       );
     }
   }
+
+  /**
+   * Replaces the set of charters an existing member oversees for a single
+   * warehouse. Reconciles `user_warehouse_assignments`:
+   *   - target set = deduped `charterIds`, or `[null]` (all-charters) when empty;
+   *   - DELETE assignment rows whose charter_id is NOT in the target set;
+   *   - INSERT rows for target charters that are missing;
+   *   - leave exactly one remaining row flagged `is_primary`.
+   *
+   * Gated on `members:invite` — the same permission `invite()` requires to
+   * create these rows. `members:invite` is admin+ (owner/admin), which also
+   * matches the `uwa_admin_write` RLS write floor on
+   * `user_warehouse_assignments`, so the user-scoped (ctx) client can both
+   * read and write here with RLS enforced as defense-in-depth.
+   */
+  async setMemberCharterAssignments(params: {
+    userId: string;
+    warehouseId: string;
+    charterIds: string[]; // empty = "all charters" (a single null-charter row)
+  }): Promise<void> {
+    assertPermission(this.ctx, 'members:invite');
+
+    if (!params.warehouseId) {
+      throw new ServiceError('validation_error', 'A warehouse is required.');
+    }
+
+    // Defense in depth: confirm the target is a member of THIS org (RLS
+    // would also block cross-org assignment writes, but this gives a
+    // friendlier error).
+    const { data: member } = await this.ctx.supabase
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('user_id', params.userId)
+      .maybeSingle();
+    if (!member) {
+      throw new ServiceError('not_found', 'User is not a member of this organization.');
+    }
+
+    // Defense in depth: confirm the warehouse belongs to THIS org.
+    const { data: warehouse } = await this.ctx.supabase
+      .from('warehouses')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', params.warehouseId)
+      .maybeSingle();
+    if (!warehouse) {
+      throw new ServiceError('not_found', 'Warehouse not found in this organization.');
+    }
+
+    // Target set of charter_ids. Empty input means "all charters", which is
+    // represented as a single row with charter_id = null. Dedupe input.
+    const deduped = Array.from(new Set(params.charterIds.filter(Boolean)));
+    const target: Array<string | null> =
+      deduped.length > 0 ? deduped : [null];
+
+    // Read existing assignment rows for (org, user, warehouse).
+    const { data: existingRows, error: readErr } = await this.ctx.supabase
+      .from('user_warehouse_assignments')
+      .select('id, charter_id, is_primary')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('user_id', params.userId)
+      .eq('warehouse_id', params.warehouseId);
+    if (readErr) throw new ServiceError('internal_error', readErr.message);
+
+    const existing = (existingRows ?? []) as Array<{
+      id: string;
+      charter_id: string | null;
+      is_primary: boolean | null;
+    }>;
+    const before = existing.map((r) => r.charter_id);
+
+    const targetKey = (c: string | null) => c ?? '__null__';
+    const targetSet = new Set(target.map(targetKey));
+    const existingSet = new Set(existing.map((r) => targetKey(r.charter_id)));
+
+    // DELETE rows whose charter isn't in the target set.
+    const toDelete = existing.filter((r) => !targetSet.has(targetKey(r.charter_id)));
+    if (toDelete.length > 0) {
+      const { error: delErr } = await this.ctx.supabase
+        .from('user_warehouse_assignments')
+        .delete()
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('user_id', params.userId)
+        .eq('warehouse_id', params.warehouseId)
+        .in(
+          'id',
+          toDelete.map((r) => r.id),
+        );
+      if (delErr) throw new ServiceError('internal_error', delErr.message);
+    }
+
+    // INSERT rows for target charters that don't already exist.
+    const toInsert = target.filter((c) => !existingSet.has(targetKey(c)));
+    if (toInsert.length > 0) {
+      const now = new Date().toISOString();
+      const { error: insErr } = await this.ctx.supabase
+        .from('user_warehouse_assignments')
+        .insert(
+          toInsert.map((charterId) => ({
+            organization_id: this.ctx.organizationId,
+            user_id: params.userId,
+            warehouse_id: params.warehouseId,
+            charter_id: charterId,
+            is_primary: false,
+            assigned_by: this.ctx.userId,
+            assigned_at: now,
+          })),
+        );
+      if (insErr) throw new ServiceError('internal_error', insErr.message);
+    }
+
+    // Ensure exactly one remaining row is flagged primary. Re-read the
+    // surviving rows; if none is primary, promote the first.
+    const { data: finalRows } = await this.ctx.supabase
+      .from('user_warehouse_assignments')
+      .select('id, charter_id, is_primary')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('user_id', params.userId)
+      .eq('warehouse_id', params.warehouseId)
+      .order('assigned_at', { ascending: true });
+    const surviving = (finalRows ?? []) as Array<{
+      id: string;
+      charter_id: string | null;
+      is_primary: boolean | null;
+    }>;
+    const primaryCandidate = surviving[0];
+    if (primaryCandidate && !surviving.some((r) => r.is_primary)) {
+      const { error: primErr } = await this.ctx.supabase
+        .from('user_warehouse_assignments')
+        .update({ is_primary: true })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', primaryCandidate.id);
+      if (primErr) throw new ServiceError('internal_error', primErr.message);
+    }
+
+    await audit(
+      {
+        event: 'user.warehouse.changed',
+        entityType: 'user',
+        entityId: params.userId,
+        warehouseId: params.warehouseId,
+        before: { charterIds: before },
+        after: { charterIds: target },
+      },
+      this.ctx,
+    );
+  }
 }
 
 /**
@@ -427,7 +649,7 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   const { data: invite, error: inviteErr } = await admin
     .from('organization_invites')
     .select(
-      'id, organization_id, email, role, expires_at, accepted_at, warehouse_id, charter_id, invited_by',
+      'id, organization_id, email, role, expires_at, accepted_at, warehouse_id, charter_id, charter_ids, invited_by',
     )
     .eq('token', token)
     .maybeSingle();
@@ -455,6 +677,15 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   const charterId = (invite.charter_id as string | null) ?? null;
   const now = new Date().toISOString();
 
+  // Charters to assign: prefer the multi list (charter_ids) if present;
+  // else the single charter_id; else [null] (= all-charters, today's
+  // behavior). One assignment row is created per entry below.
+  const inviteCharterIds: Array<string | null> = (
+    (invite.charter_ids as string[] | null) ?? []
+  ).filter(Boolean);
+  const charters: Array<string | null> =
+    inviteCharterIds.length > 0 ? inviteCharterIds : [charterId];
+
   // Create membership (idempotent on unique constraint).
   const { error: memberErr } = await admin
     .from('organization_members')
@@ -478,40 +709,49 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   // partial uniques per charter. If the exact (user, warehouse, charter) row
   // already exists we treat the invite as a no-op assignment.
   if (warehouseId) {
-    let existingQuery = admin
-      .from('user_warehouse_assignments')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('warehouse_id', warehouseId);
-    existingQuery =
-      charterId === null
-        ? existingQuery.is('charter_id', null)
-        : existingQuery.eq('charter_id', charterId);
-    const { data: existing } = await existingQuery.maybeSingle();
+    // One assignment row per charter. is_primary is set true only on the
+    // FIRST row we actually create (rest false). Best-effort per charter:
+    // a single insert failure is logged and skipped (membership already
+    // exists, an admin can repair assignments later).
+    let primaryAssigned = false;
+    for (const thisCharter of charters) {
+      let existingQuery = admin
+        .from('user_warehouse_assignments')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('warehouse_id', warehouseId);
+      existingQuery =
+        thisCharter === null
+          ? existingQuery.is('charter_id', null)
+          : existingQuery.eq('charter_id', thisCharter);
+      const { data: existing } = await existingQuery.maybeSingle();
 
-    if (!existing) {
-      const { error: assignErr } = await admin.from('user_warehouse_assignments').insert({
-        organization_id: orgId,
-        user_id: userId,
-        warehouse_id: warehouseId,
-        charter_id: charterId,
-        is_primary: true,
-        assigned_by: invite.invited_by as string | null,
-        assigned_at: now,
-      });
-      if (assignErr) {
-        console.error('[acceptInvite] failed to create warehouse assignment', assignErr);
-        // Non-fatal — membership exists, admin can fix assignment later.
-      } else {
-        await audit({
-          event: 'user.warehouse.changed',
-          entityType: 'user',
-          entityId: userId,
-          warehouseId,
-          after: { warehouseId, charterId },
+      if (!existing) {
+        const { error: assignErr } = await admin.from('user_warehouse_assignments').insert({
+          organization_id: orgId,
+          user_id: userId,
+          warehouse_id: warehouseId,
+          charter_id: thisCharter,
+          is_primary: !primaryAssigned,
+          assigned_by: invite.invited_by as string | null,
+          assigned_at: now,
         });
+        if (assignErr) {
+          console.error('[acceptInvite] failed to create warehouse assignment', assignErr);
+          // Non-fatal — membership exists, admin can fix assignment later.
+        } else {
+          primaryAssigned = true;
+        }
       }
     }
+
+    await audit({
+      event: 'user.warehouse.changed',
+      entityType: 'user',
+      entityId: userId,
+      warehouseId,
+      after: { warehouseId, charterIds: charters },
+    });
   }
 
   // Mark invite accepted.
@@ -540,6 +780,7 @@ export async function acceptInviteWithToken(token: string, userId: string) {
       role,
       warehouse_id: warehouseId,
       charter_id: charterId,
+      charter_ids: charters,
     },
   });
 

@@ -20,11 +20,13 @@ import {
   err,
   inviteMemberSchema,
   ok,
+  setMemberChartersSchema,
   updateMemberRoleSchema,
   type AcceptInviteInput,
   type ActionResult,
   type InviteMemberInput,
   type Role,
+  type SetMemberChartersInput,
   type UpdateMemberRoleInput,
 } from '@stockpilot/core';
 import { z } from 'zod';
@@ -63,6 +65,7 @@ export async function inviteMemberAction(
       organizationName: orgName,
       inviterName: inviter,
       charterId: parsed.data.charterId ?? null,
+      charterIds: parsed.data.charterIds,
       warehouseId: parsed.data.warehouseId ?? null,
       message: parsed.data.message,
     });
@@ -121,6 +124,32 @@ export async function removeMemberAction(memberId: string): Promise<ActionResult
   try {
     const svc = await TeamService.forCurrentUser();
     await svc.removeMember(parsed.data.memberId);
+    revalidatePath('/dashboard/team');
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/**
+ * Replaces the set of charters an existing member oversees for one
+ * warehouse. Empty `charterIds` = "all charters" (a single null-charter
+ * assignment row). Gated inside the service on `members:invite` (admin+).
+ */
+export async function setMemberChartersAction(
+  input: SetMemberChartersInput,
+): Promise<ActionResult<void>> {
+  const parsed = setMemberChartersSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  try {
+    const svc = await TeamService.forCurrentUser();
+    await svc.setMemberCharterAssignments({
+      userId: parsed.data.userId,
+      warehouseId: parsed.data.warehouseId,
+      charterIds: parsed.data.charterIds,
+    });
     revalidatePath('/dashboard/team');
     return ok(undefined);
   } catch (e) {
