@@ -7,8 +7,18 @@ TestFlight/App Store build.
 
 ```bash
 cd apps/mobile
-npx eas-cli@latest update --branch production --platform ios --message "what changed"
+EXPO_PUBLIC_API_URL=https://stockpilotusa.com \
+  npx eas-cli@latest update --branch production --platform ios --message "what changed"
 ```
+
+> **⚠️ ALWAYS set `EXPO_PUBLIC_API_URL` when publishing an OTA.** Unlike `eas
+> build` (which reads `env` from the `eas.json` build profile), `eas update`
+> bundles with YOUR shell's env. If it's unset, `app.config.ts` defaults
+> `extra.apiUrl` to `http://localhost:3000` and the bundle bakes localhost as the
+> API base — breaking EVERY API call (and the scan→`/orders/sign` URL) on prod
+> devices (`ERR_CONNECTION_FAILED` to `localhost:3000`). This bit us 2026-06-04.
+> `apps/mobile/src/lib/api.ts` now has a release-time guard (localhost → prod
+> fallback) as a safety net, but still set the env explicitly.
 
 The app auto-reloads on next launch (the OTA is fetched at startup). No store
 review, no native rebuild — but ONLY for JS/asset changes (see the native-safety
