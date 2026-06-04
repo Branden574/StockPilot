@@ -80,6 +80,8 @@ export interface ItemListFilters {
   charterIds?: string[];
   /** Optional filter for managers/admins. Ignored for warehouse-scoped users (forced). */
   warehouseId?: string | null;
+  /** Restrict to these item ids — used by 'export selected'. */
+  ids?: string[];
   /**
    * Filter by item_type. Common values:
    *   - 'product' (default for the inventory tab)
@@ -355,6 +357,12 @@ export class InventoryService {
       } else if (realIds.length > 0) {
         query = query.in('charter_id', realIds);
       }
+    }
+    // Additional narrowing for 'export selected'. This sits ON TOP of the
+    // warehouse-access scoping above, so a user still can't export items
+    // outside their RLS/warehouse access — ids only ever subtracts.
+    if (filters.ids && filters.ids.length > 0) {
+      query = query.in('id', filters.ids);
     }
     if (filters.outOfStock) query = query.lte('quantity_on_hand', 0);
     if (filters.hasUnitCost) {
