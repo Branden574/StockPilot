@@ -5,8 +5,10 @@ import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { BiometricLockScreen } from '@/components/biometric-lock-screen';
+import { ColdLaunchSplash } from '@/components/cold-launch-splash';
 import { MfaChallengeScreen } from '@/components/mfa-challenge-screen';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
+import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { initDb } from '@/lib/db';
 import '@/lib/location-task';
@@ -16,6 +18,11 @@ import { useOtaAutoReload } from '@/lib/use-ota-updates';
 import { usePushNotifications } from '@/lib/use-push-notifications';
 import { useSync } from '@/lib/use-sync';
 import { useTheme } from '@/lib/use-theme';
+
+// Flips true exactly once per JS runtime = once per COLD launch. A warm resume
+// from background does NOT reload this module, so the branded splash never
+// re-shows on resume — only on a true hard relaunch.
+let coldLaunchHandled = false;
 
 export default function RootLayout() {
   // Apply a freshly-published OTA on this launch (auto check + reload)
@@ -48,19 +55,49 @@ export default function RootLayout() {
   const fontsReady = useBrandFonts();
   const { mode, c } = useTheme();
 
+  // Cold-launch branded splash (fire-once). `isCold` is computed once; the
+  // splash overlays the app, then cross-dissolves to reveal whatever RootGate
+  // shows underneath (the Face-ID lock on a locked cold launch).
+  const [isCold] = React.useState(() => {
+    if (coldLaunchHandled) return false;
+    coldLaunchHandled = true;
+    return true;
+  });
+  const [splashVisible, setSplashVisible] = React.useState(isCold);
+  const [splashActive, setSplashActive] = React.useState(isCold);
+
   if (!fontsReady) {
     // Hold splash-style background until the three brand fonts are
     // resolved — avoids a flash of system fallback type which would
-    // shift every line of copy.
-    return <View style={{ flex: 1, backgroundColor: palette('light').paper }} />;
+    // shift every line of copy. On a cold launch use the splash's dark
+    // paper so there's no light flash before the (dark) branded splash.
+    return (
+      <View
+        style={{ flex: 1, backgroundColor: isCold ? '#0c0d0a' : palette('light').paper }}
+      />
+    );
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: c.paper }}>
+    <GestureHandlerRootView
+      style={{ flex: 1, backgroundColor: splashVisible ? '#0c0d0a' : c.paper }}
+    >
       <AuthProvider>
-        <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
-        <RootGate />
+        <StatusBar style={splashVisible || mode === 'dark' ? 'light' : 'dark'} />
+        <ColdLaunchGateProvider splashActive={splashActive}>
+          <RootGate />
+        </ColdLaunchGateProvider>
       </AuthProvider>
+
+      {/* Stacked ON TOP for a blank-frame-free crossfade: the splash fades its
+          own opacity to 0, revealing RootGate (incl. the Face-ID lock) which is
+          always rendered underneath. */}
+      {splashVisible ? (
+        <ColdLaunchSplash
+          onHandoff={() => setSplashActive(false)}
+          onDone={() => setSplashVisible(false)}
+        />
+      ) : null}
     </GestureHandlerRootView>
   );
 }
