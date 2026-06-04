@@ -2,40 +2,43 @@
 
 import * as React from 'react';
 
+import { BOOT_HANDOFF_KEY } from '@/lib/boot-handoff';
+
 /**
- * BootSplash — the desktop-web counterpart to the native cold-launch splash.
+ * BootSplash — the branded "entering StockPilot" screen, the desktop
+ * counterpart to the native cold-launch splash.
  *
- * On a GENUINE cold load / hard reload of the dashboard it holds a ~2.0s branded
- * boot screen (the "S" mark draws on, the wordmark rises, a mono status steps
- * CONNECTING → RESTORING SESSION → SYNCING INVENTORY → WORKSPACE READY with a
- * 00→100% counter and a hairline mint progress bar) and then cross-dissolves
- * (~500ms) to reveal the dashboard underneath.
+ * It plays in exactly two moments and NOWHERE else:
+ *   1. The FIRST load of the landing page (stockpilotusa.com `/`).
+ *   2. After an app-entry CTA ("Open app" / "Sign in") sets a one-shot handoff
+ *      flag — so it covers the transition into the app (and persists across the
+ *      sign-in → dashboard redirect, since it lives in the ROOT layout).
  *
- * Wiring guarantees (see DashboardShell):
- *  - The splash is an OVERLAY on top of the already-rendered app. The dashboard
- *    shell mounts/hydrates BEHIND it during the 2s, so the moment the overlay
- *    clears the workspace is ready. We never gate the app's visibility on the
- *    animation loop — an instant skip just fades this overlay's opacity to 0.
- *  - Cold-load-only: a per-document `window` flag + Navigation Timing check means
- *    it fires once per real page load, never on client-side route changes.
- *  - It is SSR-rendered (deterministic first frame) so it covers the very first
- *    paint on a cold load with no hydration mismatch; on a warm in-app mount a
- *    pre-paint layout effect removes it before the browser paints (no flash).
- *  - Theme-aware via CSS tokens (bg-background / --ink / --accent) — follows the
- *    same light/dark theme as the rest of the app.
- *  - Respects prefers-reduced-motion (static mark + filled bar, short hold, fade).
+ * It deliberately does NOT play on a refresh of any page, on a direct/bookmarked
+ * dashboard load, or on client-side route changes. (A regular refresh and a hard
+ * refresh are indistinguishable in the browser — both are navigation.type
+ * 'reload' — so we simply never treat a reload as a trigger.)
+ *
+ * Wiring guarantees:
+ *  - Renders null on the server / first client render, then a pre-paint layout
+ *    effect decides whether to play — so a refresh never flashes the splash and
+ *    there is no hydration mismatch.
+ *  - When it does play it overlays the app and cross-dissolves via opacity; the
+ *    app underneath is never gated on the animation (tap anywhere or SKIP to
+ *    hand off instantly). An authoritative timer guarantees it can't hang.
+ *  - Theme-aware via CSS tokens; respects prefers-reduced-motion.
  */
 
 /** Total branded hold before the cross-dissolve begins. */
 export const LOADING_MS = 2000;
-/** Cross-dissolve duration from boot screen → dashboard. */
+/** Cross-dissolve duration from boot screen → app. */
 export const CROSSFADE_MS = 500;
 /** Under reduced motion we skip the timeline and hold the settled frame briefly. */
 const REDUCED_HOLD_MS = 1100;
 /**
- * A cold load mounts the shell within a few seconds of the document starting.
- * A warm in-app navigation (e.g. marketing → dashboard after browsing) mounts
- * it much later, so we only treat a fresh-enough document as a cold load.
+ * A genuine first load mounts within a few seconds of the document starting; a
+ * stale soft-nav into the landing mounts much later, so we bound the landing
+ * trigger by document age.
  */
 const COLD_LOAD_MAX_AGE_MS = 8000;
 
@@ -49,30 +52,29 @@ const easeOutBack = (x: number) => {
 const useIsomorphicLayoutEffect =
   typeof window !== 'undefined' ? React.useLayoutEffect : React.useEffect;
 
-declare global {
-  interface Window {
-    __spBootConsumed?: boolean;
-  }
-}
-
 /**
- * True only when StockPilot is FIRST loaded — opening the app, a fresh tab, an
- * external link, or the post-login document load. Deliberately NOT on refresh:
- * `navigation.type` is 'reload' for BOTH a regular refresh (Cmd+R) and a hard
- * refresh (Cmd+Shift+R) — browsers expose no way to tell them apart (the only
- * difference is HTTP-cache bypass) — so to keep the splash off regular refreshes
- * we skip ALL reloads and only honor a true first navigation ('navigate').
- * 'back_forward' (bfcache) and soft client navs are excluded too. Marks the
- * document consumed so a (defensive) remount never re-shows.
+ * Decide whether the splash should play on this mount:
+ *   - handoff flag present  → an app-entry CTA was clicked (consume + play)
+ *   - else first load of `/` → the landing page just loaded fresh (play)
+ *   - else                  → don't play (refresh, direct load, soft nav, …)
  */
-function detectColdLoad(): boolean {
+function shouldPlay(): boolean {
   if (typeof window === 'undefined') return false;
-  if (window.__spBootConsumed) return false;
+  try {
+    if (window.sessionStorage.getItem(BOOT_HANDOFF_KEY)) {
+      window.sessionStorage.removeItem(BOOT_HANDOFF_KEY);
+      return true;
+    }
+  } catch {
+    // sessionStorage may throw in hardened privacy modes — fall through.
+  }
   const nav = performance.getEntriesByType('navigation')[0] as
     | PerformanceNavigationTiming
     | undefined;
-  const freshDocument = nav?.type === 'navigate' && performance.now() < COLD_LOAD_MAX_AGE_MS;
-  return freshDocument;
+  const isLanding = window.location.pathname === '/';
+  // 'navigate' = genuine first load. NOT 'reload' (any refresh) or
+  // 'back_forward' (bfcache).
+  return isLanding && nav?.type === 'navigate' && performance.now() < COLD_LOAD_MAX_AGE_MS;
 }
 
 /**
@@ -135,7 +137,7 @@ function BootMark({ size, p }: { size: number; p: number }) {
 }
 
 export interface BootSplashProps {
-  /** Workspace name shown in the chip — the real org, not a placeholder. */
+  /** Workspace name shown in the chip. Defaults to "StockPilot". */
   workspaceName?: string;
   /** Fired once when the boot finishes (after the cross-dissolve), incl. skips. */
   onComplete?: () => void;
@@ -143,10 +145,13 @@ export interface BootSplashProps {
   onSkip?: () => void;
 }
 
-type Phase = 'boot' | 'leaving' | 'done';
+type Phase = 'pending' | 'boot' | 'leaving' | 'done';
 
 export function BootSplash({ workspaceName, onComplete, onSkip }: BootSplashProps) {
-  const [phase, setPhase] = React.useState<Phase>('boot');
+  // 'pending' renders null (SSR + first client render) so a refresh never
+  // flashes the splash and hydration matches; the layout effect promotes it to
+  // 'boot' only when it should actually play.
+  const [phase, setPhase] = React.useState<Phase>('pending');
   const [t, setT] = React.useState(0);
   const [reduceMotion, setReduceMotion] = React.useState(false);
 
@@ -154,6 +159,7 @@ export function BootSplash({ workspaceName, onComplete, onSkip }: BootSplashProp
   const startRef = React.useRef<number | null>(null);
   const leftRef = React.useRef(false);
   const finishedRef = React.useRef(false);
+  const decisionRef = React.useRef<boolean | null>(null);
   const leaveTimerRef = React.useRef<number | null>(null);
   // Hold the latest callbacks in refs so the timeline effect doesn't re-run when
   // a parent re-renders with new closures. Synced in an effect (not during
@@ -198,12 +204,15 @@ export function BootSplash({ workspaceName, onComplete, onSkip }: BootSplashProp
   );
 
   useIsomorphicLayoutEffect(() => {
-    // Warm / soft-nav mount → remove before the browser paints (no flash).
-    if (!detectColdLoad()) {
+    // Decide ONCE and cache it, so React StrictMode's dev double-invoke reuses
+    // the verdict instead of re-reading/consuming the one-shot handoff flag —
+    // but rebuild the timeline on every invoke so the animation still runs.
+    if (decisionRef.current === null) decisionRef.current = shouldPlay();
+    if (!decisionRef.current) {
       setPhase('done');
       return;
     }
-    window.__spBootConsumed = true;
+    setPhase('boot');
 
     const reduced =
       typeof window.matchMedia === 'function' &&
@@ -232,7 +241,7 @@ export function BootSplash({ workspaceName, onComplete, onSkip }: BootSplashProp
     };
   }, [beginLeave]);
 
-  if (phase === 'done') return null;
+  if (phase === 'pending' || phase === 'done') return null;
 
   // Under reduced motion, render the settled end-frame.
   const tt = reduceMotion ? LOADING_MS : t;
