@@ -35,8 +35,8 @@ export function StatCard({
         {label}
       </div>
 
-      <div className="flex items-end justify-between gap-3">
-        <p className="font-display text-[32px] font-medium tabular-nums leading-[1.05] tracking-[-0.025em]">
+      <div className="flex min-w-0 items-end justify-between gap-3">
+        <p className="font-display min-w-0 truncate text-[32px] font-medium tabular-nums leading-[1.05] tracking-[-0.025em]">
           {value}
         </p>
         {series && series.length > 1 && (
