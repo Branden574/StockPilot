@@ -3,14 +3,13 @@ import { NextResponse } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { csvFilename, toCsv } from '@/lib/csv';
 import { reportError } from '@/lib/error-reporter';
+import {
+  buildInventoryExportRows,
+  type InventoryExportFilters,
+} from '@/lib/inventory-export';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
-import { CategoriesService } from '@/server/services/categories';
-import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
-import { InventoryService, type ItemListSort } from '@/server/services/inventory';
-import { LocationsService } from '@/server/services/locations';
-import { SuppliersService } from '@/server/services/suppliers';
-import { WarehousesService } from '@/server/services/warehouses';
+import { type ItemListSort } from '@/server/services/inventory';
 
 import { hasPermission } from '@stockpilot/core';
 
@@ -39,34 +38,6 @@ const VALID_TYPES = new Set(['product', 'book', 'asset', 'consumable', 'all']);
 // string cell across every CSV export gets the guard automatically;
 // callers no longer need to remember.
 
-const HEADERS = [
-  'name',
-  'sku',
-  'barcode',
-  'item_type',
-  'status',
-  'quantity_on_hand',
-  'reorder_point',
-  'reorder_quantity',
-  'unit_cost',
-  'retail_price',
-  'category',
-  'primary_location',
-  'supplier',
-  'warehouse',
-  'charter',
-  'tracking_type',
-  'author',
-  'isbn',
-  'grade',
-  'rack_number',
-  'rack_row',
-  'crate_color',
-  'crate_number',
-  'created_at',
-  'updated_at',
-] as const;
-
 export async function GET(request: Request) {
   try {
     const ctx = await withApiContext(request);
@@ -88,17 +59,19 @@ export async function GET(request: Request) {
 
     // For scope=all we ignore q/status/stock/sort/cat/loc, but we keep
     // itemType so the books-tab "Export all" doesn't dump products.
-    const list = await new InventoryService(ctx).list({
-      itemType,
-      limit: ROW_CAP,
-      ...(scope === 'filtered'
+    const filters: InventoryExportFilters | undefined =
+      scope === 'filtered'
         ? {
             q: params.get('q') ?? undefined,
             status: VALID_STATUS.has(params.get('status') ?? '')
               ? (params.get('status') as 'active' | 'archived' | 'discontinued' | 'all')
               : 'active',
-            lowStock: params.get('stock') === 'low',
-            outOfStock: params.get('stock') === 'out',
+            stock:
+              params.get('stock') === 'low'
+                ? 'low'
+                : params.get('stock') === 'out'
+                  ? 'out'
+                  : null,
             sort: VALID_SORTS.has(params.get('sort') as ItemListSort)
               ? (params.get('sort') as ItemListSort)
               : 'updated_desc',
@@ -106,75 +79,19 @@ export async function GET(request: Request) {
             locationIds: params.getAll('loc').filter(Boolean),
             warehouseId: await getActiveWarehouseFilter(),
           }
-        : { status: 'active' as const }),
-    });
+        : undefined;
 
-    // Lookup tables for human-readable id → name.
-    const [categories, locations, suppliers, warehouses, charters] = await Promise.all([
-      new CategoriesService(ctx).list(),
-      new LocationsService(ctx).list(),
-      new SuppliersService(ctx).list(),
-      new WarehousesService(ctx).list(),
-      new ChartersService(ctx).list(),
-    ]);
+    const result = await buildInventoryExportRows(ctx, { scope, itemType, filters });
 
-    const catMap = new Map(categories.map((c) => [c.id as string, c.name as string]));
-    const locMap = new Map(locations.map((l) => [l.id as string, l.name as string]));
-    const supMap = new Map(suppliers.map((s) => [s.id as string, s.name as string]));
-    const whMap = new Map(warehouses.map((w) => [w.id as string, w.name as string]));
-    const chMap = new Map(charters.map((c) => [c.id as string, c.name as string]));
-
-    const rows = list.items.map((i) => {
-      const cf = (i.custom_fields ?? {}) as Record<string, unknown>;
-      const str = (k: string) => {
-        const v = cf[k];
-        return v == null ? '' : String(v);
-      };
-      return {
-        name: i.name,
-        sku: i.sku,
-        barcode: i.barcode ?? '',
-        item_type: i.item_type,
-        status: i.status,
-        quantity_on_hand: i.quantity_on_hand,
-        reorder_point: i.reorder_point,
-        reorder_quantity: (i as unknown as { reorder_quantity?: number }).reorder_quantity ?? 0,
-        unit_cost: i.unit_cost,
-        retail_price: i.retail_price,
-        category: i.category_id ? (catMap.get(i.category_id) ?? '') : '',
-        primary_location: i.primary_location_id ? (locMap.get(i.primary_location_id) ?? '') : '',
-        supplier: i.supplier_id ? (supMap.get(i.supplier_id) ?? '') : '',
-        warehouse: i.warehouse_id ? (whMap.get(i.warehouse_id) ?? '') : '',
-        charter: i.charter_id ? (chMap.get(i.charter_id) ?? '') : '',
-        tracking_type: i.tracking_type,
-        author: str('author'),
-        // For books, ISBN is the barcode — the form labels the same column
-        // "ISBN" for books and "Barcode" otherwise, and bulk imports
-        // store the ISBN at inventory_items.barcode. The custom_fields
-        // keys are legacy fallbacks from older imports.
-        isbn:
-          i.item_type === 'book'
-            ? (i.barcode ?? '') || str('isbn') || str('isbn13') || str('isbn10')
-            : '',
-        grade: str('book_grade'),
-        rack_number: str('book_rack_number'),
-        rack_row: str('book_rack_row'),
-        crate_color: str('book_crate_color'),
-        crate_number: str('book_crate_number'),
-        created_at: i.created_at,
-        updated_at: i.updated_at,
-      };
-    });
-
-    let body = toCsv([...HEADERS], rows);
+    let body = toCsv([...result.headers], result.rows);
 
     // Sentinel row when the cap clipped the result — user can re-export
     // with narrower filters to get the rest.
-    if (list.total > rows.length) {
-      body += `\n# truncated at ${ROW_CAP} rows of ${list.total}`;
+    if (result.truncated) {
+      body += `\n# truncated at ${ROW_CAP} rows of ${result.total}`;
     }
 
-    const slug = itemType === 'book' ? 'books' : 'inventory';
+    const slug = result.slug;
     const suffix = scope === 'all' ? 'all' : 'filtered';
     return new NextResponse(body, {
       status: 200,

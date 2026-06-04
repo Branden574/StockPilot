@@ -1,0 +1,117 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const listMock = vi.fn();
+const categoriesList = vi.fn();
+const locationsList = vi.fn();
+const suppliersList = vi.fn();
+const warehousesList = vi.fn();
+const chartersList = vi.fn();
+
+vi.mock('@/server/services/inventory', () => ({
+  InventoryService: vi.fn().mockImplementation(() => ({ list: listMock })),
+}));
+vi.mock('@/server/services/categories', () => ({
+  CategoriesService: vi.fn().mockImplementation(() => ({ list: categoriesList })),
+}));
+vi.mock('@/server/services/locations', () => ({
+  LocationsService: vi.fn().mockImplementation(() => ({ list: locationsList })),
+}));
+vi.mock('@/server/services/suppliers', () => ({
+  SuppliersService: vi.fn().mockImplementation(() => ({ list: suppliersList })),
+}));
+vi.mock('@/server/services/warehouses', () => ({
+  WarehousesService: vi.fn().mockImplementation(() => ({ list: warehousesList })),
+}));
+vi.mock('@/server/services/charters', () => ({
+  ChartersService: vi.fn().mockImplementation(() => ({ list: chartersList })),
+}));
+
+import { InventoryService } from '@/server/services/inventory';
+import { CategoriesService } from '@/server/services/categories';
+import { LocationsService } from '@/server/services/locations';
+import { SuppliersService } from '@/server/services/suppliers';
+import { WarehousesService } from '@/server/services/warehouses';
+import { ChartersService } from '@/server/services/charters';
+import { buildInventoryExportRows, INVENTORY_EXPORT_HEADERS } from './inventory-export';
+
+const ctx = {} as never;
+
+const sampleItem = {
+  id: 'i1',
+  name: 'Lenovo 300e',
+  sku: 'SP-1',
+  barcode: 'BC1',
+  item_type: 'product',
+  status: 'active',
+  quantity_on_hand: 100,
+  reorder_point: 5,
+  unit_cost: 10,
+  retail_price: 20,
+  category_id: 'c1',
+  primary_location_id: 'l1',
+  supplier_id: 's1',
+  warehouse_id: 'w1',
+  charter_id: 'ch1',
+  tracking_type: 'none',
+  custom_fields: {},
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-02T00:00:00Z',
+};
+
+beforeEach(() => {
+  vi.mocked(InventoryService).mockImplementation(() => ({ list: listMock }) as never);
+  vi.mocked(CategoriesService).mockImplementation(() => ({ list: categoriesList }) as never);
+  vi.mocked(LocationsService).mockImplementation(() => ({ list: locationsList }) as never);
+  vi.mocked(SuppliersService).mockImplementation(() => ({ list: suppliersList }) as never);
+  vi.mocked(WarehousesService).mockImplementation(() => ({ list: warehousesList }) as never);
+  vi.mocked(ChartersService).mockImplementation(() => ({ list: chartersList }) as never);
+  listMock.mockReset();
+  categoriesList.mockReset();
+  locationsList.mockReset();
+  suppliersList.mockReset();
+  warehousesList.mockReset();
+  chartersList.mockReset();
+  listMock.mockResolvedValue({ items: [sampleItem], total: 1 });
+  categoriesList.mockResolvedValue([{ id: 'c1', name: 'Electronics' }]);
+  locationsList.mockResolvedValue([{ id: 'l1', name: 'DC4' }]);
+  suppliersList.mockResolvedValue([{ id: 's1', name: 'Acme' }]);
+  warehousesList.mockResolvedValue([{ id: 'w1', name: 'North WH' }]);
+  chartersList.mockResolvedValue([{ id: 'ch1', name: 'Visalia' }]);
+});
+
+describe('buildInventoryExportRows', () => {
+  it('maps a row with the canonical headers and resolved lookup names', async () => {
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'all' });
+    expect(res.headers).toEqual([...INVENTORY_EXPORT_HEADERS]);
+    expect(res.rows).toHaveLength(1);
+    const r = res.rows[0]!;
+    expect(r.name).toBe('Lenovo 300e');
+    expect(r.category).toBe('Electronics');
+    expect(r.primary_location).toBe('DC4');
+    expect(r.supplier).toBe('Acme');
+    expect(r.warehouse).toBe('North WH');
+    expect(r.charter).toBe('Visalia');
+    expect(res.total).toBe(1);
+    expect(res.truncated).toBe(false);
+  });
+
+  it('FAILS CLOSED when a lookup throws — the export still returns the row, that column blank', async () => {
+    suppliersList.mockRejectedValueOnce(new Error('module_disabled: suppliers'));
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'all' });
+    expect(res.rows).toHaveLength(1);
+    const r = res.rows[0]!;
+    expect(r.supplier).toBe(''); // blanked, not a crash
+    expect(r.category).toBe('Electronics'); // others unaffected
+  });
+
+  it('passes ids through for scope=selected', async () => {
+    await buildInventoryExportRows(ctx, { scope: 'selected', itemType: 'all', ids: ['i1', 'i2'] });
+    expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ ids: ['i1', 'i2'] }));
+  });
+
+  it('marks truncated when total exceeds returned rows', async () => {
+    listMock.mockResolvedValueOnce({ items: [sampleItem], total: 99999 });
+    const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'all' });
+    expect(res.truncated).toBe(true);
+  });
+});
