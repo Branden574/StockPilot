@@ -1,5 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
+import * as WebBrowser from 'expo-web-browser';
 import { useRouter } from 'expo-router';
 import { X } from 'lucide-react-native';
 import * as React from 'react';
@@ -19,7 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AddBookCard, type IsbnLookupResult } from '@/components/AddBookCard';
 import { AddItemCard, type UpcLookupResult } from '@/components/AddItemCard';
 import { CachedImage } from '@/components/ui/cached-image';
-import { api } from '@/lib/api';
+import { api, API_BASE } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
@@ -54,6 +55,18 @@ function parseItemId(scanned: string): string | null {
   const match = scanned.match(
     /\/(?:p\/items|dashboard\/(?:inventory|books))\/([0-9a-f-]{36})/i,
   );
+  return match?.[1] ?? null;
+}
+
+/**
+ * Pulls the signature token out of a scanned WAREHOUSE PACKING-SLIP QR.
+ * That QR encodes `<origin>/orders/sign/<token>` — a public, token-scoped
+ * proof-of-delivery signature page. Returns the token, or null for any other
+ * scanned value (item labels, plain barcodes, ISBNs). Without this, the URL
+ * fell through to the UPC lookup and opened the "add item" card by mistake.
+ */
+function parseSignToken(scanned: string): string | null {
+  const match = scanned.match(/\/orders\/sign\/([A-Za-z0-9._~-]+)/);
   return match?.[1] ?? null;
 }
 
@@ -202,6 +215,27 @@ export default function Scan() {
     setLastCode(data);
     setBusy(true);
     setScanning(false);
+
+    // Warehouse packing-slip QR → the public proof-of-delivery signature page.
+    // Open it in an in-app browser so the recipient signs INSIDE StockPilot,
+    // instead of falling through to the item/UPC lookup (which mistook the
+    // signature URL for an unknown product and opened the "add item" card).
+    // Build the URL from our own API_BASE + the extracted token so a spoofed
+    // QR can't redirect the in-app browser to another host.
+    const signToken = parseSignToken(data);
+    if (signToken) {
+      try {
+        await WebBrowser.openBrowserAsync(`${API_BASE}/orders/sign/${signToken}`);
+      } catch (e) {
+        Alert.alert(
+          'Could not open signature',
+          e instanceof Error ? e.message : 'Please try again.',
+        );
+      }
+      reset();
+      setBusy(false);
+      return;
+    }
 
     // QR code from a printed StockPilot label encodes a URL with
     // /dashboard/inventory/<id> — pull the id out and load by id
