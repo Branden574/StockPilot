@@ -34,6 +34,17 @@ export function formatRelative(date: Date | string, now: Date = new Date()) {
   return '';
 }
 
+/** Short calendar date, e.g. "Apr 18". Returns "—" for null/invalid input. */
+export function formatDateShort(
+  date: Date | string | null | undefined,
+  locale = 'en-US',
+) {
+  if (!date) return '—';
+  const d = typeof date === 'string' ? new Date(date) : date;
+  if (Number.isNaN(d.getTime())) return '—';
+  return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(d);
+}
+
 export function slugify(input: string) {
   return input
     .toLowerCase()

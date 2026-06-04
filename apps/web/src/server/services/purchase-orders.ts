@@ -88,24 +88,60 @@ export class PurchaseOrdersService {
       ? 'destination:locations!destination_location_id!inner (warehouse_id)'
       : 'destination:locations!destination_location_id (warehouse_id)';
 
-    let query = this.ctx.supabase
-      .from('purchase_orders')
-      .select(
-        `id, po_number, status, supplier_id, destination_location_id, expected_at, total, created_at, updated_at, ${destEmbed}`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .order('created_at', { ascending: false });
+    if (!access.hasAllAccess && access.readableIds.length === 0) return [];
 
-    if (!access.hasAllAccess) {
-      if (access.readableIds.length === 0) return [];
-      query = query.in('destination.warehouse_id', access.readableIds);
-    } else if (params.warehouseId) {
-      query = query.eq('destination.warehouse_id', params.warehouseId);
-    }
+    type PoListRow = {
+      id: string;
+      po_number: string;
+      status: string;
+      supplier_id: string | null;
+      destination_location_id: string | null;
+      expected_at: string | null;
+      ordered_at: string | null;
+      received_at: string | null;
+      total: number;
+      created_at: string;
+      updated_at: string;
+      destination?: unknown;
+      purchase_order_items?: Array<{ count: number }>;
+    };
 
-    const { data, error } = await query;
-    if (error) throw new ServiceError('internal_error', error.message);
-    return data ?? [];
+    // Paginate the FULL rowset rather than relying on PostgREST's 1000-row cap,
+    // so the page's in-memory stat aggregation (open count, committed value,
+    // lead time, …) stays accurate at any PO volume (repo rule: paginate every
+    // aggregation SELECT). The stable secondary `.order('id')` is required for
+    // window correctness. `purchase_order_items(count)` is an embedded
+    // aggregate (RLS-scoped) giving the LINES column without an N+1;
+    // `ordered_at`/`received_at` feed the placed/lead-time stats.
+    const rows = await fetchAllRows<PoListRow>((from, to) => {
+      let query = this.ctx.supabase
+        .from('purchase_orders')
+        .select(
+          `id, po_number, status, supplier_id, destination_location_id, expected_at, ordered_at, received_at, total, created_at, updated_at, ${destEmbed}, purchase_order_items(count)`,
+        )
+        .eq('organization_id', this.ctx.organizationId);
+      if (!access.hasAllAccess) {
+        query = query.in('destination.warehouse_id', access.readableIds);
+      } else if (params.warehouseId) {
+        query = query.eq('destination.warehouse_id', params.warehouseId);
+      }
+      return query
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{
+        data: PoListRow[] | null;
+        error: { message: string } | null;
+      }>;
+    });
+
+    // Normalize the embedded `purchase_order_items(count)` shape (PostgREST
+    // returns `[{ count: N }]`) into a flat `line_count` number.
+    return rows.map((row) => {
+      const line_count = Array.isArray(row.purchase_order_items)
+        ? (row.purchase_order_items[0]?.count ?? 0)
+        : 0;
+      return { ...row, line_count };
+    });
   }
 
   async get(id: string) {
