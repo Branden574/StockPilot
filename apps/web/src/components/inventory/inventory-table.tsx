@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/image-hover-preview';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { downloadInventoryExport, type InventoryExportRequest } from '@/lib/download-export';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
 import { getCrateColor, readBookStorage, readItemRack } from '@/lib/book-storage';
@@ -1336,20 +1337,68 @@ function MultiSelectFilter({
   );
 }
 
+const EXPORT_FORMATS: Array<{ format: 'csv' | 'xlsx' | 'pdf'; label: string }> = [
+  { format: 'xlsx', label: 'Excel' },
+  { format: 'pdf', label: 'PDF' },
+  { format: 'csv', label: 'CSV' },
+];
+
+function ExportFormatRow({
+  busy,
+  onPick,
+}: {
+  busy: boolean;
+  onPick: (format: 'csv' | 'xlsx' | 'pdf') => void;
+}) {
+  return (
+    <div className="mt-1 flex gap-1">
+      {EXPORT_FORMATS.map((f) => (
+        <button
+          key={f.format}
+          type="button"
+          disabled={busy}
+          onClick={() => onPick(f.format)}
+          className="flex-1 rounded-sm border border-border bg-background px-2 py-1 text-[11px] font-medium transition-colors hover:bg-muted disabled:opacity-50"
+        >
+          {f.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: string }) {
   const [open, setOpen] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
 
-  // "Export filtered" carries every active param verbatim (q, sort, cat[],
-  // loc[], stock, status, etc.) plus scope=filtered.
-  const filteredParams = new URLSearchParams(params.toString());
-  filteredParams.set('scope', 'filtered');
-  // Drop the page param — exports aren't paginated.
-  filteredParams.delete('page');
+  const itemTypeArg = itemType as InventoryExportRequest['itemType'];
 
-  // "Export all" only sends type + scope=all. Server ignores everything else.
-  const allParams = new URLSearchParams();
-  allParams.set('type', itemType);
-  allParams.set('scope', 'all');
+  // "filtered" carries the active params (q, sort, cat[], loc[], stock, status).
+  const filtersFromParams = (): InventoryExportRequest['filters'] => ({
+    q: params.get('q') || undefined,
+    status: (params.get('status') as 'active' | 'archived' | 'discontinued' | 'all') || undefined,
+    stock: (params.get('stock') as 'low' | 'out') || null,
+    sort: params.get('sort') || undefined,
+    categoryIds: params.getAll('cat').filter(Boolean),
+    locationIds: params.getAll('loc').filter(Boolean),
+  });
+
+  async function run(scope: 'filtered' | 'all', format: 'csv' | 'xlsx' | 'pdf') {
+    setBusy(true);
+    try {
+      await downloadInventoryExport({
+        format,
+        scope,
+        itemType: itemTypeArg,
+        ...(scope === 'filtered' ? { filters: filtersFromParams() } : {}),
+      });
+      setOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Export failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -1364,30 +1413,22 @@ function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: s
           <ChevronDown className="h-3 w-3 text-[var(--ed-ink-4)]" />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[220px] p-1">
-        <div className="flex flex-col">
-          <a
-            href={`/api/inventory/export.csv?${filteredParams.toString()}`}
-            download
-            onClick={() => setOpen(false)}
-            className="rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-muted"
-          >
-            <div className="font-medium">Export filtered</div>
-            <div className="text-[11px] text-[var(--ed-ink-4)]">
-              CSV of what's currently visible
+      <PopoverContent align="end" className="w-[240px] p-2">
+        <div className="flex flex-col gap-3">
+          <div>
+            <div className="px-0.5 text-[12.5px] font-medium">Export filtered</div>
+            <div className="px-0.5 text-[11px] text-[var(--ed-ink-4)]">
+              What's currently visible
             </div>
-          </a>
-          <a
-            href={`/api/inventory/export.csv?${allParams.toString()}`}
-            download
-            onClick={() => setOpen(false)}
-            className="rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-muted"
-          >
-            <div className="font-medium">Export all</div>
-            <div className="text-[11px] text-[var(--ed-ink-4)]">
+            <ExportFormatRow busy={busy} onPick={(f) => run('filtered', f)} />
+          </div>
+          <div>
+            <div className="px-0.5 text-[12.5px] font-medium">Export all</div>
+            <div className="px-0.5 text-[11px] text-[var(--ed-ink-4)]">
               Full {itemType === 'book' ? 'books' : 'inventory'} dump
             </div>
-          </a>
+            <ExportFormatRow busy={busy} onPick={(f) => run('all', f)} />
+          </div>
         </div>
       </PopoverContent>
     </Popover>
