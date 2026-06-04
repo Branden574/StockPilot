@@ -2,7 +2,6 @@
 
 import * as React from 'react';
 
-import { BootSplash } from '@/components/dashboard/boot-splash';
 import { CommandPalette } from '@/components/dashboard/command-palette';
 import { EdgeSwipeOpener } from '@/components/dashboard/edge-swipe-opener';
 import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
@@ -212,15 +211,6 @@ export function DashboardShell({
       <VersionNotifier />
       <CommandPalette />
       <KeyboardShortcutsProvider />
-
-      {/*
-        Branded cold-load boot screen. Rendered LAST (on top) as a fixed overlay
-        that cross-dissolves to reveal the shell underneath — the shell mounts /
-        hydrates behind it during the hold, so nothing is gated on the splash's
-        animation. Self-managing: shows once per genuine page load, then renders
-        null (never on client-side route changes). See BootSplash for details.
-      */}
-      <BootSplash workspaceName={organizationName} />
     </div>
   );
 }

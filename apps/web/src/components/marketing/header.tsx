@@ -7,6 +7,7 @@ import * as React from 'react';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { IconMark } from '@/components/ui/icon-mark';
+import { requestBootSplash } from '@/lib/boot-handoff';
 import { cn } from '@/lib/utils';
 
 // Internal-company tool — no public pricing/customer pages. The marketing
@@ -51,14 +52,19 @@ export function MarketingHeader() {
         <div className="ml-auto flex items-center gap-2">
           <div className="hidden items-center gap-2 md:flex">
             <ThemeToggle />
+            {/* Plain anchors (not <Link>): a full navigation re-mounts the root
+                layout at /signin so the branded BootSplash plays once on app
+                entry. requestBootSplash() arms it just before navigating. */}
             <Button asChild variant="ghost" size="sm">
-              <Link href="/signin">Sign in</Link>
+              <a href="/signin" onClick={requestBootSplash}>
+                Sign in
+              </a>
             </Button>
             <Button asChild size="sm" className="gap-1.5">
-              <Link href="/signin">
+              <a href="/signin" onClick={requestBootSplash}>
                 Open app
                 <ArrowRight className="h-3 w-3" />
-              </Link>
+              </a>
             </Button>
           </div>
           <Button
@@ -88,7 +94,15 @@ export function MarketingHeader() {
             ))}
             <div className="mt-2 flex gap-2">
               <Button asChild size="sm" className="flex-1">
-                <Link href="/signin">Sign in</Link>
+                <a
+                  href="/signin"
+                  onClick={() => {
+                    requestBootSplash();
+                    setMobileOpen(false);
+                  }}
+                >
+                  Sign in
+                </a>
               </Button>
             </div>
           </div>

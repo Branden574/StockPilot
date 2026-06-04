@@ -10,9 +10,7 @@ import {
   MapPin,
   Users,
 } from 'lucide-react';
-import Link from 'next/link';
-
-import { Button } from '@/components/ui/button';
+import { AppEntryButton } from '@/components/marketing/app-entry-button';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
 import { SAMPLE_ITEMS } from '@/components/marketing/sample-data';
@@ -34,17 +32,13 @@ export function Hero() {
         </p>
 
         <div className="mt-7 flex flex-wrap items-center justify-center gap-2">
-          <Button asChild size="lg" className="gap-1.5">
-            <Link href="/signin">
-              Sign in to your workspace <ArrowRight className="h-3 w-3" />
-            </Link>
-          </Button>
-          <Button asChild variant="outline" size="lg" className="gap-1.5">
-            <Link href="/signin">
-              <BookOpen className="h-3 w-3" />
-              Need access? Ask your admin
-            </Link>
-          </Button>
+          <AppEntryButton className="gap-1.5">
+            Sign in to your workspace <ArrowRight className="h-3 w-3" />
+          </AppEntryButton>
+          <AppEntryButton variant="outline" className="gap-1.5">
+            <BookOpen className="h-3 w-3" />
+            Need access? Ask your admin
+          </AppEntryButton>
         </div>
 
         <div className="mx-auto mt-10 max-w-[1080px]">
