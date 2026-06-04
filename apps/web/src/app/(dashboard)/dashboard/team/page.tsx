@@ -122,6 +122,8 @@ export default async function TeamPage() {
           email: m.user?.email ?? '—',
           fullName: m.user?.full_name ?? null,
           avatarUrl: m.user?.avatar_url ?? null,
+          warehouseId: m.warehouse_id,
+          charterIds: m.charter_ids,
         }))}
         pendingInvites={invites.map((i) => ({
           id: i.id as string,

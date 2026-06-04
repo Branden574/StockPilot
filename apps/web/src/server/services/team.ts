@@ -37,7 +37,8 @@ export class TeamService {
       .eq('organization_id', this.ctx.organizationId)
       .order('created_at', { ascending: true });
     if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []).map((m: Record<string, unknown>) => {
+
+    const members = (data ?? []).map((m: Record<string, unknown>) => {
       const userField = m.user;
       const userObj = Array.isArray(userField) ? userField[0] : userField;
       return {
@@ -56,8 +57,64 @@ export class TeamService {
                 avatar_url: ((userObj as { avatar_url?: string | null }).avatar_url ?? null) as string | null,
               }
             : null,
+        // Populated below from user_warehouse_assignments. A member's charters
+        // are warehouse-scoped, so each member surfaces a single primary
+        // warehouse + the charter_ids they oversee there (empty = all charters,
+        // i.e. a lone null-charter row). null warehouse = no assignment.
+        warehouse_id: null as string | null,
+        charter_ids: [] as string[],
       };
     });
+
+    // Second query: per-member warehouse assignments for THIS org. Keyed by
+    // (org, user, warehouse, charter); a member may have rows for multiple
+    // warehouses. We surface the primary warehouse (is_primary) — or the first
+    // by assignment order if none is flagged — and the charter_ids at it.
+    const userIds = members.map((m) => m.user_id);
+    if (userIds.length > 0) {
+      const { data: assignRows, error: assignErr } = await this.ctx.supabase
+        .from('user_warehouse_assignments')
+        .select('user_id, warehouse_id, charter_id, is_primary')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('user_id', userIds);
+      if (assignErr) throw new ServiceError('internal_error', assignErr.message);
+
+      // Group rows by user, then pick the primary warehouse (or first seen).
+      const byUser = new Map<
+        string,
+        Array<{ warehouse_id: string; charter_id: string | null; is_primary: boolean }>
+      >();
+      for (const row of (assignRows ?? []) as Array<{
+        user_id: string;
+        warehouse_id: string;
+        charter_id: string | null;
+        is_primary: boolean | null;
+      }>) {
+        const list = byUser.get(row.user_id) ?? [];
+        list.push({
+          warehouse_id: row.warehouse_id,
+          charter_id: row.charter_id,
+          is_primary: row.is_primary ?? false,
+        });
+        byUser.set(row.user_id, list);
+      }
+
+      for (const m of members) {
+        const rows = byUser.get(m.user_id);
+        if (!rows || rows.length === 0) continue;
+        const primaryWarehouse =
+          rows.find((r) => r.is_primary)?.warehouse_id ?? rows[0]?.warehouse_id;
+        if (!primaryWarehouse) continue;
+        m.warehouse_id = primaryWarehouse;
+        // charter_ids at the primary warehouse (drop the null-charter
+        // sentinel → empty list = "all charters").
+        m.charter_ids = rows
+          .filter((r) => r.warehouse_id === primaryWarehouse && r.charter_id)
+          .map((r) => r.charter_id as string);
+      }
+    }
+
+    return members;
   }
 
   async listPendingInvites() {
