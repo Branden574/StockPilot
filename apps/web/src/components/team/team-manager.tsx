@@ -1,6 +1,6 @@
 'use client';
 
-import { Copy, Loader2, Mail, MoreHorizontal, Send, Trash2, UserPlus } from 'lucide-react';
+import { Check, Copy, Loader2, Mail, MoreHorizontal, Send, Trash2, UserPlus } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
@@ -49,6 +49,7 @@ import {
   removeMemberAction,
   resendInviteAction,
   revokeInviteAction,
+  setMemberChartersAction,
   transferOwnershipAction,
   updateMemberRoleAction,
 } from '@/server/actions/team';
@@ -68,6 +69,13 @@ interface Member {
   email: string;
   fullName: string | null;
   avatarUrl: string | null;
+  /** The member's primary warehouse assignment (charters are warehouse-scoped).
+   *  null when the member has no warehouse assignment (e.g. owner/admin) — the
+   *  Charters edit affordance is hidden in that case. */
+  warehouseId: string | null;
+  /** charter_ids the member currently oversees at `warehouseId`. Empty = "all
+   *  charters" at that warehouse. */
+  charterIds: string[];
 }
 
 interface PendingInvite {
@@ -142,6 +150,10 @@ export function TeamManager({
                   currentUserRole={currentUserRole}
                   allCategories={allCategories}
                   initiallyGranted={grantsByUser[m.userId] ?? []}
+                  charters={charters}
+                  warehouseCharters={warehouseCharters}
+                  charterSingular={charterSingular}
+                  warehouseSingular={warehouseSingular}
                 />
               ))}
             </TableBody>
@@ -192,11 +204,19 @@ function MemberRow({
   currentUserRole,
   allCategories,
   initiallyGranted,
+  charters,
+  warehouseCharters,
+  charterSingular,
+  warehouseSingular,
 }: {
   member: Member;
   currentUserRole: Role;
   allCategories: Array<{ id: string; name: string }>;
   initiallyGranted: string[];
+  charters: Array<{ id: string; name: string }>;
+  warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
+  charterSingular: string;
+  warehouseSingular: string;
 }) {
   const router = useRouter();
   const [removeOpen, setRemoveOpen] = React.useState(false);
@@ -206,6 +226,7 @@ function MemberRow({
   const [transferAck, setTransferAck] = React.useState(false);
   const [transferBusy, setTransferBusy] = React.useState(false);
   const [categoryAccessOpen, setCategoryAccessOpen] = React.useState(false);
+  const [chartersOpen, setChartersOpen] = React.useState(false);
   const initials = (member.fullName || member.email)
     .split(/\s+/)
     .map((s) => s[0])
@@ -217,6 +238,10 @@ function MemberRow({
   // Only the owner can hand off the role, and only to an accepted (non-owner) member.
   const canTransferOwnership =
     currentUserRole === 'owner' && member.role !== 'owner' && member.acceptedAt !== null;
+  // Charters are warehouse-scoped, so the per-member editor only applies to a
+  // member who actually has a warehouse assignment (staff/viewer/manager). Hide
+  // for owners/admins with no warehouse.
+  const canManageCharters = canManage && member.warehouseId !== null;
   const displayName = member.fullName ?? member.email;
 
   async function changeRole(role: Role) {
@@ -315,6 +340,11 @@ function MemberRow({
                 </DropdownMenuItem>
               ))}
               <DropdownMenuSeparator />
+              {canManageCharters && (
+                <DropdownMenuItem onClick={() => setChartersOpen(true)}>
+                  {charterSingular}s…
+                </DropdownMenuItem>
+              )}
               {member.role === 'viewer' && (
                 <DropdownMenuItem onClick={() => setCategoryAccessOpen(true)}>
                   Category access…
@@ -343,6 +373,24 @@ function MemberRow({
           pending={removeBusy}
           onConfirm={confirmRemove}
         />
+        {member.warehouseId && chartersOpen && (
+          // Mounted only while open + freshly keyed so its state initializer
+          // re-reads the member's current charters each time (incl. after a
+          // save + router.refresh()).
+          <MemberChartersDialog
+            key={`${member.id}-charters`}
+            open={chartersOpen}
+            onOpenChange={setChartersOpen}
+            userId={member.userId}
+            warehouseId={member.warehouseId}
+            displayName={displayName}
+            currentCharterIds={member.charterIds}
+            charters={charters}
+            warehouseCharters={warehouseCharters}
+            charterSingular={charterSingular}
+            warehouseSingular={warehouseSingular}
+          />
+        )}
         <Dialog open={categoryAccessOpen} onOpenChange={setCategoryAccessOpen}>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
@@ -515,13 +563,190 @@ function InviteRow({ invite }: { invite: PendingInvite }) {
   );
 }
 
+/**
+ * A bordered, scrollable checkbox list of charters. Toggling a row adds/removes
+ * its id from `selected`. Used both in the invite dialog and the per-member
+ * "Charters" editor. Empty selection means "all charters at this warehouse" —
+ * the caller renders that hint below.
+ *
+ * No shared checkbox primitive exists in the repo, so each row is an accessible
+ * `<button role="checkbox" aria-checked>` styled like the tag-toggle in
+ * inventory/bulk-actions.tsx.
+ */
+function CharterChecklist({
+  charters,
+  selected,
+  onToggle,
+  disabled,
+  emptyHint,
+}: {
+  charters: Array<{ id: string; name: string }>;
+  selected: string[];
+  onToggle: (id: string) => void;
+  disabled?: boolean;
+  /** Rendered (muted, dashed) when there are no charters to pick. */
+  emptyHint?: React.ReactNode;
+}) {
+  if (charters.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed bg-muted/30 px-3 py-3 text-[11px] text-muted-foreground">
+        {emptyHint}
+      </div>
+    );
+  }
+  return (
+    <div
+      className={
+        disabled
+          ? 'max-h-[180px] overflow-y-auto rounded-md border bg-muted/30 opacity-60'
+          : 'max-h-[180px] overflow-y-auto rounded-md border'
+      }
+      aria-disabled={disabled}
+    >
+      {charters.map((c) => {
+        const on = selected.includes(c.id);
+        return (
+          <button
+            key={c.id}
+            type="button"
+            role="checkbox"
+            aria-checked={on}
+            disabled={disabled}
+            onClick={() => onToggle(c.id)}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:hover:bg-transparent"
+          >
+            <span
+              aria-hidden
+              className={
+                on
+                  ? 'flex h-4 w-4 shrink-0 items-center justify-center rounded border border-primary bg-primary text-primary-foreground'
+                  : 'flex h-4 w-4 shrink-0 items-center justify-center rounded border border-input bg-background'
+              }
+            >
+              {on && <Check className="h-3 w-3" />}
+            </span>
+            <span className="truncate">{c.name}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Per-member charter editor. Reconciles which charters an existing member
+ * oversees at their (primary) warehouse via setMemberChartersAction. Empty
+ * selection = "all charters" at that warehouse.
+ */
+function MemberChartersDialog({
+  open,
+  onOpenChange,
+  userId,
+  warehouseId,
+  displayName,
+  currentCharterIds,
+  charters,
+  warehouseCharters,
+  charterSingular,
+  warehouseSingular,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  userId: string;
+  warehouseId: string;
+  displayName: string;
+  currentCharterIds: string[];
+  charters: Array<{ id: string; name: string }>;
+  warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
+  charterSingular: string;
+  warehouseSingular: string;
+}) {
+  const router = useRouter();
+
+  // Charters this member's warehouse actually services.
+  const chartersForWarehouse = React.useMemo(() => {
+    const allowed = new Set(
+      warehouseCharters
+        .filter((wc) => wc.warehouse_id === warehouseId)
+        .map((wc) => wc.charter_id),
+    );
+    return charters.filter((c) => allowed.has(c.id));
+  }, [charters, warehouseCharters, warehouseId]);
+
+  // Seed selection from the member's current charters (pruned to ones the
+  // warehouse still services). The parent remounts this component with a fresh
+  // `key` each time the dialog opens, so this initializer re-reads props after a
+  // save + router.refresh() — no re-seed effect needed.
+  const [selected, setSelected] = React.useState<string[]>(() => {
+    const allowed = new Set(chartersForWarehouse.map((c) => c.id));
+    return currentCharterIds.filter((id) => allowed.has(id));
+  });
+  const [busy, setBusy] = React.useState(false);
+
+  const toggleCharter = (id: string) => {
+    setSelected((prev) =>
+      prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id],
+    );
+  };
+
+  async function save() {
+    setBusy(true);
+    const res = await setMemberChartersAction({ userId, warehouseId, charterIds: selected });
+    setBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success(`${charterSingular} access updated for ${displayName}.`);
+    onOpenChange(false);
+    router.refresh();
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => (busy ? null : onOpenChange(v))}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            {charterSingular} access — {displayName}
+          </DialogTitle>
+          <DialogDescription>
+            {`Choose which ${charterSingular.toLowerCase()}s this member oversees at their ${warehouseSingular.toLowerCase()}. Leave all unchecked to give them every ${charterSingular.toLowerCase()} this ${warehouseSingular.toLowerCase()} services.`}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5">
+          <CharterChecklist
+            charters={chartersForWarehouse}
+            selected={selected}
+            onToggle={toggleCharter}
+            disabled={busy}
+            emptyHint={`This ${warehouseSingular.toLowerCase()} has no ${charterSingular.toLowerCase()}s linked yet. Link some in Admin → ${warehouseSingular}s — this member already sees all stock at this ${warehouseSingular.toLowerCase()}.`}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            {selected.length > 0
+              ? `Scoped to the selected ${charterSingular.toLowerCase()}${selected.length === 1 ? '' : 's'} at this ${warehouseSingular.toLowerCase()}.`
+              : `No ${charterSingular.toLowerCase()} picked — they'll see every ${charterSingular.toLowerCase()} this ${warehouseSingular.toLowerCase()} services.`}
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="gradient" onClick={save} disabled={busy}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 interface InviteFormValues {
   email: string;
   // Owner is never invitable — it can only be transferred from the
   // current owner via the dedicated ownership-transfer flow. Schema
   // mirrors `inviteMemberSchema.role` in @stockpilot/core.
   role: InviteableRole;
-  charterId: string;
+  charterIds: string[];
   warehouseId: string;
   message: string;
 }
@@ -556,11 +781,11 @@ function InviteDialog({
   } = useForm<InviteFormValues>({
     mode: 'onBlur',
     reValidateMode: 'onChange',
-    defaultValues: { email: '', role: 'staff', charterId: '', warehouseId: '', message: '' },
+    defaultValues: { email: '', role: 'staff', charterIds: [], warehouseId: '', message: '' },
   });
 
   const role = watch('role');
-  const charterId = watch('charterId');
+  const charterIds = watch('charterIds');
   const warehouseId = watch('warehouseId');
   const warehouseRequired = role === 'staff' || role === 'viewer';
 
@@ -583,25 +808,25 @@ function InviteDialog({
     return charters.filter((c) => allowedCharterIds.has(c.id));
   }, [charters, warehouseCharters, warehouseId]);
 
-  // Diagnostic: is the currently selected pair actually serviced?
-  const pairValid = React.useMemo(() => {
-    if (!warehouseId || !charterId) return true;
-    return warehouseCharters.some(
-      (wc) => wc.warehouse_id === warehouseId && wc.charter_id === charterId,
-    );
-  }, [warehouseId, charterId, warehouseCharters]);
-
   React.useEffect(() => {
-    if (!open) reset({ email: '', role: 'staff', charterId: '', warehouseId: '', message: '' });
+    if (!open) reset({ email: '', role: 'staff', charterIds: [], warehouseId: '', message: '' });
   }, [open, reset]);
 
-  // If user changes warehouse and the current charter doesn't fit, clear it
-  // so an invalid pair never gets submitted.
+  // If the user changes warehouse, prune any selected charters that the new
+  // warehouse doesn't service so an invalid pair never gets submitted.
   React.useEffect(() => {
-    if (charterId && warehouseId && !pairValid) {
-      setValue('charterId', '');
-    }
-  }, [charterId, warehouseId, pairValid, setValue]);
+    if (!warehouseId || charterIds.length === 0) return;
+    const allowed = new Set(chartersForWarehouse.map((c) => c.id));
+    const next = charterIds.filter((id) => allowed.has(id));
+    if (next.length !== charterIds.length) setValue('charterIds', next);
+  }, [warehouseId, charterIds, chartersForWarehouse, setValue]);
+
+  const toggleCharter = (id: string) => {
+    const next = charterIds.includes(id)
+      ? charterIds.filter((c) => c !== id)
+      : [...charterIds, id];
+    setValue('charterIds', next);
+  };
 
   const onSubmit = handleSubmit(async (values) => {
     if (warehouseRequired && !values.warehouseId) {
@@ -613,7 +838,7 @@ function InviteDialog({
     const res = await inviteMemberAction({
       email: values.email,
       role: values.role,
-      charterId: values.charterId || null,
+      charterIds: values.charterIds,
       warehouseId: values.warehouseId || null,
       message: values.message || undefined,
     });
@@ -712,47 +937,28 @@ function InviteDialog({
 
           <div className="space-y-1.5">
             <Label>
-              {charterSingular}
+              {charterSingular}s
               <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
             </Label>
-            <Select
-              value={charterId || NONE_VALUE}
-              onValueChange={(v: string) =>
-                setValue('charterId', v === NONE_VALUE ? '' : v)
-              }
-              disabled={!warehouseId || chartersForWarehouse.length === 0}
-            >
-              <SelectTrigger>
-                <SelectValue
-                  placeholder={
-                    !warehouseId
-                      ? `Pick a ${warehouseSingular.toLowerCase()} first`
-                      : chartersForWarehouse.length === 0
-                      ? `No ${charterSingular.toLowerCase()}s linked to this ${warehouseSingular.toLowerCase()}`
-                      : `All ${charterSingular.toLowerCase()}s at this ${warehouseSingular.toLowerCase()}`
-                  }
-                />
-              </SelectTrigger>
-              <SelectContent>
-                {warehouseId && chartersForWarehouse.length > 0 && (
-                  <SelectItem value={NONE_VALUE}>
-                    {`All ${charterSingular.toLowerCase()}s at this ${warehouseSingular.toLowerCase()}`}
-                  </SelectItem>
-                )}
-                {chartersForWarehouse.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {!warehouseId ? (
+              <div className="rounded-md border border-dashed bg-muted/30 px-3 py-3 text-[11px] text-muted-foreground">
+                {`Pick a ${warehouseSingular.toLowerCase()} above to see its ${charterSingular.toLowerCase()}s.`}
+              </div>
+            ) : (
+              <CharterChecklist
+                charters={chartersForWarehouse}
+                selected={charterIds}
+                onToggle={toggleCharter}
+                emptyHint={`This ${warehouseSingular.toLowerCase()} has no ${charterSingular.toLowerCase()}s linked yet. Link some in Admin → ${warehouseSingular}s, or invite without a ${charterSingular.toLowerCase()} (they'll see all stock at this ${warehouseSingular.toLowerCase()}).`}
+              />
+            )}
             <p className="text-[11px] text-muted-foreground">
               {!warehouseId
                 ? `Pick a ${warehouseSingular.toLowerCase()} above to see its ${charterSingular.toLowerCase()}s.`
                 : chartersForWarehouse.length === 0
-                ? `This ${warehouseSingular.toLowerCase()} has no ${charterSingular.toLowerCase()}s linked yet. Link some in Admin → ${warehouseSingular}s, or invite without a ${charterSingular.toLowerCase()} (they'll see all stock at this ${warehouseSingular.toLowerCase()}).`
-                : charterId
-                ? `Scoped to ${charters.find((c) => c.id === charterId)?.name ?? 'this'} only at this ${warehouseSingular.toLowerCase()}.`
+                ? `Or invite without a ${charterSingular.toLowerCase()} (they'll see all stock at this ${warehouseSingular.toLowerCase()}).`
+                : charterIds.length > 0
+                ? `Scoped to the selected ${charterSingular.toLowerCase()}${charterIds.length === 1 ? '' : 's'} at this ${warehouseSingular.toLowerCase()}.`
                 : `No ${charterSingular.toLowerCase()} picked — they'll see every ${charterSingular.toLowerCase()} this ${warehouseSingular.toLowerCase()} services.`}
             </p>
           </div>
