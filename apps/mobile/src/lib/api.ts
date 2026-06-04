@@ -17,15 +17,25 @@ import { supabase } from './supabase';
  * to silently fail every API call (or worse, to actually reach a
  * local dev server on the user's network).
  */
+// Hardcoded production fallback. A release build/OTA must NEVER talk to
+// localhost — this guards the OTA footgun where `eas update` is run WITHOUT
+// EXPO_PUBLIC_API_URL set, so app.config.ts defaults extra.apiUrl to
+// http://localhost:3000 and bakes it into the JS bundle. That broke every API
+// call (and the scan→/orders/sign URL) on prod devices until republished.
+const PROD_API_FALLBACK = 'https://stockpilotusa.com';
+
 function resolveApiUrl(): string {
   const fromExtra = (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl;
   const fromEnv = process.env.EXPO_PUBLIC_API_URL;
-  const candidate = fromExtra || fromEnv;
-  if (candidate && candidate.length > 0) return candidate;
+  const candidate = (fromExtra || fromEnv || '').trim();
+  const isLocalhost = /\/\/(localhost|127\.0\.0\.1)/i.test(candidate);
+
+  // In a release, a missing OR localhost candidate is a misconfiguration —
+  // use the known prod host instead of poisoning the bundle with localhost.
+  if (!__DEV__ && (!candidate || isLocalhost)) return PROD_API_FALLBACK;
+  if (candidate.length > 0) return candidate;
   if (__DEV__) return 'http://localhost:3000';
-  throw new Error(
-    'EXPO_PUBLIC_API_URL is not set in this build. Refusing to fall back to localhost in production. Re-build with the env var or set apiUrl in app.config.ts → extra.',
-  );
+  return PROD_API_FALLBACK;
 }
 
 const API_URL = resolveApiUrl();
