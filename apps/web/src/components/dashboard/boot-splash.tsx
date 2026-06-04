@@ -56,8 +56,14 @@ declare global {
 }
 
 /**
- * True only for a genuine cold load / hard reload that hasn't booted yet this
- * runtime. Marks the document consumed so a (defensive) remount never re-shows.
+ * True only when StockPilot is FIRST loaded — opening the app, a fresh tab, an
+ * external link, or the post-login document load. Deliberately NOT on refresh:
+ * `navigation.type` is 'reload' for BOTH a regular refresh (Cmd+R) and a hard
+ * refresh (Cmd+Shift+R) — browsers expose no way to tell them apart (the only
+ * difference is HTTP-cache bypass) — so to keep the splash off regular refreshes
+ * we skip ALL reloads and only honor a true first navigation ('navigate').
+ * 'back_forward' (bfcache) and soft client navs are excluded too. Marks the
+ * document consumed so a (defensive) remount never re-shows.
  */
 function detectColdLoad(): boolean {
   if (typeof window === 'undefined') return false;
@@ -65,11 +71,7 @@ function detectColdLoad(): boolean {
   const nav = performance.getEntriesByType('navigation')[0] as
     | PerformanceNavigationTiming
     | undefined;
-  const type = nav?.type;
-  // 'navigate' = fresh tab / first load, 'reload' = hard reload. 'back_forward'
-  // (bfcache) and soft client navs are NOT cold loads.
-  const freshDocument =
-    (type === 'navigate' || type === 'reload') && performance.now() < COLD_LOAD_MAX_AGE_MS;
+  const freshDocument = nav?.type === 'navigate' && performance.now() < COLD_LOAD_MAX_AGE_MS;
   return freshDocument;
 }
 
