@@ -14,6 +14,7 @@ import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { useColdLaunchGate } from '@/lib/cold-launch-gate';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
 import { useProfile } from '@/lib/use-profile';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -29,6 +30,10 @@ export function BiometricLockScreen() {
   const { unlock, signOutToFallback } = useAuth();
   const profile = useProfile();
   const { c } = useTheme();
+  // While the cold-launch splash is still on screen, defer the Face-ID
+  // auto-prompt so the system scan doesn't run BEHIND the splash. Released at
+  // hand-off. False (no gate) on a warm re-lock, preserving prior behavior.
+  const { splashActive } = useColdLaunchGate();
   const [busy, setBusy] = React.useState(false);
   const [cap, setCap] = React.useState<BiometricCapability | null>(null);
   const [attempted, setAttempted] = React.useState(false);
@@ -70,11 +75,12 @@ export function BiometricLockScreen() {
   }, [busy, unlock]);
 
   React.useEffect(() => {
+    if (splashActive) return; // wait for the cold-launch splash to hand off
     if (!cap) return;
     if (!cap.hasHardware || !cap.isEnrolled) return;
     if (attempted) return;
     void tryUnlock();
-  }, [cap, attempted, tryUnlock]);
+  }, [cap, attempted, tryUnlock, splashActive]);
 
   const isFingerprint = cap?.label === 'Fingerprint';
   const Icon = isFingerprint ? Fingerprint : ScanFace;
