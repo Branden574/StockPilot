@@ -1,6 +1,5 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
-import * as WebBrowser from 'expo-web-browser';
 import { useRouter } from 'expo-router';
 import { X } from 'lucide-react-native';
 import * as React from 'react';
@@ -9,6 +8,7 @@ import {
   Alert,
   Animated,
   Easing,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -217,15 +217,15 @@ export default function Scan() {
     setScanning(false);
 
     // Warehouse packing-slip QR → the public proof-of-delivery signature page.
-    // Open it in an in-app browser so the recipient signs INSIDE StockPilot,
-    // instead of falling through to the item/UPC lookup (which mistook the
-    // signature URL for an unknown product and opened the "add item" card).
-    // Build the URL from our own API_BASE + the extracted token so a spoofed
-    // QR can't redirect the in-app browser to another host.
+    // Open it (system browser via RN core Linking — works on existing builds
+    // over-the-air, no native module) instead of falling through to the
+    // item/UPC lookup, which mistook the signature URL for an unknown product
+    // and opened the "add item" card. Build the URL from our own API_BASE +
+    // the extracted token so a spoofed QR can't redirect to another host.
     const signToken = parseSignToken(data);
     if (signToken) {
       try {
-        await WebBrowser.openBrowserAsync(`${API_BASE}/orders/sign/${signToken}`);
+        await Linking.openURL(`${API_BASE}/orders/sign/${signToken}`);
       } catch (e) {
         Alert.alert(
           'Could not open signature',
