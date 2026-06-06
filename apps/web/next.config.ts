@@ -91,7 +91,9 @@ const nextConfig: NextConfig = {
       "object-src 'none'",
       "frame-ancestors 'none'",
       "form-action 'self'",
-      "img-src 'self' data: blob: https://*.supabase.co https://*.supabase.in https://images.unsplash.com https://avatars.githubusercontent.com https://q.stripe.com https://www.googletagmanager.com",
+      // tile.openstreetmap.org + api.maptiler.com power the live delivery-tracking
+      // basemap (MapLibre). Without them the customer's tracking map is blank.
+      "img-src 'self' data: blob: https://*.supabase.co https://*.supabase.in https://images.unsplash.com https://avatars.githubusercontent.com https://q.stripe.com https://www.googletagmanager.com https://tile.openstreetmap.org https://api.maptiler.com",
       // Supabase storage signed URLs power procedure video playback —
       // without them in media-src the <video> tag is blocked by CSP
       // and the user sees a black box on the procedure detail page.
@@ -99,7 +101,9 @@ const nextConfig: NextConfig = {
       "font-src 'self' data:",
       "style-src 'self' 'unsafe-inline'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com https://*.vercel-scripts.com https://va.vercel-scripts.com",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.resend.com https://api.stripe.com https://*.vercel-insights.com https://generativelanguage.googleapis.com",
+      // tile.openstreetmap.org + api.maptiler.com: MapLibre fetches raster/vector
+      // map tiles (and MapTiler style/glyphs/sprite) via fetch() → connect-src.
+      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.resend.com https://api.stripe.com https://*.vercel-insights.com https://generativelanguage.googleapis.com https://tile.openstreetmap.org https://api.maptiler.com",
       "frame-src 'self' https://js.stripe.com",
       "worker-src 'self' blob:",
       ...(process.env.NODE_ENV === 'production' ? ['upgrade-insecure-requests'] : []),
