@@ -24,6 +24,7 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { resizeForUpload } from '@/lib/image-resize';
+import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import { isLiveLocationActive, startLiveLocation, stopLiveLocation } from '@/lib/location-task';
 import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
 import { supabase } from '@/lib/supabase';
@@ -216,10 +217,14 @@ export default function OrderDetail() {
     const { data } = await supabase
       .from('order_requests')
       .select(
-        `id, status, requester_name, requester_email, requester_org_label,
+        // `requester:user_profiles!requester_user_id` resolves the team-member
+        // name that internal orders DON'T denormalize onto the row (else they
+        // showed "Unknown requester"). RLS lets org members read each other.
+        `id, status, requester_name, requester_email, requester_user_id, requester_org_label,
          signature_data_url, signed_by_name, signed_at, created_at,
          assigned_delivery_user_id, fulfillment_type,
-         warehouse:warehouses!warehouse_id (name)`,
+         warehouse:warehouses!warehouse_id (name),
+         requester:user_profiles!requester_user_id (full_name, email)`,
       )
       .eq('organization_id', orgId)
       .eq('id', id)
@@ -231,7 +236,12 @@ export default function OrderDetail() {
       setOrder({
         id: r.id as string,
         status: r.status as string,
-        requester: (r.requester_name as string | null) ?? (r.requester_email as string | null) ?? null,
+        requester: resolveRequesterLabel({
+          requesterName: (r.requester_name as string | null) ?? null,
+          requesterEmail: (r.requester_email as string | null) ?? null,
+          requesterUserId: (r.requester_user_id as string | null) ?? null,
+          profile: profileFromEmbed(r.requester),
+        }),
         orgLabel: (r.requester_org_label as string | null) ?? null,
         warehouseName: whObj?.name ?? null,
         signatureDataUrl: (r.signature_data_url as string | null) ?? null,

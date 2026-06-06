@@ -8,6 +8,7 @@ import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
 import { useOrg } from '@/lib/use-org';
+import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -15,8 +16,7 @@ import { useTheme } from '@/lib/use-theme';
 interface OrderRow {
   id: string;
   status: string;
-  requester_name: string | null;
-  requester_email: string | null;
+  requester: string;
   requester_org_label: string | null;
   approved_at: string | null;
   delivered_at: string | null;
@@ -46,9 +46,13 @@ export default function OrdersScreen() {
     const { data } = await supabase
       .from('order_requests')
       .select(
-        `id, status, requester_name, requester_email, requester_org_label,
+        // `requester:user_profiles!requester_user_id` resolves the team-member
+        // name that internal orders DON'T denormalize onto the row (else they
+        // showed "Unknown requester"). RLS lets org members read each other.
+        `id, status, requester_name, requester_email, requester_user_id, requester_org_label,
          approved_at, delivered_at, created_at,
          warehouse:warehouses!warehouse_id (name),
+         requester:user_profiles!requester_user_id (full_name, email),
          lines:order_request_lines (id)`,
       )
       .eq('organization_id', orgId)
@@ -59,12 +63,16 @@ export default function OrdersScreen() {
         const r = row as Record<string, unknown>;
         const wh = r.warehouse as { name: string | null } | { name: string | null }[] | null;
         const whObj = Array.isArray(wh) ? wh[0] : wh;
-        const lines = (r.lines as Array<unknown> | null) ?? [];
+        const lines = (r.lines as unknown[] | null) ?? [];
         return {
           id: r.id as string,
           status: r.status as string,
-          requester_name: (r.requester_name as string | null) ?? null,
-          requester_email: (r.requester_email as string | null) ?? null,
+          requester: resolveRequesterLabel({
+            requesterName: (r.requester_name as string | null) ?? null,
+            requesterEmail: (r.requester_email as string | null) ?? null,
+            requesterUserId: (r.requester_user_id as string | null) ?? null,
+            profile: profileFromEmbed(r.requester),
+          }),
           requester_org_label: (r.requester_org_label as string | null) ?? null,
           approved_at: (r.approved_at as string | null) ?? null,
           delivered_at: (r.delivered_at as string | null) ?? null,
@@ -111,7 +119,7 @@ function OrderCard({ order }: { order: OrderRow }) {
   const { c } = useTheme();
   const router = useRouter();
   const meta = STATUS_META[order.status] ?? { label: order.status.toUpperCase(), status: 'default' as const };
-  const requester = order.requester_name ?? order.requester_email ?? 'Unknown requester';
+  const requester = order.requester;
   const when = new Date(order.created_at);
 
   return (
