@@ -1,13 +1,39 @@
 'use client';
 import * as React from 'react';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { Map as MlMap, Marker as MlMarker } from 'maplibre-gl';
+import type { Map as MlMap, Marker as MlMarker, StyleSpecification } from 'maplibre-gl';
 
 interface LocationPayload {
   available: boolean;
   driver?: { lat: number; lng: number; heading: number | null; recordedAt: string };
   destination?: { lat: number; lng: number } | null;
   distanceMiles?: number | null;
+}
+
+// Basemap: a real street map. Falls back to no-key OpenStreetMap raster tiles so
+// it works with zero setup, and auto-upgrades to MapTiler vector tiles (nicer +
+// higher rate limits) the moment NEXT_PUBLIC_MAPTILER_KEY is set. The previous
+// demotiles.maplibre.org style was a coarse world overview with NO streets at
+// delivery zoom, so the customer saw a marker on a blank map.
+const OSM_RASTER_STYLE: StyleSpecification = {
+  version: 8,
+  sources: {
+    osm: {
+      type: 'raster',
+      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: '© OpenStreetMap contributors',
+    },
+  },
+  layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
+};
+
+function resolveBasemapStyle(): StyleSpecification | string {
+  const key = process.env.NEXT_PUBLIC_MAPTILER_KEY;
+  return key
+    ? `https://api.maptiler.com/maps/streets-v2/style.json?key=${key}`
+    : OSM_RASTER_STYLE;
 }
 
 export function DeliveryMap({ orderId, token, email }: { orderId: string; token: string; email: string }) {
@@ -40,26 +66,32 @@ export function DeliveryMap({ orderId, token, email }: { orderId: string; token:
     if (!payload?.available || !payload.driver || !mapRef.current) return;
     let disposed = false;
     void (async () => {
-      const maplibregl = (await import('maplibre-gl')).default;
-      if (disposed || !mapRef.current) return;
-      const d = payload.driver!;
-      if (!mapObj.current) {
-        mapObj.current = new maplibregl.Map({
-          container: mapRef.current,
-          style: 'https://demotiles.maplibre.org/style.json', // free OSM demo style; swap for a MapTiler key if rate-limited
-          center: [d.lng, d.lat],
-          zoom: 12,
-        });
+      try {
+        const maplibregl = (await import('maplibre-gl')).default;
+        if (disposed || !mapRef.current) return;
+        const d = payload.driver!;
+        if (!mapObj.current) {
+          mapObj.current = new maplibregl.Map({
+            container: mapRef.current,
+            style: resolveBasemapStyle(),
+            center: [d.lng, d.lat],
+            zoom: 13,
+          });
+        }
+        const map = mapObj.current;
+        const setMarker = (key: 'driver' | 'dest', lng: number, lat: number, color: string) => {
+          const existing = markers.current[key];
+          if (existing) existing.setLngLat([lng, lat]);
+          else markers.current[key] = new maplibregl.Marker({ color }).setLngLat([lng, lat]).addTo(map);
+        };
+        setMarker('driver', d.lng, d.lat, '#2563eb');
+        if (payload.destination) setMarker('dest', payload.destination.lng, payload.destination.lat, '#16a34a');
+        map.easeTo({ center: [d.lng, d.lat] });
+      } catch (err) {
+        // Don't let a map-init failure become a silent unhandled rejection —
+        // the customer just won't see the map, but we want it in the logs.
+        console.error('[delivery-map] failed to initialize map', err);
       }
-      const map = mapObj.current;
-      const setMarker = (key: 'driver' | 'dest', lng: number, lat: number, color: string) => {
-        const existing = markers.current[key];
-        if (existing) existing.setLngLat([lng, lat]);
-        else markers.current[key] = new maplibregl.Marker({ color }).setLngLat([lng, lat]).addTo(map);
-      };
-      setMarker('driver', d.lng, d.lat, '#2563eb');
-      if (payload.destination) setMarker('dest', payload.destination.lng, payload.destination.lat, '#16a34a');
-      map.easeTo({ center: [d.lng, d.lat] });
     })();
     return () => { disposed = true; };
   }, [payload]);
