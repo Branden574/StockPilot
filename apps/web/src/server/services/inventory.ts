@@ -20,6 +20,7 @@ import { RESERVED_CUSTOM_FIELD_KEYS, validateCustomFields } from '@stockpilot/co
 import { assertModuleEnabled, assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRows } from './lib/paginate';
 import { audit } from './audit';
+import { dispatchEvent } from './integration-events';
 import { CustomFieldsService } from './custom-fields';
 import { TagsService } from './tags';
 import { UserCategoriesService } from './user-categories';
@@ -1835,6 +1836,31 @@ export class InventoryService {
         throw new ServiceError('forbidden', 'Permission denied');
       }
       throw new ServiceError('internal_error', error.message);
+    }
+    // Low-stock alert — fire to webhooks/Slack/Teams only when this adjustment
+    // crosses the item BELOW its reorder point (prev > rp, new <= rp), so it
+    // alerts once on the crossing rather than on every subsequent pick.
+    try {
+      const it = item as {
+        quantity_on_hand?: number;
+        reorder_point?: number;
+        name?: string;
+        sku?: string;
+      };
+      const prev = Number(it.quantity_on_hand ?? 0);
+      const rp = Number(it.reorder_point ?? 0);
+      const next = prev + Number(input.quantityChange);
+      if (rp > 0 && next <= rp && prev > rp) {
+        void dispatchEvent(this.ctx.organizationId, 'stock.low', {
+          id: input.itemId,
+          name: it.name ?? null,
+          sku: it.sku ?? null,
+          quantity: next,
+          reorderPoint: rp,
+        });
+      }
+    } catch {
+      /* best-effort: an alert must never fail a stock adjustment */
     }
     return data;
   }

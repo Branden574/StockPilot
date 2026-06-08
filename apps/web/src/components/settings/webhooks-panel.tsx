@@ -16,14 +16,16 @@ import {
   testIntegrationEndpointAction,
 } from '@/server/actions/integration-endpoints';
 
-// Only the events currently wired at their emit sites are offered, so nobody
-// subscribes to an event that never fires. The engine + server validation
-// already support the full taxonomy (order.status_changed/completed, stock.low,
-// return.created, cycle_count.completed) — they'll appear here as each is hooked.
+// Only events wired at their emit sites are offered, so nobody subscribes to an
+// event that never fires. order.completed / order.status_changed route through
+// the order state machine and are pending; the engine supports them already.
 const EVENTS: ReadonlyArray<readonly [string, string]> = [
   ['order.created', 'New order'],
   ['po.created', 'New purchase order'],
   ['po.received', 'PO received'],
+  ['stock.low', 'Low stock'],
+  ['return.created', 'Return started'],
+  ['cycle_count.completed', 'Cycle count complete'],
 ];
 
 type EndpointType = 'webhook' | 'slack' | 'teams';

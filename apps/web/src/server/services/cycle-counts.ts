@@ -3,6 +3,7 @@ import 'server-only';
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { audit } from './audit';
+import { dispatchEvent } from './integration-events';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -876,6 +877,7 @@ export class CycleCountsService {
       },
       this.ctx,
     );
+    void dispatchEvent(this.ctx.organizationId, 'cycle_count.completed', { id });
     return data as unknown as CycleCountRow;
   }
 }
