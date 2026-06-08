@@ -444,6 +444,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: ['charter_school'],
     placements: [
       { surface: 'web_sidebar', section: 'workspace', label: 'AI Assistant', href: '/dashboard/ai', iconName: 'Sparkles', defaultSortOrder: 0, requires: 'items:update', badge: 'Beta' },
+      { surface: 'web_sidebar', section: 'workspace', label: 'Briefing', href: '/dashboard/insights', iconName: 'Sparkles', defaultSortOrder: 1, requires: 'items:update', badge: 'New' },
       { surface: 'mobile_drawer', section: 'workspace', label: 'AI Assistant', href: '/ai', iconName: 'Sparkles', defaultSortOrder: 0 },
     ],
   },
