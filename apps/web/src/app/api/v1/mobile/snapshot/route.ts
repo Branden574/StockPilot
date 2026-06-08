@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 /**
  * Funnels every supabase error in this route through reportError() and
@@ -107,6 +108,19 @@ async function snapshotGET(req: NextRequest) {
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
+
+  // Per-user throttle: this is the mobile app's full/delta sync. 30/min easily
+  // covers pull-to-refresh + foreground delta syncs while capping a tight loop
+  // (the heaviest authenticated query path). Fail-open.
+  const rl = await checkRateLimit(`mobile-snapshot:user:${ctx.userId}`, 30, 60_000);
+  if (!rl.allowed) {
+    const retryAfter = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000));
+    return NextResponse.json(
+      { error: 'rate_limited', message: 'Syncing too often — try again shortly.' },
+      { status: 429, headers: { 'retry-after': String(retryAfter) } },
+    );
+  }
+
   const url = new URL(req.url);
   const sinceRaw = url.searchParams.get('since');
   const since =

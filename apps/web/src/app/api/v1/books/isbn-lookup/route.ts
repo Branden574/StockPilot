@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { lookupIsbn, normalizeIsbn } from '@/lib/books/lookup';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,6 +20,18 @@ export async function GET(req: NextRequest) {
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
+
+  // Per-user throttle: calls paid/quota external APIs (Google Books, Open
+  // Library, etc.). 60/min covers rapid book scanning; caps a runaway loop.
+  const rl = await checkRateLimit(`isbn-lookup:user:${ctx.userId}`, 60, 60_000);
+  if (!rl.allowed) {
+    const retryAfter = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000));
+    return NextResponse.json(
+      { error: 'rate_limited', message: 'Too many lookups — slow down a moment.' },
+      { status: 429, headers: { 'retry-after': String(retryAfter) } },
+    );
+  }
+
   const url = new URL(req.url);
   const raw = (url.searchParams.get('isbn') ?? '').trim();
   if (!raw) {
