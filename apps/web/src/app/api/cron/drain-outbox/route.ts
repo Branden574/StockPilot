@@ -9,6 +9,7 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { CONNECTORS } from '@/server/connectors';
 import { enabledIntegrationOrgIds, runDrain } from '@/server/connectors/drainer';
+import { drainIntegrationDeliveries } from '@/server/services/integration-events';
 import { quickbooksConnector } from '@/server/connectors/quickbooks';
 import { QboClient, type QboEnv } from '@/server/connectors/quickbooks/client';
 import { maybePostMonthlyValuation } from '@/server/connectors/quickbooks/valuation';
@@ -152,7 +153,13 @@ export async function GET(req: Request) {
     // Monthly valuation runs AFTER the drain and must never fail the response —
     // runMonthlyValuation swallows + reports its own errors.
     await runMonthlyValuation(admin, now);
-    return NextResponse.json(result);
+    // Retry any pending webhook/Slack/Teams deliveries with backoff. Self-
+    // contained + never throws (mirrors the valuation fail-open posture).
+    const webhooks = await drainIntegrationDeliveries(admin, now).catch(() => ({
+      attempted: 0,
+      delivered: 0,
+    }));
+    return NextResponse.json({ ...result, webhooks });
   } catch (err) {
     void reportError(err, { tag: 'cron.drain-outbox' });
     return NextResponse.json(
