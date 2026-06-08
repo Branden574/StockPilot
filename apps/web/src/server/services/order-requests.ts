@@ -7,6 +7,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { createNotification } from './notifications';
+import { dispatchEvent } from './integration-events';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -801,6 +802,14 @@ export class OrderRequestsService {
       this.ctx,
     );
     void this.notifyEmail(row, 'submitted');
+    // Fan out to configured webhooks / Slack / Teams (best-effort, no-op when
+    // the org has no endpoints; cron backstops delivery).
+    void dispatchEvent(this.ctx.organizationId, 'order.created', {
+      id: row.id,
+      orderNumber: row.id.slice(0, 8).toUpperCase(),
+      requester: (row as { requester_name?: string | null }).requester_name ?? null,
+      lineCount: linePayload.length,
+    });
     return row;
   }
 

@@ -4,9 +4,11 @@ import { redirect } from 'next/navigation';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { IntegrationsPanel } from '@/components/settings/integrations-panel';
+import { WebhooksPanel } from '@/components/settings/webhooks-panel';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ConnectionsService } from '@/server/services/connections';
+import { IntegrationEndpointsService } from '@/server/services/integration-events';
 
 import { hasPermission } from '@stockpilot/core';
 
@@ -70,6 +72,14 @@ export default async function IntegrationsSettingsPage() {
   const canManageDeadLetter = showQbo || showEasyPost;
   const failedSyncs = canManageDeadLetter ? (await svc.listFailedSyncs()).rows : null;
 
+  // Webhooks & alerts live under the same `integrations` module + manage perm as
+  // the QBO card. Only load endpoints when the caller can see the panel.
+  const showWebhooks =
+    integrationsAccess.enabled && hasPermission(ctx.role, 'integrations:manage');
+  const webhookEndpoints = showWebhooks
+    ? await IntegrationEndpointsService.forCurrentUser().then((s) => s.list())
+    : [];
+
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -107,6 +117,8 @@ export default async function IntegrationsSettingsPage() {
         }
         failedSyncs={failedSyncs}
       />
+
+      {showWebhooks && <WebhooksPanel endpoints={webhookEndpoints} />}
     </div>
   );
 }

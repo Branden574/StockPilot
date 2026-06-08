@@ -7,6 +7,7 @@ import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse'
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRows } from './lib/paginate';
 import { audit } from './audit';
+import { dispatchEvent } from './integration-events';
 import { ItemImagesService } from './item-images';
 
 const lineInputSchema = z.object({
@@ -276,6 +277,12 @@ export class PurchaseOrdersService {
       },
       this.ctx,
     );
+    // Fan out to configured webhooks / Slack / Teams (best-effort).
+    void dispatchEvent(this.ctx.organizationId, 'po.created', {
+      id: po.id as string,
+      poNumber,
+      lineCount: input.lines.length,
+    });
 
     return { id: po.id as string, poNumber };
   }
