@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 
 import { audit } from './audit';
+import { dispatchEvent } from './integration-events';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -507,6 +508,11 @@ export class RMAService {
       },
       this.ctx,
     );
+    void dispatchEvent(this.ctx.organizationId, 'return.created', {
+      id: header.id,
+      returnNumber: header.return_number,
+      orderNumber: typeof orderRequestId === 'string' ? orderRequestId.slice(0, 8).toUpperCase() : null,
+    });
 
     // Zendesk shell: surface a new return as a ticket (best-effort; dormant
     // until a zendesk connection is active — the drainer skips otherwise).
