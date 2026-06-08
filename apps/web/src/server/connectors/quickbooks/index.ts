@@ -15,6 +15,7 @@ import { buildBillFromReceipt, resolveVendor, round2, type BillLine } from './bi
 import { QboClient, type QboEnv } from './client';
 import { buildReturnCreditJournalEntry, type ReturnCreditLine } from './creditmemo';
 import { refreshTokens } from './oauth';
+import { buildPurchaseOrderFromPo } from './purchase-order';
 
 /** QBO settings persisted on the connection (see ConnectionsService). */
 interface QboSettings {
@@ -62,7 +63,7 @@ function isRetryableQboError(e: unknown): boolean {
 export const quickbooksConnector: Connector = {
   id: 'quickbooks',
   modes: ['push'],
-  subscribedTopics: ['receipt.posted', 'return.closed'],
+  subscribedTopics: ['receipt.posted', 'return.closed', 'purchase_order.ordered'],
 
   /**
    * Refresh the access token. Intuit ROTATES the refresh token on most
@@ -95,10 +96,85 @@ export const quickbooksConnector: Connector = {
     if (event.topic === 'return.closed') {
       return handleReturnClosed(event, conn, secrets, deps);
     }
+    if (event.topic === 'purchase_order.ordered') {
+      return handlePurchaseOrderOrdered(event, conn, secrets, deps);
+    }
     // Not our topic — ack so the ledger marks it done.
     return { ok: true };
   },
 };
+
+/**
+ * purchase_order.ordered → QBO PurchaseOrder. The payload carries no line items,
+ * so rehydrate the PO (supplier_id, total) by aggregate id, resolve the vendor
+ * (reusing resolveVendor), and POST a single account-based PurchaseOrder for the
+ * PO total against the configured expense account. Idempotent on the `po-<id>`
+ * requestid. FAIL-CLOSED reads mirror the Bill path (throw on a transient DB
+ * error so the drainer retries; ACK only when the read succeeded + row absent).
+ */
+async function handlePurchaseOrderOrdered(
+  event: OutboxEvent,
+  conn: ConnectionRef,
+  secrets: ConnectorSecrets,
+  deps: ConnectorDeps,
+): Promise<PushResult> {
+  const settings = conn.settings as QboSettings;
+
+  // Reuse the Bill expense account — a v1 PO books its total against the same
+  // configured expense GL. GRACEFUL CONFIG GAP: fail non-retryably if unset.
+  const expenseAccountId = settings.accountIds?.billExpense;
+  if (!expenseAccountId) {
+    return { ok: false, retryable: false, error: 'QuickBooks expense account not configured' };
+  }
+
+  const admin = deps.admin as { from: (t: string) => any };
+
+  const { data: po, error: poErr } = await admin
+    .from('purchase_orders')
+    .select('id, supplier_id, total')
+    .eq('id', event.aggregateId)
+    .maybeSingle();
+  if (poErr) throw new Error(`purchase_orders select: ${poErr.message}`);
+  if (!po) return { ok: true };
+
+  const { data: supplier, error: supplierErr } = po.supplier_id
+    ? await admin.from('suppliers').select('id, name').eq('id', po.supplier_id).maybeSingle()
+    : { data: null, error: null };
+  if (supplierErr) throw new Error(`suppliers select: ${supplierErr.message}`);
+
+  // A $0 (or rounds-to-zero) PO has nothing to book — QBO rejects it 4xx, so ACK
+  // rather than burn the retry budget (mirrors the Bill zero-amount short-circuit).
+  const amount = Number(po.total) || 0;
+  if (round2(amount) <= 0) return { ok: true };
+
+  const qboEnv: QboEnv = settings.env ?? env.QBO_ENV;
+  const client = new QboClient(conn.externalAccountId!, secrets, qboEnv);
+
+  try {
+    const vendorId = supplier
+      ? await resolveVendor(client, deps, conn, supplier)
+      : settings.accountIds?.defaultVendorId;
+    if (!vendorId) {
+      return {
+        ok: false,
+        retryable: false,
+        error: 'No QuickBooks vendor for PO (no supplier mapping and no default vendor)',
+      };
+    }
+
+    const body = buildPurchaseOrderFromPo({ vendorId, expenseAccountId, amount });
+    const requestId = `po-${po.id}`.slice(0, 50);
+    const created = await client.post('/purchaseorder', body, requestId);
+    const externalId = (created.PurchaseOrder as { Id?: string } | undefined)?.Id;
+    return { ok: true, externalId };
+  } catch (e: unknown) {
+    return {
+      ok: false,
+      retryable: isRetryableQboError(e),
+      error: e instanceof Error ? e.message : 'qbo purchase order failed',
+    };
+  }
+}
 
 /**
  * receipt.posted → QBO Bill. Rehydrates receipt → purchase_orders → suppliers
