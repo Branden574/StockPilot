@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { reportError } from '@/lib/error-reporter';
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { dispatchEvent } from './integration-events';
 
 import type {
   PostReceiptInput,
@@ -211,6 +212,14 @@ export class ReceivingService {
         totalRejected,
       },
       p_dedupe_key: `receipt.posted:${receipt.id}`,
+    });
+
+    // Fan out to configured webhooks / Slack / Teams (best-effort, no-op when
+    // the org has no endpoints).
+    void dispatchEvent(this.ctx.organizationId, 'po.received', {
+      id: input.purchaseOrderId,
+      receiptNumber: receipt.receipt_number,
+      totalAccepted,
     });
 
     // Auto-unarchive any items that were archived before this receipt. A
