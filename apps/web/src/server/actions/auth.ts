@@ -3,7 +3,9 @@
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { after } from 'next/server';
 
+import { noteLoginDevice } from '@/lib/auth/login-device';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -270,6 +272,16 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
       mfa_required: nextPath === '/signin/mfa',
     },
   });
+
+  // New-device sign-in alert. Runs AFTER the response (`after`) so it adds zero
+  // latency to the login round-trip. Best-effort: emails only for a new device
+  // on an account that already has known devices (first device = silent
+  // baseline). Fires here on the password step — i.e. even before TOTP — so a
+  // stolen password used from a new device still alerts the real owner.
+  if (userId) {
+    const ua = (await headers()).get('user-agent');
+    after(() => noteLoginDevice({ userId, email: parsed.data.email, userAgent: ua, ip }));
+  }
 
   return ok({ next: nextPath });
 }
