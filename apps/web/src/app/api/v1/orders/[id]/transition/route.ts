@@ -1,0 +1,114 @@
+import { NextResponse, type NextRequest } from 'next/server';
+import { z } from 'zod';
+
+import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
+import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { OrderRequestsService } from '@/server/services/order-requests';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+/**
+ * Mobile order-pipeline transitions — the REST parity for the web
+ * ManagerActionsPanel (which uses server actions, web-only). One dispatcher over
+ * OrderRequestsService; each method self-gates module + permission + status, so
+ * this stays a thin wrapper and authorization is enforced server-side (a member
+ * without the right role gets the service's ServiceError → 403, never a bypass).
+ *
+ * Body: { action, reason?, target?, deliveryUserId?, internalNotes? }
+ */
+const bodySchema = z.object({
+  action: z.enum([
+    'approve',
+    'deny',
+    'generate_pick_slip',
+    'complete_picking',
+    'generate_packing_slips',
+    'stage',
+    'assign_delivery',
+    'mark_in_transit',
+    'cancel',
+  ]),
+  reason: z.string().max(500).optional(),
+  target: z.enum(['staged_for_pickup', 'staged_for_delivery']).optional(),
+  deliveryUserId: z.string().uuid().optional(),
+  internalNotes: z.string().max(2000).optional(),
+});
+
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const ctx = await withApiContext(req);
+  if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+
+  const { id } = await params;
+  const parsed = bodySchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: 'validation_error', message: parsed.error.issues[0]?.message ?? 'Invalid request' },
+      { status: 400 },
+    );
+  }
+  const a = parsed.data;
+  const svc = new OrderRequestsService(ctx);
+
+  try {
+    let order;
+    switch (a.action) {
+      case 'approve':
+        order = await svc.approve(id, a.internalNotes ?? null);
+        break;
+      case 'deny':
+        if (!a.reason?.trim()) {
+          return NextResponse.json(
+            { error: 'validation_error', message: 'A reason is required to deny.' },
+            { status: 400 },
+          );
+        }
+        order = await svc.deny(id, a.reason.trim());
+        break;
+      case 'generate_pick_slip':
+        order = await svc.generatePickSlip(id);
+        break;
+      case 'complete_picking':
+        order = await svc.completePicking(id);
+        break;
+      case 'generate_packing_slips':
+        order = await svc.generatePackingSlips(id);
+        break;
+      case 'stage':
+        if (!a.target) {
+          return NextResponse.json(
+            { error: 'validation_error', message: 'A staging target is required.' },
+            { status: 400 },
+          );
+        }
+        order = await svc.stageOrder(id, a.target);
+        break;
+      case 'assign_delivery':
+        if (!a.deliveryUserId) {
+          return NextResponse.json(
+            { error: 'validation_error', message: 'A delivery user is required.' },
+            { status: 400 },
+          );
+        }
+        order = await svc.assignDelivery(id, a.deliveryUserId);
+        break;
+      case 'mark_in_transit':
+        order = await svc.markInTransit(id);
+        break;
+      case 'cancel':
+        order = await svc.cancel(id, a.reason?.trim() || null);
+        break;
+    }
+    return NextResponse.json({ order });
+  } catch (e) {
+    if (e instanceof ServiceError) {
+      return NextResponse.json(
+        { error: e.code, message: e.message },
+        { status: serviceErrorStatus(e.code) },
+      );
+    }
+    void reportError(e, { tag: 'api.v1.orders.transition', extra: { action: a.action } });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  }
+}

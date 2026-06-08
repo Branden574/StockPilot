@@ -13,6 +13,7 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,6 +27,13 @@ import { useEnabledModules } from '@/lib/enabled-modules';
 import { resizeForUpload } from '@/lib/image-resize';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import { isLiveLocationActive, startLiveLocation, stopLiveLocation } from '@/lib/location-task';
+import { API_BASE } from '@/lib/api';
+import {
+  listOrderDrivers,
+  transitionOrder,
+  type OrderAction,
+  type OrderDriver,
+} from '@/lib/orders-api';
 import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
@@ -81,6 +89,7 @@ interface OrderHeader {
   createdAt: string | null;
   assignedDeliveryUserId: string | null;
   fulfillmentType: string | null;
+  signatureToken: string | null;
 }
 
 interface Attachment {
@@ -110,6 +119,13 @@ export default function OrderDetail() {
   const [sigOpen, setSigOpen] = React.useState(false);
   const [viewerUrl, setViewerUrl] = React.useState<string | null>(null);
   const [shipment, setShipment] = React.useState<OrderShipment | null>(null);
+
+  // Pipeline-action state (manager parity with the web ManagerActionsPanel).
+  const [acting, setActing] = React.useState<string | null>(null);
+  const [denyOpen, setDenyOpen] = React.useState(false);
+  const [denyReason, setDenyReason] = React.useState('');
+  const [driverOpen, setDriverOpen] = React.useState(false);
+  const [drivers, setDrivers] = React.useState<OrderDriver[] | null>(null);
 
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
@@ -222,7 +238,7 @@ export default function OrderDetail() {
         // showed "Unknown requester"). RLS lets org members read each other.
         `id, status, requester_name, requester_email, requester_user_id, requester_org_label,
          signature_data_url, signed_by_name, signed_at, created_at,
-         assigned_delivery_user_id, fulfillment_type,
+         assigned_delivery_user_id, fulfillment_type, signature_token,
          warehouse:warehouses!warehouse_id (name),
          requester:user_profiles!requester_user_id (full_name, email)`,
       )
@@ -250,6 +266,7 @@ export default function OrderDetail() {
         createdAt: (r.created_at as string | null) ?? null,
         assignedDeliveryUserId: (r.assigned_delivery_user_id as string | null) ?? null,
         fulfillmentType: (r.fulfillment_type as string | null) ?? null,
+        signatureToken: (r.signature_token as string | null) ?? null,
       });
     }
     await loadAttachments();
@@ -271,6 +288,100 @@ export default function OrderDetail() {
     await load();
     setRefreshing(false);
   }
+
+  // Advance the order through the pipeline, then reload. The server enforces
+  // module + permission + status; we just surface its message on failure.
+  async function act(body: OrderAction, busyKey: string) {
+    if (!id) return;
+    setActing(busyKey);
+    try {
+      await transitionOrder(id, body);
+      await load();
+    } catch (e) {
+      Alert.alert('Could not update order', e instanceof Error ? e.message : 'Please try again.');
+    } finally {
+      setActing(null);
+    }
+  }
+
+  async function submitDeny() {
+    const reason = denyReason.trim();
+    if (!reason) {
+      Alert.alert('Reason required', 'Enter a reason before denying.');
+      return;
+    }
+    setDenyOpen(false);
+    await act({ action: 'deny', reason }, 'deny');
+    setDenyReason('');
+  }
+
+  async function openDriverPicker() {
+    setDriverOpen(true);
+    if (drivers === null && id) {
+      try {
+        setDrivers(await listOrderDrivers(id));
+      } catch (e) {
+        setDriverOpen(false);
+        Alert.alert('Could not load drivers', e instanceof Error ? e.message : 'Please try again.');
+      }
+    }
+  }
+
+  function collectSignature() {
+    if (!order?.signatureToken) {
+      Alert.alert('No signature link', 'Generate the packing slip first to create a signature link.');
+      return;
+    }
+    Linking.openURL(`${API_BASE}/orders/sign/${order.signatureToken}`).catch(() =>
+      Alert.alert('Could not open', 'Unable to open the signature page.'),
+    );
+  }
+
+  // Whether the current status exposes any manager action (so we don't render an
+  // empty section at, e.g., a terminal status).
+  const ft = order?.fulfillmentType;
+  const st = order?.status;
+  const hasPipelineActions =
+    isManager &&
+    !!st &&
+    (st === 'pending_approval' ||
+      st === 'approved' ||
+      st === 'pick_slip_generated' ||
+      st === 'picking_in_progress' ||
+      st === 'picking_complete' ||
+      (st === 'packing_slip_generated' && (ft === 'pickup' || ft === 'delivery')) ||
+      st === 'staged_for_delivery' ||
+      st === 'staged_for_pickup' ||
+      st === 'in_transit');
+
+  const actionBtn = (
+    label: string,
+    busyKey: string,
+    onPress: () => void,
+    tone: 'primary' | 'danger' | 'default' = 'primary',
+  ) => {
+    const isBusy = acting === busyKey;
+    const bg = tone === 'primary' ? c.ink : tone === 'danger' ? '#b42318' : 'transparent';
+    const fg = tone === 'default' ? c.ink : tone === 'danger' ? '#fff' : c.paper;
+    return (
+      <Pressable
+        key={label}
+        onPress={onPress}
+        disabled={acting !== null}
+        style={[
+          styles.addBtn,
+          {
+            backgroundColor: bg,
+            borderWidth: 1,
+            borderColor: tone === 'default' ? c.hair : 'transparent',
+            opacity: acting !== null && !isBusy ? 0.5 : 1,
+          },
+        ]}
+      >
+        {isBusy ? <ActivityIndicator color={fg} /> : <Mono size={13} color={fg}>{label}</Mono>}
+      </Pressable>
+    );
+  };
 
   async function uploadAsset(uri: string) {
     if (!orgId || !id) return;
@@ -411,6 +522,62 @@ export default function OrderDetail() {
               {[order.orgLabel, order.warehouseName].filter(Boolean).join(' · ') || '—'}
             </Mono>
           </View>
+
+          {hasPipelineActions ? (
+            <View style={{ gap: 8 }}>
+              <Eyebrow>MANAGER ACTIONS</Eyebrow>
+              {order.status === 'pending_approval' ? (
+                <>
+                  {actionBtn('Approve', 'approve', () => void act({ action: 'approve' }, 'approve'))}
+                  {actionBtn('Deny', 'deny', () => setDenyOpen(true), 'danger')}
+                </>
+              ) : null}
+              {order.status === 'approved'
+                ? actionBtn('Generate pick slip', 'gps', () =>
+                    void act({ action: 'generate_pick_slip' }, 'gps'),
+                  )
+                : null}
+              {order.status === 'pick_slip_generated' || order.status === 'picking_in_progress'
+                ? actionBtn('Mark picking complete', 'cp', () =>
+                    void act({ action: 'complete_picking' }, 'cp'),
+                  )
+                : null}
+              {order.status === 'picking_complete'
+                ? actionBtn('Generate packing slips', 'gpk', () =>
+                    void act({ action: 'generate_packing_slips' }, 'gpk'),
+                  )
+                : null}
+              {order.status === 'packing_slip_generated' && order.fulfillmentType === 'pickup'
+                ? actionBtn('Mark staged for pickup', 'stage', () =>
+                    void act({ action: 'stage', target: 'staged_for_pickup' }, 'stage'),
+                  )
+                : null}
+              {order.status === 'packing_slip_generated' && order.fulfillmentType === 'delivery'
+                ? actionBtn('Mark staged for delivery', 'stage', () =>
+                    void act({ action: 'stage', target: 'staged_for_delivery' }, 'stage'),
+                  )
+                : null}
+              {order.status === 'staged_for_delivery'
+                ? actionBtn(
+                    order.assignedDeliveryUserId ? 'Reassign delivery' : 'Assign delivery',
+                    'assign',
+                    () => void openDriverPicker(),
+                    'default',
+                  )
+                : null}
+              {order.status === 'staged_for_delivery' && order.assignedDeliveryUserId
+                ? actionBtn('Mark in transit', 'transit', () =>
+                    void act({ action: 'mark_in_transit' }, 'transit'),
+                  )
+                : null}
+              {order.status === 'staged_for_pickup' || order.status === 'in_transit'
+                ? actionBtn('Collect signature', 'sig', collectSignature)
+                : null}
+              <Mono size={10.5} color={c.ink4}>
+                Same actions as the web dashboard — changes sync instantly.
+              </Mono>
+            </View>
+          ) : null}
 
           {canShareLocation ? (
             <View style={{ gap: 8 }}>
@@ -637,6 +804,107 @@ export default function OrderDetail() {
           <Mono size={11} color="rgba(255,255,255,0.7)" style={{ marginTop: 16 }}>
             Tap anywhere to close
           </Mono>
+        </Pressable>
+      </Modal>
+
+      {/* Deny-reason capture (the requester sees this reason). */}
+      <Modal visible={denyOpen} transparent animationType="fade" onRequestClose={() => setDenyOpen(false)}>
+        <Pressable
+          onPress={() => setDenyOpen(false)}
+          style={{
+            flex: 1,
+            justifyContent: 'center',
+            padding: 24,
+            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
+          }}
+        >
+          <Pressable onPress={() => undefined} style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+            <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Deny this request?</Body>
+            <Mono size={11} color={c.ink4}>The requester is notified with the reason you provide.</Mono>
+            <TextInput
+              value={denyReason}
+              onChangeText={setDenyReason}
+              placeholder="Reason"
+              placeholderTextColor={c.ink4}
+              multiline
+              style={{
+                minHeight: 72,
+                borderWidth: 1,
+                borderColor: c.hair,
+                borderRadius: 10,
+                padding: 10,
+                color: c.ink,
+                fontFamily: FONT.mono,
+                fontSize: 13,
+                textAlignVertical: 'top',
+              }}
+            />
+            <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
+              <Pressable
+                onPress={() => setDenyOpen(false)}
+                style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
+              >
+                <Mono size={13} color={c.ink}>Cancel</Mono>
+              </Pressable>
+              <Pressable
+                onPress={() => void submitDeny()}
+                style={[styles.addBtn, { backgroundColor: '#b42318', paddingHorizontal: 18 }]}
+              >
+                <Mono size={13} color="#fff">Deny</Mono>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Driver picker for assign / reassign delivery. */}
+      <Modal visible={driverOpen} transparent animationType="slide" onRequestClose={() => setDriverOpen(false)}>
+        <Pressable
+          onPress={() => setDriverOpen(false)}
+          style={{
+            flex: 1,
+            justifyContent: 'flex-end',
+            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
+          }}
+        >
+          <Pressable
+            onPress={() => undefined}
+            style={{ backgroundColor: c.card, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, gap: 10 }}
+          >
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Assign delivery</Body>
+              <Pressable onPress={() => setDriverOpen(false)} hitSlop={8}>
+                <X size={18} color={c.ink4} />
+              </Pressable>
+            </View>
+            {drivers === null ? (
+              <ActivityIndicator color={c.ink} style={{ marginVertical: 24 }} />
+            ) : drivers.length === 0 ? (
+              <Mono size={12} color={c.ink4} style={{ paddingVertical: 16 }}>No team members found.</Mono>
+            ) : (
+              <ScrollView style={{ maxHeight: 360 }}>
+                {drivers.map((d) => {
+                  const current = d.id === order?.assignedDeliveryUserId;
+                  return (
+                    <Pressable
+                      key={d.id}
+                      onPress={() => {
+                        setDriverOpen(false);
+                        void act({ action: 'assign_delivery', deliveryUserId: d.id }, 'assign');
+                      }}
+                      style={{ paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: c.hair }}
+                    >
+                      <Body size={14} color={c.ink}>
+                        {d.name}
+                        {current ? '  · current' : ''}
+                      </Body>
+                      <Mono size={11} color={c.ink4}>{d.email}</Mono>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </Pressable>
         </Pressable>
       </Modal>
     </View>
