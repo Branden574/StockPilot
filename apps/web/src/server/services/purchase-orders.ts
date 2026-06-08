@@ -310,6 +310,21 @@ export class PurchaseOrdersService {
       },
       this.ctx,
     );
+    if (status === 'ordered') {
+      // Publish to the connector outbox → the QuickBooks connector pushes a QBO
+      // PurchaseOrder (drained by the every-5-min cron; dedupe key makes a
+      // draft↔ordered toggle idempotent). Best-effort: never fails the status
+      // change. Only fires when the org has an active QBO connection + the
+      // api/integrations module enabled (the drainer gates on that).
+      void this.ctx.supabase.rpc('publish_outbox', {
+        p_org_id: this.ctx.organizationId,
+        p_topic: 'purchase_order.ordered',
+        p_aggregate_type: 'purchase_order',
+        p_aggregate_id: id,
+        p_payload: { poId: id },
+        p_dedupe_key: `purchase_order.ordered:${id}`,
+      });
+    }
   }
 
   /**
