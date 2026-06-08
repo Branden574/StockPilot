@@ -1,10 +1,18 @@
 import 'server-only';
 
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 
 import { reportError } from '@/lib/error-reporter';
 import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
+
+import {
+  assertModuleEnabled,
+  assertPermission,
+  ServiceError,
+  withContext,
+  type ServiceContext,
+} from './context';
 
 /**
  * Outbound event delivery — the engine behind generic webhooks + Slack/Teams
@@ -85,6 +93,8 @@ export function describeEvent(eventType: string, data: Record<string, unknown>):
       return { title: '↩️ Return started', summary: `A return was started${s('orderNumber') ? ` for order ${s('orderNumber')}` : ''}.` };
     case 'cycle_count.completed':
       return { title: '🔢 Cycle count complete', summary: `A cycle count finished${s('warehouse') ? ` at ${s('warehouse')}` : ''}.` };
+    case 'test.ping':
+      return { title: '✅ StockPilot test', summary: 'Your alerts are connected — this is a test event.' };
     default:
       return { title: 'StockPilot event', summary: eventType };
   }
@@ -273,4 +283,182 @@ export async function drainIntegrationDeliveries(
     void reportError(e, { tag: 'integration-events.drain' });
   }
   return { attempted, delivered };
+}
+
+// ── One-off test delivery (sends a synthetic event; persists no row) ─────────
+export async function sendTest(endpoint: {
+  type: EndpointType;
+  url: string;
+  secret: string | null;
+}): Promise<{ ok: boolean; status: number | null; error: string | null }> {
+  const envelope = {
+    id: 'test',
+    event: 'test.ping',
+    organization_id: 'test',
+    created_at: new Date().toISOString(),
+    data: { message: 'StockPilot test event' },
+  };
+  const { body, headers } = buildRequest(
+    { id: 'test', organization_id: 'test', type: endpoint.type, url: endpoint.url, secret: endpoint.secret },
+    'test.ping',
+    envelope,
+  );
+  try {
+    const res = await safeFetch(endpoint.url, {
+      method: 'POST',
+      headers,
+      body,
+      signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
+    });
+    const ok = res.status >= 200 && res.status < 300;
+    return { ok, status: res.status, error: ok ? null : `HTTP ${res.status}` };
+  } catch (e) {
+    return { ok: false, status: null, error: e instanceof Error ? e.message : 'delivery failed' };
+  }
+}
+
+// ── Admin-managed endpoint CRUD ──────────────────────────────────────────────
+export interface ManagedEndpoint {
+  id: string;
+  type: EndpointType;
+  url: string;
+  eventTypes: string[];
+  enabled: boolean;
+  description: string | null;
+  createdAt: string;
+  lastDeliveryAt: string | null;
+  lastStatus: string | null;
+  hasSecret: boolean;
+}
+
+export class IntegrationEndpointsService {
+  constructor(private readonly ctx: ServiceContext) {}
+  static async forCurrentUser() {
+    return new IntegrationEndpointsService(await withContext());
+  }
+
+  /** integrations module + admin-level manage permission (matches the RLS floor). */
+  private gate() {
+    assertModuleEnabled(this.ctx, 'integrations');
+    assertPermission(this.ctx, 'integrations:manage');
+  }
+
+  async list(): Promise<ManagedEndpoint[]> {
+    this.gate();
+    const { data, error } = await this.ctx.supabase
+      .from('integration_endpoints')
+      .select(
+        'id, type, url, event_types, enabled, description, created_at, last_delivery_at, last_status, secret',
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .order('created_at', { ascending: false });
+    if (error) throw new ServiceError('internal_error', error.message);
+    return (data ?? []).map((r) => {
+      const row = r as Record<string, unknown>;
+      return {
+        id: row.id as string,
+        type: row.type as EndpointType,
+        url: row.url as string,
+        eventTypes: (row.event_types as string[] | null) ?? [],
+        enabled: Boolean(row.enabled),
+        description: (row.description as string | null) ?? null,
+        createdAt: row.created_at as string,
+        lastDeliveryAt: (row.last_delivery_at as string | null) ?? null,
+        lastStatus: (row.last_status as string | null) ?? null,
+        hasSecret: Boolean(row.secret),
+      };
+    });
+  }
+
+  async create(input: {
+    type: EndpointType;
+    url: string;
+    eventTypes: string[];
+    description?: string | null;
+  }): Promise<{ id: string; secret: string | null }> {
+    this.gate();
+    if (!['webhook', 'slack', 'teams'].includes(input.type)) {
+      throw new ServiceError('validation_error', 'Unknown endpoint type.');
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(input.url);
+    } catch {
+      throw new ServiceError('validation_error', 'Enter a valid URL.');
+    }
+    if (parsed.protocol !== 'https:') {
+      throw new ServiceError('validation_error', 'The URL must use https://.');
+    }
+    const events = input.eventTypes.filter((e) =>
+      (INTEGRATION_EVENT_TYPES as readonly string[]).includes(e),
+    );
+    if (events.length === 0) {
+      throw new ServiceError('validation_error', 'Choose at least one event to send.');
+    }
+    // Webhooks get an HMAC signing secret (shown once); Slack/Teams authenticate
+    // via their unguessable incoming-webhook URL.
+    const secret = input.type === 'webhook' ? `whsec_${randomBytes(24).toString('hex')}` : null;
+    const { data, error } = await this.ctx.supabase
+      .from('integration_endpoints')
+      .insert({
+        organization_id: this.ctx.organizationId,
+        type: input.type,
+        url: input.url,
+        secret,
+        event_types: events,
+        description: input.description?.trim() || null,
+        created_by: this.ctx.userId,
+      })
+      .select('id')
+      .single();
+    if (error) throw new ServiceError('internal_error', error.message);
+    return { id: (data as { id: string }).id, secret };
+  }
+
+  async setEnabled(id: string, enabled: boolean): Promise<void> {
+    this.gate();
+    const { error } = await this.ctx.supabase
+      .from('integration_endpoints')
+      .update({ enabled, updated_at: new Date().toISOString() })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+  }
+
+  async remove(id: string): Promise<void> {
+    this.gate();
+    const { error } = await this.ctx.supabase
+      .from('integration_endpoints')
+      .delete()
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id);
+    if (error) throw new ServiceError('internal_error', error.message);
+  }
+
+  async rotateSecret(id: string): Promise<{ secret: string }> {
+    this.gate();
+    const secret = `whsec_${randomBytes(24).toString('hex')}`;
+    const { error } = await this.ctx.supabase
+      .from('integration_endpoints')
+      .update({ secret, updated_at: new Date().toISOString() })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .eq('type', 'webhook');
+    if (error) throw new ServiceError('internal_error', error.message);
+    return { secret };
+  }
+
+  async test(id: string): Promise<{ ok: boolean; status: number | null; error: string | null }> {
+    this.gate();
+    const { data, error } = await this.ctx.supabase
+      .from('integration_endpoints')
+      .select('type, url, secret')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('not_found', 'Endpoint not found.');
+    const row = data as { type: EndpointType; url: string; secret: string | null };
+    return sendTest({ type: row.type, url: row.url, secret: row.secret ?? null });
+  }
 }
