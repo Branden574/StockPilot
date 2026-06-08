@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { lookupUpc, buildAiDescriptionPrompt } from '@/lib/upc-lookup';
 
 export const runtime = 'nodejs';
@@ -27,6 +28,18 @@ export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
+
+  // Per-user throttle: this calls paid external APIs (UPCitemdb + Gemini).
+  // 60/min is generous for rapid barcode scanning but caps a runaway loop or a
+  // compromised token from burning quota. Fail-open (authenticated surface).
+  const rl = await checkRateLimit(`upc-lookup:user:${ctx.userId}`, 60, 60_000);
+  if (!rl.allowed) {
+    const retryAfter = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000));
+    return NextResponse.json(
+      { error: 'rate_limited', message: 'Too many lookups — slow down a moment.' },
+      { status: 429, headers: { 'retry-after': String(retryAfter) } },
+    );
   }
 
   const url = new URL(req.url);

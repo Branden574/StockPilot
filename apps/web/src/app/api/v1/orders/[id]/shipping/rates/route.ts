@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { ShippingService } from '@/server/services/shipping';
 
@@ -31,6 +32,17 @@ const bodySchema = z.object({
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+
+  // Per-user throttle: each call creates a (non-billable) EasyPost shipment.
+  // 20/min is plenty for real rate-shopping; caps abuse of the carrier API.
+  const rl = await checkRateLimit(`shipping-rates:user:${ctx.userId}`, 20, 60_000);
+  if (!rl.allowed) {
+    const retryAfter = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000));
+    return NextResponse.json(
+      { error: 'rate_limited', message: 'Too many rate requests — try again shortly.' },
+      { status: 429, headers: { 'retry-after': String(retryAfter) } },
+    );
+  }
 
   const { id } = await params;
 

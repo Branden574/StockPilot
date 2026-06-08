@@ -1,9 +1,14 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { clientIpFromRequest } from '@/lib/client-ip';
+import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const ONE_HOUR_MS = 60 * 60 * 1000;
 
 /**
  * Public order-request status read.
@@ -35,6 +40,33 @@ export async function GET(
   const token = (url.searchParams.get('token') ?? '').trim();
   if (!email || !token) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
+  }
+
+  // Rate-limit BEFORE the DB lookups so a brute-forcer guessing the
+  // token+id+email triad can't hammer this for free. Closed mode (deny on a
+  // limiter outage) since this is unauthenticated. Limits are generous for real
+  // humans — incl. a shared office/NAT IP — but a scripted loop trips fast.
+  const ip = clientIpFromRequest(req);
+  const [ipLimit, tokenLimit] = await Promise.all([
+    checkRateLimit(`public-order-read:ip:${ip}`, 120, ONE_HOUR_MS, 'closed'),
+    checkRateLimit(`public-order-read:token:${token}`, 600, ONE_HOUR_MS, 'closed'),
+  ]);
+  const denied = !ipLimit.allowed ? ipLimit : !tokenLimit.allowed ? tokenLimit : null;
+  if (denied) {
+    const retryAfter = Math.max(1, Math.ceil((denied.resetAt - Date.now()) / 1000));
+    void reportError(new Error('public order-read rate limit hit'), {
+      tag: 'public.order-read.rate-limited',
+      level: 'warning',
+      extra: {
+        bucket: !ipLimit.allowed ? 'ip' : 'token',
+        count: denied.count,
+        tokenPrefix: token.slice(0, 8),
+      },
+    });
+    return NextResponse.json(
+      { error: 'rate_limited' },
+      { status: 429, headers: { 'retry-after': String(retryAfter) } },
+    );
   }
 
   const admin = createAdminClient();
