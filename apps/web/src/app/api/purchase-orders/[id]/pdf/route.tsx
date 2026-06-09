@@ -5,6 +5,7 @@ import { renderToStream } from '@react-pdf/renderer';
 import { hasPermission } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { PurchaseOrderPdf, type PoPdfLine } from '@/lib/pdf/po';
 import { audit } from '@/server/services/audit';
@@ -31,6 +32,8 @@ export async function GET(
     // as cookie sessions — /api/* bypasses middleware so this is the only
     // place auth is resolved.
     const ctx = await withApiContext(req);
+    const limited = ctx && (await exportRateLimited(ctx.userId));
+    if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
