@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { exportRateLimited } from '@/lib/export-rate-limit';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import { renderCustomerPackingSlipPdf } from '@/lib/pdf/packing-slip-customer';
@@ -25,6 +26,8 @@ export async function GET(
 ) {
   const { id } = await params;
   const ctx = await withApiContext(req);
+  const limited = ctx && (await exportRateLimited(ctx.userId));
+  if (limited) return limited;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }

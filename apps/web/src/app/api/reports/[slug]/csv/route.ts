@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { exportRateLimited } from '@/lib/export-rate-limit';
 import { ServiceError } from '@/server/services/context';
 import { ReportsService } from '@/server/services/reports';
 import { csvFilename, toCsv } from '@/lib/csv';
@@ -38,6 +39,8 @@ export async function GET(
   const url = new URL(request.url);
   try {
     const ctx = await withApiContext(request);
+    const limited = ctx && (await exportRateLimited(ctx.userId));
+    if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }

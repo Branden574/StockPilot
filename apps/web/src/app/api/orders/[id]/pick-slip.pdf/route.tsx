@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { exportRateLimited } from '@/lib/export-rate-limit';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import { renderPickSlipPdf } from '@/lib/pdf/pick-slip';
@@ -23,6 +24,8 @@ export async function GET(
   // failure path returns a clean 401 instead of throwing NEXT_REDIRECT
   // (which the try/catch below would mis-classify as internal_error).
   const ctx = await withApiContext(req);
+  const limited = ctx && (await exportRateLimited(ctx.userId));
+  if (limited) return limited;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }

@@ -2,6 +2,7 @@ import QRCode from 'qrcode';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { exportRateLimited } from '@/lib/export-rate-limit';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { env } from '@/lib/env';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
@@ -27,6 +28,8 @@ export async function GET(
 ) {
   const { id } = await params;
   const ctx = await withApiContext(req);
+  const limited = ctx && (await exportRateLimited(ctx.userId));
+  if (limited) return limited;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
