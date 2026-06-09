@@ -217,23 +217,32 @@ export async function dispatchEvent(
       .contains('event_types', [eventType]);
     if (error || !endpoints || endpoints.length === 0) return;
 
-    for (const ep of endpoints as EndpointRow[]) {
-      const { data: inserted, error: insErr } = await admin
-        .from('integration_deliveries')
-        .insert({
+    // Batch-insert one pending delivery per endpoint (single round trip), then
+    // fire the immediate attempts in PARALLEL. Previously this was a per-endpoint
+    // insert + sequential await — O(N) round trips that blocked each other on the
+    // 8s delivery timeout (audit 2026-06-09). Failures stay 'pending' for the cron.
+    const eps = endpoints as EndpointRow[];
+    const { data: rows, error: insErr } = await admin
+      .from('integration_deliveries')
+      .insert(
+        eps.map((ep) => ({
           organization_id: organizationId,
           endpoint_id: ep.id,
           event_type: eventType,
           payload: data,
           status: 'pending',
           max_attempts: MAX_ATTEMPTS,
-        })
-        .select('id, endpoint_id, event_type, payload, attempts, max_attempts')
-        .single();
-      if (insErr || !inserted) continue;
-      // Immediate attempt (best-effort); failures stay 'pending' for the cron.
-      await attemptDelivery(admin, ep, inserted as DeliveryRow).catch(() => {});
-    }
+        })),
+      )
+      .select('id, endpoint_id, event_type, payload, attempts, max_attempts');
+    if (insErr || !rows || rows.length === 0) return;
+    const epById = new Map(eps.map((e) => [e.id, e]));
+    await Promise.allSettled(
+      (rows as DeliveryRow[]).map((row) => {
+        const ep = epById.get(row.endpoint_id);
+        return ep ? attemptDelivery(admin, ep, row) : Promise.resolve(false);
+      }),
+    );
   } catch (e) {
     void reportError(e, { tag: 'integration-events.dispatch', extra: { eventType } });
   }
@@ -268,17 +277,28 @@ export async function drainIntegrationDeliveries(
       .in('id', endpointIds);
     const epById = new Map((eps ?? []).map((e) => [(e as EndpointRow).id, e as EndpointRow]));
 
+    // Partition into deliverable rows vs orphans (endpoint deleted out-of-band).
+    const live: DeliveryRow[] = [];
+    const deadIds: string[] = [];
     for (const d of due as DeliveryRow[]) {
-      const ep = epById.get(d.endpoint_id);
-      if (!ep) {
-        // Endpoint deleted out from under a pending delivery → mark dead.
-        await admin.from('integration_deliveries').update({ status: 'dead', error: 'endpoint removed' }).eq('id', d.id);
-        continue;
-      }
-      attempted += 1;
-      const ok = await attemptDelivery(admin, ep, d).catch(() => false);
-      if (ok) delivered += 1;
+      if (epById.has(d.endpoint_id)) live.push(d);
+      else deadIds.push(d.id);
     }
+    // ONE batch update for all orphans (was a sequential per-row update).
+    if (deadIds.length > 0) {
+      await admin
+        .from('integration_deliveries')
+        .update({ status: 'dead', error: 'endpoint removed' })
+        .in('id', deadIds);
+    }
+    // Attempt all due deliveries in PARALLEL (was sequential — a single slow/hung
+    // webhook blocked every later row for up to the 8s timeout). limit caps the
+    // fan-out per tick (audit 2026-06-09).
+    const results = await Promise.allSettled(
+      live.map((d) => attemptDelivery(admin, epById.get(d.endpoint_id)!, d)),
+    );
+    attempted = live.length;
+    delivered = results.filter((r) => r.status === 'fulfilled' && r.value === true).length;
   } catch (e) {
     void reportError(e, { tag: 'integration-events.drain' });
   }

@@ -1251,11 +1251,13 @@ export class OrderRequestsService {
 
   async markInTransit(id: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
-    // Permission gate: assigned driver OR manager+. The internal
-    // check below enforces driver-OR-manager; this assertPermission
-    // call gates anyone without the broader orders:approve permission
-    // out (staff who aren't on the order can't even reach this).
-    assertPermission(this.ctx, 'orders:approve');
+    // Authorization is "assigned driver OR manager+", enforced by the
+    // per-user/role check below (after the row loads). We must NOT gate on
+    // orders:approve up front: a staff member assigned as the delivery driver
+    // legitimately lacks that permission, and a blanket assert here blocked
+    // them from ever marking their OWN delivery in transit — the exact mobile
+    // workflow this is for (audit 2026-06-09). requireWarehouseAccess('write')
+    // + the assigned-driver/manager check below remain the real gates.
     await this.requireWarehouseAccess(id, 'write');
 
     const { data: row } = await this.ctx.supabase

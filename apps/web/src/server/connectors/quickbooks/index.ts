@@ -133,6 +133,7 @@ async function handlePurchaseOrderOrdered(
     .from('purchase_orders')
     .select('id, supplier_id, total')
     .eq('id', event.aggregateId)
+    .eq('organization_id', conn.organizationId) // defense-in-depth: tenant-scope the rehydration
     .maybeSingle();
   if (poErr) throw new Error(`purchase_orders select: ${poErr.message}`);
   if (!po) return { ok: true };
@@ -216,6 +217,7 @@ async function handleReceiptPosted(
       .from('receipts')
       .select('id, purchase_order_id, receipt_number')
       .eq('id', event.aggregateId)
+      .eq('organization_id', conn.organizationId) // defense-in-depth: tenant-scope the rehydration
       .maybeSingle();
     if (receiptErr) throw new Error(`receipts select: ${receiptErr.message}`);
     if (!receipt) return { ok: true };
@@ -349,6 +351,7 @@ async function handleReturnClosed(
     .from('returns')
     .select('id, return_number')
     .eq('id', event.aggregateId)
+    .eq('organization_id', conn.organizationId) // defense-in-depth: tenant-scope the rehydration
     .maybeSingle();
   if (retErr) throw new Error(`returns select: ${retErr.message}`);
   if (!ret) return { ok: true };

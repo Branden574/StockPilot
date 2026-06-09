@@ -48,6 +48,16 @@ yarn-error.log*
 !.env.example
 !**/.env.example
 
+# One-off local maintenance/inspection scripts. These read prod credentials
+# from .env.local.prod and some hardcode an absolute Desktop path — they must
+# NEVER be committed (security audit 2026-06-09). The single committed tool
+# (debug-po-pdf.mjs) is negated back below.
+apps/web/scripts/inspect-*.mjs
+apps/web/scripts/unarchive-*.mjs
+apps/web/scripts/unarchive-*.mjs.bak
+apps/web/scripts/backfill-*.mjs
+!apps/web/scripts/debug-po-pdf.mjs
+
 # personal secret notebooks — never commit
 secrets.local.md
 *.secrets.local
