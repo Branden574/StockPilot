@@ -53,6 +53,24 @@ const nextConfig: NextConfig = {
   },
 
   images: {
+    // Serve image bytes DIRECTLY (skip Vercel's image optimizer) — 2026-06-09.
+    //
+    // Why: the optimizer keys its cache on the full source URL. Item thumbnails
+    // are Supabase SIGNED urls whose token is minted via unstable_cache — which
+    // is per-DEPLOYMENT. Every deploy re-mints every thumbnail URL, the
+    // optimizer sees them all as brand-new images, and a normal deploy cadence
+    // burned 100% of the free-tier Image Optimization Transformations + Cache
+    // Writes quotas (Vercel "approaching limits" emails, 2026-06-08) — at the
+    // cap Vercel can pause the project.
+    //
+    // Why this is safe: item images are pre-resized at upload (200px thumb_path
+    // since migration 0122 + resize-on-upload + backfill), so the optimizer was
+    // re-encoding already-small thumbs — pure overhead. next/image keeps
+    // lazy-loading/layout/blur placeholders; bytes now come straight from the
+    // Supabase CDN (one hop fewer on a cache miss, so list pages first-paint
+    // slightly faster). remotePatterns kept for if/when optimization is
+    // re-enabled for a public marketing surface.
+    unoptimized: true,
     remotePatterns: [
       { protocol: 'https', hostname: '*.supabase.co' },
       { protocol: 'https', hostname: '*.supabase.in' },
@@ -60,12 +78,6 @@ const nextConfig: NextConfig = {
       { protocol: 'https', hostname: 'avatars.githubusercontent.com' },
     ],
     formats: ['image/avif', 'image/webp'],
-    // Supabase signed URLs expire on a 7-day cadence (SIGNED_URL_TTL_SEC).
-    // Default Vercel image-optimizer cache is 60s, which means re-fetching
-    // the same signed URL ~10,000× over the URL's lifetime. Cache for
-    // 24h instead — the signed URL itself is still validated on each
-    // optimization request, and the upstream Supabase byte payload
-    // doesn't change.
     minimumCacheTTL: 86400,
   },
 
