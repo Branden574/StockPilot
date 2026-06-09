@@ -176,7 +176,13 @@ export class BundlesService {
       query = query.is('archived_at', null);
     }
     if (opts.search) {
-      const term = `%${opts.search}%`;
+      // Strip PostgREST/LIKE metacharacters (,()%*) before interpolating into
+      // the .or() filter — otherwise an injected comma/paren escapes the ilike
+      // clause and adds arbitrary predicates (reachable via the AI listBundles
+      // tool). Mirrors InventoryService.list (audit 2026-06-09). RLS + the
+      // org-eq above already block cross-tenant escape; this closes the
+      // within-org filter-bypass + query-error vector.
+      const term = `%${opts.search.trim().slice(0, 120).replace(/[,()%*]/g, ' ')}%`;
       query = query.or(`name.ilike.${term},sku.ilike.${term}`);
     }
 
