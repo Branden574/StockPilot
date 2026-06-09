@@ -3,6 +3,7 @@ import 'server-only';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRows } from './lib/paginate';
 
 export interface MovementWithItem {
   id: string;
@@ -323,34 +324,45 @@ export async function getDashboardHistory(
     reorder_point: number | null;
   };
 
-  let itemsQ = ctx.supabase
-    .from('inventory_items')
-    .select('id, created_at, quantity_on_hand, unit_cost, reorder_point')
-    .eq('organization_id', ctx.organizationId)
-    .eq('status', 'active')
-    .is('deleted_at', null);
-  if (options.warehouseId) {
-    itemsQ = itemsQ.eq('warehouse_id', options.warehouseId);
-  }
+  // Paginate BOTH selects through fetchAllRows: a single .select() is silently
+  // capped at 1000 rows (PostgREST max_rows), which on a large org would
+  // undercount inventory value (>1000 active items) or movements (>1000 in the
+  // window) and quietly skew the whole dashboard history (audit 2026-06-09).
+  // Stable .order('id') is required so no row lands on two pages / none.
+  const itemsPage = (from: number, to: number) => {
+    let q = ctx.supabase
+      .from('inventory_items')
+      .select('id, created_at, quantity_on_hand, unit_cost, reorder_point')
+      .eq('organization_id', ctx.organizationId)
+      .eq('status', 'active')
+      .is('deleted_at', null);
+    if (options.warehouseId) q = q.eq('warehouse_id', options.warehouseId);
+    return q.order('id', { ascending: true }).range(from, to);
+  };
 
-  let movQ = ctx.supabase
-    .from('stock_movements')
-    .select(
-      options.warehouseId
-        ? 'item_id, quantity_change, created_at, item:inventory_items!item_id!inner (warehouse_id)'
-        : 'item_id, quantity_change, created_at',
-    )
-    .eq('organization_id', ctx.organizationId)
-    .gte('created_at', new Date(startMs).toISOString());
-  if (options.warehouseId) {
-    movQ = movQ.eq('item.warehouse_id', options.warehouseId);
-  }
+  type MovRow = { item_id: string; quantity_change: number; created_at: string };
+  const movSelect = options.warehouseId
+    ? 'item_id, quantity_change, created_at, item:inventory_items!item_id!inner (warehouse_id)'
+    : 'item_id, quantity_change, created_at';
+  const movPage = (from: number, to: number) => {
+    let q = ctx.supabase
+      .from('stock_movements')
+      .select(movSelect)
+      .eq('organization_id', ctx.organizationId)
+      .gte('created_at', new Date(startMs).toISOString());
+    if (options.warehouseId) q = q.eq('item.warehouse_id', options.warehouseId);
+    // The dynamic embed `select()` string can't be statically typed by the
+    // PostgREST type parser, so cast to the page shape fetchAllRows expects.
+    return q.order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{
+      data: MovRow[] | null;
+      error: { message: string } | null;
+    }>;
+  };
 
-  const [itemsRes, movRes] = await Promise.all([itemsQ, movQ]);
-  if (itemsRes.error) throw new ServiceError('internal_error', itemsRes.error.message);
-  if (movRes.error) throw new ServiceError('internal_error', movRes.error.message);
-  const items = (itemsRes.data ?? []) as ItemRow[];
-  const movData = movRes.data;
+  const [items, movData] = await Promise.all([
+    fetchAllRows<ItemRow>(itemsPage),
+    fetchAllRows<MovRow>(movPage),
+  ]);
 
   // Mutable per-item state (reverse-walked through movements below).
   const qtyById = new Map<string, number>();

@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
@@ -39,6 +40,17 @@ const bodySchema = z.object({
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+
+  // Per-user throttle on order mutations — defense-in-depth on top of the
+  // service's module/role/status gates. 60/min/user is far above real use
+  // (a manager tapping through a pipeline) but stops scripted abuse.
+  const rl = await checkRateLimit(`order-transition:${ctx.userId}`, 60, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: 'rate_limited', message: 'Too many requests — slow down.' },
+      { status: 429, headers: { 'retry-after': String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))) } },
+    );
+  }
 
   const { id } = await params;
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
