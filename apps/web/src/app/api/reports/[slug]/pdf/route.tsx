@@ -3,6 +3,7 @@ import { Readable } from 'node:stream';
 import { renderToStream } from '@react-pdf/renderer';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import {
@@ -64,6 +65,8 @@ export async function GET(
 
   try {
     const ctx = await withApiContext(request);
+    const limited = ctx && (await exportRateLimited(ctx.userId));
+    if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
