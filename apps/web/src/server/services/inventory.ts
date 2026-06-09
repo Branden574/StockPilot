@@ -25,6 +25,14 @@ import { CustomFieldsService } from './custom-fields';
 import { TagsService } from './tags';
 import { UserCategoriesService } from './user-categories';
 
+// Charter ids arrive from a user-controlled URL param (?charter=) via
+// parseIdList, which does NOT validate them, and get interpolated into a raw
+// `.or(charter_id.in.("…"))` PostgREST filter string — so a crafted value could
+// inject filter syntax (within-org only: RLS + the org-eq bound it, no
+// cross-tenant escape). Drop anything that isn't a clean UUID before it reaches
+// the filter string. Security audit 2026-06-09.
+const CHARTER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export type ItemListSort =
   | 'updated_desc'
   | 'updated_asc'
@@ -349,7 +357,7 @@ export class InventoryService {
     // a user can pick "Generic + Acme" together.
     if (filters.charterIds && filters.charterIds.length > 0) {
       const includesGeneric = filters.charterIds.includes('generic');
-      const realIds = filters.charterIds.filter((id) => id !== 'generic');
+      const realIds = filters.charterIds.filter((id) => id !== 'generic' && CHARTER_ID_RE.test(id));
       if (includesGeneric && realIds.length > 0) {
         const list = realIds.map((id) => `"${id}"`).join(',');
         query = query.or(`charter_id.is.null,charter_id.in.(${list})`);
@@ -477,7 +485,7 @@ export class InventoryService {
       }
       if (filters.charterIds && filters.charterIds.length > 0) {
         const includesGeneric = filters.charterIds.includes('generic');
-        const realIds = filters.charterIds.filter((id) => id !== 'generic');
+        const realIds = filters.charterIds.filter((id) => id !== 'generic' && CHARTER_ID_RE.test(id));
         if (includesGeneric && realIds.length > 0) {
           const list = realIds.map((id) => `"${id}"`).join(',');
           sumQuery = sumQuery.or(`charter_id.is.null,charter_id.in.(${list})`);
