@@ -419,3 +419,41 @@
     animation: none;
   }
 }
+
+/* ── Marketing entrance + scroll-reveal ──────────────────────────────────
+   Both honor prefers-reduced-motion via the global rule above (animation +
+   transition durations are forced to ~0, so elements snap to their resting
+   state instead of moving). */
+
+/* Hero on-load entrance — pure CSS, runs on first paint. Stagger with an
+   inline animation-delay per element. `both` holds the from-state before the
+   delay and the to-state after, so there's no flash. */
+@keyframes hero-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 18px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.hero-rise {
+  opacity: 0;
+  animation: hero-rise 0.72s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+/* Scroll-reveal — toggled by the useInView hook adding `.is-in`. Targets are
+   all below the fold (after the pinned chapters), so the hidden default never
+   causes a first-paint flash. Stagger with an inline transition-delay. */
+.reveal-up {
+  opacity: 0;
+  transform: translate3d(0, 14px, 0);
+  transition:
+    opacity 0.6s cubic-bezier(0.2, 0.7, 0.2, 1),
+    transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.reveal-up.is-in {
+  opacity: 1;
+  transform: none;
+}
