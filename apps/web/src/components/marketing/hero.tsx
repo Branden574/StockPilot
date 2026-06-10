@@ -11,6 +11,7 @@ import {
   Users,
 } from 'lucide-react';
 import { AppEntryButton } from '@/components/marketing/app-entry-button';
+import { HeroFrameParallax } from '@/components/marketing/hero-frame-parallax';
 import { Button } from '@/components/ui/button';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
@@ -51,7 +52,9 @@ export function Hero() {
         </div>
 
         <div className="hero-rise mx-auto mt-10 max-w-[1080px]" style={{ animationDelay: '0.26s' }}>
-          <HeroFrame />
+          <HeroFrameParallax>
+            <HeroFrame />
+          </HeroFrameParallax>
         </div>
       </div>
     </section>
