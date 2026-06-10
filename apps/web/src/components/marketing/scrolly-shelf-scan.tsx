@@ -29,7 +29,7 @@ export function ScrollyShelfScan() {
       ref={trackRef}
       aria-label="And the phone counts the shelf for you"
       className="shelf-track relative"
-      style={{ height: '350vh' }}
+      style={{ height: '280vh' }}
     >
       <div
         ref={stageRef}
