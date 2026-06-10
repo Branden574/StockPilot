@@ -10,9 +10,14 @@ import { IconMark } from '@/components/ui/icon-mark';
 import { requestBootSplash } from '@/lib/boot-handoff';
 import { cn } from '@/lib/utils';
 
-// Internal-company tool — no public pricing/customer pages. The marketing
-// landing is mostly a welcome screen for staff that arrive at the root URL.
-const NAV: Array<{ href: string; label: string }> = [];
+// Standard marketing nav. Section links use absolute `/#id` so they also work
+// from sub-pages (/pricing, /support…) — clicking jumps to the landing section.
+const NAV: Array<{ href: string; label: string }> = [
+  { href: '/#product', label: 'Features' },
+  { href: '/#how-it-works', label: 'How it works' },
+  { href: '/pricing', label: 'Pricing' },
+  { href: '/support', label: 'Support' },
+];
 
 export function MarketingHeader() {
   const [scrolled, setScrolled] = React.useState(false);
