@@ -31,7 +31,7 @@ export function ScrollyPipeline() {
       ref={trackRef}
       aria-label="One order, end to end"
       className="relative"
-      style={{ height: '300vh' }}
+      style={{ height: '240vh' }}
     >
       <div
         ref={stageRef}
