@@ -10,7 +10,9 @@
 export const COMPANY_NAME = 'StockPilot';
 /** Update if/when a legal entity (LLC/Inc) is formed. */
 export const COMPANY_LEGAL_NAME = 'StockPilot';
-export const SUPPORT_EMAIL = 'support@stockpilotusa.com';
-export const PRIVACY_EMAIL = 'privacy@stockpilotusa.com';
+// Pointed at the existing, working hello@ inbox (no separate support@/privacy@
+// mailboxes to set up). Change these if dedicated inboxes are created later.
+export const SUPPORT_EMAIL = 'hello@stockpilotusa.com';
+export const PRIVACY_EMAIL = 'hello@stockpilotusa.com';
 export const SALES_EMAIL = 'sales@stockpilotusa.com';
 export const SITE_URL = 'https://stockpilotusa.com';
