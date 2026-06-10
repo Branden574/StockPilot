@@ -49,10 +49,10 @@ export function EnterpriseComparison() {
               StockPilot
             </div>
             <div className="mt-3 font-display text-[clamp(40px,6vw,64px)] font-medium leading-none tracking-[-0.03em]">
-              $49<span className="align-baseline text-[24px] text-[var(--ed-ink-3)]">/mo</span>
+              $99<span className="align-baseline text-[24px] text-[var(--ed-ink-3)]">/mo</span>
             </div>
             <div className="mt-2 text-[13px] leading-relaxed text-[var(--ed-ink-3)]">
-              ≈ <span className="text-foreground font-medium">$588 a year</span> — every feature,
+              ≈ <span className="text-foreground font-medium">$1,188 a year</span> — every feature,
               every site you run, your whole team. Live this afternoon.
             </div>
           </div>
@@ -80,7 +80,7 @@ export function EnterpriseComparison() {
         <p className="mt-5 font-display text-[clamp(18px,2.2vw,26px)] font-medium leading-snug tracking-[-0.02em]">
           The same operations.{' '}
           <span className="font-serif-italic text-[var(--ed-ink-3)]">
-            For a fraction of one percent of the cost.
+            A rounding error next to six figures a year.
           </span>
         </p>
 
