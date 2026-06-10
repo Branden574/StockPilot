@@ -1,3 +1,5 @@
+'use client';
+
 import {
   ArrowLeftRight,
   BarChart3,
@@ -7,6 +9,9 @@ import {
   Users,
   Zap,
 } from 'lucide-react';
+
+import { useInView } from '@/lib/hooks/use-in-view';
+import { cn } from '@/lib/utils';
 
 interface Feature {
   icon: LucideIcon;
@@ -48,6 +53,7 @@ const FEATURES: Feature[] = [
 ];
 
 export function FeatureGrid() {
+  const { ref, inView } = useInView<HTMLDivElement>();
   return (
     <section id="product" className="mx-auto max-w-[1280px] px-8 py-[72px]">
       <p className="mb-4 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--ed-ink-4)]">
@@ -58,11 +64,15 @@ export function FeatureGrid() {
         <span className="font-serif-italic text-[var(--ed-ink-3)]">think about stock.</span>
       </h2>
 
-      <div className="mt-9 grid grid-cols-1 gap-px overflow-hidden rounded-[10px] border border-border bg-border md:grid-cols-2 lg:grid-cols-3">
-        {FEATURES.map((f) => (
+      <div
+        ref={ref}
+        className="mt-9 grid grid-cols-1 gap-px overflow-hidden rounded-[10px] border border-border bg-border md:grid-cols-2 lg:grid-cols-3"
+      >
+        {FEATURES.map((f, i) => (
           <article
             key={f.title}
-            className="flex min-h-[220px] flex-col gap-3 bg-card p-7"
+            className={cn('reveal-up flex min-h-[220px] flex-col gap-3 bg-card p-7', inView && 'is-in')}
+            style={{ transitionDelay: `${i * 55}ms` }}
           >
             <f.icon className="h-[22px] w-[22px] text-foreground" strokeWidth={1.4} />
             <h3 className="font-display text-[16px] font-medium tracking-[-0.01em]">{f.title}</h3>

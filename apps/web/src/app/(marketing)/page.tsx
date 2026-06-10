@@ -3,6 +3,7 @@ import dynamic from 'next/dynamic';
 import { FinalCta } from '@/components/marketing/cta-final';
 import { FeatureGrid } from '@/components/marketing/feature-grid';
 import { Hero } from '@/components/marketing/hero';
+import { StatBand } from '@/components/marketing/stat-band';
 
 // Both scrollytelling chapters are ~150vh below the fold (Hero takes the
 // first viewport-height). Dynamic-import them so their client JS chunks
@@ -22,6 +23,7 @@ export default function HomePage() {
       <Hero />
       <ScrollyWarehouse />
       <ScrollyShelfScan />
+      <StatBand />
       <FeatureGrid />
       <FinalCta />
     </>

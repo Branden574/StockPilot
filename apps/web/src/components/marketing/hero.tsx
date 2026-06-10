@@ -11,6 +11,7 @@ import {
   Users,
 } from 'lucide-react';
 import { AppEntryButton } from '@/components/marketing/app-entry-button';
+import { Button } from '@/components/ui/button';
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
 import { SAMPLE_ITEMS } from '@/components/marketing/sample-data';
@@ -20,28 +21,36 @@ export function Hero() {
   return (
     <section className="relative">
       <div className="mx-auto max-w-[1280px] px-8 pb-16 pt-28 text-center sm:pt-32">
-        <h1 className="mx-auto max-w-4xl font-display text-[clamp(48px,7vw,88px)] font-medium leading-[0.96] tracking-[-0.04em] text-balance">
+        <h1 className="hero-rise mx-auto max-w-4xl font-display text-[clamp(48px,7vw,88px)] font-medium leading-[0.96] tracking-[-0.04em] text-balance">
           Inventory software
           <br />
           <span className="font-serif-italic text-[var(--ed-ink-3)]">quiet enough</span> to actually use.
         </h1>
 
-        <p className="mx-auto mt-6 max-w-xl text-[17px] leading-[1.5] text-[var(--ed-ink-3)] text-balance">
-          StockPilot is the internal inventory platform for our charters and warehouses. Counts,
-          costs, and movements you can trust — without the dashboard slop.
+        <p
+          className="hero-rise mx-auto mt-6 max-w-xl text-[17px] leading-[1.5] text-[var(--ed-ink-3)] text-balance"
+          style={{ animationDelay: '0.1s' }}
+        >
+          Inventory and order operations for teams that actually run a warehouse — counts, costs,
+          and movements you can trust, without the dashboard slop.
         </p>
 
-        <div className="mt-7 flex flex-wrap items-center justify-center gap-2">
+        <div
+          className="hero-rise mt-7 flex flex-wrap items-center justify-center gap-2"
+          style={{ animationDelay: '0.18s' }}
+        >
           <AppEntryButton className="gap-1.5">
-            Sign in to your workspace <ArrowRight className="h-3 w-3" />
+            Get started <ArrowRight className="h-3 w-3" />
           </AppEntryButton>
-          <AppEntryButton variant="outline" className="gap-1.5">
-            <BookOpen className="h-3 w-3" />
-            Need access? Ask your admin
-          </AppEntryButton>
+          <Button asChild variant="outline" className="gap-1.5">
+            <a href="#how-it-works">
+              <BookOpen className="h-3 w-3" />
+              See how it works
+            </a>
+          </Button>
         </div>
 
-        <div className="mx-auto mt-10 max-w-[1080px]">
+        <div className="hero-rise mx-auto mt-10 max-w-[1080px]" style={{ animationDelay: '0.26s' }}>
           <HeroFrame />
         </div>
       </div>
