@@ -10,27 +10,28 @@ type Cell = 'yes' | 'partial' | 'no';
 interface Row {
   feature: string;
   stockpilot: Cell;
-  others: Cell;
+  sortly: Cell;
   sheets: Cell;
 }
 
-// Honest, defensible comparison. The middle column is generic ("other inventory
-// apps") on purpose — naming a specific competitor with "✗" marks is legal
-// exposure. "partial" = some apps have some of this. StockPilot column reflects
-// what's actually shipped.
+// Sortly marks are from their PUBLIC pricing page (sortly.com), June 2026.
+// `partial` = available, but tier-gated or limited (POs are Ultra-only; the API
+// and Webhooks are Enterprise-only; Slack/Teams + custom roles are Premium+).
+// `no` = not offered (lot/expiry, delivery tracking, returns, AI are absent
+// from their published feature set). Conservative + dated on purpose.
 const ROWS: Row[] = [
-  { feature: 'Real-time web + native mobile sync', stockpilot: 'yes', others: 'partial', sheets: 'no' },
-  { feature: 'Live delivery tracking on a map', stockpilot: 'yes', others: 'no', sheets: 'no' },
-  { feature: 'Lot / expiry (FEFO) tracking', stockpilot: 'yes', others: 'partial', sheets: 'no' },
-  { feature: 'Purchase orders + 3-way match', stockpilot: 'yes', others: 'partial', sheets: 'no' },
-  { feature: 'Audit-grade cycle counts', stockpilot: 'yes', others: 'partial', sheets: 'no' },
-  { feature: 'Returns / RMA workflow', stockpilot: 'yes', others: 'no', sheets: 'no' },
-  { feature: 'AI insights briefing', stockpilot: 'yes', others: 'no', sheets: 'no' },
-  { feature: 'Webhooks · Slack · Teams', stockpilot: 'yes', others: 'partial', sheets: 'no' },
-  { feature: 'Public API + API keys', stockpilot: 'yes', others: 'partial', sheets: 'no' },
-  { feature: 'QuickBooks export', stockpilot: 'yes', others: 'yes', sheets: 'no' },
-  { feature: 'Multi-tenant + role / RLS security', stockpilot: 'yes', others: 'partial', sheets: 'no' },
-  { feature: 'Full audit log on every change', stockpilot: 'yes', others: 'no', sheets: 'no' },
+  { feature: 'Real-time web + native mobile sync', stockpilot: 'yes', sortly: 'yes', sheets: 'no' },
+  { feature: 'Live delivery tracking on a map', stockpilot: 'yes', sortly: 'no', sheets: 'no' },
+  { feature: 'Lot / expiry (FEFO) tracking', stockpilot: 'yes', sortly: 'no', sheets: 'no' },
+  { feature: 'Purchase orders + 3-way match', stockpilot: 'yes', sortly: 'partial', sheets: 'no' },
+  { feature: 'Audit-grade cycle counts', stockpilot: 'yes', sortly: 'partial', sheets: 'no' },
+  { feature: 'Returns / RMA workflow', stockpilot: 'yes', sortly: 'no', sheets: 'no' },
+  { feature: 'AI insights briefing', stockpilot: 'yes', sortly: 'no', sheets: 'no' },
+  { feature: 'Webhooks · Slack · Teams', stockpilot: 'yes', sortly: 'partial', sheets: 'no' },
+  { feature: 'Public API + API keys', stockpilot: 'yes', sortly: 'partial', sheets: 'no' },
+  { feature: 'QuickBooks integration', stockpilot: 'yes', sortly: 'yes', sheets: 'no' },
+  { feature: 'Multi-tenant + role / RLS security', stockpilot: 'yes', sortly: 'partial', sheets: 'no' },
+  { feature: 'Full audit log / activity history', stockpilot: 'yes', sortly: 'yes', sheets: 'no' },
 ];
 
 function Mark({ cell }: { cell: Cell }) {
@@ -63,7 +64,7 @@ export function ComparisonTable() {
             StockPilot
           </div>
           <div className="text-center text-[11px] font-medium text-[var(--ed-ink-3)] sm:text-[12px]">
-            Other apps
+            Sortly
           </div>
           <div className="text-center text-[11px] font-medium text-[var(--ed-ink-3)] sm:text-[12px]">
             Spreadsheets
@@ -85,7 +86,7 @@ export function ComparisonTable() {
               <Mark cell={r.stockpilot} />
             </div>
             <div>
-              <Mark cell={r.others} />
+              <Mark cell={r.sortly} />
             </div>
             <div>
               <Mark cell={r.sheets} />
@@ -94,12 +95,18 @@ export function ComparisonTable() {
         ))}
       </div>
 
-      <p className="mt-3 text-[11.5px] text-[var(--ed-ink-4)]">
-        <Check className="mb-0.5 inline h-3.5 w-3.5" strokeWidth={2.4} /> included ·{' '}
-        <Minus className="mb-0.5 inline h-3.5 w-3.5" strokeWidth={2.2} /> varies by app /
-        tier ·{' '}
-        <X className="mb-0.5 inline h-3 w-3 opacity-50" strokeWidth={2} /> not available
-      </p>
+      <div className="mt-3 space-y-1.5">
+        <p className="text-[11.5px] text-[var(--ed-ink-4)]">
+          <Check className="mb-0.5 inline h-3.5 w-3.5" strokeWidth={2.4} /> included ·{' '}
+          <Minus className="mb-0.5 inline h-3.5 w-3.5" strokeWidth={2.2} /> limited or higher-tier ·{' '}
+          <X className="mb-0.5 inline h-3 w-3 opacity-50" strokeWidth={2} /> not available
+        </p>
+        <p className="text-[11px] leading-relaxed text-[var(--ed-ink-4)]">
+          Sortly capabilities are summarized in good faith from their public pricing (sortly.com) as
+          of June 2026; several require Premium, Ultra, or Enterprise plans. Verify current details
+          with each vendor.
+        </p>
+      </div>
     </section>
   );
 }
