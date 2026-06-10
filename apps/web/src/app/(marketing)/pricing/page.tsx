@@ -40,7 +40,7 @@ const TIERS: Tier[] = [
   },
   {
     name: 'Growth',
-    price: '$49',
+    price: '$99',
     cadence: '/ month',
     blurb: 'For growing operations across multiple locations.',
     features: [
@@ -82,7 +82,7 @@ export default function PricingPage() {
           your whole team.
         </p>
         <div className="border-border bg-muted/40 text-muted-foreground mt-5 inline-flex rounded-full border px-3 py-1 text-xs">
-          Early access — pricing below is illustrative. <span className="mx-1">·</span>
+          Introductory pricing — early teams lock in this rate. <span className="mx-1">·</span>
           <a href={`mailto:${SALES_EMAIL}`} className="text-foreground underline-offset-4 hover:underline">
             Talk to us for a quote
           </a>
