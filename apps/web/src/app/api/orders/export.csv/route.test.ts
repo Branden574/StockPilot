@@ -20,6 +20,13 @@ vi.mock('@/server/services/order-requests', async (importOriginal) => {
   return { ...actual, OrderRequestsService: vi.fn() };
 });
 
+// Mock the export throttle to a no-op (allow). Without this it calls the real
+// checkRateLimit, whose RPC fails in the no-DB test env and (fail-CLOSED) 429s
+// before the handler logic this suite is actually testing.
+vi.mock('@/lib/export-rate-limit', () => ({
+  exportRateLimited: vi.fn().mockResolvedValue(null),
+}));
+
 function buildCtx(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer') {
   const stub = makeSupabaseStub({});
   return {
