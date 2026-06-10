@@ -117,6 +117,22 @@ export default async function AdminOverviewPage() {
               Open
             </Link>
           </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+            <div>
+              <div className="font-display text-[15px] font-medium tracking-[-0.01em]">
+                Support tickets
+              </div>
+              <p className="text-[12.5px] leading-[1.55] text-[var(--ed-ink-3)]">
+                Triage &ldquo;report a problem&rdquo; tickets from the public support page.
+              </p>
+            </div>
+            <Link
+              href="/dashboard/admin/support"
+              className="rounded-md border border-border bg-background px-3 py-1.5 text-[12.5px] font-medium hover:border-[var(--ed-line-strong)]"
+            >
+              Open
+            </Link>
+          </div>
         </div>
       )}
 
