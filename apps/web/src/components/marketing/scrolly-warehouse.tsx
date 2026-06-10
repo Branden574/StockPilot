@@ -29,9 +29,10 @@ export function ScrollyWarehouse() {
 
   return (
     <section
+      id="how-it-works"
       ref={trackRef}
       aria-label="A walk through the warehouse"
-      className="scrolly-track relative"
+      className="scrolly-track relative scroll-mt-16"
       style={{ height: '350vh' }}
     >
       <div

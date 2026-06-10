@@ -1,12 +1,14 @@
 import type { Metadata } from 'next';
 
+import { PRIVACY_EMAIL } from '@/lib/site';
+
 export const metadata: Metadata = {
   title: 'Privacy Policy · StockPilot',
   description:
     'How StockPilot collects, stores, and protects the data you and your organization put into the app.',
 };
 
-const EFFECTIVE_DATE = 'May 27, 2026';
+const EFFECTIVE_DATE = 'June 9, 2026';
 
 /**
  * Plain-language privacy policy. Required for App Store submission
@@ -121,6 +123,108 @@ export default function PrivacyPolicyPage() {
         </List>
       </Section>
 
+      <section id="california" className="mt-10 scroll-mt-20">
+        <h2 className="text-xl font-semibold tracking-tight">
+          Your California privacy rights (CCPA/CPRA)
+        </h2>
+        <div className="mt-3 text-muted-foreground">
+          <p>
+            If you are a California resident, the California Consumer Privacy Act
+            (CCPA), as amended by the California Privacy Rights Act (CPRA), gives
+            you the rights described below over the personal information we
+            process about you as an individual user.
+          </p>
+          <p className="mt-4 font-medium text-foreground">
+            We do not sell or share your personal information.
+          </p>
+          <p className="mt-2">
+            We have never sold personal information, and we do not “share” it for
+            cross-context behavioral advertising, as those terms are defined under
+            the CCPA/CPRA. Because we do neither, there is no “Do Not Sell or
+            Share My Personal Information” action you need to take — it is our
+            default.
+          </p>
+
+          <h3 className="mt-6 font-semibold text-foreground">Categories we collect</h3>
+          <List>
+            <li>
+              <strong>Identifiers</strong> — name, email, account ID, and sign-in
+              IP address.
+            </li>
+            <li>
+              <strong>Commercial / operational records</strong> — the inventory,
+              order, and purchasing data your organization creates.
+            </li>
+            <li>
+              <strong>Internet or network activity</strong> — session timestamps
+              and basic device / OS information.
+            </li>
+            <li>
+              <strong>Geolocation</strong> — only coarse location inferred from IP
+              for security review. We do not collect precise GPS location unless
+              you are an assigned driver who turns on live delivery sharing.
+            </li>
+          </List>
+          <p className="mt-2">
+            We collect these directly from you and from your use of the app, and
+            disclose them only to the service providers that host and run the app
+            (e.g., Supabase and Vercel) under contracts that prohibit using the
+            data for their own purposes. We do not disclose personal information
+            for money or for advertising.
+          </p>
+
+          <h3 className="mt-6 font-semibold text-foreground">Your rights</h3>
+          <List>
+            <li><strong>Right to know / access</strong> the personal information we hold about you and how we use it.</li>
+            <li><strong>Right to delete</strong> your personal information, subject to legal exceptions.</li>
+            <li><strong>Right to correct</strong> inaccurate personal information.</li>
+            <li><strong>Right to opt out</strong> of the sale or sharing of personal information — already our default, since we do neither.</li>
+            <li><strong>Right to limit</strong> the use of sensitive personal information — we do not use sensitive personal information for any purpose beyond running the service.</li>
+            <li><strong>Right to non-discrimination</strong> — we will never deny service, charge a different price, or lower service quality because you exercised a privacy right.</li>
+          </List>
+
+          <h3 className="mt-6 font-semibold text-foreground">How to exercise your rights</h3>
+          <p>
+            Email{' '}
+            <a className="underline" href={`mailto:${PRIVACY_EMAIL}`}>
+              {PRIVACY_EMAIL}
+            </a>{' '}
+            from the address on your account, or use the in-app controls (Settings
+            → Account to delete; Settings → Profile to correct). We verify each
+            request against your account and respond within 45 days (extendable
+            once by another 45 days where permitted). You may use an authorized
+            agent; we may ask the agent for proof of authorization. Exercising
+            these rights is always free.
+          </p>
+
+          <h3 className="mt-6 font-semibold text-foreground">Shine the Light</h3>
+          <p>
+            California Civil Code § 1798.83 lets California residents request
+            information about disclosures of personal information to third parties
+            for their direct-marketing purposes. We do not disclose personal
+            information to third parties for their direct marketing, so there is
+            nothing to report.
+          </p>
+        </div>
+      </section>
+
+      <Section title="Other U.S. state privacy rights">
+        <p>
+          Residents of other U.S. states with comprehensive privacy laws —
+          including Virginia, Colorado, Connecticut, Utah, Texas, Oregon, and
+          others — have similar rights to access, correct, delete, and obtain a
+          copy of their personal information, and to opt out of targeted
+          advertising, sale, or certain profiling. We do not engage in targeted
+          advertising, sell personal information, or conduct profiling that
+          produces legal or similarly significant effects. To exercise any of
+          these rights, email{' '}
+          <a className="underline" href={`mailto:${PRIVACY_EMAIL}`}>
+            {PRIVACY_EMAIL}
+          </a>
+          .
+        </p>
+      </Section>
+
       <Section title="Children">
         <p>
           StockPilot is a business-operations tool and is not directed at
@@ -140,8 +244,8 @@ export default function PrivacyPolicyPage() {
       <Section title="Contact">
         <p>
           Questions about this policy? Email{' '}
-          <a className="underline" href="mailto:hello@stockpilot.app">
-            hello@stockpilot.app
+          <a className="underline" href={`mailto:${PRIVACY_EMAIL}`}>
+            {PRIVACY_EMAIL}
           </a>
           .
         </p>
