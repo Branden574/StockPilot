@@ -1,8 +1,10 @@
 import dynamic from 'next/dynamic';
 
+import { ComparisonTable } from '@/components/marketing/comparison-table';
 import { FinalCta } from '@/components/marketing/cta-final';
 import { FeatureGrid } from '@/components/marketing/feature-grid';
 import { Hero } from '@/components/marketing/hero';
+import { MarqueeStrip } from '@/components/marketing/marquee-strip';
 import { StatBand } from '@/components/marketing/stat-band';
 
 // Both scrollytelling chapters are ~150vh below the fold (Hero takes the
@@ -16,6 +18,9 @@ const ScrollyWarehouse = dynamic(
 const ScrollyShelfScan = dynamic(
   () => import('@/components/marketing/scrolly-shelf-scan').then((m) => m.ScrollyShelfScan),
 );
+const ScrollyPipeline = dynamic(
+  () => import('@/components/marketing/scrolly-pipeline').then((m) => m.ScrollyPipeline),
+);
 
 export default function HomePage() {
   return (
@@ -23,7 +28,10 @@ export default function HomePage() {
       <Hero />
       <ScrollyWarehouse />
       <ScrollyShelfScan />
+      <ScrollyPipeline />
+      <MarqueeStrip />
       <StatBand />
+      <ComparisonTable />
       <FeatureGrid />
       <FinalCta />
     </>
