@@ -1,6 +1,7 @@
 import dynamic from 'next/dynamic';
 
 import { ComparisonTable } from '@/components/marketing/comparison-table';
+import { EnterpriseComparison } from '@/components/marketing/enterprise-comparison';
 import { FinalCta } from '@/components/marketing/cta-final';
 import { FeatureGrid } from '@/components/marketing/feature-grid';
 import { Hero } from '@/components/marketing/hero';
@@ -32,6 +33,7 @@ export default function HomePage() {
       <MarqueeStrip />
       <StatBand />
       <ComparisonTable />
+      <EnterpriseComparison />
       <FeatureGrid />
       <FinalCta />
     </>
