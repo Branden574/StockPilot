@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils';
 const NAV: Array<{ href: string; label: string }> = [
   { href: '/#product', label: 'Features' },
   { href: '/#how-it-works', label: 'How it works' },
+  { href: '/#compare', label: 'Compare' },
   { href: '/pricing', label: 'Pricing' },
   { href: '/support', label: 'Support' },
 ];

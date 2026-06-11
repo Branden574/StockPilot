@@ -45,7 +45,7 @@ function Mark({ cell }: { cell: Cell }) {
 export function ComparisonTable() {
   const { ref, inView } = useInView<HTMLDivElement>();
   return (
-    <section className="mx-auto max-w-[1280px] px-8 py-[72px]">
+    <section id="compare" className="mx-auto max-w-[1280px] scroll-mt-16 px-8 py-[72px]">
       <p className="mb-4 text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--ed-ink-4)]">
         — How we compare
       </p>

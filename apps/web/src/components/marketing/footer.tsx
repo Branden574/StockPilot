@@ -9,6 +9,7 @@ const COLUMNS: Array<{ heading: string; links: Array<{ href: string; label: stri
     links: [
       { href: '/#product', label: 'Features' },
       { href: '/#how-it-works', label: 'How it works' },
+      { href: '/#compare', label: 'Compare' },
       { href: '/pricing', label: 'Pricing' },
     ],
   },
