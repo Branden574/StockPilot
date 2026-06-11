@@ -11,9 +11,11 @@ cd apps/mobile
 pnpm release:ios
 ```
 
-That's it. The script runs:
+That's it. The script runs (via the lockfile-pinned `eas-cli` devDependency — do
+NOT switch back to `npx eas-cli@latest`; an unpinned CLI fetched at release time
+next to signing credentials is a supply-chain risk):
 
-```
+```bash
 eas build --platform ios --profile production --auto-submit --no-wait --non-interactive
 ```
 
