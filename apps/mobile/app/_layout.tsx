@@ -1,4 +1,4 @@
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { type Href, Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as React from 'react';
 import { View } from 'react-native';
@@ -115,7 +115,9 @@ function RootGate() {
     if (loading) return;
     const inAuthGroup = segments[0] === '(auth)';
     if (!session && !inAuthGroup) {
-      router.replace('/(auth)/sign-in');
+      // `welcome` is a new route; the generated route-type union only refreshes
+      // on the next expo build, so cast until then (stays valid afterward).
+      router.replace('/(auth)/welcome' as Href);
     } else if (session && inAuthGroup) {
       router.replace('/');
     }
