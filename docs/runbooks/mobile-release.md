@@ -55,25 +55,34 @@ npx eas-cli@latest submit --platform ios --profile production --id <BUILD_ID> --
 Submission credentials (ASC API key) live at `secrets/AuthKey_9SA2GBH9YV.p8`
 (repo root, gitignored) and are referenced from `eas.json`'s `submit.production`.
 
-## The Xcode image pin (do not float!)
+## The Xcode image pin (do not float, do not go below 26!)
 
 `eas.json` pins both iOS profiles to:
 
 ```json
-"image": "macos-sequoia-15.5-xcode-16.4"
+"image": "macos-sequoia-15.6-xcode-26.2"
 ```
 
-**History:** the profiles used to say `"image": "latest"`. On 2026-06-10 EAS
-advanced `latest` from Xcode 16.4 to Xcode 26.4, whose stricter Clang rejects
-`fmt 11.0.2`'s consteval format strings (`fmt` is pinned by RN 0.79.6 via
-RCT-Folly) — build 28 failed with
-`call to consteval function 'fmt::basic_format_string<…>' is not a constant expression`
-with **zero code changes** on our side. Pinning to the SDK 53 default
-(Xcode 16.4) fixed it (build 29 green).
+This pin is squeezed from BOTH sides — change it only with eyes open:
 
-**Rule:** keep the image pinned to the Expo-SDK-default Xcode. Only move the pin
-deliberately when upgrading the Expo SDK, and expect to revalidate the native
-build when you do.
+- **Floor — Apple requires Xcode 26+** (enforced since 2026-04-28). An Xcode 16
+  build compiles fine but Apple rejects/discards it at submission ("This build
+  can no longer be submitted… built with Xcode 16" — hit 2026-05-27, and again
+  2026-06-10 when build 29 was mistakenly built on a 16.4 pin: the upload
+  "succeeded" but the build never appeared in App Store Connect).
+- **Ceiling — Xcode 26.4 breaks the React Native compile.** `latest` advanced to
+  `macos-tahoe-26.4-xcode-26.4` on ~2026-06-10, whose stricter Clang rejects
+  `fmt 11.0.2`'s consteval format strings (`fmt` is pinned by RN 0.79.6 via
+  RCT-Folly): build 28 failed with
+  `call to consteval function 'fmt::basic_format_string<…>' is not a constant expression`
+  with **zero code changes** on our side.
+
+Xcode 26.2 is the proven sweet spot — builds 20–27 all compiled and were
+accepted by Apple on the pre-26.4 Xcode 26.x image line.
+
+**Rule:** never use `"image": "latest"` (a floating toolchain broke us twice).
+Revisit the pin deliberately when upgrading the Expo SDK or when Apple raises
+the minimum Xcode again, and revalidate the native build when you do.
 
 ## Versioning
 
