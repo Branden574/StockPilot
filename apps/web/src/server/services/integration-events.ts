@@ -37,6 +37,17 @@ export const INTEGRATION_EVENT_TYPES = [
   'po.received',
   'return.created',
   'cycle_count.completed',
+  // Security feed (cybersecurity monitoring Phase 1, 2026-06-12): forensic-
+  // relevant account/credential events an org admin wants in a #security
+  // channel in real time. Payloads carry NO secrets — names/prefixes/roles
+  // only (the delivery body lands in third-party Slack/Teams/webhook infra).
+  'security.new_device_login',
+  'security.mfa_unenrolled',
+  'security.mfa_policy_changed',
+  'security.api_key_created',
+  'security.api_key_revoked',
+  'security.member_role_changed',
+  'security.export_rate_limited',
 ] as const;
 
 export type IntegrationEventType = (typeof INTEGRATION_EVENT_TYPES)[number];
@@ -93,6 +104,38 @@ export function describeEvent(eventType: string, data: Record<string, unknown>):
       return { title: '↩️ Return started', summary: `A return was started${s('orderNumber') ? ` for order ${s('orderNumber')}` : ''}.` };
     case 'cycle_count.completed':
       return { title: '🔢 Cycle count complete', summary: `A cycle count finished${s('warehouse') ? ` at ${s('warehouse')}` : ''}.` };
+    case 'security.new_device_login':
+      return {
+        title: '🔐 New device sign-in',
+        summary: `${s('email') ?? 'A member'} signed in from a device we haven't seen before${s('device') ? ` (${s('device')})` : ''}${s('ip') ? ` — IP ${s('ip')}` : ''}.`,
+      };
+    case 'security.mfa_unenrolled':
+      return {
+        title: '🚨 MFA disabled',
+        summary: `${s('email') ?? 'A member'} removed their two-factor authentication. If this wasn't expected, review their account now.`,
+      };
+    case 'security.mfa_policy_changed':
+      return {
+        title: '🛡️ MFA policy changed',
+        summary: `The organization MFA policy changed${s('from') ? ` from "${s('from')}"` : ''}${s('to') ? ` to "${s('to')}"` : ''}${s('email') ? ` (by ${s('email')})` : ''}.`,
+      };
+    case 'security.api_key_created':
+      return {
+        title: '🔑 API key created',
+        summary: `A new API key "${s('name') ?? ''}"${s('prefix') ? ` (${s('prefix')}…)` : ''} was created${s('scopes') ? ` with scopes: ${s('scopes')}` : ''}.`,
+      };
+    case 'security.api_key_revoked':
+      return { title: '🔑 API key revoked', summary: `An API key was revoked${s('name') ? ` ("${s('name')}")` : ''}.` };
+    case 'security.member_role_changed':
+      return {
+        title: '🛡️ Member role changed',
+        summary: `A member's role changed${s('from') ? ` from ${s('from')}` : ''}${s('to') ? ` to ${s('to')}` : ''}.`,
+      };
+    case 'security.export_rate_limited':
+      return {
+        title: '🚨 Export rate limit tripped',
+        summary: `${s('email') ?? 'A member'} hit the bulk-export rate limit (40/hr) — possible scripted data exfiltration; review their recent activity.`,
+      };
     case 'test.ping':
       return { title: '✅ StockPilot test', summary: 'Your alerts are connected — this is a test event.' };
     default:

@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { sendNewDeviceLoginEmail } from '@/lib/email/login-alert';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { dispatchEvent } from '@/server/services/integration-events';
 
 /** Collapse version numbers out of a UA so a routine browser auto-update
  *  ("Chrome/120" → "Chrome/121") doesn't read as a brand-new device. Keeps the
@@ -80,6 +81,23 @@ export async function noteLoginDevice(args: {
 
     if (hadKnownDevices && args.email) {
       await sendNewDeviceLoginEmail({ to: args.email, userAgent: ua, ip: args.ip });
+      // Security feed: also surface the new device in each of the user's orgs'
+      // subscribed channels (the email above only reaches the user — a hijacked
+      // account's owner may never see it; the org's #security channel will).
+      // Best-effort like everything here; capped so a many-org account can't
+      // fan out unboundedly.
+      const { data: memberships } = await admin
+        .from('organization_members')
+        .select('organization_id')
+        .eq('user_id', args.userId)
+        .limit(5);
+      for (const m of (memberships ?? []) as { organization_id: string }[]) {
+        void dispatchEvent(m.organization_id, 'security.new_device_login', {
+          email: args.email,
+          device: ua.slice(0, 120),
+          ip: args.ip ?? undefined,
+        });
+      }
     }
   } catch (e) {
     // Never let an alert failure affect sign-in.

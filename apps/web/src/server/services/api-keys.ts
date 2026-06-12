@@ -2,6 +2,7 @@ import 'server-only';
 
 import { API_SCOPES, generateApiKey } from '@/lib/auth/api-key';
 
+import { dispatchEvent } from './integration-events';
 import {
   assertModuleEnabled,
   ServiceError,
@@ -84,18 +85,33 @@ export class ApiKeysService {
       .select('id')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Security feed: a fresh credential with API reach is exactly what a
+    // #security channel watches for. Payload carries the PREFIX only — the
+    // raw key never leaves this method's return value.
+    void dispatchEvent(this.ctx.organizationId, 'security.api_key_created', {
+      name,
+      prefix,
+      scopes: scopes.join(', '),
+    });
     // Return the raw key exactly once — it's never recoverable after this.
     return { id: (data as { id: string }).id, key };
   }
 
   async revoke(id: string): Promise<void> {
     this.gate();
-    const { error } = await this.ctx.supabase
+    const { data, error } = await this.ctx.supabase
       .from('api_keys')
       .update({ revoked_at: new Date().toISOString() })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
-      .is('revoked_at', null);
+      .is('revoked_at', null)
+      .select('name')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (data) {
+      void dispatchEvent(this.ctx.organizationId, 'security.api_key_revoked', {
+        name: (data as { name: string | null }).name ?? undefined,
+      });
+    }
   }
 }

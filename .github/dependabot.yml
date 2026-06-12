@@ -1,0 +1,34 @@
+# Dependabot — security-first posture (cybersecurity monitoring Phase 1).
+# Alerts + automated security fixes are enabled at the repo level; this file
+# adds SCHEDULED checks so vulnerable/stale dependencies surface weekly even
+# without a published advisory. PR volume is deliberately capped: this is a
+# monorepo with pinned-by-policy packages (eas-cli, the EAS Xcode image), so
+# we want a small, reviewable stream — security updates always come through
+# regardless of these caps.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    # Group routine bumps so the stream stays reviewable; security updates
+    # are never grouped away.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # Pinned by the iOS release runbook — EAS image/Xcode constraints mean
+      # bumping this blindly breaks signed builds. Bump manually with the
+      # runbook open.
+      - dependency-name: eas-cli
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3

@@ -24,7 +24,7 @@ export async function GET(
   // failure path returns a clean 401 instead of throwing NEXT_REDIRECT
   // (which the try/catch below would mis-classify as internal_error).
   const ctx = await withApiContext(req);
-  const limited = ctx && (await exportRateLimited(ctx.userId));
+  const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
   if (limited) return limited;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
