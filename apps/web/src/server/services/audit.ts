@@ -164,6 +164,9 @@ export type AuditEvent =
   // planning module's lead time / safety multiplier / velocity window, stored
   // in organization_modules.settings for 'planning'.
   | 'planning_params.updated'
+  // PO approval threshold — an admin changed the spend-governance amount
+  // stored in organization_modules.settings for 'purchase_orders'.
+  | 'po_approval_threshold.updated'
   // MFA discrete events (replacing prior misuse of user.role.changed
   // and warehouse.updated for these forensic-relevant flows).
   | 'mfa.enrolled'
