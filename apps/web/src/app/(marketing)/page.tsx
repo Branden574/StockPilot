@@ -6,6 +6,7 @@ import { FinalCta } from '@/components/marketing/cta-final';
 import { FeatureGrid } from '@/components/marketing/feature-grid';
 import { Hero } from '@/components/marketing/hero';
 import { MarqueeStrip } from '@/components/marketing/marquee-strip';
+import { PrivacySection } from '@/components/marketing/privacy-section';
 import { StatBand } from '@/components/marketing/stat-band';
 
 // Both scrollytelling chapters are ~150vh below the fold (Hero takes the
@@ -35,6 +36,7 @@ export default function HomePage() {
       <ComparisonTable />
       <EnterpriseComparison />
       <FeatureGrid />
+      <PrivacySection />
       <FinalCta />
     </>
   );
