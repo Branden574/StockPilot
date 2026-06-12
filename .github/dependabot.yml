@@ -25,6 +25,13 @@ updates:
       # bumping this blindly breaks signed builds. Bump manually with the
       # runbook open.
       - dependency-name: eas-cli
+      # NO automated major bumps for anything: majors change APIs (first week
+      # proved it — pdf-parse 2.x and @hookform/resolvers 5.x both failed the
+      # preview build, and expo-* majors must track the pinned Expo SDK, never
+      # float). Majors are deliberate, manual upgrades. Security advisories
+      # still open PRs regardless of this ignore.
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
     directory: /
