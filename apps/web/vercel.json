@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "bash -c 'if [ \"${VERCEL_GIT_COMMIT_REF#dependabot/}\" != \"$VERCEL_GIT_COMMIT_REF\" ]; then exit 0; else exit 1; fi'",
   "crons": [
     {
       "path": "/api/cron/purge-ai-chat-history",
