@@ -8,10 +8,23 @@ import { ServiceError } from '@/server/services/context';
 
 import { err, ok, type ActionResult, type ConnectorProviderId } from '@stockpilot/core';
 
-// Only QuickBooks ships today; keep the schema tight so an unknown provider
-// can't slip past validation into the service layer.
+// Only the OAuth connectors that actually ship are accepted; keep the schema
+// tight so an unknown provider can't slip past validation into the service
+// layer.
 const providerSchema = z.object({
-  provider: z.literal('quickbooks'),
+  provider: z.enum(['quickbooks', 'sage_intacct']),
+});
+
+// Sage Intacct per-connection settings (Integrations panel). All free-text for
+// the MVP, mirroring the QBO account mapping. Empty strings allowed so an
+// admin can save partially and finish later.
+const intacctSettingsSchema = z.object({
+  poTxnDefinition: z.string().max(120).trim().default(''),
+  defaultItemId: z.string().max(64).trim().default(''),
+  defaultVendorId: z.string().max(64).trim().default(''),
+  journalSymbol: z.string().max(32).trim().default(''),
+  returnCredit: z.string().max(64).trim().default(''),
+  inventoryAsset: z.string().max(64).trim().default(''),
 });
 
 // EasyPost connect: an API key (+ optional webhook signing secret). Both are
@@ -53,6 +66,26 @@ export async function beginConnectAction(
     const authorizeUrl = await svc.beginConnect(parsed.data.provider);
     revalidatePath('/dashboard/settings/integrations');
     return ok({ authorizeUrl });
+  } catch (e) {
+    return toActionError(e);
+  }
+}
+
+/**
+ * Saves the Sage Intacct connection settings (transaction definition, default
+ * item/vendor, journal symbol + the two GL accounts the return entry posts
+ * against). Merge semantics live in the service.
+ */
+export async function saveIntacctSettingsAction(
+  input: z.infer<typeof intacctSettingsSchema>,
+): Promise<ActionResult> {
+  const parsed = intacctSettingsSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid settings');
+  try {
+    const svc = await ConnectionsService.forCurrentUser();
+    await svc.saveIntacctSettings(parsed.data);
+    revalidatePath('/dashboard/settings/integrations');
+    return ok(undefined);
   } catch (e) {
     return toActionError(e);
   }
