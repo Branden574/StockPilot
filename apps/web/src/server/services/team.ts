@@ -10,6 +10,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { type Role } from '@stockpilot/core';
 
 import { audit } from './audit';
+import { dispatchEvent } from './integration-events';
 import {
   assertPermission,
   assertRoleUnchanged,
@@ -379,6 +380,12 @@ export class TeamService {
       },
       this.ctx,
     );
+    // Security feed: privilege changes (especially escalations to admin) are
+    // forensic-relevant. Best-effort, off the response path.
+    void dispatchEvent(this.ctx.organizationId, 'security.member_role_changed', {
+      from: target.role as string,
+      to: role,
+    });
   }
 
   async removeMember(memberId: string) {

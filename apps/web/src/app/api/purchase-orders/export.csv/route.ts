@@ -48,7 +48,7 @@ type PoRow = {
 export async function GET(request: Request) {
   try {
     const ctx = await withApiContext(request);
-    const limited = ctx && (await exportRateLimited(ctx.userId));
+    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
     if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });

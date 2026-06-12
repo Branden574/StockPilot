@@ -84,11 +84,27 @@ export async function reportError(
   const url = getWebhookUrl();
   if (!url) return;
 
+  // Slack/Teams incoming webhooks reject arbitrary JSON (Slack 400s on
+  // unknown fields) — they want `{text}`. Detect them so pointing
+  // ERROR_WEBHOOK_URL at a #alerts channel "just works"; any other endpoint
+  // gets the full structured payload.
+  const isChatWebhook =
+    url.includes('hooks.slack.com') || url.includes('webhook.office.com');
+  const body = isChatWebhook
+    ? JSON.stringify({
+        text:
+          `*🔥 ${payload.level.toUpperCase()} — ${payload.tag}* (${payload.env})\n` +
+          `${payload.message}` +
+          (payload.digest ? `\ndigest: \`${payload.digest}\`` : '') +
+          (payload.stack ? `\n\`\`\`${payload.stack.slice(0, 1500)}\`\`\`` : ''),
+      })
+    : JSON.stringify(payload);
+
   try {
     await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body,
       // Don't keep the request alive past 2s so a slow webhook doesn't
       // block the Edge runtime / SSR rendering pipeline.
       signal: AbortSignal.timeout(2000),

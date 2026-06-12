@@ -28,7 +28,7 @@ export async function GET(
 ) {
   const { id } = await params;
   const ctx = await withApiContext(req);
-  const limited = ctx && (await exportRateLimited(ctx.userId));
+  const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
   if (limited) return limited;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });

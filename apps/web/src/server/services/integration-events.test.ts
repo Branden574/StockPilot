@@ -49,6 +49,50 @@ describe('describeEvent', () => {
     expect(title).toBeTruthy();
     expect(summary).toBe('something.weird');
   });
+
+  it('renders every security event with identity context and no raw secrets', () => {
+    const newDevice = describeEvent('security.new_device_login', {
+      email: 'jo@org.com',
+      device: 'Chrome/# macOS',
+      ip: '203.0.113.9',
+    });
+    expect(newDevice.title).toMatch(/new device/i);
+    expect(newDevice.summary).toContain('jo@org.com');
+    expect(newDevice.summary).toContain('203.0.113.9');
+
+    const mfaOff = describeEvent('security.mfa_unenrolled', { email: 'jo@org.com' });
+    expect(mfaOff.title).toMatch(/mfa/i);
+    expect(mfaOff.summary).toContain('jo@org.com');
+
+    const policy = describeEvent('security.mfa_policy_changed', {
+      from: 'all_required',
+      to: 'optional',
+    });
+    expect(policy.summary).toContain('all_required');
+    expect(policy.summary).toContain('optional');
+
+    // API key copy must carry the PREFIX only — never a raw key.
+    const key = describeEvent('security.api_key_created', {
+      name: 'Zapier',
+      prefix: 'sk_live_abc1',
+      scopes: 'items:read',
+    });
+    expect(key.summary).toContain('Zapier');
+    expect(key.summary).toContain('sk_live_abc1…');
+
+    const role = describeEvent('security.member_role_changed', { from: 'staff', to: 'admin' });
+    expect(role.summary).toContain('staff');
+    expect(role.summary).toContain('admin');
+
+    const exfil = describeEvent('security.export_rate_limited', { email: 'jo@org.com' });
+    expect(exfil.summary).toMatch(/export rate limit|exfiltration/i);
+    expect(exfil.summary).toContain('jo@org.com');
+  });
+
+  it('security events degrade to generic copy when identity fields are absent', () => {
+    const { summary } = describeEvent('security.new_device_login', {});
+    expect(summary).toMatch(/a member/i);
+  });
 });
 
 describe('buildRequest', () => {

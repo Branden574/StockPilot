@@ -7,6 +7,23 @@ import { Button } from '@/components/ui/button';
 export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   useEffect(() => {
     console.error(error);
+    // Crash beacon: surface production client crashes in the server-side
+    // error feed (ERROR_WEBHOOK_URL). Fire-and-forget; failures are ignored.
+    try {
+      void fetch('/api/client-error', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: error.message,
+          digest: error.digest,
+          path: window.location.pathname,
+          boundary: 'error',
+        }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch {
+      /* noop */
+    }
   }, [error]);
 
   return (

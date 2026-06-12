@@ -22,9 +22,21 @@ export default function GlobalError({
 }) {
   React.useEffect(() => {
     // Best-effort report; we don't bring in the error-reporter module
-    // here because it might be the very thing that broke.
+    // here because it might be the very thing that broke. A bare fetch to
+    // the crash beacon is dependency-free and safe to attempt.
     try {
       console.error('[global-error]', error);
+      void fetch('/api/client-error', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: error?.message,
+          digest: error?.digest,
+          path: window.location.pathname,
+          boundary: 'global-error',
+        }),
+        keepalive: true,
+      }).catch(() => {});
     } catch {
       /* noop */
     }
