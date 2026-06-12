@@ -9,7 +9,10 @@ import {
 import Link from 'next/link';
 
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { requireOrgContext } from '@/lib/auth/session';
+import { createClient } from '@/lib/supabase/server';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { PoApprovalPanel } from '@/components/settings/po-approval-panel';
 import { StatCard } from '@/components/dashboard/stat-card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
@@ -92,6 +95,26 @@ export default async function PurchaseOrdersPage({
   const params = await searchParams;
   const tab: PoTab = isPoTab(params.status) ? params.status : 'all';
   const q = (params.q ?? '').trim();
+
+  // Approval-threshold panel (owner/admin only). Read fails SOFT to "panel
+  // shows 0" — the enforcement read in the service is the fail-closed one.
+  const orgCtx = await requireOrgContext();
+  const isAdmin = orgCtx.role === 'owner' || orgCtx.role === 'admin';
+  let approvalThreshold = 0;
+  if (isAdmin) {
+    const supabase = await createClient();
+    const { data: moduleRow } = await supabase
+      .from('organization_modules')
+      .select('settings')
+      .eq('organization_id', orgCtx.organizationId)
+      .eq('module_id', 'purchase_orders')
+      .maybeSingle();
+    const raw = Number(
+      ((moduleRow as { settings?: Record<string, unknown> } | null)?.settings ?? {})
+        .approvalThresholdAmount,
+    );
+    approvalThreshold = Number.isFinite(raw) && raw > 0 ? raw : 0;
+  }
 
   // Fail CLOSED: a read error must NEVER crash the whole page (recurring bug
   // pattern #1 — a thrown RSC read trips the dashboard error boundary). Degrade
@@ -359,6 +382,12 @@ export default async function PurchaseOrdersPage({
           </div>
         )}
       </div>
+
+      {isAdmin && (
+        <div className="mt-6">
+          <PoApprovalPanel initialAmount={approvalThreshold} />
+        </div>
+      )}
     </div>
   );
 }
