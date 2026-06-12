@@ -394,7 +394,14 @@ function makeDeps(admin: any) {
         .eq('connection_id', connectionId)
         .eq('entity_type', entityType);
       q = localId === null ? q.is('local_id', null) : q.eq('local_id', localId);
-      const { data } = await q.maybeSingle();
+      const { data, error } = await q.maybeSingle();
+      // FAIL CLOSED: this read is the idempotency guard for connectors without
+      // a provider-side dedupe key (Intacct has no QBO-style requestid). A
+      // transient query error must NOT read as "no mapping" — that would
+      // re-POST and duplicate the document in the customer's ERP. Throwing
+      // surfaces as a failed attempt (retry/dead-letter), which is always
+      // recoverable; a duplicate export is not.
+      if (error) throw new Error(`connection_mappings select: ${error.message}`);
       return data
         ? { externalId: data.external_id, externalMeta: data.external_meta ?? {} }
         : null;

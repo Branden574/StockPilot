@@ -5,9 +5,13 @@ import { redirect } from 'next/navigation';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { ApiKeysPanel } from '@/components/settings/api-keys-panel';
 import { IntegrationsPanel } from '@/components/settings/integrations-panel';
+import { SageIntacctCard } from '@/components/settings/sage-intacct-card';
 import { WebhooksPanel } from '@/components/settings/webhooks-panel';
+import { env } from '@/lib/env';
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { createClient } from '@/lib/supabase/server';
 import { ApiKeysService } from '@/server/services/api-keys';
 import { ConnectionsService } from '@/server/services/connections';
 import { IntegrationEndpointsService } from '@/server/services/integration-events';
@@ -15,6 +19,10 @@ import { IntegrationEndpointsService } from '@/server/services/integration-event
 import { hasPermission, isAdminRole } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Integrations — Settings' };
+
+// The Intacct item import (invoked from this segment) scans up to 2,000 items
+// per run — allow it past the default function timeout.
+export const maxDuration = 300;
 
 export default async function IntegrationsSettingsPage() {
   const ctx = await requireOrgContext();
@@ -70,6 +78,7 @@ export default async function IntegrationsSettingsPage() {
   type ConnRow = Awaited<ReturnType<ConnectionsService['list']>>['connections'][number];
   let qbo: ConnRow | null = null;
   let easypost: ConnRow | null = null;
+  let intacct: ConnRow | null = null;
   let health: Awaited<ReturnType<ConnectionsService['list']>>['health'] = [];
   let failedSyncs: Awaited<ReturnType<ConnectionsService['listFailedSyncs']>>['rows'] | null = null;
   if (integrationsAccess.enabled || shippingAccess.enabled) {
@@ -79,6 +88,10 @@ export default async function IntegrationsSettingsPage() {
     qbo = showQbo ? listed.connections.find((c) => c.providerId === 'quickbooks') ?? null : null;
     easypost = showEasyPost
       ? listed.connections.find((c) => c.providerId === 'easypost') ?? null
+      : null;
+    // Sage Intacct shares the QBO gates (integrations module + manage perm).
+    intacct = showQbo
+      ? listed.connections.find((c) => c.providerId === 'sage_intacct') ?? null
       : null;
     // Operator dead-letter view (spans both providers) — only when a card shows.
     if (showQbo || showEasyPost) failedSyncs = (await svc.listFailedSyncs()).rows;
@@ -133,8 +146,61 @@ export default async function IntegrationsSettingsPage() {
         failedSyncs={failedSyncs}
       />
 
+      {showQbo && (
+        <div className="mt-6 space-y-6">
+          <SageIntacctCard
+            warehouses={await loadWritableWarehouses(ctx)}
+            status={intacct?.status ?? null}
+            externalAccountId={intacct?.externalAccountId ?? null}
+            lastConnectedAt={intacct?.lastConnectedAt ?? null}
+            lastError={intacct?.lastError ?? null}
+            credentialsConfigured={Boolean(env.SAGE_INTACCT_CLIENT_ID)}
+            settings={{
+              ...((intacct?.settings.intacct as Record<string, string> | undefined) ?? {}),
+              returnCredit:
+                ((intacct?.settings.accountIds as Record<string, string> | undefined)
+                  ?.returnCredit) ?? '',
+              inventoryAsset:
+                ((intacct?.settings.accountIds as Record<string, string> | undefined)
+                  ?.inventoryAsset) ?? '',
+            }}
+          />
+          {/* Migrating off Sage 50 needs no API at all — it's a guided CSV import. */}
+          <div className="rounded-lg border p-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h3 className="text-sm font-medium">Migrate from Sage 50</h3>
+                <p className="text-muted-foreground mt-0.5 text-xs">
+                  Bring your items, stock quantities, and vendors over from Sage 50&apos;s built-in
+                  CSV exports — no API or credentials needed.
+                </p>
+              </div>
+              <Link
+                href="/dashboard/settings/migrate/sage50"
+                className="bg-foreground text-background hover:opacity-90 inline-flex h-8 shrink-0 items-center rounded-md px-3 text-xs font-medium transition-opacity"
+              >
+                Start migration
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showWebhooks && <WebhooksPanel endpoints={webhookEndpoints} />}
       {showApiKeys && <ApiKeysPanel apiKeys={apiKeys} />}
     </div>
   );
+}
+
+/** Warehouses the caller can write to — the Intacct import's destination picker. */
+async function loadWritableWarehouses(ctx: Awaited<ReturnType<typeof requireOrgContext>>) {
+  const access = await getWarehouseAccess(ctx);
+  if (access.writableIds.length === 0) return [];
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from('warehouses')
+    .select('id, name')
+    .in('id', access.writableIds)
+    .order('name', { ascending: true });
+  return ((data ?? []) as { id: string; name: string }[]).map((w) => ({ id: w.id, name: w.name }));
 }

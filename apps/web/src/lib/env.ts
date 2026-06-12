@@ -71,6 +71,16 @@ const serverSchema = z.object({
   QBO_CLIENT_SECRET: optionalSecret.transform((s) => s.trim()),
   QBO_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
 
+  // Sage Intacct connector (integrations module). OAuth2 app credentials
+  // from the Sage Intacct developer portal — these only exist once the Web
+  // Services developer license (sender ID, sold via a Sage account manager)
+  // is purchased and an app is registered. Until then both stay unset and
+  // the Integrations panel shows the connector as awaiting-credentials.
+  // No env/host split: an Intacct sandbox is a separate COMPANY on the same
+  // API host, not a separate base URL.
+  SAGE_INTACCT_CLIENT_ID: optionalSecret.transform((s) => s.trim()),
+  SAGE_INTACCT_CLIENT_SECRET: optionalSecret.transform((s) => s.trim()),
+
   // Comma-separated allowlist of email addresses that may access the
   // platform-admin surfaces (e.g. /dashboard/admin/orgs/new — provision
   // a new tenant org for a customer). Server-only check; not in the JWT,

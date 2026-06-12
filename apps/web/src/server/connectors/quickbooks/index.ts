@@ -139,7 +139,12 @@ async function handlePurchaseOrderOrdered(
   if (!po) return { ok: true };
 
   const { data: supplier, error: supplierErr } = po.supplier_id
-    ? await admin.from('suppliers').select('id, name').eq('id', po.supplier_id).maybeSingle()
+    ? await admin
+        .from('suppliers')
+        .select('id, name')
+        .eq('id', po.supplier_id)
+        .eq('organization_id', conn.organizationId) // defense-in-depth: tenant-scope the rehydration
+        .maybeSingle()
     : { data: null, error: null };
   if (supplierErr) throw new Error(`suppliers select: ${supplierErr.message}`);
 
@@ -238,7 +243,12 @@ async function handleReceiptPosted(
     if (poErr) throw new Error(`purchase_orders select: ${poErr.message}`);
 
     const { data: supplier, error: supplierErr } = po?.supplier_id
-      ? await admin.from('suppliers').select('id, name').eq('id', po.supplier_id).maybeSingle()
+      ? await admin
+        .from('suppliers')
+        .select('id, name')
+        .eq('id', po.supplier_id)
+        .eq('organization_id', conn.organizationId) // defense-in-depth: tenant-scope the rehydration
+        .maybeSingle()
       : { data: null, error: null };
     if (supplierErr) throw new Error(`suppliers select: ${supplierErr.message}`);
 

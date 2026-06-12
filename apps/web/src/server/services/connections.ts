@@ -314,14 +314,20 @@ export class ConnectionsService {
       );
     }
 
-    // Fail fast on a misconfigured deployment: QBO_CLIENT_ID is optionalSecret
-    // (defaults to ''). Without it the authorize URL carries client_id='' and
-    // Intuit rejects the user with an opaque error AFTER the redirect. Surface
-    // it here so we never write a stray pending row or leave the app.
-    if (!env.QBO_CLIENT_ID) {
+    // Per-provider OAuth client ids (all optionalSecret, default ''). Fail fast
+    // on a misconfigured deployment: without a client id the authorize URL
+    // carries client_id='' and the provider rejects the user with an opaque
+    // error AFTER the redirect. Surface it here so we never write a stray
+    // pending row or leave the app.
+    const oauthClientIds: Partial<Record<ConnectorProviderId, string>> = {
+      quickbooks: env.QBO_CLIENT_ID,
+      sage_intacct: env.SAGE_INTACCT_CLIENT_ID,
+    };
+    const clientId = oauthClientIds[provider];
+    if (!clientId) {
       throw new ServiceError(
         'validation_error',
-        'QuickBooks is not configured on this deployment (missing QBO_CLIENT_ID).',
+        `${meta.title} is not configured on this deployment (missing OAuth client id).`,
       );
     }
 
@@ -352,15 +358,20 @@ export class ConnectionsService {
 
     // Upsert keyed on the (organization_id, provider_id) UNIQUE constraint:
     // reconnecting an existing (e.g. errored/disconnected) connection reuses the
-    // row and rotates the CSRF state rather than creating a duplicate. The env
-    // is stamped so the callback + connector know which Intuit host to hit.
+    // row and rotates the CSRF state rather than creating a duplicate. For
+    // QuickBooks the env is stamped so the callback + connector know which
+    // Intuit host to hit (Intacct has a single API host — no env to stamp).
+    const settingsStamp =
+      provider === 'quickbooks'
+        ? { ...currentSettings, env: env.QBO_ENV }
+        : currentSettings;
     const { error } = await this.ctx.supabase.from('org_connections').upsert(
       {
         organization_id: this.ctx.organizationId,
         provider_id: provider,
         status: 'pending',
         oauth_state: state,
-        settings: { ...currentSettings, env: env.QBO_ENV },
+        settings: settingsStamp,
         created_by: createdBy,
       },
       { onConflict: 'organization_id,provider_id' },
@@ -369,7 +380,7 @@ export class ConnectionsService {
 
     const redirectUri = `${env.NEXT_PUBLIC_APP_URL}/api/integrations/${provider}/callback`;
     const url = new URL(meta.oauth.authorizeBase);
-    url.searchParams.set('client_id', env.QBO_CLIENT_ID);
+    url.searchParams.set('client_id', clientId);
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('scope', meta.oauth.scopes.join(' '));
     url.searchParams.set('redirect_uri', redirectUri);
@@ -697,6 +708,62 @@ export class ConnectionsService {
       .update({ settings: nextSettings })
       .eq('organization_id', this.ctx.organizationId)
       .eq('provider_id', provider);
+    if (updateError) throw new ServiceError('internal_error', updateError.message);
+  }
+
+  /**
+   * Saves the Sage Intacct connection settings: the purchasing transaction
+   * definition + default item/vendor + GL journal symbol under
+   * `settings.intacct.*`, and the two return GL accounts under
+   * `settings.accountIds.*` (same keys the QBO connector reads, so the
+   * Integrations panel vocabulary stays consistent). MERGES with existing
+   * settings like saveAccountMapping — never clobbers sibling keys.
+   */
+  async saveIntacctSettings(input: {
+    poTxnDefinition: string;
+    defaultItemId: string;
+    defaultVendorId: string;
+    journalSymbol: string;
+    returnCredit: string;
+    inventoryAsset: string;
+  }): Promise<void> {
+    assertModuleEnabled(this.ctx, 'integrations');
+    assertPermission(this.ctx, 'integrations:manage');
+
+    const { data: row, error: selectError } = await this.ctx.supabase
+      .from('org_connections')
+      .select('id, settings')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('provider_id', 'sage_intacct')
+      .maybeSingle();
+    if (selectError) throw new ServiceError('internal_error', selectError.message);
+    if (!row) throw new ServiceError('not_found', 'No Sage Intacct connection to configure.');
+
+    const current = ((row as { settings: Record<string, unknown> | null }).settings) ?? {};
+    const currentIntacct = (current.intacct as Record<string, unknown> | undefined) ?? {};
+    const currentAccountIds =
+      (current.accountIds as Record<string, unknown> | undefined) ?? {};
+    const nextSettings = {
+      ...current,
+      intacct: {
+        ...currentIntacct,
+        poTxnDefinition: input.poTxnDefinition.trim(),
+        defaultItemId: input.defaultItemId.trim(),
+        defaultVendorId: input.defaultVendorId.trim(),
+        journalSymbol: input.journalSymbol.trim(),
+      },
+      accountIds: {
+        ...currentAccountIds,
+        returnCredit: input.returnCredit.trim(),
+        inventoryAsset: input.inventoryAsset.trim(),
+      },
+    };
+
+    const { error: updateError } = await this.ctx.supabase
+      .from('org_connections')
+      .update({ settings: nextSettings })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('provider_id', 'sage_intacct');
     if (updateError) throw new ServiceError('internal_error', updateError.message);
   }
 }
