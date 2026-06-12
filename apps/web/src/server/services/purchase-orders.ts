@@ -290,7 +290,12 @@ export class PurchaseOrdersService {
   async updateStatus(id: string, status: 'draft' | 'ordered' | 'cancelled') {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
-    await this.get(id); // throws not_found if user can't see this PO's warehouse
+    const { po } = await this.get(id); // throws not_found if user can't see this PO's warehouse
+    if (status === 'ordered') {
+      // Spend governance: committing the order is the gated act — drafting
+      // and cancelling stay open to everyone with purchase_orders:manage.
+      await this.assertApprovalThreshold(Number((po as { total?: unknown }).total ?? 0));
+    }
     const { error } = await this.ctx.supabase
       .from('purchase_orders')
       .update({
@@ -324,6 +329,41 @@ export class PurchaseOrdersService {
         p_payload: { poId: id },
         p_dedupe_key: `purchase_order.ordered:${id}`,
       });
+    }
+  }
+
+  /**
+   * PO approval threshold (Intacct-grade spend governance, no migration —
+   * lives in the purchase_orders module's organization_modules.settings as
+   * `approvalThresholdAmount`). When configured (> 0), a PO whose total is AT
+   * OR ABOVE the threshold can only be PLACED (status → ordered) by an owner
+   * or admin; managers keep full draft/cancel rights at any size. Absent/0 =
+   * feature off (the default — existing orgs are unaffected).
+   *
+   * FAIL CLOSED: a settings read error blocks the transition rather than
+   * silently waiving governance (an approval gate that disappears on a
+   * transient DB error is not a gate).
+   */
+  private async assertApprovalThreshold(total: number): Promise<void> {
+    if (this.ctx.role === 'owner' || this.ctx.role === 'admin') return;
+    const { data, error } = await this.ctx.supabase
+      .from('organization_modules')
+      .select('settings')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('module_id', 'purchase_orders')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    const settings = ((data as { settings?: unknown } | null)?.settings ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const raw = Number(settings.approvalThresholdAmount);
+    const threshold = Number.isFinite(raw) && raw > 0 ? raw : null;
+    if (threshold !== null && total >= threshold) {
+      throw new ServiceError(
+        'forbidden',
+        `This purchase order ($${total.toLocaleString()}) meets the $${threshold.toLocaleString()} approval threshold — ask an owner or admin to place it.`,
+      );
     }
   }
 
