@@ -26,6 +26,15 @@ const EVENTS: ReadonlyArray<readonly [string, string]> = [
   ['stock.low', 'Low stock'],
   ['return.created', 'Return started'],
   ['cycle_count.completed', 'Cycle count complete'],
+  // Security feed — point these at a #security Slack channel for live
+  // monitoring of forensic-relevant account/credential events.
+  ['security.new_device_login', 'Security: new device sign-in'],
+  ['security.mfa_unenrolled', 'Security: MFA disabled'],
+  ['security.mfa_policy_changed', 'Security: MFA policy changed'],
+  ['security.api_key_created', 'Security: API key created'],
+  ['security.api_key_revoked', 'Security: API key revoked'],
+  ['security.member_role_changed', 'Security: member role changed'],
+  ['security.export_rate_limited', 'Security: export rate limit tripped'],
 ];
 
 type EndpointType = 'webhook' | 'slack' | 'teams';

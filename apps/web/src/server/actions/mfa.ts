@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { audit } from '@/server/services/audit';
 import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/context';
+import { dispatchEvent } from '@/server/services/integration-events';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
@@ -193,6 +194,11 @@ export async function unenrollFactorAction(input: {
       entityId: session.userId,
       extra: { factorId: parsed.data.factorId },
     });
+    // Security feed: weakening an account's auth posture is exactly what a
+    // #security channel exists for. Best-effort, off the response path.
+    void dispatchEvent(ctx.organizationId, 'security.mfa_unenrolled', {
+      email: session.email,
+    });
     revalidatePath('/dashboard/settings/security');
     return ok(undefined);
   } catch (e) {
@@ -285,6 +291,11 @@ export async function setOrgMfaPolicyAction(input: {
       entityId: ctx.organizationId,
       before: { mfa_policy: prev?.mfa_policy ?? null },
       after: { mfa_policy: parsed.data.policy },
+    });
+    // Security feed: org-wide auth-policy changes are forensic-relevant.
+    void dispatchEvent(ctx.organizationId, 'security.mfa_policy_changed', {
+      from: (prev?.mfa_policy as string | null) ?? 'optional',
+      to: parsed.data.policy,
     });
     // Invalidate the cached org row (lib/dashboard/cached-org.ts) so
     // the new policy takes effect immediately for the MFA banner +
