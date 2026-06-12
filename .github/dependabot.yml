@@ -27,11 +27,24 @@ updates:
       - dependency-name: eas-cli
       # NO automated major bumps for anything: majors change APIs (first week
       # proved it — pdf-parse 2.x and @hookform/resolvers 5.x both failed the
-      # preview build, and expo-* majors must track the pinned Expo SDK, never
-      # float). Majors are deliberate, manual upgrades. Security advisories
-      # still open PRs regardless of this ignore.
+      # preview build). Majors are deliberate, manual upgrades. Security
+      # advisories still open PRs regardless of this ignore.
       - dependency-name: '*'
         update-types: ['version-update:semver-major']
+      # Expo-SDK-managed packages are versioned BY the SDK — they only ever
+      # move together via `npx expo install --fix` during a deliberate SDK
+      # upgrade. Even minors break the native build or typecheck (PR #5's
+      # group bumped RN-coupled deps and failed mobile typecheck).
+      - dependency-name: 'expo'
+      - dependency-name: 'expo-*'
+      - dependency-name: 'react-native'
+      - dependency-name: 'react-native-*'
+      - dependency-name: '@react-native*'
+      - dependency-name: '@expo/*'
+      - dependency-name: 'react'
+      - dependency-name: 'react-dom'
+      - dependency-name: '@types/react'
+      - dependency-name: '@types/react-dom'
 
   - package-ecosystem: github-actions
     directory: /
