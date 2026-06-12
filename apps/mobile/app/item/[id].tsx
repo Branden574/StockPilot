@@ -123,7 +123,7 @@ export default function ItemDetail() {
         `id, name, sku, barcode, description, quantity_on_hand,
          reorder_point, reorder_quantity, unit_cost, retail_price,
          unit_of_measure, status, category_id, item_type, bin_location,
-         warehouse_id, custom_fields,
+         warehouse_id, charter_id, custom_fields,
          category:categories!category_id (name),
          supplier:suppliers!supplier_id (name),
          primary_location:locations!primary_location_id (name)`,
@@ -171,33 +171,32 @@ export default function ItemDetail() {
     const crateNumber = cfStr('crateNumber') ?? cfStr('crate_number');
     const grade = cfStr('grade');
 
-    // Warehouse + charter are resolved in a second pass to avoid a
-    // multi-FK embed (`warehouses` has two relations into other tables
-    // that confuse PostgREST). Cheap because we filter to one row.
+    // Warehouse is resolved in a second pass to avoid a multi-FK embed
+    // (`warehouses` has two relations into other tables that confuse
+    // PostgREST). Cheap because we filter to one row.
+    //
+    // Charter comes from the ITEM's own charter_id — never from the
+    // warehouse. warehouse_charters is many-to-many (one warehouse hosts
+    // inventory for many charters), so deriving it from the warehouse
+    // stamped an arbitrary charter (whichever row came first) on every
+    // item in the building. charter_id IS NULL = "Generic" (any charter
+    // the warehouse services can use) — same sentinel the web table uses.
     let warehouseName: string | null = null;
     let charterName: string | null = null;
     const whId = r.warehouse_id as string | null | undefined;
-    if (whId) {
-      const [whResp, joinResp] = await Promise.all([
-        supabase.from('warehouses').select('name').eq('id', whId).maybeSingle(),
-        supabase
-          .from('warehouse_charters')
-          .select('charter_id')
-          .eq('warehouse_id', whId)
-          .limit(1)
-          .maybeSingle(),
-      ]);
-      warehouseName = (whResp.data?.name as string | undefined) ?? null;
-      const charterId = (joinResp.data?.charter_id as string | undefined) ?? null;
-      if (charterId) {
-        const { data: ch } = await supabase
-          .from('charters')
-          .select('name')
-          .eq('id', charterId)
-          .maybeSingle();
-        charterName = (ch?.name as string | undefined) ?? null;
-      }
-    }
+    const charterId = r.charter_id as string | null | undefined;
+    const [whResp, chResp] = await Promise.all([
+      whId
+        ? supabase.from('warehouses').select('name').eq('id', whId).maybeSingle()
+        : Promise.resolve(null),
+      charterId
+        ? supabase.from('charters').select('name').eq('id', charterId).maybeSingle()
+        : Promise.resolve(null),
+    ]);
+    warehouseName = (whResp?.data?.name as string | undefined) ?? null;
+    charterName = charterId
+      ? ((chResp?.data?.name as string | undefined) ?? null)
+      : 'Generic';
 
     // Primary image — cached signed URL (reused across screens).
     const { data: imgRow } = await supabase
