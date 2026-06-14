@@ -2,6 +2,7 @@ import { TrendingUp } from 'lucide-react';
 import Link from 'next/link';
 
 import { DraftPosFromReorderButton } from '@/components/reports/draft-pos-from-reorder-button';
+import { AutoReorderPanel } from '@/components/settings/auto-reorder-panel';
 import { PlanningParamsPanel } from '@/components/settings/planning-params-panel';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,9 +14,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatNumber } from '@/lib/utils';
+import { createClient } from '@/lib/supabase/server';
+import { readAutoReorderSettings } from '@/server/services/auto-reorder';
 import { PlanningService } from '@/server/services/planning';
+
+import { planAllowsAutoReorder, type OrgBillingState } from '@stockpilot/core';
 
 /**
  * Reorder Planning — velocity-ranked reorder surface. Lists active items by
@@ -29,11 +35,24 @@ export default async function PlanningPage() {
     return <ModuleNotEnabled moduleId="planning" canManage={moduleAccess.canManage} />;
   }
 
+  const ctx = await requireOrgContext();
+  const supabase = await createClient();
   const svc = await PlanningService.forCurrentUser();
-  const [suggestions, params] = await Promise.all([
+  const [suggestions, params, autoReorder, orgBillingRes] = await Promise.all([
     svc.getReorderSuggestions(),
     svc.readParams(),
+    readAutoReorderSettings(supabase, ctx.organizationId),
+    supabase
+      .from('organizations')
+      .select(
+        'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
+      )
+      .eq('id', ctx.organizationId)
+      .maybeSingle(),
   ]);
+  const autoReorderEntitled = planAllowsAutoReorder(
+    ((orgBillingRes.data as OrgBillingState | null) ?? { plan: null }) as OrgBillingState,
+  );
 
   // The auto-draft path uses the canonical below-par filter (reorder_point > 0,
   // on-hand at/below it); count those here so the button mirrors what it will do.
@@ -124,8 +143,9 @@ export default async function PlanningPage() {
       </Card>
 
       {moduleAccess.canManage && (
-        <div className="mt-6">
+        <div className="mt-6 space-y-6">
           <PlanningParamsPanel initial={params} />
+          <AutoReorderPanel initial={autoReorder} entitled={autoReorderEntitled} />
         </div>
       )}
     </div>

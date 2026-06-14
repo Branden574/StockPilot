@@ -1,4 +1,4 @@
-import { PLAN_IDS, type PlanId } from './plans';
+import { PLAN_IDS, PLANS, type PlanId } from './plans';
 
 /**
  * The billing-relevant shape of an organization row. Mirrors the columns
@@ -87,4 +87,13 @@ export function resolveEffectivePlan(
     trialDaysRemaining: null,
     arrangement,
   };
+}
+
+/**
+ * Whether the org's EFFECTIVE plan entitles it to automatic reordering
+ * (Pro and above). Checked on the effective tier, so a Comped/override org
+ * qualifies even though its raw `plan` column may still be 'free'.
+ */
+export function planAllowsAutoReorder(org: OrgBillingState, now: number = Date.now()): boolean {
+  return PLANS[resolveEffectivePlan(org, now).tier].limits.autoReorder;
 }
