@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 
 import { lookupIsbn, normalizeIsbn } from '@/lib/books/lookup';
+import { clientIpFromRequest } from '@/lib/client-ip';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 
@@ -18,6 +20,14 @@ export async function GET(request: Request) {
   }
   if (!normalizeIsbn(raw)) {
     return NextResponse.json({ error: 'Invalid ISBN format' }, { status: 400 });
+  }
+  // This endpoint is PUBLIC and fans out to 3 external book APIs + a paid
+  // metadata-merge per call — rate-limit per IP (fail-CLOSED so a DB outage
+  // can't unlock unlimited amplification/cost).
+  const ip = clientIpFromRequest(request);
+  const rl = await checkRateLimit(`books-lookup:${ip}`, 30, 60_000, 'closed');
+  if (!rl.allowed) {
+    return NextResponse.json({ error: 'Too many requests. Try again shortly.' }, { status: 429 });
   }
   const merged = await lookupIsbn(raw);
   if (!merged) {

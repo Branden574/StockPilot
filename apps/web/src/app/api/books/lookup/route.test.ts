@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Public endpoint is now per-IP rate-limited (fail-closed). Mock it allow-by-
+// default so the lookup-behavior tests run; one test flips it to denied.
+const checkRateLimitMock = vi.fn(async () => ({ allowed: true, count: 1, resetAt: Date.now() + 1000 }));
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: (...a: unknown[]) => checkRateLimitMock(...(a as [])),
+}));
+vi.mock('@/lib/client-ip', () => ({ clientIpFromRequest: () => '203.0.113.7' }));
+
 import { GET } from './route';
 
 type FetchMock = ReturnType<typeof vi.fn>;
@@ -63,9 +71,18 @@ describe('GET /api/books/lookup', () => {
   beforeEach(() => {
     // Default: nothing matches at all sources.
     setupFetch({ google: null, openLibrary: null, openLibrarySearch: null, loc: null });
+    checkRateLimitMock.mockResolvedValue({ allowed: true, count: 1, resetAt: Date.now() + 1000 });
   });
   afterEach(() => {
     global.fetch = ORIGINAL_FETCH;
+  });
+
+  it('returns 429 when the per-IP rate limit is exceeded (no upstream fetch)', async () => {
+    checkRateLimitMock.mockResolvedValueOnce({ allowed: false, count: 31, resetAt: Date.now() + 1000 });
+    const fetchSpy = setupFetch({ google: { totalItems: 1 } });
+    const res = await GET(new Request('https://test.local/api/books/lookup?isbn=9780306406157'));
+    expect(res.status).toBe(429);
+    expect(fetchSpy).not.toHaveBeenCalled(); // limited BEFORE any outbound call
   });
 
   it('returns 400 for invalid ISBN like "abc"', async () => {

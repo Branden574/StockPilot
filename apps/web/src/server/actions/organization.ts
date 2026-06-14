@@ -3,12 +3,12 @@
 import { revalidatePath, updateTag } from 'next/cache';
 import { z } from 'zod';
 
-import { requireOrgContext, requireSession } from '@/lib/auth/session';
+import { requireSession } from '@/lib/auth/session';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { ORG_TIMEZONE_OPTIONS } from '@/lib/timezone-options';
 import { audit } from '@/server/services/audit';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, withContext } from '@/server/services/context';
 import { slugify } from '@/lib/utils';
 
 import {
@@ -118,7 +118,13 @@ export async function updateTerminologyAction(
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
   try {
-    const ctx = await requireOrgContext();
+    const ctx = await withContext();
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+      return err(
+        'forbidden',
+        'Multi-factor authentication required. Enroll in MFA before performing this action.',
+      );
+    }
     if (ctx.role !== 'owner' && ctx.role !== 'admin') {
       return err('forbidden', 'Only admins can change terminology.');
     }
@@ -188,7 +194,13 @@ export async function updateOrgPoTermsAction(
     );
   }
   try {
-    const ctx = await requireOrgContext();
+    const ctx = await withContext();
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+      return err(
+        'forbidden',
+        'Multi-factor authentication required. Enroll in MFA before performing this action.',
+      );
+    }
     if (ctx.role !== 'owner' && ctx.role !== 'admin') {
       return err('forbidden', 'Only owners and admins can edit PO terms.');
     }
@@ -262,7 +274,13 @@ export async function updateOrgTimezoneAction(
     );
   }
   try {
-    const ctx = await requireOrgContext();
+    const ctx = await withContext();
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+      return err(
+        'forbidden',
+        'Multi-factor authentication required. Enroll in MFA before performing this action.',
+      );
+    }
     if (ctx.role !== 'owner' && ctx.role !== 'admin') {
       return err('forbidden', 'Only owners and admins can change the timezone.');
     }
@@ -326,7 +344,13 @@ export async function renameOrganizationAction(input: {
     );
   }
   try {
-    const ctx = await requireOrgContext();
+    const ctx = await withContext();
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+      return err(
+        'forbidden',
+        'Multi-factor authentication required. Enroll in MFA before performing this action.',
+      );
+    }
     if (ctx.role !== 'owner' && ctx.role !== 'admin') {
       return err('forbidden', 'Only owners and admins can rename the org.');
     }

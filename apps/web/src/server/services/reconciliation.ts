@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRows } from './lib/paginate';
 
 export interface ReconciliationRow {
   organization_id: string;
@@ -46,23 +47,25 @@ export class ReconciliationService {
     vendorId?: string | null;
     status?: 'open' | 'closed' | 'all';
   } = {}) {
-    let q = this.ctx.supabase
-      .from('vw_po_reconciliation')
-      .select(
-        'organization_id, purchase_order_id, po_number, status, supplier_id, supplier_name, qty_ordered_total, qty_received_total, qty_open_total, cost_ordered_total, cost_received_total, created_at, updated_at',
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .order('created_at', { ascending: false });
-
-    if (filters.vendorId) q = q.eq('supplier_id', filters.vendorId);
-    if (filters.status === 'open') {
-      q = q.in('status', ['expected_inbound', 'ordered', 'partially_received']);
-    } else if (filters.status === 'closed') {
-      q = q.in('status', ['received', 'cancelled']);
-    }
-
-    const { data: rows, error: rErr } = await q;
-    if (rErr) throw new ServiceError('internal_error', rErr.message);
+    // PAGINATED — this per-PO view feeds the financial TOTALS below; a 1000-row
+    // PostgREST cap would silently undercount any org with >1000 POs. Page by a
+    // stable key (purchase_order_id), then re-sort newest-first for display.
+    const recRows = await fetchAllRows<ReconciliationRow>((from, to) => {
+      let q = this.ctx.supabase
+        .from('vw_po_reconciliation')
+        .select(
+          'organization_id, purchase_order_id, po_number, status, supplier_id, supplier_name, qty_ordered_total, qty_received_total, qty_open_total, cost_ordered_total, cost_received_total, created_at, updated_at',
+        )
+        .eq('organization_id', this.ctx.organizationId);
+      if (filters.vendorId) q = q.eq('supplier_id', filters.vendorId);
+      if (filters.status === 'open') {
+        q = q.in('status', ['expected_inbound', 'ordered', 'partially_received']);
+      } else if (filters.status === 'closed') {
+        q = q.in('status', ['received', 'cancelled']);
+      }
+      return q.order('purchase_order_id', { ascending: true }).range(from, to);
+    });
+    recRows.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
 
     const { data: vendor, error: vErr } = await this.ctx.supabase
       .from('vw_vendor_performance')
@@ -77,7 +80,6 @@ export class ReconciliationService {
       .eq('organization_id', this.ctx.organizationId);
     if (wErr) throw new ServiceError('internal_error', wErr.message);
 
-    const recRows = (rows ?? []) as unknown as ReconciliationRow[];
     const totals = recRows.reduce(
       (a, r) => ({
         qtyOrdered: a.qtyOrdered + Number(r.qty_ordered_total),
