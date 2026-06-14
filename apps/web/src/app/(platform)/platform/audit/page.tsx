@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { listPlatformAudit, type PlatformAuditAction } from '@/server/services/platform/audit';
 
@@ -15,8 +16,14 @@ const ACTION_LABEL: Record<PlatformAuditAction, string> = {
   ticket_updated: 'Updated ticket',
 };
 
-export default async function PlatformAuditPage() {
-  const rows = await listPlatformAudit({ limit: 200 });
+export default async function PlatformAuditPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ org?: string }>;
+}) {
+  const { org } = await searchParams;
+  const orgFilter = org && /^[0-9a-f-]{36}$/i.test(org) ? org : undefined;
+  const rows = await listPlatformAudit({ limit: 200, organizationId: orgFilter });
 
   return (
     <div className="mx-auto w-full max-w-[1280px] px-6 pb-20 pt-7">
@@ -25,6 +32,14 @@ export default async function PlatformAuditPage() {
         <p className="mt-1 text-[13px] text-[var(--ed-ink-3)]">
           Every god-mode action — who, what, which org, when. Append-only, newest first.
         </p>
+        {orgFilter ? (
+          <p className="mt-2 text-[12px]">
+            <span className="text-[var(--ed-ink-4)]">Filtered to one organization.</span>{' '}
+            <Link href="/platform/audit" className="font-medium hover:underline">
+              Show all
+            </Link>
+          </p>
+        ) : null}
       </div>
 
       <div className="overflow-hidden rounded-[10px] border border-border">
