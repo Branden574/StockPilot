@@ -192,7 +192,9 @@ describe('setOrgLogoUrlAction', () => {
         data: [{ logo_url: 'https://old/logo.png' }],
         error: null,
       },
-      'organizations.update': { data: null, error: null },
+      // update now does .select('id').maybeSingle() + a row-hit check, so the
+      // stub must return the updated row.
+      'organizations.update': { data: { id: 'org-1' }, error: null },
     });
   });
 
