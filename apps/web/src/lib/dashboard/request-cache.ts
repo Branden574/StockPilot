@@ -4,7 +4,7 @@ import { cache } from 'react';
 
 import { createClient } from '@/lib/supabase/server';
 
-import type { ModuleId } from '@stockpilot/core';
+import { MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
 
 /**
  * Request-scoped React.cache() wrappers for data the dashboard layout AND
@@ -45,6 +45,13 @@ export interface OrgRow {
    * org row → zero extra round-trips (preserves load-perf).
    */
   order_status_config: unknown;
+  /**
+   * Platform-admin "Comped — all modules" flag (migration 0175). When true,
+   * the entitlement layer treats every non-core module as enabled for this org
+   * (used with a Comped Enterprise arrangement). Read off the cached org row →
+   * zero extra round-trips.
+   */
+  all_modules_comp?: boolean | null;
 }
 
 export const getOrgRowForRequest = cache(
@@ -53,13 +60,18 @@ export const getOrgRowForRequest = cache(
     const { data } = await supabase
       .from('organizations')
       .select(
-        'terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout, order_status_config',
+        'terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout, order_status_config, all_modules_comp',
       )
       .eq('id', organizationId)
       .maybeSingle();
     return (data as OrgRow | null) ?? null;
   },
 );
+
+/** Every non-core module id — the set a Comped org gets when all_modules_comp is on. */
+const NON_CORE_MODULE_IDS: ModuleId[] = (Object.values(MODULE_REGISTRY) as Array<{ id: ModuleId; tier: string }>)
+  .filter((m) => m.tier !== 'core')
+  .map((m) => m.id);
 
 export interface DashboardWarehouse {
   id: string;
@@ -115,8 +127,17 @@ export const getModulesForRequest = cache(
     if (error) {
       console.error('[getModulesForRequest] organization_modules query failed:', error);
     }
-    return new Set(
+    const enabled = new Set(
       ((data ?? []) as Array<{ module_id: string }>).map((r) => r.module_id as ModuleId),
     );
+
+    // Comped "all modules" override: a platform admin granting full access
+    // flips on every non-core module. getOrgRowForRequest is request-cached, so
+    // this adds zero round-trips. Fails CLOSED — a null/false flag adds nothing.
+    const org = await getOrgRowForRequest(organizationId);
+    if (org?.all_modules_comp) {
+      for (const id of NON_CORE_MODULE_IDS) enabled.add(id);
+    }
+    return enabled;
   },
 );

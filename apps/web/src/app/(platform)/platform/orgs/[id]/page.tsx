@@ -2,11 +2,13 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { BillingPanel } from '@/components/platform/billing-panel';
 import { PasswordResetButton } from '@/components/platform/password-reset-button';
 import { requireSession } from '@/lib/auth/session';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import {
   DETAIL_PREVIEW_LIMIT,
+  getOrgBillingState,
   getOrgInventory,
   getOrgMembers,
   getOrgOrders,
@@ -16,12 +18,13 @@ import {
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Organization · Platform' };
 
-type Tab = 'overview' | 'inventory' | 'users' | 'orders';
+type Tab = 'overview' | 'inventory' | 'users' | 'orders' | 'billing';
 const TABS: { key: Tab; label: string }[] = [
   { key: 'overview', label: 'Overview' },
   { key: 'inventory', label: 'Inventory' },
   { key: 'users', label: 'Users' },
   { key: 'orders', label: 'Orders' },
+  { key: 'billing', label: 'Billing' },
 ];
 
 export default async function PlatformOrgDetailPage({
@@ -112,6 +115,7 @@ export default async function PlatformOrgDetailPage({
         {tab === 'inventory' && (await InventoryTab({ orgId: id }))}
         {tab === 'users' && (await UsersTab({ orgId: id }))}
         {tab === 'orders' && (await OrdersTab({ orgId: id }))}
+        {tab === 'billing' && (await BillingTab({ orgId: id }))}
       </div>
     </div>
   );
@@ -238,6 +242,30 @@ async function OrdersTab({ orgId }: { orgId: string }) {
       />
       <CapNote count={orders.length} />
     </>
+  );
+}
+
+async function BillingTab({ orgId }: { orgId: string }) {
+  const b = await getOrgBillingState(orgId);
+  if (!b) return <p className="text-[13px] text-[var(--ed-ink-4)]">Org not found.</p>;
+  const tierName = b.effective.tier.charAt(0).toUpperCase() + b.effective.tier.slice(1);
+  const effectiveLabel =
+    b.arrangement !== 'standard' ? `${tierName} · ${b.arrangement}` : tierName;
+  return (
+    <BillingPanel
+      organizationId={orgId}
+      accessTier={b.accessTier}
+      arrangement={b.arrangement}
+      customPriceCents={b.customPriceCents}
+      customPriceInterval={b.customPriceInterval}
+      allModulesComp={b.allModulesComp}
+      billingNotes={b.billingNotes}
+      trialTier={b.trialTier}
+      trialEndsAt={b.trialEndsAt}
+      hasStripeSubscription={b.hasStripeSubscription}
+      effectiveLabel={effectiveLabel}
+      trialDaysRemaining={b.effective.trialDaysRemaining}
+    />
   );
 }
 
