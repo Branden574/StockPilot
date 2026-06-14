@@ -30,6 +30,7 @@ export const config = {
   //   /api/**               API routes always handle their own auth
   matcher: [
     '/dashboard/:path*',
+    '/platform/:path*',
     '/onboarding/:path*',
     '/signin/:path*',
     '/signup',

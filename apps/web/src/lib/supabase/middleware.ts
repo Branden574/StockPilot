@@ -12,7 +12,7 @@ interface CookieToSet {
   options?: CookieOptions;
 }
 
-const PROTECTED_PREFIXES = ['/dashboard', '/onboarding'];
+const PROTECTED_PREFIXES = ['/dashboard', '/platform', '/onboarding'];
 const AUTH_ROUTES = ['/signin', '/signup', '/reset'];
 
 /** Header keys forwarded from middleware to the page render. */
