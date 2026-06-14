@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { planAllowsAutoReorder, resolveEffectivePlan, type OrgBillingState } from './effective-plan';
+import {
+  planAllowsAutoReorder,
+  planAllowsRestorePoints,
+  resolveEffectivePlan,
+  type OrgBillingState,
+} from './effective-plan';
 
 const NOW = Date.parse('2026-06-14T00:00:00Z');
 const inDays = (d: number) => new Date(NOW + d * 86_400_000).toISOString();
@@ -121,6 +126,24 @@ describe('planAllowsAutoReorder — Pro and above', () => {
         org({ plan: 'free', trial_ends_at: inDays(5), trial_tier: 'pro' }),
         NOW,
       ),
+    ).toBe(true);
+  });
+});
+
+describe('planAllowsRestorePoints — Business and above', () => {
+  it('Free and Pro do NOT get restore points', () => {
+    expect(planAllowsRestorePoints(org({ plan: 'free' }), NOW)).toBe(false);
+    expect(planAllowsRestorePoints(org({ plan: 'pro' }), NOW)).toBe(false);
+  });
+
+  it('Business and Enterprise get restore points', () => {
+    expect(planAllowsRestorePoints(org({ plan: 'business' }), NOW)).toBe(true);
+    expect(planAllowsRestorePoints(org({ plan: 'enterprise' }), NOW)).toBe(true);
+  });
+
+  it('a Comped/override Enterprise org qualifies with plan=free', () => {
+    expect(
+      planAllowsRestorePoints(org({ plan: 'free', access_tier: 'enterprise' }), NOW),
     ).toBe(true);
   });
 });
