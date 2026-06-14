@@ -26,7 +26,11 @@ export class BillingService {
     assertPermission(this.ctx, 'billing:read');
     const { data, error } = await this.ctx.supabase
       .from('organizations')
-      .select('id, name, plan, stripe_customer_id, stripe_subscription_id, trial_ends_at')
+      .select(
+        // include the platform-admin override columns (0175) so the billing
+        // page can resolve the EFFECTIVE plan, not the raw `plan` column.
+        'id, name, plan, stripe_customer_id, stripe_subscription_id, trial_ends_at, access_tier, billing_arrangement, trial_tier',
+      )
       .eq('id', this.ctx.organizationId)
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
