@@ -36,9 +36,11 @@ export type CreateOrgForInput = z.infer<typeof createOrgForSchema>;
  * land directly on a usable dashboard on first sign-in (skipping
  * /onboarding because the org already exists).
  *
- * Gated by `isPlatformAdmin(session.email)` — checked against the
- * STOCKPILOT_PLATFORM_ADMIN_EMAILS env var allowlist. Non-admins get a
- * generic `unauthorized` result so the surface area of the check isn't
+ * Gated by `checkPlatformAdmin({ requireStepUp: true })` — the VERIFIED auth
+ * email (auth.getUser, NOT the user-writable profile column) checked against
+ * the STOCKPILOT_PLATFORM_ADMIN_EMAILS env var allowlist, plus a fresh MFA
+ * step-up. Non-admins get a generic `forbidden` result so the surface area of
+ * the check isn't
  * leaked.
  */
 export async function createOrgForCustomerAction(
