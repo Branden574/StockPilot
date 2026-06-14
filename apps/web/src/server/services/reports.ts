@@ -1,6 +1,7 @@
 import 'server-only';
 
-import { ServiceError, withContext, type ServiceContext } from './context';
+import { withContext, type ServiceContext } from './context';
+import { fetchAllRows } from './lib/paginate';
 
 export interface ValuationRow {
   itemId: string;
@@ -190,31 +191,51 @@ export class ReportsService {
    * and category. All non-deleted, active items count.
    */
   async inventoryValuation(): Promise<ValuationReport> {
-    const { data, error } = await this.ctx.supabase
-      .from('inventory_items')
-      .select(
-        `id, sku, name, quantity_on_hand, unit_cost, warehouse_id, category_id,
+    // PostgREST hard-caps every response at `[api] max_rows` (1000), so a
+    // single `.limit(10_000)` silently truncates any org with >1000 items —
+    // corrupting the totals/rollups. Page through the full set instead.
+    type ValuationItemRow = {
+      id: string;
+      sku: string;
+      name: string;
+      quantity_on_hand: number;
+      unit_cost: number;
+      warehouse_id: string | null;
+      category_id: string | null;
+      warehouse: { name: string } | { name: string }[] | null;
+      category: { name: string } | { name: string }[] | null;
+    };
+    const data = await fetchAllRows<ValuationItemRow>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('inventory_items')
+          .select(
+            `id, sku, name, quantity_on_hand, unit_cost, warehouse_id, category_id,
          warehouse:warehouses!warehouse_id (name),
          category:categories!category_id (name)`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      // Rentals (canopies, supplies) circulate rather than sell —
-      // excluded from every report so valuations and forecasts
-      // reflect only sellable inventory.
-      .eq('is_rental', false)
-      .order('quantity_on_hand', { ascending: false })
-      // Explicit cap — relying on PostgREST's default 1000-row limit
-      // is implicit and inconsistent across versions; safer to declare.
-      .limit(10_000);
-    if (error) throw new ServiceError('internal_error', error.message);
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .is('deleted_at', null)
+          .eq('status', 'active')
+          // Rentals (canopies, supplies) circulate rather than sell —
+          // excluded from every report so valuations and forecasts
+          // reflect only sellable inventory.
+          .eq('is_rental', false)
+          // Stable order for range pagination; the report re-sorts by
+          // quantity_on_hand below.
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: 10_000 },
+    );
 
     // Hold each raw row alongside the warehouse_id / category_id needed to
     // bucket by id (not name). Two warehouses with the same name —
     // e.g. "Main" in two regions — must NOT collapse into one row.
     type Enriched = ValuationRow & { warehouseId: string | null; categoryId: string | null };
-    const enriched: Enriched[] = (data ?? []).map((r) => {
+    const enriched: Enriched[] = data
+      // Preserve the original quantity_on_hand-descending row order.
+      .sort((a, b) => (Number(b.quantity_on_hand) || 0) - (Number(a.quantity_on_hand) || 0))
+      .map((r) => {
       const rec = r as unknown as {
         id: string;
         sku: string;
@@ -305,20 +326,32 @@ export class ReportsService {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
     // 50k row cap. A high-volume org with millions of movements in a
     // 90-day window would otherwise pull the whole result set into
-    // Node memory and aggregate in JS. The summary is approximate
-    // anyway (top movers, type breakdown) — a 50k sample is plenty
-    // for ranking and totals at the rounding levels we display.
-    const { data, error } = await this.ctx.supabase
-      .from('stock_movements')
-      .select(
-        `id, item_id, movement_type, quantity_change, created_at,
+    // Node memory and aggregate in JS. The cap is now the TRUE bound on
+    // rows considered — without paging, PostgREST's max_rows = 1000 would
+    // silently truncate the aggregate. Order is irrelevant here (pure
+    // type/per-item sums + JS top-N), so we page by id.
+    type MovementRow = {
+      id: string;
+      item_id: string;
+      movement_type: string;
+      quantity_change: number;
+      created_at: string;
+      item: { id: string; sku: string; name: string } | { id: string; sku: string; name: string }[] | null;
+    };
+    const data = await fetchAllRows<MovementRow>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('stock_movements')
+          .select(
+            `id, item_id, movement_type, quantity_change, created_at,
          item:inventory_items!item_id (id, sku, name)`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .gte('created_at', since)
-      .order('created_at', { ascending: false })
-      .limit(50_000);
-    if (error) throw new ServiceError('internal_error', error.message);
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .gte('created_at', since)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: 50_000 },
+    );
 
     const byType = new Map<string, { count: number; totalQty: number }>();
     const perItem = new Map<
@@ -326,14 +359,7 @@ export class ReportsService {
       { sku: string; name: string; totalIn: number; totalOut: number; movementCount: number }
     >();
 
-    for (const r of (data ?? []) as Array<{
-      id: string;
-      item_id: string;
-      movement_type: string;
-      quantity_change: number;
-      created_at: string;
-      item: { id: string; sku: string; name: string } | { id: string; sku: string; name: string }[] | null;
-    }>) {
+    for (const r of data) {
       const t = r.movement_type;
       const change = Number(r.quantity_change) || 0;
       const typeEntry = byType.get(t) ?? { count: 0, totalQty: 0 };
@@ -376,7 +402,7 @@ export class ReportsService {
         .map(([movementType, v]) => ({ movementType, count: v.count, totalQty: v.totalQty }))
         .sort((a, b) => b.count - a.count),
       topMovers,
-      totalMovements: (data ?? []).length,
+      totalMovements: data.length,
     };
   }
 
@@ -386,25 +412,11 @@ export class ReportsService {
    * to do so.
    */
   async reorderForecast(): Promise<ReorderForecast> {
-    const { data, error } = await this.ctx.supabase
-      .from('inventory_items')
-      .select(
-        `id, sku, name, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, warehouse_id,
-         warehouse:warehouses!warehouse_id (name)`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      .eq('is_rental', false)
-      .gt('reorder_point', 0)
-      .order('quantity_on_hand', { ascending: true })
-      .limit(5_000);
-    if (error) throw new ServiceError('internal_error', error.message);
-
-    const rows: ReorderRow[] = [];
-    let totalDeficit = 0;
-    let totalEstimatedCost = 0;
-    for (const r of (data ?? []) as Array<{
+    // PostgREST caps responses at 1000 rows; page the full set so the
+    // forecast covers every below-reorder-point item, not just the first
+    // 1000. The final rows are re-sorted by deficit, so fetch order is
+    // irrelevant — page by id.
+    type ReorderItemRow = {
       id: string;
       sku: string;
       name: string;
@@ -414,7 +426,29 @@ export class ReportsService {
       unit_cost: number;
       warehouse_id: string | null;
       warehouse: { name: string } | { name: string }[] | null;
-    }>) {
+    };
+    const data = await fetchAllRows<ReorderItemRow>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('inventory_items')
+          .select(
+            `id, sku, name, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, warehouse_id,
+         warehouse:warehouses!warehouse_id (name)`,
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .is('deleted_at', null)
+          .eq('status', 'active')
+          .eq('is_rental', false)
+          .gt('reorder_point', 0)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: 5_000 },
+    );
+
+    const rows: ReorderRow[] = [];
+    let totalDeficit = 0;
+    let totalEstimatedCost = 0;
+    for (const r of data) {
       const qty = Number(r.quantity_on_hand) || 0;
       const reorderPoint = Number(r.reorder_point) || 0;
       if (qty > reorderPoint) continue;
@@ -455,25 +489,11 @@ export class ReportsService {
    */
   async shrinkage(days = 30): Promise<ShrinkageReport> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-    // 50k cap — see movementSummary() for the rationale.
-    const { data, error } = await this.ctx.supabase
-      .from('stock_movements')
-      .select(
-        `id, item_id, movement_type, quantity_change, reason, notes, created_at,
-         item:inventory_items!item_id (id, sku, name, unit_cost)`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('movement_type', 'adjust')
-      .lt('quantity_change', 0)
-      .gte('created_at', since)
-      .order('created_at', { ascending: false })
-      .limit(50_000);
-    if (error) throw new ServiceError('internal_error', error.message);
-
-    const rows: ShrinkageRow[] = [];
-    let totalUnits = 0;
-    let totalCost = 0;
-    for (const r of (data ?? []) as Array<{
+    // 50k cap — see movementSummary() for the rationale. Page the full set
+    // (PostgREST max_rows = 1000 would otherwise silently truncate) ordered
+    // by id; the rows are re-sorted by created_at desc below to preserve the
+    // original newest-first display order.
+    type ShrinkageMoveRow = {
       id: string;
       item_id: string;
       quantity_change: number;
@@ -484,7 +504,28 @@ export class ReportsService {
         | { id: string; sku: string; name: string; unit_cost: number }
         | { id: string; sku: string; name: string; unit_cost: number }[]
         | null;
-    }>) {
+    };
+    const data = await fetchAllRows<ShrinkageMoveRow>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('stock_movements')
+          .select(
+            `id, item_id, movement_type, quantity_change, reason, notes, created_at,
+         item:inventory_items!item_id (id, sku, name, unit_cost)`,
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('movement_type', 'adjust')
+          .lt('quantity_change', 0)
+          .gte('created_at', since)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: 50_000 },
+    );
+
+    const rows: ShrinkageRow[] = [];
+    let totalUnits = 0;
+    let totalCost = 0;
+    for (const r of data) {
       const item = Array.isArray(r.item) ? r.item[0] : r.item;
       if (!item) continue;
       const change = Number(r.quantity_change) || 0;
@@ -507,6 +548,10 @@ export class ReportsService {
       });
     }
 
+    // Preserve the original newest-first display order (the query used to
+    // order by created_at desc before paginating by id).
+    rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+
     return { rangeDays: days, rows, totalUnits, totalCost };
   }
 
@@ -527,21 +572,10 @@ export class ReportsService {
   async supplierScorecard(days = 90): Promise<SupplierScorecardReport> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-    const { data: pos, error: posErr } = await this.ctx.supabase
-      .from('purchase_orders')
-      .select(
-        `id, supplier_id, status, ordered_at, expected_at, received_at,
-         total, created_at,
-         supplier:suppliers!supplier_id (name)`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .not('supplier_id', 'is', null)
-      .gte('created_at', since)
-      .order('created_at', { ascending: false })
-      .limit(50_000);
-    if (posErr) throw new ServiceError('internal_error', posErr.message);
-
-    const poList = (pos ?? []) as Array<{
+    // PostgREST caps every response at 1000 rows; page the full PO set so
+    // the scorecard aggregates over every PO in the window. Final rows are
+    // re-sorted by totalSpend, so fetch order is irrelevant — page by id.
+    type ScorecardPoRow = {
       id: string;
       supplier_id: string;
       status: string;
@@ -554,7 +588,23 @@ export class ReportsService {
         | { name: string }
         | { name: string }[]
         | null;
-    }>;
+    };
+    const poList = await fetchAllRows<ScorecardPoRow>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('purchase_orders')
+          .select(
+            `id, supplier_id, status, ordered_at, expected_at, received_at,
+         total, created_at,
+         supplier:suppliers!supplier_id (name)`,
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .not('supplier_id', 'is', null)
+          .gte('created_at', since)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: 50_000 },
+    );
 
     const poIds = poList.map((p) => p.id);
     let poItems: Array<{
@@ -563,12 +613,35 @@ export class ReportsService {
       quantity_received: number;
     }> = [];
     if (poIds.length > 0) {
-      const { data: items, error: itemsErr } = await this.ctx.supabase
-        .from('purchase_order_items')
-        .select('purchase_order_id, quantity_ordered, quantity_received')
-        .in('purchase_order_id', poIds);
-      if (itemsErr) throw new ServiceError('internal_error', itemsErr.message);
-      poItems = (items ?? []) as typeof poItems;
+      // The `.in(poIds)` aggregate is likewise capped at 1000 rows by
+      // PostgREST; page it so fill-rate sums cover every PO line. Batch the
+      // poIds (URL length) and page each batch.
+      const PO_ID_BATCH = 200;
+      for (let i = 0; i < poIds.length; i += PO_ID_BATCH) {
+        const batch = poIds.slice(i, i + PO_ID_BATCH);
+        const batchItems = await fetchAllRows<{
+          id: string;
+          purchase_order_id: string;
+          quantity_ordered: number;
+          quantity_received: number;
+        }>(
+          (from, to) =>
+            this.ctx.supabase
+              .from('purchase_order_items')
+              .select('id, purchase_order_id, quantity_ordered, quantity_received')
+              .in('purchase_order_id', batch)
+              .order('id', { ascending: true })
+              .range(from, to),
+          { cap: 100_000 },
+        );
+        for (const it of batchItems) {
+          poItems.push({
+            purchase_order_id: it.purchase_order_id,
+            quantity_ordered: it.quantity_ordered,
+            quantity_received: it.quantity_received,
+          });
+        }
+      }
     }
     const itemsByPo = new Map<
       string,
@@ -711,21 +784,10 @@ export class ReportsService {
     // ── 1. PO lines: unit_cost committed at order time ──────────────────
     // purchase_order_items.organization_id is the authoritative org scope;
     // we embed the parent PO purely for its date + supplier attribution.
-    const { data: poRows, error: poErr } = await this.ctx.supabase
-      .from('purchase_order_items')
-      .select(
-        `unit_cost, purchase_order_id,
-         po:purchase_orders!purchase_order_id (
-           id, supplier_id, ordered_at, created_at,
-           supplier:suppliers!supplier_id (name)
-         )`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('item_id', itemId)
-      .limit(10_000);
-    if (poErr) throw new ServiceError('internal_error', poErr.message);
-
+    // PostgREST caps responses at 1000 rows; page the full set (order/date
+    // is applied in JS afterward, so fetch order is irrelevant — page by id).
     type PoLine = {
+      id: string;
       unit_cost: number;
       purchase_order_id: string;
       po:
@@ -745,30 +807,32 @@ export class ReportsService {
           }[]
         | null;
     };
+    const poRows = await fetchAllRows<PoLine>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('purchase_order_items')
+          .select(
+            `id, unit_cost, purchase_order_id,
+         po:purchase_orders!purchase_order_id (
+           id, supplier_id, ordered_at, created_at,
+           supplier:suppliers!supplier_id (name)
+         )`,
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('item_id', itemId)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: 10_000 },
+    );
 
     // ── 2. Receipt lines: unit_cost actually paid at receive time ───────
     // receipt_lines carry no organization_id, so scope through the parent
     // receipt's organization_id (RLS enforces this too). The supplier is
     // resolved off the receipt's PO.
-    const { data: rcRows, error: rcErr } = await this.ctx.supabase
-      .from('receipt_lines')
-      .select(
-        `unit_cost, item_id,
-         receipt:receipts!receipt_id (
-           id, organization_id, status, received_at,
-           po:purchase_orders!purchase_order_id (
-             supplier_id,
-             supplier:suppliers!supplier_id (name)
-           )
-         )`,
-      )
-      .eq('item_id', itemId)
-      .eq('receipt.organization_id', this.ctx.organizationId)
-      .eq('receipt.status', 'posted')
-      .limit(10_000);
-    if (rcErr) throw new ServiceError('internal_error', rcErr.message);
-
+    // PostgREST caps responses at 1000 rows; page the full set (no ordering
+    // requirement — points are sorted by date in JS afterward — so page by id).
     type ReceiptLine = {
+      id: string;
       unit_cost: number;
       item_id: string;
       receipt:
@@ -794,6 +858,27 @@ export class ReportsService {
           }[]
         | null;
     };
+    const rcRows = await fetchAllRows<ReceiptLine>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('receipt_lines')
+          .select(
+            `id, unit_cost, item_id,
+         receipt:receipts!receipt_id (
+           id, organization_id, status, received_at,
+           po:purchase_orders!purchase_order_id (
+             supplier_id,
+             supplier:suppliers!supplier_id (name)
+           )
+         )`,
+          )
+          .eq('item_id', itemId)
+          .eq('receipt.organization_id', this.ctx.organizationId)
+          .eq('receipt.status', 'posted')
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: 10_000 },
+    );
 
     const NO_SUPPLIER = '__none';
     // Per-supplier accumulator: keep the display name + the raw points.
@@ -833,7 +918,7 @@ export class ReportsService {
       }
     };
 
-    for (const r of (poRows ?? []) as PoLine[]) {
+    for (const r of poRows) {
       const po = Array.isArray(r.po) ? r.po[0] : r.po;
       if (!po) continue; // orphaned line (shouldn't happen with the NOT NULL FK)
       const supplier = Array.isArray(po.supplier) ? po.supplier[0] : po.supplier;
@@ -845,7 +930,7 @@ export class ReportsService {
       );
     }
 
-    for (const r of (rcRows ?? []) as ReceiptLine[]) {
+    for (const r of rcRows) {
       const receipt = Array.isArray(r.receipt) ? r.receipt[0] : r.receipt;
       // Defensive: the .eq('receipt.organization_id', …) filter only
       // restricts the embedded join, so a row whose receipt was filtered
@@ -900,33 +985,6 @@ export class ReportsService {
   async velocityClass(days = 90): Promise<VelocityClassReport> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-    const [movementsRes, itemsRes] = await Promise.all([
-      this.ctx.supabase
-        .from('stock_movements')
-        .select('item_id, quantity_change, movement_type, created_at')
-        .eq('organization_id', this.ctx.organizationId)
-        .gte('created_at', since)
-        .lt('quantity_change', 0)
-        .limit(100_000), // out-movements only (negative); cap for memory safety
-      this.ctx.supabase
-        .from('inventory_items')
-        .select(
-          `id, sku, name, quantity_on_hand, unit_cost,
-           warehouse:warehouses!warehouse_id (name),
-           category:categories!category_id (name)`,
-        )
-        .eq('organization_id', this.ctx.organizationId)
-        .is('deleted_at', null)
-        .eq('status', 'active')
-        .eq('is_rental', false)
-        .or('is_bundle.is.null,is_bundle.eq.false')
-        .limit(50_000),
-    ]);
-    if (movementsRes.error)
-      throw new ServiceError('internal_error', movementsRes.error.message);
-    if (itemsRes.error)
-      throw new ServiceError('internal_error', itemsRes.error.message);
-
     type ItemRow = {
       id: string;
       sku: string;
@@ -937,16 +995,53 @@ export class ReportsService {
       category: { name: string } | { name: string }[] | null;
     };
     type MoveRow = {
+      id: string;
       item_id: string;
       quantity_change: number;
       movement_type: string;
       created_at: string;
     };
 
+    // PostgREST caps responses at 1000 rows; page both sets (pure aggregation
+    // + JS sort by valueOut afterward, so fetch order is irrelevant — page by
+    // id). The caps stay as the TRUE memory bound, not a silent 1000.
+    const [movementRows, itemRows] = await Promise.all([
+      fetchAllRows<MoveRow>(
+        (from, to) =>
+          this.ctx.supabase
+            .from('stock_movements')
+            .select('id, item_id, quantity_change, movement_type, created_at')
+            .eq('organization_id', this.ctx.organizationId)
+            .gte('created_at', since)
+            .lt('quantity_change', 0) // out-movements only (negative)
+            .order('id', { ascending: true })
+            .range(from, to),
+        { cap: 100_000 },
+      ),
+      fetchAllRows<ItemRow>(
+        (from, to) =>
+          this.ctx.supabase
+            .from('inventory_items')
+            .select(
+              `id, sku, name, quantity_on_hand, unit_cost,
+           warehouse:warehouses!warehouse_id (name),
+           category:categories!category_id (name)`,
+            )
+            .eq('organization_id', this.ctx.organizationId)
+            .is('deleted_at', null)
+            .eq('status', 'active')
+            .eq('is_rental', false)
+            .or('is_bundle.is.null,is_bundle.eq.false')
+            .order('id', { ascending: true })
+            .range(from, to),
+        { cap: 50_000 },
+      ),
+    ]);
+
     // Aggregate units-out and last-out per item.
     const unitsOutById = new Map<string, number>();
     const lastOutById = new Map<string, string>();
-    for (const m of (movementsRes.data ?? []) as MoveRow[]) {
+    for (const m of movementRows) {
       const prev = unitsOutById.get(m.item_id) ?? 0;
       unitsOutById.set(m.item_id, prev + Math.abs(Number(m.quantity_change) || 0));
       const prevDate = lastOutById.get(m.item_id);
@@ -955,7 +1050,7 @@ export class ReportsService {
       }
     }
 
-    const rawRows = ((itemsRes.data ?? []) as ItemRow[]).map((r) => {
+    const rawRows = itemRows.map((r) => {
       const wh = Array.isArray(r.warehouse) ? r.warehouse[0] : r.warehouse;
       const cat = Array.isArray(r.category) ? r.category[0] : r.category;
       const unitsOut = unitsOutById.get(r.id) ?? 0;
@@ -1018,22 +1113,6 @@ export class ReportsService {
   async deadStock(days = 90): Promise<DeadStockReport> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-    // First pass: every item with on-hand > 0 in the org.
-    const { data: items, error: itemsErr } = await this.ctx.supabase
-      .from('inventory_items')
-      .select(
-        `id, sku, name, quantity_on_hand, unit_cost, created_at,
-         warehouse:warehouses!warehouse_id (name),
-         category:categories!category_id (name)`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      .eq('is_rental', false)
-      .gt('quantity_on_hand', 0)
-      .or('is_bundle.is.null,is_bundle.eq.false');
-    if (itemsErr) throw new ServiceError('internal_error', itemsErr.message);
-
     type ItemRow = {
       id: string;
       sku: string;
@@ -1045,23 +1124,55 @@ export class ReportsService {
       category: { name: string } | { name: string }[] | null;
     };
 
-    const itemList = (items ?? []) as ItemRow[];
+    // First pass: every item with on-hand > 0 in the org. PostgREST caps
+    // responses at 1000 rows, so page the full set — otherwise an org with
+    // >1000 stocked items only ever sees the first 1000.
+    const itemList = await fetchAllRows<ItemRow>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('inventory_items')
+          .select(
+            `id, sku, name, quantity_on_hand, unit_cost, created_at,
+         warehouse:warehouses!warehouse_id (name),
+         category:categories!category_id (name)`,
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .is('deleted_at', null)
+          .eq('status', 'active')
+          .eq('is_rental', false)
+          .gt('quantity_on_hand', 0)
+          .or('is_bundle.is.null,is_bundle.eq.false')
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: 50_000 },
+    );
     const itemIds = itemList.map((i) => i.id);
 
-    // Most-recent out-movement per item in the window.
-    const recentOut = new Map<string, string>();
+    // Items that had ANY out-movement in the window — these are NOT dead.
+    // Only `.has()` is read below, so the stored timestamp is incidental;
+    // the order('created_at') was decorative. The cap previously truncated
+    // which movements were seen (silently 1000), wrongly flagging active
+    // items as dead. Paging the full window makes the dedup correct.
+    const recentOut = new Set<string>();
     if (itemIds.length > 0) {
-      const { data: moves } = await this.ctx.supabase
-        .from('stock_movements')
-        .select('item_id, created_at')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('item_id', itemIds)
-        .gte('created_at', since)
-        .lt('quantity_change', 0)
-        .order('created_at', { ascending: false })
-        .limit(100_000);
-      for (const m of (moves ?? []) as Array<{ item_id: string; created_at: string }>) {
-        if (!recentOut.has(m.item_id)) recentOut.set(m.item_id, m.created_at);
+      // Batch the itemIds (URL length) and page each batch.
+      const ITEM_ID_BATCH = 200;
+      for (let i = 0; i < itemIds.length; i += ITEM_ID_BATCH) {
+        const batch = itemIds.slice(i, i + ITEM_ID_BATCH);
+        const moves = await fetchAllRows<{ id: string; item_id: string }>(
+          (from, to) =>
+            this.ctx.supabase
+              .from('stock_movements')
+              .select('id, item_id, created_at')
+              .eq('organization_id', this.ctx.organizationId)
+              .in('item_id', batch)
+              .gte('created_at', since)
+              .lt('quantity_change', 0)
+              .order('id', { ascending: true })
+              .range(from, to),
+          { cap: 100_000 },
+        );
+        for (const m of moves) recentOut.add(m.item_id);
       }
     }
 
@@ -1114,20 +1225,6 @@ export class ReportsService {
   async bundleActivity(days = 90): Promise<BundleActivityReport> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-    const { data: dists, error: distErr } = await this.ctx.supabase
-      .from('bundle_distributions')
-      .select(
-        `id, bundle_id, warehouse_id, quantity, distributed_at,
-         shortage_recorded,
-         bundle:bundles!bundle_id (name, sku),
-         warehouse:warehouses!warehouse_id (name)`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .gte('distributed_at', since)
-      .order('distributed_at', { ascending: false })
-      .limit(10_000);
-    if (distErr) throw new ServiceError('internal_error', distErr.message);
-
     type DistRow = {
       id: string;
       bundle_id: string;
@@ -1139,32 +1236,58 @@ export class ReportsService {
       warehouse: { name: string } | { name: string }[] | null;
     };
 
-    const distList = (dists ?? []) as DistRow[];
+    // PostgREST caps responses at 1000 rows; page the full set. The report
+    // aggregates by bundle and re-sorts by kitsOut, and lastRunAt is a max
+    // comparison — so fetch order is irrelevant; page by id.
+    const distList = await fetchAllRows<DistRow>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('bundle_distributions')
+          .select(
+            `id, bundle_id, warehouse_id, quantity, distributed_at,
+         shortage_recorded,
+         bundle:bundles!bundle_id (name, sku),
+         warehouse:warehouses!warehouse_id (name)`,
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .gte('distributed_at', since)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: 10_000 },
+    );
     const distIds = distList.map((d) => d.id);
 
     // Pull every component-draw movement linked to these distributions
     // so we can show the cost side of the ledger.
     const valueByDist = new Map<string, number>();
     if (distIds.length > 0) {
-      const { data: moves } = await this.ctx.supabase
-        .from('stock_movements')
-        .select(
-          `reference_id, quantity_change, item_id,
-           item:inventory_items!item_id (unit_cost)`,
-        )
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('reference_type', 'bundle')
-        .eq('movement_type', 'bundle_distribution')
-        .gte('created_at', since)
-        .lt('quantity_change', 0)
-        .limit(50_000);
       type MoveRow = {
+        id: string;
         reference_id: string;
         quantity_change: number;
         item_id: string;
         item: { unit_cost: number } | { unit_cost: number }[] | null;
       };
-      for (const m of (moves ?? []) as MoveRow[]) {
+      // Likewise capped at 1000 by PostgREST — page the full window so the
+      // component-cost rollup sums every draw, not just the first 1000.
+      const moves = await fetchAllRows<MoveRow>(
+        (from, to) =>
+          this.ctx.supabase
+            .from('stock_movements')
+            .select(
+              `id, reference_id, quantity_change, item_id,
+           item:inventory_items!item_id (unit_cost)`,
+            )
+            .eq('organization_id', this.ctx.organizationId)
+            .eq('reference_type', 'bundle')
+            .eq('movement_type', 'bundle_distribution')
+            .gte('created_at', since)
+            .lt('quantity_change', 0)
+            .order('id', { ascending: true })
+            .range(from, to),
+        { cap: 50_000 },
+      );
+      for (const m of moves) {
         const itemField = Array.isArray(m.item) ? m.item[0] : m.item;
         const cost = Number(itemField?.unit_cost ?? 0);
         const value = Math.abs(Number(m.quantity_change) || 0) * cost;
@@ -1256,19 +1379,6 @@ export class ReportsService {
   async bundleShortages(days = 90): Promise<BundleShortagesReport> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-    const { data: moves, error } = await this.ctx.supabase
-      .from('stock_movements')
-      .select(
-        `id, item_id, notes, created_at,
-         item:inventory_items!item_id (id, name, sku)`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('movement_type', 'bundle_shortage')
-      .gte('created_at', since)
-      .order('created_at', { ascending: false })
-      .limit(5_000);
-    if (error) throw new ServiceError('internal_error', error.message);
-
     type MoveRow = {
       id: string;
       item_id: string;
@@ -1276,6 +1386,26 @@ export class ReportsService {
       created_at: string;
       item: { id: string; name: string; sku: string } | { id: string; name: string; sku: string }[] | null;
     };
+
+    // PostgREST caps responses at 1000 rows; page the full window so every
+    // shortage event is counted. Rows aggregate by item and re-sort by
+    // unitsShort (lastShortAt is a max comparison) — fetch order is
+    // irrelevant; page by id.
+    const moves = await fetchAllRows<MoveRow>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('stock_movements')
+          .select(
+            `id, item_id, notes, created_at,
+         item:inventory_items!item_id (id, name, sku)`,
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('movement_type', 'bundle_shortage')
+          .gte('created_at', since)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: 5_000 },
+    );
 
     const byItem = new Map<
       string,
@@ -1289,7 +1419,7 @@ export class ReportsService {
       }
     >();
 
-    for (const m of (moves ?? []) as MoveRow[]) {
+    for (const m of moves) {
       const itemField = Array.isArray(m.item) ? m.item[0] : m.item;
       // Notes encode "short N units during bundle distribution" — grab
       // the leading number for the unitsShort count. Defensive: defaults
