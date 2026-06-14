@@ -10,6 +10,7 @@ import {
   type AutoReorderSettings,
 } from '@/server/services/auto-reorder';
 import { createNotification } from '@/server/services/notifications';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import type { ServiceContext } from '@/server/services/context';
 
@@ -47,16 +48,22 @@ export async function GET(req: Request) {
   const admin = createAdminClient();
 
   try {
-    // Orgs with auto-reorder ENABLED in the purchase_orders module settings.
-    const { data: modRows, error: modErr } = await admin
-      .from('organization_modules')
-      .select('organization_id, settings')
-      .eq('module_id', 'purchase_orders')
-      .eq('enabled', true);
-    if (modErr) throw new Error(`organization_modules: ${modErr.message}`);
+    // Orgs with the purchase_orders module enabled — PAGINATED (a plain select
+    // is silently capped at PostgREST's 1000-row max, which would skip orgs once
+    // the platform has >1000 PO-enabled orgs). fetchAllRows throws on error
+    // (fail-closed). Stable order by organization_id for range pagination.
+    const modRows = await fetchAllRows<{ organization_id: string; settings: unknown }>((from, to) =>
+      admin
+        .from('organization_modules')
+        .select('organization_id, settings')
+        .eq('module_id', 'purchase_orders')
+        .eq('enabled', true)
+        .order('organization_id', { ascending: true })
+        .range(from, to),
+    );
 
     const candidates: Array<{ orgId: string; settings: AutoReorderSettings }> = [];
-    for (const r of (modRows ?? []) as Array<{ organization_id: string; settings: unknown }>) {
+    for (const r of modRows) {
       const bucket =
         r.settings && typeof r.settings === 'object'
           ? (r.settings as Record<string, unknown>).autoReorder
