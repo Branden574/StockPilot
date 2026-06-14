@@ -156,6 +156,12 @@ function OverviewTab({
         <Meta label="Size" value={overview.size ?? '—'} />
         <Meta label="Plan source" value={overview.effective.source} />
       </dl>
+      <Link
+        href={`/platform/audit?org=${overview.id}`}
+        className="inline-block text-[12.5px] font-medium hover:underline"
+      >
+        View this org&apos;s platform-admin audit trail →
+      </Link>
     </div>
   );
 }
