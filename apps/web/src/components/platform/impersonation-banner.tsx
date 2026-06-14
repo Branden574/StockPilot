@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { isPlatformAdmin } from '@/lib/auth/platform-admin';
+import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 import { getServerSession } from '@/lib/auth/session';
 import { getActiveImpersonation } from '@/server/services/platform/impersonation';
 
@@ -14,7 +14,7 @@ import { StopActingAsButton } from './stop-acting-as-button';
  */
 export async function ImpersonationBanner() {
   const session = await getServerSession();
-  if (!session || !isPlatformAdmin(session.email)) return null;
+  if (!session || !(await currentUserIsPlatformAdmin())) return null;
 
   const active = await getActiveImpersonation(session.userId);
   if (!active) return null;

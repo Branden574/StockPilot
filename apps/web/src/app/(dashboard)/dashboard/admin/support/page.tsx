@@ -3,8 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { SupportTriage } from '@/components/admin/support-triage';
-import { isPlatformAdmin } from '@/lib/auth/platform-admin';
-import { requireSession } from '@/lib/auth/session';
+import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 import { listSupportTickets } from '@/server/services/support-tickets';
 
 export const dynamic = 'force-dynamic';
@@ -12,9 +11,9 @@ export const metadata: Metadata = { title: 'Support tickets · Admin' };
 
 export default async function AdminSupportPage() {
   // Platform-admin only — support tickets are StockPilot's own inbox, not
-  // per-org data. Non-admins bounce to the dashboard.
-  const session = await requireSession();
-  if (!isPlatformAdmin(session.email)) redirect('/dashboard');
+  // per-org data. Non-admins bounce to the dashboard. Gated on the VERIFIED
+  // auth email, never the user-writable profile column.
+  if (!(await currentUserIsPlatformAdmin())) redirect('/dashboard');
 
   const tickets = await listSupportTickets();
   const open = tickets.filter((t) => t.status === 'open' || t.status === 'in_progress').length;
