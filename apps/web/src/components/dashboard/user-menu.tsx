@@ -1,6 +1,6 @@
 'use client';
 
-import { LogOut, Settings, User } from 'lucide-react';
+import { LogOut, Settings, ShieldAlert, User } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
@@ -21,9 +21,17 @@ interface UserMenuProps {
   fullName: string | null;
   avatarUrl: string | null;
   organizationName: string;
+  /** True only for platform super-admins — gates the Platform console link. */
+  isPlatformAdmin?: boolean;
 }
 
-export function UserMenu({ email, fullName, avatarUrl, organizationName }: UserMenuProps) {
+export function UserMenu({
+  email,
+  fullName,
+  avatarUrl,
+  organizationName,
+  isPlatformAdmin,
+}: UserMenuProps) {
   const router = useRouter();
   const initials = (fullName || email || 'U')
     .split(/\s+/)
@@ -79,6 +87,17 @@ export function UserMenu({ email, fullName, avatarUrl, organizationName }: UserM
               Settings
             </Link>
           </DropdownMenuItem>
+          {isPlatformAdmin && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link href="/platform">
+                  <ShieldAlert className="mr-2 h-4 w-4" />
+                  Platform admin
+                </Link>
+              </DropdownMenuItem>
+            </>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onSelect={async () => {
