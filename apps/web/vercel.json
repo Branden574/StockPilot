@@ -21,6 +21,10 @@
     {
       "path": "/api/cron/price-pull",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/auto-reorder",
+      "schedule": "0 8 * * *"
     }
   ],
   "functions": {
