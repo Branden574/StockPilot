@@ -3,9 +3,8 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
+import { checkPlatformAdmin, currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
-import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { startActingAs, stopActingAs } from '@/server/services/platform/impersonation';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -55,7 +54,7 @@ export async function startActingAsAction(
  */
 export async function stopActingAsAction(): Promise<ActionResult<{ ok: true }>> {
   const session = await requireSession();
-  if (!isPlatformAdmin(session.email)) {
+  if (!(await currentUserIsPlatformAdmin())) {
     // A non-admin has no impersonation grant anyway; respond generically.
     return err('forbidden', 'Not authorized.');
   }

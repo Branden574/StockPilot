@@ -46,7 +46,7 @@ export async function setBilling(input: SetBillingInput): Promise<void> {
   }
 
   const admin = createAdminClient();
-  const { error } = await admin
+  const { data: updated, error } = await admin
     .from('organizations')
     .update({
       access_tier: input.accessTier,
@@ -56,8 +56,13 @@ export async function setBilling(input: SetBillingInput): Promise<void> {
       all_modules_comp: input.allModulesComp,
       billing_notes: input.billingNotes,
     })
-    .eq('id', input.organizationId);
+    .eq('id', input.organizationId)
+    .select('id')
+    .maybeSingle();
   if (error) throw new Error(error.message);
+  // Fail closed: a 0-row update means the org id was wrong/gone — never report
+  // a silent success or audit a no-op change.
+  if (!updated) throw new Error('Organization not found.');
 
   await recordPlatformAudit({
     actorUserId: input.actorUserId,
@@ -95,7 +100,7 @@ export async function startTrial(input: StartTrialInput): Promise<void> {
   const endsAt = new Date(input.now + days * 86_400_000).toISOString();
 
   const admin = createAdminClient();
-  const { error } = await admin
+  const { data: updated, error } = await admin
     .from('organizations')
     .update({
       access_tier: null, // trial drives access via the resolver, not an override
@@ -104,8 +109,11 @@ export async function startTrial(input: StartTrialInput): Promise<void> {
       trial_ends_at: endsAt,
       trial_tier: input.trialTier,
     })
-    .eq('id', input.organizationId);
+    .eq('id', input.organizationId)
+    .select('id')
+    .maybeSingle();
   if (error) throw new Error(error.message);
+  if (!updated) throw new Error('Organization not found.');
 
   await recordPlatformAudit({
     actorUserId: input.actorUserId,
