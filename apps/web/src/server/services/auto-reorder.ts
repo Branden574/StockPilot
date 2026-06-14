@@ -113,6 +113,25 @@ export function planAutoReorder(
   };
 }
 
+/**
+ * PURE money-gate: may an auto-reorder PO be auto-SENT (vs held as a draft)?
+ *
+ * Safety posture: NEVER auto-send unbounded. A PO is auto-sent only when there
+ * is at least one ceiling (the auto-send cap OR the org approval threshold) AND
+ * the total is under both. With neither configured we HOLD (draft) — no
+ * unbounded auto-spend. All amounts in dollars.
+ */
+export function shouldAutoSend(
+  total: number,
+  capDollars: number | null,
+  threshold: number | null,
+): boolean {
+  if (capDollars == null && threshold == null) return false; // no ceiling → hold
+  if (threshold != null && total >= threshold) return false; // at/over approval threshold
+  if (capDollars != null && total > capDollars) return false; // over auto-send cap
+  return true;
+}
+
 /** Minimal supabase shape the reader needs (satisfied by both clients). */
 type DbLike = { from: (t: string) => any };
 

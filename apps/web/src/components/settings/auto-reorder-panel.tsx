@@ -116,7 +116,9 @@ export function AutoReorderPanel({ initial, entitled }: Props) {
                 <option value="send">Auto-send the PO to the supplier</option>
               </select>
               <p className="text-muted-foreground text-xs">
-                Draft = someone reviews + sends. Auto-send still respects PO approval thresholds.
+                Draft = someone reviews + sends. Auto-send still respects PO approval thresholds —
+                and a PO is only auto-sent when it&apos;s under a cap or your approval threshold;
+                without either ceiling it&apos;s drafted for review instead.
               </p>
             </div>
             {mode === 'send' && (
