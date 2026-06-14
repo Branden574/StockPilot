@@ -8,7 +8,14 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { BillingService } from '@/server/services/billing';
 import { formatRelative } from '@/lib/utils';
 
-import { hasPermission, isUnlimited, PLANS, type PlanId } from '@stockpilot/core';
+import {
+  hasPermission,
+  isUnlimited,
+  PLANS,
+  resolveEffectivePlan,
+  type OrgBillingState,
+  type PlanId,
+} from '@stockpilot/core';
 
 export default async function BillingSettingsPage() {
   const ctx = await requireOrgContext();
@@ -18,8 +25,23 @@ export default async function BillingSettingsPage() {
   const svc = await BillingService.forCurrentUser();
   const org = await svc.getOrgBilling();
 
-  const currentPlan = (org.plan as PlanId) ?? 'free';
+  // Resolve the EFFECTIVE plan (admin override > Stripe > trial > free), so a
+  // Comped/Enterprise org sees its real plan here — not the raw `plan` column.
+  const effective = resolveEffectivePlan(org as OrgBillingState);
+  const currentPlan: PlanId = effective.tier;
   const plan = PLANS[currentPlan];
+  const arrangement = org.billing_arrangement as string | null;
+  // "Managed by StockPilot": a manual admin override (comped/custom/forced
+  // tier) is in effect — self-serve checkout would conflict with it, so we
+  // show the managed state instead of upgrade buttons.
+  const isManaged =
+    Boolean(org.access_tier) || arrangement === 'comped' || arrangement === 'custom';
+  const arrangementLabel =
+    arrangement === 'comped'
+      ? 'Complimentary — no charge'
+      : arrangement === 'custom'
+        ? 'Custom pricing'
+        : null;
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -31,11 +53,14 @@ export default async function BillingSettingsPage() {
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
           <div>
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle className="flex flex-wrap items-center gap-2">
               Current plan
               <Badge variant={plan.highlight ? 'default' : 'secondary'}>{plan.name}</Badge>
+              {arrangementLabel && <Badge variant="outline">{arrangementLabel}</Badge>}
             </CardTitle>
-            <CardDescription>{plan.description}</CardDescription>
+            <CardDescription>
+              {isManaged ? 'Managed by StockPilot.' : plan.description}
+            </CardDescription>
           </div>
           {org.trial_ends_at && (() => {
             const trialEndsAt = new Date(org.trial_ends_at as string);
@@ -73,13 +98,21 @@ export default async function BillingSettingsPage() {
               <UsageStat label="Locations" max={plan.limits.locations} />
             </div>
           </div>
-          <BillingActions
-            currentPlan={currentPlan}
-            hasStripeCustomer={Boolean(org.stripe_customer_id)}
-          />
+          {isManaged ? (
+            <p className="rounded-md border bg-muted/30 p-4 text-sm text-muted-foreground">
+              Your plan is managed directly by StockPilot — there&apos;s nothing to pay or change
+              here. Contact us if your needs change.
+            </p>
+          ) : (
+            <BillingActions
+              currentPlan={currentPlan}
+              hasStripeCustomer={Boolean(org.stripe_customer_id)}
+            />
+          )}
         </CardContent>
       </Card>
 
+      {!isManaged && (
       <Card className="mt-8">
         <CardHeader>
           <CardTitle className="text-base">Other plans</CardTitle>
@@ -110,6 +143,7 @@ export default async function BillingSettingsPage() {
             })}
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }
