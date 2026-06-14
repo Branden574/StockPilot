@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveEffectivePlan, type OrgBillingState } from './effective-plan';
+import { planAllowsAutoReorder, resolveEffectivePlan, type OrgBillingState } from './effective-plan';
 
 const NOW = Date.parse('2026-06-14T00:00:00Z');
 const inDays = (d: number) => new Date(NOW + d * 86_400_000).toISOString();
@@ -92,5 +92,35 @@ describe('resolveEffectivePlan — precedence: override > stripe > trial > defau
 
   it('arrangement always defaults to standard when unset', () => {
     expect(resolveEffectivePlan(org(), NOW).arrangement).toBe('standard');
+  });
+});
+
+describe('planAllowsAutoReorder — Pro and above', () => {
+  it('Free tier does NOT get auto-reorder', () => {
+    expect(planAllowsAutoReorder(org({ plan: 'free' }), NOW)).toBe(false);
+  });
+
+  it('Pro/Business/Enterprise get auto-reorder', () => {
+    expect(planAllowsAutoReorder(org({ plan: 'pro' }), NOW)).toBe(true);
+    expect(planAllowsAutoReorder(org({ plan: 'business' }), NOW)).toBe(true);
+    expect(planAllowsAutoReorder(org({ plan: 'enterprise' }), NOW)).toBe(true);
+  });
+
+  it('a Comped/override Enterprise org qualifies even with plan=free', () => {
+    expect(
+      planAllowsAutoReorder(
+        org({ plan: 'free', access_tier: 'enterprise', billing_arrangement: 'comped' }),
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it('an active Enterprise trial qualifies', () => {
+    expect(
+      planAllowsAutoReorder(
+        org({ plan: 'free', trial_ends_at: inDays(5), trial_tier: 'pro' }),
+        NOW,
+      ),
+    ).toBe(true);
   });
 });
