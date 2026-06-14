@@ -16,6 +16,8 @@ export interface PlanLimits {
   customRoles: boolean;
   /** Automatic reordering (daily auto-PO from reorder points). Pro and above. */
   autoReorder: boolean;
+  /** Inventory restore points (snapshots + safe-reconcile restore). Business and above. */
+  restorePoints: boolean;
 }
 
 export interface PlanDefinition {
@@ -61,6 +63,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       sso: false,
       customRoles: false,
       autoReorder: false,
+      restorePoints: false,
     },
     features: ['Up to 10,000 items', '100 team members', '100 locations', 'Manual entry', 'Basic CSV export'],
   },
@@ -86,6 +89,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       sso: false,
       customRoles: false,
       autoReorder: true,
+      restorePoints: false,
     },
     features: [
       'Up to 5,000 items',
@@ -119,6 +123,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       sso: false,
       customRoles: true,
       autoReorder: true,
+      restorePoints: true,
     },
     features: [
       'Up to 50,000 items',
@@ -152,6 +157,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       sso: true,
       customRoles: true,
       autoReorder: true,
+      restorePoints: true,
     },
     features: [
       'Unlimited everything',

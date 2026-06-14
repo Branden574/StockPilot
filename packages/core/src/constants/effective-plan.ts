@@ -97,3 +97,12 @@ export function resolveEffectivePlan(
 export function planAllowsAutoReorder(org: OrgBillingState, now: number = Date.now()): boolean {
   return PLANS[resolveEffectivePlan(org, now).tier].limits.autoReorder;
 }
+
+/**
+ * Whether the org's EFFECTIVE plan entitles it to inventory restore points
+ * (Business and above). Resolves on the effective tier (Comped/override orgs
+ * qualify).
+ */
+export function planAllowsRestorePoints(org: OrgBillingState, now: number = Date.now()): boolean {
+  return PLANS[resolveEffectivePlan(org, now).tier].limits.restorePoints;
+}
