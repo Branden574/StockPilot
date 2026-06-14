@@ -233,6 +233,59 @@ export async function getOrgOverview(
   };
 }
 
+export interface PlatformOrgBillingState {
+  accessTier: string | null;
+  arrangement: string;
+  customPriceCents: number | null;
+  customPriceInterval: 'month' | 'year' | null;
+  allModulesComp: boolean;
+  billingNotes: string | null;
+  trialTier: string | null;
+  trialEndsAt: string | null;
+  hasStripeSubscription: boolean;
+  effective: EffectivePlan;
+}
+
+/** Raw stored billing override fields for the billing panel form. */
+export async function getOrgBillingState(
+  orgId: string,
+  now: number = Date.now(),
+): Promise<PlatformOrgBillingState | null> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from('organizations')
+    .select(
+      'plan, access_tier, billing_arrangement, custom_price_cents, custom_price_interval, all_modules_comp, billing_notes, trial_tier, trial_ends_at, stripe_subscription_id',
+    )
+    .eq('id', orgId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  const r = data as Record<string, unknown>;
+  return {
+    accessTier: (r.access_tier as string | null) ?? null,
+    arrangement: (r.billing_arrangement as string | null) ?? 'standard',
+    customPriceCents: r.custom_price_cents == null ? null : Number(r.custom_price_cents),
+    customPriceInterval: (r.custom_price_interval as 'month' | 'year' | null) ?? null,
+    allModulesComp: Boolean(r.all_modules_comp),
+    billingNotes: (r.billing_notes as string | null) ?? null,
+    trialTier: (r.trial_tier as string | null) ?? null,
+    trialEndsAt: (r.trial_ends_at as string | null) ?? null,
+    hasStripeSubscription: Boolean(r.stripe_subscription_id),
+    effective: resolveEffectivePlan(
+      {
+        plan: (r.plan as string | null) ?? null,
+        access_tier: (r.access_tier as string | null) ?? null,
+        billing_arrangement: (r.billing_arrangement as string | null) ?? null,
+        stripe_subscription_id: (r.stripe_subscription_id as string | null) ?? null,
+        trial_ends_at: (r.trial_ends_at as string | null) ?? null,
+        trial_tier: (r.trial_tier as string | null) ?? null,
+      },
+      now,
+    ),
+  };
+}
+
 export interface PlatformOrgItem {
   id: string;
   name: string;

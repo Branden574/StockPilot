@@ -11,7 +11,7 @@ import {
 import { createClient } from '@/lib/supabase/server';
 
 import type { Permission, PlanId, Role } from '@stockpilot/core';
-import { hasPermission, isAdminRole, isUnlimited, MODULE_REGISTRY, PLANS } from '@stockpilot/core';
+import { hasPermission, isAdminRole, isUnlimited, MODULE_REGISTRY, PLANS, resolveEffectivePlan, type OrgBillingState } from '@stockpilot/core';
 import type { ModuleId } from '@stockpilot/core';
 
 /**
@@ -269,10 +269,15 @@ export async function assertPlanLimit(
 ): Promise<void> {
   const { data: org } = await ctx.supabase
     .from('organizations')
-    .select('plan')
+    .select(
+      'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
+    )
     .eq('id', ctx.organizationId)
     .single();
-  const plan: PlanId = ((org?.plan as PlanId | undefined) ?? 'free') as PlanId;
+  // Resolve the EFFECTIVE tier (admin override > stripe > trial > plan column),
+  // so a platform-admin "access_tier" override (e.g. Comped Enterprise) lifts
+  // the limits exactly as configured — the single source of truth.
+  const plan: PlanId = resolveEffectivePlan((org as OrgBillingState | null) ?? { plan: null }).tier;
   const limit = PLANS[plan].limits[resource];
   if (isUnlimited(limit)) return;
 
