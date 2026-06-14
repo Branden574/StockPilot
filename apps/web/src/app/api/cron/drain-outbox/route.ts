@@ -10,6 +10,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { CONNECTORS } from '@/server/connectors';
 import { enabledIntegrationOrgIds, runDrain } from '@/server/connectors/drainer';
 import { drainIntegrationDeliveries } from '@/server/services/integration-events';
+import { sweepExpiredImpersonations } from '@/server/services/platform/impersonation';
 import { quickbooksConnector } from '@/server/connectors/quickbooks';
 import { QboClient, type QboEnv } from '@/server/connectors/quickbooks/client';
 import { maybePostMonthlyValuation } from '@/server/connectors/quickbooks/valuation';
@@ -159,6 +160,12 @@ export async function GET(req: Request) {
       attempted: 0,
       delivered: 0,
     }));
+    // Safety net: revoke any expired platform-admin "act as" grants globally,
+    // so an impersonation that was never explicitly exited still auto-expires.
+    // Fail-open — never blocks the drain response.
+    await sweepExpiredImpersonations(now.getTime()).catch((e) =>
+      reportError(e, { tag: 'cron.impersonation-sweep' }),
+    );
     return NextResponse.json({ ...result, webhooks });
   } catch (err) {
     void reportError(err, { tag: 'cron.drain-outbox' });

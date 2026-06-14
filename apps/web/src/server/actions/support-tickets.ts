@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { headers } from 'next/headers';
 import { z } from 'zod';
 
-import { isPlatformAdmin } from '@/lib/auth/platform-admin';
+import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -90,8 +90,8 @@ const updateSchema = z.object({
 export async function updateSupportTicketAction(
   input: z.input<typeof updateSchema>,
 ): Promise<ActionResult<null>> {
-  const session = await requireSession();
-  if (!isPlatformAdmin(session.email)) {
+  await requireSession();
+  if (!(await currentUserIsPlatformAdmin())) {
     return err('forbidden', 'Not authorized.');
   }
   const parsed = updateSchema.safeParse(input);

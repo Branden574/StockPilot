@@ -20,6 +20,7 @@ interface TopbarProps {
   organizationName: string;
   userId: string;
   initialUnreadNotifications: number;
+  isPlatformAdmin?: boolean;
   onToggleSidebar?: () => void;
   /** Pass-through filter UI props — only rendered when warehouses is non-empty. */
   warehouseFilter?: {
@@ -217,6 +218,7 @@ export function Topbar({
   organizationName,
   userId,
   initialUnreadNotifications,
+  isPlatformAdmin,
   onToggleSidebar,
   warehouseFilter,
 }: TopbarProps) {
@@ -317,6 +319,7 @@ export function Topbar({
         fullName={fullName}
         avatarUrl={avatarUrl}
         organizationName={organizationName}
+        isPlatformAdmin={isPlatformAdmin}
       />
     </header>
   );
