@@ -170,6 +170,9 @@ export type AuditEvent =
   // Automatic-reordering settings — an admin toggled auto-reorder / mode / cap,
   // stored in organization_modules.settings for 'purchase_orders'.
   | 'auto_reorder_settings.updated'
+  // Inventory restore points (snapshots + safe-reconcile restore).
+  | 'restore_point.created'
+  | 'restore_point.restored'
   // MFA discrete events (replacing prior misuse of user.role.changed
   // and warehouse.updated for these forensic-relevant flows).
   | 'mfa.enrolled'
