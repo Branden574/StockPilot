@@ -28,6 +28,8 @@ interface DashboardShellProps {
   userName: string | null;
   userRole: string;
   role: Role;
+  /** True only for platform super-admins — gates the Platform console link. */
+  isPlatformAdmin?: boolean;
   /** Module IDs enabled for this org (serialized as strings for the RSC boundary). */
   enabledModules: string[];
   /**
@@ -63,6 +65,7 @@ export function DashboardShell({
   userName,
   userRole,
   role,
+  isPlatformAdmin,
   enabledModules,
   navOverrides,
   orderStatusConfig,
@@ -152,6 +155,7 @@ export function DashboardShell({
           organizationName={organizationName}
           userId={userId}
           initialUnreadNotifications={initialUnreadNotifications}
+          isPlatformAdmin={isPlatformAdmin}
           onToggleSidebar={() => setMobileNavOpen(true)}
           warehouseFilter={warehouseFilter}
         />
