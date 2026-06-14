@@ -7,6 +7,7 @@ import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse'
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import {
   planAutoReorder,
+  shouldAutoSend,
   type AutoReorderCandidate,
   type AutoReorderSettings,
 } from './auto-reorder';
@@ -713,13 +714,21 @@ export class PurchaseOrdersService {
     }
 
     // 2. Open-PO item set — FAIL CLOSED: if we can't read it, abort rather than
-    //    risk double-ordering. Paginated via an inner join on PO status.
+    //    risk double-ordering. Paginated via an inner join on PO status. ALL
+    //    genuinely-open states count (an item already on order must not be
+    //    re-ordered): draft + expected_inbound + ordered + partially_received.
+    //    (This is the open set used by overdueCount + the reconciliation views.)
     const openItems = await fetchAllRows<{ item_id: string }>((from, to) =>
       this.ctx.supabase
         .from('purchase_order_items')
         .select('item_id, id, purchase_orders!inner(status)')
         .eq('organization_id', this.ctx.organizationId)
-        .in('purchase_orders.status', ['draft', 'ordered'])
+        .in('purchase_orders.status', [
+          'draft',
+          'expected_inbound',
+          'ordered',
+          'partially_received',
+        ])
         .order('id', { ascending: true })
         .range(from, to),
     );
@@ -729,23 +738,31 @@ export class PurchaseOrdersService {
     const plan = planAutoReorder(candidates, openItemIds);
 
     // 4. Approval threshold (dollars) — read once for send-mode decisions.
+    //    FAIL CLOSED: if the settings read errors we cannot verify the spend
+    //    ceiling, so we BLOCK all auto-sends for this run (drafts still created).
+    //    A vanished approval gate must never become "no gate" (owners bypass
+    //    assertApprovalThreshold, so this read is the ONLY send-side gate).
     let threshold: number | null = null;
     let capDollars: number | null = null;
+    let sendBlocked = false;
     if (settings.mode === 'send') {
-      const { data: modRow } = await this.ctx.supabase
+      const { data: modRow, error: modErr } = await this.ctx.supabase
         .from('organization_modules')
         .select('settings')
         .eq('organization_id', this.ctx.organizationId)
         .eq('module_id', 'purchase_orders')
         .maybeSingle();
-      const modSettings = ((modRow as { settings?: unknown } | null)?.settings ?? {}) as Record<
-        string,
-        unknown
-      >;
-      const rawThreshold = Number(modSettings.approvalThresholdAmount);
-      threshold = Number.isFinite(rawThreshold) && rawThreshold > 0 ? rawThreshold : null;
-      capDollars =
-        settings.maxAutoSendCents != null ? settings.maxAutoSendCents / 100 : null;
+      if (modErr) {
+        sendBlocked = true;
+      } else {
+        const modSettings = ((modRow as { settings?: unknown } | null)?.settings ?? {}) as Record<
+          string,
+          unknown
+        >;
+        const rawThreshold = Number(modSettings.approvalThresholdAmount);
+        threshold = Number.isFinite(rawThreshold) && rawThreshold > 0 ? rawThreshold : null;
+        capDollars = settings.maxAutoSendCents != null ? settings.maxAutoSendCents / 100 : null;
+      }
     }
 
     let created = 0;
@@ -758,9 +775,10 @@ export class PurchaseOrdersService {
         const po = await this.create({ supplierId: group.supplierId, lines: group.lines });
         created++;
         if (settings.mode === 'send') {
-          const overThreshold = threshold != null && group.total >= threshold;
-          const overCap = capDollars != null && group.total > capDollars;
-          if (!overThreshold && !overCap) {
+          // shouldAutoSend never sends unbounded: it requires a ceiling (cap or
+          // threshold) and the total under it. sendBlocked (a failed settings
+          // read) forces a hold.
+          if (!sendBlocked && shouldAutoSend(group.total, capDollars, threshold)) {
             await this.updateStatus(po.id, 'ordered');
             sent++;
           } else {

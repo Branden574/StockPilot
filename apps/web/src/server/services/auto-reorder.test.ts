@@ -4,6 +4,7 @@ import {
   AUTO_REORDER_DEFAULTS,
   parseAutoReorderSettings,
   planAutoReorder,
+  shouldAutoSend,
   type AutoReorderCandidate,
 } from './auto-reorder';
 
@@ -65,5 +66,28 @@ describe('planAutoReorder — dedup + grouping', () => {
     const plan = planAutoReorder([c('a', 's1'), c('b', 's2')], new Set(['a', 'b']));
     expect(plan.bySupplier).toHaveLength(0);
     expect(plan.skippedDuplicate).toBe(2);
+  });
+});
+
+describe('shouldAutoSend — never auto-send unbounded', () => {
+  it('HOLDS when neither cap nor threshold is set (no ceiling)', () => {
+    expect(shouldAutoSend(999999, null, null)).toBe(false);
+  });
+
+  it('sends under the cap, holds at/over it', () => {
+    expect(shouldAutoSend(100, 200, null)).toBe(true);
+    expect(shouldAutoSend(250, 200, null)).toBe(false);
+  });
+
+  it('holds at/over the approval threshold (>=)', () => {
+    expect(shouldAutoSend(199, null, 200)).toBe(true);
+    expect(shouldAutoSend(200, null, 200)).toBe(false);
+    expect(shouldAutoSend(201, null, 200)).toBe(false);
+  });
+
+  it('respects BOTH ceilings when both are set', () => {
+    expect(shouldAutoSend(150, 300, 200)).toBe(true); // under both
+    expect(shouldAutoSend(250, 300, 200)).toBe(false); // over threshold
+    expect(shouldAutoSend(350, 300, 200)).toBe(false); // over cap
   });
 });
