@@ -5,6 +5,11 @@ import { z } from 'zod';
 import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import {
+  planAutoReorder,
+  type AutoReorderCandidate,
+  type AutoReorderSettings,
+} from './auto-reorder';
 import { fetchAllRows } from './lib/paginate';
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -644,6 +649,138 @@ export class PurchaseOrdersService {
     };
   }
 
+  /**
+   * AUTOMATIC reordering (daily cron). Like createDraftsFromReorderForecast, but:
+   *   - DEDUPS against open POs (any below-par item already on a draft/ordered
+   *     PO is skipped) so a daily run never double-orders — the core guarantee;
+   *   - skips no-supplier items entirely (can't auto-send to nobody);
+   *   - in `send` mode, transitions each draft to `ordered` ONLY when its total
+   *     is under the auto-send cap AND under the org's PO approval threshold —
+   *     otherwise it's left as a draft for a human (we enforce the threshold
+   *     EXPLICITLY here because owners bypass assertApprovalThreshold, and the
+   *     cron runs as an owner-equivalent system context).
+   *
+   * Designed to run in EITHER a user context (manual "run now") or the cron's
+   * per-org system context. Returns a summary for notifications.
+   */
+  async runAutoReorder(settings: AutoReorderSettings): Promise<{
+    created: number;
+    sent: number;
+    heldForReview: number;
+    skippedDuplicate: number;
+    skippedNoSupplier: number;
+    supplierFailures: number;
+  }> {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
+    assertPermission(this.ctx, 'purchase_orders:manage');
+
+    type Row = {
+      id: string;
+      supplier_id: string | null;
+      reorder_point: number | null;
+      reorder_quantity: number | null;
+      quantity_on_hand: number | null;
+      unit_cost: number | null;
+    };
+
+    // 1. Below-par candidates — same canonical filter as the reorder forecast.
+    const rows = await fetchAllRows<Row>((from, to) =>
+      this.ctx.supabase
+        .from('inventory_items')
+        .select('id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost')
+        .eq('organization_id', this.ctx.organizationId)
+        .is('deleted_at', null)
+        .eq('status', 'active')
+        .eq('is_rental', false)
+        .gt('reorder_point', 0)
+        .order('id', { ascending: true })
+        .range(from, to),
+    );
+
+    const candidates: AutoReorderCandidate[] = [];
+    for (const raw of rows) {
+      const qty = Number(raw.quantity_on_hand ?? 0);
+      const reorderPoint = Number(raw.reorder_point ?? 0);
+      if (qty > reorderPoint) continue; // healthy
+      const reorderQty = Number(raw.reorder_quantity ?? 0);
+      const quantityOrdered = Math.max(1, Math.max(reorderQty, reorderPoint) - qty);
+      candidates.push({
+        itemId: raw.id,
+        supplierId: raw.supplier_id,
+        quantityOrdered,
+        unitCost: Number(raw.unit_cost ?? 0),
+      });
+    }
+
+    // 2. Open-PO item set — FAIL CLOSED: if we can't read it, abort rather than
+    //    risk double-ordering. Paginated via an inner join on PO status.
+    const openItems = await fetchAllRows<{ item_id: string }>((from, to) =>
+      this.ctx.supabase
+        .from('purchase_order_items')
+        .select('item_id, id, purchase_orders!inner(status)')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('purchase_orders.status', ['draft', 'ordered'])
+        .order('id', { ascending: true })
+        .range(from, to),
+    );
+    const openItemIds = new Set(openItems.map((r) => r.item_id));
+
+    // 3. Plan (pure): dedup + group by supplier.
+    const plan = planAutoReorder(candidates, openItemIds);
+
+    // 4. Approval threshold (dollars) — read once for send-mode decisions.
+    let threshold: number | null = null;
+    let capDollars: number | null = null;
+    if (settings.mode === 'send') {
+      const { data: modRow } = await this.ctx.supabase
+        .from('organization_modules')
+        .select('settings')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('module_id', 'purchase_orders')
+        .maybeSingle();
+      const modSettings = ((modRow as { settings?: unknown } | null)?.settings ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const rawThreshold = Number(modSettings.approvalThresholdAmount);
+      threshold = Number.isFinite(rawThreshold) && rawThreshold > 0 ? rawThreshold : null;
+      capDollars =
+        settings.maxAutoSendCents != null ? settings.maxAutoSendCents / 100 : null;
+    }
+
+    let created = 0;
+    let sent = 0;
+    let heldForReview = 0;
+    let supplierFailures = 0;
+
+    for (const group of plan.bySupplier) {
+      try {
+        const po = await this.create({ supplierId: group.supplierId, lines: group.lines });
+        created++;
+        if (settings.mode === 'send') {
+          const overThreshold = threshold != null && group.total >= threshold;
+          const overCap = capDollars != null && group.total > capDollars;
+          if (!overThreshold && !overCap) {
+            await this.updateStatus(po.id, 'ordered');
+            sent++;
+          } else {
+            heldForReview++; // left as a draft for a human
+          }
+        }
+      } catch {
+        supplierFailures++;
+      }
+    }
+
+    return {
+      created,
+      sent,
+      heldForReview,
+      skippedDuplicate: plan.skippedDuplicate,
+      skippedNoSupplier: plan.skippedNoSupplier,
+      supplierFailures,
+    };
+  }
 }
 
 function errMessage(e: unknown): string {

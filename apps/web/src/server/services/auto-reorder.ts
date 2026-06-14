@@ -42,6 +42,77 @@ export function parseAutoReorderSettings(raw: unknown): AutoReorderSettings {
   };
 }
 
+// ── Planning (pure) ──────────────────────────────────────────────────────
+
+export interface AutoReorderLine {
+  itemId: string;
+  quantityOrdered: number;
+  unitCost: number;
+}
+
+export interface AutoReorderCandidate extends AutoReorderLine {
+  supplierId: string | null;
+}
+
+export interface AutoReorderSupplierGroup {
+  supplierId: string;
+  lines: AutoReorderLine[];
+  /** Sum of quantity × unit cost (dollars), used for cap/threshold decisions. */
+  total: number;
+}
+
+export interface AutoReorderPlan {
+  bySupplier: AutoReorderSupplierGroup[];
+  /** Below-par items already on an open PO — skipped so we never double-order. */
+  skippedDuplicate: number;
+  /** Below-par items with no supplier — can't be auto-ordered (surfaced manually). */
+  skippedNoSupplier: number;
+}
+
+/**
+ * PURE: turn below-par candidates into per-supplier PO groups, applying the two
+ * skip rules — items already on an open PO (dedup, the no-double-order
+ * guarantee) and items with no supplier (nothing to send to). Deterministic +
+ * unit-tested; all I/O lives in the runAutoReorder method.
+ */
+export function planAutoReorder(
+  candidates: AutoReorderCandidate[],
+  openItemIds: Set<string>,
+): AutoReorderPlan {
+  const bySupplier = new Map<string, AutoReorderLine[]>();
+  let skippedDuplicate = 0;
+  let skippedNoSupplier = 0;
+
+  for (const c of candidates) {
+    if (openItemIds.has(c.itemId)) {
+      skippedDuplicate++;
+      continue;
+    }
+    if (!c.supplierId) {
+      skippedNoSupplier++;
+      continue;
+    }
+    const line: AutoReorderLine = {
+      itemId: c.itemId,
+      quantityOrdered: c.quantityOrdered,
+      unitCost: c.unitCost,
+    };
+    const list = bySupplier.get(c.supplierId) ?? [];
+    list.push(line);
+    bySupplier.set(c.supplierId, list);
+  }
+
+  return {
+    bySupplier: [...bySupplier.entries()].map(([supplierId, lines]) => ({
+      supplierId,
+      lines,
+      total: lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0),
+    })),
+    skippedDuplicate,
+    skippedNoSupplier,
+  };
+}
+
 /** Minimal supabase shape the reader needs (satisfied by both clients). */
 type DbLike = { from: (t: string) => any };
 
