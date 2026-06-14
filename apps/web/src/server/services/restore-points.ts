@@ -47,9 +47,16 @@ export interface SnapshotItem {
   itemType: string;
   /** Raw warehouse id — needed to re-create an item that was deleted. */
   warehouseId: string | null;
+  /** Part of the live uniqueness key (org, sku, bin_location) — see 0126. */
+  binLocation: string | null;
   categoryName: string | null;
   supplierName: string | null;
   locationName: string | null;
+}
+
+/** Stable reconcile key matching the (sku, bin_location) uniqueness index. */
+function itemKey(sku: string, bin: string | null): string {
+  return `${sku}␟${(bin ?? '').trim()}`;
 }
 
 export interface RestoreSnapshot {
@@ -119,6 +126,7 @@ export async function createSnapshot(
     status: string | null;
     item_type: string | null;
     warehouse_id: string | null;
+    bin_location: string | null;
     category: unknown;
     supplier: unknown;
     location: unknown;
@@ -129,7 +137,7 @@ export async function createSnapshot(
       ctx.supabase
         .from('inventory_items')
         .select(
-          'sku, name, barcode, description, unit_cost, retail_price, quantity_on_hand, reorder_point, reorder_quantity, unit_of_measure, status, item_type, warehouse_id, category:category_id(name), supplier:supplier_id(name), location:primary_location_id(name)',
+          'sku, name, barcode, description, unit_cost, retail_price, quantity_on_hand, reorder_point, reorder_quantity, unit_of_measure, status, item_type, warehouse_id, bin_location, category:category_id(name), supplier:supplier_id(name), location:primary_location_id(name)',
         )
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
@@ -155,6 +163,7 @@ export async function createSnapshot(
       status: r.status ?? 'active',
       itemType: r.item_type ?? 'product',
       warehouseId: r.warehouse_id ?? null,
+      binLocation: (r.bin_location ?? null) || null,
       categoryName: embed(r.category),
       supplierName: embed(r.supplier),
       locationName: embed(r.location),
@@ -276,24 +285,31 @@ export async function restoreSnapshot(
   const fallbackWarehouseId =
     (await getWarehouseAccess(ctx)).primaryWarehouseId ?? null;
 
-  // Current ACTIVE items by sku.
-  const activeRows = await fetchAllRows<{ id: string; sku: string | null; quantity_on_hand: number | null; status: string | null }>(
-    (from, to) =>
-      ctx.supabase
-        .from('inventory_items')
-        .select('id, sku, quantity_on_hand, status')
-        .eq('organization_id', ctx.organizationId)
-        .is('deleted_at', null)
-        .order('id', { ascending: true })
-        .range(from, to),
+  // Current ACTIVE items keyed by (sku, bin_location) — matching the live
+  // uniqueness index (0126). A product at two racks = two distinct keys.
+  const activeRows = await fetchAllRows<{
+    id: string;
+    sku: string | null;
+    bin_location: string | null;
+    quantity_on_hand: number | null;
+    status: string | null;
+  }>((from, to) =>
+    ctx.supabase
+      .from('inventory_items')
+      .select('id, sku, bin_location, quantity_on_hand, status')
+      .eq('organization_id', ctx.organizationId)
+      .is('deleted_at', null)
+      .order('id', { ascending: true })
+      .range(from, to),
   );
-  const bySku = new Map<string, { id: string; qty: number; status: string }>();
-  const activeSkus = new Set<string>();
+  const byKey = new Map<string, { id: string; qty: number }>();
+  const activeKeys = new Set<string>();
   for (const r of activeRows) {
     const sku = (r.sku ?? '').trim();
     if (!sku) continue;
-    activeSkus.add(sku);
-    bySku.set(sku, { id: r.id, qty: Number(r.quantity_on_hand ?? 0), status: r.status ?? 'active' });
+    const k = itemKey(sku, r.bin_location);
+    activeKeys.add(k);
+    byKey.set(k, { id: r.id, qty: Number(r.quantity_on_hand ?? 0) });
   }
 
   const svc = new InventoryService(ctx);
@@ -301,21 +317,24 @@ export async function restoreSnapshot(
   let recreated = 0;
   let quantityAdjusted = 0;
   let failures = 0;
-  const snapshotSkus = new Set<string>();
+  const snapshotKeys = new Set<string>();
 
   for (const it of items) {
     const sku = (it.sku ?? '').trim();
     if (!sku) continue;
-    snapshotSkus.add(sku);
+    const key = itemKey(sku, it.binLocation);
+    snapshotKeys.add(key);
     const categoryId = it.categoryName ? (categoryMap.get(it.categoryName.toLowerCase()) ?? null) : null;
     const supplierId = it.supplierName ? (supplierMap.get(it.supplierName.toLowerCase()) ?? null) : null;
     const primaryLocationId = it.locationName ? (locationMap.get(it.locationName.toLowerCase()) ?? null) : null;
+    const finalStatus = it.status as 'active' | 'archived' | 'discontinued';
 
     try {
-      const existing = bySku.get(sku);
+      const existing = byKey.get(key);
       if (existing) {
-        // Update fields back to the snapshot (status first, so a later quantity
-        // adjust isn't blocked by an archived state).
+        // Reconcile fields, forcing 'active' first so the quantity reset (which
+        // adjust_stock rejects on archived items) always works regardless of the
+        // snapshot's final status.
         await svc.update(existing.id, {
           name: it.name,
           barcode: it.barcode,
@@ -329,30 +348,32 @@ export async function restoreSnapshot(
           reorderQuantity: it.reorderQuantity,
           unitOfMeasure: it.unitOfMeasure,
           itemType: it.itemType as 'product' | 'book' | 'asset' | 'consumable',
-          status: it.status as 'active' | 'archived' | 'discontinued',
+          status: 'active',
         });
-        updated++;
-        // Reset quantity via a ledger movement — only for active items
-        // (adjust_stock rejects archived).
-        if (it.status === 'active') {
-          const delta = it.quantityOnHand - existing.qty;
-          if (delta !== 0) {
-            await svc.adjustStock({
-              itemId: existing.id,
-              quantityChange: delta,
-              movementType: 'adjust',
-              reason: 'Restore point reconcile',
-            });
-            quantityAdjusted++;
-          }
+        const delta = it.quantityOnHand - existing.qty;
+        if (delta !== 0) {
+          await svc.adjustStock({
+            itemId: existing.id,
+            quantityChange: delta,
+            movementType: 'adjust',
+            reason: 'Restore point reconcile',
+          });
+          quantityAdjusted++;
         }
+        // Apply the snapshot's final status last.
+        if (finalStatus !== 'active') {
+          await svc.update(existing.id, { status: finalStatus });
+        }
+        updated++;
       } else {
-        // Missing (never existed or was deleted) → re-create.
+        // Missing (never existed or was deleted) → re-create, preserving the bin
+        // so it doesn't collide with the (sku, bin) uniqueness index.
         await svc.create({
           name: it.name,
           sku,
           barcode: it.barcode,
           description: it.description,
+          binLocation: it.binLocation,
           categoryId,
           supplierId,
           primaryLocationId,
@@ -366,7 +387,7 @@ export async function restoreSnapshot(
           trackingType: 'none',
           itemType: it.itemType as 'product' | 'book' | 'asset' | 'consumable',
           customFields: {},
-          status: it.status as 'active' | 'archived' | 'discontinued',
+          status: finalStatus,
         });
         recreated++;
       }
@@ -375,8 +396,8 @@ export async function restoreSnapshot(
     }
   }
 
-  // Extras: active items not present in the snapshot — flagged, never deleted.
-  const extras = [...activeSkus].filter((s) => !snapshotSkus.has(s));
+  // Extras: active (sku,bin) keys not present in the snapshot — flagged, never deleted.
+  const extras = [...activeKeys].filter((k) => !snapshotKeys.has(k));
 
   void audit(
     {
@@ -394,7 +415,8 @@ export async function restoreSnapshot(
     quantityAdjusted,
     failures,
     extrasFlagged: extras.length,
-    extrasSample: extras.slice(0, 50),
+    // surface the SKU (strip the internal sku␟bin key) for the operator report
+    extrasSample: extras.slice(0, 50).map((k) => k.split('␟')[0] ?? k),
     preRestoreId: pre.id,
   };
 }
@@ -416,12 +438,18 @@ async function matchRefMap(
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   if (names.length === 0) return map;
-  const { data } = await ctx.supabase
-    .from(table)
-    .select('id, name')
-    .eq('organization_id', ctx.organizationId)
-    .is('deleted_at', null);
-  for (const r of (data ?? []) as Array<{ id: string; name: string }>) {
+  // Paginated — an org with >1000 categories/suppliers/locations would
+  // otherwise silently miss matches (PostgREST cap) and mint duplicates.
+  const rows = await fetchAllRows<{ id: string; name: string }>((from, to) =>
+    ctx.supabase
+      .from(table)
+      .select('id, name')
+      .eq('organization_id', ctx.organizationId)
+      .is('deleted_at', null)
+      .order('id', { ascending: true })
+      .range(from, to),
+  );
+  for (const r of rows) {
     map.set(r.name.trim().toLowerCase(), r.id);
   }
   return map;
