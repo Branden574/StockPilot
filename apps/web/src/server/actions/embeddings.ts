@@ -15,6 +15,12 @@ export async function backfillItemEmbeddingsAction(
   input: { limit?: number } = {},
 ): Promise<ActionResult<{ embedded: number; failed: number; remaining: number }>> {
   const ctx = await withContext();
+  if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+    return err(
+      'forbidden',
+      'Multi-factor authentication required. Enroll in MFA before performing this action.',
+    );
+  }
   if (!isAdminRole(ctx.role)) {
     return err('forbidden', 'Admin role required to run the embedding backfill.');
   }

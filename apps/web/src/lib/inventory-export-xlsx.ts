@@ -2,6 +2,7 @@ import 'server-only';
 
 import ExcelJS from 'exceljs';
 
+import { escapeForSpreadsheet } from './csv';
 import type { ExportCell } from './inventory-export';
 
 /**
@@ -24,7 +25,15 @@ export async function toInventoryXlsx(
   }));
 
   for (const r of rows) {
-    ws.addRow(headers.map((h) => r[h] ?? ''));
+    // Defuse spreadsheet-formula injection on STRING cells (same guard the CSV
+    // path applies via toCsv) — a cell like "=cmd|..." must not auto-evaluate
+    // when the .xlsx is opened. Numbers pass through as real numbers.
+    ws.addRow(
+      headers.map((h) => {
+        const v = r[h];
+        return typeof v === 'string' ? escapeForSpreadsheet(v) : (v ?? '');
+      }),
+    );
   }
 
   const head = ws.getRow(1);

@@ -235,7 +235,13 @@ export async function setOrgLogoUrlAction(input: {
     return err('validation_error', 'Invalid URL');
   }
   try {
-    const ctx = await requireOrgContext();
+    const ctx = await withContext();
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+      return err(
+        'forbidden',
+        'Multi-factor authentication required. Enroll in MFA before performing this action.',
+      );
+    }
     if (ctx.role !== 'owner' && ctx.role !== 'admin') {
       return err('forbidden', 'Only owners and admins can change the logo.');
     }
@@ -245,11 +251,16 @@ export async function setOrgLogoUrlAction(input: {
       .select('logo_url')
       .eq('id', ctx.organizationId)
       .maybeSingle();
-    const { error } = await supabase
+    const { data: updated, error } = await supabase
       .from('organizations')
       .update({ logo_url: parsed.data.url })
-      .eq('id', ctx.organizationId);
+      .eq('id', ctx.organizationId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail closed: a 0-row update means the org row didn't match — never report
+    // a silent success.
+    if (!updated) throw new ServiceError('not_found', 'Organization not found.');
     await audit({
       // S3.2: org logo updates are an *organization* event, not a
       // warehouse one. The pre-staged event type makes this audit

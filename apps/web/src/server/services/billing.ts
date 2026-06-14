@@ -123,7 +123,14 @@ export async function syncSubscriptionFromStripe(params: {
     stripe_subscription_id: params.stripeSubscriptionId,
     trial_ends_at: params.trialEndsAt,
   };
-  if (params.status === 'canceled') {
+  // Terminal NON-PAYING states forfeit paid access (dunning). `past_due` is
+  // deliberately NOT here — that's Stripe's retry/grace window, where cutting a
+  // customer off on a transient failed charge would be worse than the grace.
+  // `unpaid`/`incomplete_expired` mean Stripe has GIVEN UP collecting.
+  // NOTE: a platform-admin access_tier override still wins via
+  // resolveEffectivePlan, so a Comped org is unaffected by this.
+  const NON_PAYING = new Set(['canceled', 'unpaid', 'incomplete_expired']);
+  if (NON_PAYING.has(params.status)) {
     updates.plan = 'free';
   } else if (params.plan !== null) {
     updates.plan = params.plan;
