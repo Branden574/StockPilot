@@ -2,13 +2,17 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
+
 import { audit } from './audit';
 import { fetchAllRows } from './lib/paginate';
 import {
+  assertCurrentAal2,
   assertPermission,
   ServiceError,
   type ServiceContext,
 } from './context';
+import { InventoryService } from './inventory';
 
 import { planAllowsRestorePoints, type OrgBillingState } from '@stockpilot/core';
 
@@ -41,6 +45,8 @@ export interface SnapshotItem {
   unitOfMeasure: string;
   status: string;
   itemType: string;
+  /** Raw warehouse id — needed to re-create an item that was deleted. */
+  warehouseId: string | null;
   categoryName: string | null;
   supplierName: string | null;
   locationName: string | null;
@@ -112,6 +118,7 @@ export async function createSnapshot(
     unit_of_measure: string | null;
     status: string | null;
     item_type: string | null;
+    warehouse_id: string | null;
     category: unknown;
     supplier: unknown;
     location: unknown;
@@ -122,7 +129,7 @@ export async function createSnapshot(
       ctx.supabase
         .from('inventory_items')
         .select(
-          'sku, name, barcode, description, unit_cost, retail_price, quantity_on_hand, reorder_point, reorder_quantity, unit_of_measure, status, item_type, category:category_id(name), supplier:supplier_id(name), location:primary_location_id(name)',
+          'sku, name, barcode, description, unit_cost, retail_price, quantity_on_hand, reorder_point, reorder_quantity, unit_of_measure, status, item_type, warehouse_id, category:category_id(name), supplier:supplier_id(name), location:primary_location_id(name)',
         )
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
@@ -147,6 +154,7 @@ export async function createSnapshot(
       unitOfMeasure: (r.unit_of_measure ?? '').trim() || 'unit',
       status: r.status ?? 'active',
       itemType: r.item_type ?? 'product',
+      warehouseId: r.warehouse_id ?? null,
       categoryName: embed(r.category),
       supplierName: embed(r.supplier),
       locationName: embed(r.location),
@@ -209,6 +217,238 @@ export async function listSnapshots(ctx: ServiceContext): Promise<RestorePointRo
     itemCount: (r.item_count as number | null) ?? 0,
     capped: Boolean(r.capped),
   }));
+}
+
+export interface RestoreResult {
+  updated: number;
+  recreated: number;
+  quantityAdjusted: number;
+  failures: number;
+  /** Active items NOT in the snapshot — flagged, never auto-deleted. */
+  extrasFlagged: number;
+  extrasSample: string[];
+  preRestoreId: string;
+}
+
+/** Phrase the operator must type to confirm a restore. */
+export const RESTORE_CONFIRM_PHRASE = 'RESTORE';
+
+/**
+ * Safe-reconcile restore. Resets items + quantities to the snapshot, re-creates
+ * missing items, posts ledger movements for quantity changes, and NEVER
+ * auto-deletes items absent from the snapshot (they're flagged). Always takes a
+ * `pre_restore` snapshot first, so the restore itself is undoable.
+ *
+ * Gated: owner/admin + Business+ (assertRestorePointsAccess) + a fresh MFA
+ * step-up + the typed confirmation phrase.
+ */
+export async function restoreSnapshot(
+  ctx: ServiceContext,
+  opts: { id: string; confirm: string },
+): Promise<RestoreResult> {
+  await assertRestorePointsAccess(ctx);
+  await assertCurrentAal2(ctx); // dangerous, irreversible-ish → fresh MFA step-up
+  if (opts.confirm !== RESTORE_CONFIRM_PHRASE) {
+    throw new ServiceError('validation_error', `Type ${RESTORE_CONFIRM_PHRASE} to confirm.`);
+  }
+
+  // Load the target snapshot blob (RLS admin-only read).
+  const { data: row, error: rowErr } = await ctx.supabase
+    .from('restore_points')
+    .select('snapshot')
+    .eq('id', opts.id)
+    .eq('organization_id', ctx.organizationId)
+    .maybeSingle();
+  if (rowErr) throw new ServiceError('internal_error', rowErr.message);
+  if (!row) throw new ServiceError('not_found', 'Restore point not found.');
+  const snapshot = (row as { snapshot: RestoreSnapshot }).snapshot;
+  const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
+
+  // Auto-snapshot current state FIRST so this restore is itself undoable.
+  const pre = await createSnapshot(ctx, { kind: 'pre_restore', label: 'Before restore' });
+
+  // Resolve category/supplier name → id maps (create missing, best-effort).
+  const categoryMap = await ensureRefMap(ctx, 'categories', uniqueNames(items, 'categoryName'));
+  const supplierMap = await ensureRefMap(ctx, 'suppliers', uniqueNames(items, 'supplierName'));
+  // Locations are warehouse-bound — match existing only, never create.
+  const locationMap = await matchRefMap(ctx, 'locations', uniqueNames(items, 'locationName'));
+
+  const fallbackWarehouseId =
+    (await getWarehouseAccess(ctx)).primaryWarehouseId ?? null;
+
+  // Current ACTIVE items by sku.
+  const activeRows = await fetchAllRows<{ id: string; sku: string | null; quantity_on_hand: number | null; status: string | null }>(
+    (from, to) =>
+      ctx.supabase
+        .from('inventory_items')
+        .select('id, sku, quantity_on_hand, status')
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .order('id', { ascending: true })
+        .range(from, to),
+  );
+  const bySku = new Map<string, { id: string; qty: number; status: string }>();
+  const activeSkus = new Set<string>();
+  for (const r of activeRows) {
+    const sku = (r.sku ?? '').trim();
+    if (!sku) continue;
+    activeSkus.add(sku);
+    bySku.set(sku, { id: r.id, qty: Number(r.quantity_on_hand ?? 0), status: r.status ?? 'active' });
+  }
+
+  const svc = new InventoryService(ctx);
+  let updated = 0;
+  let recreated = 0;
+  let quantityAdjusted = 0;
+  let failures = 0;
+  const snapshotSkus = new Set<string>();
+
+  for (const it of items) {
+    const sku = (it.sku ?? '').trim();
+    if (!sku) continue;
+    snapshotSkus.add(sku);
+    const categoryId = it.categoryName ? (categoryMap.get(it.categoryName.toLowerCase()) ?? null) : null;
+    const supplierId = it.supplierName ? (supplierMap.get(it.supplierName.toLowerCase()) ?? null) : null;
+    const primaryLocationId = it.locationName ? (locationMap.get(it.locationName.toLowerCase()) ?? null) : null;
+
+    try {
+      const existing = bySku.get(sku);
+      if (existing) {
+        // Update fields back to the snapshot (status first, so a later quantity
+        // adjust isn't blocked by an archived state).
+        await svc.update(existing.id, {
+          name: it.name,
+          barcode: it.barcode,
+          description: it.description,
+          categoryId,
+          supplierId,
+          primaryLocationId,
+          unitCost: it.unitCost,
+          retailPrice: it.retailPrice,
+          reorderPoint: it.reorderPoint,
+          reorderQuantity: it.reorderQuantity,
+          unitOfMeasure: it.unitOfMeasure,
+          itemType: it.itemType as 'product' | 'book' | 'asset' | 'consumable',
+          status: it.status as 'active' | 'archived' | 'discontinued',
+        });
+        updated++;
+        // Reset quantity via a ledger movement — only for active items
+        // (adjust_stock rejects archived).
+        if (it.status === 'active') {
+          const delta = it.quantityOnHand - existing.qty;
+          if (delta !== 0) {
+            await svc.adjustStock({
+              itemId: existing.id,
+              quantityChange: delta,
+              movementType: 'adjust',
+              reason: 'Restore point reconcile',
+            });
+            quantityAdjusted++;
+          }
+        }
+      } else {
+        // Missing (never existed or was deleted) → re-create.
+        await svc.create({
+          name: it.name,
+          sku,
+          barcode: it.barcode,
+          description: it.description,
+          categoryId,
+          supplierId,
+          primaryLocationId,
+          warehouseId: it.warehouseId ?? fallbackWarehouseId,
+          unitCost: it.unitCost,
+          retailPrice: it.retailPrice,
+          quantityOnHand: it.quantityOnHand,
+          reorderPoint: it.reorderPoint,
+          reorderQuantity: it.reorderQuantity,
+          unitOfMeasure: it.unitOfMeasure,
+          trackingType: 'none',
+          itemType: it.itemType as 'product' | 'book' | 'asset' | 'consumable',
+          customFields: {},
+          status: it.status as 'active' | 'archived' | 'discontinued',
+        });
+        recreated++;
+      }
+    } catch {
+      failures++;
+    }
+  }
+
+  // Extras: active items not present in the snapshot — flagged, never deleted.
+  const extras = [...activeSkus].filter((s) => !snapshotSkus.has(s));
+
+  void audit(
+    {
+      event: 'restore_point.restored',
+      entityType: 'restore_point',
+      entityId: opts.id,
+      extra: { updated, recreated, quantityAdjusted, failures, extras: extras.length, preRestoreId: pre.id },
+    },
+    ctx,
+  );
+
+  return {
+    updated,
+    recreated,
+    quantityAdjusted,
+    failures,
+    extrasFlagged: extras.length,
+    extrasSample: extras.slice(0, 50),
+    preRestoreId: pre.id,
+  };
+}
+
+function uniqueNames(items: SnapshotItem[], key: 'categoryName' | 'supplierName' | 'locationName'): string[] {
+  const set = new Set<string>();
+  for (const it of items) {
+    const v = it[key];
+    if (v && v.trim()) set.add(v.trim());
+  }
+  return [...set];
+}
+
+/** Match existing rows by name (case-insensitive); never create. */
+async function matchRefMap(
+  ctx: ServiceContext,
+  table: 'categories' | 'suppliers' | 'locations',
+  names: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (names.length === 0) return map;
+  const { data } = await ctx.supabase
+    .from(table)
+    .select('id, name')
+    .eq('organization_id', ctx.organizationId)
+    .is('deleted_at', null);
+  for (const r of (data ?? []) as Array<{ id: string; name: string }>) {
+    map.set(r.name.trim().toLowerCase(), r.id);
+  }
+  return map;
+}
+
+/** Match existing by name; create any missing (best-effort). categories/suppliers only. */
+async function ensureRefMap(
+  ctx: ServiceContext,
+  table: 'categories' | 'suppliers',
+  names: string[],
+): Promise<Map<string, string>> {
+  const map = await matchRefMap(ctx, table, names);
+  for (const name of names) {
+    const key = name.toLowerCase();
+    if (map.has(key)) continue;
+    try {
+      const { data } = await ctx.supabase
+        .from(table)
+        .insert({ organization_id: ctx.organizationId, name })
+        .select('id')
+        .single();
+      if (data) map.set(key, (data as { id: string }).id);
+    } catch {
+      /* best-effort: if we can't create the ref, items link to null */
+    }
+  }
+  return map;
 }
 
 /** Keep the newest RETENTION snapshots for an org; delete older ones. */
