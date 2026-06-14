@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 
 import { CreateRestorePointButton } from '@/components/settings/create-restore-point-button';
+import { RestoreSnapshotButton } from '@/components/settings/restore-snapshot-button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { withContext } from '@/server/services/context';
 import { listSnapshots } from '@/server/services/restore-points';
@@ -91,6 +92,7 @@ export default async function RestorePointsPage() {
                         <th className="px-4 py-2.5 font-medium">Type</th>
                         <th className="px-4 py-2.5 font-medium">Label</th>
                         <th className="px-4 py-2.5 font-medium text-right">Items</th>
+                        <th className="px-4 py-2.5 font-medium text-right">Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -104,6 +106,12 @@ export default async function RestorePointsPage() {
                           <td className="px-4 py-2.5 text-right font-mono tabular-nums">
                             {s.itemCount}
                             {s.capped ? '+' : ''}
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <RestoreSnapshotButton
+                              id={s.id}
+                              when={new Date(s.createdAt).toLocaleString()}
+                            />
                           </td>
                         </tr>
                       ))}
