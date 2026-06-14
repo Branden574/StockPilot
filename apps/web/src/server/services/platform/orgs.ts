@@ -127,3 +127,195 @@ function tally(rows: Array<{ organization_id: string }>): Map<string, number> {
   for (const r of rows) m.set(r.organization_id, (m.get(r.organization_id) ?? 0) + 1);
   return m;
 }
+
+// ── Per-org detail reads (Phase 1) — all read-only, service-role, gated ──────
+
+/** Disclosed preview cap for the detail tabs — an operator overview, not the
+ *  full app. Exact totals come from the head-count queries in the overview. */
+export const DETAIL_PREVIEW_LIMIT = 100;
+
+export interface PlatformOrgOverview {
+  id: string;
+  name: string;
+  slug: string;
+  industry: string | null;
+  size: string | null;
+  timezone: string | null;
+  currency: string | null;
+  createdAt: string;
+  ownerEmail: string | null;
+  effective: EffectivePlan;
+  billingArrangement: string;
+  counts: { members: number; items: number; orders: number; warehouses: number };
+}
+
+/** Full overview for one org. Returns null when the org id doesn't exist. */
+export async function getOrgOverview(
+  orgId: string,
+  now: number = Date.now(),
+): Promise<PlatformOrgOverview | null> {
+  const admin = createAdminClient();
+  const { data: org, error } = await admin
+    .from('organizations')
+    .select(
+      'id, name, slug, industry, size, timezone, currency, created_at, plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
+    )
+    .eq('id', orgId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!org) return null;
+  const r = org as Record<string, unknown>;
+
+  const [members, items, orders, warehouses, owner] = await Promise.all([
+    admin
+      .from('organization_members')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', orgId)
+      .not('accepted_at', 'is', null),
+    admin
+      .from('inventory_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', orgId)
+      .is('deleted_at', null),
+    admin
+      .from('order_requests')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', orgId),
+    admin
+      .from('warehouses')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', orgId)
+      .neq('status', 'archived'),
+    admin
+      .from('organization_members')
+      .select('user_profiles:user_id (email)')
+      .eq('organization_id', orgId)
+      .eq('role', 'owner')
+      .not('accepted_at', 'is', null)
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  const ownerProfile = (owner.data as { user_profiles: { email: string } | { email: string }[] | null } | null)
+    ?.user_profiles;
+  const ownerEmail = Array.isArray(ownerProfile)
+    ? (ownerProfile[0]?.email ?? null)
+    : (ownerProfile?.email ?? null);
+
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    slug: r.slug as string,
+    industry: (r.industry as string | null) ?? null,
+    size: (r.size as string | null) ?? null,
+    timezone: (r.timezone as string | null) ?? null,
+    currency: (r.currency as string | null) ?? null,
+    createdAt: r.created_at as string,
+    ownerEmail,
+    effective: resolveEffectivePlan(
+      {
+        plan: (r.plan as string | null) ?? null,
+        access_tier: (r.access_tier as string | null) ?? null,
+        billing_arrangement: (r.billing_arrangement as string | null) ?? null,
+        stripe_subscription_id: (r.stripe_subscription_id as string | null) ?? null,
+        trial_ends_at: (r.trial_ends_at as string | null) ?? null,
+        trial_tier: (r.trial_tier as string | null) ?? null,
+      },
+      now,
+    ),
+    billingArrangement: (r.billing_arrangement as string | null) ?? 'standard',
+    counts: {
+      members: members.count ?? 0,
+      items: items.count ?? 0,
+      orders: orders.count ?? 0,
+      warehouses: warehouses.count ?? 0,
+    },
+  };
+}
+
+export interface PlatformOrgItem {
+  id: string;
+  name: string;
+  sku: string | null;
+  quantityOnHand: number;
+  unitCost: number | null;
+  status: string | null;
+}
+
+/** Top items for the inventory tab (preview-capped, read-only). */
+export async function getOrgInventory(orgId: string): Promise<PlatformOrgItem[]> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from('inventory_items')
+    .select('id, name, sku, quantity_on_hand, unit_cost, status')
+    .eq('organization_id', orgId)
+    .is('deleted_at', null)
+    .order('name', { ascending: true })
+    .limit(DETAIL_PREVIEW_LIMIT);
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+    id: r.id as string,
+    name: r.name as string,
+    sku: (r.sku as string | null) ?? null,
+    quantityOnHand: Number(r.quantity_on_hand) || 0,
+    unitCost: r.unit_cost == null ? null : Number(r.unit_cost),
+    status: (r.status as string | null) ?? null,
+  }));
+}
+
+export interface PlatformOrgMember {
+  userId: string | null;
+  email: string | null;
+  fullName: string | null;
+  role: string;
+  joinedAt: string | null;
+}
+
+/** Members for the users tab — includes the user id so the reset button can target it. */
+export async function getOrgMembers(orgId: string): Promise<PlatformOrgMember[]> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from('organization_members')
+    .select('user_id, role, accepted_at, user_profiles:user_id (email, full_name)')
+    .eq('organization_id', orgId)
+    .not('accepted_at', 'is', null)
+    .order('accepted_at', { ascending: true })
+    .limit(DETAIL_PREVIEW_LIMIT);
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
+    const prof = r.user_profiles as { email: string; full_name: string | null } | { email: string; full_name: string | null }[] | null;
+    const p = Array.isArray(prof) ? (prof[0] ?? null) : prof;
+    return {
+      userId: (r.user_id as string | null) ?? null,
+      email: p?.email ?? null,
+      fullName: p?.full_name ?? null,
+      role: r.role as string,
+      joinedAt: (r.accepted_at as string | null) ?? null,
+    };
+  });
+}
+
+export interface PlatformOrgOrder {
+  id: string;
+  status: string;
+  requester: string | null;
+  createdAt: string;
+}
+
+/** Recent orders for the orders tab (preview-capped, read-only). */
+export async function getOrgOrders(orgId: string): Promise<PlatformOrgOrder[]> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from('order_requests')
+    .select('id, status, requester_name, requester_email, created_at')
+    .eq('organization_id', orgId)
+    .order('created_at', { ascending: false })
+    .limit(DETAIL_PREVIEW_LIMIT);
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+    id: r.id as string,
+    status: r.status as string,
+    requester: (r.requester_name as string | null) ?? (r.requester_email as string | null) ?? null,
+    createdAt: r.created_at as string,
+  }));
+}
