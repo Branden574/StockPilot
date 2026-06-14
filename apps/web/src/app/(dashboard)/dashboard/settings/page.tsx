@@ -53,6 +53,7 @@ const AI_SECTIONS = [
 // delete in the first place. Owners and admins only.
 const RECOVERY_SECTIONS = [
   { href: '/dashboard/settings/recovery', title: 'Recovery', description: 'Restore soft-deleted items, categories, suppliers, and locations.' },
+  { href: '/dashboard/settings/restore-points', title: 'Backups & restore', description: 'Point-in-time snapshots of your inventory you can roll back to. Business plan.' },
 ];
 
 // Industry template — one-click "set up as this industry" that turns on the
