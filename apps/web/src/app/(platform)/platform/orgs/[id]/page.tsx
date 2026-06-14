@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { ActAsButton } from '@/components/platform/act-as-button';
 import { BillingPanel } from '@/components/platform/billing-panel';
 import { PasswordResetButton } from '@/components/platform/password-reset-button';
 import { requireSession } from '@/lib/auth/session';
@@ -74,19 +75,24 @@ export default async function PlatformOrgDetailPage({
             {overview.ownerEmail ?? '—'}
           </p>
         </div>
-        <div className="text-right">
-          <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
-            Billing
-          </div>
-          <div className="text-[14px] font-medium">
-            {tierName}
-            {overview.billingArrangement !== 'standard' ? ` · ${overview.billingArrangement}` : ''}
-          </div>
-          {overview.effective.trialDaysRemaining != null ? (
-            <div className="text-[12px] text-amber-600">
-              Trial — {overview.effective.trialDaysRemaining}d left
+        <div className="flex items-center gap-4">
+          <div className="text-right">
+            <div className="text-[11px] uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
+              Billing
             </div>
-          ) : null}
+            <div className="text-[14px] font-medium">
+              {tierName}
+              {overview.billingArrangement !== 'standard'
+                ? ` · ${overview.billingArrangement}`
+                : ''}
+            </div>
+            {overview.effective.trialDaysRemaining != null ? (
+              <div className="text-[12px] text-amber-600">
+                Trial — {overview.effective.trialDaysRemaining}d left
+              </div>
+            ) : null}
+          </div>
+          <ActAsButton organizationId={overview.id} orgName={overview.name} />
         </div>
       </div>
 
