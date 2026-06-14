@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
+import { ImpersonationBanner } from '@/components/platform/impersonation-banner';
 import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
 import { requireOrgContext } from '@/lib/auth/session';
 import {
@@ -186,6 +187,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         orderStatusConfig={orgRow?.order_status_config ?? null}
         warehouseFilter={warehouseFilter}
       >
+        <ImpersonationBanner />
         {showMfaBanner && <MfaRequiredBanner />}
         {children}
       </DashboardShell>
