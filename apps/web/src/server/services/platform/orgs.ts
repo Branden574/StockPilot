@@ -76,7 +76,8 @@ export async function listOrgsForPlatform(
       .from('organization_members')
       .select('organization_id')
       .in('organization_id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000'])
-      .not('accepted_at', 'is', null),
+      .not('accepted_at', 'is', null)
+      .is('impersonation_expires_at', null), // exclude temporary "act as" grants
     admin
       .from('inventory_items')
       .select('organization_id')
@@ -171,7 +172,8 @@ export async function getOrgOverview(
       .from('organization_members')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', orgId)
-      .not('accepted_at', 'is', null),
+      .not('accepted_at', 'is', null)
+      .is('impersonation_expires_at', null), // exclude temporary "act as" grants
     admin
       .from('inventory_items')
       .select('id', { count: 'exact', head: true })
@@ -192,6 +194,7 @@ export async function getOrgOverview(
       .eq('organization_id', orgId)
       .eq('role', 'owner')
       .not('accepted_at', 'is', null)
+      .is('impersonation_expires_at', null) // a real owner, not an impersonating admin
       .limit(1)
       .maybeSingle(),
   ]);
@@ -332,6 +335,7 @@ export async function getOrgMembers(orgId: string): Promise<PlatformOrgMember[]>
     .select('user_id, role, accepted_at, user_profiles:user_id (email, full_name)')
     .eq('organization_id', orgId)
     .not('accepted_at', 'is', null)
+    .is('impersonation_expires_at', null) // real members only, not "act as" grants
     .order('accepted_at', { ascending: true })
     .limit(DETAIL_PREVIEW_LIMIT);
   if (error) throw new Error(error.message);
