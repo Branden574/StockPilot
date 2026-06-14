@@ -2,19 +2,17 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 
 import { CreateOrgForForm } from '@/components/admin/create-org-for-form';
-import { isPlatformAdmin } from '@/lib/auth/platform-admin';
-import { requireSession } from '@/lib/auth/session';
+import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 
 export const metadata = {
   title: 'Provision new organization',
 };
 
 export default async function PlatformAdminCreateOrgPage() {
-  const session = await requireSession();
-
   // Hard 404 (not 403) so the existence of the route isn't observable
-  // to users who aren't on the platform-admin allowlist.
-  if (!isPlatformAdmin(session.email)) {
+  // to users who aren't on the platform-admin allowlist. Gated on the
+  // VERIFIED auth email, never the user-writable profile column.
+  if (!(await currentUserIsPlatformAdmin())) {
     notFound();
   }
 

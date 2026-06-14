@@ -3,8 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { requireSession } from '@/lib/auth/session';
-import { isPlatformAdmin } from '@/lib/auth/platform-admin';
+import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -45,11 +44,18 @@ export type CreateOrgForInput = z.infer<typeof createOrgForSchema>;
 export async function createOrgForCustomerAction(
   input: CreateOrgForInput,
 ): Promise<ActionResult<{ organizationId: string; slug: string; userId: string }>> {
-  const session = await requireSession();
-
-  if (!isPlatformAdmin(session.email)) {
-    return err('forbidden', 'Not authorized.');
+  // Gated on the VERIFIED auth email + a fresh AAL2 step-up: provisioning
+  // creates a real auth user + org via the service role, so it's as sensitive
+  // as billing/act-as and gets the same step-up.
+  const gate = await checkPlatformAdmin({ requireStepUp: true });
+  if (!gate.ok) {
+    return gate.reason === 'aal2_required'
+      ? err('forbidden', 'Re-authenticate with MFA to provision an organization.', {
+          reason: 'aal2_required',
+        })
+      : err('forbidden', 'Not authorized.');
   }
+  const session = gate.session;
 
   const parsed = createOrgForSchema.safeParse(input);
   if (!parsed.success) {

@@ -1,8 +1,8 @@
 import { Building2, FileLock, type LucideIcon, PlusCircle, Users, Warehouse } from 'lucide-react';
 import Link from 'next/link';
 
-import { isPlatformAdmin } from '@/lib/auth/platform-admin';
-import { requireOrgContext, requireSession } from '@/lib/auth/session';
+import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
+import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 
 interface AdminCard {
@@ -15,8 +15,7 @@ interface AdminCard {
 
 export default async function AdminOverviewPage() {
   const ctx = await requireOrgContext();
-  const session = await requireSession();
-  const platformAdmin = isPlatformAdmin(session.email);
+  const platformAdmin = await currentUserIsPlatformAdmin();
   const supabase = await createClient();
 
   const [chartersRes, warehousesRes, membersRes, invitesRes, auditRes] = await Promise.all([
