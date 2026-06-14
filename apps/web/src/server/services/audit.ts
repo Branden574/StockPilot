@@ -167,6 +167,9 @@ export type AuditEvent =
   // PO approval threshold — an admin changed the spend-governance amount
   // stored in organization_modules.settings for 'purchase_orders'.
   | 'po_approval_threshold.updated'
+  // Automatic-reordering settings — an admin toggled auto-reorder / mode / cap,
+  // stored in organization_modules.settings for 'purchase_orders'.
+  | 'auto_reorder_settings.updated'
   // MFA discrete events (replacing prior misuse of user.role.changed
   // and warehouse.updated for these forensic-relevant flows).
   | 'mfa.enrolled'
