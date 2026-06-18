@@ -172,6 +172,42 @@ export function signWebhook(secret: string, body: string, ts: number): string {
   return `t=${ts},v1=${createHmac('sha256', secret).update(`${ts}.${body}`).digest('hex')}`;
 }
 
+/**
+ * Outbound delivery fetch.
+ *
+ * - `webhook` (arbitrary user-supplied URL) → `safeFetch` (full SSRF guard:
+ *   resolves + pins the IP so a rebinder can't reach an internal service).
+ * - `slack` / `teams` → the destination can ONLY be the provider's known
+ *   public host, so we validate the host against a strict allowlist and use
+ *   plain `fetch`. This is the same SSRF protection (a malicious URL can't
+ *   target an internal host) WITHOUT safeFetch's IP-pinning undici Agent,
+ *   which is unreliable on the serverless runtime — that Agent is exactly why
+ *   Slack delivery was failing with a generic "fetch failed" while the plain
+ *   `fetch` error-reporter path to the same Slack host worked.
+ */
+async function deliverFetch(
+  endpoint: { type: EndpointType; url: string },
+  init: RequestInit,
+): Promise<Response> {
+  if (endpoint.type === 'slack' || endpoint.type === 'teams') {
+    let host: string;
+    try {
+      host = new URL(endpoint.url).hostname.toLowerCase();
+    } catch {
+      throw new SsrfBlockedError('not a valid URL');
+    }
+    const allowed =
+      endpoint.type === 'slack'
+        ? host === 'hooks.slack.com'
+        : host === 'webhook.office.com' || host.endsWith('.webhook.office.com');
+    if (!allowed) {
+      throw new SsrfBlockedError(`host not allowed for ${endpoint.type}: ${host}`);
+    }
+    return fetch(endpoint.url, init);
+  }
+  return safeFetch(endpoint.url, init as Parameters<typeof safeFetch>[1]);
+}
+
 // ── Send one delivery + update its row ──────────────────────────────────────
 async function attemptDelivery(admin: Admin, endpoint: EndpointRow, delivery: DeliveryRow): Promise<boolean> {
   const envelope = {
@@ -187,7 +223,7 @@ async function attemptDelivery(admin: Admin, endpoint: EndpointRow, delivery: De
   let code: number | null = null;
   let errorMsg: string | null = null;
   try {
-    const res = await safeFetch(endpoint.url, {
+    const res = await deliverFetch(endpoint, {
       method: 'POST',
       headers,
       body,
@@ -367,7 +403,7 @@ export async function sendTest(endpoint: {
     envelope,
   );
   try {
-    const res = await safeFetch(endpoint.url, {
+    const res = await deliverFetch(endpoint, {
       method: 'POST',
       headers,
       body,
