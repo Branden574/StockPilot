@@ -58,7 +58,9 @@ function stubFor(opts: {
     'organization_modules.select': opts.settingsError
       ? { data: null, error: { message: opts.settingsError } }
       : { data: opts.settings === null ? null : { settings: opts.settings }, error: null },
-    'purchase_orders.update': { data: null, error: null },
+    // updateStatus now appends .select('id').maybeSingle() and fails closed on a
+    // 0-row update — return a row so the happy-path transitions still succeed.
+    'purchase_orders.update': { data: { id: 'po-1' }, error: null },
     'rpc:publish_outbox': { data: null, error: null },
   });
 }

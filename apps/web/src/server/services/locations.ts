@@ -79,12 +79,15 @@ export class LocationsService {
 
   async archive(id: string) {
     assertPermission(this.ctx, 'locations:manage');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('locations')
       .update({ deleted_at: new Date().toISOString(), deleted_by: this.ctx.userId })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Location not found.');
     void audit({ event: 'location.archived', entityType: 'location', entityId: id }, this.ctx);
   }
 
@@ -98,12 +101,15 @@ export class LocationsService {
    */
   async restore(id: string) {
     assertPermission(this.ctx, 'locations:manage');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('locations')
       .update({ deleted_at: null })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Location not found.');
     void audit({ event: 'location.restored', entityType: 'location', entityId: id }, this.ctx);
   }
 }

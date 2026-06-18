@@ -170,12 +170,15 @@ export class ChartersService {
 
   async archive(id: string) {
     assertPermission(this.ctx, 'organization:update');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('charters')
       .update({ status: 'archived' })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Charter not found.');
     await audit({ event: 'charter.archived', entityType: 'charter', entityId: id }, this.ctx);
   }
 
@@ -186,12 +189,15 @@ export class ChartersService {
    */
   async restore(id: string) {
     assertPermission(this.ctx, 'organization:update');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('charters')
       .update({ status: 'active' })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Charter not found.');
     await audit({ event: 'charter.restored', entityType: 'charter', entityId: id }, this.ctx);
   }
 }

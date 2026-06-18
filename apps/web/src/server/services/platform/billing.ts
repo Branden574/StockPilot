@@ -55,6 +55,10 @@ export async function setBilling(input: SetBillingInput): Promise<void> {
       custom_price_interval: input.arrangement === 'custom' ? input.customPriceInterval : null,
       all_modules_comp: input.allModulesComp,
       billing_notes: input.billingNotes,
+      // Clear any prior trial when moving to a non-trial arrangement — otherwise
+      // a future trial_ends_at silently keeps premium access (resolveEffectivePlan
+      // honors the trial when access_tier is null). startTrial owns trial setup.
+      ...(input.arrangement !== 'trial' ? { trial_ends_at: null, trial_tier: null } : {}),
     })
     .eq('id', input.organizationId)
     .select('id')

@@ -90,12 +90,15 @@ export class SuppliersService {
   async archive(id: string) {
     assertModuleEnabled(this.ctx, 'suppliers');
     assertPermission(this.ctx, 'suppliers:manage');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('suppliers')
       .update({ deleted_at: new Date().toISOString(), deleted_by: this.ctx.userId })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Supplier not found.');
     void audit({ event: 'supplier.archived', entityType: 'supplier', entityId: id }, this.ctx);
   }
 
@@ -110,12 +113,15 @@ export class SuppliersService {
   async restore(id: string) {
     assertModuleEnabled(this.ctx, 'suppliers');
     assertPermission(this.ctx, 'suppliers:manage');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('suppliers')
       .update({ deleted_at: null })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Supplier not found.');
     void audit({ event: 'supplier.restored', entityType: 'supplier', entityId: id }, this.ctx);
   }
 }

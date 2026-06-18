@@ -67,12 +67,18 @@ export class ReconciliationService {
     });
     recRows.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
 
-    const { data: vendor, error: vErr } = await this.ctx.supabase
-      .from('vw_vendor_performance')
-      .select('*')
-      .eq('organization_id', this.ctx.organizationId)
-      .order('po_count', { ascending: false });
-    if (vErr) throw new ServiceError('internal_error', vErr.message);
+    // PAGINATED — an org with >1000 suppliers would otherwise silently truncate
+    // the byVendor list at the PostgREST cap. Page by a stable key (supplier_id),
+    // then re-sort by po_count desc for display.
+    const vendor = await fetchAllRows<VendorPerformanceRow>((from, to) =>
+      this.ctx.supabase
+        .from('vw_vendor_performance')
+        .select('*')
+        .eq('organization_id', this.ctx.organizationId)
+        .order('supplier_id', { ascending: true })
+        .range(from, to),
+    );
+    vendor.sort((a, b) => Number(b.po_count) - Number(a.po_count));
 
     const { data: warehouse, error: wErr } = await this.ctx.supabase
       .from('vw_warehouse_inbound')
@@ -94,7 +100,7 @@ export class ReconciliationService {
     return {
       rows: recRows,
       totals,
-      byVendor: (vendor ?? []) as unknown as VendorPerformanceRow[],
+      byVendor: vendor,
       byWarehouse: (warehouse ?? []) as unknown as WarehouseInboundRow[],
     };
   }

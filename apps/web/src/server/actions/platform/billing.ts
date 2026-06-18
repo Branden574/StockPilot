@@ -36,6 +36,15 @@ export async function setOrgBillingAction(
   const parsed = setBillingSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid');
 
+  // A comped/custom arrangement with no access tier grants only 'free' while
+  // the UI shows a "Comped" badge — reject so the operator picks a real tier.
+  if (
+    (parsed.data.arrangement === 'comped' || parsed.data.arrangement === 'custom') &&
+    !parsed.data.accessTier
+  ) {
+    return err('validation_error', 'Select an access tier for a comped/custom arrangement.');
+  }
+
   const gate = await checkPlatformAdmin({ requireStepUp: true });
   if (!gate.ok) {
     return gate.reason === 'aal2_required'
