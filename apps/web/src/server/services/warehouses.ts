@@ -313,12 +313,15 @@ export class WarehousesService {
 
   async archive(id: string) {
     assertPermission(this.ctx, 'organization:update');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('warehouses')
       .update({ status: 'archived' })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Warehouse not found.');
     await audit({ event: 'warehouse.archived', entityType: 'warehouse', entityId: id, warehouseId: id }, this.ctx);
   }
 
@@ -330,12 +333,15 @@ export class WarehousesService {
    */
   async restore(id: string) {
     assertPermission(this.ctx, 'organization:update');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('warehouses')
       .update({ status: 'active' })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Warehouse not found.');
     await audit({ event: 'warehouse.restored', entityType: 'warehouse', entityId: id, warehouseId: id }, this.ctx);
   }
 }

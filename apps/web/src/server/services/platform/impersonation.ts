@@ -48,7 +48,10 @@ export async function sweepExpiredImpersonations(
     .is('ended_at', null)
     .lt('expires_at', nowIso);
   if (adminUserId) q = q.eq('admin_user_id', adminUserId);
-  const { data } = await q;
+  const { data, error } = await q;
+  // Fail closed: a DB blip must not leave expired grants un-swept (a stale
+  // owner membership outliving its TTL is a privilege-escalation risk).
+  if (error) throw new Error(error.message);
 
   for (const row of (data ?? []) as Array<{
     id: string;
@@ -83,7 +86,7 @@ export async function getActiveImpersonation(
   now: number = Date.now(),
 ): Promise<ActiveImpersonation | null> {
   const admin = createAdminClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from('platform_impersonation_sessions')
     .select('id, target_organization_id, expires_at')
     .eq('admin_user_id', adminUserId)
@@ -91,6 +94,9 @@ export async function getActiveImpersonation(
     .order('started_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  // Fail closed: a swallowed error would hide an active impersonation banner,
+  // letting an admin keep acting as an org without the UI warning them.
+  if (error) throw new Error(error.message);
   if (!data) return null;
   const row = data as { id: string; target_organization_id: string; expires_at: string };
   if (Date.parse(row.expires_at) <= now) return null; // expired → not active
