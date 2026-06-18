@@ -295,7 +295,10 @@ async function DashboardBody({
     // donut shows the whole org's value split by category/warehouse, which is
     // most useful unfiltered. The byWarehouse rollup already answers the
     // per-warehouse question inside the widget.
-    ReportsService.forCurrentUser().then((svc) => svc.inventoryValuation()),
+    // Summary-only (rollups, not per-item rows) so the dashboard's DB cost
+    // stays flat regardless of item count — the donut only needs byCategory/
+    // byWarehouse. The full inventoryValuation() still backs the report page.
+    ReportsService.forCurrentUser().then((svc) => svc.inventoryValuationSummary()),
     getWarehousesForRequest(ctx.organizationId),
     getMfaFactorsForRequest(),
     getOrgRowForRequest(ctx.organizationId),
