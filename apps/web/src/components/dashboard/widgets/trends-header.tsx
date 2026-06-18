@@ -17,7 +17,7 @@ export function TrendsHeaderWidget({
 }: DashboardWidgetProps) {
   return (
     <div className="mb-4 flex items-end justify-between gap-3 border-b border-border pb-2">
-      <div>
+      <div className="min-w-0">
         <h2 className="font-display text-[18px] font-medium tracking-[-0.015em]">
           30-day trends
         </h2>
@@ -25,7 +25,10 @@ export function TrendsHeaderWidget({
           Inventory value, on-hand counts, and movement velocity over the last month.
         </p>
       </div>
-      <div className="hidden grid-cols-4 gap-2 sm:grid sm:max-w-xl sm:flex-1">
+      {/* Inline readouts only appear when there's real horizontal room (>=lg);
+          on narrower windows they'd cramp/clip, and the same numbers live in
+          the stat cards + attention hero anyway. */}
+      <div className="hidden grid-cols-4 gap-2 lg:grid lg:max-w-xl lg:flex-1">
         <StatusMetric
           label="Health"
           value={`${healthRate}%`}

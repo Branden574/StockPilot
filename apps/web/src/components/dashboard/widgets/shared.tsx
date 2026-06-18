@@ -119,13 +119,13 @@ export function StatusMetric({
   tone?: 'neutral' | 'good' | 'warn' | 'danger';
 }) {
   return (
-    <div className="border-border bg-card rounded-md border px-3 py-2.5">
-      <div className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
+    <div className="border-border bg-card min-w-0 rounded-md border px-3 py-2.5">
+      <div className="truncate text-[10.5px] font-medium uppercase tracking-[0.08em] text-[var(--ed-ink-4)]">
         {label}
       </div>
       <div
         className={cn(
-          'mt-1 font-mono text-[18px] font-medium tabular-nums leading-none',
+          'mt-1 truncate font-mono text-[18px] font-medium tabular-nums leading-none',
           // Use the standalone hue vars (`--accent`, `--warning`) not the
           // *-foreground vars — those are designed for text painted ON a
           // colored background and are near-black/near-white, which goes
