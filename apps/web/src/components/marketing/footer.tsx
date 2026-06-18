@@ -25,6 +25,7 @@ const COLUMNS: Array<{ heading: string; links: Array<{ href: string; label: stri
     links: [
       { href: '/privacy', label: 'Privacy Policy' },
       { href: '/terms', label: 'Terms of Service' },
+      { href: '/security', label: 'Security' },
       { href: '/privacy#california', label: 'California privacy' },
     ],
   },
@@ -83,6 +84,9 @@ export function MarketingFooter() {
             </Link>
             <Link href="/terms" className="transition-colors hover:text-foreground">
               Terms
+            </Link>
+            <Link href="/security" className="transition-colors hover:text-foreground">
+              Security
             </Link>
             <Link href="/support" className="transition-colors hover:text-foreground">
               Support
