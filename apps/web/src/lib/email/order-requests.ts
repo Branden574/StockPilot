@@ -270,7 +270,10 @@ function buildUnsubscribeUrl(appUrl: string, recipientEmail: string): string {
  * Outlook 2007–2019 desktop strips inline SVG; the wordmark text to
  * the right preserves the brand identity in those clients.
  */
-const BRAND_MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 100 100" aria-hidden="true" style="display:inline-block;vertical-align:middle;margin-right:10px"><defs><mask id="sp-mask"><rect width="100" height="100" fill="white"/><path d="M 32 78 Q 72 78 72 66 Q 72 54 54 54 Q 32 54 32 42 Q 32 24 72 24" stroke="black" stroke-width="11" stroke-linecap="round" fill="none"/><circle cx="72" cy="24" r="6" fill="black"/></mask></defs><rect x="12" y="12" width="76" height="76" rx="16" fill="#0c0c0e" mask="url(#sp-mask)"/></svg>`;
+// Hosted PNG (not inline SVG): Gmail/Outlook strip <svg>, so the brand mark
+// must be a real raster image at an absolute URL to render in the inbox.
+// Served from apps/web/public/email-logo.png.
+const BRAND_MARK_SVG = `<img src="https://stockpilotusa.com/email-logo.png" width="28" height="28" alt="StockPilot" style="display:inline-block;vertical-align:middle;margin-right:10px;width:28px;height:28px;border-radius:6px" />`;
 
 // ─── Template ────────────────────────────────────────────────────────
 

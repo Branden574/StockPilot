@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { sendEmail } from './resend';
+import { emailLogoImg } from './templates';
 
 /** Coarse, human-readable device label from a UA string — "Chrome on macOS",
  *  "Safari on iPhone", etc. Falls back to a trimmed UA when unrecognized. */
@@ -65,6 +66,7 @@ export async function sendNewDeviceLoginEmail(args: {
   const html = `<!doctype html>
 <html><body style="margin:0;background:#f4f3ee;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#0e0f0d;">
   <div style="max-width:520px;margin:0 auto;padding:32px 24px;">
+    <div style="margin-bottom:16px;">${emailLogoImg(40)}</div>
     <div style="font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#8b8e85;font-weight:600;">StockPilot · Security</div>
     <h1 style="font-size:22px;line-height:1.25;margin:10px 0 4px;font-weight:600;">New sign-in detected</h1>
     <p style="font-size:15px;line-height:1.5;color:#5a5d56;margin:0 0 20px;">
