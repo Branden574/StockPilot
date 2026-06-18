@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Inter, Inter_Tight, Instrument_Serif, JetBrains_Mono } from 'next/font/google';
 import type { ReactNode } from 'react';
 
+import { PostHogProvider } from '@/components/analytics/posthog-provider';
 import { BootSplash } from '@/components/dashboard/boot-splash';
 import { Toaster } from '@/components/ui/sonner';
 import { ThemeProvider } from '@/components/theme/theme-provider';
@@ -109,7 +110,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     >
       <body className="min-h-screen bg-background font-sans antialiased">
         <ThemeProvider>
-          {children}
+          {/*
+            PostHog product analytics. Wraps the whole app so pageviews +
+            autocapture cover all routes. Completely inert (no init, no
+            network) until NEXT_PUBLIC_POSTHOG_KEY is set — see
+            posthog-provider.tsx.
+          */}
+          <PostHogProvider>{children}</PostHogProvider>
           <Toaster />
           {/*
             Branded boot screen. Lives at the ROOT so it persists across the

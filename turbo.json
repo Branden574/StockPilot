@@ -21,7 +21,9 @@
     "STOCKPILOT_PLATFORM_ADMIN_EMAILS",
     "ERROR_WEBHOOK_URL",
     "SENTRY_DSN",
-    "POSTHOG_KEY"
+    "POSTHOG_KEY",
+    "NEXT_PUBLIC_POSTHOG_KEY",
+    "NEXT_PUBLIC_POSTHOG_HOST"
   ],
   "tasks": {
     "build": {

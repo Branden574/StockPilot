@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { capture } from '@/lib/analytics';
 import { updatePoStatusAction } from '@/server/actions/purchase-orders';
 
 export function PoActions({ poId, status }: { poId: string; status: string }) {
@@ -19,6 +20,10 @@ export function PoActions({ poId, status }: { poId: string; status: string }) {
     if (!res.ok) {
       toast.error(res.error.message);
       return;
+    }
+    // Product analytics (no-op until PostHog is configured).
+    if (next === 'ordered') {
+      capture('purchase_order_ordered', { po_id: poId });
     }
     toast.success(`Purchase order marked as ${next}.`);
     router.refresh();

@@ -14,6 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { reset as resetAnalytics } from '@/lib/analytics';
 import { signOutAction } from '@/server/actions/auth';
 
 interface UserMenuProps {
@@ -101,6 +102,9 @@ export function UserMenu({
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onSelect={async () => {
+              // Clear the PostHog identity before tearing down the session.
+              // No-op when analytics is unconfigured.
+              resetAnalytics();
               await signOutAction();
               router.refresh();
             }}

@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { capture } from '@/lib/analytics';
 import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
 import { compressImageVariants } from '@/lib/image-variants';
 import { resolveListReturnHref } from '@/lib/last-list-url';
@@ -716,6 +717,12 @@ export function ItemForm({
     // the user retry from the tags row instead of rolling back the
     // whole submit.
     const itemId = res.data.id;
+
+    // Product analytics (no-op until PostHog is configured).
+    if (!isEdit) {
+      capture('item_created', { is_book: isBook, is_rental: isRentalFixed });
+    }
+
     const initialKey = [...initialTagIds].sort().join(',');
     const selectedKey = [...selectedTagIds].sort().join(',');
     if (tags.length > 0 && (!isEdit || initialKey !== selectedKey)) {
