@@ -18,6 +18,58 @@ import { resolveEffectivePlan, type EffectivePlan } from '@stockpilot/core';
  * act-as) live in their own services with their own audit + step-up.
  */
 
+/** Platform-wide rollups for the console landing — investor/traction metrics. */
+export interface PlatformMetrics {
+  totalOrgs: number;
+  totalUsers: number;
+  totalItems: number;
+  /** Sum of quantity_on_hand × unit_cost across EVERY org (dollars). */
+  totalInventoryValue: number;
+  totalPurchaseOrders: number;
+  totalOrders: number;
+  totalMovements: number;
+}
+
+/**
+ * Platform-wide totals (across ALL orgs) for the console landing — the
+ * traction numbers an operator/investor wants at a glance. Service-role +
+ * gated by the caller's requirePlatformAdmin(). Cheap head-counts; the value
+ * sum reuses the 0179 valuation view (service-role sees all orgs).
+ */
+export async function getPlatformMetrics(): Promise<PlatformMetrics> {
+  const admin = createAdminClient();
+
+  const [orgs, users, items, pos, orders, movements, valRes] = await Promise.all([
+    admin.from('organizations').select('id', { count: 'exact', head: true }),
+    admin.from('user_profiles').select('id', { count: 'exact', head: true }).is('deleted_at', null),
+    admin
+      .from('inventory_items')
+      .select('id', { count: 'exact', head: true })
+      .is('deleted_at', null),
+    admin.from('purchase_orders').select('id', { count: 'exact', head: true }),
+    admin.from('order_requests').select('id', { count: 'exact', head: true }),
+    admin.from('stock_movements').select('id', { count: 'exact', head: true }),
+    // security_invoker view + service-role (RLS bypassed) → all orgs' rollups.
+    // Bounded by orgs×warehouses (small at current scale).
+    admin.from('vw_inventory_valuation_by_warehouse').select('value'),
+  ]);
+
+  const totalInventoryValue = ((valRes.data ?? []) as Array<{ value: number }>).reduce(
+    (s, r) => s + (Number(r.value) || 0),
+    0,
+  );
+
+  return {
+    totalOrgs: orgs.count ?? 0,
+    totalUsers: users.count ?? 0,
+    totalItems: items.count ?? 0,
+    totalInventoryValue,
+    totalPurchaseOrders: pos.count ?? 0,
+    totalOrders: orders.count ?? 0,
+    totalMovements: movements.count ?? 0,
+  };
+}
+
 export interface PlatformOrgSummary {
   id: string;
   name: string;

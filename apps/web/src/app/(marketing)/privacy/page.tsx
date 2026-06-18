@@ -225,6 +225,49 @@ export default function PrivacyPolicyPage() {
         </p>
       </Section>
 
+      <Section title="Schools & student data (FERPA / COPPA)">
+        <p>
+          StockPilot is an inventory- and operations-management tool. It is{' '}
+          <strong>not</strong> a student information system and is not designed to
+          collect, store, or process student education records. When a school,
+          district, or education organization uses StockPilot, the data involved is
+          operational — inventory items, locations, suppliers, purchase orders, and
+          the staff accounts that manage them.
+        </p>
+        <List>
+          <li>
+            We do <strong>not</strong> request or require student names, student IDs,
+            grades, or any other student personally identifiable information, and the
+            product has no feature that asks for it.
+          </li>
+          <li>
+            Because we do not handle student education records, StockPilot does not act
+            as a “school official” with access to education records under{' '}
+            <strong>FERPA</strong>, and is not directed to children under 13 under{' '}
+            <strong>COPPA</strong>.
+          </li>
+          <li>
+            Education customers that require a Data Processing Addendum or a
+            student-data-privacy agreement for their procurement process can request one
+            at{' '}
+            <a className="underline" href={`mailto:${PRIVACY_EMAIL}`}>
+              {PRIVACY_EMAIL}
+            </a>
+            .
+          </li>
+        </List>
+      </Section>
+
+      <Section title="Analytics">
+        <p>
+          We use first-party, privacy-respecting product analytics to understand how the
+          web app is used (which features are used, where people get stuck) so we can
+          improve it. This is aggregate, usage-level data tied to an account — never sold,
+          never shared with advertisers, and not used for cross-site tracking. We do not
+          embed third-party advertising or analytics SDKs in the mobile app.
+        </p>
+      </Section>
+
       <Section title="Children">
         <p>
           StockPilot is a business-operations tool and is not directed at

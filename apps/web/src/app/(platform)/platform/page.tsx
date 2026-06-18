@@ -1,7 +1,31 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { listOrgsForPlatform, type PlatformOrgSummary } from '@/server/services/platform/orgs';
+import {
+  getPlatformMetrics,
+  listOrgsForPlatform,
+  type PlatformOrgSummary,
+} from '@/server/services/platform/orgs';
+
+const NUM = new Intl.NumberFormat('en-US');
+const USD0 = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 0,
+});
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-card px-4 py-3">
+      <div className="font-display text-[22px] font-medium tracking-[-0.02em] tabular-nums">
+        {value}
+      </div>
+      <div className="mt-0.5 text-[11px] uppercase tracking-wide text-[var(--ed-ink-3)]">
+        {label}
+      </div>
+    </div>
+  );
+}
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Organizations · Platform' };
@@ -34,7 +58,11 @@ export default async function PlatformOrgsPage({
   searchParams: Promise<{ q?: string }>;
 }) {
   const { q } = await searchParams;
-  const { orgs, capped } = await listOrgsForPlatform(q);
+  // Platform-wide metrics + the directory in one fan-out.
+  const [{ orgs, capped }, metrics] = await Promise.all([
+    listOrgsForPlatform(q),
+    getPlatformMetrics(),
+  ]);
 
   return (
     <div className="mx-auto w-full max-w-[1280px] px-6 pb-20 pt-7">
@@ -44,6 +72,17 @@ export default async function PlatformOrgsPage({
           Every organization on the platform. Click one to view its data, manage billing, or act as
           it.
         </p>
+      </div>
+
+      {/* Platform-wide traction metrics (across all orgs). */}
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+        <MetricCard label="Organizations" value={NUM.format(metrics.totalOrgs)} />
+        <MetricCard label="Users" value={NUM.format(metrics.totalUsers)} />
+        <MetricCard label="Items" value={NUM.format(metrics.totalItems)} />
+        <MetricCard label="Inventory value" value={USD0.format(metrics.totalInventoryValue)} />
+        <MetricCard label="Purchase orders" value={NUM.format(metrics.totalPurchaseOrders)} />
+        <MetricCard label="Orders" value={NUM.format(metrics.totalOrders)} />
+        <MetricCard label="Movements" value={NUM.format(metrics.totalMovements)} />
       </div>
 
       <form method="GET" className="mb-4 flex items-center gap-2">
