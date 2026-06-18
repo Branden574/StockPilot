@@ -3,6 +3,17 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // PostHog reverse proxy. Analytics is routed through our OWN origin
+  // (/ingest/*) instead of calling us.i.posthog.com directly. Two reasons:
+  //   1. CSP — connect-src is a strict allowlist that (deliberately) does NOT
+  //      include posthog.com; same-origin /ingest is covered by 'self', so we
+  //      don't have to loosen the security headers to ship analytics.
+  //   2. Ad blockers / Brave Shields drop requests to known tracker hosts;
+  //      first-party /ingest requests sail through, so we don't under-count.
+  // skipTrailingSlashRedirect stops Next from 308-redirecting PostHog's
+  // /flags|/decide style paths. Hosts are US Cloud (the project's region) and
+  // MUST match api_host:'/ingest' in the PostHog provider.
+  skipTrailingSlashRedirect: true,
   // Belt-and-suspenders: Next.js defaults this to false, but a future
   // dependency (e.g. a Sentry plugin) can flip the underlying webpack
   // devtool. Pin it explicitly so production never serves the full
@@ -70,6 +81,19 @@ const nextConfig: NextConfig = {
   },
 
   transpilePackages: ['@stockpilot/core'],
+
+  // First-party proxy for PostHog (see skipTrailingSlashRedirect note above).
+  // The browser only ever talks to /ingest on our own domain; Next rewrites
+  // it server-side to PostHog US Cloud, invisible to CSP + ad blockers.
+  async rewrites() {
+    return [
+      {
+        source: '/ingest/static/:path*',
+        destination: 'https://us-assets.i.posthog.com/static/:path*',
+      },
+      { source: '/ingest/:path*', destination: 'https://us.i.posthog.com/:path*' },
+    ];
+  },
 
   async headers() {
     // CSP — see SECURITY.md for the full rationale. Notable choices:

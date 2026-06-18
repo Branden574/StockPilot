@@ -24,7 +24,12 @@ export function PostHogProvider({ children }: { children: ReactNode }) {
     if (posthog.__loaded) return; // already initialized (StrictMode re-mount)
 
     posthog.init(key, {
-      api_host: env.NEXT_PUBLIC_POSTHOG_HOST,
+      // First-party reverse proxy (next.config rewrites /ingest → PostHog US
+      // Cloud). Same-origin so the app's CSP connect-src 'self' allows it and
+      // ad blockers / Brave can't drop it. MUST match the /ingest rewrite.
+      api_host: '/ingest',
+      // Where the PostHog APP lives (toolbar/links) — NOT the ingest path.
+      ui_host: 'https://us.posthog.com',
       capture_pageview: true,
       autocapture: true,
       // Only allocate a person profile once we explicitly identify() a
