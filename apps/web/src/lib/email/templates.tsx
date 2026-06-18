@@ -1,5 +1,17 @@
 import type { DigestPayload } from '@/server/services/digest';
 
+/**
+ * Public StockPilot logo for email headers. A hosted PNG on our own domain —
+ * email clients (Gmail/Outlook) strip inline <svg>, so the brand mark in an
+ * email MUST be a real raster image at an absolute URL. Served from
+ * apps/web/public/email-logo.png.
+ */
+export const EMAIL_LOGO_URL = 'https://stockpilotusa.com/email-logo.png';
+export function emailLogoImg(size = 28): string {
+  const r = Math.round(size * 0.22);
+  return `<img src="${EMAIL_LOGO_URL}" width="${size}" height="${size}" alt="StockPilot" style="display:inline-block;vertical-align:middle;width:${size}px;height:${size}px;border-radius:${r}px;" />`;
+}
+
 interface InviteEmailParams {
   organizationName: string;
   inviterName: string;
@@ -11,7 +23,7 @@ export function inviteEmailHtml({ organizationName, inviterName, acceptUrl }: In
 <html><body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,Segoe UI,sans-serif;">
   <div style="max-width:560px;margin:40px auto;background:white;border-radius:12px;padding:40px;">
     <div style="display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:18px;margin-bottom:24px;">
-      <span style="display:inline-block;width:28px;height:28px;background:linear-gradient(135deg,#3b82f6,#6366f1);border-radius:6px;"></span>
+      ${emailLogoImg(28)}
       StockPilot
     </div>
     <h1 style="font-size:24px;margin:0 0 12px;">${escapeHtml(inviterName)} invited you to <strong>${escapeHtml(organizationName)}</strong></h1>
@@ -84,7 +96,7 @@ export function weeklyDigestHtml(payload: DigestPayload, opts: DigestEmailOpts):
 <html><body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,Segoe UI,sans-serif;">
   <div style="max-width:640px;margin:40px auto;background:white;border-radius:12px;padding:40px;">
     <div style="display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:18px;margin-bottom:24px;">
-      <span style="display:inline-block;width:28px;height:28px;background:linear-gradient(135deg,#3b82f6,#6366f1);border-radius:6px;"></span>
+      ${emailLogoImg(28)}
       StockPilot
     </div>
     <h1 style="font-size:24px;margin:0 0 4px;">Weekly digest</h1>
