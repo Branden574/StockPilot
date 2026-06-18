@@ -57,13 +57,18 @@ export interface OrgRow {
 export const getOrgRowForRequest = cache(
   async (organizationId: string): Promise<OrgRow | null> => {
     const supabase = await createClient();
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('organizations')
       .select(
         'terminology, mfa_policy, logo_url, timezone, nav_overrides, dashboard_layout, order_status_config, all_modules_comp',
       )
       .eq('id', organizationId)
       .maybeSingle();
+    // FAIL CLOSED: this row feeds the MFA-policy gate (mfa_policy). Swallowing a
+    // transient read error and returning null would resolve the policy to
+    // 'optional' → silently disable MFA for the request. Throw so the gate
+    // fails closed; a genuine missing row still returns null (no error).
+    if (error) throw new Error(`getOrgRowForRequest: ${error.message}`);
     return (data as OrgRow | null) ?? null;
   },
 );
