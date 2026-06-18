@@ -39,6 +39,18 @@ const serverSchema = z.object({
   STRIPE_WEBHOOK_SECRET: optionalSecret.transform((s) => s.trim()),
   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: optionalSecret.transform((s) => s.trim()),
 
+  // PostHog product analytics (client-side). Both are optional and ship
+  // INERT: when NEXT_PUBLIC_POSTHOG_KEY is empty the provider never calls
+  // posthog.init() and every analytics helper early-returns — no network,
+  // no errors. Set the key (and optionally an EU/self-hosted host) to light
+  // it up without a code change. Host defaults to PostHog US cloud.
+  NEXT_PUBLIC_POSTHOG_KEY: optionalSecret.transform((s) => s.trim()),
+  NEXT_PUBLIC_POSTHOG_HOST: z
+    .string()
+    .optional()
+    .default('https://us.i.posthog.com')
+    .transform((s) => s.trim()),
+
   RESEND_API_KEY: optionalSecret.transform((s) => s.trim()),
   RESEND_FROM_EMAIL: z.string().transform((s) => s.trim()).default('StockPilot <hello@stockpilotusa.com>'),
 
@@ -105,6 +117,12 @@ const clientSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: supabaseUrlField,
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().transform((s) => s.trim()).pipe(z.string().min(1)),
   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().optional().default('').transform((s) => s.trim()),
+  NEXT_PUBLIC_POSTHOG_KEY: z.string().optional().default('').transform((s) => s.trim()),
+  NEXT_PUBLIC_POSTHOG_HOST: z
+    .string()
+    .optional()
+    .default('https://us.i.posthog.com')
+    .transform((s) => s.trim()),
 });
 
 const isDev = process.env.NODE_ENV !== 'production';
@@ -153,6 +171,8 @@ function parseClient() {
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+    NEXT_PUBLIC_POSTHOG_KEY: process.env.NEXT_PUBLIC_POSTHOG_KEY,
+    NEXT_PUBLIC_POSTHOG_HOST: process.env.NEXT_PUBLIC_POSTHOG_HOST,
   });
   const parsed = clientSchema.safeParse(merged);
   if (!parsed.success) {
