@@ -11,6 +11,7 @@ import { Sidebar } from '@/components/dashboard/sidebar';
 import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { VersionNotifier } from '@/components/version-notifier';
+import { identify } from '@/lib/analytics';
 
 import type { Role } from '@stockpilot/core';
 
@@ -78,6 +79,14 @@ export function DashboardShell({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
     setMounted(true);
   }, []);
+
+  // Identify the signed-in user to PostHog. `identify` is a no-op when
+  // analytics is unconfigured (NEXT_PUBLIC_POSTHOG_KEY unset), so this costs
+  // nothing until the owner turns analytics on. Sign-out reset() lives in the
+  // user-menu sign-out handler.
+  React.useEffect(() => {
+    identify(userId, { email, organization_id: organizationId });
+  }, [userId, email, organizationId]);
 
   // Pin the body to exactly viewport-height-without-overflow. We used to
   // do this with `overflow-hidden + h-dvh`, but on iOS Safari that
