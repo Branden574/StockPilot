@@ -215,30 +215,35 @@ export async function getThirtyDayMetrics(
   // Always inner-join inventory_items so we can filter out movements whose
   // parent item has been soft-deleted. Without this the 30-day series
   // double-counts events for SKUs that no longer exist on the dash.
-  let query = ctx.supabase
-    .from('stock_movements')
-    .select(
-      'movement_type, created_at, item:inventory_items!item_id!inner (warehouse_id, deleted_at)',
-    )
-    .eq('organization_id', ctx.organizationId)
-    .is('item.deleted_at', null)
-    .gte('created_at', since.toISOString())
-    .order('created_at', { ascending: true });
-  if (options.warehouseId) {
-    query = query.eq('item.warehouse_id', options.warehouseId);
-  }
-  const { data, error } = await query;
-  if (error) throw new ServiceError('internal_error', error.message);
+  // Paginated: a single .select() is silently capped at 1000 rows by PostgREST,
+  // and the old ascending order dropped the NEWEST days for any org with >1000
+  // movements in the 30-day window. Page by a stable id (day-bucketing below is
+  // order-independent).
+  const data = await fetchAllRows<{ movement_type: string; created_at: string }>(
+    (from, to) => {
+      let q = ctx.supabase
+        .from('stock_movements')
+        .select(
+          'movement_type, created_at, item:inventory_items!item_id!inner (warehouse_id, deleted_at)',
+        )
+        .eq('organization_id', ctx.organizationId)
+        .is('item.deleted_at', null)
+        .gte('created_at', since.toISOString());
+      if (options.warehouseId) q = q.eq('item.warehouse_id', options.warehouseId);
+      return q.order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{
+        data: { movement_type: string; created_at: string }[] | null;
+        error: { message: string } | null;
+      }>;
+    },
+    { cap: 100_000 },
+  );
 
   const dailyCounts = new Array<number>(30).fill(0);
   const byTypeMap = new Map<string, number>();
   const dayMs = 24 * 60 * 60 * 1000;
   const startMs = since.getTime();
 
-  for (const r of (data ?? []) as unknown as Array<{
-    movement_type: string;
-    created_at: string;
-  }>) {
+  for (const r of data) {
     const t = new Date(r.created_at).getTime();
     const dayIdx = Math.min(29, Math.max(0, Math.floor((t - startMs) / dayMs)));
     dailyCounts[dayIdx] = (dailyCounts[dayIdx] ?? 0) + 1;
@@ -485,13 +490,20 @@ export async function getItemTrends(
   }
 
   const itemIds = items.map((i) => i.id);
-  const { data, error } = await ctx.supabase
-    .from('stock_movements')
-    .select('item_id, quantity_change, created_at')
-    .eq('organization_id', ctx.organizationId)
-    .in('item_id', itemIds)
-    .gte('created_at', new Date(startMs).toISOString());
-  if (error) throw new ServiceError('internal_error', error.message);
+  // Paginated: >1000 movements across the requested items in the 14-day window
+  // would otherwise be silently truncated, undercounting the trend lines.
+  const data = await fetchAllRows<{ item_id: string; quantity_change: number; created_at: string }>(
+    (from, to) =>
+      ctx.supabase
+        .from('stock_movements')
+        .select('item_id, quantity_change, created_at')
+        .eq('organization_id', ctx.organizationId)
+        .in('item_id', itemIds)
+        .gte('created_at', new Date(startMs).toISOString())
+        .order('id', { ascending: true })
+        .range(from, to),
+    { cap: 100_000 },
+  );
 
   // Bucket movements per item per day.
   type DayBucket = { change: number; count: number };
