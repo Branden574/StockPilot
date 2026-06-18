@@ -114,13 +114,18 @@ export class RecoveryService {
   async restore(entity: RecoveryEntity, id: string): Promise<void> {
     assertPermission(this.ctx, 'items:delete');
     const table = ENTITY_TABLE[entity];
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from(table)
       .update({ deleted_at: null, deleted_by: null })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
-      .not('deleted_at', 'is', null);
+      .not('deleted_at', 'is', null)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail closed: a 0-row update means the row is gone or wasn't deleted —
+    // don't audit a restore that didn't happen.
+    if (!row) throw new ServiceError('not_found', 'Record not found or not deleted.');
     void audit(
       {
         event: 'recovery.restored',

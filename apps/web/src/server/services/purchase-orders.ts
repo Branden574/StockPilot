@@ -302,7 +302,7 @@ export class PurchaseOrdersService {
       // and cancelling stay open to everyone with purchase_orders:manage.
       await this.assertApprovalThreshold(Number((po as { total?: unknown }).total ?? 0));
     }
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('purchase_orders')
       .update({
         status,
@@ -310,8 +310,13 @@ export class PurchaseOrdersService {
         updated_by: this.ctx.userId,
       })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail closed: a 0-row update means the PO vanished/changed under us — never
+    // audit a no-op or fire the QBO outbox for a status change that didn't land.
+    if (!row) throw new ServiceError('conflict', 'Purchase order not found or already changed.');
     void audit(
       {
         event: 'purchase_order.status_changed',

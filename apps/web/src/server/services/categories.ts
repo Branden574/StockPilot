@@ -97,12 +97,15 @@ export class CategoriesService {
 
   async archive(id: string) {
     assertPermission(this.ctx, 'categories:manage');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('categories')
       .update({ deleted_at: new Date().toISOString(), deleted_by: this.ctx.userId })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Category not found.');
     void audit({ event: 'category.archived', entityType: 'category', entityId: id }, this.ctx);
   }
 
@@ -112,12 +115,15 @@ export class CategoriesService {
    */
   async restore(id: string) {
     assertPermission(this.ctx, 'categories:manage');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('categories')
       .update({ deleted_at: null, deleted_by: null })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Category not found.');
     void audit({ event: 'category.restored', entityType: 'category', entityId: id }, this.ctx);
   }
 }

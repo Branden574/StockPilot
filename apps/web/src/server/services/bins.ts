@@ -211,12 +211,17 @@ export class BinsService {
     // partial unique index on (warehouse_id, bin_type) WHERE is_default
     // doesn't block another bin from being promoted later. Doing this
     // in a single UPDATE keeps it atomic.
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('bins')
       .update({ status: 'archived', is_default: false })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail closed: a 0-row update means the bin vanished between the read
+    // above and the write — don't audit an archive that didn't land.
+    if (!row) throw new ServiceError('not_found', 'Bin not found.');
 
     // B2: emit a bin.archived audit event. Previously this method had
     // no audit at all, so an archive could fly under the radar.

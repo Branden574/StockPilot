@@ -363,12 +363,17 @@ export class TeamService {
       );
     }
 
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('organization_members')
       .update({ role })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', memberId);
+      .eq('id', memberId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail closed: a 0-row update means the member vanished between the read
+    // above and the write — don't audit/dispatch a role change that didn't land.
+    if (!row) throw new ServiceError('conflict', 'Member not found or already changed.');
 
     await audit(
       {

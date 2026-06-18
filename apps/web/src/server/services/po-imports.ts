@@ -698,13 +698,18 @@ export class PoImportsService {
   async cancel(id: string): Promise<void> {
     assertModuleEnabled(this.ctx, 'po_imports');
     assertPermission(this.ctx, 'purchase_orders:manage');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('po_imports')
       .update({ status: 'canceled' })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
-      .not('status', 'in', '(approved,canceled)');
+      .not('status', 'in', '(approved,canceled)')
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail closed: a 0-row update means the import is gone or already
+    // approved/canceled — don't audit a cancellation that didn't happen.
+    if (!row) throw new ServiceError('conflict', 'Import not found or already finalized.');
     await audit(
       {
         event: 'po_import.canceled',

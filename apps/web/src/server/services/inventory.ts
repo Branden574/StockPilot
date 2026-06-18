@@ -535,13 +535,16 @@ export class InventoryService {
           // count (lowStockCount + outOfStockCount).
           r.quantity_on_hand <= r.reorder_point || r.quantity_on_hand <= 0,
       );
-      totalCount = filtered.length;
       rows = filtered;
       // Apply the same JS-side filter to the sum rowset so the value
       // footer matches what the user actually sees in the table.
       sumRows = sumRows.filter(
         (r) => r.quantity_on_hand <= r.reorder_point || r.quantity_on_hand <= 0,
       );
+      // totalCount must reflect the full org-wide filtered set (sumRows), not
+      // the current page (`filtered` is ≤ page size) — otherwise "Page X of Y"
+      // is wrong whenever the low-stock set spans more than one page.
+      totalCount = sumRows.length;
     }
 
     const valueOnHand = sumRows.reduce(
@@ -1855,9 +1858,15 @@ export class InventoryService {
         name?: string;
         sku?: string;
       };
-      const prev = Number(it.quantity_on_hand ?? 0);
-      const rp = Number(it.reorder_point ?? 0);
-      const next = prev + Number(input.quantityChange);
+      // adjust_stock is atomic and RETURNS the authoritative updated row
+      // (see 0004_phase2_helpers.sql — `returns public.inventory_items`). Derive
+      // the new qty from that returned row, not the pre-RPC read, so concurrent
+      // adjustments don't make the crossing detection miss/double-fire. `prev`
+      // is reconstructed as new - delta (the RPC computed new = prev + delta).
+      const ret = (data ?? {}) as { quantity_on_hand?: number; reorder_point?: number };
+      const next = Number(ret.quantity_on_hand ?? it.quantity_on_hand ?? 0);
+      const prev = next - Number(input.quantityChange);
+      const rp = Number(ret.reorder_point ?? it.reorder_point ?? 0);
       if (rp > 0 && next <= rp && prev > rp) {
         void dispatchEvent(this.ctx.organizationId, 'stock.low', {
           id: input.itemId,
