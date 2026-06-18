@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { withContext, type ServiceContext } from './context';
+import { ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRows } from './lib/paginate';
 
 export interface ValuationRow {
@@ -316,6 +316,75 @@ export class ReportsService {
       byWarehouse: [...byWh.values()].sort((a, b) => b.value - a.value),
       byCategory: [...byCat.values()].sort((a, b) => b.value - a.value),
     };
+  }
+
+  /**
+   * Lightweight valuation rollups for the DASHBOARD — the by-warehouse and
+   * by-category breakdowns + totals, aggregated in Postgres via the
+   * vw_inventory_valuation_* views (migration 0179; security_invoker → RLS
+   * scopes each view to the caller's org). Unlike inventoryValuation(), this
+   * does NOT pull per-item rows into Node, so its cost is flat regardless of
+   * item count (the dashboard donut only needs the rollups). Use the full
+   * inventoryValuation() for the report page + CSV/PDF export.
+   */
+  async inventoryValuationSummary(): Promise<
+    Pick<ValuationReport, 'totalValue' | 'totalUnits' | 'itemCount' | 'byWarehouse' | 'byCategory'>
+  > {
+    const orgId = this.ctx.organizationId;
+    const [whRes, catRes] = await Promise.all([
+      this.ctx.supabase
+        .from('vw_inventory_valuation_by_warehouse')
+        .select('warehouse_id, warehouse_name, value, units, item_count')
+        .eq('organization_id', orgId),
+      this.ctx.supabase
+        .from('vw_inventory_valuation_by_category')
+        .select('category_id, category_name, value, units, item_count')
+        .eq('organization_id', orgId),
+    ]);
+    if (whRes.error) throw new ServiceError('internal_error', whRes.error.message);
+    if (catRes.error) throw new ServiceError('internal_error', catRes.error.message);
+
+    const byWarehouse = (
+      (whRes.data ?? []) as Array<{
+        warehouse_id: string | null;
+        warehouse_name: string | null;
+        value: number;
+        units: number;
+      }>
+    )
+      .map((r) => ({
+        warehouseId: r.warehouse_id ?? null,
+        warehouseName: r.warehouse_name ?? 'Unassigned',
+        value: Number(r.value) || 0,
+        units: Number(r.units) || 0,
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    const byCategory = (
+      (catRes.data ?? []) as Array<{
+        category_id: string | null;
+        category_name: string | null;
+        value: number;
+        units: number;
+      }>
+    )
+      .map((r) => ({
+        categoryId: r.category_id ?? null,
+        categoryName: r.category_name ?? 'Uncategorized',
+        value: Number(r.value) || 0,
+        units: Number(r.units) || 0,
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    // Every active item has exactly one warehouse bucket (null → Unassigned),
+    // so the warehouse rollup sums to the grand total.
+    const totalValue = byWarehouse.reduce((s, w) => s + w.value, 0);
+    const totalUnits = byWarehouse.reduce((s, w) => s + w.units, 0);
+    const itemCount = (
+      (whRes.data ?? []) as Array<{ item_count: number }>
+    ).reduce((s, r) => s + (Number(r.item_count) || 0), 0);
+
+    return { totalValue, totalUnits, itemCount, byWarehouse, byCategory };
   }
 
   /**
