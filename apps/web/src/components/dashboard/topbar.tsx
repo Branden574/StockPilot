@@ -1,12 +1,13 @@
 'use client';
 
-import { BookOpen, HelpCircle, Menu, Search } from 'lucide-react';
+import { BookOpen, HelpCircle, Search } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import * as React from 'react';
 
 import { openKeyboardShortcutsOverlay } from '@/components/dashboard/keyboard-shortcuts';
 import { NotificationBell } from '@/components/dashboard/notification-bell';
+import { SidebarToggleButton } from '@/components/dashboard/sidebar-toggle-button';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { WarehouseFilterPicker } from '@/components/dashboard/warehouse-filter-picker';
 import { cn } from '@/lib/utils';
@@ -22,6 +23,8 @@ interface TopbarProps {
   initialUnreadNotifications: number;
   isPlatformAdmin?: boolean;
   onToggleSidebar?: () => void;
+  /** Desktop sidebar visibility, for the toggle button's label. */
+  sidebarHidden?: boolean;
   /** Pass-through filter UI props — only rendered when warehouses is non-empty. */
   warehouseFilter?: {
     warehouses: Array<{ id: string; name: string }>;
@@ -220,6 +223,7 @@ export function Topbar({
   initialUnreadNotifications,
   isPlatformAdmin,
   onToggleSidebar,
+  sidebarHidden = false,
   warehouseFilter,
 }: TopbarProps) {
   const pathname = usePathname();
@@ -230,14 +234,7 @@ export function Topbar({
       className="border-border sticky top-0 z-20 flex items-center gap-3 border-b bg-[color-mix(in_oklab,hsl(var(--background))_92%,transparent)] px-4 backdrop-blur-md sm:gap-4 sm:px-5"
       style={{ height: 56 }}
     >
-      <button
-        type="button"
-        className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors md:hidden"
-        aria-label="Open dashboard navigation"
-        onClick={onToggleSidebar}
-      >
-        <Menu className="h-4 w-4" />
-      </button>
+      <SidebarToggleButton hidden={sidebarHidden} onToggle={() => onToggleSidebar?.()} />
 
       <nav
         className="flex min-w-0 items-center gap-2 text-[13px] text-[var(--ed-ink-3)]"
