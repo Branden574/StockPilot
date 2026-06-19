@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { ItemThumb } from '@/components/items/item-thumb';
+import { MakeRecurringButton } from '@/components/po/make-recurring-button';
 import { PoReceiveDialog } from '@/components/po/po-receive-dialog';
 import { PoSetDestination } from '@/components/po/po-set-destination';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
@@ -129,6 +130,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
               <Download className="h-4 w-4" /> Download PDF
             </a>
           </Button>
+          <MakeRecurringButton poId={id} />
           <PoActions poId={id} status={status} />
           {canReceive && warehouseId && (
             <PoReceiveDialog
