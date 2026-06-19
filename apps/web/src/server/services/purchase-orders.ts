@@ -341,6 +341,14 @@ export class PurchaseOrdersService {
         p_dedupe_key: `purchase_order.ordered:${id}`,
       });
     }
+    if (status === 'cancelled') {
+      const poNumber = (po as { po_number?: string | null }).po_number ?? null;
+      void dispatchEvent(this.ctx.organizationId, 'po.cancelled', {
+        id,
+        poNumber,
+        cancelledBy: this.ctx.userId,
+      });
+    }
   }
 
   /**
