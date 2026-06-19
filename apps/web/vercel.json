@@ -23,6 +23,10 @@
       "schedule": "0 9 * * *"
     },
     {
+      "path": "/api/cron/recurring-pos",
+      "schedule": "0 7 * * *"
+    },
+    {
       "path": "/api/cron/auto-reorder",
       "schedule": "0 8 * * *"
     },
