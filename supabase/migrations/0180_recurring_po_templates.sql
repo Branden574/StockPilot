@@ -21,7 +21,7 @@ create table if not exists public.recurring_po_templates (
   cadence                 text not null check (cadence in ('weekly','biweekly','monthly','quarterly','custom')),
   custom_days             integer check (custom_days is null or (custom_days between 1 and 365)),
   send_mode               text not null default 'draft' check (send_mode in ('draft','send')),
-  max_auto_send_cents     numeric(14,4),
+  max_auto_send_cents     numeric(14,4) check (max_auto_send_cents is null or max_auto_send_cents >= 0),
   line_items              jsonb not null default '[]'::jsonb,
   notes                   text,
   last_run_at             timestamptz,

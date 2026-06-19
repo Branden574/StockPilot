@@ -330,8 +330,10 @@ export class RecurringPoTemplatesService {
     let failures = 0;
 
     for (const tpl of templates) {
+      let createdOk = false;
       try {
-        // Parse line items from jsonb — fail-closed: if malformed, skip template.
+        // Parse line items from jsonb — fail-closed: malformed/empty → skip (and
+        // still advance the schedule below so a bad template can't retry forever).
         const rawLines = Array.isArray(tpl.line_items) ? tpl.line_items : [];
         const lines = rawLines
           .map((l: unknown) => {
@@ -342,67 +344,78 @@ export class RecurringPoTemplatesService {
               unitCost: Number(o.unitCost ?? 0),
             };
           })
-          .filter((l) => l.itemId && l.quantityOrdered > 0);
+          // Defense-in-depth: a row mutated out-of-band can't sneak a negative
+          // unitCost (which would lower the total under the auto-send cap).
+          .filter((l) => l.itemId && l.quantityOrdered > 0 && l.unitCost >= 0);
 
         if (lines.length === 0) {
           failures++;
-          continue;
-        }
+        } else {
+          const total = lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
 
-        const total = lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
+          // Create the PO (always starts as draft).
+          const po = await new PurchaseOrdersService(this.ctx).create({
+            supplierId: tpl.supplier_id ?? null,
+            destinationLocationId: tpl.destination_location_id ?? null,
+            notes: tpl.notes ?? undefined,
+            lines,
+          });
+          created++;
 
-        // Create the PO (always starts as draft).
-        const po = await new PurchaseOrdersService(this.ctx).create({
-          supplierId: tpl.supplier_id ?? null,
-          destinationLocationId: tpl.destination_location_id ?? null,
-          notes: tpl.notes ?? undefined,
-          lines,
-        });
-        created++;
+          // Auto-send decision — only relevant when send_mode==='send'.
+          if (tpl.send_mode === 'send') {
+            // Approval threshold — FAIL CLOSED: read error → sendBlocked=true.
+            let threshold: number | null = null;
+            let sendBlocked = false;
+            const { data: modRow, error: modErr } = await this.ctx.supabase
+              .from('organization_modules')
+              .select('settings')
+              .eq('organization_id', this.ctx.organizationId)
+              .eq('module_id', 'purchase_orders')
+              .maybeSingle();
+            if (modErr) {
+              sendBlocked = true;
+            } else {
+              const modSettings = (
+                (modRow as { settings?: unknown } | null)?.settings ?? {}
+              ) as Record<string, unknown>;
+              const rawThreshold = Number(modSettings.approvalThresholdAmount);
+              threshold =
+                Number.isFinite(rawThreshold) && rawThreshold > 0 ? rawThreshold : null;
+            }
 
-        // Auto-send decision — only relevant when send_mode==='send'.
-        if (tpl.send_mode === 'send') {
-          // Approval threshold — FAIL CLOSED: read error → sendBlocked=true.
-          let threshold: number | null = null;
-          let sendBlocked = false;
-          const { data: modRow, error: modErr } = await this.ctx.supabase
-            .from('organization_modules')
-            .select('settings')
-            .eq('organization_id', this.ctx.organizationId)
-            .eq('module_id', 'purchase_orders')
-            .maybeSingle();
-          if (modErr) {
-            sendBlocked = true;
-          } else {
-            const modSettings = (
-              (modRow as { settings?: unknown } | null)?.settings ?? {}
-            ) as Record<string, unknown>;
-            const rawThreshold = Number(modSettings.approvalThresholdAmount);
-            threshold =
-              Number.isFinite(rawThreshold) && rawThreshold > 0 ? rawThreshold : null;
+            const capDollars =
+              tpl.max_auto_send_cents != null ? tpl.max_auto_send_cents / 100 : null;
+
+            if (!sendBlocked && shouldAutoSend(total, capDollars, threshold)) {
+              await new PurchaseOrdersService(this.ctx).updateStatus(po.id, 'ordered');
+              sent++;
+            } else {
+              heldForReview++;
+            }
           }
-
-          const capDollars =
-            tpl.max_auto_send_cents != null ? tpl.max_auto_send_cents / 100 : null;
-
-          if (!sendBlocked && shouldAutoSend(total, capDollars, threshold)) {
-            await new PurchaseOrdersService(this.ctx).updateStatus(po.id, 'ordered');
-            sent++;
-          } else {
-            heldForReview++;
-          }
+          createdOk = true;
         }
+      } catch {
+        failures++;
+      }
 
-        // Advance the schedule — atomic: update immediately so a double cron tick
-        // can't fire twice. Stamp last_run_at.
-        const currentNextRun = new Date(tpl.next_run_at);
-        const nextRun = nextRunAt(
-          tpl.cadence as RecurringCadence,
-          currentNextRun,
-          tpl.custom_days ?? undefined,
-        );
-
-        await this.ctx.supabase
+      // Advance the schedule for EVERY attempted template (success OR failure) so
+      // it fires at most once per due period: no double-fire on a re-run, no
+      // catch-up burst for an overdue/dormant template, and no infinite retry of
+      // a failing one. Advance until strictly in the future. Rowcount-checked —
+      // a template that DID create a PO but failed to advance could re-fire (and
+      // re-send) next run, so surface that as a failure for the cron summary.
+      try {
+        let nextRun = new Date(tpl.next_run_at);
+        for (let guard = 0; nextRun.getTime() <= now.getTime() && guard < 1000; guard += 1) {
+          nextRun = nextRunAt(
+            tpl.cadence as RecurringCadence,
+            nextRun,
+            tpl.custom_days ?? undefined,
+          );
+        }
+        const { data: advanced, error: advErr } = await this.ctx.supabase
           .from('recurring_po_templates')
           .update({
             next_run_at: nextRun.toISOString(),
@@ -410,9 +423,14 @@ export class RecurringPoTemplatesService {
             updated_by: this.ctx.userId,
           })
           .eq('organization_id', this.ctx.organizationId)
-          .eq('id', tpl.id);
+          .eq('id', tpl.id)
+          .select('id')
+          .maybeSingle();
+        if (advErr || !advanced) {
+          throw advErr ?? new Error('recurring template schedule advance matched 0 rows');
+        }
       } catch {
-        failures++;
+        if (createdOk) failures += 1;
       }
     }
 
