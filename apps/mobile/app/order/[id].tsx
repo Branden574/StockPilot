@@ -1,6 +1,5 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import * as Location from 'expo-location';
 import { ArrowLeft, Camera, ImagePlus, PenLine, Trash2, Truck, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
@@ -23,10 +22,8 @@ import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
-import { useEnabledModules } from '@/lib/enabled-modules';
 import { resizeForUpload } from '@/lib/image-resize';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
-import { isLiveLocationActive, startLiveLocation, stopLiveLocation } from '@/lib/location-task';
 import { API_BASE } from '@/lib/api';
 import {
   listOrderDrivers,
@@ -129,59 +126,6 @@ export default function OrderDetail() {
 
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
-
-  const enabledModules = useEnabledModules();
-  const canShareLocation =
-    order?.status === 'in_transit' &&
-    order?.assignedDeliveryUserId === user?.id &&
-    order?.fulfillmentType === 'delivery' &&
-    enabledModules.has('live_tracking');
-
-  const [sharing, setSharing] = React.useState(false);
-  React.useEffect(() => {
-    let active = true;
-    void isLiveLocationActive().then((on) => {
-      if (active) setSharing(on);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-  // If the order leaves in_transit while the screen is open, stop sharing.
-  // Keyed on status (not the full object) on purpose — `order` is read inside
-  // but only its `status` should re-trigger this guard.
-  React.useEffect(() => {
-    if (order && order.status !== 'in_transit' && sharing) {
-      void stopLiveLocation().then(() => setSharing(false));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [order?.status, sharing]);
-
-  const onToggleShare = React.useCallback(async () => {
-    if (sharing) {
-      await stopLiveLocation();
-      setSharing(false);
-      return;
-    }
-    const fg = await Location.requestForegroundPermissionsAsync();
-    if (fg.status !== 'granted') {
-      Alert.alert(
-        'Location needed',
-        'Allow location access to share your delivery location with the customer.',
-      );
-      return;
-    }
-    const bg = await Location.requestBackgroundPermissionsAsync();
-    if (bg.status !== 'granted') {
-      Alert.alert(
-        'Background location off',
-        'Sharing will pause when the app is in the background. Enable "Always" location in Settings for full live tracking while you drive.',
-      );
-    }
-    if (!order) return;
-    await startLiveLocation(order.id);
-    setSharing(true);
-  }, [sharing, order]);
 
   React.useEffect(() => {
     if (!user) return;
@@ -576,24 +520,6 @@ export default function OrderDetail() {
               <Mono size={10.5} color={c.ink4}>
                 Same actions as the web dashboard — changes sync instantly.
               </Mono>
-            </View>
-          ) : null}
-
-          {canShareLocation ? (
-            <View style={{ gap: 8 }}>
-              <Eyebrow>LIVE DELIVERY TRACKING</Eyebrow>
-              <Mono size={11} color={c.ink4}>
-                The customer can see you on the map until this delivery is complete. Keeps sharing
-                in the background while you drive.
-              </Mono>
-              <Pressable
-                onPress={() => void onToggleShare()}
-                style={[styles.addBtn, { backgroundColor: c.ink }]}
-              >
-                <Mono size={13} color={c.paper}>
-                  {sharing ? 'Stop sharing location' : 'Share my live location'}
-                </Mono>
-              </Pressable>
             </View>
           ) : null}
 
