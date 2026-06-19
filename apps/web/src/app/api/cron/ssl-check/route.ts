@@ -112,6 +112,6 @@ export async function GET(req: Request) {
       level: 'warning',
       extra: { host, validTo, daysLeft },
     });
-    return NextResponse.json({ host, validTo, daysLeft, status: 'error' });
+    return NextResponse.json({ host, validTo, daysLeft, status: 'error' }, { status: 500 });
   }
 }
