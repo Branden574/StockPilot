@@ -65,6 +65,9 @@ describe('isTypingTarget', () => {
     expect(isTypingTarget(document.createElement('textarea'))).toBe(true);
     expect(isTypingTarget(document.createElement('select'))).toBe(true);
     expect(isTypingTarget(document.createElement('div'))).toBe(false);
+    const editable = document.createElement('div');
+    Object.defineProperty(editable, 'isContentEditable', { value: true });
+    expect(isTypingTarget(editable)).toBe(true);
     expect(isTypingTarget(null)).toBe(false);
   });
 });

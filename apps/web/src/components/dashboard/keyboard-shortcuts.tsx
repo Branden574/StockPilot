@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
+import { isTypingTarget } from '@/components/dashboard/sidebar-pref';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
@@ -70,14 +71,6 @@ const KBD = cn(
  * earlier `g` doesn't surprise the user a second later.
  */
 const PREFIX_RESET_MS = 1500;
-
-function isTypingTarget(el: Element | null): boolean {
-  if (!el) return false;
-  const tag = el.tagName.toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
-  if ((el as HTMLElement).isContentEditable) return true;
-  return false;
-}
 
 export function KeyboardShortcutsProvider() {
   const router = useRouter();
