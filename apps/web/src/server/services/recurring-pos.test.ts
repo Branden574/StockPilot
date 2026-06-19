@@ -234,6 +234,26 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     expect(stub.fromCalls.includes('purchase_orders')).toBe(false);
   });
 
+  it('schedule-advance failure on a created PO: surfaced as a failure (no silent double-fire)', async () => {
+    const template = { ...TEMPLATE_BASE, send_mode: 'draft' as const };
+    const stub = makeSupabaseStub({
+      'recurring_po_templates.select': { data: [template], error: null },
+      'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
+      'purchase_order_items.insert': { data: [], error: null },
+      // The schedule-advance update matches 0 rows / errors → must be surfaced.
+      'recurring_po_templates.update': { data: null, error: { message: 'advance failed' } },
+      'rpc:next_po_number': { data: 'PO-100', error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { role: 'owner' });
+    const svc = new RecurringPoTemplatesService(ctx as never);
+    const result = await svc.runDueTemplates(NOW);
+
+    // PO was created, but the schedule didn't advance → flagged as a failure so
+    // the cron summary/notification surfaces the duplicate-spend risk.
+    expect(result.created).toBe(1);
+    expect(result.failures).toBe(1);
+  });
+
   it('seedFromPo copies supplier_id and line items from an existing PO', async () => {
     const stub = makeSupabaseStub({
       'purchase_orders.select': {
