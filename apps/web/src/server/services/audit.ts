@@ -207,7 +207,12 @@ export type AuditEvent =
   | 'return.denied'
   | 'return.received'
   | 'return.closed'
-  | 'return.cancelled';
+  | 'return.cancelled'
+  // Recurring PO templates — time-based standing orders (Task 3).
+  | 'recurring_po_template.created'
+  | 'recurring_po_template.updated'
+  | 'recurring_po_template.toggled'
+  | 'recurring_po_template.deleted';
 
 interface AuditPayload {
   event: AuditEvent;
