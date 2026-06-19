@@ -7,6 +7,9 @@
 /** Cookie that persists the per-device preference. "1" = hidden. */
 export const SIDEBAR_HIDDEN_COOKIE = 'sp_sidebar_hidden';
 
+/** DOM id on the desktop sidebar <aside>, referenced by the toggle's aria-controls. */
+export const SIDEBAR_DOM_ID = 'dashboard-sidebar';
+
 /** Parse the persisted preference. Hidden only when the value is exactly "1". */
 export function parseSidebarHidden(value: string | null | undefined): boolean {
   return value === '1';

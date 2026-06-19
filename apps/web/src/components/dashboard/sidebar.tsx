@@ -14,6 +14,8 @@ import { DEFAULT_MODULE_IDS, type ModuleId, type NavOverrides, type Role } from 
 
 interface SidebarProps {
   className?: string;
+  /** DOM id applied to the <aside>; lets the topbar toggle reference it via aria-controls. */
+  id?: string;
   organizationId: string;
   organizationName: string;
   organizationLogoUrl?: string | null;
@@ -41,6 +43,7 @@ interface SidebarProps {
 
 export function Sidebar({
   className,
+  id,
   organizationId,
   organizationName,
   organizationLogoUrl,
@@ -129,6 +132,7 @@ export function Sidebar({
 
   return (
     <aside
+      id={id}
       className={cn(
         'border-border flex h-screen w-[244px] shrink-0 flex-col border-r bg-[color-mix(in_oklab,hsl(var(--background))_94%,hsl(var(--foreground))_3%)]',
         className,

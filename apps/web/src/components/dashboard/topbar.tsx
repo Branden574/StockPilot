@@ -272,7 +272,7 @@ export function Topbar({
 
       <button
         type="button"
-        className="border-border bg-card hidden h-8 min-w-[240px] max-w-[460px] flex-1 items-center gap-2 rounded-md border px-2.5 text-[12.5px] text-[var(--ed-ink-4)] shadow-[0_1px_0_rgba(14,15,13,0.03)] transition-colors hover:border-[var(--ed-line-strong)] md:flex"
+        className="border-border bg-card hidden h-8 min-w-[240px] max-w-[460px] flex-1 items-center gap-2 rounded-md border px-2.5 text-[12.5px] text-[var(--ed-ink-4)] shadow-[0_1px_0_rgba(14,15,13,0.03)] transition-colors hover:border-[var(--ed-line-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background md:flex"
         aria-label="Open command palette"
         onClick={() => {
           // Synthesize a ⌘K so we don't need a global store. The palette
@@ -282,7 +282,7 @@ export function Topbar({
           );
         }}
       >
-        <Search className="h-3 w-3" />
+        <Search className="h-3 w-3" aria-hidden />
         <span className="flex-1 text-left">Search items, POs, suppliers…</span>
         <span className="border-border bg-muted rounded-[3px] border px-1.5 py-px font-mono text-[10.5px] text-[var(--ed-ink-3)]">
           ⌘K
@@ -293,20 +293,20 @@ export function Topbar({
 
       <button
         type="button"
-        className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors"
+        className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         aria-label="Keyboard shortcuts (?)"
         title="Keyboard shortcuts (?)"
         onClick={() => openKeyboardShortcutsOverlay()}
       >
-        <HelpCircle className="h-3.5 w-3.5" />
+        <HelpCircle className="h-3.5 w-3.5" aria-hidden />
       </button>
 
       <button
         type="button"
-        className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors"
+        className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         aria-label="Help"
       >
-        <BookOpen className="h-3.5 w-3.5" />
+        <BookOpen className="h-3.5 w-3.5" aria-hidden />
       </button>
 
       <ThemeToggle />

@@ -12,6 +12,7 @@ import {
   isDesktopViewport,
   isSidebarToggleChord,
   isTypingTarget,
+  SIDEBAR_DOM_ID,
   sidebarCookieString,
 } from '@/components/dashboard/sidebar-pref';
 import { Topbar } from '@/components/dashboard/topbar';
@@ -188,6 +189,7 @@ export function DashboardShell({
 
       {!desktopSidebarHidden && (
         <Sidebar
+          id={SIDEBAR_DOM_ID}
           className="hidden md:flex"
           organizationId={organizationId}
           organizationName={organizationName}
