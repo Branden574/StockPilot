@@ -85,9 +85,9 @@ const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: 
 const stamp = Date.now().toString(36);
 const slug = `loadtest-${stamp}`;
 const email = `loadtest+${stamp}@stockpilot.dev`;
-// Strong password that satisfies the project's policy (8+, mixed case + digit):
-// the 'Lt9' prefix guarantees upper+lower+digit; base64url adds entropy.
-const password = `Lt9${randomBytes(15).toString('base64url')}`;
+// Random per-run password (NOT a hardcoded credential): random bytes plus a
+// short guaranteeing suffix so it satisfies the policy (8+, upper+lower+digit).
+const password = `${randomBytes(18).toString('base64url')}aA1`;
 const nowIso = new Date().toISOString();
 
 // 1) Organization (Pro plan so all features are available to the load test).
