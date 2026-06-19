@@ -99,6 +99,15 @@ export function planAllowsAutoReorder(org: OrgBillingState, now: number = Date.n
 }
 
 /**
+ * Whether the org's EFFECTIVE plan entitles it to recurring PO templates
+ * (Pro and above). Checked on the effective tier, so a Comped/override org
+ * qualifies even though its raw `plan` column may still be 'free'.
+ */
+export function planAllowsRecurringPos(org: OrgBillingState, now: number = Date.now()): boolean {
+  return PLANS[resolveEffectivePlan(org, now).tier].limits.recurringPos;
+}
+
+/**
  * Whether the org's EFFECTIVE plan entitles it to inventory restore points
  * (Business and above). Resolves on the effective tier (Comped/override orgs
  * qualify).

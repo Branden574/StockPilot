@@ -16,6 +16,8 @@ export interface PlanLimits {
   customRoles: boolean;
   /** Automatic reordering (daily auto-PO from reorder points). Pro and above. */
   autoReorder: boolean;
+  /** Recurring PO templates (time-based standing orders). Pro and above. */
+  recurringPos: boolean;
   /** Inventory restore points (snapshots + safe-reconcile restore). Business and above. */
   restorePoints: boolean;
 }
@@ -63,6 +65,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       sso: false,
       customRoles: false,
       autoReorder: false,
+      recurringPos: false,
       restorePoints: false,
     },
     features: ['Up to 10,000 items', '100 team members', '100 locations', 'Manual entry', 'Basic CSV export'],
@@ -89,6 +92,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       sso: false,
       customRoles: false,
       autoReorder: true,
+      recurringPos: true,
       restorePoints: false,
     },
     features: [
@@ -123,6 +127,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       sso: false,
       customRoles: true,
       autoReorder: true,
+      recurringPos: true,
       restorePoints: true,
     },
     features: [
@@ -157,6 +162,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       sso: true,
       customRoles: true,
       autoReorder: true,
+      recurringPos: true,
       restorePoints: true,
     },
     features: [
