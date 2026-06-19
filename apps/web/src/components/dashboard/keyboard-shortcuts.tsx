@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils';
 // sync. `keys` is what we render inside <kbd> chips; for two-key sequences we
 // use a `prefix` + `key` pair so the state machine below can match against
 // the canonical case-insensitive value.
-type Section = 'Navigation' | 'New things' | 'Help' | 'Search';
+type Section = 'Navigation' | 'New things' | 'Search' | 'View' | 'Help';
 
 interface ShortcutRow {
   /** Visual key chips (in order). */
@@ -52,12 +52,13 @@ const SHORTCUT_ROWS: ShortcutRow[] = [
   { keys: ['n', 'i'], description: 'New item', section: 'New things' },
   { keys: ['n', 'p'], description: 'New purchase order', section: 'New things' },
   { keys: ['n', 'c'], description: 'New cycle count', section: 'New things' },
+  { keys: ['⌘', '\\'], description: 'Hide/show the sidebar (Ctrl+\\ on Windows)', section: 'View' },
   { keys: ['?'], description: 'Open this keyboard-shortcuts overlay', section: 'Help' },
   { keys: ['Esc'], description: 'Close the overlay', section: 'Help' },
   { keys: ['⌘', 'K'], description: 'Open command palette (Ctrl+K on Windows)', section: 'Search' },
 ];
 
-const SECTION_ORDER: Section[] = ['Navigation', 'New things', 'Search', 'Help'];
+const SECTION_ORDER: Section[] = ['Navigation', 'New things', 'Search', 'View', 'Help'];
 
 const KBD = cn(
   'border-border bg-card rounded border px-1.5 py-px font-mono text-[10.5px] text-foreground',
