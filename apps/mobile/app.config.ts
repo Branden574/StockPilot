@@ -21,7 +21,10 @@ const config: ExpoConfig = {
     backgroundColor: '#0a0f1f',
   },
   ios: {
-    supportsTablet: true,
+    // iPhone-only: warehouse/stockroom users are on phones, and this keeps the
+    // App Store listing to iPhone screenshots only (no iPad set required).
+    // iPads still run the app in iPhone-compatibility mode.
+    supportsTablet: false,
     bundleIdentifier: 'app.stockpilot.mobile',
     // Do NOT hand-edit this for releases. eas.json `production` sets
     // `autoIncrement: true` with `cli.appVersionSource: 'remote'`, so EAS owns
