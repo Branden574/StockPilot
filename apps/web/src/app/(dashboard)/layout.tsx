@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
-import { headers } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
+import { SIDEBAR_HIDDEN_COOKIE, parseSidebarHidden } from '@/components/dashboard/sidebar-pref';
 import { ImpersonationBanner } from '@/components/platform/impersonation-banner';
 import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
@@ -48,6 +49,11 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const supabase = await createClient();
   // Gates the "Platform admin" link in the account menu (verified auth email).
   const platformAdmin = await currentUserIsPlatformAdmin();
+
+  const cookieStore = await cookies();
+  const initialSidebarHidden = parseSidebarHidden(
+    cookieStore.get(SIDEBAR_HIDDEN_COOKIE)?.value,
+  );
 
   // Layout-blocking parallel fan-out. Org row, warehouses list, and MFA
   // factors go through request-cached helpers so the dashboard page (or
@@ -186,6 +192,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         userRole={`${ROLE_LABELS[ctx.role].label} · ${ctx.organizationName}`}
         role={ctx.role}
         isPlatformAdmin={platformAdmin}
+        initialSidebarHidden={initialSidebarHidden}
         enabledModules={enabledModules}
         navOverrides={orgRow?.nav_overrides ?? null}
         orderStatusConfig={orgRow?.order_status_config ?? null}
