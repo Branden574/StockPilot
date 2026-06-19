@@ -27,7 +27,7 @@ vi.mock('@/components/dashboard/warehouse-filter-picker', () => ({
 }));
 vi.mock('@/components/theme/theme-toggle', () => ({ ThemeToggle: () => null }));
 vi.mock('@/components/dashboard/keyboard-shortcuts', () => ({
-  KeyboardShortcutsProvider: () => null,
+  KeyboardShortcutsProvider: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   openKeyboardShortcutsOverlay: vi.fn(),
 }));
 vi.mock('@/components/orders/order-status-config-provider', () => ({
@@ -51,11 +51,22 @@ const baseProps = {
   enabledModules: [] as string[],
   navOverrides: null,
   orderStatusConfig: null,
+  isPlatformAdmin: false,
 };
 
 function setViewport(desktop: boolean) {
   vi.spyOn(window, 'matchMedia').mockImplementation(
-    (q: string) => ({ matches: desktop, media: q } as MediaQueryList),
+    (q: string) =>
+      ({
+        matches: desktop,
+        media: q,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList,
   );
 }
 
@@ -77,6 +88,7 @@ describe('DashboardShell sidebar hide', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show sidebar' }));
     expect(screen.getByTestId('desktop-sidebar')).toBeInTheDocument();
+    expect(document.cookie).not.toContain('sp_sidebar_hidden=1');
   });
 
   it('desktop: Cmd/Ctrl+\\ toggles the sidebar', () => {
