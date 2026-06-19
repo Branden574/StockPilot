@@ -7,6 +7,7 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { dispatchEvent } from '@/server/services/integration-events';
 
 // Why a route handler instead of a Server Action: the public sign page
 // renders <SignatureCollector /> only while `signed_at IS NULL`. A
@@ -253,6 +254,14 @@ export async function POST(req: NextRequest) {
       /* email failure is non-fatal; the row is completed */
     }
   }
+
+  // Dispatch order.completed integration event (best-effort, fire-and-forget).
+  void dispatchEvent(order.organization_id, 'order.completed', {
+    id: order.id,
+    orderNumber: order.id.slice(0, 8).toUpperCase(),
+    signerName: parsed.data.signerName,
+    signerEmail: parsed.data.signerEmail,
+  });
 
   return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
 }

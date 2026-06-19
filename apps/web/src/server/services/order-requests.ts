@@ -889,6 +889,11 @@ export class OrderRequestsService {
       this.ctx,
     );
     void this.notifyEmail(row, 'cancelled');
+    void dispatchEvent(this.ctx.organizationId, 'order.cancelled', {
+      id,
+      orderNumber: id.slice(0, 8).toUpperCase(),
+      cancelledBy: this.ctx.userId,
+    });
     return row;
   }
 
@@ -942,6 +947,11 @@ export class OrderRequestsService {
       this.ctx,
     );
     void this.notifyEmail(row, 'approved');
+    void dispatchEvent(this.ctx.organizationId, 'order.approved', {
+      id,
+      orderNumber: id.slice(0, 8).toUpperCase(),
+      approvedBy: this.ctx.userId,
+    });
     return row;
   }
 
@@ -1321,6 +1331,11 @@ export class OrderRequestsService {
     );
     // Best-effort: notify requester the order is on the way.
     void this.notifyEmail(finalRow, 'in_transit');
+    void dispatchEvent(this.ctx.organizationId, 'order.in_transit', {
+      id,
+      orderNumber: id.slice(0, 8).toUpperCase(),
+      markedBy: this.ctx.userId,
+    });
     return finalRow;
   }
 
@@ -1357,6 +1372,12 @@ export class OrderRequestsService {
       this.ctx,
     );
     void this.notifyEmail(row, 'denied');
+    void dispatchEvent(this.ctx.organizationId, 'order.denied', {
+      id,
+      orderNumber: id.slice(0, 8).toUpperCase(),
+      reason,
+      deniedBy: this.ctx.userId,
+    });
 
     // Zendesk shell: a denied order is an "order problem" ticket (best-effort).
     try {

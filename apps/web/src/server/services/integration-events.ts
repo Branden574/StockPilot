@@ -31,11 +31,19 @@ import {
 export const INTEGRATION_EVENT_TYPES = [
   'stock.low',
   'order.created',
+  'order.approved',
+  'order.denied',
+  'order.in_transit',
+  'order.cancelled',
   'order.status_changed',
   'order.completed',
   'po.created',
   'po.received',
+  'po.cancelled',
   'return.created',
+  'return.approved',
+  'return.closed',
+  'return.denied',
   'cycle_count.completed',
   // Security feed (cybersecurity monitoring Phase 1, 2026-06-12): forensic-
   // relevant account/credential events an org admin wants in a #security
@@ -92,16 +100,44 @@ export function describeEvent(eventType: string, data: Record<string, unknown>):
       };
     case 'order.created':
       return { title: '🧾 New order', summary: `Order ${s('orderNumber') ?? s('id') ?? ''} was created${s('requester') ? ` by ${s('requester')}` : ''}.` };
+    case 'order.approved':
+      return { title: '✅ Order Approved', summary: `Order ${s('orderNumber') ?? s('id') ?? ''} was approved.` };
+    case 'order.denied':
+      return {
+        title: '❌ Order Denied',
+        summary: `Order ${s('orderNumber') ?? s('id') ?? ''} was denied${s('reason') ? ': ' + s('reason') : ''}.`,
+      };
+    case 'order.in_transit':
+      return { title: '🚚 Order In Transit', summary: `Order ${s('orderNumber') ?? s('id') ?? ''} is now in transit.` };
+    case 'order.cancelled':
+      return { title: '🚫 Order Cancelled', summary: `Order ${s('orderNumber') ?? s('id') ?? ''} was cancelled.` };
     case 'order.status_changed':
       return { title: '🔄 Order updated', summary: `Order ${s('orderNumber') ?? s('id') ?? ''} → ${s('status') ?? 'updated'}.` };
     case 'order.completed':
-      return { title: '✅ Order delivered', summary: `Order ${s('orderNumber') ?? s('id') ?? ''} was completed.` };
+      return {
+        title: '✅ Order Completed',
+        summary: `Order ${s('orderNumber') ?? s('id') ?? ''} was completed${s('signerName') ? ` by ${s('signerName')}` : ''}.`,
+      };
     case 'po.created':
       return { title: '📦 New purchase order', summary: `PO ${s('poNumber') ?? s('id') ?? ''} created${s('supplier') ? ` for ${s('supplier')}` : ''}.` };
     case 'po.received':
       return { title: '📥 PO received', summary: `PO ${s('poNumber') ?? s('id') ?? ''} was received.` };
+    case 'po.cancelled':
+      return { title: '🚫 Purchase Order Cancelled', summary: `PO ${s('poNumber') ?? s('id') ?? ''} was cancelled.` };
     case 'return.created':
       return { title: '↩️ Return started', summary: `A return was started${s('orderNumber') ? ` for order ${s('orderNumber')}` : ''}.` };
+    case 'return.approved':
+      return { title: '✅ Return Approved', summary: `Return ${s('returnNumber') ?? s('id') ?? ''} was approved.` };
+    case 'return.closed':
+      return {
+        title: '📦 Return Closed',
+        summary: `Return ${s('returnNumber') ?? s('id') ?? ''} was closed${s('disposition') ? ' (' + s('disposition') + ')' : ''}.`,
+      };
+    case 'return.denied':
+      return {
+        title: '❌ Return Denied',
+        summary: `Return ${s('returnNumber') ?? s('id') ?? ''} was denied${s('reason') ? ': ' + s('reason') : ''}.`,
+      };
     case 'cycle_count.completed':
       return { title: '🔢 Cycle count complete', summary: `A cycle count finished${s('warehouse') ? ` at ${s('warehouse')}` : ''}.` };
     case 'security.new_device_login':

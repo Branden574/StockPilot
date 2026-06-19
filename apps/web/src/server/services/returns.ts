@@ -553,6 +553,11 @@ export class RMAService {
       { event: 'return.approved', entityType: 'return', entityId: id },
       this.ctx,
     );
+    void dispatchEvent(this.ctx.organizationId, 'return.approved', {
+      id,
+      returnNumber: current.return_number,
+      actorId: this.ctx.userId,
+    });
     return updated;
   }
 
@@ -574,6 +579,12 @@ export class RMAService {
       { event: 'return.denied', entityType: 'return', entityId: id, reason: reason ?? undefined },
       this.ctx,
     );
+    void dispatchEvent(this.ctx.organizationId, 'return.denied', {
+      id,
+      returnNumber: current.return_number,
+      reason: reason ?? undefined,
+      actorId: this.ctx.userId,
+    });
     return updated;
   }
 
@@ -659,6 +670,12 @@ export class RMAService {
     // it rehydrates); we derive it here from each return line's quantity ×ⁿ the
     // source order line's unit_cost_at_request (0044) for the digest/summary.
     await this.publishReturnClosed(updated);
+
+    void dispatchEvent(this.ctx.organizationId, 'return.closed', {
+      id,
+      returnNumber: updated.return_number,
+      actorId: this.ctx.userId,
+    });
 
     return updated;
   }
