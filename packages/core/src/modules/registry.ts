@@ -367,6 +367,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: ['charter_school', 'distribution', 'agriculture_food', 'light_3pl'],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Purchase orders', href: '/dashboard/purchase-orders', iconName: 'ClipboardList', defaultSortOrder: 110, requires: 'purchase_orders:read' },
+      { surface: 'web_sidebar', section: 'inventory', label: 'Recurring POs', href: '/dashboard/purchase-orders/recurring', iconName: 'RefreshCw', defaultSortOrder: 111, requires: 'purchase_orders:manage' },
       { surface: 'mobile_drawer', section: 'inventory', label: 'Purchase orders', href: '/purchase-orders', iconName: 'ClipboardList', defaultSortOrder: 110 },
     ],
   },
