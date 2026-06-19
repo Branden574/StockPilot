@@ -55,6 +55,32 @@ If a change touches ANY of the following, it needs a NEW native build (`eas buil
 
 When in doubt, build. A bad OTA reaches every device on the channel instantly.
 
+### ⚠️ Bump the app version when a native build CHANGES the module set
+
+The rule above covers "don't OTA a native API the build lacks." The **inverse**
+bit us 2026-06-18 and is just as fatal: a NEW native build that *removes* (or
+adds/upgrades) a module while keeping the same `version` inherits the OLD
+runtime's OTA history. Because `runtimeVersion.policy: 'appVersion'`, builds #31/#32
+(`expo-location`/`expo-task-manager` removed, still `version: '1.0.0'`) shared
+runtime `1.0.0` with every prior `1.0.0` OTA — including bundles published BEFORE
+the removal that `import` `expo-location`. expo-updates served the latest `1.0.0`
+OTA (which touched the now-missing native module) to the new binary → **crash on
+launch, every time** (the embedded bundle is fine; the stale OTA overrides it on
+the second+ launch).
+
+**Rule:** when a production build ADDS, REMOVES, or upgrades a native module /
+config plugin / permission, **bump `version` in `app.config.ts` in the same
+change** (e.g. `1.0.0 → 1.0.1`). The new binary then gets a fresh
+`runtimeVersion` with no prior (incompatible) OTA history — it loads its own
+embedded bundle and only ever receives OTAs published from matching code.
+
+**Recovery if you already shipped the native build WITHOUT bumping** (as on
+2026-06-18): publish a fresh OTA from the post-change code so the latest update
+for that runtime is compatible again — `eas update --branch production` from the
+new code supersedes the stale one. Already-installed copies that cached the bad
+bundle must **delete + reinstall** (a fast crash can kill the process before the
+corrected OTA finishes downloading in the background).
+
 Build #23 is the known-good native baseline (see MEMORY:
 `reference_mobile_items_perf_solved`). Do NOT reintroduce FlashList 1.7 or
 Supabase server-side image transforms via OTA — both crashed builds previously.
