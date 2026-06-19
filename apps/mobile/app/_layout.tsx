@@ -11,7 +11,6 @@ import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { initDb } from '@/lib/db';
-import '@/lib/location-task';
 import { palette } from '@/lib/theme';
 import { useBrandFonts } from '@/lib/use-fonts';
 import { useOtaAutoReload } from '@/lib/use-ota-updates';
