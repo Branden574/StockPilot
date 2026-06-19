@@ -29,6 +29,14 @@
     {
       "path": "/api/cron/restore-points",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/ssl-check",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/auth-anomalies",
+      "schedule": "0 */6 * * *"
     }
   ],
   "functions": {
