@@ -8,6 +8,12 @@ import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-short
 import { NavProgressBar } from '@/components/dashboard/nav-progress-bar';
 import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
 import { Sidebar } from '@/components/dashboard/sidebar';
+import {
+  isDesktopViewport,
+  isSidebarToggleChord,
+  isTypingTarget,
+  sidebarCookieString,
+} from '@/components/dashboard/sidebar-pref';
 import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { VersionNotifier } from '@/components/version-notifier';
@@ -50,6 +56,8 @@ interface DashboardShellProps {
     activeId: string | null;
     warehouseLabel: string;
   };
+  /** Server-read initial value of the desktop sidebar hide preference. */
+  initialSidebarHidden?: boolean;
 }
 
 export function DashboardShell({
@@ -71,8 +79,43 @@ export function DashboardShell({
   navOverrides,
   orderStatusConfig,
   warehouseFilter,
+  initialSidebarHidden = false,
 }: DashboardShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+  const [desktopSidebarHidden, setDesktopSidebarHidden] =
+    React.useState(initialSidebarHidden);
+
+  // Persist to the cookie whenever the preference changes (skip the very
+  // first render so we don't rewrite the server-provided value on mount).
+  const firstPrefRender = React.useRef(true);
+  React.useEffect(() => {
+    if (firstPrefRender.current) {
+      firstPrefRender.current = false;
+      return;
+    }
+    document.cookie = sidebarCookieString(desktopSidebarHidden);
+  }, [desktopSidebarHidden]);
+
+  // Single topbar control: desktop toggles the pinned sidebar; mobile opens
+  // the drawer (today's behavior). Decided at click time via matchMedia.
+  const handleToggleSidebar = React.useCallback(() => {
+    if (isDesktopViewport()) setDesktopSidebarHidden((v) => !v);
+    else setMobileNavOpen(true);
+  }, []);
+
+  // Cmd/Ctrl+\ toggles on desktop; ignored while typing so a literal "\"
+  // in a text field is never swallowed.
+  React.useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!isSidebarToggleChord(e)) return;
+      if (isTypingTarget(document.activeElement)) return;
+      if (!isDesktopViewport()) return;
+      e.preventDefault();
+      setDesktopSidebarHidden((v) => !v);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const [mounted, setMounted] = React.useState(false);
 
   React.useEffect(() => {
@@ -143,18 +186,20 @@ export function DashboardShell({
         Skip to main content
       </a>
 
-      <Sidebar
-        className="hidden md:flex"
-        organizationId={organizationId}
-        organizationName={organizationName}
-        organizationLogoUrl={organizationLogoUrl ?? null}
-        memberships={memberships}
-        userName={userName}
-        userRole={userRole}
-        role={role}
-        enabledModules={enabledModules}
-        navOverrides={navOverrides}
-      />
+      {!desktopSidebarHidden && (
+        <Sidebar
+          className="hidden md:flex"
+          organizationId={organizationId}
+          organizationName={organizationName}
+          organizationLogoUrl={organizationLogoUrl ?? null}
+          memberships={memberships}
+          userName={userName}
+          userRole={userRole}
+          role={role}
+          enabledModules={enabledModules}
+          navOverrides={navOverrides}
+        />
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar
@@ -165,7 +210,8 @@ export function DashboardShell({
           userId={userId}
           initialUnreadNotifications={initialUnreadNotifications}
           isPlatformAdmin={isPlatformAdmin}
-          onToggleSidebar={() => setMobileNavOpen(true)}
+          onToggleSidebar={handleToggleSidebar}
+          sidebarHidden={desktopSidebarHidden}
           warehouseFilter={warehouseFilter}
         />
         {/*
