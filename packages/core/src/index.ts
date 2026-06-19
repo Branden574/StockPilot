@@ -12,3 +12,4 @@ export * from './connectors/registry';
 export * from './lots/expiry';
 export * from './pricing/google-books';
 export * from './geo/distance';
+export * from './purchasing/recurring';

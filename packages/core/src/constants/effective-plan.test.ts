@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   planAllowsAutoReorder,
+  planAllowsRecurringPos,
   planAllowsRestorePoints,
   resolveEffectivePlan,
   type OrgBillingState,
@@ -124,6 +125,27 @@ describe('planAllowsAutoReorder — Pro and above', () => {
     expect(
       planAllowsAutoReorder(
         org({ plan: 'free', trial_ends_at: inDays(5), trial_tier: 'pro' }),
+        NOW,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('planAllowsRecurringPos — Pro and above', () => {
+  it('Free tier does NOT get recurring POs', () => {
+    expect(planAllowsRecurringPos(org({ plan: 'free' }), NOW)).toBe(false);
+  });
+
+  it('Pro/Business/Enterprise get recurring POs', () => {
+    expect(planAllowsRecurringPos(org({ plan: 'pro' }), NOW)).toBe(true);
+    expect(planAllowsRecurringPos(org({ plan: 'business' }), NOW)).toBe(true);
+    expect(planAllowsRecurringPos(org({ plan: 'enterprise' }), NOW)).toBe(true);
+  });
+
+  it('a Comped/override Enterprise org qualifies even with plan=free', () => {
+    expect(
+      planAllowsRecurringPos(
+        org({ plan: 'free', access_tier: 'enterprise', billing_arrangement: 'comped' }),
         NOW,
       ),
     ).toBe(true);
