@@ -64,8 +64,10 @@ async function runGate(opts?: { skipPlanGate?: boolean }) {
         'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
       )
       .eq('id', ctx.organizationId)
-      .single();
+      .maybeSingle();
     if (orgErr) throw new ServiceError('internal_error', orgErr.message);
+    // A missing org row flows into the {plan:null} fallback below → plan gate
+    // fails closed with a clean plan_limit_exceeded (not an opaque internal_error).
     if (!planAllowsRecurringPos((orgRow as OrgBillingState | null) ?? { plan: null })) {
       return {
         ctx: null as never,
