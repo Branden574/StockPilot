@@ -20,10 +20,6 @@
  */
 export const ORG_TIMEZONE_DEFAULT = 'America/Los_Angeles';
 
-/** @deprecated Use ORG_TIMEZONE_DEFAULT. Kept as an alias so older
- *  callers don't break in one migration. */
-export const ORG_TIMEZONE = ORG_TIMEZONE_DEFAULT;
-
 /** Locale-aware date formatter. Pass the org's tz explicitly via
  *  the third argument when available; falls back to the default. */
 export function formatOrgDate(
