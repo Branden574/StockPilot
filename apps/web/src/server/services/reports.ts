@@ -849,7 +849,10 @@ export class ReportsService {
    * (and RLS enforces the same boundary regardless). We only consider
    * receipts in the 'posted' state — drafts/reversals aren't money we paid.
    */
-  async itemCostHistory(itemId: string): Promise<ItemCostHistory> {
+  async itemCostHistory(
+    itemId: string,
+    opts?: { since?: string; until?: string },
+  ): Promise<ItemCostHistory> {
     // ── 1. PO lines: unit_cost committed at order time ──────────────────
     // purchase_order_items.organization_id is the authoritative org scope;
     // we embed the parent PO purely for its date + supplier attribution.
@@ -877,8 +880,8 @@ export class ReportsService {
         | null;
     };
     const poRows = await fetchAllRows<PoLine>(
-      (from, to) =>
-        this.ctx.supabase
+      (from, to) => {
+        let q = this.ctx.supabase
           .from('purchase_order_items')
           .select(
             `id, unit_cost, purchase_order_id,
@@ -888,9 +891,11 @@ export class ReportsService {
          )`,
           )
           .eq('organization_id', this.ctx.organizationId)
-          .eq('item_id', itemId)
-          .order('id', { ascending: true })
-          .range(from, to),
+          .eq('item_id', itemId);
+        if (opts?.since) q = q.gte('ordered_at', opts.since);
+        if (opts?.until) q = q.lte('ordered_at', opts.until);
+        return q.order('id', { ascending: true }).range(from, to);
+      },
       { cap: 10_000 },
     );
 
@@ -928,8 +933,8 @@ export class ReportsService {
         | null;
     };
     const rcRows = await fetchAllRows<ReceiptLine>(
-      (from, to) =>
-        this.ctx.supabase
+      (from, to) => {
+        let q = this.ctx.supabase
           .from('receipt_lines')
           .select(
             `id, unit_cost, item_id,
@@ -943,9 +948,11 @@ export class ReportsService {
           )
           .eq('item_id', itemId)
           .eq('receipt.organization_id', this.ctx.organizationId)
-          .eq('receipt.status', 'posted')
-          .order('id', { ascending: true })
-          .range(from, to),
+          .eq('receipt.status', 'posted');
+        if (opts?.since) q = q.gte('received_at', opts.since);
+        if (opts?.until) q = q.lte('received_at', opts.until);
+        return q.order('id', { ascending: true }).range(from, to);
+      },
       { cap: 10_000 },
     );
 

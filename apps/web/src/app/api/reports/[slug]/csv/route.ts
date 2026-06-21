@@ -280,6 +280,29 @@ export async function GET(
       return csvResponse(slug, csv, `${days}d`);
     }
 
+    if (slug === 'item-cost-history') {
+      const itemId = url.searchParams.get('itemId');
+      if (!itemId) {
+        return NextResponse.json({ error: 'itemId is required' }, { status: 400 });
+      }
+      const since = url.searchParams.get('since') ?? undefined;
+      const until = url.searchParams.get('until') ?? undefined;
+      const data = await svc.itemCostHistory(itemId, { since, until });
+      // Flatten per-supplier series into a flat chronological list.
+      const rows = data.series
+        .flatMap((s) =>
+          s.points.map((p) => ({
+            Supplier: s.supplierName,
+            Date: p.date.slice(0, 10),
+            Source: p.source === 'receipt' ? 'Receipt' : 'PO',
+            'Unit cost': p.unitCost.toFixed(4),
+          })),
+        )
+        .sort((a, b) => (a.Date < b.Date ? -1 : a.Date > b.Date ? 1 : 0));
+      const csv = toCsv(['Supplier', 'Date', 'Source', 'Unit cost'], rows);
+      return csvResponse(slug, csv);
+    }
+
     return NextResponse.json({ error: 'Unknown report' }, { status: 404 });
   } catch (e) {
     if (e instanceof ServiceError) {

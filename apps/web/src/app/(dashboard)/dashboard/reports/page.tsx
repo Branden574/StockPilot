@@ -81,6 +81,12 @@ const REPORTS: Report[] = [
     desc: 'Components that ran short during distribution, grouped by item',
     icon: PackageX,
   },
+  {
+    slug: 'item-cost-history',
+    name: 'Item cost history',
+    desc: 'Unit cost over time by supplier — from PO + receipt history',
+    icon: TrendingUp,
+  },
 ];
 
 export default async function ReportsPage() {
