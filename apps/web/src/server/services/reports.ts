@@ -881,7 +881,11 @@ export class ReportsService {
     };
     const poRows = await fetchAllRows<PoLine>(
       (from, to) => {
-        let q = this.ctx.supabase
+        // Date-window filtering happens in JS (see `observe` below): filtering
+        // on the embedded `po.ordered_at` here would NOT restrict the top-level
+        // purchase_order_items rows (PostgREST embed-filter semantics), and the
+        // per-item row count is tiny, so we fetch all and window in memory.
+        const q = this.ctx.supabase
           .from('purchase_order_items')
           .select(
             `id, unit_cost, purchase_order_id,
@@ -892,8 +896,6 @@ export class ReportsService {
           )
           .eq('organization_id', this.ctx.organizationId)
           .eq('item_id', itemId);
-        if (opts?.since) q = q.gte('ordered_at', opts.since);
-        if (opts?.until) q = q.lte('ordered_at', opts.until);
         return q.order('id', { ascending: true }).range(from, to);
       },
       { cap: 10_000 },
@@ -934,7 +936,9 @@ export class ReportsService {
     };
     const rcRows = await fetchAllRows<ReceiptLine>(
       (from, to) => {
-        let q = this.ctx.supabase
+        // Date window applied in JS (see `observe`); same embed-filter caveat
+        // as the PO query above.
+        const q = this.ctx.supabase
           .from('receipt_lines')
           .select(
             `id, unit_cost, item_id,
@@ -949,8 +953,6 @@ export class ReportsService {
           .eq('item_id', itemId)
           .eq('receipt.organization_id', this.ctx.organizationId)
           .eq('receipt.status', 'posted');
-        if (opts?.since) q = q.gte('received_at', opts.since);
-        if (opts?.until) q = q.lte('received_at', opts.until);
         return q.order('id', { ascending: true }).range(from, to);
       },
       { cap: 10_000 },
@@ -979,12 +981,24 @@ export class ReportsService {
       return entry;
     };
 
+    // Inclusive calendar-day window (since/until are YYYY-MM-DD). Applied in JS
+    // so it works uniformly for both sources (PO ordered_at / receipt
+    // received_at) and so the running stats below reflect the window.
+    // Only honor well-formed YYYY-MM-DD (or longer ISO) bounds; ignore garbage
+    // so a malformed query param degrades to "no filter" rather than silently
+    // returning an empty report.
+    const isoDay = /^\d{4}-\d{2}-\d{2}/;
+    const sinceDay = opts?.since && isoDay.test(opts.since) ? opts.since.slice(0, 10) : null;
+    const untilDay = opts?.until && isoDay.test(opts.until) ? opts.until.slice(0, 10) : null;
     let sum = 0;
     let count = 0;
     let lastDate: string | null = null;
     let lastUnitCost: number | null = null;
     const observe = (point: CostHistoryPoint, supplierId: string | null, supplierName: string | null) => {
       if (!Number.isFinite(point.unitCost)) return;
+      const day = (point.date ?? '').slice(0, 10);
+      if (sinceDay && day < sinceDay) return;
+      if (untilDay && day > untilDay) return;
       ensure(supplierId, supplierName).points.push(point);
       sum += point.unitCost;
       count += 1;
