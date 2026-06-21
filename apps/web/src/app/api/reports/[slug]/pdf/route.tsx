@@ -441,6 +441,68 @@ export async function GET(
         },
       ];
       auditExtra = { days, events: data.rows.length, total_cost: data.totalCost };
+    } else if (slug === 'item-cost-history') {
+      const itemId = url.searchParams.get('itemId');
+      if (!itemId) {
+        return NextResponse.json({ error: 'itemId is required' }, { status: 400 });
+      }
+      const since = url.searchParams.get('since') ?? undefined;
+      const until = url.searchParams.get('until') ?? undefined;
+      const data = await reportsSvc.itemCostHistory(itemId, { since, until });
+
+      // Resolve item name for the PDF title — org-scoped, fail-closed.
+      const { data: itemRow } = await ctx.supabase
+        .from('inventory_items')
+        .select('sku, name')
+        .eq('id', itemId)
+        .eq('organization_id', ctx.organizationId)
+        .maybeSingle();
+
+      const itemLabel = itemRow
+        ? `${(itemRow as { sku: string; name: string }).sku} · ${(itemRow as { sku: string; name: string }).name}`
+        : itemId;
+
+      title = `Item cost history: ${itemLabel}`;
+      const dateRange = since && until ? ` · ${since} – ${until}` : since ? ` · from ${since}` : until ? ` · until ${until}` : '';
+      subtitle = `${data.series.length} supplier${data.series.length !== 1 ? 's' : ''} · ${data.pointCount} observation${data.pointCount !== 1 ? 's' : ''}${dateRange}`;
+      footerNote = [
+        data.lastUnitCost != null ? `Last: ${formatCurrencyForPdf(data.lastUnitCost)}` : null,
+        data.avgUnitCost != null ? `Average: ${formatCurrencyForPdf(data.avgUnitCost)}` : null,
+      ]
+        .filter(Boolean)
+        .join(' · ') || undefined;
+
+      // Flatten and sort by date across all suppliers.
+      const allPoints = data.series
+        .flatMap((s) =>
+          s.points.map((p) => ({
+            supplier: s.supplierName,
+            date: p.date,
+            source: p.source,
+            unitCost: p.unitCost,
+          })),
+        )
+        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+      sections = [
+        {
+          columns: [
+            { key: 'supplier', label: 'Supplier', width: 28 },
+            { key: 'date', label: 'Date', width: 14 },
+            { key: 'unit', label: 'Unit cost', align: 'right', width: 14 },
+            { key: 'source', label: 'Source', align: 'center', width: 10 },
+          ],
+          rows: allPoints.map((p): ReportRow => ({
+            cells: {
+              supplier: p.supplier,
+              date: formatDateForPdf(new Date(p.date)),
+              unit: formatCurrencyForPdf(p.unitCost),
+              source: p.source === 'receipt' ? 'Receipt' : 'PO',
+            },
+          })),
+        },
+      ];
+      auditExtra = { item_id: itemId, point_count: data.pointCount, since, until };
     } else {
       return NextResponse.json({ error: 'unknown_report' }, { status: 404 });
     }

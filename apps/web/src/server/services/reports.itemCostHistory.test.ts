@@ -257,4 +257,102 @@ describe('ReportsService.itemCostHistory', () => {
 
     await expect(svc.itemCostHistory(ITEM)).rejects.toBeInstanceOf(ServiceError);
   });
+
+  // ── Date-range extension ──────────────────────────────────────────────────
+
+  it('calling with no opts returns all points (backward-compatible)', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_order_items.select': {
+        data: [
+          {
+            unit_cost: 10,
+            purchase_order_id: 'po-1',
+            po: {
+              id: 'po-1',
+              supplier_id: 'sup-a',
+              ordered_at: '2026-01-01T00:00:00Z',
+              created_at: '2025-12-30T00:00:00Z',
+              supplier: { name: 'Acme' },
+            },
+          },
+        ],
+        error: null,
+      },
+      'receipt_lines.select': { data: [], error: null },
+    });
+    const svc = new ReportsService(makeServiceContext(stub.client));
+
+    // No opts passed — should return all 1 point.
+    const result = await svc.itemCostHistory(ITEM);
+    expect(result.pointCount).toBe(1);
+    // Also verify no gte/lte were injected on the PO chain.
+    const poChain = stub.chains.get('purchase_order_items.select') ?? [];
+    const methods = poChain.filter((m) => m === 'gte' || m === 'lte');
+    expect(methods).toHaveLength(0);
+  });
+
+  it('opts.since filters PO query by ordered_at gte and receipt query by received_at gte', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_order_items.select': { data: [], error: null },
+      'receipt_lines.select': { data: [], error: null },
+    });
+    const svc = new ReportsService(makeServiceContext(stub.client));
+
+    await svc.itemCostHistory(ITEM, { since: '2026-03-01' });
+
+    // PO chain must have a gte call with ('ordered_at', '2026-03-01').
+    const poArgs = stub.chainArgs.get('purchase_order_items.select') ?? [];
+    const poChain = stub.chains.get('purchase_order_items.select') ?? [];
+    const gteIdx = poChain.lastIndexOf('gte');
+    expect(gteIdx).toBeGreaterThanOrEqual(0);
+    expect(poArgs[gteIdx]).toEqual(['ordered_at', '2026-03-01']);
+
+    // Receipt chain must have a gte call with ('received_at', '2026-03-01').
+    const rcArgs = stub.chainArgs.get('receipt_lines.select') ?? [];
+    const rcChain = stub.chains.get('receipt_lines.select') ?? [];
+    const rcGteIdx = rcChain.lastIndexOf('gte');
+    expect(rcGteIdx).toBeGreaterThanOrEqual(0);
+    expect(rcArgs[rcGteIdx]).toEqual(['received_at', '2026-03-01']);
+  });
+
+  it('opts.until filters PO query by ordered_at lte and receipt query by received_at lte', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_order_items.select': { data: [], error: null },
+      'receipt_lines.select': { data: [], error: null },
+    });
+    const svc = new ReportsService(makeServiceContext(stub.client));
+
+    await svc.itemCostHistory(ITEM, { until: '2026-06-30' });
+
+    // PO chain must have a lte call with ('ordered_at', '2026-06-30').
+    const poArgs = stub.chainArgs.get('purchase_order_items.select') ?? [];
+    const poChain = stub.chains.get('purchase_order_items.select') ?? [];
+    const lteIdx = poChain.lastIndexOf('lte');
+    expect(lteIdx).toBeGreaterThanOrEqual(0);
+    expect(poArgs[lteIdx]).toEqual(['ordered_at', '2026-06-30']);
+
+    // Receipt chain must have a lte call with ('received_at', '2026-06-30').
+    const rcArgs = stub.chainArgs.get('receipt_lines.select') ?? [];
+    const rcChain = stub.chains.get('receipt_lines.select') ?? [];
+    const rcLteIdx = rcChain.lastIndexOf('lte');
+    expect(rcLteIdx).toBeGreaterThanOrEqual(0);
+    expect(rcArgs[rcLteIdx]).toEqual(['received_at', '2026-06-30']);
+  });
+
+  it('since+until together filter both queries to the window', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_order_items.select': { data: [], error: null },
+      'receipt_lines.select': { data: [], error: null },
+    });
+    const svc = new ReportsService(makeServiceContext(stub.client));
+
+    await svc.itemCostHistory(ITEM, { since: '2026-01-01', until: '2026-06-30' });
+
+    const poArgs = stub.chainArgs.get('purchase_order_items.select') ?? [];
+    const poChain = stub.chains.get('purchase_order_items.select') ?? [];
+    const gteIdx = poChain.lastIndexOf('gte');
+    const lteIdx = poChain.lastIndexOf('lte');
+    expect(poArgs[gteIdx]).toEqual(['ordered_at', '2026-01-01']);
+    expect(poArgs[lteIdx]).toEqual(['ordered_at', '2026-06-30']);
+  });
 });
