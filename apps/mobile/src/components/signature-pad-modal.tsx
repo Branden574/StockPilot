@@ -70,7 +70,8 @@ export function SignaturePadModal({
     setCurrentStroke([]);
   };
 
-  const handleSave = async () => {
+  const handleSave = () => {
+    if (submitting) return; // re-entry guard: ignore taps while a submit is in flight
     if (!signerName.trim()) {
       Alert.alert('Required', 'Please enter your name.');
       return;
@@ -88,14 +89,18 @@ export function SignaturePadModal({
       return;
     }
 
+    // Disable the button BEFORE the async toDataURL callback fires — otherwise a
+    // fast double-tap during the capture+network gap would POST the same
+    // signature token twice (the server rejects the replay, but the user would
+    // see a confusing error). finally clears it on every exit path.
+    setSubmitting(true);
     svgRef.current.toDataURL(async (base64: string) => {
-      const signatureDataUrl = 'data:image/png;base64,' + base64;
-      if (!isValidSignatureDataUrl(signatureDataUrl)) {
-        Alert.alert('Error', 'Failed to capture signature. Please try again.');
-        return;
-      }
-      setSubmitting(true);
       try {
+        const signatureDataUrl = 'data:image/png;base64,' + base64;
+        if (!isValidSignatureDataUrl(signatureDataUrl)) {
+          Alert.alert('Error', 'Failed to capture signature. Please try again.');
+          return;
+        }
         await api('/api/orders/sign', {
           method: 'POST',
           body: {
@@ -105,11 +110,12 @@ export function SignaturePadModal({
             signatureDataUrl,
           },
         });
-        onSuccess();
-        onClose();
+        // Reset local state while still mounted, then notify parent + close.
         handleClear();
         setSignerName(defaultName);
         setSignerEmail(defaultEmail);
+        onSuccess();
+        onClose();
       } catch (err: unknown) {
         const message =
           err instanceof Error ? err.message : 'Failed to save signature. Please try again.';
