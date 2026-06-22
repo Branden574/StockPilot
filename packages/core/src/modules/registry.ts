@@ -360,7 +360,9 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     tier: 'optional',
     title: 'Purchase orders',
     dependsOn: ['inventory'],
-    permissions: ['purchase_orders:read'],
+    // 'manage' is declared (not just 'read') because the Recurring POs placement
+    // below requires it; the registry-invariant test enforces this superset.
+    permissions: ['purchase_orders:read', 'purchase_orders:manage'],
     surfaces: ['web', 'mobile', 'api'],
     apiPrefixes: ['/api/v1/purchase-orders', '/api/purchase-orders'],
     ownsTables: ['purchase_orders', 'purchase_order_lines'],
