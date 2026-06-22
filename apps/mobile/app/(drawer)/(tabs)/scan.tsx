@@ -8,7 +8,6 @@ import {
   Alert,
   Animated,
   Easing,
-  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,8 +18,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AddBookCard, type IsbnLookupResult } from '@/components/AddBookCard';
 import { AddItemCard, type UpcLookupResult } from '@/components/AddItemCard';
+import { SignaturePadModal } from '@/components/signature-pad-modal';
 import { CachedImage } from '@/components/ui/cached-image';
-import { api, API_BASE } from '@/lib/api';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
@@ -132,6 +132,8 @@ export default function Scan() {
   const [addItem, setAddItem] = React.useState<UpcLookupResult | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [lastCode, setLastCode] = React.useState<string | null>(null);
+  const [signatureToken, setSignatureToken] = React.useState<string | null>(null);
+  const [signatureModalVisible, setSignatureModalVisible] = React.useState(false);
 
   React.useEffect(() => {
     if (!user) return;
@@ -216,23 +218,14 @@ export default function Scan() {
     setBusy(true);
     setScanning(false);
 
-    // Warehouse packing-slip QR → the public proof-of-delivery signature page.
-    // Open it (system browser via RN core Linking — works on existing builds
-    // over-the-air, no native module) instead of falling through to the
-    // item/UPC lookup, which mistook the signature URL for an unknown product
-    // and opened the "add item" card. Build the URL from our own API_BASE +
-    // the extracted token so a spoofed QR can't redirect to another host.
+    // Warehouse packing-slip QR → in-app native signature pad.
+    // Extract the token from the scanned URL and open the SignaturePadModal
+    // instead of the system browser. Spoofed QRs can't inject a different host
+    // because parseSignToken only extracts the token path segment.
     const signToken = parseSignToken(data);
     if (signToken) {
-      try {
-        await Linking.openURL(`${API_BASE}/orders/sign/${signToken}`);
-      } catch (e) {
-        Alert.alert(
-          'Could not open signature',
-          e instanceof Error ? e.message : 'Please try again.',
-        );
-      }
-      reset();
+      setSignatureToken(signToken);
+      setSignatureModalVisible(true);
       setBusy(false);
       return;
     }
@@ -749,6 +742,23 @@ export default function Scan() {
       {busy && !item && !addBook && !addItem && (
         <ActivityIndicator style={styles.spinner} color="#fafaf7" size="large" />
       )}
+
+      {signatureToken ? (
+        <SignaturePadModal
+          visible={signatureModalVisible}
+          onClose={() => {
+            setSignatureModalVisible(false);
+            setSignatureToken(null);
+            reset();
+          }}
+          onSuccess={() => {
+            setSignatureModalVisible(false);
+            setSignatureToken(null);
+            reset();
+          }}
+          signatureToken={signatureToken}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
