@@ -16,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { SignaturePadModal } from '@/components/signature-pad-modal';
 
 import { CachedImage } from '@/components/ui/cached-image';
 import { Card } from '@/components/ui/card';
@@ -24,7 +25,6 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { resizeForUpload } from '@/lib/image-resize';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
-import { API_BASE } from '@/lib/api';
 import {
   listOrderDrivers,
   transitionOrder,
@@ -78,6 +78,8 @@ interface OrderHeader {
   id: string;
   status: string;
   requester: string | null;
+  requesterName: string | null;
+  requesterEmail: string | null;
   orgLabel: string | null;
   warehouseName: string | null;
   signatureDataUrl: string | null;
@@ -123,6 +125,7 @@ export default function OrderDetail() {
   const [denyReason, setDenyReason] = React.useState('');
   const [driverOpen, setDriverOpen] = React.useState(false);
   const [drivers, setDrivers] = React.useState<OrderDriver[] | null>(null);
+  const [signatureModalVisible, setSignatureModalVisible] = React.useState(false);
 
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
@@ -202,6 +205,8 @@ export default function OrderDetail() {
           requesterUserId: (r.requester_user_id as string | null) ?? null,
           profile: profileFromEmbed(r.requester),
         }),
+        requesterName: (r.requester_name as string | null) ?? null,
+        requesterEmail: (r.requester_email as string | null) ?? null,
         orgLabel: (r.requester_org_label as string | null) ?? null,
         warehouseName: whObj?.name ?? null,
         signatureDataUrl: (r.signature_data_url as string | null) ?? null,
@@ -276,9 +281,7 @@ export default function OrderDetail() {
       Alert.alert('No signature link', 'Generate the packing slip first to create a signature link.');
       return;
     }
-    Linking.openURL(`${API_BASE}/orders/sign/${order.signatureToken}`).catch(() =>
-      Alert.alert('Could not open', 'Unable to open the signature page.'),
-    );
+    setSignatureModalVisible(true);
   }
 
   // Whether the current status exposes any manager action (so we don't render an
@@ -782,6 +785,17 @@ export default function OrderDetail() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {order?.signatureToken ? (
+        <SignaturePadModal
+          visible={signatureModalVisible}
+          onClose={() => setSignatureModalVisible(false)}
+          onSuccess={() => void load()}
+          signatureToken={order.signatureToken}
+          defaultName={order.requesterName ?? ''}
+          defaultEmail={order.requesterEmail ?? ''}
+        />
+      ) : null}
 
       {/* Driver picker for assign / reassign delivery. */}
       <Modal visible={driverOpen} transparent animationType="slide" onRequestClose={() => setDriverOpen(false)}>
