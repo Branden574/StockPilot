@@ -11,7 +11,12 @@ import { WarehousesService } from '@/server/services/warehouses';
 
 export default async function PublicRequestsSettingsPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'orders:approve')) {
+  // Public-link config writes target organizations/warehouses rows whose RLS is
+  // admin+, and the OrderRequestsService methods (rotatePublicToken / setBlurb /
+  // setWarehousePublicOrderable) gate on 'organization:update'. Match that floor
+  // here so managers aren't shown config controls (incl. the public token) that
+  // always fail on use. (Page gate must match the service/RLS floor.)
+  if (!hasPermission(ctx.role, 'organization:update')) {
     redirect('/dashboard');
   }
 
