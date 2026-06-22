@@ -66,6 +66,7 @@ describe('nav order is frozen to the original static nav', () => {
       '/dashboard/inventory', '/dashboard/books', '/dashboard/categories', '/dashboard/tags',
       '/dashboard/movements', '/dashboard/rentals', '/dashboard/bundles', '/dashboard/orders',
       '/dashboard/cycle-counts', '/dashboard/procedures', '/dashboard/purchase-orders',
+      '/dashboard/purchase-orders/recurring',
       '/dashboard/purchase-orders/imports', '/dashboard/locations', '/dashboard/suppliers',
       '/dashboard/reports',
       '/dashboard/ai', '/dashboard/insights', '/dashboard/schedule', '/dashboard/notifications',
