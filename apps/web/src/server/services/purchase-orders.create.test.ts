@@ -124,7 +124,7 @@ describe('PurchaseOrdersService.create — PO number handling', () => {
       // Mock the insert to return a Postgres unique-constraint violation.
       'purchase_orders.insert': {
         data: null,
-        error: { code: '23505', message: 'unique constraint "purchase_orders_organization_id_po_number_key"' },
+        error: { code: '23505', message: 'unique constraint "purchase_orders_org_ponumber_active_key"' },
       },
       'purchase_order_items.insert': { data: null, error: null },
     });
@@ -346,5 +346,30 @@ describe('PurchaseOrdersService.create — destination warehouse guard', () => {
     // PO row + lines were written.
     expect(stub.chainsAll.get('purchase_orders.insert')).toBeDefined();
     expect(stub.chainsAll.get('purchase_order_items.insert')).toBeDefined();
+  });
+});
+
+describe('PurchaseOrdersService.create — cancelled PO number reuse', () => {
+  it('allows a supplied poNumber whose only holder is cancelled, and excludes cancelled in the pre-check', async () => {
+    const stub = makeSupabaseStub({
+      // The status-filtered pre-check finds no NON-cancelled holder.
+      'purchase_orders.select': { data: null, error: null },
+      'purchase_orders.insert': { data: [{ id: 'po-reuse' }], error: null },
+      'purchase_order_items.insert': { data: null, error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    const result = await svc.create({ lines: MINIMAL_LINE, poNumber: 'MLA-001071' });
+
+    expect(result.poNumber).toBe('MLA-001071');
+    // The uniqueness pre-check must filter OUT cancelled POs so a number freed
+    // by a cancellation can be reused.
+    const selectArgs = (stub.chainArgsAll.get('purchase_orders.select') ?? []).flat(2);
+    expect(selectArgs).toContain('status');
+    expect(selectArgs).toContain('cancelled');
+    // The PO was inserted with the reused number.
+    const insertArgs = stub.chainArgs.get('purchase_orders.insert');
+    const insertPayload = insertArgs?.[0]?.[0] as Record<string, unknown> | undefined;
+    expect(insertPayload?.po_number).toBe('MLA-001071');
   });
 });

@@ -299,11 +299,15 @@ export class PurchaseOrdersService {
     const suppliedPoNumber = input.poNumber?.trim();
     let poNumber: string;
     if (suppliedPoNumber) {
+      // A CANCELLED PO is void and does NOT reserve its number — exclude it so a
+      // number "spent" on a later-cancelled PO can be reissued. The partial
+      // unique index (status <> 'cancelled') backs this at the DB level.
       const { data: existing } = await this.ctx.supabase
         .from('purchase_orders')
         .select('id')
         .eq('organization_id', this.ctx.organizationId)
         .eq('po_number', suppliedPoNumber)
+        .neq('status', 'cancelled')
         .maybeSingle();
       if (existing) {
         throw new ServiceError('conflict', 'That PO number is already in use.');
@@ -466,12 +470,15 @@ export class PurchaseOrdersService {
     let poNumber: string;
     if (suppliedPoNumber && suppliedPoNumber !== currentPoNumber) {
       // Only check uniqueness when the caller is actually changing the number.
+      // Cancelled POs don't reserve their number (matches the partial unique
+      // index), so a number freed by a cancellation can be claimed on edit.
       const { data: existing } = await this.ctx.supabase
         .from('purchase_orders')
         .select('id')
         .eq('organization_id', this.ctx.organizationId)
         .eq('po_number', suppliedPoNumber)
         .neq('id', id)
+        .neq('status', 'cancelled')
         .maybeSingle();
       if (existing) {
         throw new ServiceError('conflict', 'That PO number is already in use.');
@@ -511,6 +518,12 @@ export class PurchaseOrdersService {
       .eq('status', 'draft')
       .select('id')
       .maybeSingle();
+    // A concurrent create/edit could claim this po_number between our pre-check
+    // and this write → partial unique index 23505. Map it to a clean conflict,
+    // mirroring create()'s backstop, instead of leaking the raw Postgres text.
+    if (updErr?.code === '23505') {
+      throw new ServiceError('conflict', 'That PO number is already in use.');
+    }
     if (updErr) throw new ServiceError('internal_error', updErr.message);
     if (!updatedPo) {
       throw new ServiceError(
@@ -623,6 +636,17 @@ export class PurchaseOrdersService {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
     const { po } = await this.get(id); // throws not_found if user can't see this PO's warehouse
+    // Cancelled is terminal. A cancelled PO releases its po_number (the partial
+    // unique index only covers non-cancelled rows), so its number may already
+    // have been reissued to a new active PO — reopening it would collide. Block
+    // the revive with a clear message instead of leaking a raw 23505; create a
+    // new PO instead.
+    if ((po as { status?: string }).status === 'cancelled' && status !== 'cancelled') {
+      throw new ServiceError(
+        'conflict',
+        'This purchase order was cancelled and cannot be reopened. Create a new one instead.',
+      );
+    }
     if (status === 'ordered') {
       // Spend governance: committing the order is the gated act — drafting
       // and cancelling stay open to everyone with purchase_orders:manage.
@@ -639,6 +663,11 @@ export class PurchaseOrdersService {
       .eq('id', id)
       .select('id')
       .maybeSingle();
+    // Defense-in-depth: a residual collision (e.g. a TOCTOU revive race) hits the
+    // partial unique index → 23505. Map it to a clean conflict, mirroring create().
+    if ((error as { code?: string } | null)?.code === '23505') {
+      throw new ServiceError('conflict', 'That PO number is already in use by another order.');
+    }
     if (error) throw new ServiceError('internal_error', error.message);
     // Fail closed: a 0-row update means the PO vanished/changed under us — never
     // audit a no-op or fire the QBO outbox for a status change that didn't land.

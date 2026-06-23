@@ -357,6 +357,47 @@ describe('PurchaseOrdersService.update — PO number uniqueness', () => {
     expect(stub.chainsAll.get('purchase_order_items.delete')).toBeUndefined();
     expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
   });
+
+  it('maps a 23505 on the header claim (concurrent number reuse race) to a clean conflict', async () => {
+    // Pre-check passed (no number change), but a concurrent create/edit claimed
+    // the number before our header UPDATE → partial unique index 23505. It must
+    // surface as a friendly conflict, mirroring create(), not a raw internal_error.
+    const stub = makeUpdateStub({
+      'purchase_orders.update': {
+        data: null,
+        error: { code: '23505', message: 'duplicate key value violates unique constraint "purchase_orders_org_ponumber_active_key"' },
+      },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    const thrown = await svc
+      .update(PO_ID, { lines: [{ itemId: 'item-uuid-1', quantityOrdered: 1, unitCost: 10 }] })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('conflict');
+    expect((thrown as ServiceError).message).toBe('That PO number is already in use.');
+  });
+
+  it('the edit uniqueness pre-check excludes cancelled POs (number reuse)', async () => {
+    // Changing the number triggers the pre-check. The mock returns the same row
+    // for get() and the pre-check (known mock limitation) so this throws
+    // conflict — but we assert the query filtered out cancelled POs, so a number
+    // whose only holder is cancelled would NOT block the edit in production.
+    const stub = makeUpdateStub();
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc
+      .update(PO_ID, {
+        poNumber: 'MLA-001071', // differs from DRAFT_PO 'PO-001' → runs the pre-check
+        lines: [{ itemId: 'item-uuid-1', quantityOrdered: 1, unitCost: 10 }],
+      })
+      .catch(() => {});
+
+    const selectArgs = (stub.chainArgsAll.get('purchase_orders.select') ?? []).flat(2);
+    expect(selectArgs).toContain('status');
+    expect(selectArgs).toContain('cancelled');
+  });
 });
 
 // ─── Destination warehouse guard ──────────────────────────────────────────────
