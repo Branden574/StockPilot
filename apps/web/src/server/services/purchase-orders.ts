@@ -27,6 +27,7 @@ export const createPoSchema = z.object({
   destinationLocationId: z.string().uuid().nullable().optional(),
   expectedAt: z.string().datetime().nullable().optional(),
   notes: z.string().max(2000).optional(),
+  poNumber: z.string().trim().min(1).max(64).optional(),
   lines: z.array(lineInputSchema).min(1, 'Add at least one line item'),
 });
 export type CreatePoInput = z.infer<typeof createPoSchema>;
@@ -232,10 +233,19 @@ export class PurchaseOrdersService {
       if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
     }
 
-    const { data: numberRpc } = await this.ctx.supabase.rpc('next_po_number', {
-      p_org_id: this.ctx.organizationId,
-    });
-    const poNumber = (numberRpc as string | null) ?? `PO-${Date.now()}`;
+    // Use the caller-supplied PO number (trimmed) when provided; otherwise
+    // auto-generate via the org-scoped RPC. The fallback `PO-<timestamp>`
+    // is a last-resort guard in case the RPC itself returns null.
+    const suppliedPoNumber = input.poNumber?.trim();
+    let poNumber: string;
+    if (suppliedPoNumber) {
+      poNumber = suppliedPoNumber;
+    } else {
+      const { data: numberRpc } = await this.ctx.supabase.rpc('next_po_number', {
+        p_org_id: this.ctx.organizationId,
+      });
+      poNumber = (numberRpc as string | null) ?? `PO-${Date.now()}`;
+    }
 
     const subtotal = input.lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
 
@@ -256,6 +266,11 @@ export class PurchaseOrdersService {
       })
       .select('id')
       .single();
+    // Unique-constraint violation on (organization_id, po_number) — surface a
+    // clean user-facing message instead of leaking the raw Postgres error.
+    if (error?.code === '23505') {
+      throw new ServiceError('conflict', 'That PO number is already in use.');
+    }
     if (error) throw new ServiceError('internal_error', error.message);
 
     const linesPayload = input.lines.map((l) => ({
