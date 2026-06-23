@@ -57,6 +57,7 @@ export type AuditEvent =
   | 'stock.receipt.posted'
   | 'stock.receipt.reversed'
   | 'purchase_order.created'
+  | 'purchase_order.updated'
   | 'purchase_order.status_changed'
   | 'idempotency.replay'
   | 'idempotency.conflict'

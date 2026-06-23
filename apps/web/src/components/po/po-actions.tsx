@@ -1,6 +1,7 @@
 'use client';
 
-import { Send, X } from 'lucide-react';
+import { Pencil, Send, X } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -31,6 +32,13 @@ export function PoActions({ poId, status }: { poId: string; status: string }) {
 
   return (
     <>
+      {status === 'draft' && (
+        <Button variant="outline" asChild>
+          <Link href={`/dashboard/purchase-orders/${poId}/edit`}>
+            <Pencil className="h-4 w-4" /> Edit
+          </Link>
+        </Button>
+      )}
       {status === 'draft' && (
         <Button variant="default" disabled={busy === 'ordered'} onClick={() => setStatus('ordered')}>
           <Send className="h-4 w-4" /> Mark as ordered

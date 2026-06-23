@@ -38,6 +38,7 @@ export const INTEGRATION_EVENT_TYPES = [
   'order.status_changed',
   'order.completed',
   'po.created',
+  'po.updated',
   'po.received',
   'po.cancelled',
   'return.created',
@@ -120,6 +121,8 @@ export function describeEvent(eventType: string, data: Record<string, unknown>):
       };
     case 'po.created':
       return { title: '📦 New purchase order', summary: `PO ${s('poNumber') ?? s('id') ?? ''} created${s('supplier') ? ` for ${s('supplier')}` : ''}.` };
+    case 'po.updated':
+      return { title: '✏️ Purchase order updated', summary: `PO ${s('poNumber') ?? s('id') ?? ''} was updated.` };
     case 'po.received':
       return { title: '📥 PO received', summary: `PO ${s('poNumber') ?? s('id') ?? ''} was received.` };
     case 'po.cancelled':
