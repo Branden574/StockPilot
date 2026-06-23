@@ -245,7 +245,7 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
       lines: lines.map((l) =>
         l.itemId
           ? { itemId: l.itemId, quantityOrdered: l.quantityOrdered, unitCost: l.unitCost }
-          : { newItemName: l.newItemName!, quantityOrdered: l.quantityOrdered, unitCost: l.unitCost },
+          : { newItemName: l.newItemName!.trim(), quantityOrdered: l.quantityOrdered, unitCost: l.unitCost },
       ),
     });
     setSubmitting(false);

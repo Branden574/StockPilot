@@ -264,12 +264,37 @@ export class PurchaseOrdersService {
       }
     }
 
-    // For each line that carries a newItemName, create a real catalog item
-    // via InventoryService (which enforces items:create permission, plan limits,
+    // Resolve the PO number BEFORE creating any custom items. A caller-supplied
+    // number is pre-checked against this org's existing POs so a duplicate fails
+    // FAST — otherwise we'd create the custom catalog items, then hit the unique
+    // constraint on insert, and strand those items as orphans (made more likely
+    // now that a duplicate po_number is a real, user-triggerable failure). The
+    // insert below still keeps the 23505 guard for the rare concurrent-dup race.
+    const suppliedPoNumber = input.poNumber?.trim();
+    let poNumber: string;
+    if (suppliedPoNumber) {
+      const { data: existing } = await this.ctx.supabase
+        .from('purchase_orders')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('po_number', suppliedPoNumber)
+        .maybeSingle();
+      if (existing) {
+        throw new ServiceError('conflict', 'That PO number is already in use.');
+      }
+      poNumber = suppliedPoNumber;
+    } else {
+      const { data: numberRpc } = await this.ctx.supabase.rpc('next_po_number', {
+        p_org_id: this.ctx.organizationId,
+      });
+      poNumber = (numberRpc as string | null) ?? `PO-${Date.now()}`;
+    }
+
+    // For each line that carries a newItemName, create a real catalog item via
+    // InventoryService (which enforces items:create permission, plan limits,
     // SKU auto-gen, and warehouse access) and replace the line with its new id.
-    // Custom items are created BEFORE the PO insert — if the PO insert later
-    // fails, the new items remain as harmless unused catalog rows (no orphaned
-    // purchase_order_items, no stock movement at zero qty).
+    // The PO number was already validated as available above, so a clean create
+    // won't strand these as orphans (only the rare concurrent-duplicate race).
     const invSvc = new InventoryService(this.ctx);
     const resolvedLines: Array<{ itemId: string; quantityOrdered: number; unitCost: number }> = [];
     for (const l of input.lines) {
@@ -300,20 +325,6 @@ export class PurchaseOrdersService {
           unitCost: l.unitCost,
         });
       }
-    }
-
-    // Use the caller-supplied PO number (trimmed) when provided; otherwise
-    // auto-generate via the org-scoped RPC. The fallback `PO-<timestamp>`
-    // is a last-resort guard in case the RPC itself returns null.
-    const suppliedPoNumber = input.poNumber?.trim();
-    let poNumber: string;
-    if (suppliedPoNumber) {
-      poNumber = suppliedPoNumber;
-    } else {
-      const { data: numberRpc } = await this.ctx.supabase.rpc('next_po_number', {
-        p_org_id: this.ctx.organizationId,
-      });
-      poNumber = (numberRpc as string | null) ?? `PO-${Date.now()}`;
     }
 
     const subtotal = resolvedLines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
