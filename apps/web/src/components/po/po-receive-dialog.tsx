@@ -205,27 +205,35 @@ export function PoReceiveDialog({
         <DialogHeader>
           <DialogTitle>Receive {poNumber}</DialogTitle>
           <DialogDescription>
-            Enter received, accepted, and rejected quantities per line. Only
-            accepted quantities increase usable stock — rejected/damaged units
-            are recorded but stay out of inventory.
+            Enter how many you received for each line — the variance shows what&apos;s
+            still outstanding. Receiving in parts is fine: post a receipt each time
+            more arrives, until the variance reaches zero.
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-[55vh] space-y-3 overflow-y-auto">
           {lines.map((l) => {
             const remaining = l.quantityOrdered - l.quantityReceived;
             const e = entries[l.id] ?? blankEntry(remaining);
+            // Variance = what's still outstanding after this receipt. Positive =
+            // still waiting on stock; 0 = fully received; negative = over ordered.
+            const variance = remaining - e.received;
+            const varianceTone =
+              variance > 0
+                ? 'text-amber-600 dark:text-amber-400'
+                : variance < 0
+                ? 'text-destructive'
+                : 'text-emerald-600 dark:text-emerald-400';
             return (
               <div key={l.id} className="grid gap-3 rounded-md border p-3 sm:grid-cols-12">
                 <div className="sm:col-span-5">
                   <p className="font-medium">{l.name}</p>
                   <p className="text-muted-foreground font-mono text-xs">{l.sku}</p>
                   <p className="text-muted-foreground mt-1 text-xs">
-                    Ordered {l.quantityOrdered} · Already received {l.quantityReceived}{' '}
-                    · Remaining {remaining}
+                    Ordered {l.quantityOrdered} · Already received {l.quantityReceived}
                   </p>
                 </div>
-                <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-muted-foreground text-[11px]">Received</Label>
+                <div className="sm:col-span-3 space-y-1">
+                  <Label className="text-muted-foreground text-[11px]">Received now</Label>
                   <Input
                     type="number"
                     min="0"
@@ -233,45 +241,27 @@ export function PoReceiveDialog({
                     value={e.received}
                     onChange={(ev) => {
                       const v = Math.max(0, Number(ev.target.value) || 0);
-                      // Auto-adjust accepted if it exceeds new received
-                      const accepted = Math.min(e.accepted, v);
-                      const rejected = Math.min(e.rejected, v - accepted);
-                      setField(l.id, { received: v, accepted, rejected });
+                      // Everything you receive goes into usable stock. We keep the
+                      // accepted/rejected split in the payload (accepted = received,
+                      // rejected = 0) but don't ask for it — the variance is what matters.
+                      setField(l.id, { received: v, accepted: v, rejected: 0 });
                     }}
                   />
                 </div>
-                <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-muted-foreground text-[11px]">Accepted</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    max={e.received}
-                    step="1"
-                    value={e.accepted}
-                    onChange={(ev) => {
-                      const v = Math.max(0, Math.min(e.received, Number(ev.target.value) || 0));
-                      const rejected = Math.min(e.rejected, e.received - v);
-                      setField(l.id, { accepted: v, rejected });
-                    }}
-                  />
-                </div>
-                <div className="sm:col-span-2 space-y-1">
-                  <Label className="text-muted-foreground text-[11px]">Rejected</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    max={e.received - e.accepted}
-                    step="1"
-                    value={e.rejected}
-                    onChange={(ev) =>
-                      setField(l.id, {
-                        rejected: Math.max(
-                          0,
-                          Math.min(e.received - e.accepted, Number(ev.target.value) || 0),
-                        ),
-                      })
-                    }
-                  />
+                <div className="sm:col-span-3 space-y-1">
+                  <Label className="text-muted-foreground text-[11px]">Variance</Label>
+                  <div
+                    className={`border-border bg-muted/30 flex h-9 items-center rounded-md border px-3 text-sm tabular-nums ${varianceTone}`}
+                  >
+                    {variance}
+                  </div>
+                  <p className="text-muted-foreground text-[11px]">
+                    {variance > 0
+                      ? `${variance} still to come`
+                      : variance < 0
+                      ? `${Math.abs(variance)} over ordered`
+                      : 'Fully received'}
+                  </p>
                 </div>
                 <div className="sm:col-span-1 flex items-end">
                   <Button
