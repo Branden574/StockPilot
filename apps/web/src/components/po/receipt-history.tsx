@@ -84,7 +84,8 @@ export function ReceiptHistory({
   if (receipts.length === 0) {
     return (
       <p className="text-muted-foreground text-sm">
-        No receipts posted yet. Click &quot;Receive&quot; above when items arrive.
+        No receipts yet. Use the &quot;Receive items&quot; button on the line items above to
+        record what was received — partial deliveries are fine.
       </p>
     );
   }

@@ -180,3 +180,71 @@ describe('PurchaseOrdersService.updateStatus — cancelled is terminal', () => {
     expect((err as ServiceError).message).not.toMatch(/duplicate key/i);
   });
 });
+
+describe('PurchaseOrdersService.updateStatus — cancel cleans up auto-created items', () => {
+  function cancelStub(opts: {
+    candidates: Array<{ id: string; name: string }>;
+    /** Rows the purchase_order_items lookup returns (item_id, quantity_received, po.status). */
+    poLines?: Array<Record<string, unknown>>;
+  }) {
+    return makeSupabaseStub({
+      'purchase_orders.select': {
+        data: { id: 'po-1', po_number: 'PO-1', status: 'ordered', total: 0, destination: null },
+        error: null,
+      },
+      'purchase_order_items.select': { data: opts.poLines ?? [], error: null },
+      'purchase_orders.update': { data: { id: 'po-1' }, error: null },
+      'inventory_items.select': { data: opts.candidates, error: null },
+      'inventory_items.update': { data: opts.candidates, error: null },
+    });
+  }
+
+  it('archives the unused custom items the PO created when it is cancelled', async () => {
+    const stub = cancelStub({ candidates: [{ id: 'item-x', name: 'Foldable Tote' }] });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc.updateStatus('po-1', 'cancelled');
+
+    // The orphaned custom item was archived (status -> 'archived').
+    const updArgs = stub.chainArgs.get('inventory_items.update');
+    const payload = updArgs?.[0]?.[0] as Record<string, unknown> | undefined;
+    expect(payload?.status).toBe('archived');
+  });
+
+  it('does NOT touch items when the PO auto-created none', async () => {
+    const stub = cancelStub({ candidates: [] });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc.updateStatus('po-1', 'cancelled');
+
+    expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
+    // The PO itself was still cancelled.
+    expect(stub.chainsAll.get('purchase_orders.update')).toBeDefined();
+  });
+
+  it('does NOT archive a custom item that received stock on this PO (qoh later drawn to 0)', async () => {
+    // qoh=0 but quantity_received>0 means it was received then consumed — it has
+    // real receipt/cost history and must stay visible, not be archived.
+    const stub = cancelStub({
+      candidates: [{ id: 'item-x', name: 'Foldable Tote' }],
+      poLines: [{ item_id: 'item-x', quantity_received: 5, po: { status: 'cancelled' } }],
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc.updateStatus('po-1', 'cancelled');
+
+    expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
+  });
+
+  it('does NOT archive a custom item still referenced by another non-cancelled PO', async () => {
+    const stub = cancelStub({
+      candidates: [{ id: 'item-x', name: 'Foldable Tote' }],
+      poLines: [{ item_id: 'item-x', quantity_received: 0, po: { status: 'ordered' } }],
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc.updateStatus('po-1', 'cancelled');
+
+    expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
+  });
+});

@@ -3,6 +3,7 @@ import 'server-only';
 import { z } from 'zod';
 
 import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createNotification } from './notifications';
 
@@ -327,6 +328,9 @@ export class PurchaseOrdersService {
     // won't strand these as orphans (only the rare concurrent-duplicate race).
     const invSvc = new InventoryService(this.ctx);
     const resolvedLines: Array<{ itemId: string; quantityOrdered: number; unitCost: number }> = [];
+    // Catalog items we auto-create for newItemName lines — stamped with this PO
+    // after insert so cancelling the PO can archive the unused ones.
+    const customItemIds: string[] = [];
     for (const l of input.lines) {
       if (l.newItemName) {
         // Parse through the item schema to apply all Zod defaults (retailPrice,
@@ -342,6 +346,7 @@ export class PurchaseOrdersService {
           warehouseId: customItemWarehouseId,
         });
         const newItem = await invSvc.create(itemInput);
+        customItemIds.push(newItem.id as string);
         resolvedLines.push({
           itemId: newItem.id as string,
           quantityOrdered: l.quantityOrdered,
@@ -394,6 +399,23 @@ export class PurchaseOrdersService {
       .from('purchase_order_items')
       .insert(linesPayload);
     if (linesError) throw new ServiceError('internal_error', linesError.message);
+
+    // Stamp auto-created custom items with their origin PO (items were created
+    // before the PO row existed, so we backfill the link here). Best-effort: a
+    // failure here only weakens cancel-time cleanup, it must not fail the PO.
+    if (customItemIds.length > 0) {
+      const { error: stampErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .update({ created_from_purchase_order_id: po.id as string })
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', customItemIds);
+      if (stampErr) {
+        void reportError(new Error(stampErr.message), {
+          tag: 'po.create.stamp_custom_items',
+          organizationId: this.ctx.organizationId,
+        });
+      }
+    }
 
     void audit(
       {
@@ -536,6 +558,7 @@ export class PurchaseOrdersService {
     // for any newItemName lines — and replace the line set.
     const invSvc = new InventoryService(this.ctx);
     const resolvedLines: Array<{ itemId: string; quantityOrdered: number; unitCost: number }> = [];
+    const customItemIds: string[] = [];
     for (const l of input.lines) {
       if (l.newItemName) {
         const itemInput = createItemSchema.parse({
@@ -547,6 +570,7 @@ export class PurchaseOrdersService {
           warehouseId: customItemWarehouseId,
         });
         const newItem = await invSvc.create(itemInput);
+        customItemIds.push(newItem.id as string);
         resolvedLines.push({
           itemId: newItem.id as string,
           quantityOrdered: l.quantityOrdered,
@@ -581,6 +605,21 @@ export class PurchaseOrdersService {
       .from('purchase_order_items')
       .insert(linesPayload);
     if (linesErr) throw new ServiceError('internal_error', linesErr.message);
+
+    // Stamp any custom items created during this edit with their origin PO.
+    if (customItemIds.length > 0) {
+      const { error: stampErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .update({ created_from_purchase_order_id: id })
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', customItemIds);
+      if (stampErr) {
+        void reportError(new Error(stampErr.message), {
+          tag: 'po.update.stamp_custom_items',
+          organizationId: this.ctx.organizationId,
+        });
+      }
+    }
 
     void audit(
       {
@@ -702,6 +741,100 @@ export class PurchaseOrdersService {
         id,
         poNumber,
         cancelledBy: this.ctx.userId,
+      });
+      // Clean up the catalog items this PO auto-created but that never went
+      // anywhere — a cancelled PO shouldn't leave phantom items on the Items
+      // page. Awaited (it does DB writes + audits) but self-contained so it
+      // can't fail the cancel.
+      await this.archiveOrphanedCustomItems(id);
+    }
+  }
+
+  /**
+   * When a PO is cancelled, archive the catalog items it auto-created (custom
+   * "newItemName" lines) that were never actually used. "Never used" means:
+   * status 'active', zero on-hand, AND the item has no received history on ANY
+   * PO line AND is not referenced by any non-cancelled PO. We deliberately do
+   * NOT treat quantity_on_hand=0 alone as "unused" — an item that was received
+   * then sold/consumed is also zero, and archiving it would hide real receipt /
+   * stock-movement / cost history. Reversible (archive, not delete) and
+   * race-guarded; if a kept item is later received on another PO the receiving
+   * flow auto-unarchives it. Best-effort — never throws.
+   */
+  private async archiveOrphanedCustomItems(poId: string): Promise<void> {
+    try {
+      const { data: candidates, error: candErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, name')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('created_from_purchase_order_id', poId)
+        .eq('status', 'active')
+        .eq('quantity_on_hand', 0)
+        .is('deleted_at', null);
+      if (candErr) {
+        void reportError(new Error(candErr.message), {
+          tag: 'po.cancel.archive_custom_items.candidates',
+          organizationId: this.ctx.organizationId,
+        });
+        return;
+      }
+      const cand = (candidates ?? []) as Array<{ id: string; name: string }>;
+      if (cand.length === 0) return;
+      const candIds = cand.map((c) => c.id);
+
+      // One pass over every PO line referencing these items. Keep (do NOT
+      // archive) an item if EITHER it ever received stock (quantity_received>0
+      // on any line — qoh=0 then just means it was consumed) OR it's still on a
+      // non-cancelled PO (this PO is already 'cancelled' here, so it's excluded
+      // — and such an item may yet receive stock + auto-unarchive there).
+      const { data: poLines } = await this.ctx.supabase
+        .from('purchase_order_items')
+        .select('item_id, quantity_received, po:purchase_orders!inner(status)')
+        .in('item_id', candIds);
+      const keep = new Set<string>();
+      for (const row of (poLines ?? []) as Array<Record<string, unknown>>) {
+        const itemId = row.item_id as string;
+        if (Number(row.quantity_received) > 0) keep.add(itemId);
+        const poField = row.po as { status?: string } | { status?: string }[] | null;
+        const poStatus = Array.isArray(poField) ? poField[0]?.status : poField?.status;
+        if (poStatus && poStatus !== 'cancelled') keep.add(itemId);
+      }
+
+      const toArchive = cand.filter((c) => !keep.has(c.id));
+      if (toArchive.length === 0) return;
+
+      const { data: flippedRows, error: updErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .update({ status: 'archived' })
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', toArchive.map((c) => c.id))
+        .eq('status', 'active') // race guard
+        .select('id, name');
+      if (updErr) {
+        void reportError(new Error(updErr.message), {
+          tag: 'po.cancel.archive_custom_items',
+          organizationId: this.ctx.organizationId,
+        });
+        return;
+      }
+
+      for (const item of (flippedRows ?? []) as Array<{ id: string; name: string }>) {
+        await audit(
+          {
+            event: 'inventory.item.archived',
+            entityType: 'inventory_item',
+            entityId: item.id,
+            after: { status: 'archived' },
+            before: { status: 'active' },
+            extra: { reason: 'po_cancelled', purchaseOrderId: poId, itemName: item.name },
+          },
+          this.ctx,
+        );
+      }
+    } catch (e) {
+      void reportError(e, {
+        tag: 'po.cancel.archive_custom_items.unhandled',
+        organizationId: this.ctx.organizationId,
       });
     }
   }

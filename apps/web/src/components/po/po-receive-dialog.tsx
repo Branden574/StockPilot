@@ -198,7 +198,7 @@ export function PoReceiveDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button variant="gradient">
-          <PackageCheck className="h-4 w-4" /> Receive
+          <PackageCheck className="h-4 w-4" /> Receive items
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-3xl">
