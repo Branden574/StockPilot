@@ -230,26 +230,49 @@ export class PurchaseOrdersService {
     return { po, lines: linesWithImages };
   }
 
+  /**
+   * Resolves the warehouse a PO's destination location belongs to, enforcing
+   * write access. Throws a clear validation error when the location is missing
+   * or — critically — has no warehouse_id. A warehouse-less destination makes
+   * the PO impossible to receive against (received stock has nowhere to post):
+   * the detail page silently hides the Receive button AND the "set destination"
+   * recovery card (which only fires when destination is null), stranding the PO
+   * in a dead-end. Rejecting it at write time keeps that state from ever forming.
+   */
+  private async resolveDestinationWarehouseId(
+    destinationLocationId: string | null | undefined,
+  ): Promise<string | null> {
+    if (!destinationLocationId) return null;
+    const { data: loc } = await this.ctx.supabase
+      .from('locations')
+      .select('warehouse_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', destinationLocationId)
+      .maybeSingle();
+    if (!loc) {
+      throw new ServiceError('validation_error', 'The selected destination location was not found.');
+    }
+    const wh = (loc as { warehouse_id?: string | null }).warehouse_id ?? null;
+    if (!wh) {
+      throw new ServiceError(
+        'validation_error',
+        "That destination location isn't linked to a warehouse, so received stock would have nowhere to go. Pick a warehouse-backed location.",
+      );
+    }
+    await assertWarehouseAccess(wh, 'write', this.ctx);
+    return wh;
+  }
+
   async create(input: CreatePoInput) {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
-    // Validate the destination location is in a warehouse the user can write to.
-    // Also capture the warehouse_id so we can assign custom items to it.
-    let destinationWarehouseId: string | null = null;
-    if (input.destinationLocationId) {
-      const { data: loc } = await this.ctx.supabase
-        .from('locations')
-        .select('warehouse_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('id', input.destinationLocationId)
-        .maybeSingle();
-      const wh = (loc as { warehouse_id?: string | null } | null)?.warehouse_id ?? null;
-      if (wh) {
-        await assertWarehouseAccess(wh, 'write', this.ctx);
-        destinationWarehouseId = wh;
-      }
-    }
+    // Validate the destination location is in a warehouse the user can write to
+    // (and reject a warehouse-less one). Also capture the warehouse_id so we can
+    // assign custom items to it.
+    const destinationWarehouseId = await this.resolveDestinationWarehouseId(
+      input.destinationLocationId,
+    );
 
     // Resolve the warehouse to assign to any custom (new) items.
     // Priority: PO destination warehouse → org's primary/first warehouse.
@@ -417,21 +440,11 @@ export class PurchaseOrdersService {
     }
     const currentPoNumber = (po as { po_number?: string }).po_number ?? '';
 
-    // Resolve the destination warehouse id for custom-item creation.
-    let destinationWarehouseId: string | null = null;
-    if (input.destinationLocationId) {
-      const { data: loc } = await this.ctx.supabase
-        .from('locations')
-        .select('warehouse_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('id', input.destinationLocationId)
-        .maybeSingle();
-      const wh = (loc as { warehouse_id?: string | null } | null)?.warehouse_id ?? null;
-      if (wh) {
-        await assertWarehouseAccess(wh, 'write', this.ctx);
-        destinationWarehouseId = wh;
-      }
-    }
+    // Resolve the destination warehouse id for custom-item creation (and reject
+    // a warehouse-less destination — same guard as create()).
+    const destinationWarehouseId = await this.resolveDestinationWarehouseId(
+      input.destinationLocationId,
+    );
 
     // Resolve the warehouse for any custom (new) items — same logic as create().
     const hasCustomLines = input.lines.some((l) => Boolean(l.newItemName));

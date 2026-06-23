@@ -143,7 +143,13 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
         </div>
       </div>
 
-      {!po.destination_location_id &&
+      {/*
+        Show the destination-fix card whenever we can't resolve a warehouse to
+        receive against — covering BOTH a missing destination AND a destination
+        location that has no warehouse_id. The latter is the dead-end that hid
+        the Receive button with no way out: the destination was set, so the old
+        `!destination_location_id` gate never fired. */}
+      {warehouseId === null &&
         (status === 'expected_inbound' ||
           status === 'ordered' ||
           status === 'partially_received' ||
@@ -152,6 +158,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
             <PoSetDestination
               poId={id}
               warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
+              hasUnreceivableDestination={po.destination_location_id != null}
             />
           </div>
         )}

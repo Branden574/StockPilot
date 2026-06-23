@@ -18,15 +18,22 @@ import { setPoDestinationWarehouseAction } from '@/server/actions/purchase-order
 interface Props {
   poId: string;
   warehouses: Array<{ id: string; name: string }>;
+  /**
+   * True when the PO HAS a destination location but it isn't linked to a
+   * warehouse (so receiving can't resolve a target). Distinct from the
+   * no-destination-at-all case purely for the explanatory copy.
+   */
+  hasUnreceivableDestination?: boolean;
 }
 
 /**
- * Inline picker that shows when a PO has no destination_location_id yet.
- * Receiving is gated on a destination, so without this the user is stuck.
+ * Inline picker that shows when a PO can't resolve a receiving warehouse —
+ * either no destination is set, or its destination location has no warehouse.
+ * Receiving is gated on a warehouse, so without this the user is stuck.
  * On change → resolves a location for the chosen warehouse on the server
  * (auto-creates one if needed) → page refreshes → Receive button appears.
  */
-export function PoSetDestination({ poId, warehouses }: Props) {
+export function PoSetDestination({ poId, warehouses, hasUnreceivableDestination }: Props) {
   const router = useRouter();
   const [warehouseId, setWarehouseId] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -61,8 +68,18 @@ export function PoSetDestination({ poId, warehouses }: Props) {
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <Warehouse className="h-3.5 w-3.5" />
         <span>
-          <strong>No destination set.</strong> Pick a warehouse so receiving can
-          post stock against this PO.
+          {hasUnreceivableDestination ? (
+            <>
+              <strong>This PO&apos;s destination isn&apos;t linked to a warehouse.</strong>{' '}
+              Received stock has nowhere to go, so the Receive button is hidden.
+              Pick a warehouse below to fix it.
+            </>
+          ) : (
+            <>
+              <strong>No destination set.</strong> Pick a warehouse so receiving
+              can post stock against this PO.
+            </>
+          )}
         </span>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">

@@ -359,6 +359,34 @@ describe('PurchaseOrdersService.update — PO number uniqueness', () => {
   });
 });
 
+// ─── Destination warehouse guard ──────────────────────────────────────────────
+
+describe('PurchaseOrdersService.update — destination warehouse guard', () => {
+  const DEST_LOC_UUID = 'bbbbbbbb-0000-0000-0000-000000000001' as const;
+
+  it('rejects editing a draft to a warehouse-less destination BEFORE any write', async () => {
+    const stub = makeUpdateStub({
+      'locations.select': { data: { warehouse_id: null }, error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    const thrown = await svc
+      .update(PO_ID, {
+        lines: [{ itemId: 'item-uuid-1', quantityOrdered: 1, unitCost: 10 }],
+        destinationLocationId: DEST_LOC_UUID,
+      })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('validation_error');
+    expect((thrown as ServiceError).message).toContain('warehouse');
+    // Guard fires before the destructive header/line writes.
+    expect(stub.chainsAll.get('purchase_order_items.delete')).toBeUndefined();
+    expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+  });
+});
+
 // ─── Notifications ────────────────────────────────────────────────────────────
 
 describe('PurchaseOrdersService.update — notifications', () => {

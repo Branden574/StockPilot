@@ -46,6 +46,16 @@ interface DraftLine {
   rejected: string;
 }
 
+interface ReceiptHistoryItem {
+  id: string;
+  receipt_number: string;
+  status: string;
+  received_at: string | null;
+  received_by_name: string;
+  accepted: number;
+  rejected: number;
+}
+
 export default function PoReceiveScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -54,9 +64,18 @@ export default function PoReceiveScreen() {
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const [header, setHeader] = React.useState<PoHeader | null>(null);
   const [lines, setLines] = React.useState<PoLine[]>([]);
+  const [receipts, setReceipts] = React.useState<ReceiptHistoryItem[]>([]);
   const [draft, setDraft] = React.useState<Record<string, DraftLine>>({});
   const [loading, setLoading] = React.useState(true);
   const [posting, setPosting] = React.useState(false);
+  // Synchronous re-entry guard: blocks a double-tap from firing a second
+  // post before React re-renders the disabled button (each post would
+  // otherwise carry its own key = a duplicate receipt = double-counted stock).
+  const submittingRef = React.useRef(false);
+  // One idempotency key per receive-intent, stable across retries so a network
+  // blip after a server-side success doesn't post a second receipt. Reset only
+  // after a successful post (the screen navigates away on success anyway).
+  const idemKeyRef = React.useRef<string | null>(null);
   const [scannerOpen, setScannerOpen] = React.useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const [highlightLineId, setHighlightLineId] = React.useState<string | null>(null);
@@ -136,6 +155,72 @@ export default function PoReceiveScreen() {
       seed[l.id] = { received: '', rejected: '' };
     }
     setDraft(seed);
+
+    // Receipt history (who / when / qty) — the audit log shown below the
+    // receive form, mirroring the web PO detail page. Read-only + org-scoped.
+    const { data: receiptRows } = await supabase
+      .from('receipts')
+      .select('id, receipt_number, status, received_at, received_by')
+      .eq('organization_id', orgId)
+      .eq('purchase_order_id', id)
+      .order('received_at', { ascending: false });
+
+    const receiptIds = (receiptRows ?? []).map((r) => (r as Record<string, unknown>).id as string);
+    const totalsById = new Map<string, { accepted: number; rejected: number }>();
+    const nameById = new Map<string, string>();
+    if (receiptIds.length > 0) {
+      const { data: receiptLines } = await supabase
+        .from('receipt_lines')
+        .select('receipt_id, qty_accepted_base, qty_rejected_base')
+        .in('receipt_id', receiptIds)
+        // Display-only totals; cap well above any realistic PO so PostgREST's
+        // default 1000-row window can't silently understate the history.
+        .limit(5000);
+      for (const rl of receiptLines ?? []) {
+        const r = rl as Record<string, unknown>;
+        const rid = r.receipt_id as string;
+        const t = totalsById.get(rid) ?? { accepted: 0, rejected: 0 };
+        t.accepted += Number(r.qty_accepted_base) || 0;
+        t.rejected += Number(r.qty_rejected_base) || 0;
+        totalsById.set(rid, t);
+      }
+      const receiverIds = Array.from(
+        new Set(
+          (receiptRows ?? [])
+            .map((r) => (r as Record<string, unknown>).received_by as string | null)
+            .filter((v): v is string => Boolean(v)),
+        ),
+      );
+      if (receiverIds.length > 0) {
+        const { data: profs } = await supabase
+          .from('user_profiles')
+          .select('id, full_name, email')
+          .in('id', receiverIds);
+        for (const p of profs ?? []) {
+          const pr = p as Record<string, unknown>;
+          nameById.set(
+            pr.id as string,
+            ((pr.full_name as string | null) || (pr.email as string | null) || 'Unknown').trim(),
+          );
+        }
+      }
+    }
+    setReceipts(
+      (receiptRows ?? []).map((row) => {
+        const r = row as Record<string, unknown>;
+        const t = totalsById.get(r.id as string) ?? { accepted: 0, rejected: 0 };
+        return {
+          id: r.id as string,
+          receipt_number: r.receipt_number as string,
+          status: r.status as string,
+          received_at: (r.received_at as string | null) ?? null,
+          received_by_name: nameById.get(r.received_by as string) ?? 'Unknown',
+          accepted: t.accepted,
+          rejected: t.rejected,
+        };
+      }),
+    );
+
     setLoading(false);
   }, [id, orgId]);
 
@@ -215,8 +300,18 @@ export default function PoReceiveScreen() {
       return;
     }
 
+    // Re-entry guard — checked synchronously so a rapid double-tap can't fire
+    // two posts before the button's disabled state re-renders.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setPosting(true);
-    const idempotencyKey = `mobile-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Stable key for this intent: reused on retry so the RPC dedupes a
+    // post that actually succeeded server-side but failed to ack to the client.
+    if (!idemKeyRef.current) {
+      idemKeyRef.current = `mobile-${id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+    const idempotencyKey = idemKeyRef.current;
 
     const { error } = await supabase.rpc('post_receipt_v2', {
       p_purchase_order_id: id,
@@ -227,11 +322,14 @@ export default function PoReceiveScreen() {
       p_notes: null,
     });
     setPosting(false);
+    submittingRef.current = false;
 
     if (error) {
       Alert.alert('Receive failed', error.message);
       return;
     }
+    // Posted: retire the key so a later receive against this PO is a new intent.
+    idemKeyRef.current = null;
     Alert.alert(
       'Posted',
       `Received ${payloadLines.length} line${payloadLines.length === 1 ? '' : 's'}.`,
@@ -346,6 +444,27 @@ export default function PoReceiveScreen() {
                 );
               })
             )}
+
+            {receipts.length > 0 && (
+              <View style={styles.historySection}>
+                <Text style={styles.historyHeading}>Receipt history</Text>
+                {receipts.map((r) => (
+                  <View key={r.id} style={styles.historyCard}>
+                    <View style={styles.historyTopRow}>
+                      <Text style={styles.historyNumber}>
+                        {r.receipt_number}
+                        {r.status !== 'posted' ? ` · ${r.status}` : ''}
+                      </Text>
+                      <Text style={styles.historyDate}>{formatReceiptDate(r.received_at)}</Text>
+                    </View>
+                    <Text style={styles.historyMeta}>
+                      by {r.received_by_name} · {r.accepted} accepted
+                      {r.rejected > 0 ? ` · ${r.rejected} rejected` : ''}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            )}
           </ScrollView>
 
           <View style={styles.footer}>
@@ -421,6 +540,19 @@ function labelForStatus(s: string): string {
   if (s === 'ordered') return 'Ordered';
   if (s === 'partially_received') return 'Partial';
   return s;
+}
+
+function formatReceiptDate(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 const styles = StyleSheet.create({
@@ -507,6 +639,36 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
   },
   allBtnText: { color: theme.text, fontWeight: '700' },
+  historySection: { marginTop: space.lg },
+  historyHeading: {
+    color: theme.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: space.sm,
+  },
+  historyCard: {
+    backgroundColor: theme.card,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    padding: space.md,
+    marginBottom: space.sm,
+  },
+  historyTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  historyNumber: {
+    color: theme.text,
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: 'Menlo',
+  },
+  historyDate: { color: theme.textMuted, fontSize: 11 },
+  historyMeta: { color: theme.textMuted, fontSize: 12, marginTop: 4 },
   footer: {
     position: 'absolute',
     left: 0,

@@ -25,8 +25,19 @@ export interface PoPdfLine {
   sku: string;
   name: string;
   quantityOrdered: number;
+  /** Cumulative quantity received against this line (post_receipt increments). */
+  quantityReceived: number;
   unitCost: number;
   lineTotal: number;
+}
+
+export interface PoPdfReceipt {
+  receiptNumber: string;
+  receivedAt: string | null;
+  receivedByName: string | null;
+  status: string;
+  totalAccepted: number;
+  totalRejected: number;
 }
 
 export interface PoPdfHeader {
@@ -68,17 +79,29 @@ interface PurchaseOrderPdfProps {
   org: PoPdfOrg;
   supplier: PoPdfSupplier | null;
   destination: PoPdfDestination | null;
+  /** Posted receipts (receiving history). Empty = nothing received yet. */
+  receipts?: PoPdfReceipt[];
 }
 
 // Fixed-width column layout for the PO line table. Sum to ~100 so flex
 // widths translate cleanly to the available row.
 const PO_COLS = {
   num: 5,
-  sku: 18,
-  name: 39,
+  sku: 16,
+  name: 32,
   qty: 10,
+  recv: 9,
   unit: 14,
   total: 14,
+} as const;
+
+// Column layout for the receipts (receiving log) table.
+const RECEIPT_COLS = {
+  number: 22,
+  date: 26,
+  by: 24,
+  accepted: 14,
+  rejected: 14,
 } as const;
 
 export function PurchaseOrderPdf({
@@ -87,6 +110,7 @@ export function PurchaseOrderPdf({
   org,
   supplier,
   destination,
+  receipts = [],
 }: PurchaseOrderPdfProps) {
   const subtotal = Number(po.subtotal) || 0;
   const total = Number(po.total) || 0;
@@ -186,7 +210,8 @@ export function PurchaseOrderPdf({
               <Text style={[pdfStyles.tHeadCell, { flex: PO_COLS.num }]}>#</Text>
               <Text style={[pdfStyles.tHeadCell, { flex: PO_COLS.sku }]}>SKU</Text>
               <Text style={[pdfStyles.tHeadCell, { flex: PO_COLS.name }]}>Description</Text>
-              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>Qty</Text>
+              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>Ordered</Text>
+              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.recv }]}>Recv</Text>
               <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
                 Unit cost
               </Text>
@@ -222,6 +247,9 @@ export function PurchaseOrderPdf({
                   </Text>
                   <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>
                     {formatNumberForPdf(l.quantityOrdered)}
+                  </Text>
+                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.recv }]}>
+                    {formatNumberForPdf(l.quantityReceived)}
                   </Text>
                   <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
                     {formatCurrencyForPdf(l.unitCost)}
@@ -267,6 +295,45 @@ export function PurchaseOrderPdf({
             </View>
           </View>
         </View>
+
+        {receipts.length > 0 ? (
+          <View style={pdfStyles.section}>
+            <Text style={pdfStyles.sectionTitle}>Receipts</Text>
+            <View style={pdfStyles.table}>
+              <View style={pdfStyles.tHeadRow} fixed>
+                <Text style={[pdfStyles.tHeadCell, { flex: RECEIPT_COLS.number }]}>Receipt</Text>
+                <Text style={[pdfStyles.tHeadCell, { flex: RECEIPT_COLS.date }]}>Date</Text>
+                <Text style={[pdfStyles.tHeadCell, { flex: RECEIPT_COLS.by }]}>Received by</Text>
+                <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: RECEIPT_COLS.accepted }]}>
+                  Accepted
+                </Text>
+                <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: RECEIPT_COLS.rejected }]}>
+                  Rejected
+                </Text>
+              </View>
+              {receipts.map((r, i) => (
+                <View key={`${r.receiptNumber}-${i}`} style={pdfStyles.tRow}>
+                  <Text style={[pdfStyles.tCell, pdfStyles.tCellMono, { flex: RECEIPT_COLS.number }]}>
+                    {r.receiptNumber}
+                    {r.status && r.status !== 'posted' ? ` (${r.status})` : ''}
+                  </Text>
+                  <Text style={[pdfStyles.tCell, { flex: RECEIPT_COLS.date }]}>
+                    {formatDateForPdf(r.receivedAt)}
+                  </Text>
+                  <Text style={[pdfStyles.tCell, { flex: RECEIPT_COLS.by }]}>
+                    {r.receivedByName ?? '—'}
+                  </Text>
+                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: RECEIPT_COLS.accepted }]}>
+                    {formatNumberForPdf(r.totalAccepted)}
+                  </Text>
+                  <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: RECEIPT_COLS.rejected }]}>
+                    {formatNumberForPdf(r.totalRejected)}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
 
         {hasTerms ? (
           <View style={pdfStyles.termsWrap} wrap={false}>

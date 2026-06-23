@@ -60,9 +60,11 @@ vi.mock('./inventory', () => ({
 // Re-export for test use with a readable name.
 const mockInvCreate = _mockInvCreate;
 
-import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { ServiceError } from './context';
 import { createPoSchema, PurchaseOrdersService } from './purchase-orders';
+
+const DEST_LOC_UUID = 'bbbbbbbb-0000-0000-0000-000000000001' as const;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -284,5 +286,65 @@ describe('PurchaseOrdersService.create — custom line items', () => {
     expect((thrown as ServiceError).message).toContain('destination location');
     // InventoryService.create must NOT have been called (fail before item creation).
     expect(mockInvCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('PurchaseOrdersService.create — destination warehouse guard', () => {
+  it('rejects a destination location that has no warehouse_id (un-receivable PO) BEFORE any write', async () => {
+    const stub = makeSupabaseStub({
+      'locations.select': { data: { warehouse_id: null }, error: null },
+      'purchase_orders.insert': { data: [{ id: 'po-new' }], error: null },
+      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:next_po_number': { data: 'PO-X', error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    const thrown = await svc
+      .create({ lines: MINIMAL_LINE, destinationLocationId: DEST_LOC_UUID })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('validation_error');
+    expect((thrown as ServiceError).message).toContain('warehouse');
+    // The guard fires before any write — no PO row, no lines.
+    expect(stub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
+  });
+
+  it('rejects a destination location that does not exist', async () => {
+    const stub = makeSupabaseStub({
+      'locations.select': { data: null, error: null },
+      'rpc:next_po_number': { data: 'PO-X', error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    const thrown = await svc
+      .create({ lines: MINIMAL_LINE, destinationLocationId: DEST_LOC_UUID })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('validation_error');
+    expect((thrown as ServiceError).message).toContain('not found');
+  });
+
+  it('accepts a warehouse-backed destination and enforces write access', async () => {
+    const stub = makeSupabaseStub({
+      'locations.select': { data: { warehouse_id: WH_UUID }, error: null },
+      'purchase_orders.insert': { data: [{ id: 'po-new' }], error: null },
+      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:next_po_number': { data: 'PO-Y', error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    const result = await svc.create({
+      lines: MINIMAL_LINE,
+      destinationLocationId: DEST_LOC_UUID,
+    });
+
+    expect(result.poNumber).toBe('PO-Y');
+    expect(vi.mocked(assertWarehouseAccess)).toHaveBeenCalledWith(WH_UUID, 'write', expect.anything());
+    // PO row + lines were written.
+    expect(stub.chainsAll.get('purchase_orders.insert')).toBeDefined();
+    expect(stub.chainsAll.get('purchase_order_items.insert')).toBeDefined();
   });
 });
