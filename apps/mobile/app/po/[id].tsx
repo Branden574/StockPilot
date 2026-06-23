@@ -282,13 +282,13 @@ export default function PoReceiveScreen() {
       .map((l) => {
         const d = draft[l.id] ?? { received: '', rejected: '' };
         const received = Number(d.received) || 0;
-        const rejected = Number(d.rejected) || 0;
         if (received <= 0) return null;
         return {
           po_line_id: l.id,
           qty_received: received,
-          qty_accepted: Math.max(0, received - rejected),
-          qty_rejected: rejected,
+          // Everything received goes into usable stock — no separate reject step.
+          qty_accepted: received,
+          qty_rejected: 0,
           unit_cost: l.unit_cost,
           notes: null,
         };
@@ -381,6 +381,8 @@ export default function PoReceiveScreen() {
                   l.quantity_ordered - l.quantity_received,
                 );
                 const d = draft[l.id] ?? { received: '', rejected: '' };
+                // Variance = what's still outstanding after this receipt.
+                const variance = remaining - (Number(d.received) || 0);
                 const isHighlighted = highlightLineId === l.id;
                 return (
                   <View
@@ -405,25 +407,14 @@ export default function PoReceiveScreen() {
                     <View style={styles.lineMetricsRow}>
                       <Metric label="Ordered" value={l.quantity_ordered} />
                       <Metric label="Already" value={l.quantity_received} />
-                      <Metric label="Remaining" value={remaining} tone="primary" />
+                      <Metric label="Variance" value={variance} tone="primary" />
                     </View>
                     <View style={styles.qtyRow}>
                       <View style={styles.qtyField}>
-                        <Text style={styles.qtyLabel}>Received</Text>
+                        <Text style={styles.qtyLabel}>Received now</Text>
                         <TextInput
                           value={d.received}
                           onChangeText={(v) => setField(l.id, 'received', v)}
-                          keyboardType="decimal-pad"
-                          placeholder="0"
-                          placeholderTextColor={theme.textMuted}
-                          style={styles.qtyInput}
-                        />
-                      </View>
-                      <View style={styles.qtyField}>
-                        <Text style={styles.qtyLabel}>Rejected</Text>
-                        <TextInput
-                          value={d.rejected}
-                          onChangeText={(v) => setField(l.id, 'rejected', v)}
                           keyboardType="decimal-pad"
                           placeholder="0"
                           placeholderTextColor={theme.textMuted}
