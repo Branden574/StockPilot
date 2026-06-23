@@ -193,7 +193,8 @@ export class PurchaseOrdersService {
     const { data: lines } = await this.ctx.supabase
       .from('purchase_order_items')
       .select('id, item_id, quantity_ordered, quantity_received, unit_cost, line_total')
-      .eq('purchase_order_id', id);
+      .eq('purchase_order_id', id)
+      .eq('organization_id', this.ctx.organizationId);
 
     // Keep the raw row shape (callers downstream — detail page, PDF
     // route — read snake_case fields off these lines), and tack
@@ -468,7 +469,45 @@ export class PurchaseOrdersService {
       poNumber = suppliedPoNumber ?? currentPoNumber;
     }
 
-    // Resolve lines — create catalog items for newItemName lines.
+    // Subtotal is computable straight from the input lines (qty × unitCost) —
+    // it doesn't depend on resolving item ids — so we can claim the header
+    // BEFORE doing any destructive work.
+    const subtotal = input.lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
+
+    // Atomic claim: update the header with a `status = 'draft'` guard. This is the
+    // AUTHORITATIVE draft gate (the get() check above is only a fast pre-check).
+    // If a concurrent "mark as ordered" raced in after our get(), this returns 0
+    // rows and we abort here — BEFORE creating any custom items or touching the
+    // line rows — so a now-ordered PO is never mutated and no items are orphaned.
+    // org + id scope prevents cross-tenant edits.
+    const { data: updatedPo, error: updErr } = await this.ctx.supabase
+      .from('purchase_orders')
+      .update({
+        supplier_id: input.supplierId ?? null,
+        destination_location_id: input.destinationLocationId ?? null,
+        expected_at: input.expectedAt ?? null,
+        notes: input.notes ?? null,
+        po_number: poNumber,
+        subtotal,
+        total: subtotal,
+        updated_by: this.ctx.userId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .eq('status', 'draft')
+      .select('id')
+      .maybeSingle();
+    if (updErr) throw new ServiceError('internal_error', updErr.message);
+    if (!updatedPo) {
+      throw new ServiceError(
+        'conflict',
+        'This purchase order is no longer a draft (it may have just been ordered).',
+      );
+    }
+
+    // Header is claimed (still draft). Now resolve lines — creating catalog items
+    // for any newItemName lines — and replace the line set.
     const invSvc = new InventoryService(this.ctx);
     const resolvedLines: Array<{ itemId: string; quantityOrdered: number; unitCost: number }> = [];
     for (const l of input.lines) {
@@ -496,9 +535,8 @@ export class PurchaseOrdersService {
       }
     }
 
-    const subtotal = resolvedLines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
-
-    // Replace lines: delete existing, insert resolved set.
+    // Replace lines: delete existing, insert resolved set (safe — a draft PO has
+    // no receipt_lines referencing these line rows).
     const { error: delErr } = await this.ctx.supabase
       .from('purchase_order_items')
       .delete()
@@ -517,27 +555,6 @@ export class PurchaseOrdersService {
       .from('purchase_order_items')
       .insert(linesPayload);
     if (linesErr) throw new ServiceError('internal_error', linesErr.message);
-
-    // Update the header — fail-closed on 0 rows (PO was deleted/changed under us).
-    const { data: updatedPo, error: updErr } = await this.ctx.supabase
-      .from('purchase_orders')
-      .update({
-        supplier_id: input.supplierId ?? null,
-        destination_location_id: input.destinationLocationId ?? null,
-        expected_at: input.expectedAt ?? null,
-        notes: input.notes ?? null,
-        po_number: poNumber,
-        subtotal,
-        total: subtotal,
-        updated_by: this.ctx.userId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id)
-      .select('id')
-      .maybeSingle();
-    if (updErr) throw new ServiceError('internal_error', updErr.message);
-    if (!updatedPo) throw new ServiceError('conflict', 'Purchase order not found or already changed.');
 
     void audit(
       {
