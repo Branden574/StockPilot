@@ -1,0 +1,110 @@
+import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
+
+import { PoForm, type InitialPoValues } from '@/components/po/po-form';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { requireOrgContext } from '@/lib/auth/session';
+import { InventoryService } from '@/server/services/inventory';
+import { LocationsService } from '@/server/services/locations';
+import { PurchaseOrdersService } from '@/server/services/purchase-orders';
+import { ServiceError } from '@/server/services/context';
+import { SuppliersService } from '@/server/services/suppliers';
+
+import { hasPermission } from '@stockpilot/core';
+
+export default async function EditPoPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+
+  const ctx = await requireOrgContext();
+  if (!hasPermission(ctx.role, 'purchase_orders:manage')) {
+    redirect('/dashboard');
+  }
+
+  const [poSvc, inventorySvc, suppliersSvc, locationsSvc] = await Promise.all([
+    PurchaseOrdersService.forCurrentUser(),
+    InventoryService.forCurrentUser(),
+    SuppliersService.forCurrentUser(),
+    LocationsService.forCurrentUser(),
+  ]);
+
+  let result;
+  try {
+    result = await poSvc.get(id);
+  } catch (e) {
+    if (e instanceof ServiceError && e.code === 'not_found') notFound();
+    throw e;
+  }
+
+  const { po, lines } = result;
+
+  // Only draft POs can be edited.
+  if ((po as { status?: string }).status !== 'draft') {
+    redirect(`/dashboard/purchase-orders/${id}`);
+  }
+
+  const [inventory, suppliers, locations] = await Promise.all([
+    inventorySvc.list({ limit: 1000 }),
+    suppliersSvc.list(),
+    locationsSvc.list(),
+  ]);
+
+  // Map PO's existing lines to the form's Line shape.
+  // Lines from the service have item_id (snake_case); the form expects itemId.
+  const initialLines = lines.map((l) => ({
+    itemId: (l.item_id as string | null) ?? undefined,
+    quantityOrdered: l.quantity_ordered as number,
+    unitCost: l.unit_cost as number,
+  }));
+
+  // Convert the stored expected_at ISO string to a date-input value (YYYY-MM-DD).
+  const storedExpectedAt = (po as { expected_at?: string | null }).expected_at ?? null;
+  const expectedAtDateInput = storedExpectedAt
+    ? new Date(storedExpectedAt).toISOString().slice(0, 10)
+    : '';
+
+  const initial: InitialPoValues = {
+    supplierId: (po as { supplier_id?: string | null }).supplier_id ?? '',
+    locationId: (po as { destination_location_id?: string | null }).destination_location_id ?? '',
+    expectedAt: expectedAtDateInput,
+    notes: (po as { notes?: string | null }).notes ?? '',
+    poNumber: (po as { po_number?: string }).po_number ?? '',
+    lines: initialLines,
+  };
+
+  return (
+    <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
+      <div className="mb-6">
+        <Link
+          href={`/dashboard/purchase-orders/${id}`}
+          className="text-muted-foreground hover:text-foreground text-sm"
+        >
+          ← Back to purchase order
+        </Link>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+          Edit {(po as { po_number?: string }).po_number ?? 'Purchase Order'}
+        </h1>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>PO details</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <PoForm
+            items={inventory.items.map((i) => ({
+              id: i.id,
+              name: i.name,
+              sku: i.sku,
+              unit_cost: i.unit_cost,
+            }))}
+            suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
+            locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
+            poId={id}
+            initial={initial}
+          />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

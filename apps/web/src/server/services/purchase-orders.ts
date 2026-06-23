@@ -3,6 +3,8 @@ import 'server-only';
 import { z } from 'zod';
 
 import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { createNotification } from './notifications';
 
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import {
@@ -386,6 +388,205 @@ export class PurchaseOrdersService {
     });
 
     return { id: po.id as string, poNumber };
+  }
+
+
+  /**
+   * Edit a DRAFT purchase order in place. The header fields (supplier,
+   * destination, expected date, notes, PO number) and the full line-item
+   * list are replaced atomically. Only drafts can be edited — once ordered
+   * the PO is immutable (use receive/cancel flows instead).
+   *
+   * Security guarantees:
+   *   - assertModuleEnabled + assertPermission gate matches create()
+   *   - Every query is scoped to ctx.organizationId (no cross-tenant edit)
+   *   - status !== 'draft' guard is checked BEFORE any write
+   *   - Line-delete is safe: draft POs have no receipt_lines yet
+   *   - Header update is fail-closed: 0-row update throws conflict
+   */
+  async update(id: string, input: CreatePoInput): Promise<{ id: string; poNumber: string }> {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
+    assertPermission(this.ctx, 'purchase_orders:manage');
+
+    // Fetch the current PO (org-scoped, permission-gated).
+    const { po } = await this.get(id);
+    const currentStatus = (po as { status?: string }).status ?? '';
+    if (currentStatus !== 'draft') {
+      throw new ServiceError('forbidden', 'Only draft purchase orders can be edited.');
+    }
+    const currentPoNumber = (po as { po_number?: string }).po_number ?? '';
+
+    // Resolve the destination warehouse id for custom-item creation.
+    let destinationWarehouseId: string | null = null;
+    if (input.destinationLocationId) {
+      const { data: loc } = await this.ctx.supabase
+        .from('locations')
+        .select('warehouse_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', input.destinationLocationId)
+        .maybeSingle();
+      const wh = (loc as { warehouse_id?: string | null } | null)?.warehouse_id ?? null;
+      if (wh) {
+        await assertWarehouseAccess(wh, 'write', this.ctx);
+        destinationWarehouseId = wh;
+      }
+    }
+
+    // Resolve the warehouse for any custom (new) items — same logic as create().
+    const hasCustomLines = input.lines.some((l) => Boolean(l.newItemName));
+    let customItemWarehouseId: string | null = destinationWarehouseId;
+    if (hasCustomLines && !customItemWarehouseId) {
+      const access = await getWarehouseAccess(this.ctx);
+      customItemWarehouseId = access.primaryWarehouseId;
+      if (!customItemWarehouseId) {
+        throw new ServiceError(
+          'validation_error',
+          'Pick a destination location (or set up a warehouse) before adding a custom item.',
+        );
+      }
+    }
+
+    // PO number uniqueness pre-check — run BEFORE creating custom items so
+    // a duplicate number never orphans catalog items.
+    const suppliedPoNumber = input.poNumber?.trim();
+    let poNumber: string;
+    if (suppliedPoNumber && suppliedPoNumber !== currentPoNumber) {
+      // Only check uniqueness when the caller is actually changing the number.
+      const { data: existing } = await this.ctx.supabase
+        .from('purchase_orders')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('po_number', suppliedPoNumber)
+        .neq('id', id)
+        .maybeSingle();
+      if (existing) {
+        throw new ServiceError('conflict', 'That PO number is already in use.');
+      }
+      poNumber = suppliedPoNumber;
+    } else {
+      // Keep the current number when omitted or unchanged.
+      poNumber = suppliedPoNumber ?? currentPoNumber;
+    }
+
+    // Resolve lines — create catalog items for newItemName lines.
+    const invSvc = new InventoryService(this.ctx);
+    const resolvedLines: Array<{ itemId: string; quantityOrdered: number; unitCost: number }> = [];
+    for (const l of input.lines) {
+      if (l.newItemName) {
+        const itemInput = createItemSchema.parse({
+          name: l.newItemName,
+          itemType: 'product',
+          status: 'active',
+          unitCost: l.unitCost,
+          quantityOnHand: 0,
+          warehouseId: customItemWarehouseId,
+        });
+        const newItem = await invSvc.create(itemInput);
+        resolvedLines.push({
+          itemId: newItem.id as string,
+          quantityOrdered: l.quantityOrdered,
+          unitCost: l.unitCost,
+        });
+      } else {
+        resolvedLines.push({
+          itemId: l.itemId!,
+          quantityOrdered: l.quantityOrdered,
+          unitCost: l.unitCost,
+        });
+      }
+    }
+
+    const subtotal = resolvedLines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
+
+    // Replace lines: delete existing, insert resolved set.
+    const { error: delErr } = await this.ctx.supabase
+      .from('purchase_order_items')
+      .delete()
+      .eq('purchase_order_id', id)
+      .eq('organization_id', this.ctx.organizationId);
+    if (delErr) throw new ServiceError('internal_error', delErr.message);
+
+    const linesPayload = resolvedLines.map((l) => ({
+      organization_id: this.ctx.organizationId,
+      purchase_order_id: id,
+      item_id: l.itemId,
+      quantity_ordered: l.quantityOrdered,
+      unit_cost: l.unitCost,
+    }));
+    const { error: linesErr } = await this.ctx.supabase
+      .from('purchase_order_items')
+      .insert(linesPayload);
+    if (linesErr) throw new ServiceError('internal_error', linesErr.message);
+
+    // Update the header — fail-closed on 0 rows (PO was deleted/changed under us).
+    const { data: updatedPo, error: updErr } = await this.ctx.supabase
+      .from('purchase_orders')
+      .update({
+        supplier_id: input.supplierId ?? null,
+        destination_location_id: input.destinationLocationId ?? null,
+        expected_at: input.expectedAt ?? null,
+        notes: input.notes ?? null,
+        po_number: poNumber,
+        subtotal,
+        total: subtotal,
+        updated_by: this.ctx.userId,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+    if (updErr) throw new ServiceError('internal_error', updErr.message);
+    if (!updatedPo) throw new ServiceError('conflict', 'Purchase order not found or already changed.');
+
+    void audit(
+      {
+        event: 'purchase_order.updated',
+        entityType: 'purchase_order',
+        entityId: id,
+        extra: {
+          po_number: poNumber,
+          supplier_id: input.supplierId ?? null,
+          line_count: resolvedLines.length,
+        },
+      },
+      this.ctx,
+    );
+
+    void dispatchEvent(this.ctx.organizationId, 'po.updated', {
+      id,
+      poNumber,
+      lineCount: resolvedLines.length,
+    });
+
+    // Notify org owners/admins (best-effort, except the editor themselves).
+    void (async () => {
+      try {
+        const admin = createAdminClient();
+        const { data: members } = await admin
+          .from('organization_members')
+          .select('user_id')
+          .eq('organization_id', this.ctx.organizationId)
+          .in('role', ['owner', 'admin'])
+          .not('accepted_at', 'is', null)
+          .is('impersonation_expires_at', null);
+        for (const m of (members ?? []) as Array<{ user_id: string }>) {
+          if (m.user_id === this.ctx.userId) continue; // don't notify the editor
+          await createNotification({
+            organizationId: this.ctx.organizationId,
+            userId: m.user_id,
+            type: 'purchase_order.updated',
+            title: 'Purchase order updated',
+            body: `PO ${poNumber} was edited (${resolvedLines.length} item(s)).`,
+            link: `/dashboard/purchase-orders/${id}`,
+          });
+        }
+      } catch {
+        // Best-effort: notification errors never fail the edit.
+      }
+    })();
+
+    return { id, poNumber };
   }
 
   async updateStatus(id: string, status: 'draft' | 'ordered' | 'cancelled') {

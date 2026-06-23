@@ -33,6 +33,25 @@ export async function createPoAction(input: CreatePoInput): Promise<ActionResult
   }
 }
 
+
+export async function updatePoAction(
+  id: string,
+  input: CreatePoInput,
+): Promise<ActionResult<{ id: string; poNumber: string }>> {
+  const parsed = createPoSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  try {
+    const svc = await PurchaseOrdersService.forCurrentUser();
+    const result = await svc.update(id, parsed.data);
+    revalidatePath('/dashboard/purchase-orders');
+    revalidatePath(`/dashboard/purchase-orders/${id}`);
+    revalidatePath(`/dashboard/purchase-orders/${id}/edit`);
+    return ok(result);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 const setDestinationSchema = z.object({
   poId: z.string().uuid(),
   warehouseId: z.string().uuid(),

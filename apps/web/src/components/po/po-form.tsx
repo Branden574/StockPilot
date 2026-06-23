@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
-import { createPoAction } from '@/server/actions/purchase-orders';
+import { createPoAction, updatePoAction } from '@/server/actions/purchase-orders';
 import { formatCurrency } from '@/lib/utils';
 
 interface ItemOption {
@@ -35,10 +35,23 @@ interface Option {
   name: string;
 }
 
+export interface InitialPoValues {
+  supplierId: string;
+  locationId: string;
+  expectedAt: string;
+  notes: string;
+  poNumber: string;
+  lines: Line[];
+}
+
 interface PoFormProps {
   items: ItemOption[];
   suppliers: Option[];
   locations: Option[];
+  /** When set, the form is in edit mode for this PO id. */
+  poId?: string;
+  /** Pre-filled values for edit mode. */
+  initial?: InitialPoValues;
 }
 
 /** A line is either an existing catalog item (itemId set) or a new item to create (newItemName set). */
@@ -199,14 +212,14 @@ const ROW = cn(
 
 // ─── PoForm ─────────────────────────────────────────────────────────────────
 
-export function PoForm({ items, suppliers, locations }: PoFormProps) {
+export function PoForm({ items, suppliers, locations, poId, initial }: PoFormProps) {
   const router = useRouter();
-  const [supplierId, setSupplierId] = React.useState<string>('');
-  const [locationId, setLocationId] = React.useState<string>('');
-  const [poNumber, setPoNumber] = React.useState<string>('');
-  const [expectedAt, setExpectedAt] = React.useState<string>('');
-  const [notes, setNotes] = React.useState<string>('');
-  const [lines, setLines] = React.useState<Line[]>([]);
+  const [supplierId, setSupplierId] = React.useState<string>(initial?.supplierId ?? '');
+  const [locationId, setLocationId] = React.useState<string>(initial?.locationId ?? '');
+  const [poNumber, setPoNumber] = React.useState<string>(initial?.poNumber ?? '');
+  const [expectedAt, setExpectedAt] = React.useState<string>(initial?.expectedAt ?? '');
+  const [notes, setNotes] = React.useState<string>(initial?.notes ?? '');
+  const [lines, setLines] = React.useState<Line[]>(initial?.lines ?? []);
   const [submitting, setSubmitting] = React.useState(false);
 
   const total = lines.reduce((s, l) => s + l.quantityOrdered * l.unitCost, 0);
@@ -234,7 +247,7 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
     }
     setSubmitting(true);
     const trimmedPoNumber = poNumber.trim();
-    const res = await createPoAction({
+    const payload = {
       supplierId: supplierId || null,
       destinationLocationId: locationId || null,
       expectedAt: expectedAt ? new Date(expectedAt).toISOString() : null,
@@ -247,14 +260,29 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
           ? { itemId: l.itemId, quantityOrdered: l.quantityOrdered, unitCost: l.unitCost }
           : { newItemName: l.newItemName!.trim(), quantityOrdered: l.quantityOrdered, unitCost: l.unitCost },
       ),
-    });
-    setSubmitting(false);
-    if (!res.ok) {
-      toast.error(res.error.message);
-      return;
+    };
+
+    if (poId) {
+      // Edit mode
+      const res = await updatePoAction(poId, payload);
+      setSubmitting(false);
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      toast.success('Purchase order updated.');
+      router.push(`/dashboard/purchase-orders/${poId}`);
+    } else {
+      // Create mode
+      const res = await createPoAction(payload);
+      setSubmitting(false);
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      toast.success('Purchase order created.');
+      router.push(`/dashboard/purchase-orders/${res.data.id}`);
     }
-    toast.success('Purchase order created.');
-    router.push(`/dashboard/purchase-orders/${res.data.id}`);
   }
 
   return (
@@ -419,7 +447,7 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
           Cancel
         </Button>
         <Button variant="gradient" onClick={submit} disabled={submitting || lines.length === 0}>
-          {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create PO'}
+          {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : poId ? 'Save changes' : 'Create PO'}
         </Button>
       </div>
     </div>
