@@ -54,11 +54,13 @@ interface LineEntry {
   serials: string[];
 }
 
-function blankEntry(remaining: number): LineEntry {
-  const r = Math.max(remaining, 0);
+function blankEntry(): LineEntry {
+  // Start blank (0 → rendered empty by BlankZeroNumberInput) so the user types
+  // what actually arrived rather than clearing a pre-filled quantity. The "All"
+  // button fills the full remaining for a complete delivery.
   return {
-    received: r,
-    accepted: r,
+    received: 0,
+    accepted: 0,
     rejected: 0,
     notes: '',
     lots: [],
@@ -78,7 +80,7 @@ export function PoReceiveDialog({
   const [notes, setNotes] = React.useState('');
   const [entries, setEntries] = React.useState<Record<string, LineEntry>>(() =>
     Object.fromEntries(
-      lines.map((l) => [l.id, blankEntry(l.quantityOrdered - l.quantityReceived)]),
+      lines.map((l) => [l.id, blankEntry()]),
     ),
   );
 
@@ -91,7 +93,7 @@ export function PoReceiveDialog({
       setIdempotencyKey(crypto.randomUUID());
       setEntries(
         Object.fromEntries(
-          lines.map((l) => [l.id, blankEntry(l.quantityOrdered - l.quantityReceived)]),
+          lines.map((l) => [l.id, blankEntry()]),
         ),
       );
       setNotes('');
@@ -101,13 +103,13 @@ export function PoReceiveDialog({
   function setField(lineId: string, patch: Partial<LineEntry>) {
     setEntries((m) => ({
       ...m,
-      [lineId]: { ...(m[lineId] ?? blankEntry(0)), ...patch },
+      [lineId]: { ...(m[lineId] ?? blankEntry()), ...patch },
     }));
   }
 
   async function submit() {
     const submittable = lines
-      .map((l) => ({ line: l, entry: entries[l.id] ?? blankEntry(0) }))
+      .map((l) => ({ line: l, entry: entries[l.id] ?? blankEntry() }))
       .filter(({ entry }) => entry.received > 0);
     if (submittable.length === 0) {
       toast.error('Enter at least one received quantity to post the receipt.');
@@ -213,7 +215,7 @@ export function PoReceiveDialog({
         <div className="max-h-[55vh] space-y-3 overflow-y-auto">
           {lines.map((l) => {
             const remaining = l.quantityOrdered - l.quantityReceived;
-            const e = entries[l.id] ?? blankEntry(remaining);
+            const e = entries[l.id] ?? blankEntry();
             // Variance = what's still outstanding after this receipt. Positive =
             // still waiting on stock; 0 = fully received; negative = over ordered.
             const variance = remaining - e.received;
@@ -234,17 +236,16 @@ export function PoReceiveDialog({
                 </div>
                 <div className="sm:col-span-3 space-y-1">
                   <Label className="text-muted-foreground text-[11px]">Received now</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="1"
+                  <BlankZeroNumberInput
+                    min={0}
+                    step={1}
                     value={e.received}
-                    onChange={(ev) => {
-                      const v = Math.max(0, Number(ev.target.value) || 0);
+                    onValueChange={(v) => {
+                      const r = Math.max(0, v);
                       // Everything you receive goes into usable stock. We keep the
                       // accepted/rejected split in the payload (accepted = received,
                       // rejected = 0) but don't ask for it — the variance is what matters.
-                      setField(l.id, { received: v, accepted: v, rejected: 0 });
+                      setField(l.id, { received: r, accepted: r, rejected: 0 });
                     }}
                   />
                 </div>
