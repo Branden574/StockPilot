@@ -15,12 +15,22 @@ import { fetchAllRows } from './lib/paginate';
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
 import { ItemImagesService } from './item-images';
+import { InventoryService } from './inventory';
+import { createItemSchema } from '@stockpilot/core';
 
-const lineInputSchema = z.object({
-  itemId: z.string().uuid(),
-  quantityOrdered: z.coerce.number().positive(),
-  unitCost: z.coerce.number().nonnegative(),
-});
+const lineInputSchema = z
+  .object({
+    itemId: z.string().uuid().optional(),
+    newItemName: z.string().trim().min(1).max(200).optional(),
+    quantityOrdered: z.coerce.number().positive(),
+    unitCost: z.coerce.number().nonnegative(),
+  })
+  .refine(
+    (l) => Boolean(l.itemId) !== Boolean(l.newItemName),
+    {
+      message: 'Each line must have exactly one of itemId or newItemName (not both, not neither)',
+    },
+  );
 
 export const createPoSchema = z.object({
   supplierId: z.string().uuid().nullable().optional(),
@@ -222,6 +232,8 @@ export class PurchaseOrdersService {
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     // Validate the destination location is in a warehouse the user can write to.
+    // Also capture the warehouse_id so we can assign custom items to it.
+    let destinationWarehouseId: string | null = null;
     if (input.destinationLocationId) {
       const { data: loc } = await this.ctx.supabase
         .from('locations')
@@ -230,7 +242,64 @@ export class PurchaseOrdersService {
         .eq('id', input.destinationLocationId)
         .maybeSingle();
       const wh = (loc as { warehouse_id?: string | null } | null)?.warehouse_id ?? null;
-      if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
+      if (wh) {
+        await assertWarehouseAccess(wh, 'write', this.ctx);
+        destinationWarehouseId = wh;
+      }
+    }
+
+    // Resolve the warehouse to assign to any custom (new) items.
+    // Priority: PO destination warehouse → org's primary/first warehouse.
+    // If there is no warehouse at all, throw a clear error before touching the DB.
+    const hasCustomLines = input.lines.some((l) => Boolean(l.newItemName));
+    let customItemWarehouseId: string | null = destinationWarehouseId;
+    if (hasCustomLines && !customItemWarehouseId) {
+      const access = await getWarehouseAccess(this.ctx);
+      customItemWarehouseId = access.primaryWarehouseId;
+      if (!customItemWarehouseId) {
+        throw new ServiceError(
+          'validation_error',
+          'Pick a destination location (or set up a warehouse) before adding a custom item.',
+        );
+      }
+    }
+
+    // For each line that carries a newItemName, create a real catalog item
+    // via InventoryService (which enforces items:create permission, plan limits,
+    // SKU auto-gen, and warehouse access) and replace the line with its new id.
+    // Custom items are created BEFORE the PO insert — if the PO insert later
+    // fails, the new items remain as harmless unused catalog rows (no orphaned
+    // purchase_order_items, no stock movement at zero qty).
+    const invSvc = new InventoryService(this.ctx);
+    const resolvedLines: Array<{ itemId: string; quantityOrdered: number; unitCost: number }> = [];
+    for (const l of input.lines) {
+      if (l.newItemName) {
+        // Parse through the item schema to apply all Zod defaults (retailPrice,
+        // reorderPoint, reorderQuantity, unitOfMeasure, trackingType, etc.)
+        // before passing to InventoryService.create(), which expects the fully
+        // resolved CreateItemInput shape.
+        const itemInput = createItemSchema.parse({
+          name: l.newItemName,
+          itemType: 'product',
+          status: 'active',
+          unitCost: l.unitCost,
+          quantityOnHand: 0,
+          warehouseId: customItemWarehouseId,
+        });
+        const newItem = await invSvc.create(itemInput);
+        resolvedLines.push({
+          itemId: newItem.id as string,
+          quantityOrdered: l.quantityOrdered,
+          unitCost: l.unitCost,
+        });
+      } else {
+        // itemId is guaranteed present by the refine (validated upstream).
+        resolvedLines.push({
+          itemId: l.itemId!,
+          quantityOrdered: l.quantityOrdered,
+          unitCost: l.unitCost,
+        });
+      }
     }
 
     // Use the caller-supplied PO number (trimmed) when provided; otherwise
@@ -247,7 +316,7 @@ export class PurchaseOrdersService {
       poNumber = (numberRpc as string | null) ?? `PO-${Date.now()}`;
     }
 
-    const subtotal = input.lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
+    const subtotal = resolvedLines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
 
     const { data: po, error } = await this.ctx.supabase
       .from('purchase_orders')
@@ -273,7 +342,7 @@ export class PurchaseOrdersService {
     }
     if (error) throw new ServiceError('internal_error', error.message);
 
-    const linesPayload = input.lines.map((l) => ({
+    const linesPayload = resolvedLines.map((l) => ({
       organization_id: this.ctx.organizationId,
       purchase_order_id: po.id as string,
       item_id: l.itemId,

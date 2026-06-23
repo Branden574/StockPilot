@@ -2,14 +2,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
+// Use vi.hoisted() so these values are available inside vi.mock() factory callbacks,
+// which Vitest hoists before all other statements.
+const { WH_UUID, mockInvCreate: _mockInvCreate } = vi.hoisted(() => ({
+  WH_UUID: 'aaaaaaaa-0000-0000-0000-000000000001' as const,
+  mockInvCreate: vi.fn(async () => ({ id: 'new-item-uuid' })),
+}));
+
 // Full warehouse access — these tests cover create() PO number logic,
 // not warehouse scoping.
+// Uses a proper UUID for the warehouse so createItemSchema.parse() accepts warehouseId.
 vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => ({
-    readableIds: ['wh-a'],
-    writableIds: ['wh-a'],
+    readableIds: [WH_UUID],
+    writableIds: [WH_UUID],
     hasAllAccess: true,
-    primaryWarehouseId: 'wh-a',
+    primaryWarehouseId: WH_UUID,
   })),
   assertWarehouseAccess: vi.fn(),
   forcedWarehouseId: vi.fn(async () => null),
@@ -41,11 +49,32 @@ vi.mock('./item-images', () => ({
   },
 }));
 
+// InventoryService is called by PurchaseOrdersService.create() for custom lines.
+// We stub it so we can assert what it received without a real DB.
+vi.mock('./inventory', () => ({
+  InventoryService: class {
+    create = _mockInvCreate;
+  },
+}));
+
+// Re-export for test use with a readable name.
+const mockInvCreate = _mockInvCreate;
+
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { ServiceError } from './context';
-import { PurchaseOrdersService } from './purchase-orders';
+import { createPoSchema, PurchaseOrdersService } from './purchase-orders';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Reset the InventoryService.create stub to its default success response.
+  mockInvCreate.mockResolvedValue({ id: 'new-item-uuid' });
+  // Reset warehouse access to the full-access default.
+  vi.mocked(getWarehouseAccess).mockResolvedValue({
+    readableIds: [WH_UUID],
+    writableIds: [WH_UUID],
+    hasAllAccess: true,
+    primaryWarehouseId: WH_UUID,
+  });
 });
 
 const MINIMAL_LINE = [{ itemId: 'item-uuid-1', quantityOrdered: 2, unitCost: 10 }];
@@ -108,5 +137,127 @@ describe('PurchaseOrdersService.create — PO number handling', () => {
     expect((thrown as ServiceError).message).toBe('That PO number is already in use.');
     // The purchase_order_items insert must NOT have been attempted.
     expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
+  });
+});
+
+describe('PurchaseOrdersService.create — custom line items', () => {
+  const STUB_PO_ID = 'po-new-id';
+
+  it('creates a catalog item then uses its id for the PO line when newItemName is provided', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_orders.insert': { data: [{ id: STUB_PO_ID }], error: null },
+      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:next_po_number': { data: 'PO-AUTO-1', error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    const result = await svc.create({
+      lines: [{ newItemName: 'Acme Widget', quantityOrdered: 5, unitCost: 12.5 }],
+    });
+
+    // InventoryService.create must have been called once with the correct fields.
+    expect(mockInvCreate).toHaveBeenCalledTimes(1);
+    const invArg = (mockInvCreate.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+    expect(invArg.name).toBe('Acme Widget');
+    expect(invArg.unitCost).toBe(12.5);
+    expect(invArg.itemType).toBe('product');
+    expect(invArg.status).toBe('active');
+    expect(invArg.quantityOnHand).toBe(0);
+    // Warehouse must be org-scoped (from getWarehouseAccess primary, since no
+    // destination location was provided).
+    expect(invArg.warehouseId).toBe(WH_UUID);
+
+    // The PO line insert must carry the new item's id, not a newItemName.
+    // chainArgs layout: chainArgs.get(key) = [ [insertCallArgs...], ... ]
+    // insert is called as .insert(rowsArray) → chainArgs[0] = [rowsArray].
+    const linesInsertArgs = stub.chainArgs.get('purchase_order_items.insert');
+    const linesPayload = linesInsertArgs?.[0]?.[0] as Array<Record<string, unknown>> | undefined;
+    expect(linesPayload).toHaveLength(1);
+    expect(linesPayload?.[0]?.item_id).toBe('new-item-uuid');
+    expect(linesPayload?.[0]?.quantity_ordered).toBe(5);
+    expect(linesPayload?.[0]?.unit_cost).toBe(12.5);
+    expect(linesPayload?.[0]?.organization_id).toBe('org-test');
+
+    expect(result.poNumber).toBe('PO-AUTO-1');
+  });
+
+  it('handles mixed lines: one existing itemId + one newItemName', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_orders.insert': { data: [{ id: STUB_PO_ID }], error: null },
+      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:next_po_number': { data: 'PO-AUTO-2', error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc.create({
+      lines: [
+        { itemId: 'existing-item-uuid', quantityOrdered: 2, unitCost: 20 },
+        { newItemName: 'Brand New Thing', quantityOrdered: 3, unitCost: 7.5 },
+      ],
+    });
+
+    // InventoryService.create called once (only for the custom line).
+    expect(mockInvCreate).toHaveBeenCalledTimes(1);
+    const invArg = (mockInvCreate.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+    expect(invArg.name).toBe('Brand New Thing');
+
+    // Lines payload must have both lines in order, with correct item ids.
+    const linesInsertArgs = stub.chainArgs.get('purchase_order_items.insert');
+    const linesPayload = linesInsertArgs?.[0]?.[0] as Array<Record<string, unknown>> | undefined;
+    expect(linesPayload).toHaveLength(2);
+    expect(linesPayload?.[0]?.item_id).toBe('existing-item-uuid');
+    expect(linesPayload?.[1]?.item_id).toBe('new-item-uuid');
+  });
+
+  it('lineInputSchema refine: rejects a line with BOTH itemId and newItemName', () => {
+    const result = createPoSchema.safeParse({
+      lines: [
+        {
+          itemId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          newItemName: 'Conflict',
+          quantityOrdered: 1,
+          unitCost: 0,
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toContain('exactly one');
+  });
+
+  it('lineInputSchema refine: rejects a line with NEITHER itemId nor newItemName', () => {
+    const result = createPoSchema.safeParse({
+      lines: [{ quantityOrdered: 1, unitCost: 0 }],
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toContain('exactly one');
+  });
+
+  it('throws validation_error when there is no warehouse and the line is custom', async () => {
+    // Simulate an org with no warehouses at all.
+    vi.mocked(getWarehouseAccess).mockResolvedValue({
+      readableIds: [],
+      writableIds: [],
+      hasAllAccess: true,
+      primaryWarehouseId: null,
+    });
+
+    const stub = makeSupabaseStub({
+      'purchase_orders.insert': { data: [{ id: STUB_PO_ID }], error: null },
+      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:next_po_number': { data: 'PO-AUTO-3', error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    const thrown = await svc
+      .create({
+        lines: [{ newItemName: 'No Warehouse Item', quantityOrdered: 1, unitCost: 5 }],
+      })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('validation_error');
+    expect((thrown as ServiceError).message).toContain('destination location');
+    // InventoryService.create must NOT have been called (fail before item creation).
+    expect(mockInvCreate).not.toHaveBeenCalled();
   });
 });
