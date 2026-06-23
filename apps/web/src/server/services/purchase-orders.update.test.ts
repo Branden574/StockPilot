@@ -204,6 +204,32 @@ describe('PurchaseOrdersService.update — status gate', () => {
   });
 });
 
+// ─── concurrent claim race (status-guarded header update) ─────────────────────
+
+describe('PurchaseOrdersService.update — concurrent claim race', () => {
+  it('aborts with conflict (no item created, no lines touched) when the draft-guarded header update hits 0 rows', async () => {
+    // get() still sees a draft (passes the early check), but the status-guarded
+    // header update returns 0 rows — i.e. a concurrent "mark as ordered" raced in
+    // between the get() and the claim. The edit must abort BEFORE creating any
+    // custom item or replacing any line.
+    const stub = makeUpdateStub({
+      'purchase_orders.update': { data: null, error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    const thrown = await svc
+      .update(PO_ID, { lines: [{ newItemName: 'Should Not Exist', quantityOrdered: 1, unitCost: 5 }] })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('conflict');
+    // The claim failed BEFORE any destructive work — no custom item, no line ops.
+    expect(mockInvCreate).not.toHaveBeenCalled();
+    expect(stub.chainsAll.get('purchase_order_items.delete')).toBeUndefined();
+    expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
+  });
+});
+
 // ─── newItemName lines ────────────────────────────────────────────────────────
 
 describe('PurchaseOrdersService.update — newItemName lines', () => {

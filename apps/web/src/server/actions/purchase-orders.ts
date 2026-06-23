@@ -38,6 +38,9 @@ export async function updatePoAction(
   id: string,
   input: CreatePoInput,
 ): Promise<ActionResult<{ id: string; poNumber: string }>> {
+  if (!z.string().uuid().safeParse(id).success) {
+    return err('validation_error', 'Invalid purchase order id');
+  }
   const parsed = createPoSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   try {
