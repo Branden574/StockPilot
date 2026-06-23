@@ -138,6 +138,31 @@ describe('PurchaseOrdersService.create — PO number handling', () => {
     // The purchase_order_items insert must NOT have been attempted.
     expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
   });
+
+  it('pre-checks a supplied duplicate poNumber and rejects BEFORE creating custom items (no orphans)', async () => {
+    const stub = makeSupabaseStub({
+      // Pre-check SELECT finds an existing PO with this number.
+      'purchase_orders.select': { data: [{ id: 'existing-po' }], error: null },
+      'purchase_orders.insert': { data: [{ id: 'po-new' }], error: null },
+      'purchase_order_items.insert': { data: null, error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    const thrown = await svc
+      .create({
+        poNumber: 'DUPLICATE-PO',
+        lines: [{ newItemName: 'Should Not Be Created', quantityOrdered: 1, unitCost: 5 }],
+      })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('conflict');
+    expect((thrown as ServiceError).message).toBe('That PO number is already in use.');
+    // Orphan-fix: no custom catalog item was created and no PO row was inserted,
+    // because the duplicate was caught BEFORE the item-creation loop.
+    expect(mockInvCreate).not.toHaveBeenCalled();
+    expect(stub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
+  });
 });
 
 describe('PurchaseOrdersService.create — custom line items', () => {
