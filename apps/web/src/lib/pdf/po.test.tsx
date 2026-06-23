@@ -69,6 +69,7 @@ const baseLines: PoPdfLine[] = [
     sku: 'SKU-1',
     name: 'Widget',
     quantityOrdered: 2,
+    quantityReceived: 0,
     unitCost: 50,
     lineTotal: 100,
   },

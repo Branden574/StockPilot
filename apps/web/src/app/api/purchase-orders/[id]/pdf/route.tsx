@@ -7,12 +7,13 @@ import { hasPermission } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
-import { PurchaseOrderPdf, type PoPdfLine } from '@/lib/pdf/po';
+import { PurchaseOrderPdf, type PoPdfLine, type PoPdfReceipt } from '@/lib/pdf/po';
 import { audit } from '@/server/services/audit';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
+import { ReceivingService } from '@/server/services/receiving';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 
@@ -66,10 +67,44 @@ export async function GET(
         sku: item?.sku ?? '',
         name: item?.name ?? 'Unknown item',
         quantityOrdered: Number(l.quantity_ordered) || 0,
+        quantityReceived: Number(l.quantity_received) || 0,
         unitCost: Number(l.unit_cost) || 0,
         lineTotal: Number(l.line_total) || 0,
       };
     });
+
+    // Receiving history → receipts table on the PDF. Best-effort: if the
+    // receiving module is disabled (or the lookup errors) we still render the
+    // PO without a receipts section rather than failing the whole export.
+    let receiptRows: PoPdfReceipt[] = [];
+    try {
+      const receivingSvc = new ReceivingService(ctx);
+      const { receipts, lines: receiptLines } = await receivingSvc.listForPurchaseOrder(id);
+      const totalsByReceipt = new Map<string, { accepted: number; rejected: number }>();
+      for (const rl of receiptLines) {
+        const t = totalsByReceipt.get(rl.receipt_id) ?? { accepted: 0, rejected: 0 };
+        t.accepted += Number(rl.qty_accepted_base) || 0;
+        t.rejected += Number(rl.qty_rejected_base) || 0;
+        totalsByReceipt.set(rl.receipt_id, t);
+      }
+      // Oldest-first reads naturally as a chronological receiving log
+      // (the service returns newest-first).
+      receiptRows = [...receipts]
+        .reverse()
+        .map((r) => {
+          const t = totalsByReceipt.get(r.id) ?? { accepted: 0, rejected: 0 };
+          return {
+            receiptNumber: r.receipt_number,
+            receivedAt: r.received_at ?? null,
+            receivedByName: r.received_by_name ?? null,
+            status: r.status,
+            totalAccepted: t.accepted,
+            totalRejected: t.rejected,
+          };
+        });
+    } catch {
+      receiptRows = [];
+    }
 
     // Supplier info — list() is fine; orgs typically have a small
     // supplier set and the data is already cached in the dashboard.
@@ -141,6 +176,7 @@ export async function GET(
         org={{ name: orgName, logoUrl: orgLogoUrl, poTerms: orgPoTerms }}
         supplier={supplier}
         destination={destination}
+        receipts={receiptRows}
       />,
     );
 

@@ -54,7 +54,11 @@ export default async function NewPoPage() {
               unit_cost: i.unit_cost,
             }))}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
-            locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
+            // Only warehouse-backed locations can be receiving destinations — a
+            // warehouse-less location makes the PO impossible to receive against.
+            locations={locations
+              .filter((l) => Boolean((l as { warehouse_id?: string | null }).warehouse_id))
+              .map((l) => ({ id: l.id as string, name: l.name as string }))}
           />
         </CardContent>
       </Card>

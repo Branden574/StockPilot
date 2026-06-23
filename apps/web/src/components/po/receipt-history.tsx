@@ -36,6 +36,19 @@ interface ItemLookup {
   [id: string]: { name: string; sku: string };
 }
 
+/** Absolute received date+time. Rendered inside a suppressHydrationWarning span. */
+function formatReceiptDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 const STATUS_COLORS: Record<ReceiptRow['status'], string> = {
   draft: 'bg-muted text-muted-foreground',
   posted: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300',
@@ -130,14 +143,19 @@ function ReceiptCard({
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="font-mono text-sm font-medium">{receipt.receipt_number}</span>
           <span className={`rounded-full px-2 py-0.5 text-[11px] ${STATUS_COLORS[receipt.status]}`}>
             {receipt.status}
           </span>
           <span className="text-muted-foreground text-xs" suppressHydrationWarning>
-            {formatRelative(receipt.received_at)}
+            {formatReceiptDate(receipt.received_at)} · {formatRelative(receipt.received_at)}
           </span>
+          {receipt.received_by_name && (
+            <span className="text-muted-foreground text-xs">
+              · by <span className="text-foreground font-medium">{receipt.received_by_name}</span>
+            </span>
+          )}
         </div>
         {canReverse && receipt.status === 'posted' && (
           <Button variant="ghost" size="sm" onClick={() => setReverseOpen(true)}>

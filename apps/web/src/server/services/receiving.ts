@@ -6,6 +6,7 @@ import { reportError } from '@/lib/error-reporter';
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { dispatchEvent } from './integration-events';
+import { fetchAllRows } from './lib/paginate';
 
 import type {
   PostReceiptInput,
@@ -24,6 +25,13 @@ export interface ReceiptRow {
   notes: string | null;
   received_by: string;
   received_at: string;
+  /**
+   * Display name of the user who posted the receipt, resolved from
+   * user_profiles (full_name → email → 'Unknown'). Only populated by
+   * listForPurchaseOrder(); the RPC-returning paths (postReceipt/reverse)
+   * leave it undefined since they're not rendered in the history view.
+   */
+  received_by_name?: string | null;
   idempotency_key: string | null;
   created_at: string;
   updated_at: string;
@@ -99,15 +107,48 @@ export class ReceivingService {
     const ids = (receipts ?? []).map((r) => r.id as string);
     if (ids.length === 0) return { receipts: [], lines: [] };
 
-    const { data: lines, error: lErr } = await this.ctx.supabase
-      .from('receipt_lines')
-      .select('*')
-      .in('receipt_id', ids);
-    if (lErr) throw new ServiceError('internal_error', lErr.message);
+    // Paginate: a long-lived PO can accumulate >1000 receipt_lines across many
+    // receipts, and the PDF/detail totals sum these — a silent 1000-row cap
+    // would understate accepted/rejected. Stable .order('id') per the helper.
+    const lines = await fetchAllRows<Record<string, unknown>>((from, to) =>
+      this.ctx.supabase
+        .from('receipt_lines')
+        .select('*')
+        .in('receipt_id', ids)
+        .order('id')
+        .range(from, to),
+    );
+
+    // Resolve received_by → display name so the history can show WHO received
+    // each delivery (full_name, falling back to email). Read-only, org-scoped
+    // via RLS on user_profiles — same pattern as order-requests.
+    type ProfileRow = { id: string; full_name: string | null; email: string | null };
+    const receiverIds = Array.from(
+      new Set(
+        (receipts ?? [])
+          .map((r) => r.received_by as string | null)
+          .filter((v): v is string => Boolean(v)),
+      ),
+    );
+    const nameById = new Map<string, string>();
+    if (receiverIds.length > 0) {
+      const { data: profs } = await this.ctx.supabase
+        .from('user_profiles')
+        .select('id, full_name, email')
+        .in('id', receiverIds);
+      for (const p of (profs ?? []) as ProfileRow[]) {
+        nameById.set(p.id, (p.full_name || p.email || 'Unknown').trim());
+      }
+    }
+
+    const receiptsWithNames = (receipts ?? []).map((r) => ({
+      ...(r as Record<string, unknown>),
+      received_by_name: nameById.get(r.received_by as string) ?? 'Unknown',
+    })) as unknown as ReceiptRow[];
 
     return {
-      receipts: (receipts ?? []) as unknown as ReceiptRow[],
-      lines: (lines ?? []) as unknown as ReceiptLineRow[],
+      receipts: receiptsWithNames,
+      lines: lines as unknown as ReceiptLineRow[],
     };
   }
 

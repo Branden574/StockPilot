@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { requireOrgContext } from '@/lib/auth/session';
+import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { createClient } from '@/lib/supabase/server';
 import { ServiceError } from '@/server/services/context';
 import {
@@ -76,6 +77,15 @@ export async function setPoDestinationWarehouseAction(input: {
   try {
     const ctx = await requireOrgContext();
     const supabase = await createClient();
+
+    // Receiving posts stock INTO this warehouse, so the caller must have write
+    // access to it — mirror the guard in the create()/update() service paths so
+    // this recovery action can't re-point a PO to a warehouse the user can't
+    // actually receive into. Map the ForbiddenError to a clean 'forbidden'
+    // ServiceError (toResult only special-cases ServiceError).
+    await assertWarehouseAccess(parsed.data.warehouseId, 'write', ctx).catch(() => {
+      throw new ServiceError('forbidden', 'You do not have access to receive into that warehouse.');
+    });
 
     // Reuse an existing location for the warehouse, or auto-create one.
     let locationId: string | null = null;
