@@ -48,6 +48,7 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
   const router = useRouter();
   const [supplierId, setSupplierId] = React.useState<string>('');
   const [locationId, setLocationId] = React.useState<string>('');
+  const [poNumber, setPoNumber] = React.useState<string>('');
   const [expectedAt, setExpectedAt] = React.useState<string>('');
   const [notes, setNotes] = React.useState<string>('');
   const [lines, setLines] = React.useState<Line[]>([]);
@@ -77,11 +78,15 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
       return;
     }
     setSubmitting(true);
+    const trimmedPoNumber = poNumber.trim();
     const res = await createPoAction({
       supplierId: supplierId || null,
       destinationLocationId: locationId || null,
       expectedAt: expectedAt ? new Date(expectedAt).toISOString() : null,
       notes: notes || undefined,
+      // Only include poNumber when non-empty; omitting it lets the service
+      // auto-generate via next_po_number().
+      ...(trimmedPoNumber ? { poNumber: trimmedPoNumber } : {}),
       lines: lines.map((l) => ({ itemId: l.itemId, quantityOrdered: l.quantityOrdered, unitCost: l.unitCost })),
     });
     setSubmitting(false);
@@ -137,6 +142,18 @@ export function PoForm({ items, suppliers, locations }: PoFormProps) {
       </div>
 
       <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1.5">
+          <Label>
+            PO number
+            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+          </Label>
+          <Input
+            value={poNumber}
+            onChange={(e) => setPoNumber(e.target.value)}
+            placeholder="Auto-generated if left blank"
+            maxLength={64}
+          />
+        </div>
         <div className="space-y-1.5">
           <Label>
             Expected delivery
