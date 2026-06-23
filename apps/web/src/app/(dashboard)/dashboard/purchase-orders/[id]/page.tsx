@@ -132,14 +132,6 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
           </Button>
           <MakeRecurringButton poId={id} />
           <PoActions poId={id} status={status} />
-          {canReceive && warehouseId && (
-            <PoReceiveDialog
-              poId={id}
-              poNumber={po.po_number as string}
-              warehouseId={warehouseId}
-              lines={lineRows}
-            />
-          )}
         </div>
       </div>
 
@@ -165,8 +157,23 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
 
       <div className="mt-8 grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="text-base">Line items</CardTitle>
+          <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+            <div>
+              <CardTitle className="text-base">Line items</CardTitle>
+              {canReceive && warehouseId && (
+                <p className="text-muted-foreground mt-1 text-xs">
+                  Items arrived? Use “Receive items” to record what was received.
+                </p>
+              )}
+            </div>
+            {canReceive && warehouseId && (
+              <PoReceiveDialog
+                poId={id}
+                poNumber={po.po_number as string}
+                warehouseId={warehouseId}
+                lines={lineRows}
+              />
+            )}
           </CardHeader>
           <CardContent className="p-0">
             <Table>

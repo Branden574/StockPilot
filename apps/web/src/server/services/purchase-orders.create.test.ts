@@ -236,6 +236,22 @@ describe('PurchaseOrdersService.create — custom line items', () => {
     expect(linesPayload?.[1]?.item_id).toBe('new-item-uuid');
   });
 
+  it('stamps auto-created custom items with the origin PO id (for cancel-time cleanup)', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_orders.insert': { data: [{ id: STUB_PO_ID }], error: null },
+      'purchase_order_items.insert': { data: null, error: null },
+      'inventory_items.update': { data: null, error: null },
+      'rpc:next_po_number': { data: 'PO-AUTO-9', error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc.create({ lines: [{ newItemName: 'Stamp Me', quantityOrdered: 1, unitCost: 1 }] });
+
+    const updArgs = stub.chainArgs.get('inventory_items.update');
+    const payload = updArgs?.[0]?.[0] as Record<string, unknown> | undefined;
+    expect(payload?.created_from_purchase_order_id).toBe(STUB_PO_ID);
+  });
+
   it('lineInputSchema refine: rejects a line with BOTH itemId and newItemName', () => {
     const result = createPoSchema.safeParse({
       lines: [
