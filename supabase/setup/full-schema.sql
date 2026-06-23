@@ -423,7 +423,7 @@ create table public.purchase_orders (
   supplier_id              uuid references public.suppliers(id) on delete set null,
   destination_location_id  uuid references public.locations(id) on delete set null,
   status                   text not null default 'draft' check (status in (
-                              'draft','ordered','partially_received','received','cancelled')),
+                              'draft','ordered','expected_inbound','partially_received','received','cancelled')),
   expected_at              timestamptz,
   ordered_at               timestamptz,
   received_at              timestamptz,
@@ -435,9 +435,13 @@ create table public.purchase_orders (
   created_by               uuid references public.user_profiles(id) on delete set null,
   updated_by               uuid references public.user_profiles(id) on delete set null,
   created_at               timestamptz not null default now(),
-  updated_at               timestamptz not null default now(),
-  unique (organization_id, po_number)
+  updated_at               timestamptz not null default now()
 );
+-- po_number uniqueness is enforced ONLY across non-cancelled POs (mirrors
+-- migration 0181) so a cancelled PO's number can be reissued.
+create unique index purchase_orders_org_ponumber_active_key
+  on public.purchase_orders (organization_id, po_number)
+  where status <> 'cancelled';
 create trigger purchase_orders_set_updated_at
   before update on public.purchase_orders
   for each row execute function public.tg_set_updated_at();

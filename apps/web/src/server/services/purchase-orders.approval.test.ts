@@ -127,3 +127,56 @@ describe('PurchaseOrdersService.updateStatus — approval threshold', () => {
     expect(stub.chainsAll.get('purchase_orders.update')).toBeDefined();
   });
 });
+
+describe('PurchaseOrdersService.updateStatus — cancelled is terminal', () => {
+  /** A visible CANCELLED PO. */
+  function cancelledStub() {
+    return makeSupabaseStub({
+      'purchase_orders.select': {
+        data: { id: 'po-1', po_number: 'MLA-001071', status: 'cancelled', total: 0, destination: null },
+        error: null,
+      },
+      'purchase_order_items.select': { data: [], error: null },
+      'purchase_orders.update': { data: { id: 'po-1' }, error: null },
+    });
+  }
+
+  for (const target of ['draft', 'ordered'] as const) {
+    it(`refuses to reopen a cancelled PO (→ ${target}) — its number may be reissued`, async () => {
+      const stub = cancelledStub();
+      const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+      const err = await svc.updateStatus('po-1', target).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('conflict');
+      expect((err as ServiceError).message).toMatch(/cancelled.*cannot be reopened/i);
+      // The terminal guard fires BEFORE any write.
+      expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+    });
+  }
+
+  it('still allows a no-op re-cancel of an already-cancelled PO', async () => {
+    const stub = cancelledStub();
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+    await svc.updateStatus('po-1', 'cancelled');
+    expect(stub.chainsAll.get('purchase_orders.update')).toBeDefined();
+  });
+
+  it('maps a residual partial-index 23505 to a clean conflict (not internal_error)', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_orders.select': {
+        data: { id: 'po-1', po_number: 'X', status: 'draft', total: 0, destination: null },
+        error: null,
+      },
+      'purchase_order_items.select': { data: [], error: null },
+      'purchase_orders.update': {
+        data: null,
+        error: { code: '23505', message: 'duplicate key value violates unique constraint "purchase_orders_org_ponumber_active_key"' },
+      },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+    const err = await svc.updateStatus('po-1', 'draft').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('conflict');
+    expect((err as ServiceError).message).not.toMatch(/duplicate key/i);
+  });
+});
