@@ -384,6 +384,18 @@ export class ReceivingService {
       if (error.message.includes('receipt_not_found')) {
         throw new ServiceError('not_found', 'Receipt not found.');
       }
+      // adjust_stock raises this when the reversal would push on-hand below 0 —
+      // i.e. some of the received stock was already shipped/used. The most
+      // likely real-world reversal failure; surface it clearly, not as a 500.
+      if (error.message.includes('insufficient_stock')) {
+        throw new ServiceError(
+          'conflict',
+          'Cannot reverse: some of this received stock has already been shipped, used, or moved, so on-hand would go negative. Adjust stock back up (or use a return) first, then reverse.',
+        );
+      }
+      if (error.message.includes('item_not_found')) {
+        throw new ServiceError('not_found', 'An item on this receipt no longer exists.');
+      }
       throw new ServiceError('internal_error', error.message);
     }
 
