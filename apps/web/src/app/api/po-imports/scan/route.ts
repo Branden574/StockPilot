@@ -44,15 +44,19 @@ export async function POST(req: Request) {
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   // PO scan extraction is the heaviest Gemini call in the app — up to
-  // 5 files * 8 MB each * multi-second vision runs. Cap at 30/min/user so a
-  // runaway upload loop can't drain the org's quota, while leaving comfortable
-  // headroom for batch-scanning a stack of POs and retries after a failed scan
-  // (every attempt counts). FAIL OPEN: this endpoint is authenticated
-  // (withApiContext 401s above), so a transient rate-limit RPC blip should
-  // log + allow rather than stonewall a legitimate user — matching
-  // lib/rate-limit's guidance (closed mode is only for unauthenticated public
-  // endpoints, where an open failure mode = unlimited submissions).
-  const rl = await checkRateLimit(`ai-po-scan:${ctx.userId}`, 30, 60_000, 'open');
+  // 5 files * 8 MB each * multi-second vision runs. The cap exists ONLY to stop
+  // a runaway/programmatic loop from draining the org's Gemini quota — NOT to
+  // throttle humans. A person can't out-scan this: each scan's vision run takes
+  // ~6-10s, so a real user (even batch-scanning a stack or retrying) tops out
+  // around a handful per minute. Set 90/min/user — comfortably above any human
+  // (incl. rapid testing) yet still a hard ceiling on an automated loop. Every
+  // POST counts (the check is before the expensive call); rate-limited requests
+  // do NOT increment, so a blocked user can't dig themselves deeper.
+  // FAIL OPEN: authenticated endpoint (withApiContext 401s above), so a
+  // transient rate-limit RPC blip should log + allow, not stonewall — matching
+  // lib/rate-limit's guidance (closed mode is for unauthenticated public
+  // endpoints only).
+  const rl = await checkRateLimit(`ai-po-scan:${ctx.userId}`, 90, 60_000, 'open');
   if (!rl.allowed) {
     return NextResponse.json(
       {
