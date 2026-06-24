@@ -17,6 +17,7 @@ const SCOPES: ReadonlyArray<readonly [string, string]> = [
   ['inventory:read', 'Read inventory'],
   ['orders:read', 'Read orders'],
   ['purchase_orders:read', 'Read purchase orders'],
+  ['webhooks:manage', 'Manage automation webhooks (Zapier / Make / n8n)'],
 ];
 
 export interface PanelApiKey {

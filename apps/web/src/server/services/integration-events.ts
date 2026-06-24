@@ -61,6 +61,17 @@ export const INTEGRATION_EVENT_TYPES = [
 
 export type IntegrationEventType = (typeof INTEGRATION_EVENT_TYPES)[number];
 
+/**
+ * Event types a PUBLIC API key (scope `webhooks:manage`) may subscribe to.
+ * Excludes the `security.*` forensic feed (member emails, IPs, MFA/role changes,
+ * key lifecycle) — that stream is only wirable by an interactive admin in the
+ * dashboard (e.g. a #security Slack channel), never by a long-lived automation
+ * credential that could exfiltrate it to an arbitrary endpoint.
+ */
+export const PUBLIC_HOOK_EVENT_TYPES = INTEGRATION_EVENT_TYPES.filter(
+  (t) => !t.startsWith('security.'),
+) as readonly string[];
+
 export type EndpointType = 'webhook' | 'slack' | 'teams';
 
 const MAX_ATTEMPTS = 6;
