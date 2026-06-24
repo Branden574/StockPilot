@@ -50,6 +50,18 @@ describe('describeEvent', () => {
     expect(summary).toBe('something.weird');
   });
 
+  it('renders order.status_changed with the order number and new status', () => {
+    // Contract the new staging/packing-slip dispatch sites rely on.
+    const { title, summary } = describeEvent('order.status_changed', {
+      id: 'abcd1234-0000',
+      orderNumber: 'ABCD1234',
+      status: 'staged_for_delivery',
+    });
+    expect(title).toBeTruthy();
+    expect(summary).toContain('ABCD1234');
+    expect(summary).toContain('staged_for_delivery');
+  });
+
   it('renders every security event with identity context and no raw secrets', () => {
     const newDevice = describeEvent('security.new_device_login', {
       email: 'jo@org.com',
