@@ -78,10 +78,11 @@ const baseLines: PoPdfLine[] = [
 function render(opts: {
   status?: string;
   poTerms?: string | null;
+  lines?: PoPdfLine[];
 }): TreeNode[] {
   const tree = PurchaseOrderPdf({
     po: { ...baseHeader, status: opts.status ?? baseHeader.status },
-    lines: baseLines,
+    lines: opts.lines ?? baseLines,
     org: {
       name: 'Acme Co',
       logoUrl: null,
@@ -155,6 +156,50 @@ describe('PurchaseOrderPdf', () => {
     expect(captions.some((t) => t.includes('Accepted by (Supplier)'))).toBe(
       true,
     );
+  });
+
+  it('renders an Outstanding column header', () => {
+    const nodes = render({});
+    const header = nodes.find(
+      (n) => textOf(n.props.children).trim() === 'Outstanding',
+    );
+    expect(header).toBeDefined();
+  });
+
+  it('shows the still-owed quantity (ordered − received) on a partially-received line', () => {
+    const nodes = render({
+      status: 'partially_received',
+      lines: [
+        { sku: 'SKU-1', name: 'Widget', quantityOrdered: 100, quantityReceived: 40, unitCost: 1, lineTotal: 100 },
+      ],
+    });
+    // Outstanding cell = 100 - 40 = 60, bolded (still owed).
+    const outstanding = nodes.find(
+      (n) =>
+        textOf(n.props.children).trim() === '60' &&
+        Array.isArray(n.props.style) &&
+        (n.props.style as Array<{ fontFamily?: string }>).some(
+          (s) => s && s.fontFamily === 'Helvetica-Bold',
+        ),
+    );
+    expect(outstanding).toBeDefined();
+  });
+
+  it('shows 0 outstanding once a line is fully received, and never goes negative on over-receipt', () => {
+    const nodes = render({
+      status: 'received',
+      lines: [
+        // exact fill
+        { sku: 'A', name: 'A', quantityOrdered: 5, quantityReceived: 5, unitCost: 1, lineTotal: 5 },
+        // over-receipt: 7 received vs 5 ordered → clamps to 0, not -2
+        { sku: 'B', name: 'B', quantityOrdered: 5, quantityReceived: 7, unitCost: 1, lineTotal: 5 },
+      ],
+    });
+    const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
+    expect(allText).not.toContain('-2');
+    // Both lines' outstanding cells read 0.
+    const zeros = nodes.filter((n) => textOf(n.props.children).trim() === '0');
+    expect(zeros.length).toBeGreaterThanOrEqual(2);
   });
 
   it('keeps existing totals + line items intact', () => {

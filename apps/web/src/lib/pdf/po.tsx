@@ -86,12 +86,13 @@ interface PurchaseOrderPdfProps {
 // Fixed-width column layout for the PO line table. Sum to ~100 so flex
 // widths translate cleanly to the available row.
 const PO_COLS = {
-  num: 5,
-  sku: 16,
-  name: 32,
-  qty: 10,
+  num: 4,
+  sku: 14,
+  name: 26,
+  qty: 9,
   recv: 9,
-  unit: 14,
+  out: 11,
+  unit: 13,
   total: 14,
 } as const;
 
@@ -212,6 +213,9 @@ export function PurchaseOrderPdf({
               <Text style={[pdfStyles.tHeadCell, { flex: PO_COLS.name }]}>Description</Text>
               <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>Ordered</Text>
               <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.recv }]}>Recv</Text>
+              <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.out }]}>
+                Outstanding
+              </Text>
               <Text style={[pdfStyles.tHeadCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
                 Unit cost
               </Text>
@@ -250,6 +254,22 @@ export function PurchaseOrderPdf({
                   </Text>
                   <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.recv }]}>
                     {formatNumberForPdf(l.quantityReceived)}
+                  </Text>
+                  {/*
+                   * Outstanding = still-owed quantity (ordered − received),
+                   * clamped at 0 so an over-receipt never prints a negative.
+                   * Bolded while > 0 so a partially-received PO clearly shows
+                   * what's still on the way; reads 0 once fully received.
+                   */}
+                  <Text
+                    style={[
+                      pdfStyles.tCell,
+                      pdfStyles.tRight,
+                      Math.max(0, l.quantityOrdered - l.quantityReceived) > 0 ? pdfStyles.bold : pdfStyles.muted,
+                      { flex: PO_COLS.out },
+                    ]}
+                  >
+                    {formatNumberForPdf(Math.max(0, l.quantityOrdered - l.quantityReceived))}
                   </Text>
                   <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
                     {formatCurrencyForPdf(l.unitCost)}
