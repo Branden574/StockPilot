@@ -88,6 +88,13 @@ export function PoImportDetail({
   // Whether newly-created items are products (default) or books. A "book PO"
   // creates item_type='book' so the lines land on the Books tab.
   const [createItemType, setCreateItemType] = React.useState<'product' | 'book'>('product');
+  // Physical placement applied to every created item. Rack → items + books;
+  // crate → books only. For books the rack also scopes the ISBN merge, so books
+  // landing on a different rack stay separate from an existing same-ISBN copy.
+  const [rackNumber, setRackNumber] = React.useState<string>('');
+  const [rackRow, setRackRow] = React.useState<string>('');
+  const [crateColor, setCrateColor] = React.useState<string>('');
+  const [crateNumber, setCrateNumber] = React.useState<string>('');
   // Locations belong to a warehouse — only offer those in the chosen warehouse,
   // and clear the selection if the warehouse changes out from under it.
   const warehouseLocations = locations.filter((l) => l.warehouseId === warehouseId);
@@ -385,6 +392,30 @@ export function PoImportDetail({
               onChange={(e) => setExpectedAt(e.target.value)}
             />
           </div>
+          <div>
+            <label className="text-muted-foreground text-xs">Rack number (optional)</label>
+            <Input value={rackNumber} onChange={(e) => setRackNumber(e.target.value)} placeholder="e.g. 41" />
+          </div>
+          <div>
+            <label className="text-muted-foreground text-xs">Rack row (optional)</label>
+            <Input
+              value={rackRow}
+              onChange={(e) => setRackRow(e.target.value.toUpperCase())}
+              placeholder="e.g. B"
+            />
+          </div>
+          {createItemType === 'book' && (
+            <>
+              <div>
+                <label className="text-muted-foreground text-xs">Crate color (optional)</label>
+                <Input value={crateColor} onChange={(e) => setCrateColor(e.target.value)} placeholder="e.g. Gray" />
+              </div>
+              <div>
+                <label className="text-muted-foreground text-xs">Crate number (optional)</label>
+                <Input value={crateNumber} onChange={(e) => setCrateNumber(e.target.value)} placeholder="e.g. Bin" />
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -624,6 +655,10 @@ export function PoImportDetail({
         charterId={charterId || null}
         locationId={locationId || null}
         itemType={createItemType}
+        rackNumber={rackNumber}
+        rackRow={rackRow}
+        crateColor={crateColor}
+        crateNumber={crateNumber}
         lines={createLines}
         onSuccess={(counts) => {
           const parts: string[] = [];
