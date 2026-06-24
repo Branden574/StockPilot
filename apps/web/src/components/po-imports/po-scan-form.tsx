@@ -23,6 +23,20 @@ export function PoScanForm() {
   const [files, setFiles] = React.useState<File[]>([]);
   const [busy, setBusy] = React.useState(false);
   const [dragOver, setDragOver] = React.useState(false);
+  // Optimistic extraction progress. The scan is one request (upload + Gemini
+  // vision, ~6-10s) with no server-streamed progress, so we ease a bar to ~92%
+  // over ~13s on elapsed time, hold there until the response lands, then snap to
+  // 100%, cycling stage labels so the user sees roughly where it is.
+  const [pct, setPct] = React.useState(0);
+  const [stage, setStage] = React.useState('');
+  const progressTimer = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+  React.useEffect(
+    () => () => {
+      if (progressTimer.current) clearInterval(progressTimer.current);
+    },
+    [],
+  );
 
   function add(picked: FileList | File[]) {
     const incoming = Array.from(picked);
@@ -51,6 +65,32 @@ export function PoScanForm() {
       return;
     }
     setBusy(true);
+
+    // Drive the optimistic progress bar + rotating stage labels off elapsed time.
+    const STAGES = [
+      'Uploading…',
+      'Reading the document…',
+      'Extracting vendor & line items…',
+      'Finishing up…',
+    ];
+    setPct(0);
+    setStage(STAGES[0]!);
+    const start = Date.now();
+    progressTimer.current = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const t = Math.min(1, elapsed / 13000);
+      const eased = 1 - (1 - t) * (1 - t); // ease-out quad
+      setPct(Math.round(eased * 92));
+      setStage(STAGES[Math.min(STAGES.length - 1, Math.floor(elapsed / 3200))]!);
+    }, 120);
+
+    const stopProgress = () => {
+      if (progressTimer.current) {
+        clearInterval(progressTimer.current);
+        progressTimer.current = null;
+      }
+    };
+
     try {
       const fd = new FormData();
       for (const f of files) fd.append('file', f);
@@ -63,6 +103,8 @@ export function PoScanForm() {
         toast.error(json.message || `Couldn't scan the upload (${res.status}). Try again or use a clearer photo.`);
         return;
       }
+      stopProgress();
+      setPct(100);
       if (json.duplicateOf) {
         toast.success('Already scanned earlier. Opening the existing import.');
       } else if (json.lowConfidenceLines > 0) {
@@ -76,6 +118,7 @@ export function PoScanForm() {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Couldn't reach the scan service. Check your network and try again.");
     } finally {
+      stopProgress();
       setBusy(false);
     }
   }
@@ -144,24 +187,34 @@ export function PoScanForm() {
         </ul>
       )}
 
-      <div className="flex flex-wrap gap-2">
-        <Button onClick={submit} disabled={busy || files.length === 0} variant="gradient">
-          {busy ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" /> Extracting…
-            </>
-          ) : (
-            <>
-              <Sparkles className="h-4 w-4" /> Extract with AI
-            </>
-          )}
-        </Button>
-        {files.length > 0 && !busy && (
-          <Button variant="outline" onClick={() => setFiles([])}>
-            Clear
+      {busy ? (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {stage || 'Working…'}
+          </div>
+          <div className="bg-muted h-2 w-full overflow-hidden rounded-full">
+            <div
+              className="bg-foreground h-full rounded-full transition-[width] duration-200 ease-out"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <p className="text-muted-foreground text-xs">
+            Extracting with AI — this usually takes a few seconds. Keep this tab open.
+          </p>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={submit} disabled={files.length === 0} variant="gradient">
+            <Sparkles className="h-4 w-4" /> Extract with AI
           </Button>
-        )}
-      </div>
+          {files.length > 0 && (
+            <Button variant="outline" onClick={() => setFiles([])}>
+              Clear
+            </Button>
+          )}
+        </div>
+      )}
 
       <p className="text-xs text-muted-foreground">
         Scanned POs run through Gemini 2.0 Flash (free tier on Google AI

@@ -7,6 +7,8 @@ import * as React from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   Image,
   Pressable,
   ScrollView,
@@ -47,6 +49,25 @@ export default function ScanPo() {
   const [cameraOpen, setCameraOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const cameraRef = React.useRef<CameraView | null>(null);
+
+  // Extraction progress. The scan is one request (upload + Gemini vision, ~6-10s)
+  // with no server-streamed progress, so we drive an optimistic bar on elapsed
+  // time: ease to ~92% over ~13s, hold there until the response lands, and cycle
+  // descriptive stage labels so the user sees roughly where it is.
+  const progressAnim = React.useRef(new Animated.Value(0)).current;
+  const [stageLabel, setStageLabel] = React.useState('');
+  const stageTimer = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopProgress = React.useCallback(() => {
+    if (stageTimer.current) {
+      clearInterval(stageTimer.current);
+      stageTimer.current = null;
+    }
+    progressAnim.stopAnimation();
+  }, [progressAnim]);
+
+  // Clear the interval if the screen unmounts mid-extraction.
+  React.useEffect(() => () => stopProgress(), [stopProgress]);
 
   async function openCamera() {
     if (!permission?.granted) {
@@ -116,6 +137,28 @@ export default function ScanPo() {
       return;
     }
     setBusy(true);
+
+    // Kick off the optimistic progress bar + rotating stage labels.
+    const STAGES = [
+      'Uploading photos…',
+      'Reading the document…',
+      'Extracting vendor & line items…',
+      'Finishing up…',
+    ];
+    setStageLabel(STAGES[0]!);
+    let si = 0;
+    stageTimer.current = setInterval(() => {
+      si = Math.min(si + 1, STAGES.length - 1);
+      setStageLabel(STAGES[si]!);
+    }, 3200);
+    progressAnim.setValue(0);
+    Animated.timing(progressAnim, {
+      toValue: 0.92,
+      duration: 13000,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false, // animating width %, not a transform
+    }).start();
+
     try {
       const fd = new FormData();
       for (const f of frames) {
@@ -151,6 +194,13 @@ export default function ScanPo() {
         Alert.alert('Scan failed', msg);
         return;
       }
+      // Snap the bar to 100% so the success feels complete before the alert.
+      setStageLabel('Done');
+      Animated.timing(progressAnim, {
+        toValue: 1,
+        duration: 250,
+        useNativeDriver: false,
+      }).start();
       const reviewUrl = `${API_BASE}/dashboard/purchase-orders/imports/${json.id}`;
       Alert.alert(
         'Extracted',
@@ -169,6 +219,7 @@ export default function ScanPo() {
     } catch (err) {
       Alert.alert('Scan failed', err instanceof Error ? err.message : 'Network error');
     } finally {
+      stopProgress();
       setBusy(false);
     }
   }
@@ -259,23 +310,43 @@ export default function ScanPo() {
           </View>
         )}
 
-        {frames.length > 0 && (
+        {frames.length > 0 && !busy && (
           <Pressable
             onPress={submit}
-            disabled={busy}
             style={({ pressed }) => [
               styles.extractBtn,
-              (pressed || busy) && { opacity: 0.7 },
+              pressed && { opacity: 0.7 },
             ]}
           >
-            {busy ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.extractBtnText}>
-                ✨  Extract {frames.length} {frames.length === 1 ? 'page' : 'pages'}
-              </Text>
-            )}
+            <Text style={styles.extractBtnText}>
+              ✨  Extract {frames.length} {frames.length === 1 ? 'page' : 'pages'}
+            </Text>
           </Pressable>
+        )}
+
+        {busy && (
+          <View style={styles.progressCard}>
+            <View style={styles.progressHeaderRow}>
+              <ActivityIndicator color={theme.primary} />
+              <Text style={styles.progressLabel}>{stageLabel || 'Working…'}</Text>
+            </View>
+            <View style={styles.progressTrack}>
+              <Animated.View
+                style={[
+                  styles.progressFill,
+                  {
+                    width: progressAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ['0%', '100%'],
+                    }),
+                  },
+                ]}
+              />
+            </View>
+            <Text style={styles.progressHint}>
+              Extracting with AI — this usually takes a few seconds. Keep the app open.
+            </Text>
+          </View>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -400,4 +471,23 @@ const styles = StyleSheet.create({
     marginTop: space.sm,
   },
   extractBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  progressCard: {
+    marginTop: space.md,
+    backgroundColor: theme.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.border,
+    borderRadius: radius.md,
+    padding: space.md,
+    gap: space.sm,
+  },
+  progressHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  progressLabel: { color: theme.text, fontSize: 14, fontWeight: '600' },
+  progressTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.border,
+    overflow: 'hidden',
+  },
+  progressFill: { height: '100%', borderRadius: 4, backgroundColor: theme.primary },
+  progressHint: { color: theme.textMuted, fontSize: 12 },
 });
