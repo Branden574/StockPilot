@@ -35,23 +35,45 @@ export function BlankZeroNumberInput({
   placeholder = '0',
   ...rest
 }: Props) {
-  const displayValue =
-    value === 0 || value === null || value === undefined ? '' : String(value);
+  // Hold the RAW text the user is typing. Deriving the displayed value purely
+  // from Number(value) silently strips the decimal point and trailing/leading
+  // zeros — String(Number("16.50")) === "16.5", String(Number("10.")) === "10"
+  // — which makes "0", "0.50", a decimal point, and trailing zeros impossible
+  // to type (the characters vanish as you enter them). We keep the text as the
+  // source of truth for the field and only emit the parsed number upward.
+  const toText = React.useCallback(
+    (v: number | null | undefined) =>
+      v === 0 || v === null || v === undefined ? '' : String(v),
+    [],
+  );
+  const [text, setText] = React.useState<string>(() => toText(value));
+
+  // Resync when the external value changes to something the current text
+  // doesn't already represent (form reset, prefill, programmatic set). Never
+  // clobber an in-progress entry that already parses to the same number — e.g.
+  // typing "16.50" emits 16.5, which round-trips back as a value of 16.5; we
+  // must keep showing "16.50", not snap it to "16.5".
+  React.useEffect(() => {
+    const currentNum = text.trim() === '' ? 0 : Number(text);
+    const sameNumber = Number.isFinite(currentNum) && currentNum === (value ?? 0);
+    if (!sameNumber) setText(toText(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- resync on the external value only
+  }, [value]);
+
   return (
     <Input
       {...rest}
       type="number"
-      inputMode="numeric"
-      value={displayValue}
+      // Fractional step ⇒ a decimal entry is expected, so offer the decimal
+      // keypad (which includes "."); whole-number fields keep the numeric pad.
+      inputMode={Number(rest.step) > 0 && Number(rest.step) < 1 ? 'decimal' : 'numeric'}
+      value={text}
       placeholder={placeholder}
       onChange={(e) => {
         const raw = e.target.value;
-        if (raw === '') {
-          onValueChange(0);
-          return;
-        }
-        const n = Number(raw);
-        if (Number.isFinite(n)) onValueChange(n);
+        setText(raw); // keep the raw text so partial entries like "0.", "10." survive
+        const n = raw.trim() === '' ? 0 : Number(raw);
+        onValueChange(Number.isFinite(n) ? n : 0);
       }}
     />
   );
