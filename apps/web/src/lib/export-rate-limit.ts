@@ -37,6 +37,21 @@ export async function exportRateLimited(
   if (rl.allowed) return null;
 
   if (organizationId) {
+    // Record EVERY trip (un-deduped) so the hourly audit-anomaly cron can detect
+    // a sustained export-abuse pattern by counting trips per actor. The per-org
+    // alert below stays dedup-gated (1/hour) so it doesn't spam the webhook.
+    void createAdminClient()
+      .from('audit_logs')
+      .insert({ organization_id: organizationId, user_id: userId, event: 'security.export_rate_limited' })
+      .then(({ error }) => {
+        if (error) {
+          void reportError(new Error(`export-rate-limit.audit: ${error.message}`), {
+            tag: 'export-rate-limit.audit',
+            level: 'warning',
+          });
+        }
+      });
+
     try {
       // Fail OPEN here (unlike the export budget): this key only dedupes the
       // alert — if its read errors we'd rather send a duplicate alert than
