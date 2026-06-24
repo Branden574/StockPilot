@@ -8,6 +8,8 @@ import { InventoryService } from '@/server/services/inventory';
 import { PoImportsService } from '@/server/services/po-imports';
 import { VendorItemMappingsService } from '@/server/services/vendor-item-mappings';
 import { requireOrgContext } from '@/lib/auth/session';
+import { extractIsbnsFromText } from '@/lib/books/isbn-extract';
+import { isbnVariants } from '@/lib/books/isbn-variants';
 import { createClient } from '@/lib/supabase/server';
 import { generateSku } from '@/lib/utils';
 
@@ -287,6 +289,44 @@ export async function createItemsFromPoLinesAction(input: {
       }
 
       let resolvedItemId: string;
+      // Set when a book line auto-links to an existing book by ISBN — that book
+      // is pre-existing (not import-created), so it must NOT be flagged
+      // item_created (else a later cancel would archive a real book).
+      let linkedExistingByIsbn = false;
+
+      // Book ISBN auto-match: for a book import, pull the ISBN off the line
+      // (vendor numbers or the description) and look for an existing book whose
+      // barcode is that ISBN (in either ISBN-10/13 form). A hit means we link
+      // the PO line to that book so RECEIVING adds to its on-hand count instead
+      // of creating a duplicate (e.g. 10 on hand + 20 received = 30).
+      let bookIsbn: string | null = null;
+      let isbnMatchItemId: string | null = null;
+      if (parsed.data.itemType === 'book') {
+        const haystack = [
+          vendorItemNumber,
+          vendorProductNumber,
+          auxiliaryNumber,
+          description,
+        ]
+          .filter(Boolean)
+          .join(' ');
+        bookIsbn = extractIsbnsFromText(haystack)[0] ?? null;
+        if (bookIsbn) {
+          const variants = isbnVariants(bookIsbn);
+          if (variants.length > 0) {
+            const { data: existingBook } = await supabase
+              .from('inventory_items')
+              .select('id')
+              .eq('organization_id', ctx.organizationId)
+              .eq('item_type', 'book')
+              .in('barcode', variants)
+              .is('deleted_at', null)
+              .limit(1)
+              .maybeSingle();
+            isbnMatchItemId = (existingBook?.id as string | undefined) ?? null;
+          }
+        }
+      }
 
       if (decision.mode === 'use_existing') {
         if (!decision.itemId) {
@@ -309,6 +349,12 @@ export async function createItemsFromPoLinesAction(input: {
         }
         resolvedItemId = existing.id as string;
         linked++;
+      } else if (isbnMatchItemId) {
+        // Book matched an existing book by ISBN — link so receiving tops up its
+        // count instead of creating a duplicate. Not import-created.
+        resolvedItemId = isbnMatchItemId;
+        linked++;
+        linkedExistingByIsbn = true;
       } else {
         // mode === 'create'
         // Prefer the user-edited name from the modal; otherwise auto-clean
@@ -324,9 +370,10 @@ export async function createItemsFromPoLinesAction(input: {
         const item = await inventorySvc.create({
           name: finalName,
           sku: generateSku(),
-          // Use the vendor's item number as the barcode so scanning the
-          // physical packaging finds it later.
-          barcode: vendorItemNumber ?? vendorProductNumber ?? undefined,
+          // For books, store the ISBN as the barcode so a future book PO with
+          // the same ISBN matches this one. Otherwise use the vendor's item
+          // number so scanning the physical packaging finds it later.
+          barcode: bookIsbn ?? vendorItemNumber ?? vendorProductNumber ?? undefined,
           unitCost: Number(l.unit_cost ?? 0) || 0,
           retailPrice: 0,
           quantityOnHand: 0,
@@ -356,7 +403,10 @@ export async function createItemsFromPoLinesAction(input: {
           item_id: resolvedItemId,
           match_status: 'mapped',
           exception_reason: null,
-          item_created: decision.mode === 'create',
+          // Only flag item_created when WE actually created a new item — an
+          // ISBN auto-link reuses a pre-existing book, which cancel-cleanup
+          // must never archive.
+          item_created: decision.mode === 'create' && !linkedExistingByIsbn,
         })
         .eq('id', l.id as string);
       if (updErr) throw new ServiceError('internal_error', updErr.message);
