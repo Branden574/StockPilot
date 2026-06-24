@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
+import { Input } from '@/components/ui/input';
 import {
   Dialog,
   DialogContent,
@@ -55,6 +56,8 @@ interface Props {
   charters: Array<{ id: string; name: string }>;
   locations: Array<{ id: string; name: string; warehouseId: string }>;
   items: Item[];
+  /** AI-extracted expected delivery date (YYYY-MM-DD) prefilled into the picker. */
+  defaultExpectedAt?: string | null;
 }
 
 export function PoImportDetail({
@@ -65,6 +68,7 @@ export function PoImportDetail({
   charters,
   locations,
   items,
+  defaultExpectedAt,
 }: Props) {
   const router = useRouter();
   const [vendorId, setVendorId] = React.useState<string>(header.vendor_id ?? '');
@@ -78,6 +82,9 @@ export function PoImportDetail({
   // Optional bill-to charter for the created PO — distinct from the item
   // charter above; this is the entity the PO is billed to (shown on the PDF).
   const [billToCharterId, setBillToCharterId] = React.useState<string>('');
+  // Expected delivery date for the created PO, prefilled from the AI-extracted
+  // ship/delivery date when present. `<input type="date">` value is YYYY-MM-DD.
+  const [expectedAt, setExpectedAt] = React.useState<string>(defaultExpectedAt ?? '');
   // Locations belong to a warehouse — only offer those in the chosen warehouse,
   // and clear the selection if the warehouse changes out from under it.
   const warehouseLocations = locations.filter((l) => l.warehouseId === warehouseId);
@@ -158,6 +165,7 @@ export function PoImportDetail({
       vendorId,
       locationId: locationId || null,
       charterId: billToCharterId || null,
+      expectedAt: expectedAt ? new Date(expectedAt).toISOString() : null,
       lineOverrides: Object.entries(overrides).map(([lineId, o]) => ({
         lineId,
         itemId: o.itemId ?? null,
@@ -350,6 +358,14 @@ export function PoImportDetail({
                 ))}
               </SelectContent>
             </Select>
+          </div>
+          <div>
+            <label className="text-muted-foreground text-xs">Expected delivery (optional)</label>
+            <Input
+              type="date"
+              value={expectedAt}
+              onChange={(e) => setExpectedAt(e.target.value)}
+            />
           </div>
         </div>
       )}

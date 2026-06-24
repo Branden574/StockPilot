@@ -157,6 +157,27 @@ export async function renamePoNumberAction(
   }
 }
 
+export async function updatePoNotesAction(
+  id: string,
+  notes: string,
+): Promise<ActionResult<{ id: string }>> {
+  if (!z.string().uuid().safeParse(id).success) {
+    return err('validation_error', 'Invalid purchase order id');
+  }
+  if (typeof notes !== 'string' || notes.length > 2000) {
+    return err('validation_error', 'Notes are too long (2000 characters max).');
+  }
+  try {
+    const svc = await PurchaseOrdersService.forCurrentUser();
+    const result = await svc.updateNotes(id, notes);
+    revalidatePath('/dashboard/purchase-orders');
+    revalidatePath(`/dashboard/purchase-orders/${id}`);
+    return ok(result);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 export async function updatePoStatusAction(id: string, status: 'draft' | 'ordered' | 'cancelled'): Promise<ActionResult<void>> {
   try {
     const svc = await PurchaseOrdersService.forCurrentUser();

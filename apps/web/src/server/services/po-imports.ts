@@ -615,6 +615,7 @@ export class PoImportsService {
         supplier_id: input.vendorId,
         destination_location_id: destinationLocationId,
         charter_id: billToCharterId,
+        expected_at: input.expectedAt ?? null,
         notes: `Imported from PO file (po_import ${input.poImportId})`,
         subtotal,
         total: subtotal,

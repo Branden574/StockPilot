@@ -179,6 +179,8 @@ describe('PoImportsService.approve — stamps created items + destination (Fix #
     const poInsert = stub.chainArgs.get('purchase_orders.insert')?.[0]?.[0] as Record<string, unknown>;
     expect(poInsert?.destination_location_id).toBe('loc-chosen');
     expect(poInsert?.status).toBe('expected_inbound');
+    // expected_at defaults to null when no expectedAt is supplied.
+    expect(poInsert?.expected_at ?? null).toBeNull();
 
     // Fix #2: created_from_purchase_order_id stamped onto the import-created item,
     // so cancelling the PO later archives it via the normal cleanup.
@@ -191,6 +193,22 @@ describe('PoImportsService.approve — stamps created items + destination (Fix #
     const lineSelectArgs = (stub.chainArgsAll.get('po_import_lines.select') ?? []).flat(2);
     expect(lineSelectArgs).toContain('item_created');
     expect(lineSelectArgs).toContain(true);
+  });
+
+  it('sets expected_at on the created PO when an expectedAt is supplied', async () => {
+    const stub = makeApproveStub();
+    const svc = new PoImportsService(makeServiceContext(stub.client) as never);
+
+    await svc.approve({
+      poImportId: IMPORT_ID,
+      vendorId: 'vendor-1',
+      warehouseId: WH_UUID,
+      expectedAt: '2026-07-15T00:00:00.000Z',
+      lineOverrides: [],
+    } as never);
+
+    const poInsert = stub.chainArgs.get('purchase_orders.insert')?.[0]?.[0] as Record<string, unknown>;
+    expect(poInsert?.expected_at).toBe('2026-07-15T00:00:00.000Z');
   });
 
   it('rejects approving an import that is not in a reviewable status', async () => {

@@ -34,6 +34,13 @@ export default async function PoImportDetailPage({
     (await LocationsService.forCurrentUser()).list(),
   ]);
 
+  // Prefill the expected-delivery picker from the AI-extracted ship/delivery
+  // date stored in parsed_json (scan imports only). Only a clean YYYY-MM-DD is
+  // accepted — `<input type="date">` rejects anything else.
+  const rawExpected =
+    (header as { parsed_json?: { expectedDate?: string } | null }).parsed_json?.expectedDate?.trim() ?? '';
+  const defaultExpectedAt = /^\d{4}-\d{2}-\d{2}$/.test(rawExpected) ? rawExpected : null;
+
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -65,6 +72,7 @@ export default async function PoImportDetailPage({
           name: i.name,
           quantityOnHand: Number(i.quantity_on_hand) || 0,
         }))}
+        defaultExpectedAt={defaultExpectedAt}
       />
     </div>
   );
