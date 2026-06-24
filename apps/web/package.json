@@ -57,7 +57,7 @@
     "stripe": "^17.4.0",
     "tailwind-merge": "^2.5.4",
     "tailwindcss-animate": "^1.0.7",
-    "undici": "^6.25.0",
+    "undici": "^6.27.0",
     "zod": "^3.23.8",
     "zustand": "^5.0.1"
   },
