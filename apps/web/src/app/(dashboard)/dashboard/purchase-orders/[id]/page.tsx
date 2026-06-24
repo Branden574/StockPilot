@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import { ItemThumb } from '@/components/items/item-thumb';
 import { MakeRecurringButton } from '@/components/po/make-recurring-button';
 import { PoReceiveDialog } from '@/components/po/po-receive-dialog';
+import { PoNotesEditor } from '@/components/po/po-notes-editor';
 import { PoRenameButton } from '@/components/po/po-rename-button';
 import { PoSetDestination } from '@/components/po/po-set-destination';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
@@ -254,12 +255,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
             />
             <Row label="Subtotal" value={formatCurrency(po.subtotal as number)} />
             <Row label="Total" value={formatCurrency(po.total as number)} bold />
-            {po.notes && (
-              <div className="space-y-1 border-t pt-3">
-                <p className="text-muted-foreground text-xs uppercase tracking-wider">Notes</p>
-                <p className="whitespace-pre-wrap text-sm">{po.notes as string}</p>
-              </div>
-            )}
+            <PoNotesEditor poId={id} currentNotes={(po.notes as string | null) ?? null} />
           </CardContent>
         </Card>
       </div>

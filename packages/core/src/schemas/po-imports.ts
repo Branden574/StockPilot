@@ -99,6 +99,11 @@ export const approvePoImportSchema = z.object({
    * creating items from the import. Verified against the org server-side.
    */
   charterId: z.string().uuid().nullable().optional(),
+  /**
+   * Optional expected delivery date for the created PO (ISO datetime). Prefilled
+   * from the AI-extracted ship/delivery date when present; user can override.
+   */
+  expectedAt: z.string().datetime().nullable().optional(),
   /** Per-line overrides; caller can change line item / classification before approval. */
   lineOverrides: z
     .array(

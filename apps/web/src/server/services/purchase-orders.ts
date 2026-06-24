@@ -758,6 +758,53 @@ export class PurchaseOrdersService {
     return { id, poNumber: trimmed };
   }
 
+  /**
+   * Update just the free-text notes on a PO. Unlike update() (which replaces
+   * lines + recomputes totals and is therefore draft-only), notes are a pure
+   * annotation with no stock/money impact, so this is allowed at ANY status —
+   * including received/ordered/expected_inbound POs that can't use the
+   * draft-only edit form. Pass an empty string to clear the notes.
+   */
+  async updateNotes(id: string, notes: string): Promise<{ id: string }> {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
+    assertPermission(this.ctx, 'purchase_orders:manage');
+
+    const trimmed = (notes ?? '').trim();
+    if (trimmed.length > 2000) {
+      throw new ServiceError('validation_error', 'Notes are too long (2000 characters max).');
+    }
+
+    // get() enforces org scope + warehouse read access; throws not_found if the
+    // caller can't see this PO. Reused so notes editing can't reach another
+    // org's (or an inaccessible warehouse's) PO.
+    const { po } = await this.get(id);
+    const before = (po as { notes?: string | null }).notes ?? null;
+    const nextNotes = trimmed.length > 0 ? trimmed : null;
+
+    const { data: row, error } = await this.ctx.supabase
+      .from('purchase_orders')
+      .update({ notes: nextNotes, updated_by: this.ctx.userId, updated_at: new Date().toISOString() })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    // Fail closed: a 0-row update means the PO vanished between get() and write.
+    if (!row) throw new ServiceError('not_found', 'Purchase order not found');
+
+    void audit(
+      {
+        event: 'purchase_order.updated',
+        entityType: 'purchase_order',
+        entityId: id,
+        before: { notes: before },
+        after: { notes: nextNotes, notesUpdated: true },
+      },
+      this.ctx,
+    );
+    return { id };
+  }
+
   async updateStatus(id: string, status: 'draft' | 'ordered' | 'cancelled') {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
