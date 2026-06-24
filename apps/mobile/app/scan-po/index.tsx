@@ -139,9 +139,16 @@ export default function ScanPo() {
           Authorization: `Bearer ${token}`,
         },
       });
-      const json = await res.json().catch(() => ({}));
+      const json = await res.json().catch(() => ({}) as Record<string, unknown>);
       if (!res.ok || !json.ok) {
-        Alert.alert('Scan failed', json.message || `HTTP ${res.status}`);
+        // A 429 means the per-minute scan cap was hit — show a clear retry
+        // hint even when the body has no message (e.g. an edge/platform 429).
+        const msg =
+          res.status === 429
+            ? (json.message as string) ||
+              'Too many scans in a short window. Wait about a minute and try again.'
+            : (json.message as string) || `Scan failed (HTTP ${res.status}). Please try again.`;
+        Alert.alert('Scan failed', msg);
         return;
       }
       const reviewUrl = `${API_BASE}/dashboard/purchase-orders/imports/${json.id}`;
