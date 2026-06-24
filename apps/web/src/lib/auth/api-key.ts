@@ -20,6 +20,9 @@ export const API_SCOPES = [
   'inventory:write',
   'orders:read',
   'purchase_orders:read',
+  // Subscribe/unsubscribe automation webhooks (Zapier/Make/n8n REST hooks).
+  // Creates org-scoped integration_endpoints; delivery stays SSRF-guarded + HMAC-signed.
+  'webhooks:manage',
 ] as const;
 export type ApiScope = (typeof API_SCOPES)[number];
 

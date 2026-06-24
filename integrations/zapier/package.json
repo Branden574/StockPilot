@@ -1,0 +1,19 @@
+{
+  "name": "stockpilot-zapier",
+  "version": "1.0.0",
+  "description": "StockPilot integration for Zapier — instant triggers (PO received, order created, low stock, …) and item search, on the StockPilot public API.",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test",
+    "validate": "zapier validate",
+    "push": "zapier push"
+  },
+  "engines": {
+    "node": ">=18",
+    "npm": ">=8"
+  },
+  "dependencies": {
+    "zapier-platform-core": "16.4.0"
+  }
+}
