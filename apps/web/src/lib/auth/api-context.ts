@@ -15,11 +15,37 @@ import { isAdminRole } from '@stockpilot/core';
  * paths in withApiContext need the same MFA gate the cookie path
  * gets via withContext().
  */
+/**
+ * Reads the `aal` claim from a Supabase JWT WITHOUT verifying the signature —
+ * the caller MUST have already validated the token (we only call this after
+ * `auth.getUser(bearer)` succeeds). Used for the bearer/API path because the
+ * bearer-bound client has no stored session, so
+ * `auth.mfa.getAuthenticatorAssuranceLevel()` (which reads getSession()) would
+ * return currentLevel=null and wrongly report a real AAL2 token as unsatisfied.
+ * The token's own `aal` claim is the authoritative AAL of that session.
+ */
+export function aalFromJwt(token: string): 'aal1' | 'aal2' | null {
+  try {
+    const part = token.split('.')[1];
+    if (!part) return null;
+    const payload = JSON.parse(Buffer.from(part, 'base64url').toString('utf8')) as {
+      aal?: unknown;
+    };
+    return payload.aal === 'aal2' ? 'aal2' : payload.aal === 'aal1' ? 'aal1' : null;
+  } catch {
+    return null;
+  }
+}
+
 async function resolveApiMfaState(
-   
+
   supabase: any,
   organizationId: string,
   role: Role,
+  // When provided (bearer path), AAL is read from the token's verified `aal`
+  // claim instead of getAuthenticatorAssuranceLevel() (which needs a stored
+  // session the bearer client doesn't have). null = couldn't read → fail closed.
+  bearerAal?: 'aal1' | 'aal2' | null,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean }> {
   let mfaRequired = false;
   let mfaSatisfied = false;
@@ -36,8 +62,13 @@ async function resolveApiMfaState(
       policy === 'all_required' ||
       (policy === 'admins_required' && isAdminRole(role));
     if (mfaRequired) {
-      const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-      mfaSatisfied = data?.currentLevel === 'aal2';
+      if (bearerAal !== undefined) {
+        // Bearer/API path: trust the verified token's own AAL claim.
+        mfaSatisfied = bearerAal === 'aal2';
+      } else {
+        const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+        mfaSatisfied = data?.currentLevel === 'aal2';
+      }
     } else {
       mfaSatisfied = true;
     }
@@ -181,6 +212,9 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       supabase,
       member.organization_id as string,
       member.role as Role,
+      // The bearer client has no stored session, so read AAL from the token
+      // itself (already verified above by adminAuth.auth.getUser(bearer)).
+      aalFromJwt(bearer),
     );
     const enabledModules = await resolveApiEnabledModules(
       supabase,
