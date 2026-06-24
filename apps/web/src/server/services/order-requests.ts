@@ -1112,6 +1112,14 @@ export class OrderRequestsService {
       { event: 'order.packing_slip_generated', entityType: 'order_request', entityId: id },
       this.ctx,
     );
+    // Generic lifecycle webhook for stages without a dedicated topic (the
+    // created/approved/denied/in_transit/completed/cancelled events have their
+    // own). Lets a subscriber follow the full order lifecycle via one stream.
+    void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
+      id,
+      orderNumber: id.slice(0, 8).toUpperCase(),
+      status: 'packing_slip_generated',
+    });
     return updated as OrderRequestRow;
   }
 
@@ -1192,6 +1200,12 @@ export class OrderRequestsService {
       },
       this.ctx,
     );
+    // Generic lifecycle webhook (no dedicated topic for staging).
+    void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
+      id,
+      orderNumber: id.slice(0, 8).toUpperCase(),
+      status: target,
+    });
     return updated as OrderRequestRow;
   }
 

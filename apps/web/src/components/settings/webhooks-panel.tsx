@@ -17,14 +17,29 @@ import {
 } from '@/server/actions/integration-endpoints';
 
 // Only events wired at their emit sites are offered, so nobody subscribes to an
-// event that never fires. order.completed / order.status_changed route through
-// the order state machine and are pending; the engine supports them already.
+// event that never fires. The full order/PO/return lifecycle + the security
+// feed are all dispatched today.
 const EVENTS: ReadonlyArray<readonly [string, string]> = [
+  // Orders lifecycle
   ['order.created', 'New order'],
+  ['order.approved', 'Order approved'],
+  ['order.denied', 'Order denied'],
+  ['order.status_changed', 'Order status changed'],
+  ['order.in_transit', 'Order in transit'],
+  ['order.completed', 'Order completed'],
+  ['order.cancelled', 'Order cancelled'],
+  // Purchase orders lifecycle
   ['po.created', 'New purchase order'],
+  ['po.updated', 'Purchase order updated'],
   ['po.received', 'PO received'],
-  ['stock.low', 'Low stock'],
+  ['po.cancelled', 'PO cancelled'],
+  // Returns lifecycle
   ['return.created', 'Return started'],
+  ['return.approved', 'Return approved'],
+  ['return.denied', 'Return denied'],
+  ['return.closed', 'Return closed'],
+  // Inventory
+  ['stock.low', 'Low stock'],
   ['cycle_count.completed', 'Cycle count complete'],
   // Security feed — point these at a #security Slack channel for live
   // monitoring of forensic-relevant account/credential events.
