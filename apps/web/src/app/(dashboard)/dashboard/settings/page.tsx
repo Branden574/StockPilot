@@ -54,6 +54,7 @@ const AI_SECTIONS = [
 const RECOVERY_SECTIONS = [
   { href: '/dashboard/settings/recovery', title: 'Recovery', description: 'Restore soft-deleted items, categories, suppliers, and locations.' },
   { href: '/dashboard/settings/restore-points', title: 'Backups & restore', description: 'Point-in-time snapshots of your inventory you can roll back to. Business plan.' },
+  { href: '/dashboard/settings/inventory-cleanup', title: 'Archived item cleanup', description: 'Automatically delete items that have stayed archived past a set time. Recoverable.' },
 ];
 
 // Industry template — one-click "set up as this industry" that turns on the

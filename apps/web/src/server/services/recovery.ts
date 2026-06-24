@@ -114,9 +114,18 @@ export class RecoveryService {
   async restore(entity: RecoveryEntity, id: string): Promise<void> {
     assertPermission(this.ctx, 'items:delete');
     const table = ENTITY_TABLE[entity];
+    const payload: Record<string, unknown> = { deleted_at: null, deleted_by: null };
+    // Restoring an inventory item that's still status='archived' must RESET its
+    // retention clock. Otherwise the auto-delete-archived cron (which matches
+    // status='archived' AND deleted_at IS NULL AND archived_at <= now()-days)
+    // would re-soft-delete the just-restored item on its very next run, making
+    // recovery impossible to keep. A fresh archived_at gives a full window.
+    if (entity === 'inventory_items') {
+      payload.archived_at = new Date().toISOString();
+    }
     const { data: row, error } = await this.ctx.supabase
       .from(table)
-      .update({ deleted_at: null, deleted_by: null })
+      .update(payload)
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .not('deleted_at', 'is', null)

@@ -54,11 +54,12 @@ export async function GET(
 
     const { po, lines } = await poSvc.get(id);
 
-    // Hydrate item names + SKUs only for the lines on this PO.
+    // Hydrate item names + SKUs only for the lines on this PO. includeDeleted:
+    // a since-deleted item must still print its name on this historical PO.
     const itemIds = lines
       .map((l) => l.item_id as string | null)
       .filter((v): v is string => Boolean(v));
-    const referencedItems = await inventorySvc.byIds(itemIds);
+    const referencedItems = await inventorySvc.byIds(itemIds, { includeDeleted: true });
     const itemsById = new Map(referencedItems.map((i) => [i.id, i]));
 
     const lineRows: PoPdfLine[] = lines.map((l) => {
