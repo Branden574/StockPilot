@@ -32,6 +32,8 @@ interface CreateItemsModalProps {
   charterId?: string | null;
   /** Optional specific location within the warehouse for the new items. */
   locationId?: string | null;
+  /** Create the new items as products (default) or books. */
+  itemType?: 'product' | 'book';
   /** PO lines the user is creating internal items from. */
   lines: PoImportLineRow[];
   /** Called after a successful create so the parent can refresh data. */
@@ -68,6 +70,7 @@ export function CreateItemsModal({
   warehouseId,
   charterId,
   locationId,
+  itemType,
   lines,
   onSuccess,
 }: CreateItemsModalProps) {
@@ -159,6 +162,7 @@ export function CreateItemsModal({
       warehouseId,
       charterId: charterId ?? null,
       locationId: locationId ?? null,
+      itemType: itemType ?? 'product',
       nameOverrides: Object.fromEntries(
         Object.entries(names).map(([id, n]) => [id, n.trim()]),
       ),

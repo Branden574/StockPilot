@@ -85,6 +85,9 @@ export function PoImportDetail({
   // Expected delivery date for the created PO, prefilled from the AI-extracted
   // ship/delivery date when present. `<input type="date">` value is YYYY-MM-DD.
   const [expectedAt, setExpectedAt] = React.useState<string>(defaultExpectedAt ?? '');
+  // Whether newly-created items are products (default) or books. A "book PO"
+  // creates item_type='book' so the lines land on the Books tab.
+  const [createItemType, setCreateItemType] = React.useState<'product' | 'book'>('product');
   // Locations belong to a warehouse — only offer those in the chosen warehouse,
   // and clear the selection if the warehouse changes out from under it.
   const warehouseLocations = locations.filter((l) => l.warehouseId === warehouseId);
@@ -334,6 +337,21 @@ export function PoImportDetail({
                     {c.name}
                   </SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-muted-foreground text-xs">Create new items as</label>
+            <Select
+              value={createItemType}
+              onValueChange={(v) => setCreateItemType(v === 'book' ? 'book' : 'product')}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="product">Items</SelectItem>
+                <SelectItem value="book">Books</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -605,6 +623,7 @@ export function PoImportDetail({
         warehouseId={warehouseId || null}
         charterId={charterId || null}
         locationId={locationId || null}
+        itemType={createItemType}
         lines={createLines}
         onSuccess={(counts) => {
           const parts: string[] = [];

@@ -159,6 +159,12 @@ const createItemsFromLinesSchema = z.object({
   /** Optional specific location within the warehouse for the new items. */
   locationId: z.string().uuid().nullable().optional(),
   /**
+   * Whether to create the new items as regular products (default) or as books
+   * (item_type='book' → they appear on the Books tab). Applies to the whole
+   * import — a "book PO" creates books, a supply PO creates products.
+   */
+  itemType: z.enum(['product', 'book']).optional(),
+  /**
    * Optional per-line name overrides. Keyed by line id. When present we
    * use the user's edited name; when missing/empty we fall back to the
    * cleaned PO line description.
@@ -179,6 +185,7 @@ export async function createItemsFromPoLinesAction(input: {
   warehouseId: string | null;
   charterId?: string | null;
   locationId?: string | null;
+  itemType?: 'product' | 'book';
   nameOverrides?: Record<string, string>;
   decisions?: Record<string, { mode: 'create' | 'use_existing' | 'skip'; itemId?: string }>;
 }): Promise<ActionResult<{ created: number; mapped: number; linked: number; skipped: number }>> {
@@ -332,7 +339,7 @@ export async function createItemsFromPoLinesAction(input: {
           categoryId: null,
           primaryLocationId,
           trackingType: 'none',
-          itemType: 'product',
+          itemType: parsed.data.itemType ?? 'product',
           customFields: {},
           status: 'active',
         });

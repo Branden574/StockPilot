@@ -103,6 +103,24 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
     expect(updatePayload?.item_created).toBe(true);
     expect(updatePayload?.item_id).toBe('new-item-1');
     expect(updatePayload?.match_status).toBe('mapped');
+    // Defaults to a product when no itemType is supplied.
+    expect(createArg.itemType).toBe('product');
+  });
+
+  it('creates books (item_type=book) when itemType: "book" is chosen for the import', async () => {
+    installStub({});
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      itemType: 'book',
+    });
+
+    expect(result.ok).toBe(true);
+    const createArg = (mockCreate.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    expect(createArg.itemType).toBe('book');
   });
 
   it('drops a charter that does not belong to the org (tenant isolation) — never tags items with it', async () => {
