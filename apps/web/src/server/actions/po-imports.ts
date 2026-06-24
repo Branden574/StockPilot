@@ -111,6 +111,7 @@ export async function approvePoImportAction(input: {
   poImportId: string;
   warehouseId: string;
   vendorId: string;
+  locationId?: string | null;
   lineOverrides?: Array<{
     lineId: string;
     itemId?: string | null;
@@ -151,6 +152,10 @@ const createItemsFromLinesSchema = z.object({
   vendorId: z.string().uuid(),
   /** Destination warehouse the new items will be created at. */
   warehouseId: z.string().uuid().nullable(),
+  /** Optional charter the new items belong to (sets inventory_items.charter_id). */
+  charterId: z.string().uuid().nullable().optional(),
+  /** Optional specific location within the warehouse for the new items. */
+  locationId: z.string().uuid().nullable().optional(),
   /**
    * Optional per-line name overrides. Keyed by line id. When present we
    * use the user's edited name; when missing/empty we fall back to the
@@ -170,6 +175,8 @@ export async function createItemsFromPoLinesAction(input: {
   lineIds: string[];
   vendorId: string;
   warehouseId: string | null;
+  charterId?: string | null;
+  locationId?: string | null;
   nameOverrides?: Record<string, string>;
   decisions?: Record<string, { mode: 'create' | 'use_existing' | 'skip'; itemId?: string }>;
 }): Promise<ActionResult<{ created: number; mapped: number; linked: number; skipped: number }>> {
@@ -183,12 +190,23 @@ export async function createItemsFromPoLinesAction(input: {
     const inventorySvc = await InventoryService.forCurrentUser();
     const mappingsSvc = await VendorItemMappingsService.forCurrentUser();
 
-    // Resolve a primary_location_id for the destination warehouse so the
-    // newly created items show their warehouse as a Location in the UI.
-    // Cosmetic only — the receive flow uses the PO's
-    // destination_location_id, not the items'.
+    // Resolve a primary_location_id for the new items. Prefer the location the
+    // user explicitly chose (verified to belong to this org + the destination
+    // warehouse); otherwise fall back to any location in the warehouse.
+    // Cosmetic only — the receive flow uses the PO's destination_location_id.
     let primaryLocationId: string | null = null;
-    if (parsed.data.warehouseId) {
+    if (parsed.data.locationId && parsed.data.warehouseId) {
+      const { data: chosen } = await supabase
+        .from('locations')
+        .select('id')
+        .eq('organization_id', ctx.organizationId)
+        .eq('id', parsed.data.locationId)
+        .eq('warehouse_id', parsed.data.warehouseId)
+        .is('deleted_at', null)
+        .maybeSingle();
+      primaryLocationId = (chosen?.id as string | undefined) ?? null;
+    }
+    if (!primaryLocationId && parsed.data.warehouseId) {
       const { data: loc } = await supabase
         .from('locations')
         .select('id')
@@ -199,6 +217,31 @@ export async function createItemsFromPoLinesAction(input: {
         .maybeSingle();
       primaryLocationId = (loc?.id as string | undefined) ?? null;
     }
+
+    // Verify the chosen charter belongs to this org before tagging items with it.
+    let charterId: string | null = null;
+    if (parsed.data.charterId) {
+      const { data: charter } = await supabase
+        .from('charters')
+        .select('id')
+        .eq('organization_id', ctx.organizationId)
+        .eq('id', parsed.data.charterId)
+        .maybeSingle();
+      charterId = (charter?.id as string | undefined) ?? null;
+    }
+
+    // Confirm the import belongs to the ACTIVE org before creating items in it.
+    // RLS on po_import_lines only proves the caller is a member of the import's
+    // org — a multi-org user could otherwise pass another of their orgs' import
+    // id while the active context is org A, creating org-A items against org-B
+    // lines (cross-tenant pollution). This explicit guard fails closed.
+    const { data: importHeader } = await supabase
+      .from('po_imports')
+      .select('id')
+      .eq('organization_id', ctx.organizationId)
+      .eq('id', parsed.data.poImportId)
+      .maybeSingle();
+    if (!importHeader) return err('not_found', 'PO import not found');
 
     // Pull just the lines we're creating items for. RLS guarantees the
     // import belongs to the caller's org.
@@ -283,7 +326,7 @@ export async function createItemsFromPoLinesAction(input: {
           unitOfMeasure: (l.uom_original as string | null)?.toLowerCase() ?? 'unit',
           supplierId: parsed.data.vendorId,
           warehouseId: parsed.data.warehouseId,
-          charterId: null,
+          charterId,
           categoryId: null,
           primaryLocationId,
           trackingType: 'none',
@@ -295,13 +338,16 @@ export async function createItemsFromPoLinesAction(input: {
         resolvedItemId = item.id as string;
       }
 
-      // Map the line (whether newly created or linked to existing).
+      // Map the line (whether newly created or linked to existing). Record
+      // whether WE created the item (vs linking an existing one) so a later
+      // cancel can clean up only the items the import spawned.
       const { error: updErr } = await supabase
         .from('po_import_lines')
         .update({
           item_id: resolvedItemId,
           match_status: 'mapped',
           exception_reason: null,
+          item_created: decision.mode === 'create',
         })
         .eq('id', l.id as string);
       if (updErr) throw new ServiceError('internal_error', updErr.message);

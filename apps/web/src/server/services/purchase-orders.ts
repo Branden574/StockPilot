@@ -671,6 +671,70 @@ export class PurchaseOrdersService {
     return { id, poNumber };
   }
 
+  /**
+   * Rename a PO's number, independent of status. The full draft-edit (update())
+   * is gated to drafts, but the PO NUMBER is just a label — imported POs land in
+   * 'expected_inbound' and users still need to relabel them (e.g. to the
+   * vendor's real PO #). Allowed for any non-cancelled PO; a cancelled PO has
+   * released its number, so renaming it is pointless and blocked. Uniqueness
+   * mirrors create()/update(): no OTHER non-cancelled PO may hold the number.
+   */
+  async renamePoNumber(id: string, newPoNumber: string): Promise<{ id: string; poNumber: string }> {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
+    assertPermission(this.ctx, 'purchase_orders:manage');
+
+    const trimmed = newPoNumber.trim();
+    if (!trimmed) throw new ServiceError('validation_error', 'Enter a PO number.');
+    if (trimmed.length > 100) throw new ServiceError('validation_error', 'PO number is too long.');
+
+    const { po } = await this.get(id);
+    const currentStatus = (po as { status?: string }).status ?? '';
+    const currentNumber = (po as { po_number?: string }).po_number ?? '';
+    if (currentStatus === 'cancelled') {
+      throw new ServiceError('conflict', 'A cancelled purchase order cannot be renamed.');
+    }
+    if (trimmed === currentNumber) return { id, poNumber: trimmed }; // no-op
+
+    // Uniqueness pre-check (exclude cancelled — they don't reserve their number).
+    const { data: existing } = await this.ctx.supabase
+      .from('purchase_orders')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('po_number', trimmed)
+      .neq('id', id)
+      .neq('status', 'cancelled')
+      .maybeSingle();
+    if (existing) throw new ServiceError('conflict', 'That PO number is already in use.');
+
+    const { data: row, error } = await this.ctx.supabase
+      .from('purchase_orders')
+      .update({ po_number: trimmed, updated_by: this.ctx.userId, updated_at: new Date().toISOString() })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .neq('status', 'cancelled')
+      .select('id')
+      .maybeSingle();
+    // Concurrent claim of the number → partial unique index 23505. Map to a
+    // clean conflict like create()/update() rather than leaking the raw error.
+    if (error?.code === '23505') {
+      throw new ServiceError('conflict', 'That PO number is already in use.');
+    }
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('conflict', 'Purchase order not found or was cancelled.');
+
+    void audit(
+      {
+        event: 'purchase_order.updated',
+        entityType: 'purchase_order',
+        entityId: id,
+        before: { po_number: currentNumber },
+        after: { po_number: trimmed, renamed: true },
+      },
+      this.ctx,
+    );
+    return { id, poNumber: trimmed };
+  }
+
   async updateStatus(id: string, status: 'draft' | 'ordered' | 'cancelled') {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
@@ -790,6 +854,7 @@ export class PurchaseOrdersService {
       const { data: poLines } = await this.ctx.supabase
         .from('purchase_order_items')
         .select('item_id, quantity_received, po:purchase_orders!inner(status)')
+        .eq('organization_id', this.ctx.organizationId) // defense-in-depth: keep the keep-check single-org
         .in('item_id', candIds);
       const keep = new Set<string>();
       for (const row of (poLines ?? []) as Array<Record<string, unknown>>) {

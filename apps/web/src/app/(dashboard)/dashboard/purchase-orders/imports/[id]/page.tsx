@@ -2,8 +2,10 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { PoImportDetail } from '@/components/po-imports/po-import-detail';
+import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
+import { LocationsService } from '@/server/services/locations';
 import { PoImportsService } from '@/server/services/po-imports';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -24,10 +26,12 @@ export default async function PoImportDetailPage({
     throw e;
   }
 
-  const [suppliers, warehouses, items] = await Promise.all([
+  const [suppliers, warehouses, items, charters, locations] = await Promise.all([
     (await SuppliersService.forCurrentUser()).list(),
     (await WarehousesService.forCurrentUser()).list(),
     (await InventoryService.forCurrentUser()).list({ limit: 500, itemType: 'all' }),
+    (await ChartersService.forCurrentUser()).list(),
+    (await LocationsService.forCurrentUser()).list(),
   ]);
 
   return (
@@ -51,6 +55,10 @@ export default async function PoImportDetailPage({
           name: s.name as string,
         }))}
         warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
+        charters={charters.map((c) => ({ id: c.id, name: c.name }))}
+        locations={(locations as Array<{ id: string; name: string; warehouse_id: string | null }>)
+          .filter((l) => l.warehouse_id)
+          .map((l) => ({ id: l.id, name: l.name, warehouseId: l.warehouse_id as string }))}
         items={items.items.map((i) => ({
           id: i.id,
           sku: i.sku,

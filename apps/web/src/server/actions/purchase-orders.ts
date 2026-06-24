@@ -139,6 +139,24 @@ export async function setPoDestinationWarehouseAction(input: {
   }
 }
 
+export async function renamePoNumberAction(
+  id: string,
+  poNumber: string,
+): Promise<ActionResult<{ id: string; poNumber: string }>> {
+  if (!z.string().uuid().safeParse(id).success) {
+    return err('validation_error', 'Invalid purchase order id');
+  }
+  try {
+    const svc = await PurchaseOrdersService.forCurrentUser();
+    const result = await svc.renamePoNumber(id, poNumber);
+    revalidatePath('/dashboard/purchase-orders');
+    revalidatePath(`/dashboard/purchase-orders/${id}`);
+    return ok(result);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 export async function updatePoStatusAction(id: string, status: 'draft' | 'ordered' | 'cancelled'): Promise<ActionResult<void>> {
   try {
     const svc = await PurchaseOrdersService.forCurrentUser();
