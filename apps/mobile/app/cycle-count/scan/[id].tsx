@@ -4,6 +4,7 @@ import * as React from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
   StyleSheet,
   Text,
@@ -155,11 +156,20 @@ export default function CycleCountScanScreen() {
         <View style={styles.center}>
           <Text style={styles.permTitle}>Camera access needed</Text>
           <Text style={styles.permBody}>
-            Scan-to-count uses the camera to read item barcodes.
+            {permission.canAskAgain
+              ? 'Scan-to-count uses the camera to read item barcodes.'
+              : 'Camera access is off for StockPilot. Turn it on in Settings to scan-to-count.'}
           </Text>
-          <Pressable style={styles.cta} onPress={requestPermission}>
-            <Text style={styles.ctaLabel}>Grant access</Text>
-          </Pressable>
+          {/* App Store 5.1.1(iv): neutral CTA; link to Settings once denied. */}
+          {permission.canAskAgain ? (
+            <Pressable style={styles.cta} onPress={requestPermission}>
+              <Text style={styles.ctaLabel}>Continue</Text>
+            </Pressable>
+          ) : (
+            <Pressable style={styles.cta} onPress={() => Linking.openSettings()}>
+              <Text style={styles.ctaLabel}>Open Settings</Text>
+            </Pressable>
+          )}
         </View>
       </SafeAreaView>
     );
