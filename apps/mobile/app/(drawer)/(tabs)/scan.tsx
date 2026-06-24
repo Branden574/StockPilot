@@ -8,6 +8,7 @@ import {
   Alert,
   Animated,
   Easing,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -497,10 +498,25 @@ export default function Scan() {
       <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.permission}>
           <Text style={styles.permTitle}>Camera access needed</Text>
-          <Text style={styles.permBody}>StockPilot uses the camera to scan barcodes and QR codes.</Text>
-          <Pressable style={styles.cta} onPress={requestPermission}>
-            <Text style={styles.ctaLabel}>Grant access</Text>
-          </Pressable>
+          <Text style={styles.permBody}>
+            {permission.canAskAgain
+              ? 'StockPilot uses the camera to scan barcodes and QR codes.'
+              : 'Camera access is off for StockPilot. Turn it on in Settings to scan barcodes and QR codes.'}
+          </Text>
+          {/* App Store 5.1.1(iv): a pre-permission prompt must use a NEUTRAL
+              button ("Continue"), never directive text ("Grant"/"Allow") — the
+              OS dialog makes the actual ask. If the user previously denied
+              (canAskAgain=false), iOS won't re-prompt, so we link to Settings
+              instead of a button that silently does nothing. */}
+          {permission.canAskAgain ? (
+            <Pressable style={styles.cta} onPress={requestPermission}>
+              <Text style={styles.ctaLabel}>Continue</Text>
+            </Pressable>
+          ) : (
+            <Pressable style={styles.cta} onPress={() => Linking.openSettings()}>
+              <Text style={styles.ctaLabel}>Open Settings</Text>
+            </Pressable>
+          )}
         </View>
       </SafeAreaView>
     );

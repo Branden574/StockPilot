@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -337,11 +338,20 @@ export default function AiScanScreen() {
         <View style={styles.center}>
           <Text style={styles.permTitle}>Camera access needed</Text>
           <Text style={styles.permBody}>
-            AI Shelf Scan uses the camera to identify books on the shelf.
+            {permission.canAskAgain
+              ? 'AI Shelf Scan uses the camera to identify books on the shelf.'
+              : 'Camera access is off for StockPilot. Turn it on in Settings to use AI Shelf Scan.'}
           </Text>
-          <Pressable style={styles.cta} onPress={requestPermission}>
-            <Text style={styles.ctaLabel}>Grant access</Text>
-          </Pressable>
+          {/* App Store 5.1.1(iv): neutral CTA; link to Settings once denied. */}
+          {permission.canAskAgain ? (
+            <Pressable style={styles.cta} onPress={requestPermission}>
+              <Text style={styles.ctaLabel}>Continue</Text>
+            </Pressable>
+          ) : (
+            <Pressable style={styles.cta} onPress={() => Linking.openSettings()}>
+              <Text style={styles.ctaLabel}>Open Settings</Text>
+            </Pressable>
+          )}
         </View>
       </SafeAreaView>
     );
