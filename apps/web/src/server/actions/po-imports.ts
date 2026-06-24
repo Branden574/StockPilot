@@ -112,6 +112,7 @@ export async function approvePoImportAction(input: {
   warehouseId: string;
   vendorId: string;
   locationId?: string | null;
+  charterId?: string | null;
   lineOverrides?: Array<{
     lineId: string;
     itemId?: string | null;

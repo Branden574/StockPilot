@@ -93,6 +93,12 @@ export const approvePoImportSchema = z.object({
    * auto-resolved.
    */
   locationId: z.string().uuid().nullable().optional(),
+  /**
+   * Optional bill-to charter for the created PO (rendered on the PO PDF's
+   * "Bill to" block). Distinct from the item-ownership charter chosen when
+   * creating items from the import. Verified against the org server-side.
+   */
+  charterId: z.string().uuid().nullable().optional(),
   /** Per-line overrides; caller can change line item / classification before approval. */
   lineOverrides: z
     .array(

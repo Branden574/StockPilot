@@ -38,6 +38,8 @@ interface Option {
 export interface InitialPoValues {
   supplierId: string;
   locationId: string;
+  /** Bill-to charter id ('' = none). */
+  charterId: string;
   expectedAt: string;
   notes: string;
   poNumber: string;
@@ -48,6 +50,8 @@ interface PoFormProps {
   items: ItemOption[];
   suppliers: Option[];
   locations: Option[];
+  /** Bill-to charter options (rendered on the PO PDF). */
+  charters: Option[];
   /** When set, the form is in edit mode for this PO id. */
   poId?: string;
   /** Pre-filled values for edit mode. */
@@ -212,10 +216,11 @@ const ROW = cn(
 
 // ─── PoForm ─────────────────────────────────────────────────────────────────
 
-export function PoForm({ items, suppliers, locations, poId, initial }: PoFormProps) {
+export function PoForm({ items, suppliers, locations, charters, poId, initial }: PoFormProps) {
   const router = useRouter();
   const [supplierId, setSupplierId] = React.useState<string>(initial?.supplierId ?? '');
   const [locationId, setLocationId] = React.useState<string>(initial?.locationId ?? '');
+  const [charterId, setCharterId] = React.useState<string>(initial?.charterId ?? '');
   const [poNumber, setPoNumber] = React.useState<string>(initial?.poNumber ?? '');
   const [expectedAt, setExpectedAt] = React.useState<string>(initial?.expectedAt ?? '');
   const [notes, setNotes] = React.useState<string>(initial?.notes ?? '');
@@ -250,6 +255,7 @@ export function PoForm({ items, suppliers, locations, poId, initial }: PoFormPro
     const payload = {
       supplierId: supplierId || null,
       destinationLocationId: locationId || null,
+      charterId: charterId || null,
       expectedAt: expectedAt ? new Date(expectedAt).toISOString() : null,
       notes: notes || undefined,
       // Only include poNumber when non-empty; omitting it lets the service
@@ -347,6 +353,28 @@ export function PoForm({ items, suppliers, locations, poId, initial }: PoFormPro
             <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
           </Label>
           <Input type="date" value={expectedAt} onChange={(e) => setExpectedAt(e.target.value)} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1.5">
+          <Label>
+            Bill to charter
+            <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+          </Label>
+          <Select value={charterId || '__none'} onValueChange={(v: string) => setCharterId(v === '__none' ? '' : v)}>
+            <SelectTrigger>
+              <SelectValue placeholder="No charter" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none">No charter</SelectItem>
+              {charters.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 

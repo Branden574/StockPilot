@@ -365,6 +365,61 @@ describe('PurchaseOrdersService.create — destination warehouse guard', () => {
   });
 });
 
+describe('PurchaseOrdersService.create — bill-to charter', () => {
+  const CHARTER_UUID = 'cccccccc-0000-0000-0000-000000000001';
+  const SPOOFED_CHARTER_UUID = 'dddddddd-0000-0000-0000-000000000099';
+
+  it('persists a charter_id that belongs to the org, after an org-scoped verification', async () => {
+    const stub = makeSupabaseStub({
+      'charters.select': { data: { id: CHARTER_UUID }, error: null }, // found in org
+      'purchase_orders.insert': { data: [{ id: 'po-ch' }], error: null },
+      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:next_po_number': { data: 'PO-CH-1', error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc.create({ lines: MINIMAL_LINE, charterId: CHARTER_UUID });
+
+    const insertPayload = stub.chainArgs.get('purchase_orders.insert')?.[0]?.[0] as Record<string, unknown>;
+    expect(insertPayload?.charter_id).toBe(CHARTER_UUID);
+    // The verification query was org-scoped (tenant isolation).
+    const charterSelectArgs = (stub.chainArgsAll.get('charters.select') ?? []).flat(Infinity);
+    expect(charterSelectArgs).toContain('organization_id');
+    expect(charterSelectArgs).toContain('org-test');
+  });
+
+  it('drops a charter that is not in the org (cross-tenant) — writes charter_id null', async () => {
+    const stub = makeSupabaseStub({
+      'charters.select': { data: null, error: null }, // not found in this org
+      'purchase_orders.insert': { data: [{ id: 'po-ch' }], error: null },
+      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:next_po_number': { data: 'PO-CH-2', error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc.create({ lines: MINIMAL_LINE, charterId: SPOOFED_CHARTER_UUID });
+
+    const insertPayload = stub.chainArgs.get('purchase_orders.insert')?.[0]?.[0] as Record<string, unknown>;
+    expect(insertPayload?.charter_id).toBeNull();
+  });
+
+  it('writes charter_id null and skips the charter lookup when no charter is given', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_orders.insert': { data: [{ id: 'po-ch' }], error: null },
+      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:next_po_number': { data: 'PO-CH-3', error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc.create({ lines: MINIMAL_LINE });
+
+    const insertPayload = stub.chainArgs.get('purchase_orders.insert')?.[0]?.[0] as Record<string, unknown>;
+    expect(insertPayload?.charter_id).toBeNull();
+    // No charter id → no verification query at all.
+    expect(stub.chainsAll.get('charters.select')).toBeUndefined();
+  });
+});
+
 describe('PurchaseOrdersService.create — cancelled PO number reuse', () => {
   it('allows a supplied poNumber whose only holder is cancelled, and excludes cancelled in the pre-check', async () => {
     const stub = makeSupabaseStub({

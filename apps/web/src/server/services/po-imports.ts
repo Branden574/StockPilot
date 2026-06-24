@@ -594,6 +594,19 @@ export class PoImportsService {
       input.locationId ?? null,
     );
 
+    // Verify the chosen bill-to charter belongs to this org before tagging the
+    // PO with it; a spoofed/cross-tenant id is silently dropped (never written).
+    let billToCharterId: string | null = null;
+    if (input.charterId) {
+      const { data: charter } = await this.ctx.supabase
+        .from('charters')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', input.charterId)
+        .maybeSingle();
+      billToCharterId = (charter?.id as string | undefined) ?? null;
+    }
+
     const { data: po, error: poErr } = await this.ctx.supabase
       .from('purchase_orders')
       .insert({
@@ -601,6 +614,7 @@ export class PoImportsService {
         po_number: poNumber,
         supplier_id: input.vendorId,
         destination_location_id: destinationLocationId,
+        charter_id: billToCharterId,
         notes: `Imported from PO file (po_import ${input.poImportId})`,
         subtotal,
         total: subtotal,
