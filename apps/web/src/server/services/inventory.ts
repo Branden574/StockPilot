@@ -594,14 +594,21 @@ export class InventoryService {
    */
   async byIds(
     ids: string[],
+    opts: { includeDeleted?: boolean } = {},
   ): Promise<Array<{ id: string; sku: string; name: string; tracking_type: 'none' | 'lot' | 'serial' }>> {
     if (ids.length === 0) return [];
-    const { data, error } = await this.ctx.supabase
+    let query = this.ctx.supabase
       .from('inventory_items')
       .select('id, sku, name, tracking_type')
       .eq('organization_id', this.ctx.organizationId)
-      .in('id', ids)
-      .is('deleted_at', null);
+      .in('id', ids);
+    // Live surfaces (lists, pickers) exclude soft-deleted items. Historical
+    // read-only display (past POs/receipts) opts in to includeDeleted so an
+    // item deleted AFTER the document was created still shows its real name
+    // instead of "Unknown item" — keeps the auto-delete feature's promise that
+    // history is preserved.
+    if (!opts.includeDeleted) query = query.is('deleted_at', null);
+    const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return (data ?? []).map((r) => ({
       id: r.id as string,

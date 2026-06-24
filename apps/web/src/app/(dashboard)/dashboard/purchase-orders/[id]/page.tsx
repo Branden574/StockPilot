@@ -65,7 +65,9 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   const lineItemIds = lines.map((l) => l.item_id as string).filter(Boolean);
   const receiptItemIds = receiptData.lines.map((l) => l.item_id as string).filter(Boolean);
   const referencedIds = Array.from(new Set([...lineItemIds, ...receiptItemIds]));
-  const referencedItems = await inventorySvc.byIds(referencedIds);
+  // includeDeleted: this is historical display — a since-deleted (e.g. auto-
+  // cleaned-up) item should still show its name on past lines/receipts.
+  const referencedItems = await inventorySvc.byIds(referencedIds, { includeDeleted: true });
   const itemsById = new Map(referencedItems.map((i) => [i.id, i]));
 
   const supplier = suppliers.find((s) => s.id === po.supplier_id);

@@ -171,6 +171,9 @@ export type AuditEvent =
   // Automatic-reordering settings — an admin toggled auto-reorder / mode / cap,
   // stored in organization_modules.settings for 'purchase_orders'.
   | 'auto_reorder_settings.updated'
+  // Archived-item auto-cleanup settings — an admin toggled auto-delete /
+  // retention days, stored in organization_modules.settings for 'inventory'.
+  | 'archive_cleanup_settings.updated'
   // Inventory restore points (snapshots + safe-reconcile restore).
   | 'restore_point.created'
   | 'restore_point.restored'
