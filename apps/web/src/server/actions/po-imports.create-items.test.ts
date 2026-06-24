@@ -53,21 +53,25 @@ function installStub(opts: {
   charterRow?: { id: string } | null;
   locationRow?: { id: string } | null;
   lines?: Array<Record<string, unknown>>;
-  /** Row the inventory_items lookup returns (use_existing check + book ISBN match). */
-  inventoryItemRow?: { id: string } | null;
+  /**
+   * Rows the inventory_items lookup returns. Used as an ARRAY for the rack-aware
+   * book ISBN candidate query (.select('id, custom_fields')…) AND, via the
+   * mock's maybeSingle (returns the first element), for the use_existing check.
+   */
+  inventoryItems?: Array<Record<string, unknown>>;
 }): SupabaseStub {
   // Use presence checks, not ??, so an explicit `null` (charter not in org) is
   // honoured rather than silently replaced by the default row.
   const charterRow = 'charterRow' in opts ? opts.charterRow : { id: CHARTER_ID };
   const locationRow = 'locationRow' in opts ? opts.locationRow : { id: 'loc-1' };
-  const inventoryItemRow = 'inventoryItemRow' in opts ? opts.inventoryItemRow : { id: 'existing-1' };
+  const inventoryItems = 'inventoryItems' in opts ? (opts.inventoryItems ?? []) : [{ id: 'existing-1' }];
   const stub = makeSupabaseStub({
     'po_imports.select': { data: { id: PO_IMPORT_ID }, error: null }, // import-belongs-to-org guard
     'charters.select': { data: charterRow ?? null, error: null },
     'locations.select': { data: locationRow ?? null, error: null },
     'po_import_lines.select': { data: opts.lines ?? [baseLine()], error: null },
     'po_import_lines.update': { data: null, error: null },
-    'inventory_items.select': { data: inventoryItemRow ?? null, error: null },
+    'inventory_items.select': { data: inventoryItems, error: null },
   });
   mockSupabaseRef.client = stub.client;
   return stub;
@@ -114,7 +118,7 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
 
   it('creates books (item_type=book) when itemType: "book" is chosen for the import', async () => {
     // No ISBN on the line → no auto-match → straight create as a book.
-    installStub({ lines: [baseLine({ vendor_item_number: 'V1' })], inventoryItemRow: null });
+    installStub({ lines: [baseLine({ vendor_item_number: 'V1' })], inventoryItems: [] });
 
     const result = await createItemsFromPoLinesAction({
       poImportId: PO_IMPORT_ID,
@@ -130,10 +134,11 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
   });
 
   it('book import: links a line to an existing book by ISBN (adds to its count, no duplicate)', async () => {
-    // Line carries an ISBN-13; an existing book matches it → link, do not create.
+    // Line carries an ISBN-13; an existing book at the SAME rack (here: no rack,
+    // matching the no-rack import) → link, do not create.
     const stub = installStub({
       lines: [baseLine({ vendor_item_number: ISBN13 })],
-      inventoryItemRow: { id: 'existing-book-1' },
+      inventoryItems: [{ id: 'existing-book-1', custom_fields: {} }],
     });
 
     const result = await createItemsFromPoLinesAction({
@@ -170,7 +175,7 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
   it('book import: creates a new book with barcode=ISBN when no existing book matches', async () => {
     const stub = installStub({
       lines: [baseLine({ vendor_item_number: ISBN13 })],
-      inventoryItemRow: null, // no existing book with that ISBN
+      inventoryItems: [], // no existing book with that ISBN
     });
 
     const result = await createItemsFromPoLinesAction({
@@ -190,6 +195,106 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
     const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
     expect(updatePayload?.item_created).toBe(true);
     void stub;
+  });
+
+  it('rack-aware merge: SAME ISBN + SAME rack → links to the existing book', async () => {
+    const stub = installStub({
+      lines: [baseLine({ vendor_item_number: ISBN13 })],
+      // Existing book on rack 41/B with this ISBN.
+      inventoryItems: [{ id: 'book-41b', custom_fields: { book_rack_number: '41', book_rack_row: 'B' } }],
+    });
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      itemType: 'book',
+      rackNumber: '41',
+      rackRow: 'b', // lowercased on purpose — should normalize to B and still match
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.linked).toBe(1);
+    expect(mockCreate).not.toHaveBeenCalled();
+    const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(updatePayload?.item_id).toBe('book-41b');
+    expect(updatePayload?.item_created).toBe(false);
+  });
+
+  it('rack-aware merge: SAME ISBN + DIFFERENT rack → creates a SEPARATE book (does NOT merge)', async () => {
+    const stub = installStub({
+      lines: [baseLine({ vendor_item_number: ISBN13 })],
+      // Existing book is on rack 41/B; the import targets rack 50 → must NOT merge.
+      inventoryItems: [{ id: 'book-41b', custom_fields: { book_rack_number: '41', book_rack_row: 'B' } }],
+    });
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      itemType: 'book',
+      rackNumber: '50',
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.created).toBe(1); // separate book, not a merge
+    const createArg = (mockCreate.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    expect(createArg.itemType).toBe('book');
+    // New book carries the chosen rack in custom_fields.
+    const cf = createArg.customFields as Record<string, unknown>;
+    expect(cf.book_rack_number).toBe('50');
+    const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(updatePayload?.item_created).toBe(true);
+  });
+
+  it('writes rack + crate placement into a created book; rack row is uppercased', async () => {
+    const stub = installStub({ lines: [baseLine({ vendor_item_number: ISBN13 })], inventoryItems: [] });
+
+    await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      itemType: 'book',
+      rackNumber: '41',
+      rackRow: 'b',
+      crateColor: 'Gray',
+      crateNumber: 'Bin',
+    });
+
+    const cf = (mockCreate.mock.calls[0] as unknown as [Record<string, unknown>])[0]
+      .customFields as Record<string, unknown>;
+    expect(cf).toMatchObject({
+      book_rack_number: '41',
+      book_rack_row: 'B',
+      book_crate_color: 'Gray',
+      book_crate_number: 'Bin',
+    });
+    void stub;
+  });
+
+  it('writes rack placement into a created PRODUCT under the neutral rack_* keys (no crate)', async () => {
+    installStub({ lines: [baseLine({ vendor_item_number: 'V1' })], inventoryItems: [] });
+
+    await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      // product (default)
+      rackNumber: '12',
+      rackRow: 'a',
+      crateColor: 'Gray', // crate is books-only → must be ignored for products
+    });
+
+    const cf = (mockCreate.mock.calls[0] as unknown as [Record<string, unknown>])[0]
+      .customFields as Record<string, unknown>;
+    expect(cf).toMatchObject({ rack_number: '12', rack_row: 'A' });
+    expect(cf.book_rack_number).toBeUndefined();
+    expect(cf.book_crate_color).toBeUndefined();
+    expect(cf.crate_color).toBeUndefined();
   });
 
   it('product import does NOT ISBN-match even if a vendor number looks like an ISBN', async () => {
