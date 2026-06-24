@@ -87,6 +87,12 @@ export const approvePoImportSchema = z.object({
   poImportId: z.string().uuid(),
   warehouseId: z.string().uuid(),
   vendorId: z.string().uuid(),
+  /**
+   * Optional specific destination location within the warehouse. When set, the
+   * created PO receives against it; otherwise a location in the warehouse is
+   * auto-resolved.
+   */
+  locationId: z.string().uuid().nullable().optional(),
   /** Per-line overrides; caller can change line item / classification before approval. */
   lineOverrides: z
     .array(

@@ -585,12 +585,13 @@ export class PoImportsService {
       0,
     );
 
-    // Receiving posts against a destination location, but the import flow
-    // only knows the destination warehouse. Find any existing location in
-    // that warehouse; if none exists, auto-create one named after the
-    // warehouse so the receive button shows up immediately on the new PO.
+    // Receiving posts against a destination location. Prefer the location the
+    // user chose at import; otherwise find any existing location in the
+    // warehouse, creating one named after the warehouse if none exists so the
+    // receive button shows up immediately on the new PO.
     const destinationLocationId = await this.resolveDestinationLocation(
       input.warehouseId,
+      input.locationId ?? null,
     );
 
     const { data: po, error: poErr } = await this.ctx.supabase
@@ -627,6 +628,27 @@ export class PoImportsService {
       if (lineErr) throw new ServiceError('internal_error', lineErr.message);
     }
 
+    // Stamp the items THIS import created (not pre-existing items the user
+    // linked) with their origin PO, so cancelling the PO archives the unused
+    // ones via the normal cleanup (archiveOrphanedCustomItems) — otherwise an
+    // imported-then-cancelled PO would strand its auto-created items in stock.
+    const { data: createdLines } = await this.ctx.supabase
+      .from('po_import_lines')
+      .select('item_id')
+      .eq('po_import_id', input.poImportId)
+      .eq('item_created', true)
+      .not('item_id', 'is', null);
+    const createdItemIds = ((createdLines ?? []) as Array<{ item_id: string | null }>)
+      .map((r) => r.item_id)
+      .filter((v): v is string => Boolean(v));
+    if (createdItemIds.length > 0) {
+      await this.ctx.supabase
+        .from('inventory_items')
+        .update({ created_from_purchase_order_id: po.id as string })
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', createdItemIds);
+    }
+
     await this.ctx.supabase
       .from('po_imports')
       .update({
@@ -660,7 +682,23 @@ export class PoImportsService {
    * if none, creates one named after the warehouse so receiving works
    * out of the box on imported POs.
    */
-  private async resolveDestinationLocation(warehouseId: string): Promise<string | null> {
+  private async resolveDestinationLocation(
+    warehouseId: string,
+    preferredLocationId: string | null = null,
+  ): Promise<string | null> {
+    // Honour an explicitly-chosen location, but only if it really belongs to
+    // this org + warehouse (defends against a stale/spoofed id).
+    if (preferredLocationId) {
+      const { data: chosen } = await this.ctx.supabase
+        .from('locations')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', preferredLocationId)
+        .eq('warehouse_id', warehouseId)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (chosen?.id) return chosen.id as string;
+    }
     const { data: existing, error: findErr } = await this.ctx.supabase
       .from('locations')
       .select('id')
@@ -710,6 +748,11 @@ export class PoImportsService {
     // Fail closed: a 0-row update means the import is gone or already
     // approved/canceled — don't audit a cancellation that didn't happen.
     if (!row) throw new ServiceError('conflict', 'Import not found or already finalized.');
+
+    // Cancelling a not-yet-approved import: archive the items it auto-created
+    // (during review) that were never used, so they don't linger in inventory.
+    await this.archiveImportCreatedItems(id);
+
     await audit(
       {
         event: 'po_import.canceled',
@@ -718,5 +761,86 @@ export class PoImportsService {
       },
       this.ctx,
     );
+  }
+
+  /**
+   * Archive catalog items THIS import auto-created (item_created lines) that are
+   * still unused — active, zero on-hand, not referenced by any non-cancelled PO.
+   * Used when an import is cancelled before approval (no PO exists to hang the
+   * created_from marker on). Only touches items the import created, never
+   * pre-existing items the user linked. Reversible (archive, not delete) and
+   * best-effort — never fails the cancel.
+   */
+  private async archiveImportCreatedItems(importId: string): Promise<void> {
+    try {
+      const { data: lines } = await this.ctx.supabase
+        .from('po_import_lines')
+        .select('item_id')
+        .eq('po_import_id', importId)
+        .eq('item_created', true)
+        .not('item_id', 'is', null);
+      const ids = Array.from(
+        new Set(
+          ((lines ?? []) as Array<{ item_id: string | null }>)
+            .map((l) => l.item_id)
+            .filter((v): v is string => Boolean(v)),
+        ),
+      );
+      if (ids.length === 0) return;
+
+      const { data: candidates } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, name')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', ids)
+        .eq('status', 'active')
+        .eq('quantity_on_hand', 0)
+        .is('deleted_at', null);
+      const cand = (candidates ?? []) as Array<{ id: string; name: string }>;
+      if (cand.length === 0) return;
+
+      // Keep any item still referenced by a non-cancelled PO (it may yet receive
+      // stock there). The just-cancelled import has no PO, so nothing to exclude
+      // on that account.
+      const { data: poLines } = await this.ctx.supabase
+        .from('purchase_order_items')
+        .select('item_id, po:purchase_orders!inner(status)')
+        .eq('organization_id', this.ctx.organizationId) // defense-in-depth: keep the keep-check single-org
+        .in('item_id', cand.map((c) => c.id));
+      const keep = new Set<string>();
+      for (const row of (poLines ?? []) as Array<Record<string, unknown>>) {
+        const poField = row.po as { status?: string } | { status?: string }[] | null;
+        const poStatus = Array.isArray(poField) ? poField[0]?.status : poField?.status;
+        if (poStatus && poStatus !== 'cancelled') keep.add(row.item_id as string);
+      }
+      const toArchive = cand.filter((c) => !keep.has(c.id));
+      if (toArchive.length === 0) return;
+
+      const { data: flipped } = await this.ctx.supabase
+        .from('inventory_items')
+        .update({ status: 'archived' })
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', toArchive.map((c) => c.id))
+        .eq('status', 'active') // race guard
+        .select('id, name');
+      for (const item of (flipped ?? []) as Array<{ id: string; name: string }>) {
+        await audit(
+          {
+            event: 'inventory.item.archived',
+            entityType: 'inventory_item',
+            entityId: item.id,
+            before: { status: 'active' },
+            after: { status: 'archived' },
+            extra: { reason: 'po_import_canceled', poImportId: importId, itemName: item.name },
+          },
+          this.ctx,
+        );
+      }
+    } catch (e) {
+      console.warn(
+        '[po-import cancel] archive created items failed',
+        e instanceof Error ? e.message : e,
+      );
+    }
   }
 }

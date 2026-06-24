@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import { ItemThumb } from '@/components/items/item-thumb';
 import { MakeRecurringButton } from '@/components/po/make-recurring-button';
 import { PoReceiveDialog } from '@/components/po/po-receive-dialog';
+import { PoRenameButton } from '@/components/po/po-rename-button';
 import { PoSetDestination } from '@/components/po/po-set-destination';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
 import { PoActions } from '@/components/po/po-actions';
@@ -116,9 +117,14 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
 
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="font-mono text-2xl font-semibold tracking-tight">
-            {po.po_number as string}
-          </h1>
+          <div className="flex items-center gap-1.5">
+            <h1 className="font-mono text-2xl font-semibold tracking-tight">
+              {po.po_number as string}
+            </h1>
+            {status !== 'cancelled' && (
+              <PoRenameButton poId={id} currentNumber={po.po_number as string} />
+            )}
+          </div>
           <div className="mt-2 flex items-center gap-2">
             <PoStatusBadge status={status} />
             <span className="text-muted-foreground text-sm">

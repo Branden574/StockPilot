@@ -52,6 +52,8 @@ interface Props {
   lines: PoImportLineRow[];
   suppliers: Array<{ id: string; name: string }>;
   warehouses: Array<{ id: string; name: string }>;
+  charters: Array<{ id: string; name: string }>;
+  locations: Array<{ id: string; name: string; warehouseId: string }>;
   items: Item[];
 }
 
@@ -60,6 +62,8 @@ export function PoImportDetail({
   lines,
   suppliers,
   warehouses,
+  charters,
+  locations,
   items,
 }: Props) {
   const router = useRouter();
@@ -67,6 +71,19 @@ export function PoImportDetail({
   const [warehouseId, setWarehouseId] = React.useState<string>(
     header.warehouse_id ?? '',
   );
+  // Optional charter the imported items belong to, and an optional specific
+  // destination location within the chosen warehouse.
+  const [charterId, setCharterId] = React.useState<string>('');
+  const [locationId, setLocationId] = React.useState<string>('');
+  // Locations belong to a warehouse — only offer those in the chosen warehouse,
+  // and clear the selection if the warehouse changes out from under it.
+  const warehouseLocations = locations.filter((l) => l.warehouseId === warehouseId);
+  React.useEffect(() => {
+    if (locationId && !warehouseLocations.some((l) => l.id === locationId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- keep location valid for the warehouse
+      setLocationId('');
+    }
+  }, [warehouseId, locationId, warehouseLocations]);
   const [overrides, setOverrides] = React.useState<
     Record<string, { itemId?: string | null; skip?: boolean }>
   >({});
@@ -136,6 +153,7 @@ export function PoImportDetail({
       poImportId: header.id,
       warehouseId,
       vendorId,
+      locationId: locationId || null,
       lineOverrides: Object.entries(overrides).map(([lineId, o]) => ({
         lineId,
         itemId: o.itemId ?? null,
@@ -264,6 +282,47 @@ export function PoImportDetail({
                 {warehouses.map((w) => (
                   <SelectItem key={w.id} value={w.id}>
                     {w.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-muted-foreground text-xs">Charter (optional)</label>
+            <Select
+              value={charterId || '__none'}
+              onValueChange={(v) => setCharterId(v === '__none' ? '' : v)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="No charter" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">No charter</SelectItem>
+                {charters.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-muted-foreground text-xs">Location (optional)</label>
+            <Select
+              value={locationId || '__none'}
+              onValueChange={(v) => setLocationId(v === '__none' ? '' : v)}
+              disabled={!warehouseId}
+            >
+              <SelectTrigger>
+                <SelectValue
+                  placeholder={warehouseId ? 'Warehouse default' : 'Pick a warehouse first'}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">Warehouse default</SelectItem>
+                {warehouseLocations.map((l) => (
+                  <SelectItem key={l.id} value={l.id}>
+                    {l.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -505,6 +564,8 @@ export function PoImportDetail({
         poImportId={header.id}
         vendorId={vendorId}
         warehouseId={warehouseId || null}
+        charterId={charterId || null}
+        locationId={locationId || null}
         lines={createLines}
         onSuccess={(counts) => {
           const parts: string[] = [];
