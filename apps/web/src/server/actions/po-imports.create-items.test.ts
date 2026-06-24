@@ -53,22 +53,27 @@ function installStub(opts: {
   charterRow?: { id: string } | null;
   locationRow?: { id: string } | null;
   lines?: Array<Record<string, unknown>>;
+  /** Row the inventory_items lookup returns (use_existing check + book ISBN match). */
+  inventoryItemRow?: { id: string } | null;
 }): SupabaseStub {
   // Use presence checks, not ??, so an explicit `null` (charter not in org) is
   // honoured rather than silently replaced by the default row.
   const charterRow = 'charterRow' in opts ? opts.charterRow : { id: CHARTER_ID };
   const locationRow = 'locationRow' in opts ? opts.locationRow : { id: 'loc-1' };
+  const inventoryItemRow = 'inventoryItemRow' in opts ? opts.inventoryItemRow : { id: 'existing-1' };
   const stub = makeSupabaseStub({
     'po_imports.select': { data: { id: PO_IMPORT_ID }, error: null }, // import-belongs-to-org guard
     'charters.select': { data: charterRow ?? null, error: null },
     'locations.select': { data: locationRow ?? null, error: null },
     'po_import_lines.select': { data: opts.lines ?? [baseLine()], error: null },
     'po_import_lines.update': { data: null, error: null },
-    'inventory_items.select': { data: { id: 'existing-1' }, error: null },
+    'inventory_items.select': { data: inventoryItemRow ?? null, error: null },
   });
   mockSupabaseRef.client = stub.client;
   return stub;
 }
+
+const ISBN13 = '9780306406157';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -108,7 +113,8 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
   });
 
   it('creates books (item_type=book) when itemType: "book" is chosen for the import', async () => {
-    installStub({});
+    // No ISBN on the line → no auto-match → straight create as a book.
+    installStub({ lines: [baseLine({ vendor_item_number: 'V1' })], inventoryItemRow: null });
 
     const result = await createItemsFromPoLinesAction({
       poImportId: PO_IMPORT_ID,
@@ -121,6 +127,87 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
     expect(result.ok).toBe(true);
     const createArg = (mockCreate.mock.calls[0] as unknown as [Record<string, unknown>])[0];
     expect(createArg.itemType).toBe('book');
+  });
+
+  it('book import: links a line to an existing book by ISBN (adds to its count, no duplicate)', async () => {
+    // Line carries an ISBN-13; an existing book matches it → link, do not create.
+    const stub = installStub({
+      lines: [baseLine({ vendor_item_number: ISBN13 })],
+      inventoryItemRow: { id: 'existing-book-1' },
+    });
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      itemType: 'book',
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.created).toBe(0);
+      expect(result.data.linked).toBe(1);
+    }
+    // No new item created — the PO line points at the existing book so receiving
+    // tops up its count.
+    expect(mockCreate).not.toHaveBeenCalled();
+    const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(updatePayload?.item_id).toBe('existing-book-1');
+    // Must NOT be flagged item_created — it's a pre-existing book.
+    expect(updatePayload?.item_created).toBe(false);
+    // The book lookup was org-scoped and filtered to books, matching on barcode.
+    const lookupArgs = (stub.chainArgsAll.get('inventory_items.select') ?? []).flat(Infinity);
+    expect(lookupArgs).toContain('organization_id');
+    expect(lookupArgs).toContain('item_type');
+    expect(lookupArgs).toContain('book');
+    expect(lookupArgs).toContain('barcode');
+    // Both ISBN-10 and ISBN-13 forms were used as match candidates.
+    expect(lookupArgs).toContain(ISBN13);
+    expect(lookupArgs).toContain('0306406152');
+  });
+
+  it('book import: creates a new book with barcode=ISBN when no existing book matches', async () => {
+    const stub = installStub({
+      lines: [baseLine({ vendor_item_number: ISBN13 })],
+      inventoryItemRow: null, // no existing book with that ISBN
+    });
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      itemType: 'book',
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.created).toBe(1);
+    const createArg = (mockCreate.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    expect(createArg.itemType).toBe('book');
+    // New book stores the ISBN as its barcode so the NEXT book PO matches it.
+    expect(createArg.barcode).toBe(ISBN13);
+    const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(updatePayload?.item_created).toBe(true);
+    void stub;
+  });
+
+  it('product import does NOT ISBN-match even if a vendor number looks like an ISBN', async () => {
+    // itemType defaults to product → the book ISBN lookup is skipped entirely.
+    installStub({ lines: [baseLine({ vendor_item_number: ISBN13 })] });
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      // no itemType → 'product'
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.created).toBe(1); // created, not linked
+    const createArg = (mockCreate.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    expect(createArg.itemType).toBe('product');
   });
 
   it('drops a charter that does not belong to the org (tenant isolation) — never tags items with it', async () => {
