@@ -38,6 +38,8 @@ const lineInputSchema = z
 export const createPoSchema = z.object({
   supplierId: z.string().uuid().nullable().optional(),
   destinationLocationId: z.string().uuid().nullable().optional(),
+  /** Bill-to charter rendered on the PO PDF. Distinct from item ownership. */
+  charterId: z.string().uuid().nullable().optional(),
   expectedAt: z.string().datetime().nullable().optional(),
   notes: z.string().max(2000).optional(),
   poNumber: z.string().trim().min(1).max(64).optional(),
@@ -264,6 +266,23 @@ export class PurchaseOrdersService {
     return wh;
   }
 
+  /**
+   * Verifies a bill-to charter belongs to this org before tagging a PO with it.
+   * Returns the id when valid, else null — a spoofed/cross-tenant or stale
+   * charter id is silently dropped (never written), mirroring the charter
+   * defense in the PO-import create-items path. null input → null (no charter).
+   */
+  private async resolveCharterId(charterId: string | null | undefined): Promise<string | null> {
+    if (!charterId) return null;
+    const { data: charter } = await this.ctx.supabase
+      .from('charters')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', charterId)
+      .maybeSingle();
+    return (charter?.id as string | undefined) ?? null;
+  }
+
   async create(input: CreatePoInput) {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
@@ -363,6 +382,7 @@ export class PurchaseOrdersService {
     }
 
     const subtotal = resolvedLines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
+    const billToCharterId = await this.resolveCharterId(input.charterId);
 
     const { data: po, error } = await this.ctx.supabase
       .from('purchase_orders')
@@ -371,6 +391,7 @@ export class PurchaseOrdersService {
         po_number: poNumber,
         supplier_id: input.supplierId ?? null,
         destination_location_id: input.destinationLocationId ?? null,
+        charter_id: billToCharterId,
         expected_at: input.expectedAt ?? null,
         notes: input.notes ?? null,
         subtotal,
@@ -515,6 +536,7 @@ export class PurchaseOrdersService {
     // it doesn't depend on resolving item ids — so we can claim the header
     // BEFORE doing any destructive work.
     const subtotal = input.lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
+    const billToCharterId = await this.resolveCharterId(input.charterId);
 
     // Atomic claim: update the header with a `status = 'draft'` guard. This is the
     // AUTHORITATIVE draft gate (the get() check above is only a fast pre-check).
@@ -527,6 +549,7 @@ export class PurchaseOrdersService {
       .update({
         supplier_id: input.supplierId ?? null,
         destination_location_id: input.destinationLocationId ?? null,
+        charter_id: billToCharterId,
         expected_at: input.expectedAt ?? null,
         notes: input.notes ?? null,
         po_number: poNumber,

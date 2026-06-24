@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { PoForm } from '@/components/po/po-form';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
+import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -18,15 +19,17 @@ export default async function NewPoPage() {
   if (!hasPermission(ctx.role, 'purchase_orders:manage')) {
     redirect('/dashboard');
   }
-  const [inventorySvc, suppliersSvc, locationsSvc] = await Promise.all([
+  const [inventorySvc, suppliersSvc, locationsSvc, chartersSvc] = await Promise.all([
     InventoryService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
     LocationsService.forCurrentUser(),
+    ChartersService.forCurrentUser(),
   ]);
-  const [inventory, suppliers, locations] = await Promise.all([
+  const [inventory, suppliers, locations, charters] = await Promise.all([
     inventorySvc.list({ limit: 1000 }),
     suppliersSvc.list(),
     locationsSvc.list(),
+    chartersSvc.list(),
   ]);
 
   return (
@@ -59,6 +62,7 @@ export default async function NewPoPage() {
             locations={locations
               .filter((l) => Boolean((l as { warehouse_id?: string | null }).warehouse_id))
               .map((l) => ({ id: l.id as string, name: l.name as string }))}
+            charters={charters.map((c) => ({ id: c.id as string, name: c.name as string }))}
           />
         </CardContent>
       </Card>

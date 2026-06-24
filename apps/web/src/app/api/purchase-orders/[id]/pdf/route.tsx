@@ -7,7 +7,7 @@ import { hasPermission } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
-import { PurchaseOrderPdf, type PoPdfLine, type PoPdfReceipt } from '@/lib/pdf/po';
+import { PurchaseOrderPdf, type PoPdfBillToCharter, type PoPdfLine, type PoPdfReceipt } from '@/lib/pdf/po';
 import { audit } from '@/server/services/audit';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -162,6 +162,43 @@ export async function GET(
     const orgLogoUrl = ((org as { logo_url?: string | null })?.logo_url ?? null) || null;
     const orgPoTerms = ((org as { po_terms?: string | null })?.po_terms ?? null) || null;
 
+    // Bill-to charter → "Bill to" block. Org-scoped fetch by the PO's
+    // charter_id; a since-archived charter still prints on this historical PO.
+    // Best-effort: a missing/errored charter just omits the block.
+    const billToCharterId = (po as { charter_id?: string | null }).charter_id ?? null;
+    let billToCharter: PoPdfBillToCharter | null = null;
+    if (billToCharterId) {
+      const { data: charter } = await ctx.supabase
+        .from('charters')
+        .select('name, code, address, contact_name, contact_email, contact_phone')
+        .eq('organization_id', ctx.organizationId)
+        .eq('id', billToCharterId)
+        .maybeSingle();
+      if (charter) {
+        const addr = (charter as { address?: Record<string, string> | null }).address ?? null;
+        // Compose mailing lines from the structured jsonb, dropping blanks.
+        // "City, Region PostalCode" on one line; street + country on their own.
+        const regionZip = [(addr?.region ?? '').trim(), (addr?.postalCode ?? '').trim()]
+          .filter(Boolean)
+          .join(' ');
+        const cityRegionZip = [(addr?.city ?? '').trim(), regionZip].filter(Boolean).join(', ');
+        const addressLines = [
+          (addr?.line1 ?? '').trim(),
+          (addr?.line2 ?? '').trim(),
+          cityRegionZip,
+          (addr?.country ?? '').trim(),
+        ].filter(Boolean);
+        billToCharter = {
+          name: ((charter as { name?: string | null }).name ?? '') || '',
+          code: ((charter as { code?: string | null }).code ?? null) || null,
+          addressLines,
+          contactName: ((charter as { contact_name?: string | null }).contact_name ?? null) || null,
+          contactEmail: ((charter as { contact_email?: string | null }).contact_email ?? null) || null,
+          contactPhone: ((charter as { contact_phone?: string | null }).contact_phone ?? null) || null,
+        };
+      }
+    }
+
     const stream = await renderToStream(
       <PurchaseOrderPdf
         po={{
@@ -178,6 +215,7 @@ export async function GET(
         supplier={supplier}
         destination={destination}
         receipts={receiptRows}
+        billToCharter={billToCharter}
       />,
     );
 

@@ -71,10 +71,13 @@ export function PoImportDetail({
   const [warehouseId, setWarehouseId] = React.useState<string>(
     header.warehouse_id ?? '',
   );
-  // Optional charter the imported items belong to, and an optional specific
-  // destination location within the chosen warehouse.
+  // Optional charter the imported items belong to (stock ownership), and an
+  // optional specific destination location within the chosen warehouse.
   const [charterId, setCharterId] = React.useState<string>('');
   const [locationId, setLocationId] = React.useState<string>('');
+  // Optional bill-to charter for the created PO — distinct from the item
+  // charter above; this is the entity the PO is billed to (shown on the PDF).
+  const [billToCharterId, setBillToCharterId] = React.useState<string>('');
   // Locations belong to a warehouse — only offer those in the chosen warehouse,
   // and clear the selection if the warehouse changes out from under it.
   const warehouseLocations = locations.filter((l) => l.warehouseId === warehouseId);
@@ -154,6 +157,7 @@ export function PoImportDetail({
       warehouseId,
       vendorId,
       locationId: locationId || null,
+      charterId: billToCharterId || null,
       lineOverrides: Object.entries(overrides).map(([lineId, o]) => ({
         lineId,
         itemId: o.itemId ?? null,
@@ -288,10 +292,29 @@ export function PoImportDetail({
             </Select>
           </div>
           <div>
-            <label className="text-muted-foreground text-xs">Charter (optional)</label>
+            <label className="text-muted-foreground text-xs">Charter for items (optional)</label>
             <Select
               value={charterId || '__none'}
               onValueChange={(v) => setCharterId(v === '__none' ? '' : v)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="No charter" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">No charter</SelectItem>
+                {charters.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-muted-foreground text-xs">Bill to charter (optional)</label>
+            <Select
+              value={billToCharterId || '__none'}
+              onValueChange={(v) => setBillToCharterId(v === '__none' ? '' : v)}
             >
               <SelectTrigger>
                 <SelectValue placeholder="No charter" />

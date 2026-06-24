@@ -73,6 +73,17 @@ export interface PoPdfDestination {
   locationName: string | null;
 }
 
+/** Bill-to charter for the "Bill to" block. Null = billed to the org only. */
+export interface PoPdfBillToCharter {
+  name: string;
+  code: string | null;
+  /** Pre-formatted, non-empty mailing-address lines (street, city/region/zip…). */
+  addressLines: string[];
+  contactName: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
+}
+
 interface PurchaseOrderPdfProps {
   po: PoPdfHeader;
   lines: PoPdfLine[];
@@ -81,6 +92,8 @@ interface PurchaseOrderPdfProps {
   destination: PoPdfDestination | null;
   /** Posted receipts (receiving history). Empty = nothing received yet. */
   receipts?: PoPdfReceipt[];
+  /** Bill-to charter rendered under the org in the "Bill to" block. */
+  billToCharter?: PoPdfBillToCharter | null;
 }
 
 // Fixed-width column layout for the PO line table. Sum to ~100 so flex
@@ -112,6 +125,7 @@ export function PurchaseOrderPdf({
   supplier,
   destination,
   receipts = [],
+  billToCharter = null,
 }: PurchaseOrderPdfProps) {
   const subtotal = Number(po.subtotal) || 0;
   const total = Number(po.total) || 0;
@@ -155,6 +169,33 @@ export function PurchaseOrderPdf({
           <View style={pdfStyles.col}>
             <Text style={pdfStyles.sectionTitle}>Bill to</Text>
             <Text style={pdfStyles.bold}>{org.name}</Text>
+            {/*
+             * Bill-to charter (purchase_orders.charter_id) — the campus/entity
+             * this PO is billed to. Renders its name, code, mailing address, and
+             * contact beneath the org so the supplier sees who to invoice.
+             */}
+            {billToCharter ? (
+              <>
+                <Text style={pdfStyles.bold}>
+                  {billToCharter.name}
+                  {billToCharter.code ? ` (${billToCharter.code})` : ''}
+                </Text>
+                {billToCharter.addressLines.map((line, i) => (
+                  <Text key={`bca-${i}`} style={pdfStyles.muted}>
+                    {line}
+                  </Text>
+                ))}
+                {billToCharter.contactName ? (
+                  <Text style={pdfStyles.muted}>{billToCharter.contactName}</Text>
+                ) : null}
+                {billToCharter.contactEmail ? (
+                  <Text style={pdfStyles.muted}>{billToCharter.contactEmail}</Text>
+                ) : null}
+                {billToCharter.contactPhone ? (
+                  <Text style={pdfStyles.muted}>{billToCharter.contactPhone}</Text>
+                ) : null}
+              </>
+            ) : null}
             {destination?.warehouseName ? (
               <Text style={pdfStyles.muted}>
                 Ship to: {destination.warehouseName}

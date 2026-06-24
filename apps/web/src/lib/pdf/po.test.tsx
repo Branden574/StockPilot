@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { PurchaseOrderPdf, type PoPdfHeader, type PoPdfLine } from './po';
+import { PurchaseOrderPdf, type PoPdfBillToCharter, type PoPdfHeader, type PoPdfLine } from './po';
 
 /**
  * Lightweight tree-walker tests for PurchaseOrderPdf. We can't actually render
@@ -79,6 +79,7 @@ function render(opts: {
   status?: string;
   poTerms?: string | null;
   lines?: PoPdfLine[];
+  billToCharter?: PoPdfBillToCharter | null;
 }): TreeNode[] {
   const tree = PurchaseOrderPdf({
     po: { ...baseHeader, status: opts.status ?? baseHeader.status },
@@ -90,6 +91,7 @@ function render(opts: {
     },
     supplier: null,
     destination: null,
+    billToCharter: opts.billToCharter ?? null,
   });
   return flatten(tree);
 }
@@ -200,6 +202,37 @@ describe('PurchaseOrderPdf', () => {
     // Both lines' outstanding cells read 0.
     const zeros = nodes.filter((n) => textOf(n.props.children).trim() === '0');
     expect(zeros.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('renders the Bill-to charter block (name, code, address, contact) when provided', () => {
+    const nodes = render({
+      billToCharter: {
+        name: 'North Region Campus',
+        code: 'NRC',
+        addressLines: ['100 Main St', 'Austin, TX 78701'],
+        contactName: 'Jane Buyer',
+        contactEmail: 'ap@nrc.example',
+        contactPhone: '512-555-0100',
+      },
+    });
+    const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
+    expect(allText).toContain('North Region Campus');
+    expect(allText).toContain('(NRC)');
+    expect(allText).toContain('100 Main St');
+    expect(allText).toContain('Austin, TX 78701');
+    expect(allText).toContain('Jane Buyer');
+    expect(allText).toContain('ap@nrc.example');
+    expect(allText).toContain('512-555-0100');
+    // Still shows the org as the account holder.
+    expect(allText).toContain('Acme Co');
+  });
+
+  it('omits the Bill-to charter block when none is set', () => {
+    const nodes = render({ billToCharter: null });
+    const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
+    expect(allText).not.toContain('North Region Campus');
+    // The org line is still present under "Bill to".
+    expect(allText).toContain('Acme Co');
   });
 
   it('keeps existing totals + line items intact', () => {
