@@ -90,7 +90,7 @@ export default async function EditItemPage({
     customFieldDefs,
   ] = await Promise.all([
     categoriesSvc.list(),
-    locationsSvc.list(),
+    locationsSvc.list({ excludeSystem: true }),
     suppliersSvc.list(),
     tagsSvc.list(),
     tagsSvc.listForItem(id),
