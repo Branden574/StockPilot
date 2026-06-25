@@ -167,18 +167,6 @@ const createItemsFromLinesSchema = z.object({
    */
   itemType: z.enum(['product', 'book']).optional(),
   /**
-   * Optional physical placement applied to every created item. Rack applies to
-   * items + books; crate applies to books only. Written to the same custom_fields
-   * keys the item form uses (rack_number/rack_row for items, book_rack_* and
-   * book_crate_* for books). For books the rack also scopes the ISBN auto-match:
-   * a line only folds into an existing book at the SAME rack, so the same title
-   * on a different (or no) rack stays a separate item with its own on-hand.
-   */
-  rackNumber: z.string().max(40).optional(),
-  rackRow: z.string().max(40).optional(),
-  crateColor: z.string().max(40).optional(),
-  crateNumber: z.string().max(40).optional(),
-  /**
    * Optional per-line name overrides. Keyed by line id. When present we
    * use the user's edited name; when missing/empty we fall back to the
    * cleaned PO line description.
@@ -200,10 +188,6 @@ export async function createItemsFromPoLinesAction(input: {
   charterId?: string | null;
   locationId?: string | null;
   itemType?: 'product' | 'book';
-  rackNumber?: string;
-  rackRow?: string;
-  crateColor?: string;
-  crateNumber?: string;
   nameOverrides?: Record<string, string>;
   decisions?: Record<string, { mode: 'create' | 'use_existing' | 'skip'; itemId?: string }>;
 }): Promise<ActionResult<{ created: number; mapped: number; linked: number; skipped: number }>> {
@@ -281,28 +265,6 @@ export async function createItemsFromPoLinesAction(input: {
       .in('id', parsed.data.lineIds);
     if (lErr) throw new ServiceError('internal_error', lErr.message);
 
-    // Physical placement applied to every created item. Rack → items + books;
-    // crate → books only. Keys mirror the item form. For books the rack also
-    // scopes the ISBN merge below (importRackKey).
-    const isBookImport = parsed.data.itemType === 'book';
-    const rackNumber = (parsed.data.rackNumber ?? '').trim();
-    const rackRow = (parsed.data.rackRow ?? '').trim().toUpperCase();
-    const crateColor = (parsed.data.crateColor ?? '').trim();
-    const crateNumber = (parsed.data.crateNumber ?? '').trim();
-    const placementCustomFields: Record<string, string> = {};
-    if (isBookImport) {
-      if (rackNumber) placementCustomFields.book_rack_number = rackNumber;
-      if (rackRow) placementCustomFields.book_rack_row = rackRow;
-      if (crateColor) placementCustomFields.book_crate_color = crateColor;
-      if (crateNumber) placementCustomFields.book_crate_number = crateNumber;
-    } else {
-      if (rackNumber) placementCustomFields.rack_number = rackNumber;
-      if (rackRow) placementCustomFields.rack_row = rackRow;
-    }
-    // "number|row" identity for the book merge ('' = no rack). Same ISBN at a
-    // different rack key → not a match → a separate book is created.
-    const importRackKey = `${rackNumber}|${rackRow}`;
-
     let created = 0;
     let mapped = 0;
     let linked = 0;
@@ -352,28 +314,23 @@ export async function createItemsFromPoLinesAction(input: {
         if (bookIsbn) {
           const variants = isbnVariants(bookIsbn);
           if (variants.length > 0) {
-            const { data: candidates } = await supabase
+            const { data: candidates, error: isbnErr } = await supabase
               .from('inventory_items')
-              .select('id, custom_fields')
+              .select('id')
               .eq('organization_id', ctx.organizationId)
               .eq('item_type', 'book')
               .in('barcode', variants)
               .is('deleted_at', null)
-              .limit(50);
-            // Rack-aware merge: only fold into an existing book at the SAME rack
-            // (number|row). Same ISBN on a different/blank rack → no match → a
-            // separate book is created so its on-hand stays distinct.
-            const match = (candidates ?? []).find((c) => {
-              const cf = ((c as { custom_fields?: Record<string, unknown> }).custom_fields ??
-                {}) as Record<string, unknown>;
-              const ck = `${String(cf.book_rack_number ?? '').trim()}|${String(
-                cf.book_rack_row ?? '',
-              )
-                .trim()
-                .toUpperCase()}`;
-              return ck === importRackKey;
-            });
-            isbnMatchItemId = (match?.id as string | undefined) ?? null;
+              .limit(1);
+            if (isbnErr) {
+              // Fail-closed: fall through to create a new book. Log so a transient
+              // DB error doesn't silently spawn duplicate books with no trace.
+              console.error(
+                'po-imports: ISBN candidate lookup failed; creating new book instead of linking',
+                { error: isbnErr.message },
+              );
+            }
+            isbnMatchItemId = (candidates?.[0]?.id as string | undefined) ?? null;
           }
         }
       }
@@ -437,7 +394,7 @@ export async function createItemsFromPoLinesAction(input: {
           primaryLocationId,
           trackingType: 'none',
           itemType: parsed.data.itemType ?? 'product',
-          customFields: { ...placementCustomFields },
+          customFields: {},
           status: 'active',
         });
         created++;
