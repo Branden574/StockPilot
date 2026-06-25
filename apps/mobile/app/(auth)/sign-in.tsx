@@ -1,4 +1,3 @@
-import { Link } from 'expo-router';
 import {
   ArrowRight,
   Check,
@@ -31,7 +30,6 @@ import {
   promptBiometric,
 } from '@/lib/biometric';
 import { supabase } from '@/lib/supabase';
-import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 export default function SignIn() {
@@ -255,23 +253,9 @@ export default function SignIn() {
           ) : null}
 
           <View style={styles.footer}>
-            <Body size={14} color={c.ink3}>
-              New to StockPilot?{' '}
+            <Body size={13} color={c.ink4} style={{ textAlign: 'center' }}>
+              New to StockPilot? Your organization admin can invite you.
             </Body>
-            <Link href="/(auth)/sign-up" replace asChild>
-              <Pressable>
-                <Body
-                  size={14}
-                  color={c.ink}
-                  style={[
-                    styles.linkText,
-                    { borderBottomColor: c.ink, fontFamily: FONT.display },
-                  ]}
-                >
-                  Create account
-                </Body>
-              </Pressable>
-            </Link>
           </View>
         </ScrollView>
       </AuthShell>
@@ -313,8 +297,5 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'baseline',
-  },
-  linkText: {
-    borderBottomWidth: 1,
   },
 });
