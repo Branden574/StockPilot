@@ -25,6 +25,17 @@ import { CustomFieldsService } from './custom-fields';
 import { TagsService } from './tags';
 import { UserCategoriesService } from './user-categories';
 
+/**
+ * Whole days between an ISO timestamp and `nowMs` (floor). Null if no timestamp.
+ * Pure helper — exported so tests can import it directly.
+ */
+export function deriveAgeDays(receivedAtIso: string | null, nowMs: number): number | null {
+  if (!receivedAtIso) return null;
+  const then = new Date(receivedAtIso).getTime();
+  if (Number.isNaN(then)) return null;
+  return Math.max(0, Math.floor((nowMs - then) / 86_400_000));
+}
+
 // Charter ids arrive from a user-controlled URL param (?charter=) via
 // parseIdList, which does NOT validate them, and get interpolated into a raw
 // `.or(charter_id.in.("…"))` PostgREST filter string — so a crafted value could
@@ -2001,5 +2012,120 @@ export class InventoryService {
     });
     if (error) throw new ServiceError('internal_error', error.message);
     return data;
+  }
+
+  /**
+   * Returns not-yet-placed (staged) stock grouped by item, with source PO/receipt + age.
+   * Used by the Staging worklist screen.
+   *
+   * Schema notes:
+   * - stock_movements written by post_receipt_v2 (mig 0190) via adjust_stock store
+   *   the receipts.id as the `notes` column (6th arg = p_notes), NOT reference_id
+   *   (adjust_stock does not write reference_id). So we derive the source receipt
+   *   from sm.notes (which holds the UUID text) rather than sm.reference_id.
+   * - receipts has purchase_order_id FK → purchase_orders; PostgREST embed
+   *   purchase_orders(po_number) resolves correctly.
+   *
+   * Fail-closed / graceful degradation: the primary levels query returns [] on
+   * error/null (no staged stock to show). The source-movement and receipt/PO
+   * sub-queries degrade gracefully — on error they log and continue with an empty
+   * map, so staged items still surface (just without the source/age badge) rather
+   * than hiding staged stock. Never throws.
+   * Belt-and-suspenders: .eq('organization_id', …) on every query on top of RLS.
+   */
+  async stagedWorklist(
+    opts: { itemType?: 'book' | 'non-book'; warehouseId?: string | null } = {},
+  ): Promise<Array<{
+    itemId: string; name: string; sku: string; itemType: string; warehouseId: string | null;
+    stagingLocationId: string; stagedQuantity: number;
+    sourceReceiptId: string | null; sourcePoNumber: string | null; receiptNumber: string | null;
+    receivedAt: string | null; ageDays: number | null;
+  }>> {
+    // 1. Staged levels (qty>0) joined to item + staging location.
+    let q = this.ctx.supabase
+      .from('item_stock_levels')
+      .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at)')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('locations.kind', 'staging')
+      .gt('quantity', 0);
+    if (opts.warehouseId) q = q.eq('locations.warehouse_id', opts.warehouseId);
+    if (opts.itemType === 'book') q = q.eq('inventory_items.item_type', 'book');
+    if (opts.itemType === 'non-book') q = q.neq('inventory_items.item_type', 'book');
+    // Exclude soft-deleted items at the DB (works with the inventory_items!inner embed)
+    // so they're never fetched over the wire.
+    q = q.is('inventory_items.deleted_at', null);
+    const { data: levels, error } = await q;
+    if (error || !levels) return [];
+
+    const rows = (levels as Array<Record<string, any>>).filter((r) => r.inventory_items);
+    if (rows.length === 0) return [];
+    const itemIds = rows.map((r) => r.item_id);
+
+    // 2. Earliest receive_po-into-staging movement per item (for age + source).
+    // Note: post_receipt_v2 (mig 0190) passes receipts.id as `notes` (p_notes arg),
+    // not as reference_id — so we read from sm.notes to get the source receipt ID.
+    const sourceByItem = new Map<string, { receivedAt: string; receiptId: string | null }>();
+    const { data: moves, error: movesErr } = await this.ctx.supabase
+      .from('stock_movements')
+      .select('item_id, created_at, notes, movement_type')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('movement_type', 'receive_po')
+      .in('item_id', itemIds)
+      .order('created_at', { ascending: true });
+    // Graceful degradation: a source-lookup failure still returns the staged items
+    // (just without the source/age badge) — log so the silent failure is diagnosable.
+    if (movesErr) console.error('staging worklist: source-movement lookup failed', { error: movesErr.message });
+    for (const m of (moves ?? []) as Array<Record<string, any>>) {
+      if (!sourceByItem.has(m.item_id)) {
+        // notes holds receipts.id as text (mig 0190); guard empty/whitespace so it
+        // doesn't become a bogus id in the receipts .in('id', …) list.
+        sourceByItem.set(m.item_id, { receivedAt: m.created_at, receiptId: m.notes?.trim() || null });
+      }
+    }
+
+    // 3. Resolve receipt -> PO number / receipt number for the sources we have.
+    const receiptIds = [...new Set(
+      [...sourceByItem.values()].map((s) => s.receiptId).filter(Boolean),
+    )] as string[];
+    const receiptMeta = new Map<string, { poNumber: string | null; receiptNumber: string | null; receivedAt: string | null }>();
+    if (receiptIds.length > 0) {
+      const { data: receipts, error: receiptsErr } = await this.ctx.supabase
+        .from('receipts')
+        .select('id, receipt_number, received_at, purchase_orders(po_number)')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', receiptIds);
+      // Graceful degradation: a receipt/PO-lookup failure still returns the staged
+      // items (without PO/receipt numbers) — log so it's diagnosable.
+      if (receiptsErr) console.error('staging worklist: receipt/PO lookup failed', { error: receiptsErr.message });
+      for (const r of (receipts ?? []) as Array<Record<string, any>>) {
+        receiptMeta.set(r.id, {
+          poNumber: r.purchase_orders?.po_number ?? null,
+          receiptNumber: r.receipt_number ?? null,
+          receivedAt: r.received_at ?? null,
+        });
+      }
+    }
+
+    const nowMs = Date.now();
+    return rows.map((r) => {
+      const src = sourceByItem.get(r.item_id) ?? null;
+      const meta = src?.receiptId ? receiptMeta.get(src.receiptId) : undefined;
+      // Prefer receipts.received_at for the displayed date; fall back to sm.created_at.
+      const receivedAt = meta?.receivedAt ?? src?.receivedAt ?? null;
+      return {
+        itemId: r.item_id,
+        name: r.inventory_items.name,
+        sku: r.inventory_items.sku,
+        itemType: r.inventory_items.item_type,
+        warehouseId: r.locations.warehouse_id ?? null,
+        stagingLocationId: r.location_id,
+        stagedQuantity: Number(r.quantity),
+        sourceReceiptId: src?.receiptId ?? null,
+        sourcePoNumber: meta?.poNumber ?? null,
+        receiptNumber: meta?.receiptNumber ?? null,
+        receivedAt,
+        ageDays: deriveAgeDays(receivedAt, nowMs),
+      };
+    });
   }
 }
