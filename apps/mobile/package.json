@@ -11,8 +11,8 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf .expo node_modules",
-    "release:ios": "pnpm dlx eas-cli@latest build --platform ios --profile production --auto-submit --no-wait --non-interactive",
-    "release:android": "pnpm dlx eas-cli@latest build --platform android --profile production --auto-submit --no-wait --non-interactive"
+    "release:ios": "pnpm dlx eas-cli@20.3.0 build --platform ios --profile production --auto-submit --no-wait --non-interactive",
+    "release:android": "pnpm dlx eas-cli@20.3.0 build --platform android --profile production --auto-submit --no-wait --non-interactive"
   },
   "dependencies": {
     "@expo-google-fonts/instrument-serif": "^0.4.1",
