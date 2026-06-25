@@ -34,11 +34,6 @@ interface CreateItemsModalProps {
   locationId?: string | null;
   /** Create the new items as products (default) or books. */
   itemType?: 'product' | 'book';
-  /** Physical placement applied to every created item (rack always; crate for books). */
-  rackNumber?: string;
-  rackRow?: string;
-  crateColor?: string;
-  crateNumber?: string;
   /** PO lines the user is creating internal items from. */
   lines: PoImportLineRow[];
   /** Called after a successful create so the parent can refresh data. */
@@ -76,10 +71,6 @@ export function CreateItemsModal({
   charterId,
   locationId,
   itemType,
-  rackNumber,
-  rackRow,
-  crateColor,
-  crateNumber,
   lines,
   onSuccess,
 }: CreateItemsModalProps) {
@@ -172,10 +163,6 @@ export function CreateItemsModal({
       charterId: charterId ?? null,
       locationId: locationId ?? null,
       itemType: itemType ?? 'product',
-      rackNumber,
-      rackRow,
-      crateColor,
-      crateNumber,
       nameOverrides: Object.fromEntries(
         Object.entries(names).map(([id, n]) => [id, n.trim()]),
       ),
