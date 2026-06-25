@@ -53,14 +53,14 @@ once**.
 
 ### 4.1 Placement locations (extend `locations`)
 The `locations` table (id, organization_id, parent_id, name, type, …) supports a nested
-hierarchy but has **no `warehouse_id`** today (warehouses live in a separate `warehouses`
-table, mig 0007; `inventory_items` carries both `warehouse_id` → warehouses and
-`primary_location_id` → locations). Add:
-- `warehouse_id uuid references warehouses(id)` — so placement locations (staging/area/rack/
-  crate) belong to a warehouse, matching `inventory_items.warehouse_id`. (Existing free-form
-  locations keep `warehouse_id = null`.)
+hierarchy and **already has `warehouse_id`** (added in mig 0007 — earlier draft was wrong;
+verified against the migration). Placement locations (staging/area/rack/crate) use it to
+belong to a warehouse, matching `inventory_items.warehouse_id`. Add:
 - `kind` — `'staging' | 'area' | 'rack' | 'crate' | 'unplaced'`. Areas/racks/crates nest via
   the existing `parent_id` (Area → Rack → optional Crate).
+- NOTE: `transfer_stock` is currently **audit-only** (mig 0071 stopped it maintaining
+  `item_stock_levels`); the implementation revives the full two-table mutation. `item_stock_levels`
+  is dormant (read nowhere today), so reviving it breaks no existing reader.
 - Structured placement columns: `rack_number`, `rack_row`, `crate_color`, `crate_number`
   (nullable) so scans/reports read clean fields, not free-text. The location `name` is a
   derived display label (e.g. `41-B`, `41-B · Blue #3`).
