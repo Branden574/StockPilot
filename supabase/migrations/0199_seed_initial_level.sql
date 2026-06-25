@@ -19,10 +19,16 @@ begin
   if coalesce(new.quantity_on_hand, 0) <= 0 then return new; end if;
 
   -- Prefer the item's primary location if it's a real, non-staging placed bin.
+  -- Scoped to the item's own org (and warehouse when set) so a forged/cross-tenant
+  -- primary_location_id falls through to the org's own Unplaced bucket instead of
+  -- seeding stock at another org's location (tenant-isolation guard).
   if new.primary_location_id is not null then
     select id into v_loc from public.locations
-      where id = new.primary_location_id and deleted_at is null
+      where id = new.primary_location_id
+        and organization_id = new.organization_id
+        and deleted_at is null
         and kind is distinct from 'staging'
+        and (new.warehouse_id is null or warehouse_id is not distinct from new.warehouse_id)
       limit 1;
   end if;
 

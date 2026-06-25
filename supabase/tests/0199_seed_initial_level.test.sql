@@ -2,28 +2,35 @@
 -- pgTAP gate for migration 0199: tg_seed_initial_level (AFTER INSERT) seeds an
 -- item_stock_levels row on item creation so Σlevels = quantity_on_hand from day 0.
 --
--- Three cases:
+-- Four cases:
 --   1. Item with quantity_on_hand=12 and primary_location_id = a rack location
 --      → the RACK level = 12 and Σ levels = on_hand = 12.
 --   2. Item with quantity_on_hand=5, primary_location_id = null, warehouse_id set
 --      → the warehouse UNPLACED level = 5, Σ = 5, and STAGING level is absent/0.
 --   3. Item with quantity_on_hand=0
 --      → NO item_stock_levels row exists for it (and trivially Σ = on_hand = 0).
+--   4. Fix 3 (tenant-isolation): org-A item with primary_location_id = an org-B
+--      rack location → the seeded level is NOT at the org-B location; it falls
+--      through to org-A's warehouse/Unplaced instead. Σ = on_hand = 9.
 --
 -- Wrapped in begin/rollback — nothing leaks.
 
 begin;
 
-select plan(7);
+select plan(11);
 
 -- ── Stable UUIDs — namespace 0xcc99xx (distinct from all other test files) ─────
-\set org   '\'cc9900aa-0000-0000-0000-000000000001\''
-\set usr   '\'cc9900aa-0000-0000-0000-000000000002\''
-\set wh    '\'cc9900aa-0000-0000-0000-000000000003\''
-\set rack  '\'cc9900aa-0000-0000-0000-000000000004\''
-\set item1 '\'cc9900aa-0000-0000-0000-000000000005\''
-\set item2 '\'cc9900aa-0000-0000-0000-000000000006\''
-\set item3 '\'cc9900aa-0000-0000-0000-000000000007\''
+\set org    '\'cc9900aa-0000-0000-0000-000000000001\''
+\set usr    '\'cc9900aa-0000-0000-0000-000000000002\''
+\set wh     '\'cc9900aa-0000-0000-0000-000000000003\''
+\set rack   '\'cc9900aa-0000-0000-0000-000000000004\''
+\set item1  '\'cc9900aa-0000-0000-0000-000000000005\''
+\set item2  '\'cc9900aa-0000-0000-0000-000000000006\''
+\set item3  '\'cc9900aa-0000-0000-0000-000000000007\''
+\set org_b  '\'cc9900aa-0000-0000-0000-000000000008\''
+\set wh_b   '\'cc9900aa-0000-0000-0000-000000000009\''
+\set rack_b '\'cc9900aa-0000-0000-0000-00000000000a\''
+\set item4  '\'cc9900aa-0000-0000-0000-00000000000b\''
 
 -- ── Fixtures (run as superuser) ──────────────────────────────────────────────────
 
@@ -139,6 +146,81 @@ select is(
   (select quantity_on_hand from public.inventory_items
     where id = 'cc9900aa-0000-0000-0000-000000000007'::uuid),
   'Case 3: Sigma(item_stock_levels) = quantity_on_hand = 0');
+
+-- ── CASE 4: Fix 3 — tenant-isolation: org-A item with primary_location_id pointing
+-- at an org-B rack must NOT seed a level at that org-B location. Without the org-
+-- scope guard the SECURITY DEFINER trigger would seed stock across tenants.
+-- With the fix the location lookup finds no row (wrong org) and falls through to
+-- org-A's warehouse Unplaced bucket instead.
+-- ────────────────────────────────────────────────────────────────────────────────
+
+-- Org B + its warehouse + a rack location inside it.
+insert into public.organizations (id, name, slug)
+  values (:org_b, 'Other Org B', 'other-org-b-0199')
+  on conflict (id) do nothing;
+
+insert into public.warehouses (id, organization_id, name, code, status)
+  values (:wh_b, :org_b, 'Org B WH', 'WH-ORGB', 'active')
+  on conflict (id) do nothing;
+
+insert into public.locations (id, organization_id, warehouse_id, name, type, kind)
+  values (:rack_b, :org_b, :wh_b, 'OrgB-Rack1', 'bin', 'rack')
+  on conflict (id) do nothing;
+
+-- Org-A item with quantity_on_hand=9 and primary_location_id pointing at the
+-- org-B rack. The trigger must reject this (cross-tenant) and fall through to
+-- org-A's warehouse Unplaced instead.
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status,
+   tracking_type, primary_location_id)
+  values (:item4, :org, :wh, 'SL99-CASE4', 'Cross-Tenant Seed Item', 9,
+          'active', 'none', :rack_b)
+  on conflict (id) do nothing;
+
+-- 4a. Σ item_stock_levels = on_hand = 9 for the org-A item.
+select is(
+  (select coalesce(sum(quantity), 0)
+     from public.item_stock_levels
+    where item_id = 'cc9900aa-0000-0000-0000-00000000000b'::uuid),
+  9::numeric,
+  'Case 4: Sigma(item_stock_levels) = on_hand = 9 for org-A item'
+);
+
+-- 4b. No item_stock_levels row references the org-B rack for the org-A item.
+select ok(
+  not exists(
+    select 1 from public.item_stock_levels
+     where item_id     = 'cc9900aa-0000-0000-0000-00000000000b'::uuid
+       and location_id = 'cc9900aa-0000-0000-0000-00000000000a'::uuid
+  ),
+  'Case 4: no item_stock_levels row at the org-B location for the org-A item'
+);
+
+-- 4c. The stock landed in org-A's warehouse Unplaced (not the org-B rack).
+select ok(
+  exists(
+    select 1
+      from public.item_stock_levels isl
+      join public.locations l on l.id = isl.location_id
+     where isl.item_id      = 'cc9900aa-0000-0000-0000-00000000000b'::uuid
+       and l.organization_id = 'cc9900aa-0000-0000-0000-000000000001'::uuid
+       and l.warehouse_id    = 'cc9900aa-0000-0000-0000-000000000003'::uuid
+       and l.kind            = 'unplaced'
+       and l.deleted_at      is null
+       and isl.quantity      = 9
+  ),
+  'Case 4: org-A item stock (9) landed in org-A warehouse Unplaced, not org-B rack'
+);
+
+-- 4d. Σ item_stock_levels for the org-A item equals quantity_on_hand = 9 (invariant).
+select is(
+  (select coalesce(sum(quantity), 0)
+     from public.item_stock_levels
+    where item_id = 'cc9900aa-0000-0000-0000-00000000000b'::uuid),
+  (select quantity_on_hand from public.inventory_items
+    where id = 'cc9900aa-0000-0000-0000-00000000000b'::uuid),
+  'Case 4: Sigma(item_stock_levels) = quantity_on_hand invariant holds after cross-tenant guard'
+);
 
 select * from finish();
 rollback;

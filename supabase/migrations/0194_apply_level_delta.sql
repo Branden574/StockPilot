@@ -5,6 +5,30 @@
 -- + qty -> Staging; - qty -> draw down placed (mode 'placed') or Staging-first
 -- (mode 'staging_first'); raises insufficient_placed_stock when short.
 
+-- Partial unique index: at most one staging + one unplaced org-level bucket
+-- (warehouse_id IS NULL). The existing locations_one_special_per_wh covers
+-- warehouse-scoped buckets but does NOT cover NULL warehouse rows. This index
+-- makes `on conflict do nothing` work correctly in ensure_org_placement_locations.
+create unique index if not exists locations_one_special_per_org
+  on public.locations(organization_id, kind)
+  where warehouse_id is null and kind in ('staging','unplaced') and deleted_at is null;
+
+-- SECURITY DEFINER helper: create org-level Staging + Unplaced buckets
+-- (warehouse_id = NULL) when an item has no warehouse. Runs as table owner to
+-- bypass locations_insert RLS (which requires manager), so staff-role
+-- null-location positive adjustments on warehouseless items succeed.
+create or replace function public.ensure_org_placement_locations(p_org uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if p_org is null then return; end if;
+  insert into public.locations (organization_id, warehouse_id, name, type, kind)
+  values (p_org, null, 'Staging', 'other', 'staging') on conflict do nothing;
+  insert into public.locations (organization_id, warehouse_id, name, type, kind)
+  values (p_org, null, 'Unplaced', 'other', 'unplaced') on conflict do nothing;
+end; $$;
+
+grant execute on function public.ensure_org_placement_locations(uuid) to authenticated;
+
 create or replace function public.apply_level_delta(
   p_item_id uuid,
   p_qty     numeric,
@@ -35,13 +59,12 @@ begin
       select id into v_loc from public.locations
         where warehouse_id = v_wh and kind = 'staging' and deleted_at is null limit 1;
     else
+      -- Use SECURITY DEFINER helper to bypass locations_insert RLS (requires manager)
+      -- so staff-role positive adjustments on warehouseless items also succeed.
+      perform public.ensure_org_placement_locations(v_org);
       select id into v_loc from public.locations
         where organization_id = v_org and warehouse_id is null
           and kind = 'staging' and deleted_at is null limit 1;
-      if v_loc is null then
-        insert into public.locations(organization_id, name, type, kind)
-        values (v_org, 'Staging', 'other', 'staging') returning id into v_loc;
-      end if;
     end if;
     insert into public.item_stock_levels(organization_id, item_id, location_id, quantity)
     values (v_org, p_item_id, v_loc, p_qty)

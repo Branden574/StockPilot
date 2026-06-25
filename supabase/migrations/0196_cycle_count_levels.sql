@@ -116,13 +116,16 @@ begin
     -- Reconcile the per-location levels to the NEW on-hand (= expected + v_diff)
     -- so Σ item_stock_levels stays = quantity_on_hand even if live qty drifted
     -- from the snapshot. delta = new_on_hand − current Σlevels (+ → Staging,
-    -- − → placed draw-down). In the no-drift case this equals v_diff.
+    -- − → staging_first: drain Staging before placed, because freshly-received
+    -- stock normally sits in Staging and a cycle count is an authoritative recount,
+    -- not a pick — it must reconcile from wherever the stock actually sits).
+    -- In the no-drift case this equals v_diff.
     select coalesce(sum(quantity), 0) into v_levels_sum
       from public.item_stock_levels where item_id = v_line.item_id;
     perform public.apply_level_delta(
       v_line.item_id,
       (v_line.expected_quantity + v_diff) - v_levels_sum,
-      'placed');
+      'staging_first');
   end loop;
 
   update public.cycle_counts

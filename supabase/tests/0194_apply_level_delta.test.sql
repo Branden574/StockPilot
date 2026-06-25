@@ -11,7 +11,7 @@
 --   adjust_stock(item, +4, 'add',    null, ...) -- positive -> Staging
 --   adjust_stock(item, -5, 'remove', null, ...) -- negative placed -> rack(6->1)
 --
--- Asserts (7):
+-- Asserts (7 original + 4 Fix 2 = 11):
 --   1. Staging level = 4  (+4 landed there)
 --   2. Rack level = 1     (-5 drew from placed rack 6->1)
 --   3. quantity_on_hand = 5  (6 +4 -5)
@@ -19,20 +19,24 @@
 --   5. throws_ok: adjust_stock(item, -100, 'remove', null, ...) raises P0001
 --   6. staging_first mode: -3 drains Staging (4->1)
 --   7. staging_first mode: placed rack left untouched (still 6)
+--   8. Fix 2: ensure_org_placement_locations creates exactly one org-level Staging
+--      bucket (idempotent across two calls — proves the partial unique index works)
+--   9. Fix 2: ensure_org_placement_locations creates exactly one org-level Unplaced
+--      bucket (idempotent)
 --
 -- Wrapped in begin/rollback -- nothing leaks.
 
 begin;
 
-select plan(7);
+select plan(9);
 
-\set org   '\'ff940000-0000-0000-0000-000000000001\''
-\set usr   '\'ff940000-0000-0000-0000-000000000002\''
-\set wh    '\'ff940000-0000-0000-0000-000000000003\''
-\set item  '\'ff940000-0000-0000-0000-000000000004\''
-\set rack  '\'ff940000-0000-0000-0000-000000000005\''
-\set item2 '\'ff940000-0000-0000-0000-000000000006\''
-\set rack2 '\'ff940000-0000-0000-0000-000000000007\''
+\set org     '\'ff940000-0000-0000-0000-000000000001\''
+\set usr     '\'ff940000-0000-0000-0000-000000000002\''
+\set wh      '\'ff940000-0000-0000-0000-000000000003\''
+\set item    '\'ff940000-0000-0000-0000-000000000004\''
+\set rack    '\'ff940000-0000-0000-0000-000000000005\''
+\set item2   '\'ff940000-0000-0000-0000-000000000006\''
+\set rack2   '\'ff940000-0000-0000-0000-000000000007\''
 
 -- ── Fixtures (seeded as superuser before role switch) ─────────────────────────
 
@@ -198,6 +202,45 @@ select is(
       and location_id = 'ff940000-0000-0000-0000-000000000007'::uuid),
   6::numeric,
   'staging_first: placed rack untouched (still 6)');
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- FIX 2: ensure_org_placement_locations (SECURITY DEFINER helper) creates the
+-- org-level (warehouse_id IS NULL) Staging + Unplaced buckets idempotently.
+-- This helper replaced the old inline INSERT in apply_level_delta's +qty
+-- v_wh-IS-NULL branch, which ran under SECURITY INVOKER and could violate the
+-- locations_insert RLS (requires manager). Calling it TWICE proves the new
+-- locations_one_special_per_org partial unique index dedupes (no second bucket).
+-- The org ff94...0001 has only WAREHOUSE-scoped buckets seeded so far (the
+-- warehouse trigger never creates warehouse_id IS NULL rows), so this starts clean.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+reset role;
+
+-- Call the DEFINER helper twice to prove idempotency.
+select public.ensure_org_placement_locations('ff940000-0000-0000-0000-000000000001'::uuid);
+select public.ensure_org_placement_locations('ff940000-0000-0000-0000-000000000001'::uuid);
+
+-- 8. Exactly one org-level (warehouse_id null) Staging bucket exists.
+select is(
+  (select count(*)::int from public.locations
+     where organization_id = 'ff940000-0000-0000-0000-000000000001'::uuid
+       and warehouse_id is null
+       and kind = 'staging'
+       and deleted_at is null),
+  1,
+  'Fix 2: ensure_org_placement_locations created exactly one org-level Staging bucket (idempotent)'
+);
+
+-- 9. Exactly one org-level (warehouse_id null) Unplaced bucket exists.
+select is(
+  (select count(*)::int from public.locations
+     where organization_id = 'ff940000-0000-0000-0000-000000000001'::uuid
+       and warehouse_id is null
+       and kind = 'unplaced'
+       and deleted_at is null),
+  1,
+  'Fix 2: exactly one org-level Unplaced bucket (idempotent)'
+);
 
 select * from finish();
 rollback;
