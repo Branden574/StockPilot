@@ -172,7 +172,19 @@ export function rackCmp(a: string, b: string): number {
   return (aRow ?? '').localeCompare(bRow ?? '');
 }
 
-/** Split total on-hand into placed vs staged. staged = qty in Staging locations. */
+/**
+ * Split total on-hand into placed vs staged. staged = qty in Staging locations.
+ *
+ * Phase 1 caveat: this is accurate AT REST and after receiving (which writes the
+ * Staging item_stock_levels row) and after a receipt reversal (mig 0193 keeps it
+ * symmetric). It is NOT yet maintained by other on-hand mutators — picking,
+ * shipping, cycle count, returns, cancel-restore, bundles, manual adjust all
+ * change quantity_on_hand without touching item_stock_levels. So an item that
+ * holds Staging stock and is then decremented by one of those paths will show a
+ * stale (inflated) `staged`. Phase 2 ("Place from Staging") makes every mutator
+ * location-aware; until then treat staged as an at-rest figure. See the spec's
+ * "Phase 1 shipped state + Phase 2 follow-ups" section.
+ */
 export function derivePlacement(
   quantityOnHand: number,
   stagedQuantity: number,
