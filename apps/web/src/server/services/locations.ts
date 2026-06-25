@@ -10,6 +10,13 @@ export const createLocationSchema = z.object({
   type: z.enum(['warehouse', 'room', 'shelf', 'bin', 'vehicle', 'jobsite', 'other']).optional(),
   parentId: z.string().uuid().nullable().optional(),
   notes: z.string().max(2000).optional(),
+  // Placement fields for rack/crate inline creation (all optional for backward compat)
+  kind: z.enum(['area', 'rack', 'crate']).optional(),
+  warehouseId: z.string().uuid().nullable().optional(),
+  rackNumber: z.string().max(64).nullable().optional(),
+  rackRow: z.string().max(64).nullable().optional(),
+  crateColor: z.string().max(64).nullable().optional(),
+  crateNumber: z.string().max(64).nullable().optional(),
 });
 export type CreateLocationInput = z.infer<typeof createLocationSchema>;
 
@@ -60,6 +67,12 @@ export class LocationsService {
         type: input.type ?? null,
         parent_id: input.parentId ?? null,
         notes: input.notes ?? null,
+        kind: input.kind ?? null,
+        warehouse_id: input.warehouseId ?? null,
+        rack_number: input.rackNumber ?? null,
+        rack_row: input.rackRow ?? null,
+        crate_color: input.crateColor ?? null,
+        crate_number: input.crateNumber ?? null,
       })
       .select('*')
       .single();
