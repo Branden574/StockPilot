@@ -24,8 +24,10 @@ import {
 
 const PROCEDURE_VIDEOS_BUCKET = 'procedure-videos';
 const ACCEPT_MIME = ['video/mp4', 'video/quicktime', 'video/webm'];
-// 500 MB matches the bucket's file_size_limit from the migration.
-const MAX_BYTES = 500 * 1024 * 1024;
+// 1 GB matches the bucket's file_size_limit from the migration. NOTE: the
+// Supabase project-wide global upload limit must also be >= this value, or
+// storage rejects the upload regardless of the per-bucket cap.
+const MAX_BYTES = 1024 * 1024 * 1024;
 
 export interface UploadedVideo {
   id: string;
@@ -124,7 +126,7 @@ function validateFile(file: File): string | null {
     return `"${file.name}" isn't a supported video type. Use MP4, MOV, or WEBM.`;
   }
   if (file.size > MAX_BYTES) {
-    return `"${file.name}" is over 500 MB.`;
+    return `"${file.name}" is over 1 GB.`;
   }
   return null;
 }
@@ -582,7 +584,7 @@ function DropZone({
       <Film className="h-5 w-5 text-muted-foreground" aria-hidden />
       <p className="text-sm font-medium">Drop videos, or click to browse</p>
       <p className="text-xs text-muted-foreground">
-        MP4, MOV, WEBM · up to 500 MB each
+        MP4, MOV, WEBM · up to 1 GB each
       </p>
       <input
         id="video-upload"

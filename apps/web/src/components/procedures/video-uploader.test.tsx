@@ -96,7 +96,7 @@ describe('VideoUploader — staged mode', () => {
     expect(onStagedChange).toHaveBeenCalledWith([]);
   });
 
-  it('rejects files over 500 MB', async () => {
+  it('rejects files over 1 GB', async () => {
     const onStagedChange = vi.fn();
     render(
       <VideoUploader
@@ -108,7 +108,7 @@ describe('VideoUploader — staged mode', () => {
 
     const input = document.getElementById('video-upload') as HTMLInputElement;
     await dropFiles(input, [
-      makeFile('big.mp4', 'video/mp4', 600 * 1024 * 1024),
+      makeFile('big.mp4', 'video/mp4', 1100 * 1024 * 1024),
     ]);
 
     expect(toastErrorMock).toHaveBeenCalled();
