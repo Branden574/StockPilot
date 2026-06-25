@@ -52,8 +52,13 @@ once**.
 ## 4. Data model
 
 ### 4.1 Placement locations (extend `locations`)
-The `locations` table (id, organization_id, warehouse_id, parent_id, name, type, …) already
-supports a nested hierarchy. Add:
+The `locations` table (id, organization_id, parent_id, name, type, …) supports a nested
+hierarchy but has **no `warehouse_id`** today (warehouses live in a separate `warehouses`
+table, mig 0007; `inventory_items` carries both `warehouse_id` → warehouses and
+`primary_location_id` → locations). Add:
+- `warehouse_id uuid references warehouses(id)` — so placement locations (staging/area/rack/
+  crate) belong to a warehouse, matching `inventory_items.warehouse_id`. (Existing free-form
+  locations keep `warehouse_id = null`.)
 - `kind` — `'staging' | 'area' | 'rack' | 'crate' | 'unplaced'`. Areas/racks/crates nest via
   the existing `parent_id` (Area → Rack → optional Crate).
 - Structured placement columns: `rack_number`, `rack_row`, `crate_color`, `crate_number`
