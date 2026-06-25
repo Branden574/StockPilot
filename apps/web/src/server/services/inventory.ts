@@ -781,6 +781,48 @@ export class InventoryService {
   }
 
   /**
+   * Returns every non-empty stock level for `itemId`, annotated with the
+   * location's name, kind, and warehouse so callers can build per-location
+   * transfer source lists.
+   *
+   * Fail-closed: returns [] on any Supabase error rather than throwing, so a
+   * transient read failure degrades the transfer dialog (empty source list)
+   * rather than breaking the whole item-detail page.
+   *
+   * Org-scoped: `.eq('organization_id', …)` is mandatory — belt-and-suspenders
+   * on top of RLS so a service-role context can't accidentally leak rows.
+   */
+  async placements(itemId: string): Promise<Array<{
+    locationId: string;
+    name: string;
+    kind: string | null;
+    warehouseId: string | null;
+    quantity: number;
+  }>> {
+    const { data, error } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('location_id, quantity, locations!inner(id, name, kind, warehouse_id)')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('item_id', itemId)
+      .gt('quantity', 0);
+
+    if (error || !data) return [];
+
+    return data.map((row) => {
+      const loc = row.locations as unknown as {
+        id: string; name: string; kind: string | null; warehouse_id: string | null;
+      };
+      return {
+        locationId: row.location_id,
+        name: loc.name,
+        kind: loc.kind,
+        warehouseId: loc.warehouse_id,
+        quantity: Number(row.quantity),
+      };
+    });
+  }
+
+  /**
    * Sum of ACTIVE (not-yet-released) stock_reservations per item, keyed by
    * item id. Mirrors the exact reservation math the /rentals/new catalog
    * uses (no reference_type filter — total active reservations across every

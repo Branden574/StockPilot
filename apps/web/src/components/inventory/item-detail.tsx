@@ -116,7 +116,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // fan out alongside.
   const categoryIdForFetch = (item.category_id as string | null) ?? null;
   const supplierIdForFetch = (item.supplier_id as string | null) ?? null;
-  const [categoryRow, supplierRow, locations, activity, imageRows, costHistory, customFieldDefs] =
+  const [categoryRow, supplierRow, locations, holdings, activity, imageRows, costHistory, customFieldDefs] =
     await Promise.all([
       categoryIdForFetch
         ? ctx.supabase
@@ -137,6 +137,9 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
             .then((r) => r.data)
         : Promise.resolve(null),
       locationsSvc.list(),
+      // Per-location stock levels for the transfer dialog — keeps the dialog's
+      // source list accurate after mig 0192 moved stock out of primary_location_id.
+      inventorySvc.placements(id),
       activitySvc.forItem(id, 50),
       imagesSvc.list(id),
       // Per-supplier unit-cost trend from our own PO + receipt data. Fanned
@@ -322,8 +325,10 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   locations={locations.map((l) => ({
                     id: l.id as string,
                     name: l.name as string,
+                    kind: (l.kind as string | null) ?? null,
                     warehouse_id: (l.warehouse_id as string | null) ?? null,
                   }))}
+                  holdings={holdings}
                 />
               )}
             </div>
