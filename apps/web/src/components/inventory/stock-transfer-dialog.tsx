@@ -26,11 +26,21 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { transferStockAction } from '@/server/actions/inventory';
+import { transferableHoldings } from '@/lib/placements';
 
 interface LocationOption {
   id: string;
   name: string;
+  kind: string | null;
   warehouse_id: string | null;
+}
+
+interface HoldingOption {
+  locationId: string;
+  name: string;
+  kind: string | null;
+  warehouseId: string | null;
+  quantity: number;
 }
 
 interface StockTransferDialogProps {
@@ -39,6 +49,7 @@ interface StockTransferDialogProps {
   currentQuantity: number;
   currentLocationId: string | null;
   locations: LocationOption[];
+  holdings: HoldingOption[];
   trigger?: React.ReactNode;
 }
 
@@ -46,13 +57,17 @@ export function StockTransferDialog({
   itemId,
   itemName,
   currentQuantity,
-  currentLocationId,
   locations,
+  holdings,
   trigger,
 }: StockTransferDialogProps) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
-  const [fromLocation, setFromLocation] = React.useState<string>(currentLocationId ?? '');
+
+  const sourceHoldings = transferableHoldings(holdings);
+  const defaultFrom = sourceHoldings[0]?.locationId ?? '';
+
+  const [fromLocation, setFromLocation] = React.useState<string>(defaultFrom);
   const [toLocation, setToLocation] = React.useState<string>('');
   const [quantity, setQuantity] = React.useState('1');
   const [notes, setNotes] = React.useState('');
@@ -60,14 +75,30 @@ export function StockTransferDialog({
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
-    if (open) setFromLocation(currentLocationId ?? '');
-  }, [open, currentLocationId]);
+    if (open) setFromLocation(sourceHoldings[0]?.locationId ?? '');
+    // sourceHoldings is derived from holdings prop, which is stable
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const qtyNum = Number.parseFloat(quantity) || 0;
-  const validLocations = locations.filter((l) => l.id !== fromLocation);
+
+  // Max transferable = the selected source holding's qty (not total on-hand)
+  const selectedHolding = sourceHoldings.find((h) => h.locationId === fromLocation);
+  const maxTransferable = selectedHolding?.quantity ?? 0;
+
+  // Destination: all locations except the chosen source and system kinds
+  const destinationLocations = locations.filter(
+    (l) =>
+      l.id !== fromLocation &&
+      l.kind !== 'staging' &&
+      l.kind !== 'unplaced',
+  );
+
   const fromLoc = locations.find((l) => l.id === fromLocation);
   const toLoc = locations.find((l) => l.id === toLocation);
   const crossWarehouse = !!fromLoc && !!toLoc && fromLoc.warehouse_id !== toLoc.warehouse_id;
+
+  const hasNoSources = sourceHoldings.length === 0;
 
   async function submit() {
     if (!fromLocation || !toLocation) {
@@ -82,8 +113,8 @@ export function StockTransferDialog({
       toast.error('Enter a positive quantity to transfer.');
       return;
     }
-    if (qtyNum > currentQuantity) {
-      toast.error("Can't transfer more than the current on-hand stock.");
+    if (qtyNum > maxTransferable) {
+      toast.error("Can't transfer more than what's in the source location.");
       return;
     }
     setSubmitting(true);
@@ -126,73 +157,80 @@ export function StockTransferDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label>From location</Label>
-            <Select value={fromLocation} onValueChange={setFromLocation}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select source" />
-              </SelectTrigger>
-              <SelectContent>
-                {locations.map((l) => (
-                  <SelectItem key={l.id} value={l.id}>
-                    {l.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+        {hasNoSources ? (
+          <p className="text-muted-foreground text-sm">
+            This item&apos;s stock is in Staging/Unplaced — placement is handled in the
+            staging workflow.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>From location</Label>
+              <Select value={fromLocation} onValueChange={setFromLocation}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select source" />
+                </SelectTrigger>
+                <SelectContent>
+                  {sourceHoldings.map((h) => (
+                    <SelectItem key={h.locationId} value={h.locationId}>
+                      {h.name} · {h.quantity} avail
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-          <div className="space-y-1.5">
-            <Label>To location</Label>
-            <Select value={toLocation} onValueChange={setToLocation}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select destination" />
-              </SelectTrigger>
-              <SelectContent>
-                {validLocations.map((l) => (
-                  <SelectItem key={l.id} value={l.id}>
-                    {l.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {crossWarehouse && (
-              <p className="text-[11px] text-amber-700 dark:text-amber-400">
-                This transfer crosses warehouses. Both warehouses must be in your access
-                scope.
-              </p>
-            )}
-          </div>
+            <div className="space-y-1.5">
+              <Label>To location</Label>
+              <Select value={toLocation} onValueChange={setToLocation}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select destination" />
+                </SelectTrigger>
+                <SelectContent>
+                  {destinationLocations.map((l) => (
+                    <SelectItem key={l.id} value={l.id}>
+                      {l.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {crossWarehouse && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                  This transfer crosses warehouses. Both warehouses must be in your access
+                  scope.
+                </p>
+              )}
+            </div>
 
-          <div className="space-y-1.5">
-            <Label>Quantity</Label>
-            <Input
-              type="number"
-              step="1"
-              min="1"
-              value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
-            />
-          </div>
+            <div className="space-y-1.5">
+              <Label>Quantity</Label>
+              <Input
+                type="number"
+                step="1"
+                min="1"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+              />
+            </div>
 
-          <div className="space-y-1.5">
-            <Label>Notes (optional)</Label>
-            <Textarea
-              rows={2}
-              value={notes}
-              maxLength={2000}
-              placeholder="Why is this stock moving?"
-              onChange={(e) => setNotes(e.target.value)}
-            />
+            <div className="space-y-1.5">
+              <Label>Notes (optional)</Label>
+              <Textarea
+                rows={2}
+                value={notes}
+                maxLength={2000}
+                placeholder="Why is this stock moving?"
+                onChange={(e) => setNotes(e.target.value)}
+              />
+            </div>
           </div>
-        </div>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={submitting}>
+          <Button onClick={submit} disabled={submitting || hasNoSources}>
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Transfer stock'}
           </Button>
         </DialogFooter>
