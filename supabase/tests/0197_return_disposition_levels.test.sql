@@ -77,6 +77,14 @@ insert into public.inventory_items
     (:item_scr, :org_id, :wh_id, 'Scrap RTN 0197',   'SKU-R97-SCR', 100, 'active', 'none')
   on conflict (id) do nothing;
 
+-- 0199 trigger seeds Unplaced rows for both items (quantity_on_hand=100 each);
+-- clear them now so we can place all stock explicitly in Staging below.
+delete from public.item_stock_levels
+  where item_id in (
+    'ee970000-0000-0000-0000-000000000011'::uuid,
+    'ee970000-0000-0000-0000-000000000012'::uuid
+  );
+
 -- Seed Staging item_stock_levels so Σ=on_hand holds BEFORE we call the RPC.
 -- Both items: all 100 units already in Staging (realistic for just-received stock).
 -- The RESTOCK test will add +3 to this; the SCRAP test will add +4 then −4 (net 0).

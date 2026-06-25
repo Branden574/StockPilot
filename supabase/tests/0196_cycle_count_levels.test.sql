@@ -87,6 +87,9 @@ insert into public.inventory_items
   values (:item, :org, :wh, 'CYC-0196', 'Cycle Widget', 10, 'active', 'none')
   on conflict (id) do nothing;
 
+-- 0199 trigger seeds an Unplaced row; clear it so all stock sits in the rack.
+delete from public.item_stock_levels where item_id = :item;
+
 -- Per-location stock level: all 10 units sit in the rack.
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
   values (:org, :item, :rack, 10)
@@ -125,6 +128,9 @@ insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
   values (:item_d, :org, :wh, 'CYC-0196-D', 'Cycle Drift Widget', 11, 'active', 'none')
   on conflict (id) do nothing;
+
+-- 0199 trigger seeds an Unplaced row; clear it so all drift-item stock sits in rack_d.
+delete from public.item_stock_levels where item_id = :item_d;
 
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
   values (:org, :item_d, :rack_d, 11)
