@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf .expo node_modules",
     "release:ios": "pnpm dlx eas-cli@20.3.0 build --platform ios --profile production --auto-submit --no-wait --non-interactive",
-    "release:android": "pnpm dlx eas-cli@20.3.0 build --platform android --profile production --auto-submit --no-wait --non-interactive"
+    "release:android": "pnpm dlx eas-cli@20.3.0 build --platform android --profile production --auto-submit --no-wait --non-interactive",
+    "eas-build-pre-install": "if [ \"$(uname)\" = Darwin ]; then command -v pod >/dev/null 2>&1 || gem install cocoapods --no-document || sudo gem install cocoapods --no-document; fi"
   },
   "dependencies": {
     "@expo-google-fonts/instrument-serif": "^0.4.1",
