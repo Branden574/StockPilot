@@ -3,13 +3,19 @@
 -- post_cycle_count v3 — keeps item_stock_levels in sync with on-hand.
 --
 -- What changed vs. 0079:
---   After updating quantity_on_hand (snapshot + variance), we call
---   apply_level_delta(v_line.item_id, v_diff, 'placed') so the
---   per-location breakdown tracks the on-hand total:
---     • Negative variance (v_diff < 0) → placed draw-down (racks first,
---       Unplaced last). Raises insufficient_placed_stock if not enough.
---     • Positive variance (v_diff > 0) → surplus routed to Staging by
---       apply_level_delta (positives always go to Staging regardless of mode).
+--   After updating quantity_on_hand (= snapshot + variance), we reconcile the
+--   per-location breakdown to the NEW on-hand via apply_level_delta so the
+--   Phase 2a invariant Σ item_stock_levels = quantity_on_hand always holds:
+--     delta = new_on_hand − current Σ item_stock_levels
+--     (+ → Staging; − → placed draw-down, racks first / Unplaced last).
+--   This deliberately reconciles to the new on-hand rather than blindly
+--   applying v_diff: if live qty DRIFTED from the snapshot (a movement landed
+--   between count start and post), the live Σlevels already differs from the
+--   snapshot, so applying v_diff alone would leave Σlevels = live + v_diff
+--   while on_hand = expected + v_diff — they'd diverge by the drift amount.
+--   The reconcile collapses that gap. In the no-drift case (Σlevels = expected)
+--   the delta equals v_diff exactly, so positive variance still lands in
+--   Staging and negative variance still draws from placed stock.
 --   Everything else is unchanged: snapshot-based variance, drift note in
 --   stock_movements, custom audit row (reference_type='cycle_count'),
 --   warehouse-scope guard, security invoker, search_path = public.
@@ -28,6 +34,7 @@ declare
   v_current_wh    uuid;
   v_diff          numeric(14,4);
   v_drift         boolean;
+  v_levels_sum    numeric;
 begin
   select * into v_cc from public.cycle_counts where id = p_cycle_count_id for update;
   if not found then
@@ -106,8 +113,16 @@ begin
       where id = v_line.item_id
         and deleted_at is null;
 
-    -- Keep the per-location breakdown in step with the on-hand change.
-    perform public.apply_level_delta(v_line.item_id, v_diff, 'placed');
+    -- Reconcile the per-location levels to the NEW on-hand (= expected + v_diff)
+    -- so Σ item_stock_levels stays = quantity_on_hand even if live qty drifted
+    -- from the snapshot. delta = new_on_hand − current Σlevels (+ → Staging,
+    -- − → placed draw-down). In the no-drift case this equals v_diff.
+    select coalesce(sum(quantity), 0) into v_levels_sum
+      from public.item_stock_levels where item_id = v_line.item_id;
+    perform public.apply_level_delta(
+      v_line.item_id,
+      (v_line.expected_quantity + v_diff) - v_levels_sum,
+      'placed');
   end loop;
 
   update public.cycle_counts
