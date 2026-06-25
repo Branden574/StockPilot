@@ -172,6 +172,15 @@ export function rackCmp(a: string, b: string): number {
   return (aRow ?? '').localeCompare(bRow ?? '');
 }
 
+/** Split total on-hand into placed vs staged. staged = qty in Staging locations. */
+export function derivePlacement(
+  quantityOnHand: number,
+  stagedQuantity: number,
+): { staged_quantity: number; placed_quantity: number } {
+  const staged = stagedQuantity || 0;
+  return { staged_quantity: staged, placed_quantity: Math.max(0, quantityOnHand - staged) };
+}
+
 export class InventoryService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -552,8 +561,30 @@ export class InventoryService {
       0,
     );
 
+    // Per-item staged quantity = Σ quantity in the warehouse Staging location(s).
+    const ids = (rows ?? []).map((r) => (r as { id: string }).id);
+    const stagedByItem = new Map<string, number>();
+    if (ids.length > 0) {
+      const { data: levels } = await this.ctx.supabase
+        .from('item_stock_levels')
+        .select('item_id, quantity, locations!inner(kind)')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('locations.kind', 'staging')
+        .in('item_id', ids);
+      for (const lvl of (levels ?? []) as Array<{ item_id: string; quantity: number }>) {
+        stagedByItem.set(lvl.item_id, (stagedByItem.get(lvl.item_id) ?? 0) + Number(lvl.quantity));
+      }
+    }
+    const rowsWithPlacement = (rows ?? []).map((r) => ({
+      ...(r as object),
+      ...derivePlacement(
+        Number((r as { quantity_on_hand: number }).quantity_on_hand),
+        stagedByItem.get((r as { id: string }).id) ?? 0,
+      ),
+    }));
+
     return {
-      items: rows as Array<{
+      items: rowsWithPlacement as Array<{
         id: string;
         sku: string;
         barcode: string | null;
@@ -575,6 +606,8 @@ export class InventoryService {
         custom_fields: Record<string, unknown>;
         created_at: string;
         updated_at: string;
+        staged_quantity: number;
+        placed_quantity: number;
       }>,
       total: totalCount,
       /** Sum of (unit_cost × quantity_on_hand) over the FULL filtered
@@ -730,7 +763,21 @@ export class InventoryService {
         throw e;
       }
     }
-    return data;
+    const { data: stagedRows } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('quantity, locations!inner(kind)')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('item_id', id)
+      .eq('locations.kind', 'staging');
+    const staged = (stagedRows ?? []).reduce(
+      (s, r) => s + Number((r as { quantity: number }).quantity),
+      0,
+    );
+    const placement = derivePlacement(
+      Number((data as { quantity_on_hand: number }).quantity_on_hand),
+      staged,
+    );
+    return Object.assign(data, placement);
   }
 
   /**
