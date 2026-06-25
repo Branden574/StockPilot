@@ -239,7 +239,7 @@ async function InventoryTableSection({
       }),
     ),
     tagged('categoriesSvc.list', categoriesSvc.list()),
-    tagged('locationsSvc.list', locationsSvc.list()),
+    tagged('locationsSvc.list', locationsSvc.list({ excludeSystem: true })),
     tagged('suppliersSvc.list', suppliersSvc.list()),
     tagged('tagsSvc.list', tagsSvc.list()),
     tagged('chartersSvc.list', chartersSvc.list()),

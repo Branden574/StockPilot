@@ -28,7 +28,7 @@ export default async function NewPoPage() {
   const [inventory, suppliers, locations, charters] = await Promise.all([
     inventorySvc.list({ limit: 1000 }),
     suppliersSvc.list(),
-    locationsSvc.list(),
+    locationsSvc.list({ excludeSystem: true }),
     chartersSvc.list(),
   ]);
 

@@ -76,7 +76,7 @@ export default async function NewItemPage() {
     customFieldDefs,
   ] = await Promise.all([
     categoriesSvc.list(),
-    locationsSvc.list(),
+    locationsSvc.list({ excludeSystem: true }),
     suppliersSvc.list(),
     tagsSvc.list(),
     warehousesSvc.list(),

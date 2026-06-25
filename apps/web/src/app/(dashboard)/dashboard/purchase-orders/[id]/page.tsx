@@ -57,7 +57,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
 
   const [suppliers, locations, receiptData, warehouses] = await Promise.all([
     suppliersSvc.list(),
-    locationsSvc.list(),
+    locationsSvc.list({ excludeSystem: true }),
     receivingSvc.listForPurchaseOrder(id),
     warehousesSvc.list(),
   ]);

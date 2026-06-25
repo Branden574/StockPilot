@@ -16,6 +16,11 @@ export type CreateLocationInput = z.infer<typeof createLocationSchema>;
 export const updateLocationSchema = createLocationSchema.partial();
 export type UpdateLocationInput = z.infer<typeof updateLocationSchema>;
 
+/** A location an operator should pick as a normal bin (not a system bucket). */
+export function isUserFacingLocation(loc: { kind: string | null }): boolean {
+  return loc.kind !== 'staging' && loc.kind !== 'unplaced';
+}
+
 export class LocationsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -26,8 +31,10 @@ export class LocationsService {
   /**
    * Lists active locations by default. When `opts.includeArchived` is true,
    * returns ONLY archived rows (rows with `deleted_at` set).
+   * When `opts.excludeSystem` is true, rows with kind 'staging' or 'unplaced'
+   * are filtered out (appropriate for user-facing pickers).
    */
-  async list(opts: { includeArchived?: boolean } = {}) {
+  async list(opts: { includeArchived?: boolean; excludeSystem?: boolean } = {}) {
     let query = this.ctx.supabase
       .from('locations')
       .select('id, parent_id, name, type, kind, notes, warehouse_id, deleted_at, created_at, updated_at')
@@ -38,7 +45,8 @@ export class LocationsService {
       : query.is('deleted_at', null);
     const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
-    return data ?? [];
+    const rows = data ?? [];
+    return opts.excludeSystem ? rows.filter(isUserFacingLocation) : rows;
   }
 
   async create(input: CreateLocationInput) {

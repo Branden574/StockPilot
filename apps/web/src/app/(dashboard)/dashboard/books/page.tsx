@@ -207,7 +207,7 @@ async function BooksTableSection({
       offset: (page - 1) * PAGE_SIZE,
     }),
     categoriesSvc.list(),
-    locationsSvc.list(),
+    locationsSvc.list({ excludeSystem: true }),
     suppliersSvc.list(),
     tagsSvc.list(),
     chartersSvc.list(),

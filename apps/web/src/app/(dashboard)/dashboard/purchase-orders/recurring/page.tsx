@@ -60,7 +60,7 @@ export default async function RecurringPosPage() {
   const [inventory, suppliers, locations] = await Promise.all([
     inventorySvc.list({ limit: 1000 }),
     suppliersSvc.list(),
-    locationsSvc.list(),
+    locationsSvc.list({ excludeSystem: true }),
   ]);
 
   return (

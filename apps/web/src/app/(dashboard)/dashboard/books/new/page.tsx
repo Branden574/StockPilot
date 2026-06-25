@@ -74,7 +74,7 @@ export default async function NewBookPage() {
     customFieldDefs,
   ] = await Promise.all([
     categoriesSvc.list(),
-    locationsSvc.list(),
+    locationsSvc.list({ excludeSystem: true }),
     suppliersSvc.list(),
     tagsSvc.list(),
     warehousesSvc.list(),

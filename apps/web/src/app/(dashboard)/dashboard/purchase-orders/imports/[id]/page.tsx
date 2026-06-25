@@ -31,7 +31,7 @@ export default async function PoImportDetailPage({
     (await WarehousesService.forCurrentUser()).list(),
     (await InventoryService.forCurrentUser()).list({ limit: 500, itemType: 'all' }),
     (await ChartersService.forCurrentUser()).list(),
-    (await LocationsService.forCurrentUser()).list(),
+    (await LocationsService.forCurrentUser()).list({ excludeSystem: true }),
   ]);
 
   // Prefill the expected-delivery picker from the AI-extracted ship/delivery
