@@ -59,6 +59,14 @@ interface Item {
    * (item_images.lqip, populated after migration 0122). Threaded into
    * next/image's blurDataURL when present. */
   image_lqip?: string | null;
+  /** Quantity that has been confirmed placed into a rack/crate location
+   * (from staging). Added by Task 6 — optional so older callers that
+   * don't pass it still render correctly (defaults to quantity_on_hand). */
+  placed_quantity?: number;
+  /** Quantity received into a PO staging buffer but not yet placed.
+   * Added by Task 6 — optional so older callers that don't pass it
+   * still render correctly (defaults to 0 = no staged line shown). */
+  staged_quantity?: number;
 }
 
 interface Lookups {
@@ -183,6 +191,9 @@ interface SavedViewSummary {
 type SparkMode = 'qty' | 'moves';
 const SPARK_MODE_KEY = 'stockpilot:inventory:sparkline-mode';
 
+type StockView = 'placed' | 'total';
+const STOCK_VIEW_KEY = 'stockpilot:inventory:stock-view';
+
 const VIEWS = ['All items', 'Low + critical', 'Out of stock'] as const;
 type View = (typeof VIEWS)[number];
 
@@ -298,6 +309,24 @@ export function InventoryTable({
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(SPARK_MODE_KEY, sparkMode);
   }, [sparkMode]);
+
+  // Stock view preference: 'placed' = placed-only on-hand; 'total' = placed + staged.
+  // Same SSR-safe init pattern as sparkMode above — server always sees 'placed'
+  // so the hydration markup matches, then we swap in the stored preference post-mount.
+  const [stockView, setStockView] = React.useState<StockView>('placed');
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = window.localStorage.getItem(STOCK_VIEW_KEY);
+    if (stored === 'total') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
+      setStockView('total');
+    }
+  }, []);
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(STOCK_VIEW_KEY, stockView);
+  }, [stockView]);
+
   const router = useRouter();
   const addToCount = useCountSelection((s) => s.add);
   const params = useSearchParams();
@@ -672,6 +701,16 @@ export function InventoryTable({
           </button>
         )}
 
+        <button
+          type="button"
+          onClick={() => setStockView((v) => (v === 'placed' ? 'total' : 'placed'))}
+          className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)] hover:text-foreground"
+          aria-label="Toggle on-hand view"
+          title="Switch between placed-only and placed+staged on-hand"
+        >
+          {stockView === 'placed' ? 'On hand: placed' : 'On hand: placed + staged'}
+        </button>
+
         <ExportMenu
           params={params}
           itemType={showBookFields ? 'book' : params.get('type') ?? 'product'}
@@ -1015,7 +1054,25 @@ export function InventoryTable({
                       );
                     })()}
                   <td className="px-3 text-right font-mono tabular-nums">
-                    {formatNumber(item.quantity_on_hand)}
+                    {(() => {
+                      // Defensive defaults so rows without the new fields (older
+                      // callers, non-service code paths) render exactly as before.
+                      const staged = item.staged_quantity ?? 0;
+                      const placed = item.placed_quantity ?? item.quantity_on_hand;
+                      const shown = stockView === 'total' ? item.quantity_on_hand : placed;
+                      return (
+                        <>
+                          {formatNumber(shown)}
+                          {staged > 0 && (
+                            <div className="mt-0.5 text-[10.5px] font-normal leading-tight text-[var(--ed-ink-4)]">
+                              {stockView === 'total'
+                                ? `${formatNumber(placed)} placed · ${formatNumber(staged)} staged`
+                                : `+${formatNumber(staged)} staged`}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                     {(() => {
                       // Rentals-only: reserve-not-decrement model means a
                       // checkout never lowers on-hand. Surface available +
