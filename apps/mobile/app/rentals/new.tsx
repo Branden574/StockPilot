@@ -16,13 +16,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, RADIUS } from '@/lib/theme';
+import { FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface WarehouseRow {
@@ -221,11 +220,9 @@ export default function NewRental() {
             />
           </FormSection>
 
-          <Pill status="warn" style={{ alignSelf: 'flex-start', marginTop: 4 }}>
-            MVP · items not linked
-          </Pill>
-          <Body size={12.5} muted style={{ marginTop: 4 }}>
-            This creates a rental checkout record. Linking specific inventory items + automatic return-stock-back-in stays on the web until the next mobile release.
+          <Body size={12.5} muted style={{ marginTop: 8 }}>
+            This creates a rental checkout record. Linking specific inventory items and automatic
+            return-to-stock are managed on the web.
           </Body>
 
           <Button block onPress={submit} disabled={!canSubmit} style={{ marginTop: 12 }}>

@@ -9,6 +9,7 @@ import {
 import * as React from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -116,6 +117,27 @@ export default function SignIn() {
     setBusy(false);
   }
 
+  // Password reset: Supabase emails a reset link (resolves on the web). We
+  // intentionally don't confirm whether the address exists, to avoid leaking
+  // which emails have accounts.
+  async function forgotPassword() {
+    const target = email.trim();
+    if (!target) {
+      setError('Enter your email above first, then tap “Forgot?”.');
+      return;
+    }
+    setError(null);
+    const { error: resetErr } = await supabase.auth.resetPasswordForEmail(target);
+    if (resetErr) {
+      setError(resetErr.message);
+      return;
+    }
+    Alert.alert(
+      'Check your email',
+      `If an account exists for ${target}, we’ve sent a link to reset your password.`,
+    );
+  }
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
@@ -198,7 +220,7 @@ export default function SignIn() {
                   Keep me signed in
                 </Body>
               </Pressable>
-              <Pressable hitSlop={10}>
+              <Pressable hitSlop={10} onPress={forgotPassword}>
                 <Body
                   size={13}
                   color={c.ink2}

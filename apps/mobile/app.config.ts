@@ -65,6 +65,12 @@ const config: ExpoConfig = {
       'expo-camera',
       {
         cameraPermission: 'Allow StockPilot to access your camera for scanning barcodes.',
+        // The app only scans barcodes / captures photos — it never records
+        // audio or video. Opt out of the microphone permission so Apple
+        // doesn't see a usage string for a capability we don't exercise
+        // (App Store Guideline 5.1.1 — unused-permission rejection).
+        microphonePermission: false,
+        recordAudioAndroid: false,
       },
     ],
     [
