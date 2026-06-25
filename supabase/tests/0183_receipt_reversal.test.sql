@@ -80,6 +80,28 @@ insert into public.receipt_lines
     (:rline2, :rcpt2, :poline2, :item2, 10, 8,  0, 'EA', 5)
   on conflict (id) do nothing;
 
+-- Seed item_stock_levels so reverse_receipt (staging_first) has levels to drain.
+-- Stock is in the Unplaced location (simulating pre-staging-era receipt).
+-- The warehouse insert above fires trg_seed_warehouse_locations so the Unplaced
+-- location already exists; we just need to link the item qty to it.
+-- INVARIANT: each item's seeded level MUST equal its quantity_on_hand
+-- (Σlevels = on_hand). Both item1 and item2 have quantity_on_hand = 10 above,
+-- so both levels are seeded at 10. (item2's accepted/received is 8/10 on the
+-- receipt line, but its on_hand is 10 — the reversal draws 8 off, 10 → 2.)
+insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
+select :org, :item1, l.id, 10  -- = item1 quantity_on_hand
+  from public.locations l
+ where l.warehouse_id = :wh and l.kind = 'unplaced' and l.deleted_at is null
+ limit 1
+on conflict (item_id, location_id) do update set quantity = excluded.quantity;
+
+insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
+select :org, :item2, l.id, 10  -- = item2 quantity_on_hand
+  from public.locations l
+ where l.warehouse_id = :wh and l.kind = 'unplaced' and l.deleted_at is null
+ limit 1
+on conflict (item_id, location_id) do update set quantity = excluded.quantity;
+
 -- Become the manager (auth.uid() + has_org_role + RLS).
 set local "request.jwt.claim.sub" to 'bbbb0000-0000-0000-0000-000000000001';
 set local "request.jwt.claim.role" to 'authenticated';
