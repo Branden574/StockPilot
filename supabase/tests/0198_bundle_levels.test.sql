@@ -68,6 +68,10 @@ insert into public.inventory_items
     (:compB, :org, :wh, 'COMP-B-0198', 'Component Beta 0198',  30, 'active', 'none')
   on conflict (id) do nothing;
 
+-- 0199 trigger seeds Unplaced rows for both components; clear them so all stock
+-- sits in the rack for assemble_bundle's placed draw-down.
+delete from public.item_stock_levels where item_id in (:compA, :compB);
+
 -- Place all component stock in the rack location so assemble_bundle can consume it
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
   values
@@ -223,6 +227,9 @@ begin
     (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
     values (v_comp_stg, v_org, v_wh, 'COMP-STGONLY-0198', 'Staging-Only 0198', 5, 'active', 'none')
     on conflict (id) do nothing;
+
+  -- 0199 trigger seeds an Unplaced row; clear it so this item has ZERO placed stock.
+  delete from public.item_stock_levels where item_id = v_comp_stg;
 
   insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
     values (v_org, v_comp_stg, v_staging_loc, 5)
@@ -403,6 +410,9 @@ begin
     (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
     values (v_comp_sh, v_org, v_wh, 'COMP-SHORT-0198', 'Shortage Component 0198', 1, 'active', 'none')
     on conflict (id) do nothing;
+
+  -- 0199 trigger seeds an Unplaced row; clear it so the only placed stock is rack2=1.
+  delete from public.item_stock_levels where item_id = v_comp_sh;
 
   insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
     values (v_org, v_comp_sh, v_rack2, 1)

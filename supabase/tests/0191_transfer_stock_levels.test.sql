@@ -54,6 +54,9 @@ insert into public.inventory_items
   values (:item, :org, :wh, 'TX-0191', 'Transfer Item', 10, 'active', 'none')
   on conflict (id) do nothing;
 
+-- 0199 trigger seeds an Unplaced row; clear it so we can place all stock in loc1.
+delete from public.item_stock_levels where item_id = :item;
+
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
   values (:org, :item, :loc1, 10)
   on conflict (item_id, location_id) do nothing;

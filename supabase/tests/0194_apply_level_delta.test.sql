@@ -59,6 +59,9 @@ insert into public.inventory_items
   values (:item, :org, :wh, 'ALD-0194', 'Level Delta Item', 6, 'active', 'none')
   on conflict (id) do nothing;
 
+-- 0199 trigger seeds an Unplaced row; clear it so we can place all stock in the rack.
+delete from public.item_stock_levels where item_id = :item;
+
 -- Seed rack level = 6 (the item's entire on-hand is on the rack).
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
   values (:org, :item, :rack, 6)
@@ -74,6 +77,9 @@ insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
   values (:item2, :org, :wh, 'ALD-0194-B', 'Staging-First Item', 10, 'active', 'none')
   on conflict (id) do nothing;
+
+-- 0199 trigger seeds an Unplaced row; clear it so we can place stock exactly as needed.
+delete from public.item_stock_levels where item_id = :item2;
 
 -- Seed item2: rack=6 + Staging=4 (Staging = the warehouse's auto-created staging loc).
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)

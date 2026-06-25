@@ -60,6 +60,9 @@ insert into public.inventory_items
   values (:item_placed, :org, :wh, 'ICT-PLACED', 'Placed Item', 10, 'active', 'none')
   on conflict (id) do nothing;
 
+-- 0199 trigger seeds an Unplaced row; clear it so all stock sits in the rack only.
+delete from public.item_stock_levels where item_id = :item_placed;
+
 -- Seed rack level = 10 (entire on-hand is placed).
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
   values (:org, :item_placed, :rack, 10)
@@ -83,6 +86,9 @@ insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
   values (:item_staged, :org, :wh, 'ICT-STAGED', 'Staging-Only Item', 5, 'active', 'none')
   on conflict (id) do nothing;
+
+-- 0199 trigger seeds an Unplaced row; clear it, then place all stock into Staging.
+delete from public.item_stock_levels where item_id = :item_staged;
 
 -- Seed the Staging level only (no rack level → zero placed stock).
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
