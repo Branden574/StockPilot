@@ -3,8 +3,8 @@ import {
   ArrowLeft,
   Bell,
   ChevronLeft,
+  FileText,
   Fingerprint,
-  Globe,
   HelpCircle,
   Lock,
   LogOut,
@@ -131,7 +131,14 @@ export default function Settings() {
               icon={Menu}
               onPress={() => (navigation as { openDrawer?: () => void }).openDrawer?.()}
             />
-            <IconChip icon={HelpCircle} />
+            <IconChip
+              icon={HelpCircle}
+              onPress={() =>
+                Linking.openURL(
+                  'mailto:hello@stockpilot.app?subject=StockPilot%20mobile%20support',
+                ).catch(() => undefined)
+              }
+            />
           </View>
         </View>
         <View style={styles.head}>
@@ -283,7 +290,7 @@ export default function Settings() {
             onPress={() =>
               Alert.alert(
                 'Theme',
-                'Mobile follows system theme today. A manual toggle ships with the design polish round.',
+                'Mobile follows your device appearance (Light or Dark) automatically.',
               )
             }
           />
@@ -347,10 +354,21 @@ export default function Settings() {
           />
           <Hair inset={70} />
           <SettingRow
-            icon={Globe}
-            title="stockpilotusa.com"
+            icon={Shield}
+            title="Privacy Policy"
             chevron
-            onPress={() => Linking.openURL('https://stockpilotusa.com').catch(() => undefined)}
+            onPress={() =>
+              Linking.openURL('https://stockpilotusa.com/privacy').catch(() => undefined)
+            }
+          />
+          <Hair inset={70} />
+          <SettingRow
+            icon={FileText}
+            title="Terms of Service"
+            chevron
+            onPress={() =>
+              Linking.openURL('https://stockpilotusa.com/terms').catch(() => undefined)
+            }
           />
           <Hair inset={70} />
           <SettingRow

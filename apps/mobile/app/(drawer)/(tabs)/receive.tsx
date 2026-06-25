@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   Camera,
   Menu,
-  Search,
 } from 'lucide-react-native';
 import * as React from 'react';
 import {
@@ -146,7 +145,6 @@ export default function Receive() {
             />
             <IconChip icon={Menu} onPress={openDrawer} />
           </View>
-          <IconChip icon={Search} />
         </View>
         <View style={styles.head}>
           <Eyebrow>{`${pos.length} OPEN${overdueCount > 0 ? ` · ${overdueCount} OVERDUE` : ''}`}</Eyebrow>
