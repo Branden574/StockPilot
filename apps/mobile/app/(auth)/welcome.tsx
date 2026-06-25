@@ -70,14 +70,14 @@ export default function Welcome() {
           <View style={{ marginTop: 22, gap: 10 }}>
             <Button
               block
-              onPress={() => router.push('/(auth)/sign-up')}
+              onPress={() => router.push('/(auth)/sign-in')}
               trailing={<ArrowRight size={16} color={c.paper} strokeWidth={1.7} />}
             >
-              Get started
+              Sign in
             </Button>
-            <Button block variant="outline" onPress={() => router.push('/(auth)/sign-in')}>
-              I already have an account
-            </Button>
+            <Body size={13} color={c.ink4} style={{ textAlign: 'center', marginTop: 4 }}>
+              New here? Your organization admin can invite you.
+            </Body>
           </View>
         </View>
 
@@ -116,21 +116,6 @@ export default function Welcome() {
           })}
         </View>
 
-        {/* Comparison highlight */}
-        <Card hero padding={20} style={{ marginTop: 28, gap: 10 }}>
-          <Eyebrow>HOW WE COMPARE</Eyebrow>
-          <Display size={22}>
-            More than the simple tools. <Em>A fraction of the big ones.</Em>
-          </Display>
-          <Body size={13} color={c.ink3} style={{ lineHeight: 19 }}>
-            Delivery tracking, lot / expiry, returns, and AI that Sortly skips — at{' '}
-            <Body size={13} color={c.ink}>
-              $149/mo
-            </Body>
-            , a rounding error next to the $100k–$250k+/yr enterprise suites (NetSuite, SAP, Oracle).
-          </Body>
-        </Card>
-
         {/* Final CTA */}
         <View style={{ marginTop: 30, alignItems: 'center' }}>
           <Display size={26} style={{ textAlign: 'center' }}>
@@ -139,20 +124,11 @@ export default function Welcome() {
           <View style={{ marginTop: 18, width: '100%', gap: 10 }}>
             <Button
               block
-              onPress={() => router.push('/(auth)/sign-up')}
+              onPress={() => router.push('/(auth)/sign-in')}
               trailing={<ArrowRight size={16} color={c.paper} strokeWidth={1.7} />}
             >
-              Get started
+              Sign in
             </Button>
-            <Pressable
-              hitSlop={10}
-              onPress={() => router.push('/(auth)/sign-in')}
-              style={{ alignSelf: 'center', paddingVertical: 6 }}
-            >
-              <Body size={14} color={c.ink2}>
-                Sign in to your workspace
-              </Body>
-            </Pressable>
           </View>
         </View>
       </ScrollView>

@@ -38,11 +38,6 @@ interface AuthState {
    */
   verifyMfa: (code: string) => Promise<{ error?: string }>;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
-  signUp: (
-    email: string,
-    password: string,
-    fullName: string,
-  ) => Promise<{ error?: string; needsConfirm?: boolean }>;
   signOut: () => Promise<void>;
   /**
    * Trigger the biometric prompt to unlock the app. Sets `locked=false`
@@ -197,16 +192,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return {};
   };
 
-  const signUp: AuthState['signUp'] = async (email, password, fullName) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { full_name: fullName } },
-    });
-    if (error) return { error: error.message };
-    return { needsConfirm: !data.session };
-  };
-
   const signOut: AuthState['signOut'] = async () => {
     // Global scope revokes every refresh token for the user — kills
     // sessions on the web tabs + any other devices. Mirrors the
@@ -261,7 +246,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         mfaRequired,
         verifyMfa,
         signIn,
-        signUp,
         signOut,
         unlock,
         signOutToFallback,
