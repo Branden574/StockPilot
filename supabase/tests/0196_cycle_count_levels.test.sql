@@ -2,26 +2,31 @@
 -- pgTAP gate for migration 0196: post_cycle_count now calls
 -- apply_level_delta so item_stock_levels stays in sync with quantity_on_hand.
 --
--- Two scenarios:
---   A) Negative variance (counted=7, expected=10, v_diff=−3):
+-- Three scenarios:
+--   A) Negative variance (counted=7, expected=10, v_diff=−3), no drift:
 --      • quantity_on_hand = 7
 --      • rack level decremented to 7  (placed draw-down)
---      • no entry in Staging
+--      • no staging row created
 --      • Σ item_stock_levels = quantity_on_hand
 --      • cycle_count marked completed
 --
---   B) Positive variance (counted=13, expected=10, v_diff=+3):
+--   B) Positive variance (counted=13, expected=10, v_diff=+3), no drift:
 --      • quantity_on_hand = 13
 --      • rack level stays at 10  (surplus goes to Staging, not rack)
 --      • Staging level = 3
 --      • Σ item_stock_levels = quantity_on_hand
 --
--- NOTE: both scenarios use a clean initial state (expected=on_hand=10,
--- rack=10) so there is no drift between live qty and the snapshot.
--- Drift (live qty ≠ expected at post time) is the SAME divergence the
--- function intentionally surfaces in the stock_movements drift note; the
--- Σ invariant still holds because apply_level_delta uses v_diff (the
--- snapshot-based variance), not the live qty.
+--   C) DRIFT (live qty ≠ snapshot): on_hand=11 and rack level=11 going in
+--      (Σ=on_hand holds), but the count's snapshot expected_quantity=10 and
+--      counted=7 → new on_hand = expected + v_diff = 7. This is the case the
+--      naive `apply_level_delta(v_diff)` got WRONG: it would draw only 3 off
+--      the live 11 levels → Σ=8 ≠ on_hand 7. The reconcile-to-new-on-hand
+--      fix draws 11−7 = 4 so Σ = on_hand = 7. We assert on_hand=7, rack=7,
+--      and Σ item_stock_levels = 7 (the assertion that fails under the old
+--      code and proves the invariant holds even under drift).
+--
+-- Scenarios A/B use a clean initial state (expected=on_hand=rack=10) so the
+-- reconcile delta equals v_diff. Scenario C deliberately seeds drift.
 --
 -- Namespace: 0xcc99 — distinct from all other test files.
 --
@@ -29,7 +34,7 @@
 
 begin;
 
-select plan(9);
+select plan(12);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Fixed UUIDs — use a distinct namespace (0xcc99) so they never clash with
@@ -42,6 +47,9 @@ select plan(9);
 \set rack    '\'cc990000-0000-0000-0000-000000000005\''
 \set cc_neg  '\'cc990000-0000-0000-0000-000000000006\''
 \set cc_pos  '\'cc990000-0000-0000-0000-000000000007\''
+\set item_d  '\'cc990000-0000-0000-0000-000000000008\''
+\set rack_d  '\'cc990000-0000-0000-0000-000000000009\''
+\set cc_drift '\'cc990000-0000-0000-0000-00000000000a\''
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- SEED (runs as superuser — before the role switch)
@@ -106,6 +114,34 @@ insert into public.cycle_count_lines
   values (:cc_pos, :item, 10, 13, :wh)
   on conflict do nothing;
 
+-- ── DRIFT scenario item (Scenario C) ─────────────────────────────────────────
+-- A fresh item whose LIVE on_hand (11) drifted above the count snapshot (10).
+-- Σlevels = on_hand = 11 going in, so the invariant holds before posting.
+insert into public.locations (id, organization_id, warehouse_id, name, type, kind)
+  values (:rack_d, :org, :wh, 'Rack-D1', 'bin', 'rack')
+  on conflict (id) do nothing;
+
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
+  values (:item_d, :org, :wh, 'CYC-0196-D', 'Cycle Drift Widget', 11, 'active', 'none')
+  on conflict (id) do nothing;
+
+insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
+  values (:org, :item_d, :rack_d, 11)
+  on conflict (item_id, location_id) do nothing;
+
+-- Cycle count C: snapshot expected=10 (BELOW the live 11 → drift), counted=7
+-- → v_diff = −3, new on_hand = expected + v_diff = 7.
+insert into public.cycle_counts
+  (id, organization_id, warehouse_id, status, scope, started_by, started_at)
+  values (:cc_drift, :org, :wh, 'in_progress', 'warehouse', :usr, now())
+  on conflict (id) do nothing;
+
+insert into public.cycle_count_lines
+  (cycle_count_id, item_id, expected_quantity, counted_quantity, warehouse_id)
+  values (:cc_drift, :item_d, 10, 7, :wh)
+  on conflict do nothing;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Become the manager (auth.uid() drives has_org_role + RLS)
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -139,19 +175,14 @@ select is(
   'negative variance: rack level decremented to 7 (10 − 3)'
 );
 
--- 3. No surplus in Staging (negative variance must not create a staging entry)
-select is(
-  (select coalesce(
-     (select isl.quantity
-        from public.item_stock_levels isl
-        join public.locations l on l.id = isl.location_id
-       where isl.item_id    = 'cc990000-0000-0000-0000-000000000004'::uuid
-         and l.warehouse_id = 'cc990000-0000-0000-0000-000000000003'::uuid
-         and l.kind         = 'staging'
-       limit 1),
-     0)),
-  0::numeric,
-  'negative variance: no entry in Staging location'
+-- 3. No staging ROW created (negative variance must not touch Staging at all)
+select ok(
+  (select count(*)
+     from public.item_stock_levels isl
+     join public.locations l on l.id = isl.location_id
+    where isl.item_id    = 'cc990000-0000-0000-0000-000000000004'::uuid
+      and l.kind         = 'staging') = 0,
+  'negative variance: no staging row created'
 );
 
 -- 4. Σ item_stock_levels = quantity_on_hand (invariant)
@@ -247,6 +278,47 @@ select is(
   (select quantity_on_hand from public.inventory_items
     where id = 'cc990000-0000-0000-0000-000000000004'::uuid),
   'positive variance: Σ item_stock_levels = quantity_on_hand'
+);
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- SCENARIO C — DRIFT: live on_hand=11 + rack=11, snapshot expected=10,
+-- counted=7 → v_diff=−3, new on_hand = expected + v_diff = 7.
+-- The naive apply_level_delta(v_diff=−3) would draw 3 off the live 11 → Σ=8 ≠ 7.
+-- The reconcile-to-new-on-hand fix draws 11−7=4 → Σ = on_hand = 7.
+-- Manager context is still active from Scenario B's re-assert above.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+do $$
+begin
+  perform public.post_cycle_count('cc990000-0000-0000-0000-00000000000a'::uuid);
+end$$;
+
+-- 10. quantity_on_hand = expected + v_diff = 10 + (−3) = 7 (NOT live 11 − 3 = 8)
+select is(
+  (select quantity_on_hand from public.inventory_items
+    where id = 'cc990000-0000-0000-0000-000000000008'::uuid),
+  7::numeric,
+  'drift: quantity_on_hand = 7 (snapshot 10 − 3, not live 11 − 3)'
+);
+
+-- 11. Σ item_stock_levels = quantity_on_hand even under drift (the core fix).
+--     Old v_diff-only code would leave Σ=8 here; reconcile makes it 7.
+select is(
+  (select coalesce(sum(quantity), 0)
+     from public.item_stock_levels
+    where item_id = 'cc990000-0000-0000-0000-000000000008'::uuid),
+  (select quantity_on_hand from public.inventory_items
+    where id = 'cc990000-0000-0000-0000-000000000008'::uuid),
+  'drift: Σ item_stock_levels = quantity_on_hand (invariant holds under drift)'
+);
+
+-- 12. Rack level reconciled to 7 (drew the full 11 − 7 = 4, not just v_diff 3)
+select is(
+  (select quantity from public.item_stock_levels
+    where item_id    = 'cc990000-0000-0000-0000-000000000008'::uuid
+      and location_id = 'cc990000-0000-0000-0000-000000000009'::uuid),
+  7::numeric,
+  'drift: rack level reconciled to 7 (drew 11 − 7 = 4)'
 );
 
 select * from finish();
