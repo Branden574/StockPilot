@@ -56,12 +56,12 @@ export type UpdateProcedureInput = z.infer<typeof updateProcedureSchema>;
 // procedure_videos — N per procedure, stored in Supabase storage
 // ---------------------------------------------------------------------------
 
-// 500 MB matches the storage bucket's `file_size_limit` from migration
-// 0053. The previous 2 GB ceiling on this field meant a hostile caller
-// could record a row claiming an absurd `size_bytes` even though the
-// actual upload would have been rejected by storage RLS. Hard-pin to
-// the bucket cap so the two layers agree.
-const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
+// 1 GB matches the storage bucket's `file_size_limit` from migration
+// 0187 (raised from the original 500 MB in 0053). Pinning this field to
+// the bucket cap stops a hostile caller from recording a row claiming an
+// absurd `size_bytes` even though the actual upload would have been
+// rejected by storage. Keep the two layers in agreement.
+const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 
 export const recordProcedureVideoSchema = z.object({
   procedureId: uuidSchema,
