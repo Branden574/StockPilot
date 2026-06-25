@@ -171,3 +171,37 @@ From a staged row → **Place**:
 - Aging auto-actions, slotting optimization, multi-warehouse transfer flows beyond
   Staging→rack.
 - Deprecating `custom_fields` rack/crate entirely once placements are fully adopted.
+
+## 13. Phase 1 shipped state + Phase 2 follow-ups (added 2026-06-25 after the whole-branch review)
+
+Phase 1 (migs 0188–0193 + the inventory placed/staged service+toggle + the PO-import
+create-step rack/crate removal) shipped with the per-location model wired into **receiving
+and receipt-reversal only**. A multi-lens adversarial review confirmed the foundation is
+correct there but surfaced these deliberately-deferred gaps — **Phase 2 must address them
+before "Place from Staging" goes live**:
+
+1. **`Σ item_stock_levels = quantity_on_hand` is only maintained on the receive/reverse
+   paths.** Every other on-hand mutator (`complete_picking`, `post_shipment_shipped`,
+   `cancel_order_request` restore, `process_return_disposition`, `post_cycle_count`,
+   manual `adjustStock` with no location, bundle RPCs) changes `quantity_on_hand` without
+   touching `item_stock_levels`. The 0192 backfill + invariant test guarantee the invariant
+   only at backfill time. **Consequence:** the per-rack/Unplaced breakdown rots after the
+   first non-receiving mutation, and an item that holds Staging stock then decremented by a
+   non-receiving path shows a stale (inflated) `staged` figure (the authoritative
+   `quantity_on_hand` stays correct). Phase 2 decision: make `item_stock_levels` authoritative
+   across all mutators (route each through a location) **or** have Phase 2 re-derive/reconcile
+   levels at Place time. Add a recurring invariant check, not just the one-shot backfill test.
+2. **Legacy bin-to-bin Transfer dialog is a Phase-1 stopgap.** Fix B made it source from real
+   `item_stock_levels` holdings and excludes Staging/Unplaced, so it no longer errors — but
+   the proper placement UX (move from Staging→rack, split, books-vs-items) is Phase 2's
+   "Place" action built on the revived `transfer_stock`.
+3. **System locations clutter other location pickers.** mig 0188 created `Staging`/`Unplaced`
+   rows that now appear in every picker driven by `LocationsService.list()` (item create/edit,
+   PO destination, etc.). Phase 2: add an opt-in `kind` filter to `LocationsService.list()`
+   and exclude system kinds from user-facing primary-location pickers.
+4. **Minor polish (from the fix review, non-blocking):** remove the now-dead
+   `currentLocationId` prop from `StockTransferDialog`; add a one-line
+   `if v_staging is null then raise …` guard in `reverse_receipt` (currently unreachable);
+   `useMemo` the dialog's `sourceHoldings`; add a per-location non-negative guard in
+   `adjust_stock` before Phase 2 ships location-scoped decrements; and the `0188`/`0190`
+   pgTAP assertion-strength notes recorded in the SDD ledger.
