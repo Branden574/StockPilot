@@ -17,7 +17,7 @@
     },
     "preview": {
       "distribution": "internal",
-      "node": "20.11.0",
+      "node": "20.19.4",
       "ios": {
         "resourceClass": "m-medium",
         "image": "macos-sequoia-15.6-xcode-26.0"
@@ -29,7 +29,7 @@
     },
     "production": {
       "autoIncrement": true,
-      "node": "20.11.0",
+      "node": "20.19.4",
       "ios": {
         "resourceClass": "m-medium",
         "image": "macos-sequoia-15.6-xcode-26.0"
