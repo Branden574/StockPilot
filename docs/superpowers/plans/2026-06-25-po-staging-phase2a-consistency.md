@@ -462,6 +462,104 @@ rollback;
 
 ---
 
+### Task 7: Seed an initial `item_stock_levels` row on item creation (DISCOVERED during execution)
+
+**Why (discovered, Critical):** `InventoryService.create()` / `createVariants` / bulk-create + the Sage/CSV/books imports all set `quantity_on_hand` directly + write an `'initial'` `stock_movements` row but DO NOT seed an `item_stock_levels` row. Post-Phase-2a, a newly-created stocked item has `Σlevels=0 < on_hand`, so its first pick/ship/reverse raises `insufficient_placed_stock` (un-pickable). The Phase 1 backfill only covered items existing at backfill time. A single `AFTER INSERT` trigger fixes ALL create/import paths (current + future + direct SQL) in one place — the user's earlier anti-trigger choice was about the MUTATOR allocation (ambiguous source); at creation the intent is unambiguous, so a trigger is the robust catch-all here.
+
+**Destination:** initial stock is "loading existing/known inventory" (like the Phase 1 backfill), so it lands **pickable** — at the item's `primary_location_id` if that's a real non-staging location, else the warehouse **Unplaced** (else an org-level Unplaced bucket). NOT Staging.
+
+**Files:**
+- Create: `supabase/migrations/0199_seed_initial_level.sql`
+- Test: `supabase/tests/0199_seed_initial_level.test.sql`
+
+**Interfaces:** Consumes `ensure_warehouse_placement_locations`, `apply_level_delta` semantics (kinds). Produces: every `inventory_items` INSERT with `quantity_on_hand > 0` gets a matching `item_stock_levels` row so `Σlevels = quantity_on_hand` from creation.
+
+- [ ] **Step 1: Write the migration**
+
+```sql
+-- 0199_seed_initial_level.sql
+-- Phase 2a make item_stock_levels authoritative from item CREATION: the create
+-- /import paths set quantity_on_hand directly without seeding a level, which
+-- (post-2a) would make a new stocked item un-pickable (Σlevels=0<on_hand ->
+-- insufficient_placed_stock on first decrement). An AFTER INSERT trigger seeds
+-- the initial level for ALL create paths in one place. Destination = primary
+-- location (if a real non-staging loc) else warehouse Unplaced else org Unplaced
+-- -- pickable, mirroring the Phase 1 backfill's treatment of existing stock.
+
+create or replace function public.tg_seed_initial_level()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_loc uuid;
+begin
+  if coalesce(new.quantity_on_hand, 0) <= 0 then return new; end if;
+
+  -- Prefer the item's primary location if it's a real, non-staging placed bin.
+  if new.primary_location_id is not null then
+    select id into v_loc from public.locations
+      where id = new.primary_location_id and deleted_at is null
+        and kind is distinct from 'staging'
+      limit 1;
+  end if;
+
+  -- Else the warehouse Unplaced location (create placement locs if needed).
+  if v_loc is null and new.warehouse_id is not null then
+    perform public.ensure_warehouse_placement_locations(new.warehouse_id);
+    select id into v_loc from public.locations
+      where warehouse_id = new.warehouse_id and kind = 'unplaced' and deleted_at is null
+      limit 1;
+  end if;
+
+  -- Else an org-level Unplaced bucket (no warehouse), created on demand.
+  if v_loc is null then
+    select id into v_loc from public.locations
+      where organization_id = new.organization_id and warehouse_id is null
+        and kind = 'unplaced' and deleted_at is null
+      limit 1;
+    if v_loc is null then
+      insert into public.locations(organization_id, name, type, kind)
+      values (new.organization_id, 'Unplaced', 'other', 'unplaced')
+      returning id into v_loc;
+    end if;
+  end if;
+
+  insert into public.item_stock_levels(organization_id, item_id, location_id, quantity)
+  values (new.organization_id, new.id, v_loc, new.quantity_on_hand)
+  on conflict (item_id, location_id) do update
+    set quantity = public.item_stock_levels.quantity + excluded.quantity,
+        updated_at = now();
+
+  return new;
+exception
+  when others then
+    -- Never block item creation on a seeding hiccup (mirror the 0188 trigger).
+    raise warning 'seed initial level failed for item %: %', new.id, sqlerrm;
+    return new;
+end;
+$$;
+
+drop trigger if exists trg_seed_initial_level on public.inventory_items;
+create trigger trg_seed_initial_level
+  after insert on public.inventory_items
+  for each row execute function public.tg_seed_initial_level();
+```
+
+- [ ] **Step 2: Write the pgTAP test** (`supabase/tests/0199_seed_initial_level.test.sql`)
+
+Assertions (wrap begin/plan/finish/rollback; org + warehouse + a rack location seeded; the warehouse-insert trigger from 0188 auto-creates Staging/Unplaced):
+1. Insert an item with `quantity_on_hand=12` and `primary_location_id` = the rack → the rack's `item_stock_levels` level = 12, and `Σ levels = quantity_on_hand`.
+2. Insert an item with `quantity_on_hand=5` and `primary_location_id = null` (but `warehouse_id` set) → the warehouse Unplaced level = 5, `Σ = on_hand`. (NOT Staging — assert the staging level is 0/absent.)
+3. Insert an item with `quantity_on_hand=0` → no `item_stock_levels` row created (and trivially `Σ = on_hand = 0`).
+(These inserts can run as the table-owner/superuser test role since the trigger is SECURITY DEFINER; no app auth needed, but match the existing suites' transaction style.)
+
+- [ ] **Step 3: Run** `supabase db reset && pnpm db:test` → `0199_… ok` + full suite PASS.
+- [ ] **Step 4: Commit** `git commit -m "feat(inventory): seed initial item_stock_levels on item creation (mig 0199)"`
+
+---
+
 ## Final gate (after all tasks)
 - [ ] `supabase db reset && pnpm db:test` green (all new suites).
 - [ ] `pnpm --filter @stockpilot/web exec tsc --noEmit` clean; `pnpm --filter @stockpilot/web test` green (surface `insufficient_placed_stock` as a friendly error in the picking/shipping/adjust UIs — add the mapping + a unit test if a service-layer error map exists).
