@@ -4,7 +4,8 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { InventoryService } from '@/server/services/inventory';
-import { ServiceError } from '@/server/services/context';
+import { LocationsService } from '@/server/services/locations';
+import { ServiceError, withContext } from '@/server/services/context';
 
 import {
   adjustStockSchema,
@@ -227,6 +228,137 @@ export async function transferStockAction(input: TransferStockInput): Promise<Ac
     revalidatePath('/dashboard/inventory');
     return ok(undefined);
   } catch (e) {
+    return toResult(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// placeStockAction — move staged qty onto an existing or inline-created location
+// ---------------------------------------------------------------------------
+
+const newRackSchema = z.object({
+  warehouseId: z.string().uuid(),
+  rackNumber: z.string().min(1).max(64),
+  rackRow: z.string().max(64).optional(),
+  crateColor: z.string().max(64).optional(),
+  crateNumber: z.string().max(64).optional(),
+  parentId: z.string().uuid().optional(),
+});
+
+const placeStockSchema = z.object({
+  itemId: z.string().uuid(),
+  fromLocationId: z.string().uuid(),
+  quantity: z.number().positive(),
+  notes: z.string().max(2000).optional(),
+  destination: z.union([
+    z.object({ existingLocationId: z.string().uuid() }),
+    z.object({ newRack: newRackSchema }),
+  ]),
+});
+
+export type PlaceStockInput = z.infer<typeof placeStockSchema>;
+
+/** Derive a human-readable name for an inline-created rack or crate. */
+function deriveLocationName(n: z.infer<typeof newRackSchema>): string {
+  if (n.crateColor) {
+    return `${n.crateColor} #${n.crateNumber ?? n.rackNumber}`;
+  }
+  return n.rackRow ? `${n.rackNumber}-${n.rackRow}` : n.rackNumber;
+}
+
+export async function placeStockAction(
+  input: PlaceStockInput,
+): Promise<ActionResult<{ toLocationId: string }>> {
+  const parsed = placeStockSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  const data = parsed.data;
+
+  try {
+    // Resolve the org context ONCE and reuse its supabase client for the
+    // destination org-verification below. `withContext` is request-cached, so
+    // the services constructed from it below share the same context.
+    const ctx = await withContext();
+    let toLocationId: string;
+
+    if ('existingLocationId' in data.destination) {
+      // TENANT-ISOLATION GUARD: transfer_stock only verifies the ITEM's org, and
+      // item_stock_levels RLS scopes the row's OWN organization_id — NOT the
+      // referenced location's org. Without this lookup a forged request could
+      // place an org-A item's stock at an org-B location_id (a cross-tenant
+      // integrity write; same class as the Phase 2a 0199 RLS finding). Verify
+      // the destination location belongs to the caller's org before transfer.
+      const { data: loc } = await ctx.supabase
+        .from('locations')
+        .select('id, warehouse_id, kind')
+        .eq('id', data.destination.existingLocationId)
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (!loc) {
+        return err('validation_error', 'Destination location not found in your organization.');
+      }
+      // You can't "place" stock INTO a staging/unplaced bucket — those are
+      // system holding locations, not pickable destinations.
+      if (loc.kind === 'staging' || loc.kind === 'unplaced') {
+        return err('validation_error', 'Pick a rack or crate as the destination.');
+      }
+      toLocationId = loc.id;
+    } else {
+      const n = data.destination.newRack;
+      // TENANT-ISOLATION GUARD: verify the warehouse belongs to the caller's
+      // org BEFORE creating a location under it — prevents seeding a location
+      // (and then placing stock) under another org's warehouse.
+      const { data: wh } = await ctx.supabase
+        .from('warehouses')
+        .select('id')
+        .eq('id', n.warehouseId)
+        .eq('organization_id', ctx.organizationId)
+        .maybeSingle();
+      if (!wh) {
+        return err('validation_error', 'Warehouse not found in your organization.');
+      }
+      const locationsSvc = new LocationsService(ctx);
+      const created = await locationsSvc.create({
+        name: deriveLocationName(n),
+        type: n.crateColor ? 'bin' : 'shelf',
+        kind: n.crateColor ? 'crate' : 'rack',
+        warehouseId: n.warehouseId,
+        rackNumber: n.rackNumber,
+        rackRow: n.rackRow ?? null,
+        crateColor: n.crateColor ?? null,
+        crateNumber: n.crateNumber ?? null,
+        parentId: n.parentId ?? null,
+      });
+      toLocationId = created.id;
+    }
+
+    const invSvc = new InventoryService(ctx);
+    await invSvc.transferStock({
+      itemId: data.itemId,
+      fromLocationId: data.fromLocationId,
+      toLocationId,
+      quantity: data.quantity,
+      notes: data.notes,
+    });
+
+    revalidatePath('/dashboard/inventory/staging');
+    revalidatePath('/dashboard/inventory');
+    return ok({ toLocationId });
+  } catch (e) {
+    // transfer_stock raises `insufficient_stock` as a P0001 exception whose
+    // text surfaces verbatim in error.message (see mig 0191). The service wraps
+    // any RPC error as ServiceError('internal_error', error.message), so we map
+    // that specific text to a friendly message here. Case-insensitive so a bare
+    // RPC message ("INSUFFICIENT_STOCK") still matches if the wrapping changes.
+    if (
+      e instanceof ServiceError &&
+      e.code === 'internal_error' &&
+      e.message.toLowerCase().includes('insufficient_stock')
+    ) {
+      return err('validation_error', "Can't place more than is staged.");
+    }
     return toResult(e);
   }
 }
