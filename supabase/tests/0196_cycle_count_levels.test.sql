@@ -34,22 +34,24 @@
 
 begin;
 
-select plan(12);
+select plan(16);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Fixed UUIDs — use a distinct namespace (0xcc99) so they never clash with
 -- other test files.
 -- ─────────────────────────────────────────────────────────────────────────────
-\set org     '\'cc990000-0000-0000-0000-000000000001\''
-\set usr     '\'cc990000-0000-0000-0000-000000000002\''
-\set wh      '\'cc990000-0000-0000-0000-000000000003\''
-\set item    '\'cc990000-0000-0000-0000-000000000004\''
-\set rack    '\'cc990000-0000-0000-0000-000000000005\''
-\set cc_neg  '\'cc990000-0000-0000-0000-000000000006\''
-\set cc_pos  '\'cc990000-0000-0000-0000-000000000007\''
-\set item_d  '\'cc990000-0000-0000-0000-000000000008\''
-\set rack_d  '\'cc990000-0000-0000-0000-000000000009\''
-\set cc_drift '\'cc990000-0000-0000-0000-00000000000a\''
+\set org       '\'cc990000-0000-0000-0000-000000000001\''
+\set usr       '\'cc990000-0000-0000-0000-000000000002\''
+\set wh        '\'cc990000-0000-0000-0000-000000000003\''
+\set item      '\'cc990000-0000-0000-0000-000000000004\''
+\set rack      '\'cc990000-0000-0000-0000-000000000005\''
+\set cc_neg    '\'cc990000-0000-0000-0000-000000000006\''
+\set cc_pos    '\'cc990000-0000-0000-0000-000000000007\''
+\set item_d    '\'cc990000-0000-0000-0000-000000000008\''
+\set rack_d    '\'cc990000-0000-0000-0000-000000000009\''
+\set cc_drift  '\'cc990000-0000-0000-0000-00000000000a\''
+\set item_stg  '\'cc990000-0000-0000-0000-00000000000b\''
+\set cc_stg    '\'cc990000-0000-0000-0000-00000000000c\''
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- SEED (runs as superuser — before the role switch)
@@ -146,6 +148,39 @@ insert into public.cycle_counts
 insert into public.cycle_count_lines
   (cycle_count_id, item_id, expected_quantity, counted_quantity, warehouse_id)
   values (:cc_drift, :item_d, 10, 7, :wh)
+  on conflict do nothing;
+
+-- ── STAGING-ONLY scenario item (Scenario D) ──────────────────────────────────
+-- An item whose ENTIRE stock sits in Staging (freshly received, not yet placed).
+-- quantity_on_hand=100, ALL 100 in Staging. Cycle count expected=100, counted=50
+-- → v_diff=−50, new on_hand=50. With the old 'placed' mode this would raise
+-- insufficient_placed_stock (0 placed stock). With 'staging_first' it drains
+-- from Staging and succeeds.
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
+  values (:item_stg, :org, :wh, 'CYC-0196-STG', 'Staging-Only Widget', 100, 'active', 'none')
+  on conflict (id) do nothing;
+
+-- 0199 trigger seeds an Unplaced row; delete it so ALL stock is in Staging only.
+delete from public.item_stock_levels where item_id = :item_stg;
+
+-- Place all 100 in the warehouse Staging location.
+insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
+  select :org, :item_stg, l.id, 100
+    from public.locations l
+   where l.warehouse_id = :wh and l.kind = 'staging' and l.deleted_at is null
+   limit 1
+  on conflict (item_id, location_id) do nothing;
+
+-- Cycle count D: expected=100, counted=50 → v_diff=−50, new on_hand=50.
+insert into public.cycle_counts
+  (id, organization_id, warehouse_id, status, scope, started_by, started_at)
+  values (:cc_stg, :org, :wh, 'in_progress', 'warehouse', :usr, now())
+  on conflict (id) do nothing;
+
+insert into public.cycle_count_lines
+  (cycle_count_id, item_id, expected_quantity, counted_quantity, warehouse_id)
+  values (:cc_stg, :item_stg, 100, 50, :wh)
   on conflict do nothing;
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -325,6 +360,60 @@ select is(
       and location_id = 'cc990000-0000-0000-0000-000000000009'::uuid),
   7::numeric,
   'drift: rack level reconciled to 7 (drew 11 − 7 = 4)'
+);
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- SCENARIO D — STAGING-ONLY STOCK: all 100 units in Staging, no placed stock.
+-- counted=50, expected=100 → v_diff=−50, new on_hand=50.
+-- With old 'placed' mode: find 0 placed stock → raise insufficient_placed_stock.
+-- With 'staging_first' mode: drains Staging 100→50 → SUCCEEDS.
+-- This scenario FAILS with the old 'placed' mode and proves the Fix 1 change.
+-- Manager context is still active from Scenario C above.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+do $$
+begin
+  perform public.post_cycle_count('cc990000-0000-0000-0000-00000000000c'::uuid);
+end$$;
+
+-- 13. post_cycle_count succeeds and on_hand = 50.
+select is(
+  (select quantity_on_hand from public.inventory_items
+    where id = 'cc990000-0000-0000-0000-00000000000b'::uuid),
+  50::numeric,
+  'staging-only: post_cycle_count succeeds and on_hand = 50'
+);
+
+-- 14. Σ item_stock_levels = on_hand = 50 (invariant).
+select is(
+  (select coalesce(sum(quantity), 0)
+     from public.item_stock_levels
+    where item_id = 'cc990000-0000-0000-0000-00000000000b'::uuid),
+  (select quantity_on_hand from public.inventory_items
+    where id = 'cc990000-0000-0000-0000-00000000000b'::uuid),
+  'staging-only: Σ item_stock_levels = quantity_on_hand = 50'
+);
+
+-- 15. Staging level drained to 50 (not 0 — the reconcile only removes the delta).
+select is(
+  (select isl.quantity
+     from public.item_stock_levels isl
+     join public.locations l on l.id = isl.location_id
+    where isl.item_id     = 'cc990000-0000-0000-0000-00000000000b'::uuid
+      and l.warehouse_id  = 'cc990000-0000-0000-0000-000000000003'::uuid
+      and l.kind          = 'staging'
+      and l.deleted_at    is null
+    limit 1),
+  50::numeric,
+  'staging-only: Staging level drained to 50'
+);
+
+-- 16. Cycle count is completed.
+select is(
+  (select status from public.cycle_counts
+    where id = 'cc990000-0000-0000-0000-00000000000c'::uuid),
+  'completed',
+  'staging-only: cycle count marked completed'
 );
 
 select * from finish();
