@@ -4,11 +4,13 @@ const config: ExpoConfig = {
   name: 'StockPilot',
   slug: 'stockpilot',
   scheme: 'stockpilot',
-  // 1.0.1: adds the @sentry/react-native NATIVE module. Bumping the version
-  // (= the appVersion runtimeVersion) means OTAs now target runtime 1.0.1, so a
-  // bundle that imports Sentry can never reach a 1.0.0 device that lacks the
-  // native side. Build + ship 1.0.1 before publishing any OTA off this branch.
-  version: '1.0.1',
+  // 1.0.2: adds the expo-document-picker NATIVE module (PDF/file attach on POs).
+  // Bumping the version (= the appVersion runtimeVersion) means OTAs now target
+  // runtime 1.0.2, so a bundle that imports document-picker can never reach a
+  // 1.0.1 device that lacks the native side. Build + ship 1.0.2 before
+  // publishing any OTA off this branch.
+  // (1.0.1 added @sentry/react-native.)
+  version: '1.0.2',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   newArchEnabled: true,
