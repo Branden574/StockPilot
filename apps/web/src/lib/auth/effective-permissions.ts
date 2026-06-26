@@ -14,7 +14,6 @@ import {
  * Database type is `any`, and a precise PostgrestFilterBuilder shape here both
  * fails to match the real client and trips TS's "excessively deep" guard.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface QueryableClient {
   from: (table: string) => any;
 }
