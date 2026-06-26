@@ -1,4 +1,5 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import * as FileSystem from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as React from 'react';
@@ -145,12 +146,11 @@ export default function AiScanScreen() {
         },
       );
 
-      // Sanity-check size after compression. Shouldn't trip unless
-      // someone has a wildly long shelf at 1600px.
-      const headRes = await fetch(compressed.uri, { method: 'HEAD' }).catch(() => null);
-      const sizeHeader = headRes?.headers.get('content-length');
-      const bytes = sizeHeader ? Number(sizeHeader) : 0;
-      if (bytes > 0 && bytes > MAX_PHOTO_BYTES) {
+      // Sanity-check size after compression. (A fetch HEAD on a file:// URI
+      // does NOT populate content-length, so the previous check was dead and
+      // never fired.) getInfoAsync always returns size for file:// locations.
+      const info = await FileSystem.getInfoAsync(compressed.uri, { size: true });
+      if (info.exists && typeof info.size === 'number' && info.size > MAX_PHOTO_BYTES) {
         throw new Error('Photo too large after compression. Try again.');
       }
 
