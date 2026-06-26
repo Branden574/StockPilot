@@ -24,19 +24,24 @@
       },
       "channel": "preview",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://stockpilotusa.com"
+        "EXPO_PUBLIC_API_URL": "https://stockpilotusa.com",
+        "EXPO_PUBLIC_SENTRY_DSN": "https://6e90ea1479f67a57f431e95244902ade@o4511264376881152.ingest.us.sentry.io/4511632721444864"
       }
     },
     "production": {
       "autoIncrement": true,
       "node": "22.19.0",
+      "environment": "production",
       "ios": {
         "resourceClass": "m-medium",
         "image": "macos-sequoia-15.6-xcode-26.0"
       },
       "channel": "production",
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://stockpilotusa.com"
+        "EXPO_PUBLIC_API_URL": "https://stockpilotusa.com",
+        "EXPO_PUBLIC_SENTRY_DSN": "https://6e90ea1479f67a57f431e95244902ade@o4511264376881152.ingest.us.sentry.io/4511632721444864",
+        "SENTRY_ORG": "branden-vincent-walker",
+        "SENTRY_PROJECT": "stockpilot-mobile"
       }
     }
   },
