@@ -328,6 +328,12 @@ export function InventoryTable({
   }, [stockView]);
 
   const router = useRouter();
+  // Filter / sort / page navigations re-run the server component. Wrapping the
+  // router.replace in a transition keeps the current rows interactive and
+  // exposes isFilterPending so we can show an immediate "updating" state —
+  // otherwise a category/charter/location change looks frozen until the
+  // round-trip lands, which reads as "super slow".
+  const [isFilterPending, startFilterTransition] = React.useTransition();
   const addToCount = useCountSelection((s) => s.add);
   const params = useSearchParams();
   const [q, setQ] = React.useState(initialQuery);
@@ -426,7 +432,11 @@ export function InventoryTable({
     // would be wrong if the new result set is shorter.
     next.delete('page');
     const qs = next.toString();
-    router.replace(qs ? `${basePath}?${qs}` : basePath, { scroll: false });
+    // Transition so the click registers instantly (table shows a pending
+    // state) instead of appearing frozen during the server round-trip.
+    startFilterTransition(() => {
+      router.replace(qs ? `${basePath}?${qs}` : basePath, { scroll: false });
+    });
   }
 
   function setSort(key: SortKey) {
@@ -786,7 +796,13 @@ export function InventoryTable({
       )}
 
       {/* Table */}
-      <div className="overflow-x-auto rounded-[10px] border border-border bg-card">
+      <div
+        aria-busy={isFilterPending}
+        className={cn(
+          'overflow-x-auto rounded-[10px] border border-border bg-card transition-opacity',
+          isFilterPending && 'pointer-events-none opacity-60',
+        )}
+      >
         <table className="w-full min-w-[720px] text-[12.5px]">
           <thead>
             <tr className="border-b border-border">
@@ -1310,32 +1326,54 @@ function MultiSelectFilter({
 }) {
   const [open, setOpen] = React.useState(false);
   const [filter, setFilter] = React.useState('');
+  // Local DRAFT selection. Toggling options mutates the draft only — instant,
+  // no navigation — and we commit ONCE when the dropdown closes. Previously
+  // every checkbox click fired onChange → a full server round-trip, so picking
+  // 3 categories meant 3 sequential re-fetches (the "super slow" report).
+  const [draft, setDraft] = React.useState<Set<string>>(() => new Set(selected));
   const visible = filter.trim()
     ? options.filter((o) => o.name.toLowerCase().includes(filter.trim().toLowerCase()))
     : options;
   function toggle(id: string) {
-    const next = new Set(selected);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    onChange(next);
+    setDraft((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   }
+  function handleOpenChange(next: boolean) {
+    if (next) {
+      // Opening: re-sync the draft to the applied selection (covers an external
+      // change such as the toolbar's "Clear all filters").
+      setDraft(new Set(selected));
+    } else {
+      // Closing: commit once, only if the draft actually changed.
+      const changed =
+        draft.size !== selected.size || [...draft].some((id) => !selected.has(id));
+      if (changed) onChange(new Set(draft));
+    }
+    setOpen(next);
+  }
+  // While open, reflect the in-progress draft; when closed, the applied count.
+  const shownSelected = open ? draft : selected;
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <button
           type="button"
           className={cn(
             'inline-flex h-8 items-center gap-1.5 rounded-md border bg-background px-2.5 text-[12px] transition-colors hover:border-[var(--ed-line-strong)]',
-            selected.size > 0
+            shownSelected.size > 0
               ? 'border-foreground text-foreground'
               : 'border-border text-[var(--ed-ink-2)]',
           )}
           aria-label={`Filter by ${label}`}
         >
           <span>{label}</span>
-          {selected.size > 0 && (
+          {shownSelected.size > 0 && (
             <span className="grid h-4 min-w-4 place-items-center rounded-full bg-foreground px-1 font-mono text-[10px] tabular-nums text-background">
-              {selected.size}
+              {shownSelected.size}
             </span>
           )}
           <ChevronDown className="h-3 w-3 text-[var(--ed-ink-4)]" />
@@ -1360,7 +1398,7 @@ function MultiSelectFilter({
             ) : (
               <ul className="flex flex-col">
                 {visible.map((opt) => {
-                  const isOn = selected.has(opt.id);
+                  const isOn = shownSelected.has(opt.id);
                   return (
                     <li key={opt.id}>
                       <button
@@ -1377,11 +1415,11 @@ function MultiSelectFilter({
               </ul>
             )}
           </div>
-          {selected.size > 0 && (
+          {shownSelected.size > 0 && (
             <div className="border-t border-border pt-2">
               <button
                 type="button"
-                onClick={() => onChange(new Set())}
+                onClick={() => setDraft(new Set())}
                 className="text-[11.5px] text-[var(--ed-ink-3)] underline-offset-2 hover:text-foreground hover:underline"
               >
                 Clear {label.toLowerCase()}
