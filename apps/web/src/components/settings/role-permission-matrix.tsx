@@ -126,13 +126,17 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     const def = hasPermission(role, perm);
     const current = roleMap.has(key) ? roleMap.get(key)! : def;
     const next = !current;
-    // If the new state matches the default, clear the override; else store it.
-    const granted: boolean | null = next === def ? null : next;
+    // ALWAYS persist the explicit choice (true/false) — never clear the row.
+    // Clearing is a DELETE, and Supabase Realtime delivers DELETE events
+    // unreliably (RLS can't authorize a row that's already gone), so a revoke
+    // wouldn't push live. An explicit granted=false is an INSERT/UPDATE, which
+    // pushes reliably. effectivePermissions treats granted=false === default as
+    // a no-op, so persisting a "matches default" row is harmless.
+    const granted = next;
 
     const prevMap = roleMap;
     const optimistic = new Map(prevMap);
-    if (granted === null) optimistic.delete(key);
-    else optimistic.set(key, granted);
+    optimistic.set(key, granted);
     setRoleMap(optimistic);
     markBusy(key, true);
     toast.loading('Saving…', { id: SAVE_TOAST });
@@ -158,12 +162,13 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     const base = roleEff.has(perm);
     const current = userMap.has(key) ? userMap.get(key)! : base;
     const next = !current;
-    const granted: boolean | null = next === base ? null : next;
+    // Always persist the explicit choice (see toggleRole — avoids DELETE so the
+    // change pushes live over realtime).
+    const granted = next;
 
     const prevMap = userMap;
     const optimistic = new Map(prevMap);
-    if (granted === null) optimistic.delete(key);
-    else optimistic.set(key, granted);
+    optimistic.set(key, granted);
     setUserMap(optimistic);
     markBusy(key, true);
     toast.loading('Saving…', { id: SAVE_TOAST });
@@ -255,7 +260,9 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
                         const key = rk(role, p.id);
                         const def = hasPermission(role, p.id);
                         const eff = roleMap.has(key) ? roleMap.get(key)! : def;
-                        const overridden = roleMap.has(key);
+                        // "Changed from default" — a persisted row that matches
+                        // the default (after a toggle back) is NOT a change.
+                        const overridden = roleMap.has(key) && roleMap.get(key) !== def;
                         const isRollingOutGrant = eff && !def && !FULLY_GRANTABLE_PERMISSIONS.has(p.id);
                         return (
                           <td key={role} className="px-3 py-2 text-center align-middle">
@@ -339,7 +346,7 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
                           const key = uk(selectedMember.userId, p.id);
                           const base = roleEff.has(p.id);
                           const eff = userMap.has(key) ? userMap.get(key)! : base;
-                          const overridden = userMap.has(key);
+                          const overridden = userMap.has(key) && userMap.get(key) !== base;
                           const isRollingOutGrant =
                             eff && !base && !FULLY_GRANTABLE_PERMISSIONS.has(p.id);
                           return (
