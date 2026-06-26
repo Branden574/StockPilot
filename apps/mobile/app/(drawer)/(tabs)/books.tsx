@@ -44,7 +44,7 @@ import { BookListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
-import { signItemImages } from '@/lib/image-cache';
+import { signItemImages, THUMB_TRANSFORM } from '@/lib/image-cache';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -199,8 +199,12 @@ export default function BooksScreen() {
       }
 
       if (query.trim()) {
+        // Quote the value so PostgREST-reserved chars (, ( ) .) in a book
+        // title or pasted ISBN stay literal instead of corrupting the
+        // or-expression. See inventory.tsx for the full rationale.
+        const term = query.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
         req = req.or(
-          `name.ilike.%${query}%,sku.ilike.%${query}%,barcode.ilike.%${query}%`,
+          `name.ilike."%${term}%",sku.ilike."%${term}%",barcode.ilike."%${term}%"`,
         );
       }
 
@@ -266,7 +270,10 @@ export default function BooksScreen() {
         }
         const paths = Array.from(byItem.values());
         if (paths.length > 0) {
-          const urlByPath = await signItemImages(paths);
+          // Thumbnail transform, not the full-res original — book covers
+          // (often web/PO-imported, multi-megapixel, no thumb variant) would
+          // otherwise decode huge bitmaps for a 56px row. See inventory.tsx.
+          const urlByPath = await signItemImages(paths, THUMB_TRANSFORM);
           for (const b of bookRows) {
             const p = byItem.get(b.id);
             if (p) b.imageUrl = urlByPath.get(p) ?? null;

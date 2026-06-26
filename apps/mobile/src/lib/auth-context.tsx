@@ -99,21 +99,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (cancelled) return;
-      const s = data.session;
-      setSession(s);
-      if (s?.user) {
-        const enabled = await isBiometricEnabledForUser(s.user.id);
+      // CRITICAL: this hydrate path must ALWAYS clear `loading`, even on
+      // failure. supabase.auth.getSession() and isBiometricEnabledForUser()
+      // both read expo-secure-store (Keychain), which can REJECT — e.g. a
+      // cold/background launch while the device is still locked, or a
+      // corrupted/undecryptable entry after an iCloud restore-from-backup.
+      // Without this guard a rejection would leave loading=true forever and
+      // RootGate would render a blank <Stack> with no recovery but force-quit.
+      // Fail CLOSED: treat any failure as "no session" → the sign-in screen.
+      try {
+        const { data } = await supabase.auth.getSession();
         if (cancelled) return;
-        setBiometricEnabledState(enabled);
-        setLocked(enabled);
-        // A restored session may still owe an AAL2 challenge if it was
-        // only ever AAL1 on disk. Check before exposing the app.
-        await checkMfa();
-        if (cancelled) return;
+        const s = data.session;
+        setSession(s);
+        if (s?.user) {
+          let enabled = false;
+          try {
+            enabled = await isBiometricEnabledForUser(s.user.id);
+          } catch (e) {
+            console.warn('[auth] biometric-enabled check failed', e);
+            enabled = false;
+          }
+          if (cancelled) return;
+          setBiometricEnabledState(enabled);
+          setLocked(enabled);
+          // A restored session may still owe an AAL2 challenge if it was
+          // only ever AAL1 on disk. Check before exposing the app.
+          // (checkMfa is already internally try/caught.)
+          await checkMfa();
+          if (cancelled) return;
+        }
+      } catch (e) {
+        console.warn('[auth] session hydrate failed — falling back to sign-in', e);
+        if (!cancelled) {
+          setSession(null);
+          setLocked(false);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
     })();
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (event, s) => {

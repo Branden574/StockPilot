@@ -25,6 +25,7 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { API_BASE } from '@/lib/api';
+import { resizeForUpload } from '@/lib/image-resize';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -202,13 +203,19 @@ export default function AIChat() {
     const asset = result.assets[0];
     setUploading(true);
     try {
-      const ext = (asset.uri.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'jpg').toLowerCase();
+      // Resize before upload — full-res library/camera picks are multi-MB; the
+      // booklist/ISBN Vision extract is just as accurate at <=1600px and the
+      // upload is far faster on cellular.
+      const { uri: resizedUri, ext } = await resizeForUpload(asset.uri, {
+        maxEdge: 1600,
+        quality: 0.8,
+      });
       const form = new FormData();
       // React Native FormData file shape: { uri, name, type }.
       form.append('file', {
-        uri: asset.uri,
+        uri: resizedUri,
         name: `booklist.${ext}`,
-        type: asset.mimeType ?? `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+        type: ext === 'png' ? 'image/png' : 'image/jpeg',
       } as unknown as Blob);
 
       const {

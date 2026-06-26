@@ -264,6 +264,10 @@ export default function AiScanScreen() {
       return;
     }
 
+    // Capture the full review phase (incl. photoSignedUrl) so we can restore it
+    // verbatim if the save fails — keeping the user's review list intact.
+    const reviewPhase = phase;
+    const scanId = phase.scanId;
     setPhase({ kind: 'saving' });
     try {
       const {
@@ -271,37 +275,58 @@ export default function AiScanScreen() {
       } = await supabase.auth.getSession();
       if (!session) throw new Error('Not signed in.');
 
-      // Write each line via the existing v1 record endpoint (now
-      // accepting aiScanId). Local SQLite cache + outbox is updated
-      // in lockstep — same pattern the barcode scan screen uses.
-      const scanId = phase.scanId;
+      // Write each line via the existing v1 record endpoint (now accepting
+      // aiScanId). Each line is recorded INDEPENDENTLY: a mid-batch failure
+      // (network blip, a single line rejected, token expiry between lines)
+      // must NOT abort the rest and discard the review list. record sets an
+      // ABSOLUTE counted_quantity (not an increment), so re-recording a line
+      // is idempotent and retry is always safe.
+      const failed: string[] = [];
       for (const w of toWrite) {
-        const res = await fetch(
-          `${API_BASE}/api/v1/cycle-counts/${cycleCountId}/lines/${w.lineId}/record`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${session.access_token}`,
+        try {
+          const res = await fetch(
+            `${API_BASE}/api/v1/cycle-counts/${cycleCountId}/lines/${w.lineId}/record`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${session.access_token}`,
+              },
+              body: JSON.stringify({
+                countedQuantity: w.count,
+                aiScanId: scanId,
+              }),
             },
-            body: JSON.stringify({
-              countedQuantity: w.count,
-              aiScanId: scanId,
-            }),
-          },
-        );
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`Save failed for one line (${res.status}): ${text.slice(0, 200)}`);
+          );
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`${res.status}: ${text.slice(0, 200)}`);
+          }
+          // Mirror into the local SQLite cache so the detail screen reflects
+          // the new count without waiting for a sync round-trip.
+          await updateLocalLine(w.lineId, w.count);
+        } catch (lineErr) {
+          console.warn('[cycle-count] line save failed', w.lineId, lineErr);
+          failed.push(w.lineId);
         }
-        // Mirror into the local SQLite cache so the detail screen
-        // reflects the new count without waiting for a sync round-trip.
-        await updateLocalLine(w.lineId, w.count);
       }
 
-      // Mark the scan confirmed. Best-effort — if this fails the
-      // lines are still recorded; the scan just stays unconfirmed
-      // in the audit table, which is fine.
+      if (failed.length > 0) {
+        // Partial save: KEEP the review list so the user can see their work
+        // and retry. Re-confirming re-sends every line, but record is an
+        // idempotent absolute SET so already-saved lines are unaffected.
+        await cycleCountSync.refreshPendingCount();
+        Alert.alert(
+          'Partially saved',
+          `${toWrite.length - failed.length} of ${toWrite.length} counts saved. ` +
+            `${failed.length} couldn't save — check your connection and tap Confirm to retry.`,
+        );
+        setPhase(reviewPhase);
+        return;
+      }
+
+      // Mark the scan confirmed. Best-effort — if this fails the lines are
+      // still recorded; the scan just stays unconfirmed in the audit table.
       await fetch(
         `${API_BASE}/api/cycle-counts/${cycleCountId}/ai-scan/${scanId}/confirm`,
         {
@@ -314,11 +339,13 @@ export default function AiScanScreen() {
       void cycleCountSync.forceSync();
       router.back();
     } catch (e) {
+      // Only a non-per-line error (e.g. not signed in) reaches here. Keep the
+      // review list rather than discarding it to the camera, so nothing is lost.
       Alert.alert(
         'Save failed',
-        e instanceof Error ? e.message : 'Some counts may not have been saved.',
+        e instanceof Error ? e.message : 'Could not save. Check your connection and try again.',
       );
-      setPhase({ kind: 'idle' });
+      setPhase(reviewPhase);
     }
   }
 

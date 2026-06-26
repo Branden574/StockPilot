@@ -44,7 +44,19 @@ interface ApiOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
+  /** Per-request timeout override in ms. Defaults to DEFAULT_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
+
+// React Native's fetch has NO default timeout. A half-open TCP / captive-portal
+// / dead-air socket that accepts the connection but never replies leaves the
+// promise pending forever. That not only strands a screen on a permanent
+// spinner, it wedges the whole sync engine: syncNow()'s single-flight guard
+// (sync.ts) never clears its in-flight promise, so every later sync tick returns
+// the same stuck promise and queued offline writes never drain for the session.
+// We therefore compose an internal AbortController timeout into every request so
+// it is ALWAYS guaranteed to settle.
+const DEFAULT_TIMEOUT_MS = 20_000;
 
 async function authHeader(): Promise<Record<string, string>> {
   const {
@@ -67,18 +79,40 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
     ...(orgId ? { 'X-Organization-Id': orgId } : {}),
   };
 
-  const res = await fetch(`${API_URL}${path}`, {
-    method: opts.method ?? 'GET',
-    headers,
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-    signal: opts.signal,
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API ${res.status}: ${text || res.statusText}`);
+  // Internal timeout, composed with any caller-supplied signal. Either firing
+  // aborts the fetch so the promise settles instead of hanging indefinitely.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const onCallerAbort = () => ctrl.abort();
+  if (opts.signal) {
+    if (opts.signal.aborted) ctrl.abort();
+    else opts.signal.addEventListener('abort', onCallerAbort);
   }
-  return (await res.json()) as T;
+
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: opts.method ?? 'GET',
+      headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: ctrl.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API ${res.status}: ${text || res.statusText}`);
+    }
+    return (await res.json()) as T;
+  } catch (err) {
+    // Our timeout aborted (the caller did NOT cancel) → surface a clear,
+    // retryable message instead of an opaque AbortError.
+    if (ctrl.signal.aborted && !(opts.signal && opts.signal.aborted)) {
+      throw new Error('Request timed out. Check your connection and try again.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    if (opts.signal) opts.signal.removeEventListener('abort', onCallerAbort);
+  }
 }
 
 export const API_BASE = API_URL;

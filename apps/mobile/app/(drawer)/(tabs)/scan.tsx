@@ -360,8 +360,14 @@ export default function Scan() {
     try {
       // Read the image and ship it as base64 — multipart from RN to
       // Next.js can be flaky across runtimes; JSON-base64 just works.
-      const ext = (asset.uri.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'jpg').toLowerCase();
-      const blob = await (await fetch(asset.uri)).blob();
+      // Resize before encoding — a full-res cover base64-encodes to several MB
+      // of JS string held in memory during the request. Vision is just as
+      // accurate at <=1600px; this slashes the in-memory payload + upload time.
+      const { uri: resizedUri, ext } = await resizeForUpload(asset.uri, {
+        maxEdge: 1600,
+        quality: 0.8,
+      });
+      const blob = await (await fetch(resizedUri)).blob();
       const base64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onerror = () => reject(new Error('failed to read image'));
