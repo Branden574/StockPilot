@@ -76,6 +76,20 @@ export class RecurringPoTemplatesService {
     );
   }
 
+  // ── assertDestinationLocationInOrg ───────────────────────────────────────
+
+  private async assertDestinationLocationInOrg(locationId: string | null | undefined) {
+    if (!locationId) return;
+    const { data, error } = await this.ctx.supabase
+      .from('locations')
+      .select('id')
+      .eq('id', locationId)
+      .eq('organization_id', this.ctx.organizationId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('validation_error', 'Destination location not found in your organization.');
+  }
+
   // ── create ────────────────────────────────────────────────────────────────
 
   async create(input: RecurringTemplateInput) {
@@ -83,6 +97,7 @@ export class RecurringPoTemplatesService {
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     const parsed = recurringTemplateSchema.parse(input);
+    await this.assertDestinationLocationInOrg(parsed.destinationLocationId);
     const now = new Date();
     const nextRun = nextRunAt(parsed.cadence as RecurringCadence, now, parsed.customDays ?? undefined);
 
@@ -129,6 +144,7 @@ export class RecurringPoTemplatesService {
     assertPermission(this.ctx, 'purchase_orders:manage');
 
     const parsed = recurringTemplateSchema.parse(input);
+    await this.assertDestinationLocationInOrg(parsed.destinationLocationId);
 
     const { data, error } = await this.ctx.supabase
       .from('recurring_po_templates')

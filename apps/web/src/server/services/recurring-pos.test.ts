@@ -286,3 +286,81 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     expect(payload.lineItems[1]).toEqual({ itemId: 'item-y', quantityOrdered: 1, unitCost: 25 });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────
+// create — destinationLocationId org-verification
+// ─────────────────────────────────────────────────────────────────
+
+const CREATE_INPUT_BASE = {
+  name: 'Test Template',
+  cadence: 'weekly' as const,
+  sendMode: 'draft' as const,
+  lineItems: [{ itemId: '00000000-0000-0000-0000-000000000001', quantityOrdered: 1, unitCost: 10 }],
+};
+
+describe('RecurringPoTemplatesService.create — destinationLocationId org-verify', () => {
+  it('rejects a destinationLocationId from a foreign org and does NOT insert', async () => {
+    const stub = makeSupabaseStub({
+      // maybeSingle returns data=null when the array has no match (location not in caller's org)
+      'locations.select': { data: null, error: null },
+      // insert should never be reached — include stub anyway to detect accidental calls
+      'recurring_po_templates.insert': { data: { id: 'tpl-x' }, error: null },
+      'rpc:next_po_number': { data: 'PO-999', error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { role: 'owner' });
+    const svc = new RecurringPoTemplatesService(ctx as never);
+
+    await expect(
+      svc.create({
+        ...CREATE_INPUT_BASE,
+        destinationLocationId: 'aaaaaaaa-0000-0000-0000-000000000001',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+
+    // The insert must NOT have been called
+    expect(stub.chainsAll.get('recurring_po_templates.insert')).toBeUndefined();
+  });
+
+  it('succeeds when destinationLocationId belongs to the caller\'s org', async () => {
+    const SAME_ORG_LOC_ID = 'bbbbbbbb-0000-0000-0000-000000000001';
+    const stub = makeSupabaseStub({
+      // location found in org → maybeSingle returns the row
+      'locations.select': { data: { id: SAME_ORG_LOC_ID }, error: null },
+      'recurring_po_templates.insert': { data: { id: 'tpl-new' }, error: null },
+      'rpc:next_po_number': { data: 'PO-999', error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { role: 'owner' });
+    const svc = new RecurringPoTemplatesService(ctx as never);
+
+    const result = await svc.create({
+      ...CREATE_INPUT_BASE,
+      destinationLocationId: SAME_ORG_LOC_ID,
+    });
+
+    expect(result.id).toBe('tpl-new');
+    // The location lookup was performed
+    expect(stub.fromCalls).toContain('locations');
+    // The insert was performed
+    expect(stub.chainsAll.get('recurring_po_templates.insert')).toBeDefined();
+  });
+
+  it('skips the location lookup entirely when destinationLocationId is null/omitted', async () => {
+    const stub = makeSupabaseStub({
+      'recurring_po_templates.insert': { data: { id: 'tpl-no-loc' }, error: null },
+      'rpc:next_po_number': { data: 'PO-999', error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { role: 'owner' });
+    const svc = new RecurringPoTemplatesService(ctx as never);
+
+    const result = await svc.create({
+      ...CREATE_INPUT_BASE,
+      destinationLocationId: null,
+    });
+
+    expect(result.id).toBe('tpl-no-loc');
+    // No locations query at all
+    expect(stub.fromCalls).not.toContain('locations');
+    // Insert happened
+    expect(stub.chainsAll.get('recurring_po_templates.insert')).toBeDefined();
+  });
+});
