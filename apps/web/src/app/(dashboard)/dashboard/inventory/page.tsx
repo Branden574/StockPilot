@@ -11,7 +11,7 @@ import { InventoryTable } from '@/components/inventory/inventory-table';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
@@ -128,7 +128,7 @@ export default async function InventoryPage({
   // only role) and stock-adjust-only roles should NOT see entry points
   // for new items — the underlying page action also enforces this, but
   // hiding the button is the user-facing fix.
-  const canCreate = hasPermission(sessionCtx.role, 'items:create');
+  const canCreate = can(sessionCtx, 'items:create');
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
@@ -302,7 +302,7 @@ async function InventoryTableSection({
     ),
   };
 
-  const canCreate = hasPermission(sessionCtx.role, 'items:create');
+  const canCreate = can(sessionCtx, 'items:create');
 
   if (inventory.total === 0 && lifecycleStatus === 'archived' && !params.q && !params.stock) {
     return (

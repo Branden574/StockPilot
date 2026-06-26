@@ -15,7 +15,7 @@ import { BooksInventoryTable } from '@/components/books/books-inventory-table';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
@@ -113,7 +113,7 @@ export default async function BooksPage({
   ]);
   const racks = await inventorySvc.listDistinctRacks({ scope: 'books' });
 
-  const canCreate = hasPermission(sessionCtx.role, 'items:create');
+  const canCreate = can(sessionCtx, 'items:create');
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
       <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
@@ -270,12 +270,12 @@ async function BooksTableSection({
         icon={BookOpen}
         title="No books yet"
         description={
-          hasPermission(sessionCtx.role, 'items:create')
+          can(sessionCtx, 'items:create')
             ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
             : 'No books have been added to this workspace yet.'
         }
         cta={
-          hasPermission(sessionCtx.role, 'items:create')
+          can(sessionCtx, 'items:create')
             ? { label: 'Add your first book', href: '/dashboard/books/new' }
             : undefined
         }
@@ -309,7 +309,7 @@ async function BooksTableSection({
       total={inventory.total}
       valueOnHand={inventory.valueOnHand}
       lookups={lookups}
-      canCreate={hasPermission(sessionCtx.role, 'items:create')}
+      canCreate={can(sessionCtx, 'items:create')}
       categories={categories.map((c) => ({
         id: c.id as string,
         name: c.name as string,

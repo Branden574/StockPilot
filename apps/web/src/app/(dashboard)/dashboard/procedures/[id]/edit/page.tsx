@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { ProcedureForm } from '@/components/procedures/procedure-form';
 import { UploadRecoveryToast } from '@/components/procedures/upload-recovery-toast';
 import { requireOrgContext } from '@/lib/auth/session';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { ProcedureCategoriesService } from '@/server/services/procedure-categories';
 import { ProceduresService } from '@/server/services/procedures';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -21,7 +21,7 @@ export default async function EditProcedurePage({
 }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'categories:manage')) {
+  if (!can(ctx, 'categories:manage')) {
     notFound();
   }
 

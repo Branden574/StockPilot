@@ -19,7 +19,7 @@ import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
-import { hasPermission, resolveTerminology } from '@stockpilot/core';
+import { can, resolveTerminology } from '@stockpilot/core';
 
 export default async function EditItemPage({
   params,
@@ -35,7 +35,7 @@ export default async function EditItemPage({
   // Bounce them back to the detail page instead of letting them see the
   // form. The service layer also throws on submit; this just avoids
   // wasting their time.
-  if (!hasPermission(ctx.role, 'items:update')) {
+  if (!can(ctx, 'items:update')) {
     redirect(`/dashboard/inventory/${id}`);
   }
   const supabase = await createClient();

@@ -17,7 +17,7 @@ import { MovementsService } from '@/server/services/movements';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 const PAGE_SIZE = 50;
 
@@ -30,7 +30,7 @@ export default async function MovementsPage({
   // have activity_logs:read, so they get bounced back to the dashboard
   // if they type the URL. Sidebar already hides this entry for them.
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'activity_logs:read')) {
+  if (!can(ctx, 'activity_logs:read')) {
     redirect('/dashboard');
   }
 

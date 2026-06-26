@@ -9,14 +9,14 @@ import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export default async function NewPoPage() {
   // Submit asserts purchase_orders:manage. Without this gate
   // viewers/staff would land on the form, fill it out, and only
   // discover the permission gap when they click Create.
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'purchase_orders:manage')) {
+  if (!can(ctx, 'purchase_orders:manage')) {
     redirect('/dashboard');
   }
   const [inventorySvc, suppliersSvc, locationsSvc, chartersSvc] = await Promise.all([

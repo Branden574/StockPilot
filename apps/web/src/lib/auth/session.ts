@@ -4,8 +4,9 @@ import { redirect } from 'next/navigation';
 
 import { createClient } from '@/lib/supabase/server';
 import { SESSION_HEADER_USER_EMAIL, SESSION_HEADER_USER_ID } from '@/lib/supabase/middleware';
+import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 
-import type { Role } from '@stockpilot/core';
+import type { Permission, Role } from '@stockpilot/core';
 
 export interface ServerSession {
   userId: string;
@@ -19,6 +20,15 @@ export interface OrgContext extends ServerSession {
   organizationId: string;
   organizationName: string;
   role: Role;
+  /**
+   * Effective permission set = static role defaults with org-level role +
+   * per-user overrides applied. Consult via `can(ctx, perm)` for every
+   * request-scoped gate so configurable overrides take effect. Computed once
+   * per request (this fn is React.cache()d). Optional only so synthetic
+   * contexts elsewhere stay valid — requireOrgContext always sets it; when
+   * absent `can()` falls back to the static role defaults.
+   */
+  permissions?: Set<Permission>;
 }
 
 interface LoadedContext {
@@ -163,20 +173,24 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
     if (!member) redirect('/onboarding');
     const orgs = (member as { organizations: { name: string } | { name: string }[] | null })
       .organizations;
+    const role = (member as { role: Role }).role;
     return {
       ...session,
       organizationId: orgId,
       organizationName: pickOrgName(orgs) ?? 'Workspace',
-      role: (member as { role: Role }).role,
+      role,
+      permissions: await loadEffectivePermissions(supabase, orgId, session.userId, role),
     };
   }
 
   if (!orgRole) redirect('/onboarding');
 
+  const supabase = await createClient();
   return {
     ...session,
     organizationId: targetOrgId,
     organizationName: orgName ?? 'Workspace',
     role: orgRole,
+    permissions: await loadEffectivePermissions(supabase, targetOrgId, session.userId, orgRole),
   };
 });

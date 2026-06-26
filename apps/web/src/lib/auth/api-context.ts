@@ -4,6 +4,7 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 import { env } from '@/lib/env';
 import { createClient } from '@/lib/supabase/server';
+import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import type { ServiceContext } from '@/server/services/context';
 
 import type { Role, Database, ModuleId } from '@stockpilot/core';
@@ -220,10 +221,17 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       supabase,
       member.organization_id as string,
     );
+    const permissions = await loadEffectivePermissions(
+      supabase,
+      member.organization_id as string,
+      userRes.user.id,
+      member.role as Role,
+    );
     return {
       organizationId: member.organization_id as string,
       userId: userRes.user.id,
       role: member.role as Role,
+      permissions,
       supabase,
       mfaRequired: mfa.mfaRequired,
       mfaSatisfied: mfa.mfaSatisfied,
@@ -273,10 +281,17 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     supabase,
     member.organization_id as string,
   );
+  const permissions = await loadEffectivePermissions(
+    supabase,
+    member.organization_id as string,
+    user.id,
+    member.role as Role,
+  );
   return {
     organizationId: member.organization_id as string,
     userId: user.id,
     role: member.role as Role,
+    permissions,
     supabase,
     mfaRequired: mfa.mfaRequired,
     mfaSatisfied: mfa.mfaSatisfied,

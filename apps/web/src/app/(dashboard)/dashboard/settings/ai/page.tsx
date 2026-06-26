@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmbeddingsBackfillPanel } from '@/components/settings/embeddings-backfill-panel';
@@ -17,7 +17,7 @@ export default async function AiSettingsPage() {
   // permission matrix keeps role/permission consistency tight and makes
   // future role surgery (e.g. a hypothetical "AI admin" role) a one-line
   // matrix change instead of a hunt for `isAdminRole` calls.
-  if (!hasPermission(ctx.role, 'ai:manage')) {
+  if (!can(ctx, 'ai:manage')) {
     notFound();
   }
   // Pre-fetch counts so the panel renders meaningful numbers on first

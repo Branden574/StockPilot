@@ -5,7 +5,7 @@ import { ZendeskConnectCard } from '@/components/zendesk/zendesk-connect-card';
 import { ZendeskLogo } from '@/components/dashboard/zendesk-logo';
 import { withContext } from '@/server/services/context';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,7 +14,7 @@ export default async function ZendeskPage() {
   if (!access.enabled) return <ModuleNotEnabled moduleId="zendesk" canManage={access.canManage} />;
 
   const ctx = await withContext();
-  const canManage = hasPermission(ctx.role, 'integrations:manage');
+  const canManage = can(ctx, 'integrations:manage');
 
   const svc = await ConnectionsService.forCurrentUser();
   const conn = await svc.getZendeskConnection();

@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 export const metadata: Metadata = { title: 'Settings' };
 import { requireOrgContext } from '@/lib/auth/session';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 const BASE_SECTIONS = [
   { href: '/dashboard/settings/organization', title: 'Organization', description: 'Name, labels for charters and warehouses.' },
@@ -24,7 +24,7 @@ const BILLING_SECTIONS = [
   { href: '/dashboard/settings/billing', title: 'Billing', description: 'Plan, invoices, payment method.' },
 ];
 
-// Manager-and-above sections. Gated by hasPermission('orders:approve')
+// Manager-and-above sections. Gated by can(ctx, 'orders:approve')
 // so warehouse-scoped members don't see tiles they can't actually use —
 // the underlying page redirects them anyway, but the tile is the
 // discoverable surface.
@@ -112,18 +112,18 @@ export default async function SettingsPage() {
   const ctx = await requireOrgContext();
   const sections = [
     ...BASE_SECTIONS,
-    ...(hasPermission(ctx.role, 'billing:read') ? BILLING_SECTIONS : []),
-    ...(hasPermission(ctx.role, 'orders:approve') ? MANAGER_SECTIONS : []),
-    ...(hasPermission(ctx.role, 'activity_logs:read') ? ADMIN_SECTIONS : []),
-    ...(hasPermission(ctx.role, 'ai:manage') ? AI_SECTIONS : []),
-    ...(hasPermission(ctx.role, 'items:delete') ? RECOVERY_SECTIONS : []),
-    ...(hasPermission(ctx.role, 'organization:update') ? INDUSTRY_SECTIONS : []),
-    ...(hasPermission(ctx.role, 'organization:update') ? MODULES_SECTIONS : []),
-    ...(hasPermission(ctx.role, 'organization:update') ? NAVIGATION_SECTIONS : []),
-    ...(hasPermission(ctx.role, 'organization:update') ? DASHBOARD_SECTIONS : []),
-    ...(hasPermission(ctx.role, 'organization:update') ? CUSTOM_FIELDS_SECTIONS : []),
-    ...(hasPermission(ctx.role, 'organization:update') ? ORDER_STATUS_SECTIONS : []),
-    ...(hasPermission(ctx.role, 'integrations:manage') ? INTEGRATIONS_SECTIONS : []),
+    ...(can(ctx, 'billing:read') ? BILLING_SECTIONS : []),
+    ...(can(ctx, 'orders:approve') ? MANAGER_SECTIONS : []),
+    ...(can(ctx, 'activity_logs:read') ? ADMIN_SECTIONS : []),
+    ...(can(ctx, 'ai:manage') ? AI_SECTIONS : []),
+    ...(can(ctx, 'items:delete') ? RECOVERY_SECTIONS : []),
+    ...(can(ctx, 'organization:update') ? INDUSTRY_SECTIONS : []),
+    ...(can(ctx, 'organization:update') ? MODULES_SECTIONS : []),
+    ...(can(ctx, 'organization:update') ? NAVIGATION_SECTIONS : []),
+    ...(can(ctx, 'organization:update') ? DASHBOARD_SECTIONS : []),
+    ...(can(ctx, 'organization:update') ? CUSTOM_FIELDS_SECTIONS : []),
+    ...(can(ctx, 'organization:update') ? ORDER_STATUS_SECTIONS : []),
+    ...(can(ctx, 'integrations:manage') ? INTEGRATIONS_SECTIONS : []),
   ];
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">

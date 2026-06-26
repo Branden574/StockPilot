@@ -8,7 +8,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 export const metadata: Metadata = { title: 'Suppliers' };
 import { SuppliersService } from '@/server/services/suppliers';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 interface SuppliersPageProps {
   searchParams: Promise<{ view?: string }>;
@@ -25,7 +25,7 @@ export default async function SuppliersPage({ searchParams }: SuppliersPageProps
     requireOrgContext(),
     SuppliersService.forCurrentUser(),
   ]);
-  const canManage = hasPermission(ctx.role, 'suppliers:manage');
+  const canManage = can(ctx, 'suppliers:manage');
   const rows = await svc.list({ includeArchived: isArchivedView });
 
   return (

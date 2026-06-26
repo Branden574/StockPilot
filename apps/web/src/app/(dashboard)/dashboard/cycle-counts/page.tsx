@@ -21,7 +21,7 @@ import { CycleCountsService } from '@/server/services/cycle-counts';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatRelative } from '@/lib/utils';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export default async function CycleCountsPage() {
   const moduleAccess = await checkModuleAccess('cycle_counts');
@@ -31,7 +31,7 @@ export default async function CycleCountsPage() {
   // Cycle counts emit stock_movements rows when posted — gated on
   // stock:adjust (staff+). Viewers get bounced.
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'stock:adjust')) {
+  if (!can(ctx, 'stock:adjust')) {
     redirect('/dashboard');
   }
   const [ccSvc, warehousesSvc] = await Promise.all([

@@ -6,7 +6,7 @@ import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
 import { Button } from '@/components/ui/button';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -161,7 +161,7 @@ export default async function RentalItemsPage({
     locations: new Map(locations.map((l) => [l.id as string, { name: l.name as string }])),
   };
 
-  const canCreate = hasPermission(sessionCtx.role, 'items:create');
+  const canCreate = can(sessionCtx, 'items:create');
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">

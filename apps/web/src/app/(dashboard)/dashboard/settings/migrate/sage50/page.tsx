@@ -7,7 +7,7 @@ import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Migrate from Sage 50 — Settings' };
 
@@ -23,7 +23,7 @@ export const maxDuration = 300;
  */
 export default async function Sage50MigratePage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'items:import')) {
+  if (!can(ctx, 'items:import')) {
     redirect('/dashboard/settings');
   }
 

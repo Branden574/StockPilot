@@ -7,14 +7,14 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { WarehousesService } from '@/server/services/warehouses';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export default async function NewCycleCountPage() {
   // Submit asserts stock:adjust. Without this gate viewers/staff
   // would land on the form and only learn they can't submit when
   // they click Start. Matches the sibling /cycle-counts list page.
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'stock:adjust')) {
+  if (!can(ctx, 'stock:adjust')) {
     redirect('/dashboard');
   }
 
@@ -26,7 +26,7 @@ export default async function NewCycleCountPage() {
 
   // Manager+ can assign a count to a teammate at creation time. Only
   // fetch the member list when they actually can (mirrors the detail page).
-  const canAssign = hasPermission(ctx.role, 'cycle_counts:assign');
+  const canAssign = can(ctx, 'cycle_counts:assign');
   let members: Array<{ id: string; name: string; email: string }> = [];
   if (canAssign) {
     const { data: rawMembers } = await supabase

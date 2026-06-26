@@ -23,7 +23,7 @@ import { formatNumber, formatRelative } from '@/lib/utils';
 import { RMAService } from '@/server/services/returns';
 import { ShippingService, type CarrierShipmentRow } from '@/server/services/shipping';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export default async function ReturnDetailPage({
   params,
@@ -37,7 +37,7 @@ export default async function ReturnDetailPage({
     return <ModuleNotEnabled moduleId="returns" canManage={moduleAccess.canManage} />;
   }
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'returns:manage')) {
+  if (!can(ctx, 'returns:manage')) {
     redirect('/dashboard');
   }
 
@@ -76,7 +76,7 @@ export default async function ReturnDetailPage({
   // the returns gate above. Shown only once a return is approved/received.
   const shippingAccess = await checkModuleAccess('shipping');
   const canManageShipping =
-    shippingAccess.enabled && hasPermission(ctx.role, 'shipping:manage');
+    shippingAccess.enabled && can(ctx, 'shipping:manage');
   let returnLabel: CarrierShipmentRow | null = null;
   if (shippingAccess.enabled) {
     try {

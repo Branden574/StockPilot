@@ -6,7 +6,7 @@ import { csvFilename, toCsv } from '@/lib/csv';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { SuppliersService } from '@/server/services/suppliers';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -55,7 +55,7 @@ export async function GET(request: Request) {
     }
     // Same read gate the service enforces on the detail path. Org-scope +
     // warehouse-scope are additionally enforced inside the service.
-    if (!hasPermission(ctx.role, 'purchase_orders:read')) {
+    if (!can(ctx, 'purchase_orders:read')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
 

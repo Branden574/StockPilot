@@ -12,13 +12,13 @@ import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ServiceError } from '@/server/services/context';
 import { SuppliersService } from '@/server/services/suppliers';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export default async function EditPoPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'purchase_orders:manage')) {
+  if (!can(ctx, 'purchase_orders:manage')) {
     redirect('/dashboard');
   }
 

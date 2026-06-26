@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { ProcedureCard } from '@/components/procedures/procedure-card';
 import { RestoreButton } from '@/components/procedures/restore-button';
 import { requireOrgContext } from '@/lib/auth/session';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { ProcedureCategoriesService } from '@/server/services/procedure-categories';
 import { ProceduresService } from '@/server/services/procedures';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -49,7 +49,7 @@ export default async function ProceduresListPage({
   // viewers) can browse the SOP knowledge base. Writing is gated at
   // the service/action layer on `categories:manage` (manager+), matching
   // the table's RLS. The sidebar still surfaces the entry for everyone.
-  const canCreate = hasPermission(ctx.role, 'categories:manage');
+  const canCreate = can(ctx, 'categories:manage');
   const canRestore = canCreate; // Restore uses the same permission gate as archive.
 
   const [procService, catService, whService] = await Promise.all([

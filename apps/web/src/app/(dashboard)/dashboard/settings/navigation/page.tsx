@@ -6,12 +6,7 @@ import { NavCustomizer } from '@/components/settings/nav-customizer';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getModulesForRequest, getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 
-import {
-  hasPermission,
-  resolveSurface,
-  type NavOverrides,
-  type NavSectionKey,
-} from '@stockpilot/core';
+import { can, resolveSurface, type NavOverrides, type NavSectionKey } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Navigation — Settings' };
 
@@ -29,7 +24,7 @@ export const metadata: Metadata = { title: 'Navigation — Settings' };
  */
 export default async function NavigationSettingsPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'organization:update')) {
+  if (!can(ctx, 'organization:update')) {
     redirect('/dashboard');
   }
 

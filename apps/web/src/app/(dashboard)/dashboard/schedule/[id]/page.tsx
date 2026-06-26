@@ -14,7 +14,7 @@ import { ServiceError } from '@/server/services/context';
 import { ScheduleService } from '@/server/services/schedule';
 import { WarehousesService } from '@/server/services/warehouses';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 const STATUS_LABEL: Record<string, string> = {
   scheduled: 'Scheduled',
@@ -62,7 +62,7 @@ export default async function ScheduleEventDetailPage({
   // Schedule is manager+ only — viewers/staff who land here directly via URL
   // get a 404 rather than a permission error. Mirrors /dashboard/schedule.
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'schedule:manage')) notFound();
+  if (!can(ctx, 'schedule:manage')) notFound();
 
   const svc = await ScheduleService.forCurrentUser();
   let event;

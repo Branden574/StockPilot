@@ -8,7 +8,7 @@ import { BundlesService } from '@/server/services/bundles';
 import { ScheduleService } from '@/server/services/schedule';
 import { WarehousesService } from '@/server/services/warehouses';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const metadata = { title: 'New event · Schedule' };
 
@@ -20,7 +20,7 @@ export default async function NewScheduleEventPage({
   // Manager+ only. Mirrors the gate on /dashboard/schedule and the
   // detail/edit pages.
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'schedule:manage')) notFound();
+  if (!can(ctx, 'schedule:manage')) notFound();
 
   const params = await searchParams;
   // Pre-fill the date when the user clicked a day cell on the

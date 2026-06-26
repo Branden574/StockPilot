@@ -123,7 +123,7 @@ export interface InventoryTableProps {
    * Whether the current viewer can create new items. Drives the
    * "+ New item/book" button that sits at the bottom right of the
    * table next to pagination. Page passes this from a
-   * hasPermission(ctx.role, 'items:create') check.
+   * can(ctx, 'items:create') check.
    */
   canCreate?: boolean;
   /**

@@ -18,14 +18,14 @@ import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
-import { hasPermission, resolveTerminology } from '@stockpilot/core';
+import { can, resolveTerminology } from '@stockpilot/core';
 
 export default async function NewBookPage() {
   const ctx = await requireOrgContext();
   // Same server-side gate as /dashboard/inventory/new. Viewers and
   // any other role without items:create get bounced back to the books
   // list instead of seeing an empty form they can't submit.
-  if (!hasPermission(ctx.role, 'items:create')) {
+  if (!can(ctx, 'items:create')) {
     redirect('/dashboard/books');
   }
   const supabase = await createClient();

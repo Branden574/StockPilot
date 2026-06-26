@@ -11,7 +11,7 @@ import { CycleCountsService } from '@/server/services/cycle-counts';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatRelative } from '@/lib/utils';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export default async function CycleCountDetailPage({
   params,
@@ -53,7 +53,7 @@ export default async function CycleCountDetailPage({
     : null;
 
   // Manager+ can change the assignee — staff / viewers see it read-only.
-  const canAssign = hasPermission(ctx.role, 'cycle_counts:assign');
+  const canAssign = can(ctx, 'cycle_counts:assign');
 
   // Member list for the assignee picker. Only fetched when the current
   // user can actually assign (saves a round trip for staff/viewers).

@@ -10,7 +10,7 @@ import { ChartersService } from '@/server/services/charters';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 import { WarehousesService } from '@/server/services/warehouses';
 
-import { hasPermission, resolveTerminology } from '@stockpilot/core';
+import { can, resolveTerminology } from '@stockpilot/core';
 
 export const metadata = { title: 'Bulk ISBN import' };
 
@@ -25,7 +25,7 @@ export const maxDuration = 60;
 
 export default async function BulkIsbnImportPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'items:import')) {
+  if (!can(ctx, 'items:import')) {
     redirect('/dashboard/books');
   }
   const supabase = await createClient();

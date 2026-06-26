@@ -5,7 +5,7 @@ import { notFound, redirect } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ProcedureForm } from '@/components/procedures/procedure-form';
 import { requireOrgContext } from '@/lib/auth/session';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { ProcedureCategoriesService } from '@/server/services/procedure-categories';
 import { WarehousesService } from '@/server/services/warehouses';
 
@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function NewProcedurePage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'categories:manage')) {
+  if (!can(ctx, 'categories:manage')) {
     notFound();
   }
 

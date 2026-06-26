@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 
 import { OrdersNewV2 } from '@/components/orders/v2/orders-new-v2';
 import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -15,7 +15,7 @@ export default async function NewOrderPage({
   searchParams: Promise<{ warehouseId?: string }>;
 }) {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'orders:request')) {
+  if (!can(ctx, 'orders:request')) {
     redirect('/dashboard');
   }
 

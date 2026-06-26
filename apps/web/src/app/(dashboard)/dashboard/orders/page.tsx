@@ -19,7 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import {
   OrderRequestsService,
@@ -98,7 +98,7 @@ export default async function OrdersPage({
   }
   const params = await searchParams;
   const ctx = await requireOrgContext();
-  const canApprove = hasPermission(ctx.role, 'orders:approve');
+  const canApprove = can(ctx, 'orders:approve');
 
   const tab: StatusTab = isStatusTab(params.status) ? params.status : 'needs_approval';
   const page = clampPage(params.page);

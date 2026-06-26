@@ -22,7 +22,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatRelative } from '@/lib/utils';
 import { RMAService, type ReturnStatus } from '@/server/services/returns';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 const STATUS_FILTERS: Array<{ value: ReturnStatus | 'all'; label: string }> = [
   { value: 'all', label: 'All' },
@@ -56,7 +56,7 @@ export default async function ReturnsPage({
   // (manager+). The service enforces the same gate; this is the page-level
   // bounce so a viewer never sees the list shell.
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'returns:manage')) {
+  if (!can(ctx, 'returns:manage')) {
     redirect('/dashboard');
   }
 

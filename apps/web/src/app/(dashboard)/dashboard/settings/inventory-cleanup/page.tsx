@@ -6,14 +6,14 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { parseAutoDeleteArchivedSettings } from '@/server/services/archive-cleanup';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Archived item cleanup' };
 
 export default async function InventoryCleanupSettingsPage() {
   const ctx = await requireOrgContext();
   // Same gate as Recovery — this configures automatic deletion of inventory.
-  if (!hasPermission(ctx.role, 'items:delete')) redirect('/dashboard/settings');
+  if (!can(ctx, 'items:delete')) redirect('/dashboard/settings');
 
   const supabase = await createClient();
 

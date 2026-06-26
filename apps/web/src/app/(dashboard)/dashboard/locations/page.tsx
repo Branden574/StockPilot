@@ -2,7 +2,7 @@ import { LocationsManager } from '@/components/locations/locations-manager';
 import { requireOrgContext } from '@/lib/auth/session';
 import { LocationsService } from '@/server/services/locations';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 interface LocationsPageProps {
   searchParams: Promise<{ view?: string }>;
@@ -15,7 +15,7 @@ export default async function LocationsPage({ searchParams }: LocationsPageProps
     requireOrgContext(),
     LocationsService.forCurrentUser(),
   ]);
-  const canManage = hasPermission(ctx.role, 'locations:manage');
+  const canManage = can(ctx, 'locations:manage');
   const rows = await svc.list({ includeArchived: isArchivedView });
 
   return (

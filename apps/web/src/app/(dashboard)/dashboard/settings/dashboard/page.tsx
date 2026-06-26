@@ -6,7 +6,7 @@ import { DashboardCustomizer } from '@/components/settings/dashboard-customizer'
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 
-import { DASHBOARD_WIDGETS, hasPermission, type DashboardLayout } from '@stockpilot/core';
+import { can, DASHBOARD_WIDGETS, type DashboardLayout } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Dashboard — Settings' };
 
@@ -22,7 +22,7 @@ export const metadata: Metadata = { title: 'Dashboard — Settings' };
  */
 export default async function DashboardSettingsPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'organization:update')) {
+  if (!can(ctx, 'organization:update')) {
     redirect('/dashboard');
   }
 

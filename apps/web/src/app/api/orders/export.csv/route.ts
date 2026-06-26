@@ -10,7 +10,7 @@ import {
   type OrderRequestStatus,
 } from '@/server/services/order-requests';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -113,7 +113,7 @@ export async function GET(request: Request) {
     // (requesters without it only see their own requests). Org-scope is
     // additionally enforced inside the service via the RLS-bound client +
     // explicit organization_id filter.
-    if (!hasPermission(ctx.role, 'orders:approve')) {
+    if (!can(ctx, 'orders:approve')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
 

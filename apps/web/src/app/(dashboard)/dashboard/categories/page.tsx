@@ -5,7 +5,7 @@ import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { requireOrgContext } from '@/lib/auth/session';
 import { CategoriesService } from '@/server/services/categories';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 interface CategoriesPageProps {
   searchParams: Promise<{ view?: string }>;
@@ -43,7 +43,7 @@ async function CategoriesSection({ isArchivedView }: { isArchivedView: boolean }
     requireOrgContext(),
     CategoriesService.forCurrentUser(),
   ]);
-  const canManage = hasPermission(ctx.role, 'categories:manage');
+  const canManage = can(ctx, 'categories:manage');
   const rows = await svc.list({ includeArchived: isArchivedView });
 
   return (

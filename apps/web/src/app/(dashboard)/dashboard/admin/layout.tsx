@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 
 import { requireOrgContext } from '@/lib/auth/session';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 /**
  * Hard guard: every page under /dashboard/admin requires owner or admin
@@ -13,6 +13,6 @@ import { hasPermission } from '@stockpilot/core';
  */
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'organization:update')) redirect('/dashboard');
+  if (!can(ctx, 'organization:update')) redirect('/dashboard');
   return <>{children}</>;
 }

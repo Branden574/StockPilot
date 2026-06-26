@@ -11,7 +11,7 @@ import {
 import { createClient } from '@/lib/supabase/server';
 
 import type { Permission, PlanId, Role } from '@stockpilot/core';
-import { hasPermission, isAdminRole, isUnlimited, MODULE_REGISTRY, PLANS, resolveEffectivePlan, type OrgBillingState } from '@stockpilot/core';
+import { can, isAdminRole, isUnlimited, MODULE_REGISTRY, PLANS, resolveEffectivePlan, type OrgBillingState } from '@stockpilot/core';
 import type { ModuleId } from '@stockpilot/core';
 
 /**
@@ -30,6 +30,15 @@ export interface ServiceContext {
   organizationId: string;
   userId: string;
   role: Role;
+  /**
+   * Effective permission set = static role defaults with org-level role +
+   * per-user overrides applied. Consult via `can(ctx, perm)` / the
+   * `assertPermission(ctx, perm)` below — not the static role map —
+   * so configurable overrides take effect. Optional: the real auth builders
+   * (withContext / withApiContext) always set it; synthetic system contexts
+   * (cron, callbacks, tests) omit it and fall back to static role defaults.
+   */
+  permissions?: Set<Permission>;
   supabase: Awaited<ReturnType<typeof createClient>>;
   /**
    * Whether the user's session must satisfy MFA AAL2 before any
@@ -110,6 +119,7 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
     organizationId: ctx.organizationId,
     userId: ctx.userId,
     role: ctx.role,
+    permissions: ctx.permissions,
     supabase,
     mfaRequired,
     mfaSatisfied,
@@ -150,7 +160,7 @@ export function assertPermission(ctx: ServiceContext, permission: Permission) {
       { reason: 'mfa_required' },
     );
   }
-  if (!hasPermission(ctx.role, permission)) {
+  if (!can(ctx, permission)) {
     throw new ServiceError('forbidden', `Missing permission: ${permission}`);
   }
 }

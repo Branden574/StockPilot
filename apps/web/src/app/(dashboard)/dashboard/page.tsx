@@ -21,13 +21,7 @@ import {
   type DashboardWidgetProps,
 } from '@/components/dashboard/widgets';
 import { Button } from '@/components/ui/button';
-import {
-  DASHBOARD_WIDGETS,
-  hasPermission,
-  isManagerOrAbove,
-  resolveDashboardWidgets,
-  type DashboardLayout,
-} from '@stockpilot/core';
+import { can, DASHBOARD_WIDGETS, isManagerOrAbove, resolveDashboardWidgets, type DashboardLayout } from '@stockpilot/core';
 import {
   getDashboardActions,
   getDashboardHistory,
@@ -161,14 +155,14 @@ export default async function DashboardHome() {
                 <Download className="h-3 w-3" /> Export
               </Link>
             </Button>
-            {hasPermission(ctx.role, 'items:create') && (
+            {can(ctx, 'items:create') && (
               <Button variant="outline" size="sm" asChild>
                 <Link href="/dashboard/inventory/new">
                   <Plus className="h-3 w-3" /> New item
                 </Link>
               </Button>
             )}
-            {hasPermission(ctx.role, 'purchase_orders:manage') && (
+            {can(ctx, 'purchase_orders:manage') && (
               <Button size="sm" asChild>
                 <Link href="/dashboard/purchase-orders/new">
                   <Zap className="h-3 w-3" /> Receive stock

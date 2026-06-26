@@ -4,11 +4,11 @@ import { redirect } from 'next/navigation';
 import { CsvImport } from '@/components/inventory/csv-import';
 import { requireOrgContext } from '@/lib/auth/session';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export default async function ImportPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'items:import')) {
+  if (!can(ctx, 'items:import')) {
     redirect('/dashboard/inventory');
   }
   return (

@@ -9,7 +9,7 @@ import { ServiceError } from '@/server/services/context';
 import { ScheduleService } from '@/server/services/schedule';
 import { WarehousesService } from '@/server/services/warehouses';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const metadata = { title: 'Edit event · Schedule' };
 
@@ -22,7 +22,7 @@ export default async function EditScheduleEventPage({
   // Manager+ only. notFound() (not redirect) keeps the surface invisible
   // to lower-role users instead of bouncing them through /dashboard.
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'schedule:manage')) notFound();
+  if (!can(ctx, 'schedule:manage')) notFound();
 
   const [scheduleSvc, warehousesSvc, bundlesSvc] = await Promise.all([
     ScheduleService.forCurrentUser(),

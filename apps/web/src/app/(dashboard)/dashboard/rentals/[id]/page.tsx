@@ -7,7 +7,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { InventoryService } from '@/server/services/inventory';
 import { RentalsService } from '@/server/services/rentals';
 import { WarehousesService } from '@/server/services/warehouses';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { formatNumber } from '@/lib/utils';
 
 export default async function RentalDetailPage({
@@ -36,8 +36,8 @@ export default async function RentalDetailPage({
   const itemMap = new Map(itemRows.map((i) => [i.id, i]));
   const warehouse = warehouses.find((w) => w.id === rental.warehouse_id);
 
-  const canManage = hasPermission(ctx.role, 'rentals:manage');
-  const canCreate = hasPermission(ctx.role, 'rentals:create');
+  const canManage = can(ctx, 'rentals:manage');
+  const canCreate = can(ctx, 'rentals:create');
 
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">

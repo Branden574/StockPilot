@@ -8,18 +8,11 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { BillingService } from '@/server/services/billing';
 import { formatRelative } from '@/lib/utils';
 
-import {
-  hasPermission,
-  isUnlimited,
-  PLANS,
-  resolveEffectivePlan,
-  type OrgBillingState,
-  type PlanId,
-} from '@stockpilot/core';
+import { can, isUnlimited, PLANS, resolveEffectivePlan, type OrgBillingState, type PlanId } from '@stockpilot/core';
 
 export default async function BillingSettingsPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'billing:read')) {
+  if (!can(ctx, 'billing:read')) {
     notFound();
   }
   const svc = await BillingService.forCurrentUser();

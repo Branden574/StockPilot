@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { withContext } from '@/server/services/context';
 import { listSnapshots } from '@/server/services/restore-points';
 
-import { hasPermission, planAllowsRestorePoints, type OrgBillingState } from '@stockpilot/core';
+import { can, planAllowsRestorePoints, type OrgBillingState } from '@stockpilot/core';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Backups & restore — Settings' };
@@ -21,7 +21,7 @@ const KIND_LABEL: Record<string, string> = {
 export default async function RestorePointsPage() {
   const ctx = await withContext();
   // Owner/admin only.
-  if (!hasPermission(ctx.role, 'organization:update')) redirect('/dashboard/settings');
+  if (!can(ctx, 'organization:update')) redirect('/dashboard/settings');
 
   const { data: orgRow } = await ctx.supabase
     .from('organizations')

@@ -9,7 +9,7 @@ import { CommentComposer } from '@/components/procedures/comment-composer';
 import { CommentThread, type CommentView } from '@/components/procedures/comment-thread';
 import { MarkdownBody } from '@/components/procedures/markdown-body';
 import { VideoPlayer } from '@/components/procedures/video-player';
-import { hasPermission, isAdminRole } from '@stockpilot/core';
+import { can, isAdminRole } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { formatRelative } from '@/lib/utils';
 import { ProceduresService } from '@/server/services/procedures';
@@ -24,7 +24,7 @@ export default async function ProcedureDetailPage({
 }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
-  const canEdit = hasPermission(ctx.role, 'categories:manage');
+  const canEdit = can(ctx, 'categories:manage');
   const canModerate = isAdminRole(ctx.role);
 
   const svc = await ProceduresService.forCurrentUser();

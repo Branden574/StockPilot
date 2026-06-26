@@ -4,7 +4,7 @@ import { Suspense } from 'react';
 
 import { StagingTable } from '@/components/inventory/staging-table';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -33,9 +33,9 @@ export default async function StagingPage({
   // it, but the URL is still directly reachable — RLS alone would 200 an
   // empty page rather than refuse. notFound() matches the placement gate
   // and hides the route's existence from unauthorized roles.
-  if (!hasPermission(sessionCtx.role, 'items:read')) notFound();
+  if (!can(sessionCtx, 'items:read')) notFound();
 
-  const canPlace = hasPermission(sessionCtx.role, 'items:create');
+  const canPlace = can(sessionCtx, 'items:create');
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">

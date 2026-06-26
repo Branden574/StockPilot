@@ -18,7 +18,7 @@ import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
-import { hasPermission, resolveTerminology } from '@stockpilot/core';
+import { can, resolveTerminology } from '@stockpilot/core';
 
 export default async function NewItemPage() {
   const ctx = await requireOrgContext();
@@ -27,7 +27,7 @@ export default async function NewItemPage() {
   // the inventory list. Service-layer `assertPermission` also blocks
   // submit, but redirecting here means they never see the form to
   // begin with.
-  if (!hasPermission(ctx.role, 'items:create')) {
+  if (!can(ctx, 'items:create')) {
     redirect('/dashboard/inventory');
   }
   const supabase = await createClient();

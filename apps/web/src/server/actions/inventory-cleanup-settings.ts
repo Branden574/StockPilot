@@ -9,7 +9,7 @@ import {
 } from '@/server/services/archive-cleanup';
 import { ServiceError, withContext } from '@/server/services/context';
 
-import { err, hasPermission, ok, type ActionResult } from '@stockpilot/core';
+import { can, err, ok, type ActionResult } from '@stockpilot/core';
 
 // ---------------------------------------------------------------------------
 // Per-org "auto-delete archived items" settings, stored in the `inventory`
@@ -42,7 +42,7 @@ export async function setAutoDeleteArchivedSettingsAction(
     // items:delete = owner/admin (matches the Recovery section's gate). This
     // configures AUTOMATIC deletion of inventory, so it must be at least as
     // privileged as deleting an item by hand.
-    if (!hasPermission(ctx.role, 'items:delete')) {
+    if (!can(ctx, 'items:delete')) {
       return err('forbidden', 'You do not have permission to configure item deletion.');
     }
     if (!ctx.enabledModules.has('inventory')) {

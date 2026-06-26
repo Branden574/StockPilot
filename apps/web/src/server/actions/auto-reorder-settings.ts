@@ -6,14 +6,7 @@ import { z } from 'zod';
 import { audit } from '@/server/services/audit';
 import { ServiceError, withContext } from '@/server/services/context';
 
-import {
-  err,
-  hasPermission,
-  ok,
-  planAllowsAutoReorder,
-  type ActionResult,
-  type OrgBillingState,
-} from '@stockpilot/core';
+import { can, err, ok, planAllowsAutoReorder, type ActionResult, type OrgBillingState } from '@stockpilot/core';
 
 // ---------------------------------------------------------------------------
 // Per-org automatic-reordering settings, stored in the `purchase_orders`
@@ -51,7 +44,7 @@ export async function setAutoReorderSettingsAction(
         'Multi-factor authentication required. Enroll in MFA before performing this action.',
       );
     }
-    if (!hasPermission(ctx.role, 'purchase_orders:manage')) {
+    if (!can(ctx, 'purchase_orders:manage')) {
       return err('forbidden', 'You do not have permission to manage purchase orders.');
     }
     if (!ctx.enabledModules.has('purchase_orders')) {

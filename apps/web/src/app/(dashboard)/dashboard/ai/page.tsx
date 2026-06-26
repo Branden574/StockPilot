@@ -6,7 +6,7 @@ import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { ChatPanel } from '@/components/ai/chat-panel';
 import { requireOrgContext } from '@/lib/auth/session';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const metadata = {
   title: 'AI Assistant',
@@ -21,7 +21,7 @@ export default async function AiPage() {
   // underlying tool's assertPermission, but exposing the chat surface
   // to a viewer is confusing). Restrict to items:update-or-better roles.
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'items:update')) {
+  if (!can(ctx, 'items:update')) {
     redirect('/dashboard');
   }
   return (
