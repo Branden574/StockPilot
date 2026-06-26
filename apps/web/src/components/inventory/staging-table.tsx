@@ -7,8 +7,7 @@ import * as React from 'react';
 import { PlaceFromStagingDialog } from '@/components/inventory/place-from-staging-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
-import { formatRelative } from '@/lib/utils';
+import { cn, formatRelative } from '@/lib/utils';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -38,6 +37,9 @@ export interface StagingTableProps {
   /** Plain-object map: warehouseId → rack/crate destinations. '__none__' key
    *  holds destinations not tied to any warehouse. */
   destinationsMap: Record<string, DestinationOption[]>;
+  /** warehouseId → display name. Rows whose warehouse isn't in this map
+   *  (e.g. archived/inactive) fall back to a truncated UUID. */
+  warehouseNames: Record<string, string>;
   canPlace: boolean;
   /** 'all' | 'book' | 'non-book' — synced from ?type= URL param. */
   activeItemType: 'all' | 'book' | 'non-book';
@@ -100,6 +102,7 @@ const TYPE_OPTIONS: ReadonlyArray<{ value: ItemTypeFilter; label: string }> = [
 export function StagingTable({
   rows,
   destinationsMap,
+  warehouseNames,
   canPlace,
   activeItemType,
 }: StagingTableProps) {
@@ -255,12 +258,20 @@ export function StagingTable({
                     <AgeBadge ageDays={row.ageDays} />
                   </td>
 
-                  {/* Warehouse */}
+                  {/* Warehouse — resolved name, falling back to a truncated
+                      UUID for warehouses missing from the name map (archived/
+                      inactive), or an em dash when the row has no warehouse. */}
                   <td className="px-3 py-3">
                     {row.warehouseId ? (
-                      <span className="text-muted-foreground text-sm font-mono text-xs">
-                        {row.warehouseId.slice(0, 8)}…
-                      </span>
+                      warehouseNames[row.warehouseId] ? (
+                        <span className="text-sm">
+                          {warehouseNames[row.warehouseId]}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground font-mono text-xs">
+                          {row.warehouseId.slice(0, 8)}…
+                        </span>
+                      )
                     ) : (
                       <span className="text-muted-foreground text-sm">—</span>
                     )}
