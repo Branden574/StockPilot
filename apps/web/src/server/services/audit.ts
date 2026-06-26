@@ -13,6 +13,8 @@ export type AuditEvent =
   | 'user.role.changed'
   | 'user.warehouse.changed'
   | 'user.category_access.updated'
+  | 'permissions.role_override'
+  | 'permissions.user_override'
   | 'rental.created'
   | 'rental.returned'
   | 'rental.cancelled'
