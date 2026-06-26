@@ -10,6 +10,7 @@ import { PoRenameButton } from '@/components/po/po-rename-button';
 import { PoSetDestination } from '@/components/po/po-set-destination';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
 import { PoActions } from '@/components/po/po-actions';
+import { PoFileActions, PoAttachmentsList } from '@/components/po/po-attachments-panel';
 import { ReceiptHistory } from '@/components/po/receipt-history';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -26,6 +27,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
+import { PoAttachmentsService } from '@/server/services/po-attachments';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ReceivingService } from '@/server/services/receiving';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -47,13 +49,14 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
     return <PoAccessDenied />;
   }
 
-  const [poSvc, inventorySvc, suppliersSvc, locationsSvc, receivingSvc, warehousesSvc] = await Promise.all([
+  const [poSvc, inventorySvc, suppliersSvc, locationsSvc, receivingSvc, warehousesSvc, poAttachSvc] = await Promise.all([
     PurchaseOrdersService.forCurrentUser(),
     InventoryService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
     LocationsService.forCurrentUser(),
     ReceivingService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
+    PoAttachmentsService.forCurrentUser(),
   ]);
 
   let result;
@@ -66,12 +69,14 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
 
   const { po, lines } = result;
 
-  const [suppliers, locations, receiptData, warehouses] = await Promise.all([
+  const [suppliers, locations, receiptData, warehouses, attachments] = await Promise.all([
     suppliersSvc.list(),
     locationsSvc.list({ excludeSystem: true }),
     receivingSvc.listForPurchaseOrder(id),
     warehousesSvc.list(),
+    poAttachSvc.list(id),
   ]);
+  const canManagePo = can(ctx, 'purchase_orders:manage');
 
   // Load only the items actually referenced on this PO (lines + receipts)
   // instead of the whole inventory. Caps memory + DB scan to ~PO size.
@@ -150,6 +155,12 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
               <Download className="h-4 w-4" /> Download PDF
             </a>
           </Button>
+          <PoFileActions
+            purchaseOrderId={id}
+            organizationId={ctx.organizationId}
+            canManage={canManagePo}
+            hasAttachments={attachments.length > 0}
+          />
           <MakeRecurringButton poId={id} />
           <PoActions poId={id} status={status} />
         </div>
@@ -270,6 +281,8 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
           </CardContent>
         </Card>
       </div>
+
+      <PoAttachmentsList purchaseOrderId={id} attachments={attachments} canManage={canManagePo} />
     </div>
   );
 }
