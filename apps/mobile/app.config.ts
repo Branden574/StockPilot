@@ -4,7 +4,11 @@ const config: ExpoConfig = {
   name: 'StockPilot',
   slug: 'stockpilot',
   scheme: 'stockpilot',
-  version: '1.0.0',
+  // 1.0.1: adds the @sentry/react-native NATIVE module. Bumping the version
+  // (= the appVersion runtimeVersion) means OTAs now target runtime 1.0.1, so a
+  // bundle that imports Sentry can never reach a 1.0.0 device that lacks the
+  // native side. Build + ship 1.0.1 before publishing any OTA off this branch.
+  version: '1.0.1',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   newArchEnabled: true,
@@ -100,6 +104,19 @@ const config: ExpoConfig = {
     // the full rationale. Required for `expo run:ios` to succeed until
     // we bump to RN 0.81+.
     './plugins/with-fmt-consteval-fix.js',
+    // Sentry crash/error reporting. The plugin wires the native SDK and, at
+    // build time, uploads source maps when SENTRY_ORG / SENTRY_PROJECT /
+    // SENTRY_AUTH_TOKEN are present (set as EAS secrets). With those unset the
+    // build still succeeds — it just skips the source-map upload. The runtime
+    // DSN is separate (EXPO_PUBLIC_SENTRY_DSN); see src/lib/sentry.ts.
+    [
+      '@sentry/react-native',
+      {
+        organization: process.env.SENTRY_ORG,
+        project: process.env.SENTRY_PROJECT,
+        url: 'https://sentry.io/',
+      },
+    ],
   ],
   experiments: {
     typedRoutes: true,

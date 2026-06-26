@@ -2,6 +2,8 @@ import * as Updates from 'expo-updates';
 import * as React from 'react';
 import { Pressable, Text, View } from 'react-native';
 
+import { Sentry } from '@/lib/sentry';
+
 interface State {
   error: Error | null;
 }
@@ -34,6 +36,11 @@ export class AppErrorBoundary extends React.Component<
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.warn('[error-boundary] caught render error', error, info?.componentStack);
+    // React swallows render-phase throws, so the global handler never sees them
+    // — report here. No-op until Sentry has a DSN.
+    Sentry.captureException(error, {
+      contexts: { react: { componentStack: info?.componentStack ?? undefined } },
+    });
   }
 
   private handleReload = async () => {
