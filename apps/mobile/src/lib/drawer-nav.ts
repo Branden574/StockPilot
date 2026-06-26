@@ -1,6 +1,7 @@
 import {
   MODULE_REGISTRY,
   type ModuleId,
+  type Permission,
   resolveSurface,
   type Role,
 } from '@stockpilot/core';
@@ -62,8 +63,9 @@ const TAB_ELIGIBLE_HREFS: Set<string> = new Set(
 export function drawerSectionsFor(
   role: Role,
   enabledModules: Set<ModuleId>,
+  permissions?: ReadonlySet<Permission>,
 ): DrawerNavSection[] {
-  return resolveSurface('mobile_drawer', { role, enabledModules }).map((sec) => ({
+  return resolveSurface('mobile_drawer', { role, enabledModules, permissions }).map((sec) => ({
     label: SECTION_LABEL[sec.section],
     items: sec.items.map((it) => ({
       id: `${it.moduleId}:${it.href}`,

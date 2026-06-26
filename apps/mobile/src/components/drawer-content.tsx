@@ -16,8 +16,11 @@ import {
 import { useAuth } from '@/lib/auth-context';
 import { drawerSectionsFor, type DrawerNavItem } from '@/lib/drawer-nav';
 import { useEnabledModules } from '@/lib/enabled-modules';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useProfile } from '@/lib/use-profile';
+import { usePermissionsRealtime } from '@/lib/use-permissions-realtime';
 import { useRole } from '@/lib/use-role';
+import { useWorkspace } from '@/lib/use-workspace';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -30,10 +33,15 @@ import { useTheme } from '@/lib/use-theme';
  */
 export function DrawerContent(props: DrawerContentComponentProps) {
   const { c } = useTheme();
-  const { signOut } = useAuth();
+  const { signOut, user } = useAuth();
   const profile = useProfile();
   const { role } = useRole();
+  const { activeOrgId } = useWorkspace();
   const enabledModules = useEnabledModules();
+  const permissions = useEffectivePermissions();
+  // Live permission updates: when an admin grants/revokes this user's access,
+  // re-fetch the effective set so the drawer's links update without a restart.
+  usePermissionsRealtime({ organizationId: activeOrgId, userId: user?.id ?? null, role: role ?? null });
   const router = useRouter();
   const segments = useSegments();
 
@@ -51,8 +59,8 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   // defaults to DEFAULT_MODULE_IDS until a snapshot persists, so the
   // grandfathered all-modules-on org renders its full drawer offline too.
   const sections = React.useMemo(
-    () => drawerSectionsFor(role ?? 'staff', enabledModules),
-    [role, enabledModules],
+    () => drawerSectionsFor(role ?? 'staff', enabledModules, permissions),
+    [role, enabledModules, permissions],
   );
 
   const navigate = (item: DrawerNavItem) => {

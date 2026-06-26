@@ -312,6 +312,11 @@ async function snapshotGET(req: NextRequest) {
     // derives from the registry). string[] over the wire; mobile re-hydrates
     // it into a Set<ModuleId>.
     enabledModules: Array.from(ctx.enabledModules),
+    // The caller's EFFECTIVE permissions (role defaults + org overrides, mig
+    // 0207). Mobile gates its drawer nav on this so a revoked permission hides
+    // its link — mirrors the web sidebar's ctx.permissions gating. string[]
+    // over the wire; mobile re-hydrates into a Set<Permission>.
+    permissions: Array.from(ctx.permissions ?? []),
     warehouses: (warehouses ?? []).map((w) => ({
       id: w.id,
       name: w.name,

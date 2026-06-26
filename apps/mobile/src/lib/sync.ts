@@ -3,6 +3,10 @@ import * as Network from 'expo-network';
 import { api } from './api';
 import { getDb, getMeta, setMeta } from './db';
 import { ENABLED_MODULES_META_KEY, refreshEnabledModules } from './enabled-modules';
+import {
+  EFFECTIVE_PERMISSIONS_META_KEY,
+  refreshEffectivePermissions,
+} from './use-effective-permissions';
 import { listPending, markFailed, markOk, markSending } from './queue';
 
 /**
@@ -27,6 +31,13 @@ interface SnapshotResponse {
    * default (the drawer/tab consumers fall back to DEFAULT_MODULE_IDS).
    */
   enabledModules: string[];
+  /**
+   * The user's effective permission set (role defaults + org overrides). Drives
+   * the drawer's permission-based nav gating. Absent in snapshots cached before
+   * this field existed — readers default to "not loaded" (fall back to the
+   * static role permissions, today's behavior).
+   */
+  permissions?: string[];
   warehouses: Array<{ id: string; name: string }>;
   items: Array<{
     id: string;
@@ -235,6 +246,18 @@ export async function pullSnapshot(
   await setMeta(ENABLED_MODULES_META_KEY, nextModulesJson);
   if (prevModulesJson !== nextModulesJson) {
     refreshEnabledModules();
+  }
+
+  // Same pattern for the user's EFFECTIVE permissions — drives the drawer's
+  // permission-based nav gating. Re-renders the drawer immediately when an
+  // admin grants/revokes access (next foreground/60s sync, no restart).
+  const nextPermsJson = JSON.stringify(
+    Array.isArray(snap.permissions) ? snap.permissions : [],
+  );
+  const prevPermsJson = await getMeta(EFFECTIVE_PERMISSIONS_META_KEY);
+  await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, nextPermsJson);
+  if (prevPermsJson !== nextPermsJson) {
+    refreshEffectivePermissions();
   }
 
   return {
