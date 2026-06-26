@@ -97,8 +97,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
       { surface: 'web_sidebar', section: 'inventory', label: 'Items', href: '/dashboard/inventory', iconName: 'Boxes', defaultSortOrder: 0, requires: 'items:read' },
       { surface: 'web_sidebar', section: 'inventory', label: 'Staging', href: '/dashboard/inventory/staging', iconName: 'LayoutList', defaultSortOrder: 5, requires: 'items:read' },
       { surface: 'web_sidebar', section: 'inventory', label: 'Tags', href: '/dashboard/tags', iconName: 'Tags', defaultSortOrder: 40, requires: 'items:update' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Items', href: '/inventory', iconName: 'Box', defaultSortOrder: 0, mobileTabEligible: true },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Tags', href: '/tags', iconName: 'Tags', defaultSortOrder: 40 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Items', href: '/inventory', iconName: 'Box', defaultSortOrder: 0, mobileTabEligible: true, requires: 'items:read' },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Tags', href: '/tags', iconName: 'Tags', defaultSortOrder: 40, requires: 'items:update' },
     ],
   },
   movements: {
@@ -113,7 +113,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: [],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Movements', href: '/dashboard/movements', iconName: 'ArrowLeftRight', defaultSortOrder: 50, requires: 'activity_logs:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Movements', href: '/movements', iconName: 'ArrowLeftRight', defaultSortOrder: 50 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Movements', href: '/movements', iconName: 'ArrowLeftRight', defaultSortOrder: 50, requires: 'activity_logs:read' },
     ],
   },
   categories: {
@@ -128,7 +128,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: [],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Categories', href: '/dashboard/categories', iconName: 'Tag', defaultSortOrder: 30, requires: 'categories:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Categories', href: '/categories', iconName: 'Tag', defaultSortOrder: 30 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Categories', href: '/categories', iconName: 'Tag', defaultSortOrder: 30, requires: 'categories:read' },
     ],
   },
   locations: {
@@ -145,7 +145,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
       { surface: 'web_sidebar', section: 'inventory', label: 'Locations', href: '/dashboard/locations', iconName: 'MapPin', defaultSortOrder: 130, requires: 'locations:read' },
       { surface: 'web_sidebar', section: 'admin', label: 'Warehouses', href: '/dashboard/admin/warehouses', iconName: 'Warehouse', defaultSortOrder: 20, requiresAdmin: true },
       { surface: 'web_sidebar', section: 'admin', label: 'Bins', href: '/dashboard/admin/bins', iconName: 'MapPin', defaultSortOrder: 30, requiresAdmin: true },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Locations', href: '/locations', iconName: 'MapPin', defaultSortOrder: 130 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Locations', href: '/locations', iconName: 'MapPin', defaultSortOrder: 130, requires: 'locations:read' },
       { surface: 'mobile_drawer', section: 'admin', label: 'Warehouses', href: '/admin/warehouses', iconName: 'Warehouse', defaultSortOrder: 20, requiresAdmin: true },
       { surface: 'mobile_drawer', section: 'admin', label: 'Bins', href: '/admin/bins', iconName: 'MapPin', defaultSortOrder: 30, requiresAdmin: true },
     ],
@@ -162,7 +162,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: [],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Reports', href: '/dashboard/reports', iconName: 'BarChart3', defaultSortOrder: 150, requires: 'reports:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Reports', href: '/reports', iconName: 'BarChart3', defaultSortOrder: 150 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Reports', href: '/reports', iconName: 'BarChart3', defaultSortOrder: 150, requires: 'reports:read' },
     ],
   },
   notifications: {
@@ -193,7 +193,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     placements: [
       { surface: 'web_sidebar', section: 'workspace', label: 'Team', href: '/dashboard/team', iconName: 'Users', defaultSortOrder: 30, requires: 'members:invite' },
       { surface: 'web_sidebar', section: 'admin', label: 'Users', href: '/dashboard/admin/users', iconName: 'Users', defaultSortOrder: 40, requiresAdmin: true },
-      { surface: 'mobile_drawer', section: 'workspace', label: 'Team', href: '/team', iconName: 'Users', defaultSortOrder: 30 },
+      { surface: 'mobile_drawer', section: 'workspace', label: 'Team', href: '/team', iconName: 'Users', defaultSortOrder: 30, requires: 'members:invite' },
       { surface: 'mobile_drawer', section: 'admin', label: 'Users', href: '/admin/users', iconName: 'Users', defaultSortOrder: 40, requiresAdmin: true },
     ],
   },
@@ -278,7 +278,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: ['charter_school'],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Books', href: '/dashboard/books', iconName: 'BookOpen', defaultSortOrder: 20, requires: 'items:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Books', href: '/books', iconName: 'BookOpen', defaultSortOrder: 20, mobileTabEligible: true },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Books', href: '/books', iconName: 'BookOpen', defaultSortOrder: 20, mobileTabEligible: true, requires: 'items:read' },
     ],
   },
   rentals: {
@@ -293,7 +293,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: ['charter_school'],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Rentals', href: '/dashboard/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requires: 'rentals:create' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Rentals', href: '/rentals', iconName: 'PackageOpen', defaultSortOrder: 60 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Rentals', href: '/rentals', iconName: 'PackageOpen', defaultSortOrder: 60, requires: 'rentals:create' },
     ],
   },
   bundles: {
@@ -308,7 +308,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: ['charter_school', 'distribution'],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Bundles', href: '/dashboard/bundles', iconName: 'Package', defaultSortOrder: 70, requires: 'bundles:distribute' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Bundles', href: '/bundles', iconName: 'Package', defaultSortOrder: 70 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Bundles', href: '/bundles', iconName: 'Package', defaultSortOrder: 70, requires: 'bundles:distribute' },
     ],
   },
   orders: {
@@ -323,7 +323,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: ['charter_school', 'distribution', 'light_3pl'],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Orders', href: '/dashboard/orders', iconName: 'ShoppingCart', defaultSortOrder: 80, requires: 'orders:request' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Orders', href: '/orders', iconName: 'ShoppingCart', defaultSortOrder: 80 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Orders', href: '/orders', iconName: 'ShoppingCart', defaultSortOrder: 80, requires: 'orders:request' },
     ],
   },
   cycle_counts: {
@@ -338,7 +338,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: ['charter_school', 'distribution', 'agriculture_food', 'retail_backroom', 'light_3pl'],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Cycle counts', href: '/dashboard/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requires: 'stock:adjust' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Cycle counts', href: '/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Cycle counts', href: '/cycle-counts', iconName: 'ClipboardCheck', defaultSortOrder: 90, requires: 'stock:adjust' },
     ],
   },
   procedures: {
@@ -353,7 +353,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: ['charter_school'],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Procedures', href: '/dashboard/procedures', iconName: 'BookOpen', defaultSortOrder: 100, requires: 'items:update' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Procedures', href: '/procedures', iconName: 'BookOpen', defaultSortOrder: 100 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Procedures', href: '/procedures', iconName: 'BookOpen', defaultSortOrder: 100, requires: 'items:update' },
     ],
   },
   purchase_orders: {
@@ -371,7 +371,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Purchase orders', href: '/dashboard/purchase-orders', iconName: 'ClipboardList', defaultSortOrder: 110, requires: 'purchase_orders:read' },
       { surface: 'web_sidebar', section: 'inventory', label: 'Recurring POs', href: '/dashboard/purchase-orders/recurring', iconName: 'RefreshCw', defaultSortOrder: 111, requires: 'purchase_orders:manage' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Purchase orders', href: '/purchase-orders', iconName: 'ClipboardList', defaultSortOrder: 110 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Purchase orders', href: '/purchase-orders', iconName: 'ClipboardList', defaultSortOrder: 110, requires: 'purchase_orders:read' },
     ],
   },
   receiving: {
@@ -403,7 +403,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: ['charter_school'],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'PO imports', href: '/dashboard/purchase-orders/imports', iconName: 'Upload', defaultSortOrder: 120, requires: 'purchase_orders:manage' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'PO imports', href: '/po-imports', iconName: 'Upload', defaultSortOrder: 120 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'PO imports', href: '/po-imports', iconName: 'Upload', defaultSortOrder: 120, requires: 'purchase_orders:manage' },
     ],
   },
   suppliers: {
@@ -418,7 +418,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: ['charter_school', 'distribution', 'agriculture_food', 'light_3pl'],
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Suppliers', href: '/dashboard/suppliers', iconName: 'Truck', defaultSortOrder: 140, requires: 'suppliers:read' },
-      { surface: 'mobile_drawer', section: 'inventory', label: 'Suppliers', href: '/suppliers', iconName: 'Truck', defaultSortOrder: 140 },
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Suppliers', href: '/suppliers', iconName: 'Truck', defaultSortOrder: 140, requires: 'suppliers:read' },
     ],
   },
   schedule: {
@@ -433,7 +433,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: ['charter_school'],
     placements: [
       { surface: 'web_sidebar', section: 'workspace', label: 'Schedule', href: '/dashboard/schedule', iconName: 'Calendar', defaultSortOrder: 10, requires: 'schedule:manage' },
-      { surface: 'mobile_drawer', section: 'workspace', label: 'Schedule', href: '/schedule', iconName: 'Calendar', defaultSortOrder: 10 },
+      { surface: 'mobile_drawer', section: 'workspace', label: 'Schedule', href: '/schedule', iconName: 'Calendar', defaultSortOrder: 10, requires: 'schedule:manage' },
     ],
   },
   ai: {
@@ -449,7 +449,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     placements: [
       { surface: 'web_sidebar', section: 'workspace', label: 'AI Assistant', href: '/dashboard/ai', iconName: 'Sparkles', defaultSortOrder: 0, requires: 'items:update', badge: 'Beta' },
       { surface: 'web_sidebar', section: 'workspace', label: 'Briefing', href: '/dashboard/insights', iconName: 'Sparkles', defaultSortOrder: 1, requires: 'items:update', badge: 'New' },
-      { surface: 'mobile_drawer', section: 'workspace', label: 'AI Assistant', href: '/ai', iconName: 'Sparkles', defaultSortOrder: 0 },
+      { surface: 'mobile_drawer', section: 'workspace', label: 'AI Assistant', href: '/ai', iconName: 'Sparkles', defaultSortOrder: 0, requires: 'items:update' },
     ],
   },
   public_requests: {
