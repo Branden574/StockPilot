@@ -1,7 +1,5 @@
-import { Lock } from 'lucide-react';
-
 import { requireOrgContext } from '@/lib/auth/session';
-import { Card, CardContent } from '@/components/ui/card';
+import { PoAccessDenied } from '@/components/po/po-access-denied';
 
 import { can } from '@stockpilot/core';
 
@@ -26,31 +24,7 @@ export default async function PurchaseOrdersLayout({
 }) {
   const ctx = await requireOrgContext();
   if (!can(ctx, 'purchase_orders:read')) {
-    return (
-      <div className="container mx-auto flex max-w-2xl items-center justify-center px-4 py-20 sm:px-6">
-        <Card className="w-full">
-          <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted/50 text-muted-foreground">
-              <Lock className="h-5 w-5" aria-hidden="true" />
-            </div>
-            <div className="space-y-1.5">
-              <h1 className="text-xl font-semibold tracking-tight">
-                You don&apos;t have access to purchase orders
-              </h1>
-              <p className="max-w-sm text-sm text-muted-foreground">
-                Viewing purchase orders needs the &ldquo;View purchase
-                orders&rdquo; permission, which isn&apos;t enabled for your
-                account.
-              </p>
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Ask an owner or admin to enable it from Settings → Roles &amp;
-              permissions.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
+    return <PoAccessDenied />;
   }
   return <>{children}</>;
 }

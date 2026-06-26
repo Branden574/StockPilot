@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { audit } from '@/server/services/audit';
+import { broadcastPermissionsChanged } from '@/lib/realtime/broadcast';
 import { ServiceError, withContext } from '@/server/services/context';
 
 import {
@@ -122,6 +123,7 @@ export async function setRolePermissionOverrideAction(input: {
       },
       ctx,
     );
+    await broadcastPermissionsChanged(ctx.organizationId, { role });
     revalidatePath('/dashboard/settings/roles');
     return ok(null);
   } catch (e) {
@@ -192,6 +194,7 @@ export async function setUserPermissionOverrideAction(input: {
       },
       ctx,
     );
+    await broadcastPermissionsChanged(ctx.organizationId, { userId });
     revalidatePath('/dashboard/settings/roles');
     return ok(null);
   } catch (e) {
