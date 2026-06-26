@@ -1,3 +1,4 @@
+import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as React from 'react';
 import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -17,6 +18,8 @@ interface AttachmentRow {
   url: string | null;
 }
 
+const MAX_BYTES = 15 * 1024 * 1024; // must match the bucket's file_size_limit (mig 0211)
+
 function mimeForExt(ext: string): string {
   switch (ext.toLowerCase()) {
     case 'png':
@@ -26,6 +29,8 @@ function mimeForExt(ext: string): string {
     case 'heic':
     case 'heif':
       return 'image/heic';
+    case 'pdf':
+      return 'application/pdf';
     default:
       return 'image/jpeg';
   }
@@ -37,9 +42,9 @@ function mimeForExt(ext: string): string {
  * upload to the private po-attachments bucket, then insert the metadata row
  * (RLS gates both on purchase_orders:manage). Mirrors the web PO attachments.
  *
- * Note: photo-only for now (camera + photo library) — picking arbitrary PDF
- * files from the Files app needs expo-document-picker, a native module not in
- * the current build, so it'll come in a future build.
+ * Three sources: camera, photo library (both resized), and the Files app
+ * (PDFs / images via expo-document-picker, uploaded raw). 15 MB cap, matching
+ * the bucket.
  */
 export function PoAttachments({ poId }: { poId: string }) {
   const { user } = useAuth();
@@ -166,10 +171,63 @@ export function PoAttachments({ poId }: { poId: string }) {
     if (!res.canceled && res.assets[0]) await uploadAsset(res.assets[0]);
   }
 
+  /** Pick a PDF or image file from the Files app (no resize — raw upload). */
+  async function pickDocument() {
+    const res = await DocumentPicker.getDocumentAsync({
+      type: ['application/pdf', 'image/*'],
+      copyToCacheDirectory: true,
+      multiple: false,
+    });
+    if (res.canceled || !res.assets?.[0]) return;
+    const asset = res.assets[0];
+    if (!orgId || !user) {
+      Alert.alert('Not ready', 'Try again in a moment.');
+      return;
+    }
+    if (typeof asset.size === 'number' && asset.size > MAX_BYTES) {
+      Alert.alert('File too large', 'Files must be 15 MB or smaller.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const name = (asset.name && asset.name.trim()) || 'file';
+      const ext = (name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const rand = Math.random().toString(36).slice(2, 14);
+      const path = `${orgId}/${poId}/${rand}.${ext}`;
+      const arrayBuffer = await (await fetch(asset.uri)).arrayBuffer();
+      const contentType = asset.mimeType || mimeForExt(ext);
+      const { error: upErr } = await supabase.storage
+        .from(BUCKET)
+        .upload(path, arrayBuffer, { contentType });
+      if (upErr) {
+        Alert.alert('Upload failed', upErr.message);
+        return;
+      }
+      const { error: rowErr } = await supabase.from('po_attachments').insert({
+        organization_id: orgId,
+        purchase_order_id: poId,
+        storage_path: path,
+        file_name: name,
+        content_type: contentType,
+        size_bytes: asset.size ?? arrayBuffer.byteLength,
+        uploaded_by: user.id,
+      });
+      if (rowErr) {
+        await supabase.storage.from(BUCKET).remove([path]);
+        Alert.alert('Could not attach', rowErr.message);
+        return;
+      }
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function addFile() {
-    Alert.alert('Attach a file', 'Add a packing slip or photo to this PO.', [
+    Alert.alert('Attach a file', 'Add a packing slip, photo, or PDF to this PO.', [
       { text: 'Take Photo', onPress: () => void takePhoto() },
       { text: 'Choose from Library', onPress: () => void pickFromLibrary() },
+      { text: 'Choose File (PDF)', onPress: () => void pickDocument() },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }
@@ -212,7 +270,7 @@ export function PoAttachments({ poId }: { poId: string }) {
         <ActivityIndicator color={theme.primary} style={{ marginTop: space.sm }} />
       ) : items.length === 0 ? (
         <Text style={styles.muted}>
-          {canManage ? 'No files yet. Snap a photo of the packing slip.' : 'No files attached.'}
+          {canManage ? 'No files yet. Add a photo or PDF of the packing slip.' : 'No files attached.'}
         </Text>
       ) : (
         items.map((row) => (
