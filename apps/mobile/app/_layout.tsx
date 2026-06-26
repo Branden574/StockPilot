@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { BiometricLockScreen } from '@/components/biometric-lock-screen';
 import { ColdLaunchSplash } from '@/components/cold-launch-splash';
+import { AppErrorBoundary } from '@/components/error-boundary';
 import { MfaChallengeScreen } from '@/components/mfa-challenge-screen';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
@@ -84,7 +85,9 @@ export default function RootLayout() {
       <AuthProvider>
         <StatusBar style={splashVisible || mode === 'dark' ? 'light' : 'dark'} />
         <ColdLaunchGateProvider splashActive={splashActive}>
-          <RootGate />
+          <AppErrorBoundary>
+            <RootGate />
+          </AppErrorBoundary>
         </ColdLaunchGateProvider>
       </AuthProvider>
 

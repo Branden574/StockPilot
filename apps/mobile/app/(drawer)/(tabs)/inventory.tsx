@@ -48,7 +48,7 @@ import { ItemListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
-import { signItemImages } from '@/lib/image-cache';
+import { signItemImages, THUMB_TRANSFORM } from '@/lib/image-cache';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -201,7 +201,15 @@ export default function Inventory() {
       }
 
       if (query.trim()) {
-        req = req.or(`name.ilike.%${query}%,sku.ilike.%${query}%,barcode.ilike.%${query}%`);
+        // PostgREST .or() splits conditions on top-level commas and treats
+        // parens as grouping, so a raw term with , ( ) . — common in book
+        // titles, model numbers and pasted ISBNs — corrupts the filter and
+        // returns wrong/empty results. Double-quote the value so reserved
+        // chars are literal (backslash + quote escaped within the quotes).
+        const term = query.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        req = req.or(
+          `name.ilike."%${term}%",sku.ilike."%${term}%",barcode.ilike."%${term}%"`,
+        );
       }
 
       if (f.categoryIds.length > 0) {
@@ -276,7 +284,12 @@ export default function Inventory() {
         }
         const paths = Array.from(byItem.values());
         if (paths.length > 0) {
-          const urlByPath = await signItemImages(paths);
+          // Sign list thumbnails through the 200x200 transform preset, not the
+          // full-resolution original. Web/PO-imported product + book-cover
+          // images can be multi-megapixel; decoding originals into bitmaps for
+          // a 56px row balloons resident image memory (jetsam risk on older
+          // iPhones) and causes scroll decode jank. The transform serves ~12KB.
+          const urlByPath = await signItemImages(paths, THUMB_TRANSFORM);
           for (const r of rows) {
             const p = byItem.get(r.id);
             if (p) r.imageUrl = urlByPath.get(p) ?? null;
@@ -306,11 +319,14 @@ export default function Inventory() {
       return;
     }
     setOrgId(activeOrgId);
-    void Promise.all([
-      loadLookups(activeOrgId),
-      load(activeOrgId, '', EMPTY_FILTER_STATE, activeWarehouseId, 1),
-    ]);
-  }, [activeOrgId, load, loadLookups, activeWarehouseId]);
+    // Only set the org + load lookups here. The debounced effect below owns
+    // ALL list fetching (it depends on orgId/q/filter/warehouse/page). Calling
+    // load() here too fired a SECOND identical full list+image fetch on every
+    // mount / org switch, racing the debounced one — pure wasted work. Matches
+    // books.tsx, which has only the debounced fetch. The 250ms first-paint
+    // delay is masked by the loading skeleton.
+    void loadLookups(activeOrgId);
+  }, [activeOrgId, loadLookups]);
 
   // Whenever the query / filter / workspace changes, jump back to page 1.
   React.useEffect(() => {

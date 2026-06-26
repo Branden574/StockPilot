@@ -21,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { IconChip } from '@/components/ui/row';
 import { useAuth } from '@/lib/auth-context';
 import { API_BASE } from '@/lib/api';
+import { resizeForUpload } from '@/lib/image-resize';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
 
@@ -162,12 +163,30 @@ export default function ScanPo() {
     try {
       const fd = new FormData();
       for (const f of frames) {
+        let uri = f.uri;
+        let name = f.fileName;
+        let type = f.mimeType;
+        // Resize image frames before upload. Full-res phone photos (3-5MB each,
+        // or a HEIC library pick >8MB) blow past the server's 8MB/file + 24MB
+        // total caps on a multi-page scan, getting hard-rejected (413) AFTER the
+        // user already waited through the upload. maxEdge 2000 keeps small print
+        // legible for OCR. PDFs are passed through untouched (can't client-resize).
+        if (f.mimeType.startsWith('image/')) {
+          try {
+            const resized = await resizeForUpload(f.uri, { maxEdge: 2000, quality: 0.82 });
+            uri = resized.uri;
+            type = resized.ext === 'png' ? 'image/png' : 'image/jpeg';
+            name = f.fileName.replace(/\.[^.]+$/, `.${resized.ext}`);
+          } catch (e) {
+            console.warn('[scan-po] frame resize failed, uploading original', e);
+          }
+        }
         // React Native FormData wants a { uri, name, type } shape.
         fd.append('file', {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          uri: f.uri,
-          name: f.fileName,
-          type: f.mimeType,
+          uri,
+          name,
+          type,
         } as any);
       }
       const {
@@ -175,13 +194,25 @@ export default function ScanPo() {
       } = await supabase.auth.getSession();
       const token = fresh?.access_token ?? session.access_token;
 
-      const res = await fetch(`${API_BASE}/api/po-imports/scan`, {
-        method: 'POST',
-        body: fd,
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      // RN fetch has no default timeout — a dead-air / captive-portal stall
+      // would leave the promise unsettled and the progress bar stuck at 92%
+      // forever. Bound it just past the server's 60s maxDuration so a real
+      // hang surfaces as a retryable error instead of an endless spinner.
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 70_000);
+      let res: Response;
+      try {
+        res = await fetch(`${API_BASE}/api/po-imports/scan`, {
+          method: 'POST',
+          body: fd,
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
       const json = await res.json().catch(() => ({}) as Record<string, unknown>);
       if (!res.ok || !json.ok) {
         // A 429 means the per-minute scan cap was hit — show a clear retry
@@ -217,7 +248,13 @@ export default function ScanPo() {
       );
       setFrames([]);
     } catch (err) {
-      Alert.alert('Scan failed', err instanceof Error ? err.message : 'Network error');
+      const msg =
+        err instanceof Error && err.name === 'AbortError'
+          ? 'The scan timed out. Check your connection and try again.'
+          : err instanceof Error
+            ? err.message
+            : 'Network error';
+      Alert.alert('Scan failed', msg);
     } finally {
       stopProgress();
       setBusy(false);
