@@ -15,7 +15,7 @@
 
 begin;
 
-select plan(15);
+select plan(19);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Fixed UUIDs — namespace fc030400, never clashes with other test files.
@@ -354,6 +354,91 @@ select lives_ok(
        NULL                                           -- NULL charter (MUST PASS)
      ) $$,
   'user_warehouse_assignments: INSERT with NULL charter_id lives (null-safe guard)');
+
+set local "request.jwt.claim.sub"  to 'fc030400-0000-0000-0000-000000000003';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+
+-- Test 6c: INSERT user_warehouse_assignment with same-org charter_id → lives_ok
+select lives_ok(
+  $$ insert into public.user_warehouse_assignments
+       (organization_id, user_id, warehouse_id, charter_id)
+     values (
+       'fc030400-0000-0000-0000-000000000001'::uuid,  -- orgA
+       'fc030400-0000-0000-0000-000000000003'::uuid,  -- usr (already has NULL row; new row fine)
+       'fc030400-0000-0000-0000-000000000004'::uuid,  -- whA (same-org)
+       'fc030400-0000-0000-0000-000000000008'::uuid   -- charterA (SAME ORG)
+     ) $$,
+  'user_warehouse_assignments: INSERT with same-org charter_id lives');
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Shape 5c: organization_invites.charter_id = NULL (null-safe branch, previously untested)
+-- ─────────────────────────────────────────────────────────────────────────────
+set local "request.jwt.claim.sub"  to 'fc030400-0000-0000-0000-000000000003';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+
+-- Test 5c: INSERT organization_invite with NULL charter_id → lives_ok (null-safe)
+select lives_ok(
+  $$ insert into public.organization_invites
+       (organization_id, email, role, token, expires_at, invited_by, warehouse_id, charter_id)
+     values (
+       'fc030400-0000-0000-0000-000000000001'::uuid,  -- orgA
+       'invite-null-charter@test.local', 'staff',
+       'tok-null-charter-0204',
+       now() + interval '7 days',
+       'fc030400-0000-0000-0000-000000000003'::uuid,  -- usr (invited_by)
+       NULL,                                          -- warehouse_id NULL
+       NULL                                           -- NULL charter (MUST PASS)
+     ) $$,
+  'organization_invites: INSERT with NULL charter_id lives (null-safe guard)');
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Shape 7: order_requests.delivery_charter_id (nullable, INSERT policy)
+-- Policy requires: is_org_member + source='internal' + requester_user_id=auth.uid()
+--   + warehouse_in_org(warehouse_id) + charter_in_org(delivery_charter_id).
+-- fulfillment_type defaults to 'delivery'; check constraint (NOT VALID, mig 0110)
+--   requires delivery_charter_id IS NOT NULL when fulfillment_type='delivery', so
+--   supply a non-null value to isolate the org-guard (not the check constraint).
+-- ─────────────────────────────────────────────────────────────────────────────
+set local "request.jwt.claim.sub"  to 'fc030400-0000-0000-0000-000000000003';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+
+-- Test 7a: INSERT order_request with cross-org delivery_charter_id → 42501
+select throws_ok(
+  $$ insert into public.order_requests
+       (organization_id, warehouse_id, source, requester_user_id,
+        fulfillment_type, delivery_charter_id)
+     values (
+       'fc030400-0000-0000-0000-000000000001'::uuid,  -- orgA
+       'fc030400-0000-0000-0000-000000000004'::uuid,  -- whA (same-org — isolates charter guard)
+       'internal',
+       'fc030400-0000-0000-0000-000000000003'::uuid,  -- usr = auth.uid()
+       'delivery',
+       'fc030400-0000-0000-0000-000000000009'::uuid   -- charterB (FOREIGN ORG!)
+     ) $$,
+  '42501', NULL,
+  'order_requests: INSERT with cross-org delivery_charter_id raises 42501');
+
+set local "request.jwt.claim.sub"  to 'fc030400-0000-0000-0000-000000000003';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+
+-- Test 7b: INSERT order_request with same-org delivery_charter_id → lives_ok
+select lives_ok(
+  $$ insert into public.order_requests
+       (organization_id, warehouse_id, source, requester_user_id,
+        fulfillment_type, delivery_charter_id)
+     values (
+       'fc030400-0000-0000-0000-000000000001'::uuid,  -- orgA
+       'fc030400-0000-0000-0000-000000000004'::uuid,  -- whA (SAME ORG)
+       'internal',
+       'fc030400-0000-0000-0000-000000000003'::uuid,  -- usr = auth.uid()
+       'delivery',
+       'fc030400-0000-0000-0000-000000000008'::uuid   -- charterA (SAME ORG)
+     ) $$,
+  'order_requests: INSERT with same-org delivery_charter_id lives');
 
 select * from finish();
 rollback;
