@@ -39,6 +39,7 @@ const bodySchema = z.object({
       sort: z.string().optional(),
       categoryIds: z.array(z.string()).optional(),
       locationIds: z.array(z.string()).optional(),
+      charterIds: z.array(z.string()).optional(),
     })
     .optional(),
 });
@@ -95,6 +96,7 @@ export async function POST(request: NextRequest) {
             sort: parsed.data.filters?.sort as ItemListSort | undefined,
             categoryIds: parsed.data.filters?.categoryIds,
             locationIds: parsed.data.filters?.locationIds,
+            charterIds: parsed.data.filters?.charterIds,
             warehouseId: await getActiveWarehouseFilter(),
           }
         : undefined;
@@ -168,6 +170,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
     }
     void reportError(e, { tag: 'inventory.export' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    // Surface the actual message (not just an opaque "internal_error") so a
+    // failed export is diagnosable from the toast instead of silently generic.
+    return NextResponse.json(
+      { error: 'internal_error', message: e instanceof Error ? e.message : String(e) },
+      { status: 500 },
+    );
   }
 }

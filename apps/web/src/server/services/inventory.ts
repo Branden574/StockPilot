@@ -232,7 +232,12 @@ export class InventoryService {
   }
 
   async list(filters: ItemListFilters = {}) {
-    const limit = Math.min(filters.limit ?? 50, 200);
+    // Default page is 50; the hard cap is 1000 (PostgREST's max_rows) so explicit
+    // high-limit callers — chiefly the inventory export, which asks for the whole
+    // filtered set — aren't silently truncated to 200. (>1000-item orgs still cap
+    // at 1000 here and the export discloses "first N of M"; full pagination is a
+    // follow-up.)
+    const limit = Math.min(filters.limit ?? 50, 1000);
     const offset = Math.max(0, filters.offset ?? 0);
     // Pass our ctx so getWarehouseAccess doesn't fall through to
     // requireOrgContext() — same NEXT_REDIRECT trap that broke

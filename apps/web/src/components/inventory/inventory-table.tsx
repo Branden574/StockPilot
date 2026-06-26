@@ -1438,6 +1438,7 @@ function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: s
     sort: params.get('sort') || undefined,
     categoryIds: params.getAll('cat').filter(Boolean),
     locationIds: params.getAll('loc').filter(Boolean),
+    charterIds: params.getAll('charter').filter(Boolean),
   });
 
   async function run(scope: 'filtered' | 'all', format: 'csv' | 'xlsx' | 'pdf') {
