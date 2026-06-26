@@ -82,6 +82,8 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
       'purchase_orders.update': { data: { id: 'po-new' }, error: null },
       'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
       'rpc:next_po_number': { data: 'PO-100', error: null },
+      // supplier_id 'sup-1' is in-org — assertSupplierInOrg must find it
+      'suppliers.select': { data: { id: 'sup-1' }, error: null },
     });
     const ctx = makeServiceContext(stub.client, { role: 'owner' });
     const svc = new RecurringPoTemplatesService(ctx as never);
@@ -121,6 +123,8 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
       'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
       'rpc:next_po_number': { data: 'PO-100', error: null },
       'rpc:publish_outbox': { data: null, error: null },
+      // supplier_id 'sup-1' is in-org — assertSupplierInOrg must find it
+      'suppliers.select': { data: { id: 'sup-1' }, error: null },
     });
     const ctx = makeServiceContext(stub.client, { role: 'owner' });
     const svc = new RecurringPoTemplatesService(ctx as never);
@@ -148,6 +152,7 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
       },
       'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
       'rpc:next_po_number': { data: 'PO-100', error: null },
+      'suppliers.select': { data: { id: 'sup-1' }, error: null },
     });
     const ctx = makeServiceContext(stub.client, { role: 'owner' });
     const svc = new RecurringPoTemplatesService(ctx as never);
@@ -177,6 +182,7 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
       },
       'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
       'rpc:next_po_number': { data: 'PO-100', error: null },
+      'suppliers.select': { data: { id: 'sup-1' }, error: null },
     });
     const ctx = makeServiceContext(stub.client, { role: 'owner' });
     const svc = new RecurringPoTemplatesService(ctx as never);
@@ -200,6 +206,7 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
       'organization_modules.select': { data: null, error: { message: 'DB error' } },
       'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
       'rpc:next_po_number': { data: 'PO-100', error: null },
+      'suppliers.select': { data: { id: 'sup-1' }, error: null },
     });
     const ctx = makeServiceContext(stub.client, { role: 'owner' });
     const svc = new RecurringPoTemplatesService(ctx as never);
@@ -243,6 +250,7 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
       // The schedule-advance update matches 0 rows / errors → must be surfaced.
       'recurring_po_templates.update': { data: null, error: { message: 'advance failed' } },
       'rpc:next_po_number': { data: 'PO-100', error: null },
+      'suppliers.select': { data: { id: 'sup-1' }, error: null },
     });
     const ctx = makeServiceContext(stub.client, { role: 'owner' });
     const svc = new RecurringPoTemplatesService(ctx as never);
@@ -362,5 +370,136 @@ describe('RecurringPoTemplatesService.create — destinationLocationId org-verif
     expect(stub.fromCalls).not.toContain('locations');
     // Insert happened
     expect(stub.chainsAll.get('recurring_po_templates.insert')).toBeDefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// create — supplierId org-verification
+// ─────────────────────────────────────────────────────────────────
+
+const SUPPLIER_UUID = 'ffffffff-0000-0000-0000-000000000001';
+
+describe('RecurringPoTemplatesService.create — supplierId org-verify', () => {
+  it('rejects a supplierId from a foreign org and does NOT insert', async () => {
+    const stub = makeSupabaseStub({
+      // suppliers lookup returns null → not in this org
+      'suppliers.select': { data: null, error: null },
+      'recurring_po_templates.insert': { data: { id: 'tpl-x' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { role: 'owner' });
+    const svc = new RecurringPoTemplatesService(ctx as never);
+
+    await expect(
+      svc.create({
+        ...CREATE_INPUT_BASE,
+        supplierId: SUPPLIER_UUID,
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+
+    // The insert must NOT have been called
+    expect(stub.chainsAll.get('recurring_po_templates.insert')).toBeUndefined();
+  });
+
+  it('proceeds when supplierId belongs to the caller\'s org', async () => {
+    const stub = makeSupabaseStub({
+      // suppliers lookup finds the row → in this org
+      'suppliers.select': { data: { id: SUPPLIER_UUID }, error: null },
+      'recurring_po_templates.insert': { data: { id: 'tpl-new' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { role: 'owner' });
+    const svc = new RecurringPoTemplatesService(ctx as never);
+
+    const result = await svc.create({
+      ...CREATE_INPUT_BASE,
+      supplierId: SUPPLIER_UUID,
+    });
+
+    expect(result.id).toBe('tpl-new');
+    // The suppliers lookup was org-scoped.
+    const supplierArgs = (stub.chainArgsAll.get('suppliers.select') ?? []).flat(Infinity);
+    expect(supplierArgs).toContain('organization_id');
+    expect(supplierArgs).toContain('org-test');
+    // The insert was performed
+    expect(stub.chainsAll.get('recurring_po_templates.insert')).toBeDefined();
+  });
+
+  it('skips the suppliers lookup entirely when supplierId is null', async () => {
+    const stub = makeSupabaseStub({
+      'recurring_po_templates.insert': { data: { id: 'tpl-null-sup' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { role: 'owner' });
+    const svc = new RecurringPoTemplatesService(ctx as never);
+
+    const result = await svc.create({
+      ...CREATE_INPUT_BASE,
+      supplierId: null,
+    });
+
+    expect(result.id).toBe('tpl-null-sup');
+    // No suppliers query at all
+    expect(stub.fromCalls).not.toContain('suppliers');
+    // Insert happened
+    expect(stub.chainsAll.get('recurring_po_templates.insert')).toBeDefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// update — supplierId org-verification
+// ─────────────────────────────────────────────────────────────────
+
+describe('RecurringPoTemplatesService.update — supplierId org-verify', () => {
+  it('rejects a foreign-org supplierId and does NOT update', async () => {
+    const stub = makeSupabaseStub({
+      // suppliers lookup returns null → foreign org
+      'suppliers.select': { data: null, error: null },
+      'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { role: 'owner' });
+    const svc = new RecurringPoTemplatesService(ctx as never);
+
+    await expect(
+      svc.update('tpl-1', {
+        ...CREATE_INPUT_BASE,
+        supplierId: SUPPLIER_UUID,
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+
+    // The update must NOT have been called
+    expect(stub.chainsAll.get('recurring_po_templates.update')).toBeUndefined();
+  });
+
+  it('proceeds on update when supplierId belongs to the caller\'s org', async () => {
+    const stub = makeSupabaseStub({
+      // suppliers lookup finds the row → same org
+      'suppliers.select': { data: { id: SUPPLIER_UUID }, error: null },
+      'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { role: 'owner' });
+    const svc = new RecurringPoTemplatesService(ctx as never);
+
+    const result = await svc.update('tpl-1', {
+      ...CREATE_INPUT_BASE,
+      supplierId: SUPPLIER_UUID,
+    });
+
+    expect(result.id).toBe('tpl-1');
+    // The update was performed
+    expect(stub.chainsAll.get('recurring_po_templates.update')).toBeDefined();
+  });
+
+  it('skips the suppliers lookup on update when supplierId is null', async () => {
+    const stub = makeSupabaseStub({
+      'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { role: 'owner' });
+    const svc = new RecurringPoTemplatesService(ctx as never);
+
+    const result = await svc.update('tpl-1', {
+      ...CREATE_INPUT_BASE,
+      supplierId: null,
+    });
+
+    expect(result.id).toBe('tpl-1');
+    expect(stub.fromCalls).not.toContain('suppliers');
   });
 });

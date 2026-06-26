@@ -267,6 +267,22 @@ export class PurchaseOrdersService {
   }
 
   /**
+   * Throws a validation_error if the given supplierId does not belong to this org.
+   * null/undefined input is a no-op (no supplier is always valid).
+   */
+  private async assertSupplierInOrg(supplierId: string | null | undefined) {
+    if (!supplierId) return;
+    const { data, error } = await this.ctx.supabase
+      .from('suppliers')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', supplierId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('validation_error', 'The selected supplier was not found in your organization.');
+  }
+
+  /**
    * Verifies a bill-to charter belongs to this org before tagging a PO with it.
    * Returns the id when valid, else null — a spoofed/cross-tenant or stale
    * charter id is silently dropped (never written), mirroring the charter
@@ -382,6 +398,7 @@ export class PurchaseOrdersService {
     }
 
     const subtotal = resolvedLines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
+    await this.assertSupplierInOrg(input.supplierId);
     const billToCharterId = await this.resolveCharterId(input.charterId);
 
     const { data: po, error } = await this.ctx.supabase
@@ -536,6 +553,7 @@ export class PurchaseOrdersService {
     // it doesn't depend on resolving item ids — so we can claim the header
     // BEFORE doing any destructive work.
     const subtotal = input.lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
+    await this.assertSupplierInOrg(input.supplierId);
     const billToCharterId = await this.resolveCharterId(input.charterId);
 
     // Atomic claim: update the header with a `status = 'draft'` guard. This is the
