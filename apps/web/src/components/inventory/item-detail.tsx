@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { ActivityFeed } from '@/components/inventory/activity-feed';
+import { PlacementsBreakdown } from '@/components/inventory/placements-breakdown';
 import { AuditTimeline } from '@/components/audit/audit-timeline';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
 import { DuplicateItemDialog } from '@/components/inventory/duplicate-item-dialog';
@@ -362,6 +363,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     reorderPoint={item.reorder_point as number}
                     itemStatus={item.status as 'active' | 'archived' | 'discontinued'}
                   />
+                  <PlacementsBreakdown placements={holdings} />
                 </DetailRow>
                 {/* Rentals reservation surface — only the rentals item detail
                     page passes `reservedQuantity`. Checking out a rental
