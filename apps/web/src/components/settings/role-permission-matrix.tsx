@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertTriangle, Check, RotateCcw } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, RotateCcw } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -81,8 +81,25 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     () => new Map(userOverrides.filter((o) => o.user_id).map((o) => [uk(o.user_id!, o.permission), o.granted])),
   );
 
-  const [, startTransition] = React.useTransition();
+  const [isSaving, startTransition] = React.useTransition();
   const [busy, setBusy] = React.useState<Set<string>>(new Set());
+
+  // Save confirmation. Each toggle saves instantly; on success we flash a
+  // transient "Saved" so the change is visibly confirmed (errors already toast
+  // + revert). aria-live announces it for screen readers.
+  const [justSaved, setJustSaved] = React.useState(false);
+  const savedTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashSaved = React.useCallback(() => {
+    setJustSaved(true);
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setJustSaved(false), 2000);
+  }, []);
+  React.useEffect(
+    () => () => {
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+    },
+    [],
+  );
 
   const selectableMembers = members.filter((m) => m.role !== 'owner');
   const [selectedUserId, setSelectedUserId] = React.useState<string>(
@@ -121,6 +138,8 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
       if (!res.ok) {
         setRoleMap(prevMap); // revert
         toast.error(res.error.message);
+      } else {
+        flashSaved();
       }
     });
   }
@@ -152,6 +171,8 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
       if (!res.ok) {
         setUserMap(prevMap);
         toast.error(res.error.message);
+      } else {
+        flashSaved();
       }
     });
   }
@@ -170,7 +191,10 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     <div className="space-y-10">
       {/* ── Role matrix ──────────────────────────────────────────────── */}
       <section>
-        <h2 className="text-lg font-semibold">Permissions by role</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">Permissions by role</h2>
+          <SaveStatus isSaving={isSaving} justSaved={justSaved} />
+        </div>
         <p className="mt-1 text-xs text-muted-foreground">
           Toggle a box to grant or revoke a permission for an entire role. Changes save instantly.
           A dot marks a permission you&apos;ve changed from its default. Owner always has every
@@ -250,7 +274,10 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
       {/* ── Per-user exceptions ──────────────────────────────────────── */}
       {selectableMembers.length > 0 && (
         <section>
-          <h2 className="text-lg font-semibold">Per-user exceptions</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Per-user exceptions</h2>
+            <SaveStatus isSaving={isSaving} justSaved={justSaved} />
+          </div>
           <p className="mt-1 text-xs text-muted-foreground">
             Override a single person&apos;s access on top of their role. A user exception always
             wins over the role setting.
@@ -387,6 +414,27 @@ function Cell({
             aria-label="Grant takes full effect after the row-level enforcement rollout"
           />
         </span>
+      )}
+    </span>
+  );
+}
+
+function SaveStatus({ isSaving, justSaved }: { isSaving: boolean; justSaved: boolean }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1.5 text-[11px]"
+      aria-live="polite"
+    >
+      {isSaving ? (
+        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+        </span>
+      ) : justSaved ? (
+        <span className="inline-flex items-center gap-1.5 text-[hsl(var(--accent))]">
+          <Check className="h-3 w-3" /> Saved
+        </span>
+      ) : (
+        <span className="text-[var(--ed-ink-4)]">Changes save automatically</span>
       )}
     </span>
   );
