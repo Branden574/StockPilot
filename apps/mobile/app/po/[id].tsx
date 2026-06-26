@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { PoAttachments } from '@/components/po-attachments';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
@@ -456,6 +457,8 @@ export default function PoReceiveScreen() {
                 ))}
               </View>
             )}
+
+            <PoAttachments poId={id} />
           </ScrollView>
 
           <View style={styles.footer}>
