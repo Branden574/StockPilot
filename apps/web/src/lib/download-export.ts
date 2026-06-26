@@ -17,6 +17,7 @@ export interface InventoryExportRequest {
     sort?: string;
     categoryIds?: string[];
     locationIds?: string[];
+    charterIds?: string[];
   };
 }
 

@@ -45,6 +45,7 @@ export interface InventoryExportFilters {
   sort?: ItemListSort;
   categoryIds?: string[];
   locationIds?: string[];
+  charterIds?: string[];
   warehouseId?: string | null;
 }
 
@@ -91,6 +92,7 @@ export async function buildInventoryExportRows(
             sort: args.filters?.sort ?? 'updated_desc',
             categoryIds: args.filters?.categoryIds ?? [],
             locationIds: args.filters?.locationIds ?? [],
+            charterIds: args.filters?.charterIds ?? [],
             warehouseId: args.filters?.warehouseId ?? null,
           }
         : { status: 'active' as const }),
