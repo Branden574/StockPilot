@@ -10,7 +10,13 @@ import { OrgSwitcher } from '@/components/dashboard/org-switcher';
 import { IconMark } from '@/components/ui/icon-mark';
 import { cn } from '@/lib/utils';
 
-import { DEFAULT_MODULE_IDS, type ModuleId, type NavOverrides, type Role } from '@stockpilot/core';
+import {
+  DEFAULT_MODULE_IDS,
+  type ModuleId,
+  type NavOverrides,
+  type Permission,
+  type Role,
+} from '@stockpilot/core';
 
 interface SidebarProps {
   className?: string;
@@ -38,6 +44,13 @@ interface SidebarProps {
    * boundary as plain JSON from the DB.
    */
   navOverrides?: unknown;
+  /**
+   * The user's EFFECTIVE permissions (static role defaults + org overrides),
+   * serialized as strings across the RSC boundary. When provided, nav links
+   * gate on this set so a revoked permission (e.g. purchase_orders:read) hides
+   * its link. Omitted → navForRole falls back to the static role permissions.
+   */
+  permissions?: string[];
   onNavigate?: () => void;
 }
 
@@ -53,17 +66,24 @@ export function Sidebar({
   role,
   enabledModules,
   navOverrides,
+  permissions,
   onNavigate,
 }: SidebarProps) {
   const moduleSet = React.useMemo(
     () => new Set((enabledModules ?? DEFAULT_MODULE_IDS) as ModuleId[]),
     [enabledModules],
   );
+  // Effective permissions gate nav links; undefined → navForRole uses the
+  // static role map (back-compat for callers/tests that omit it).
+  const permissionSet = React.useMemo(
+    () => (permissions ? new Set(permissions as Permission[]) : undefined),
+    [permissions],
+  );
   // `applyNavOverrides` (inside navForRole) validates the override shape and
   // fails CLOSED to the derived nav on null/garbage, so the cast is safe.
   const sections: NavSection[] = React.useMemo(
-    () => navForRole(role, moduleSet, (navOverrides as NavOverrides | null) ?? null),
-    [role, moduleSet, navOverrides],
+    () => navForRole(role, moduleSet, (navOverrides as NavOverrides | null) ?? null, permissionSet),
+    [role, moduleSet, navOverrides, permissionSet],
   );
   const pathname = usePathname();
   const router = useRouter();

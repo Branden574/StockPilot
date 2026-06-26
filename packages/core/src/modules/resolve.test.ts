@@ -25,6 +25,24 @@ describe('resolveSurface', () => {
     const hrefs = out.flatMap((s) => s.items.map((i) => i.href));
     expect(hrefs.some((h) => h.startsWith('/dashboard/admin'))).toBe(false);
   });
+  it('effective permissions gate `requires` links (revoked purchase_orders:read hides the PO link)', () => {
+    // A viewer normally has purchase_orders:read → sees the PO link…
+    const withRead = resolveSurface('web_sidebar', {
+      role: 'viewer',
+      enabledModules: ALL,
+      permissions: new Set(['items:read', 'purchase_orders:read']),
+    }).flatMap((s) => s.items.map((i) => i.href));
+    expect(withRead).toContain('/dashboard/purchase-orders');
+
+    // …revoke it via the effective set and the link disappears, even though the
+    // static viewer role would include it.
+    const withoutRead = resolveSurface('web_sidebar', {
+      role: 'viewer',
+      enabledModules: ALL,
+      permissions: new Set(['items:read']),
+    }).flatMap((s) => s.items.map((i) => i.href));
+    expect(withoutRead).not.toContain('/dashboard/purchase-orders');
+  });
   it('disabling an optional module removes its items (core stays)', () => {
     const without = new Set([...ALL].filter((m) => m !== 'rentals'));
     const out = resolveSurface('web_sidebar', { role: 'admin', enabledModules: without });
@@ -63,7 +81,8 @@ describe('nav order is frozen to the original static nav', () => {
       .flatMap((s) => s.items.map((i) => i.href));
     expect(hrefs).toEqual([
       '/dashboard',
-      '/dashboard/inventory', '/dashboard/books', '/dashboard/categories', '/dashboard/tags',
+      '/dashboard/inventory', '/dashboard/inventory/staging',
+      '/dashboard/books', '/dashboard/categories', '/dashboard/tags',
       '/dashboard/movements', '/dashboard/rentals', '/dashboard/bundles', '/dashboard/orders',
       '/dashboard/cycle-counts', '/dashboard/procedures', '/dashboard/purchase-orders',
       '/dashboard/purchase-orders/recurring',

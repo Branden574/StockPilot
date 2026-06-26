@@ -1,4 +1,4 @@
-import { hasPermission } from '../constants/permissions';
+import { hasPermission, type Permission } from '../constants/permissions';
 import { isAdminRole } from '../constants/terminology';
 import type { Role } from '../constants/roles';
 import {
@@ -19,7 +19,9 @@ import {
  *   1. The module must be on — `core` modules are always on; everything else
  *      must appear in `enabledModules`.
  *   2. `requiresAdmin` placements only show for admin/owner roles.
- *   3. `requires` placements only show when the role has that permission.
+ *   3. `requires` placements only show when the caller has that permission —
+ *      checked against the EFFECTIVE permission set when provided (so org-level
+ *      role/user overrides hide or reveal nav links), else the static role map.
  * Empty sections are dropped; items within a section sort by
  * `defaultSortOrder` ascending; sections emit in a fixed canonical order.
  */
@@ -27,6 +29,14 @@ import {
 export interface ResolveInput {
   role: Role;
   enabledModules: Set<ModuleId>;
+  /**
+   * The caller's effective permissions (static role defaults with org
+   * overrides applied). When supplied, `requires` placements gate on this set
+   * so revoking e.g. purchase_orders:read hides the Purchase Orders link.
+   * Optional for back-compat: callers that omit it fall back to the static
+   * role permission map.
+   */
+  permissions?: ReadonlySet<Permission>;
 }
 
 export interface ResolvedNavItem {
@@ -61,7 +71,13 @@ export function resolveSurface(surface: NavSurface, input: ResolveInput): Resolv
     for (const p of def.placements) {
       if (p.surface !== surface) continue;
       if (p.requiresAdmin && !admin) continue;
-      if (p.requires && !hasPermission(input.role, p.requires)) continue;
+      if (
+        p.requires &&
+        !(input.permissions
+          ? input.permissions.has(p.requires)
+          : hasPermission(input.role, p.requires))
+      )
+        continue;
       items.push({
         moduleId: def.id,
         label: p.label,

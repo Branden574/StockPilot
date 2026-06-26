@@ -36,6 +36,12 @@ interface DashboardShellProps {
   userName: string | null;
   userRole: string;
   role: Role;
+  /**
+   * The user's effective permissions (role defaults + org overrides), as
+   * strings for the RSC boundary. Threaded to the Sidebar so nav links gate on
+   * actual access (a revoked permission hides its link).
+   */
+  permissions?: string[];
   /** True only for platform super-admins — gates the Platform console link. */
   isPlatformAdmin?: boolean;
   /** Module IDs enabled for this org (serialized as strings for the RSC boundary). */
@@ -75,6 +81,7 @@ export function DashboardShell({
   userName,
   userRole,
   role,
+  permissions,
   isPlatformAdmin,
   enabledModules,
   navOverrides,
@@ -198,6 +205,7 @@ export function DashboardShell({
           userName={userName}
           userRole={userRole}
           role={role}
+          permissions={permissions}
           enabledModules={enabledModules}
           navOverrides={navOverrides}
         />
@@ -254,6 +262,7 @@ export function DashboardShell({
               userName={userName}
               userRole={userRole}
               role={role}
+              permissions={permissions}
               enabledModules={enabledModules}
               navOverrides={navOverrides}
               onNavigate={() => setMobileNavOpen(false)}
