@@ -4,7 +4,6 @@ import { AlertTriangle, Check, Loader2, RotateCcw } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { cn } from '@/lib/utils';
 import {
   setRolePermissionOverrideAction,
   setUserPermissionOverrideAction,
@@ -70,6 +69,11 @@ const EDITABLE_ROLES: EditableRole[] = ROLES.filter((r): r is EditableRole => r 
 const rk = (role: string, perm: string) => `${role}::${perm}`;
 const uk = (userId: string, perm: string) => `${userId}::${perm}`;
 
+// Single reused toast id so rapid toggles update ONE bottom-right toast
+// (Saving… → Saved / error) instead of stacking — and it's visible no matter
+// how far down the (long) matrix you've scrolled.
+const SAVE_TOAST = 'perm-save';
+
 export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: Props) {
   const groups = React.useMemo(() => groupedPermissions(), []);
 
@@ -131,15 +135,17 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     else optimistic.set(key, granted);
     setRoleMap(optimistic);
     markBusy(key, true);
+    toast.loading('Saving…', { id: SAVE_TOAST });
 
     startTransition(async () => {
       const res = await setRolePermissionOverrideAction({ role, permission: perm, granted });
       markBusy(key, false);
       if (!res.ok) {
         setRoleMap(prevMap); // revert
-        toast.error(res.error.message);
+        toast.error(res.error.message, { id: SAVE_TOAST });
       } else {
         flashSaved();
+        toast.success('Saved', { id: SAVE_TOAST, duration: 1500 });
       }
     });
   }
@@ -160,6 +166,7 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     else optimistic.set(key, granted);
     setUserMap(optimistic);
     markBusy(key, true);
+    toast.loading('Saving…', { id: SAVE_TOAST });
 
     startTransition(async () => {
       const res = await setUserPermissionOverrideAction({
@@ -170,9 +177,10 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
       markBusy(key, false);
       if (!res.ok) {
         setUserMap(prevMap);
-        toast.error(res.error.message);
+        toast.error(res.error.message, { id: SAVE_TOAST });
       } else {
         flashSaved();
+        toast.success('Saved', { id: SAVE_TOAST, duration: 1500 });
       }
     });
   }
@@ -386,25 +394,30 @@ function Cell({
 }) {
   return (
     <span className="relative inline-flex items-center justify-center">
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={busy}
-        aria-label={label}
-        onChange={onToggle}
-        className={cn(
-          'h-4 w-4 cursor-pointer rounded border-border accent-[hsl(var(--accent))]',
-          busy && 'opacity-50',
-        )}
-      />
-      {overridden && (
+      {busy ? (
+        // Saving THIS box — show a spinner right where the click happened, so
+        // the save is visible even when the header status is scrolled away.
+        <Loader2
+          className="h-4 w-4 animate-spin text-[hsl(var(--accent))]"
+          aria-label={`Saving ${label}`}
+        />
+      ) : (
+        <input
+          type="checkbox"
+          checked={checked}
+          aria-label={label}
+          onChange={onToggle}
+          className="h-4 w-4 cursor-pointer rounded border-border accent-[hsl(var(--accent))]"
+        />
+      )}
+      {overridden && !busy && (
         <span
           className="absolute -right-2 -top-1 h-1.5 w-1.5 rounded-full bg-[hsl(var(--accent))]"
           aria-label="Changed from default"
           title="Changed from default"
         />
       )}
-      {rollingOut && (
+      {rollingOut && !busy && (
         <span
           className="absolute -right-4 top-0"
           title="Granted at the app level. Full data-write access for this permission is rolling out — purchase orders are already fully enabled."
