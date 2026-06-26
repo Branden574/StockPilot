@@ -5,7 +5,25 @@
 -- policy IS the realtime authorization boundary).
 
 begin;
-select plan(4);
+select plan(6);
+
+-- ── REPLICA IDENTITY FULL (mig 0210) — required so DELETE events (taking a
+--    permission away clears the override row) carry the full old row, letting
+--    Realtime evaluate RLS + deliver them. Without it, revokes need a refresh. ─
+select is(
+  (select c.relreplident::text from pg_class c
+     join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = 'role_permission_overrides'),
+  'f',
+  'role_permission_overrides has REPLICA IDENTITY FULL (DELETE events deliverable)'
+);
+select is(
+  (select c.relreplident::text from pg_class c
+     join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public' and c.relname = 'user_permission_overrides'),
+  'f',
+  'user_permission_overrides has REPLICA IDENTITY FULL (DELETE events deliverable)'
+);
 
 -- ── Published for realtime ─────────────────────────────────────────────────
 select ok(
