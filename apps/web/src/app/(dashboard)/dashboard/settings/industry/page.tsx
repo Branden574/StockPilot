@@ -5,13 +5,13 @@ import { redirect } from 'next/navigation';
 import { IndustryPacks } from '@/components/settings/industry-packs';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
-import { hasPermission, PACK_PRESET_LIST, type DomainPack } from '@stockpilot/core';
+import { can, PACK_PRESET_LIST, type DomainPack } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Industry template — Settings' };
 
 export default async function IndustrySettingsPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'organization:update')) {
+  if (!can(ctx, 'organization:update')) {
     redirect('/dashboard');
   }
 

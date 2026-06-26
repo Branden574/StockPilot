@@ -17,11 +17,11 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
-import { hasPermission, resolveTerminology } from '@stockpilot/core';
+import { can, resolveTerminology } from '@stockpilot/core';
 
 export default async function NewRentalItemPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'items:create')) {
+  if (!can(ctx, 'items:create')) {
     redirect('/dashboard/rentals/items');
   }
 

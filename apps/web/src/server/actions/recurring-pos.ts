@@ -10,14 +10,7 @@ import {
   type RecurringTemplateInput,
 } from '@/server/services/recurring-pos';
 
-import {
-  err,
-  hasPermission,
-  ok,
-  planAllowsRecurringPos,
-  type ActionResult,
-  type OrgBillingState,
-} from '@stockpilot/core';
+import { can, err, ok, planAllowsRecurringPos, type ActionResult, type OrgBillingState } from '@stockpilot/core';
 
 // ---------------------------------------------------------------------------
 // Recurring PO template CRUD actions.
@@ -43,7 +36,7 @@ async function runGate(opts?: { skipPlanGate?: boolean }) {
     } as const;
   }
 
-  if (!hasPermission(ctx.role, 'purchase_orders:manage')) {
+  if (!can(ctx, 'purchase_orders:manage')) {
     return {
       ctx: null as never,
       error: err('forbidden', 'You do not have permission to manage purchase orders.'),

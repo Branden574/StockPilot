@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 
 import { requireOrgContext } from '@/lib/auth/session';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 /**
  * Gates the entire /dashboard/reports/* tree on the reports:read
@@ -21,7 +21,7 @@ export default async function ReportsLayout({
   children: React.ReactNode;
 }) {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'reports:read')) {
+  if (!can(ctx, 'reports:read')) {
     redirect('/dashboard');
   }
   return <>{children}</>;

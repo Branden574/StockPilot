@@ -6,7 +6,7 @@ import { OrderStatusesEditor } from '@/components/settings/order-statuses-editor
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Order statuses — Settings' };
 
@@ -20,7 +20,7 @@ export const metadata: Metadata = { title: 'Order statuses — Settings' };
  */
 export default async function OrderStatusesSettingsPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'organization:update')) {
+  if (!can(ctx, 'organization:update')) {
     redirect('/dashboard');
   }
 

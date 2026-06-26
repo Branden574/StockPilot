@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { Readable } from 'node:stream';
 import { renderToStream } from '@react-pdf/renderer';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
@@ -42,7 +42,7 @@ export async function GET(
     // service-layer check in `PurchaseOrdersService.get()`. We don't want
     // a permission regression here to let unauthorized users stream a
     // signed PO out of the org.
-    if (!hasPermission(ctx.role, 'purchase_orders:read')) {
+    if (!can(ctx, 'purchase_orders:read')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
 

@@ -17,7 +17,7 @@ import { ReportTablePdf, type ReportColumn } from '@/lib/pdf/report-table';
 import { ServiceError } from '@/server/services/context';
 import type { ItemListSort } from '@/server/services/inventory';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
   try {
     const ctx = await withApiContext(request);
     if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
-    if (!hasPermission(ctx.role, 'items:export')) {
+    if (!can(ctx, 'items:export')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
 

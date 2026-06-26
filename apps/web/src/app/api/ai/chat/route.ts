@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { hasPermission } from '@/lib/auth/permissions';
+import { can } from '@/lib/auth/permissions';
 import { assertModuleEnabled, ServiceError } from '@/server/services/context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -116,7 +116,7 @@ export async function POST(req: Request) {
   // this endpoint is staff+ only so we don't have to rely on tool-by-
   // tool gating alone. We use 'items:update' as the minimum write
   // capability: staff/manager/admin/owner all have it; viewers do not.
-  if (!hasPermission(ctx.role, 'items:update')) {
+  if (!can(ctx, 'items:update')) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
 

@@ -6,7 +6,7 @@ import { Lock } from 'lucide-react';
 import { requireOrgContext } from '@/lib/auth/session';
 import { Card, CardContent } from '@/components/ui/card';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 /**
  * Gates the entire /dashboard/purchase-orders/imports/* tree on
@@ -24,7 +24,7 @@ export default async function PoImportsLayout({
   children: React.ReactNode;
 }) {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'purchase_orders:manage')) {
+  if (!can(ctx, 'purchase_orders:manage')) {
     return (
       <div className="container mx-auto flex max-w-2xl items-center justify-center px-4 py-20 sm:px-6">
         <Card className="w-full">

@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
 import { BundleForm } from '@/components/bundles/bundle-form';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { BundlesService } from '@/server/services/bundles';
 
@@ -13,7 +13,7 @@ export default async function EditBundlePage({
 }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'bundles:manage')) {
+  if (!can(ctx, 'bundles:manage')) {
     redirect(`/dashboard/bundles/${id}`);
   }
 

@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { requireOrgContext } from '@/lib/auth/session';
 import { InventoryService } from '@/server/services/inventory';
 import { RentalsService } from '@/server/services/rentals';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { cn } from '@/lib/utils';
 
 type StatusParam = 'out' | 'overdue' | 'returned' | 'cancelled' | 'all';
@@ -49,7 +49,7 @@ export default async function RentalsPage({
   // with warehouse access); we just hide create/action buttons.
   const params = await searchParams;
   const status = parseStatus(params.status);
-  const canCreate = hasPermission(ctx.role, 'rentals:create');
+  const canCreate = can(ctx, 'rentals:create');
 
   const [rentalsSvc, inventorySvc] = await Promise.all([
     RentalsService.forCurrentUser(),

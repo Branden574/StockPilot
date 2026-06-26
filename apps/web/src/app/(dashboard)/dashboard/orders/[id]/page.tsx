@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { hasPermission, isManagerOrAbove } from '@stockpilot/core';
+import { can, isManagerOrAbove } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
@@ -59,7 +59,7 @@ export default async function OrderDetailPage({
 }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
-  const canApprove = hasPermission(ctx.role, 'orders:approve');
+  const canApprove = can(ctx, 'orders:approve');
 
   const svc = await OrderRequestsService.forCurrentUser();
   let detail;
@@ -179,7 +179,7 @@ export default async function OrderDetailPage({
     SHIPPABLE_STATUSES.includes(request.status)
   ) {
     showShippingPanel = true;
-    if (hasPermission(ctx.role, 'shipping:manage')) {
+    if (can(ctx, 'shipping:manage')) {
       const shippingAccess = await checkModuleAccess('shipping');
       canBuyLabel = shippingAccess.enabled;
     }
@@ -197,7 +197,7 @@ export default async function OrderDetailPage({
   const orderIsReturnable =
     request.status === 'completed' || (request.status as string) === 'delivered';
   let returnableLines: ReturnableLine[] = [];
-  if (hasPermission(ctx.role, 'returns:manage') && orderIsReturnable) {
+  if (can(ctx, 'returns:manage') && orderIsReturnable) {
     const returnsAccess = await checkModuleAccess('returns');
     if (returnsAccess.enabled) {
       try {

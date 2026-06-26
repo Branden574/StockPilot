@@ -19,7 +19,7 @@ import { TagsService } from '@/server/services/tags';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
-import { hasPermission, resolveTerminology } from '@stockpilot/core';
+import { can, resolveTerminology } from '@stockpilot/core';
 
 /**
  * Book edit form. Mirrors /dashboard/inventory/[id]/edit but tells
@@ -42,7 +42,7 @@ export default async function EditBookPage({
   const { id } = await params;
   const { return: returnParam } = await searchParams;
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'items:update')) {
+  if (!can(ctx, 'items:update')) {
     redirect(`/dashboard/inventory/${id}`);
   }
   const supabase = await createClient();

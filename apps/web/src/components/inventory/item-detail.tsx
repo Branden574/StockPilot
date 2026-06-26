@@ -50,7 +50,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
-import { hasPermission, isLikelyIsbn } from '@stockpilot/core';
+import { can, isLikelyIsbn } from '@stockpilot/core';
 
 
 interface ItemDetailProps {
@@ -213,10 +213,10 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // detail page (read-only) but no Edit / Adjust / Transfer buttons.
   // Server-layer assertPermission still throws if a request somehow
   // bypasses this — these flags just hide the UI surfaces.
-  const canEditItem = hasPermission(ctx.role, 'items:update');
-  const canDuplicateItem = hasPermission(ctx.role, 'items:create');
-  const canAdjustStock = hasPermission(ctx.role, 'stock:adjust');
-  const canTransferStock = hasPermission(ctx.role, 'stock:transfer');
+  const canEditItem = can(ctx, 'items:update');
+  const canDuplicateItem = can(ctx, 'items:create');
+  const canAdjustStock = can(ctx, 'stock:adjust');
+  const canTransferStock = can(ctx, 'stock:transfer');
 
   // ── Market price panel (Phase 6) ───────────────────────────────────
   // Fully gated + isolated: only loads/renders when the optional

@@ -5,13 +5,13 @@ import { redirect } from 'next/navigation';
 import { ModuleToggles } from '@/components/settings/module-toggles';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
-import { hasPermission, MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
+import { can, MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Modules — Settings' };
 
 export default async function ModulesSettingsPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'organization:update')) {
+  if (!can(ctx, 'organization:update')) {
     redirect('/dashboard');
   }
 

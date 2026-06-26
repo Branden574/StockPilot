@@ -13,7 +13,7 @@ import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { createClient } from '@/lib/supabase/server';
 import { withContext } from '@/server/services/context';
 
-import { hasPermission, planAllowsRecurringPos, type OrgBillingState } from '@stockpilot/core';
+import { can, planAllowsRecurringPos, type OrgBillingState } from '@stockpilot/core';
 
 /**
  * Recurring purchase orders management page.
@@ -31,7 +31,7 @@ export default async function RecurringPosPage() {
   }
 
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'purchase_orders:manage')) {
+  if (!can(ctx, 'purchase_orders:manage')) {
     redirect('/dashboard/purchase-orders');
   }
 

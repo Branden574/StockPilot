@@ -15,7 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { BundlesService } from '@/server/services/bundles';
@@ -29,8 +29,8 @@ export default async function BundleDetailPage({
 }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
-  const canManage = hasPermission(ctx.role, 'bundles:manage');
-  const canDistribute = hasPermission(ctx.role, 'bundles:distribute');
+  const canManage = can(ctx, 'bundles:manage');
+  const canDistribute = can(ctx, 'bundles:distribute');
 
   const svc = await BundlesService.forCurrentUser();
   let detail;

@@ -12,7 +12,7 @@ import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 import { createClient } from '@/lib/supabase/server';
 import { env } from '@/lib/env';
 
-import { hasPermission, resolveTerminology, type Role } from '@stockpilot/core';
+import { can, resolveTerminology, type Role } from '@stockpilot/core';
 
 export default async function TeamPage() {
   const ctx = await requireOrgContext();
@@ -23,7 +23,7 @@ export default async function TeamPage() {
   // during loadPendingInvites and React surfaces a generic
   // "something broke" panel). Redirect early so viewers go back to
   // the dashboard instead of seeing a crash.
-  if (!hasPermission(ctx.role, 'members:invite')) {
+  if (!can(ctx, 'members:invite')) {
     redirect('/dashboard');
   }
 

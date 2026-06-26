@@ -2,12 +2,12 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { BundleForm } from '@/components/bundles/bundle-form';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 
 export default async function NewBundlePage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'bundles:manage')) {
+  if (!can(ctx, 'bundles:manage')) {
     redirect('/dashboard/bundles');
   }
 

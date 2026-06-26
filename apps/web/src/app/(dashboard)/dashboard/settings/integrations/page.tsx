@@ -16,7 +16,7 @@ import { ApiKeysService } from '@/server/services/api-keys';
 import { ConnectionsService } from '@/server/services/connections';
 import { IntegrationEndpointsService } from '@/server/services/integration-events';
 
-import { hasPermission, isAdminRole } from '@stockpilot/core';
+import { can, isAdminRole } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Integrations — Settings' };
 
@@ -40,12 +40,12 @@ export default async function IntegrationsSettingsPage() {
   ]);
 
   const showQbo =
-    integrationsAccess.enabled && hasPermission(ctx.role, 'integrations:manage');
+    integrationsAccess.enabled && can(ctx, 'integrations:manage');
   // EasyPost (shipping) is a separate, off-by-default module gated on
   // `shipping:manage`. Only surface its card when the shipping module is on AND
   // the caller can manage it — otherwise hide it entirely (the connect action
   // is the server-side source of truth regardless).
-  const showEasyPost = shippingAccess.enabled && hasPermission(ctx.role, 'shipping:manage');
+  const showEasyPost = shippingAccess.enabled && can(ctx, 'shipping:manage');
   // Public API keys: the `api_access` premium module + admin role (matches the
   // ApiKeysService gate + RLS floor).
   const showApiKeys = apiAccessAccess.enabled && isAdminRole(ctx.role);
@@ -55,8 +55,8 @@ export default async function IntegrationsSettingsPage() {
   // server-side backstop for a direct URL hit. Reachable if the caller can
   // manage ANY surface.
   if (
-    !hasPermission(ctx.role, 'integrations:manage') &&
-    !hasPermission(ctx.role, 'shipping:manage') &&
+    !can(ctx, 'integrations:manage') &&
+    !can(ctx, 'shipping:manage') &&
     !showApiKeys
   ) {
     redirect('/dashboard');
@@ -100,7 +100,7 @@ export default async function IntegrationsSettingsPage() {
   // Webhooks & alerts live under the same `integrations` module + manage perm as
   // the QBO card. Only load endpoints when the caller can see the panel.
   const showWebhooks =
-    integrationsAccess.enabled && hasPermission(ctx.role, 'integrations:manage');
+    integrationsAccess.enabled && can(ctx, 'integrations:manage');
   const webhookEndpoints = showWebhooks
     ? await IntegrationEndpointsService.forCurrentUser().then((s) => s.list())
     : [];

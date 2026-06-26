@@ -152,11 +152,109 @@ export function hasPermission(role: Role, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role].includes(permission);
 }
 
+/**
+ * Effective-permission gate for a resolved request context. Reads the
+ * caller's pre-computed effective permission set (static role defaults with
+ * org-level role + per-user overrides already applied — see
+ * effectivePermissions() and the app's loadEffectivePermissions()) rather than
+ * the static `hasPermission(role, …)`. This is the app-layer twin of the SQL
+ * has_permission(); use it for every request-scoped gate so configurable
+ * overrides take effect. `hasPermission(role, …)` stays for the few static
+ * call sites (the roles reference matrix, OAuth-callback gates where only a
+ * bare role is in hand).
+ */
+export function can(
+  ctx: { readonly role: Role; readonly permissions?: ReadonlySet<Permission> },
+  permission: Permission,
+): boolean {
+  // Real request contexts (withContext / withApiContext / requireOrgContext)
+  // carry the effective set, so overrides apply. Synthetic system contexts
+  // (cron jobs, OAuth callbacks, tests) omit it and fall back to the static
+  // role defaults — exactly their prior behavior, no override awareness needed.
+  return ctx.permissions ? ctx.permissions.has(permission) : hasPermission(ctx.role, permission);
+}
+
 export function assertPermission(role: Role, permission: Permission): void {
   if (!hasPermission(role, permission)) {
     throw new Error(`Permission denied: ${role} cannot ${permission}`);
   }
 }
+
+// ── Configurable permissions (org-level overrides) ─────────────────────────
+// Admins/owners can grant or revoke individual permissions per role and per
+// user on top of the static ROLE_PERMISSIONS defaults above. Resolution order
+// (last wins): static default → role override → user override. Owner is
+// immutable — always all permissions — so an org can never lock itself out.
+//
+// IMPORTANT: these deltas are also resolved in SQL by public.has_permission()
+// (migration 0207) for RLS. The static defaults are mirrored into the global
+// `role_default_permissions` table by that migration; a change to
+// ROLE_PERMISSIONS here REQUIRES a matching migration so the two agree. pgTAP
+// (0207 tests) asserts parity.
+
+const PERMISSION_SET = new Set<string>(PERMISSIONS);
+
+export interface PermissionOverride {
+  permission: Permission;
+  /** true = grant a permission the role lacks; false = revoke one it has. */
+  granted: boolean;
+}
+
+/**
+ * Resolves a role's effective permission set after applying org-level role
+ * overrides and per-user overrides. Pure — the DB equivalent is
+ * public.has_permission(). Unknown permission strings (e.g. a deleted perm
+ * still referenced by a stale override row) are ignored defensively.
+ */
+export function effectivePermissions(
+  role: Role,
+  roleOverrides: readonly PermissionOverride[] = [],
+  userOverrides: readonly PermissionOverride[] = [],
+): Set<Permission> {
+  // Owner is never editable — always the full set. This is the lockout escape
+  // hatch: even if every other role is stripped bare, the owner can fix it.
+  if (role === 'owner') return new Set<Permission>(ALL_PERMISSIONS);
+
+  const set = new Set<Permission>(ROLE_PERMISSIONS[role]);
+  const apply = (overrides: readonly PermissionOverride[]): void => {
+    for (const o of overrides) {
+      if (!PERMISSION_SET.has(o.permission)) continue; // defensive: skip unknown
+      if (o.granted) set.add(o.permission);
+      else set.delete(o.permission);
+    }
+  };
+  apply(roleOverrides); // role-level first…
+  apply(userOverrides); // …then user-level wins
+  return set;
+}
+
+/**
+ * Permissions whose GRANT is fully effective end-to-end today — i.e. the
+ * app-layer gate is the sole write-enforcer (reads/exports: RLS already lets
+ * any org member through), OR the write-path RLS has been migrated to
+ * has_permission(). Granting anything NOT in this set still passes the app
+ * gate but the row-level write may be blocked by has_org_role until its RLS is
+ * migrated (P3). REVOKES are always fully effective (the app gate is checked
+ * before the DB write), regardless of this set. The matrix UI uses this to
+ * warn admins which grants are "rolling out".
+ */
+export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>([
+  // Reads — RLS allows any active org member; app gate is the only restriction.
+  'members:read',
+  'items:read',
+  'locations:read',
+  'categories:read',
+  'suppliers:read',
+  'purchase_orders:read',
+  'reports:read',
+  'activity_logs:read',
+  'billing:read',
+  // Exports — no row write; app gate is the sole enforcer.
+  'items:export',
+  'reports:export',
+  // Purchase orders — write RLS migrated to has_permission() in migration 0208.
+  'purchase_orders:manage',
+]);
 
 /**
  * Human-readable metadata for each permission. Powers the

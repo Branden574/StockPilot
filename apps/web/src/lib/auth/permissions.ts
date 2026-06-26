@@ -1,4 +1,4 @@
-import { hasPermission, type Permission, type Role } from '@stockpilot/core';
+import { can, hasPermission, type Permission, type Role } from '@stockpilot/core';
 
 export class PermissionDeniedError extends Error {
   readonly code = 'forbidden' as const;
@@ -13,4 +13,4 @@ export function assertPermission(role: Role, permission: Permission): void {
   }
 }
 
-export { hasPermission };
+export { can, hasPermission };

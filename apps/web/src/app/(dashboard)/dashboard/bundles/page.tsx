@@ -17,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { BundlesService } from '@/server/services/bundles';
 import { formatNumber, formatRelative } from '@/lib/utils';
@@ -39,10 +39,10 @@ export default async function BundlesListPage({
   // Bundles list is staff-or-better (bundles:distribute). Viewers don't
   // have it and shouldn't see the list either. Sidebar already hides
   // this; redirect here covers direct URL access.
-  if (!hasPermission(ctx.role, 'bundles:distribute')) {
+  if (!can(ctx, 'bundles:distribute')) {
     redirect('/dashboard');
   }
-  const canManage = hasPermission(ctx.role, 'bundles:manage');
+  const canManage = can(ctx, 'bundles:manage');
   const svc = await BundlesService.forCurrentUser();
   const bundles = await svc.list({ search, includeArchived: isArchivedView });
 

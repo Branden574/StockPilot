@@ -8,7 +8,7 @@ import { InventoryService } from '@/server/services/inventory';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { SuppliersService } from '@/server/services/suppliers';
 
-import { err, hasPermission, ok, type ActionResult } from '@stockpilot/core';
+import { can, err, ok, type ActionResult } from '@stockpilot/core';
 
 /**
  * "Migrate from Sage 50" import. The wizard parses + maps the Sage 50 CSV
@@ -112,7 +112,7 @@ export async function importSage50Action(
       if (!ctx.enabledModules.has('suppliers')) {
         summary.suppliers.skipped = true;
         summary.suppliers.skippedReason = 'the Suppliers module is not enabled';
-      } else if (!hasPermission(ctx.role, 'suppliers:manage')) {
+      } else if (!can(ctx, 'suppliers:manage')) {
         summary.suppliers.skipped = true;
         summary.suppliers.skippedReason = 'your role can’t manage suppliers';
       } else {

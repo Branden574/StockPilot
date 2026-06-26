@@ -9,7 +9,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { gatherInsights, summarizeInsights, type InsightSeverity } from '@/server/services/insights';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Briefing — StockPilot' };
 export const dynamic = 'force-dynamic';
@@ -26,7 +26,7 @@ export default async function InsightsPage() {
     return <ModuleNotEnabled moduleId="ai" canManage={access.canManage} />;
   }
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'items:update')) redirect('/dashboard');
+  if (!can(ctx, 'items:update')) redirect('/dashboard');
 
   const insights = await gatherInsights();
   const summary = await summarizeInsights(insights);

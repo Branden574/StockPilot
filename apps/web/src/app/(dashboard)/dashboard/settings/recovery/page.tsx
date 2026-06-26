@@ -2,7 +2,7 @@ import { History } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 import { RestoreButton } from '@/components/settings/restore-button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -64,7 +64,7 @@ const SECTIONS: ReadonlyArray<SectionDef> = [
 
 export default async function RecoveryPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'items:delete')) {
+  if (!can(ctx, 'items:delete')) {
     notFound();
   }
   // "View history" links route to /dashboard/settings/audit, which is
@@ -72,7 +72,7 @@ export default async function RecoveryPage() {
   // SELECT RLS to manager+, matching the matrix — so checking the
   // permission instead of `isAdminRole` lets managers (who already have
   // activity_logs:read) follow the link cleanly. See C11.
-  const canSeeAudit = hasPermission(ctx.role, 'activity_logs:read');
+  const canSeeAudit = can(ctx, 'activity_logs:read');
   const svc = await RecoveryService.forCurrentUser();
   const buckets = await Promise.all(
     SECTIONS.map(async (s) => ({

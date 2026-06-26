@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { ServiceError } from '@/server/services/context';
 import { ConnectionsService } from '@/server/services/connections';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
     const conn = await svc.getZendeskConnection();
     return NextResponse.json({
       connection: conn,
-      canManage: hasPermission(ctx.role, 'integrations:manage'),
+      canManage: can(ctx, 'integrations:manage'),
     });
   } catch (e) {
     if (e instanceof ServiceError) {

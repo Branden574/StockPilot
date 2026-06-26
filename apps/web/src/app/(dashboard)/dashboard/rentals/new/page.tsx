@@ -7,7 +7,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { TeamService } from '@/server/services/team';
 import { WarehousesService } from '@/server/services/warehouses';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 function buildAisles(items: CatalogItem[]): AisleSummary[] {
   const byId = new Map<string | null, { name: string; count: number }>();
@@ -43,7 +43,7 @@ export default async function NewRentalPage({
   searchParams: Promise<{ warehouseId?: string }>;
 }) {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'rentals:create')) {
+  if (!can(ctx, 'rentals:create')) {
     redirect('/dashboard/rentals');
   }
 

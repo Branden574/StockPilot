@@ -7,7 +7,7 @@ import { ScheduleCalendar } from '@/components/schedule/schedule-calendar';
 import { requireOrgContext } from '@/lib/auth/session';
 import { ScheduleService } from '@/server/services/schedule';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const metadata = { title: 'Schedule' };
 
@@ -30,7 +30,7 @@ export default async function SchedulePage({
   // surface. Sidebar already filters this out for them; redirect on
   // direct URL access.
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'schedule:manage')) {
+  if (!can(ctx, 'schedule:manage')) {
     redirect('/dashboard');
   }
   const params = await searchParams;

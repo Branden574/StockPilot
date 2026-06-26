@@ -6,7 +6,7 @@ import { CustomFieldsEditor } from '@/components/settings/custom-fields-editor';
 import { requireOrgContext } from '@/lib/auth/session';
 import { CustomFieldsService } from '@/server/services/custom-fields';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Custom fields — Settings' };
 
@@ -18,7 +18,7 @@ export const metadata: Metadata = { title: 'Custom fields — Settings' };
  */
 export default async function CustomFieldsSettingsPage() {
   const ctx = await requireOrgContext();
-  if (!hasPermission(ctx.role, 'organization:update')) {
+  if (!can(ctx, 'organization:update')) {
     redirect('/dashboard');
   }
 

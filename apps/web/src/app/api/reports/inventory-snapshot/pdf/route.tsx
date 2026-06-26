@@ -16,7 +16,7 @@ import { ServiceError } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
 import { ReportsService } from '@/server/services/reports';
 
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
-    if (!hasPermission(ctx.role, 'reports:export')) {
+    if (!can(ctx, 'reports:export')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
 

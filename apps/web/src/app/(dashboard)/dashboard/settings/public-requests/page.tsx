@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { PublicTokenControls } from '@/components/orders/public-token-controls';
-import { hasPermission } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { OrderRequestsService } from '@/server/services/order-requests';
@@ -16,7 +16,7 @@ export default async function PublicRequestsSettingsPage() {
   // setWarehousePublicOrderable) gate on 'organization:update'. Match that floor
   // here so managers aren't shown config controls (incl. the public token) that
   // always fail on use. (Page gate must match the service/RLS floor.)
-  if (!hasPermission(ctx.role, 'organization:update')) {
+  if (!can(ctx, 'organization:update')) {
     redirect('/dashboard');
   }
 
