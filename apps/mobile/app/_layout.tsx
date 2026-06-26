@@ -12,6 +12,7 @@ import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { initDb } from '@/lib/db';
+import { initSentry, Sentry } from '@/lib/sentry';
 import { palette } from '@/lib/theme';
 import { useBrandFonts } from '@/lib/use-fonts';
 import { useOtaAutoReload } from '@/lib/use-ota-updates';
@@ -19,12 +20,16 @@ import { usePushNotifications } from '@/lib/use-push-notifications';
 import { useSync } from '@/lib/use-sync';
 import { useTheme } from '@/lib/use-theme';
 
+// Initialise crash reporting as early as possible (module load = before the
+// first render). No-op until EXPO_PUBLIC_SENTRY_DSN is set; see src/lib/sentry.ts.
+initSentry();
+
 // Flips true exactly once per JS runtime = once per COLD launch. A warm resume
 // from background does NOT reload this module, so the branded splash never
 // re-shows on resume — only on a true hard relaunch.
 let coldLaunchHandled = false;
 
-export default function RootLayout() {
+function RootLayout() {
   // Apply a freshly-published OTA on this launch (auto check + reload)
   // instead of the default "applies next launch" — so a published update
   // lands after one relaunch, not two.
@@ -103,6 +108,10 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 }
+
+// Sentry.wrap enables the native error boundary + touch/navigation context on
+// the root. It is a transparent pass-through when Sentry has no DSN.
+export default Sentry.wrap(RootLayout);
 
 function RootGate() {
   const { session, loading, locked, mfaRequired } = useAuth();
