@@ -73,36 +73,14 @@ export function PermissionsRealtime({ organizationId, userId, role }: Props) {
     if (!supabase) return;
     let channel: ReturnType<typeof supabase.channel> | null = null;
     try {
-      channel = supabase.channel(`perms:${organizationId}:${userId}`);
-      // Role-level overrides for this org — react only when the row's role
-      // matches ours. (postgres_changes filters on a single column, so we
-      // filter by org and check role in the handler.)
-      channel.on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'role_permission_overrides',
-          filter: `organization_id=eq.${organizationId}`,
-        },
-        (payload) => {
-          const row = (payload.new ?? payload.old) as { role?: string } | null;
-          if (!row || row.role === role) announce();
-        },
-      );
-      // User-level overrides targeting THIS user (RLS already restricts to own
-      // rows for non-admins; the filter keeps an admin from refreshing on every
-      // other user's change).
-      channel.on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'user_permission_overrides',
-          filter: `user_id=eq.${userId}`,
-        },
-        () => announce(),
-      );
+      // Broadcast (not postgres_changes): the server pings `perms:{org}` on
+      // every override write. Reliable pub/sub — no RLS/replica-identity/token
+      // fragility. React only when the ping targets this user's role or them.
+      channel = supabase.channel(`perms:${organizationId}`);
+      channel.on('broadcast', { event: 'changed' }, ({ payload }) => {
+        const p = (payload ?? {}) as { role?: string; userId?: string };
+        if (p.userId === userId || (!!p.role && p.role === role)) announce();
+      });
       channel.subscribe();
     } catch {
       /* realtime unavailable — manual refresh still works */

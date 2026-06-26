@@ -21,6 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { PoAccessDenied } from '@/components/po/po-access-denied';
 import { requireOrgContext } from '@/lib/auth/session';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -31,12 +32,22 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
-import { isManagerOrAbove } from '@stockpilot/core';
+import { can, isManagerOrAbove } from '@stockpilot/core';
 
 export default async function PoDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [ctx, poSvc, inventorySvc, suppliersSvc, locationsSvc, receivingSvc, warehousesSvc] = await Promise.all([
-    requireOrgContext(),
+
+  // Gate in-page BEFORE any service call. poSvc.get() asserts
+  // purchase_orders:read and THROWS forbidden when revoked; a thrown RSC trips
+  // the error boundary ("Something broke loading this page") because Next
+  // renders this page concurrently with the section layout, so the layout's
+  // gate can't catch it first. Checking here renders the clean denial instead.
+  const ctx = await requireOrgContext();
+  if (!can(ctx, 'purchase_orders:read')) {
+    return <PoAccessDenied />;
+  }
+
+  const [poSvc, inventorySvc, suppliersSvc, locationsSvc, receivingSvc, warehousesSvc] = await Promise.all([
     PurchaseOrdersService.forCurrentUser(),
     InventoryService.forCurrentUser(),
     SuppliersService.forCurrentUser(),

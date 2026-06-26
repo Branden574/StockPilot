@@ -31,30 +31,13 @@ export function usePermissionsRealtime(params: {
     if (!organizationId || !userId) return;
     let channel: ReturnType<typeof supabase.channel> | null = null;
     try {
-      channel = supabase.channel(`perms:${organizationId}:${userId}`);
-      channel.on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'role_permission_overrides',
-          filter: `organization_id=eq.${organizationId}`,
-        },
-        (payload) => {
-          const row = (payload.new ?? payload.old) as { role?: string } | null;
-          if (!row || !role || row.role === role) void fetchEffectivePermissions();
-        },
-      );
-      channel.on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'user_permission_overrides',
-          filter: `user_id=eq.${userId}`,
-        },
-        () => void fetchEffectivePermissions(),
-      );
+      // Broadcast (not postgres_changes): the server pings `perms:{org}` on every
+      // override write — reliable pub/sub, no RLS/replica-identity/token issues.
+      channel = supabase.channel(`perms:${organizationId}`);
+      channel.on('broadcast', { event: 'changed' }, ({ payload }) => {
+        const p = (payload ?? {}) as { role?: string; userId?: string };
+        if (p.userId === userId || (!!p.role && p.role === role)) void fetchEffectivePermissions();
+      });
       channel.subscribe();
     } catch {
       /* realtime unavailable — snapshot sync still refreshes permissions */
