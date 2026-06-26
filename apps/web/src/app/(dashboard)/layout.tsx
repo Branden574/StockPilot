@@ -191,6 +191,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         userName={ctx.fullName ?? ctx.email}
         userRole={`${ROLE_LABELS[ctx.role].label} · ${ctx.organizationName}`}
         role={ctx.role}
+        permissions={ctx.permissions ? [...ctx.permissions] : undefined}
         isPlatformAdmin={platformAdmin}
         initialSidebarHidden={initialSidebarHidden}
         enabledModules={enabledModules}

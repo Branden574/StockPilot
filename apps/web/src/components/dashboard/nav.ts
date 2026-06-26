@@ -7,6 +7,7 @@ import {
   type ModuleId,
   type NavOverrides,
   type NavSectionKey,
+  type Permission,
   type Role,
 } from '@stockpilot/core';
 
@@ -57,8 +58,9 @@ export function navForRole(
   role: Role,
   enabledModules: Set<ModuleId>,
   overrides?: NavOverrides | null,
+  permissions?: ReadonlySet<Permission>,
 ): NavSection[] {
-  const resolved = resolveSurface('web_sidebar', { role, enabledModules });
+  const resolved = resolveSurface('web_sidebar', { role, enabledModules, permissions });
   return applyNavOverrides(resolved, overrides ?? null).map((sec) => ({
     label: SECTION_LABEL[sec.section],
     items: sec.items.map((it) => ({
