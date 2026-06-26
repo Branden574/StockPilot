@@ -7,6 +7,7 @@ import { EdgeSwipeOpener } from '@/components/dashboard/edge-swipe-opener';
 import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
 import { NavProgressBar } from '@/components/dashboard/nav-progress-bar';
 import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
+import { PermissionsRealtime } from '@/components/realtime/permissions-realtime';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import {
   isDesktopViewport,
@@ -182,6 +183,10 @@ export function DashboardShell({
           covers links the per-link useLinkStatus indicator can't see
           (topbar, dashboard cards, table rows, breadcrumbs, etc). */}
       <NavProgressBar />
+      {/* Live permission updates: refreshes the dashboard (nav re-gates,
+          section layouts re-evaluate) the instant an admin changes this
+          user's access. Renders nothing. */}
+      <PermissionsRealtime organizationId={organizationId} userId={userId} role={role} />
       {/*
         Skip link: hidden until keyboard-focused. Lets keyboard / screen-
         reader users jump past the sidebar + topbar straight into the
