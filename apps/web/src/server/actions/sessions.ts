@@ -6,15 +6,14 @@ import { z } from 'zod';
 import { sessionIdFromJwt } from '@/lib/auth/api-context';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
 import { audit } from '@/server/services/audit';
-import { ServiceError, withContext } from '@/server/services/context';
+import { ServiceContext, ServiceError, withContext } from '@/server/services/context';
 import { SessionsService } from '@/server/services/sessions';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 const revokeSchema = z.object({ sessionId: z.string().uuid() });
 
-async function currentSessionId(): Promise<string | null> {
-  const ctx = await withContext();
+async function currentSessionId(ctx: ServiceContext): Promise<string | null> {
   const {
     data: { session },
   } = await ctx.supabase.auth.getSession();
@@ -49,11 +48,17 @@ export async function revokeSessionAction(input: {
 export async function revokeOtherSessionsAction(): Promise<ActionResult<{ revoked: 'others' }>> {
   try {
     const ctx = await withContext();
-    const keep = await currentSessionId();
+    const keep = await currentSessionId(ctx);
+    if (keep === null) {
+      return err(
+        'internal_error',
+        'Could not identify your current session — please reload and try again.',
+      );
+    }
     const svc = new SessionsService(ctx);
-    await svc.revokeOthers(keep ?? '00000000-0000-0000-0000-000000000000');
+    await svc.revokeOthers(keep);
     await broadcastToChannel(`user:${ctx.userId}:sessions`, 'revoked', {
-      keepId: keep ?? null,
+      keepId: keep,
     });
     await audit({ event: 'security.session_revoked', entityType: 'session', extra: { scope: 'others' } }, ctx);
     revalidatePath('/dashboard/settings/security');
