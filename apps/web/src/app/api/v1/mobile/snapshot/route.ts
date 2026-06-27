@@ -4,6 +4,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 
 /**
  * Funnels every supabase error in this route through reportError() and
@@ -168,24 +169,49 @@ async function snapshotGET(req: NextRequest) {
   // was over-defensive AND occasionally tripped PostgREST's null-
   // comparison parser when the bundles migration hadn't refreshed the
   // schema cache. Simpler eq filter — same result, no edge cases.
-  let itemQ = ctx.supabase
-    .from('inventory_items')
-    .select(
-      `id, sku, name, barcode, quantity_on_hand, unit_cost, warehouse_id,
-       item_type, is_bundle, updated_at`,
-    )
-    .eq('organization_id', ctx.organizationId)
-    .is('deleted_at', null)
-    .eq('status', 'active')
-    .eq('is_bundle', false)
-    .order('updated_at', { ascending: false })
-    .limit(2000);
-  if (!access.hasAllAccess && access.readableIds.length) {
-    itemQ = itemQ.in('warehouse_id', access.readableIds);
-  }
-  if (since) itemQ = itemQ.gte('updated_at', since);
-  const { data: items, error: itemErr } = await itemQ;
-  if (itemErr) return dbError(ctx, 'items', itemErr);
+  //
+  // PostgREST silently caps any single query at 1000 rows (max_rows).
+  // A `.limit(2000)` call was therefore silently truncating large
+  // inventories. Use fetchAllRows to page through all matching rows.
+  // Stable order on `id` guarantees pages don't overlap or skip rows
+  // when records are written between page fetches.
+  let itemFetchErr: { message?: string; code?: string; details?: string; hint?: string } | null = null;
+  const items = await fetchAllRows<{
+    id: string;
+    sku: string | null;
+    name: string;
+    barcode: string | null;
+    quantity_on_hand: number;
+    unit_cost: number | null;
+    warehouse_id: string | null;
+    item_type: string;
+    is_bundle: boolean;
+    updated_at: string;
+  }>((from, to) => {
+    let q = ctx.supabase
+      .from('inventory_items')
+      .select(
+        `id, sku, name, barcode, quantity_on_hand, unit_cost, warehouse_id,
+         item_type, is_bundle, updated_at`,
+      )
+      .eq('organization_id', ctx.organizationId)
+      .is('deleted_at', null)
+      .eq('status', 'active')
+      .eq('is_bundle', false)
+      .order('id', { ascending: true })
+      .range(from, to);
+    if (!access.hasAllAccess && access.readableIds.length) {
+      q = q.in('warehouse_id', access.readableIds);
+    }
+    if (since) q = q.gte('updated_at', since);
+    return q;
+  }).catch((err: unknown) => {
+    itemFetchErr = err instanceof Error
+      ? { message: err.message }
+      : { message: String(err) };
+    return null;
+  });
+  if (itemFetchErr) return dbError(ctx, 'items', itemFetchErr);
 
   // ── Open POs (and their lines) ──────────────────────────────────
   // purchase_orders ships through a destination_location_id pointer

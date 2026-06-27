@@ -16,6 +16,7 @@ import {
   getDigestData,
   isDigestEmpty,
 } from '@/server/services/digest';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -72,25 +73,7 @@ export async function GET(req: Request) {
     // section flags. One query — joins user_profiles → organization_members
     // → organizations. Per-section flags are filtered AT RENDER TIME so
     // each user's digest reflects only the sections they're subscribed to.
-    const { data: recipients, error } = await admin
-      .from('user_profiles')
-      .select(
-        `
-        id, email,
-        digest_section_low_stock,
-        digest_section_open_pos,
-        digest_section_cycle_counts,
-        organization_members!inner (
-          organization_id,
-          accepted_at,
-          organizations:organization_id (id, name)
-        )
-      `,
-      )
-      .eq('email_digest_optin', true)
-      .not('organization_members.accepted_at', 'is', null);
-    if (error) throw new Error(error.message);
-
+    // Paginated via fetchAllRows to avoid the silent 1000-row PostgREST cap.
     type RecipientRow = {
       id: string;
       email: string;
@@ -107,6 +90,28 @@ export async function GET(req: Request) {
       }>;
     };
 
+    const recipients = await fetchAllRows<RecipientRow>((from, to) =>
+      admin
+        .from('user_profiles')
+        .select(
+          `
+        id, email,
+        digest_section_low_stock,
+        digest_section_open_pos,
+        digest_section_cycle_counts,
+        organization_members!inner (
+          organization_id,
+          accepted_at,
+          organizations:organization_id (id, name)
+        )
+      `,
+        )
+        .eq('email_digest_optin', true)
+        .not('organization_members.accepted_at', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to),
+    );
+
     interface RecipientLite {
       userId: string;
       email: string;
@@ -116,7 +121,7 @@ export async function GET(req: Request) {
     // Fan recipients out by org so each org's payload is computed once
     // even if multiple users in the same org are opted in.
     const byOrg = new Map<string, { orgName: string; recipients: RecipientLite[] }>();
-    for (const row of (recipients ?? []) as RecipientRow[]) {
+    for (const row of recipients) {
       const sections = {
         lowStock: row.digest_section_low_stock ?? true,
         openPos: row.digest_section_open_pos ?? true,
