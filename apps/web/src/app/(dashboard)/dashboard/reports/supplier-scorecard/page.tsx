@@ -1,6 +1,8 @@
+import { Suspense } from 'react';
 import { Download } from 'lucide-react';
 import Link from 'next/link';
 
+import { ReportBodySkeleton } from '@/components/reports/report-body-skeleton';
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,17 +29,26 @@ function daysOrDash(v: number | null): string {
   return `${v.toFixed(1)}d`;
 }
 
-export default async function SupplierScorecardPage({
+export default function SupplierScorecardPage({
   searchParams,
 }: {
   searchParams: Promise<{ days?: string }>;
 }) {
-  const params = await searchParams;
+  const paramsPromise = searchParams;
+
+  return (
+    <SupplierScorecardShell paramsPromise={paramsPromise} />
+  );
+}
+
+async function SupplierScorecardShell({
+  paramsPromise,
+}: {
+  paramsPromise: Promise<{ days?: string }>;
+}) {
+  const params = await paramsPromise;
   const requested = Number(params.days);
   const days = (RANGE_OPTIONS as readonly number[]).includes(requested) ? requested : 90;
-
-  const svc = await ReportsService.forCurrentUser();
-  const data = await svc.supplierScorecard(days);
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -81,6 +92,19 @@ export default async function SupplierScorecardPage({
         </div>
       </div>
 
+      <Suspense fallback={<ReportBodySkeleton />}>
+        <SupplierScorecardBody days={days} />
+      </Suspense>
+    </div>
+  );
+}
+
+async function SupplierScorecardBody({ days }: { days: number }) {
+  const svc = await ReportsService.forCurrentUser();
+  const data = await svc.supplierScorecard(days);
+
+  return (
+    <>
       <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Stat label="Suppliers" value={formatNumber(data.rows.length)} />
         <Stat label="Total POs" value={formatNumber(data.totalPos)} />
@@ -180,7 +204,7 @@ export default async function SupplierScorecardPage({
         for fully-received POs. Fill rate = sum(qty_received) / sum(qty_ordered) across
         all PO line items in the window.
       </p>
-    </div>
+    </>
   );
 }
 

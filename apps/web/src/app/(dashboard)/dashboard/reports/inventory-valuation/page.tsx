@@ -1,7 +1,9 @@
+import { Suspense } from 'react';
 import { Download } from 'lucide-react';
 import Link from 'next/link';
 
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
+import { ReportBodySkeleton } from '@/components/reports/report-body-skeleton';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -15,10 +17,7 @@ import {
 import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 
-export default async function InventoryValuationPage() {
-  const svc = await ReportsService.forCurrentUser();
-  const data = await svc.inventoryValuation();
-
+export default function InventoryValuationPage() {
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -46,6 +45,19 @@ export default async function InventoryValuationPage() {
         </div>
       </div>
 
+      <Suspense fallback={<ReportBodySkeleton />}>
+        <InventoryValuationBody />
+      </Suspense>
+    </div>
+  );
+}
+
+async function InventoryValuationBody() {
+  const svc = await ReportsService.forCurrentUser();
+  const data = await svc.inventoryValuation();
+
+  return (
+    <>
       <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Stat label="Total value" value={formatCurrency(data.totalValue)} />
         <Stat label="Items" value={formatNumber(data.itemCount)} />
@@ -178,7 +190,7 @@ export default async function InventoryValuationPage() {
           </Table>
         </CardContent>
       </Card>
-    </div>
+    </>
   );
 }
 

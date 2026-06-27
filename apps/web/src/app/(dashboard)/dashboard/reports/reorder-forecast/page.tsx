@@ -1,8 +1,10 @@
+import { Suspense } from 'react';
 import { Download } from 'lucide-react';
 import Link from 'next/link';
 
 import { DraftPosFromReorderButton } from '@/components/reports/draft-pos-from-reorder-button';
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
+import { ReportBodySkeleton } from '@/components/reports/report-body-skeleton';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -16,10 +18,7 @@ import {
 import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 
-export default async function ReorderForecastPage() {
-  const svc = await ReportsService.forCurrentUser();
-  const data = await svc.reorderForecast();
-
+export default function ReorderForecastPage() {
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -38,7 +37,6 @@ export default async function ReorderForecastPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <DraftPosFromReorderButton itemCount={data.totalItems} />
             <Button asChild variant="outline">
               <a href="/api/reports/reorder-forecast/csv">
                 <Download className="h-4 w-4" /> CSV
@@ -47,6 +45,25 @@ export default async function ReorderForecastPage() {
             <PdfDownloadDropdown baseUrl="/api/reports/reorder-forecast/pdf" />
           </div>
         </div>
+      </div>
+
+      <Suspense fallback={<ReportBodySkeleton />}>
+        <ReorderForecastBody />
+      </Suspense>
+    </div>
+  );
+}
+
+async function ReorderForecastBody() {
+  const svc = await ReportsService.forCurrentUser();
+  const data = await svc.reorderForecast();
+
+  return (
+    <>
+      {/* Primary action — needs data.totalItems, so it lives in the streamed
+          body (it was previously in the header). */}
+      <div className="mb-4 flex justify-end">
+        <DraftPosFromReorderButton itemCount={data.totalItems} />
       </div>
 
       <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -109,7 +126,7 @@ export default async function ReorderForecastPage() {
           </Table>
         </CardContent>
       </Card>
-    </div>
+    </>
   );
 }
 

@@ -1,7 +1,9 @@
+import { Suspense } from 'react';
 import { Download } from 'lucide-react';
 import Link from 'next/link';
 
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
+import { ReportBodySkeleton } from '@/components/reports/report-body-skeleton';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -17,18 +19,11 @@ import { formatNumber } from '@/lib/utils';
 
 const RANGE_OPTIONS = [7, 30, 90] as const;
 
-export default async function StockMovementsReportPage({
+export default function StockMovementsReportPage({
   searchParams,
 }: {
   searchParams: Promise<{ days?: string }>;
 }) {
-  const params = await searchParams;
-  const requested = Number(params.days);
-  const days = (RANGE_OPTIONS as readonly number[]).includes(requested) ? requested : 30;
-
-  const svc = await ReportsService.forCurrentUser();
-  const data = await svc.movementSummary(days);
-
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -43,6 +38,34 @@ export default async function StockMovementsReportPage({
             <h1 className="text-2xl font-semibold tracking-tight">
               Stock movement summary
             </h1>
+          </div>
+        </div>
+      </div>
+
+      <Suspense fallback={<ReportBodySkeleton />}>
+        <StockMovementsBody searchParams={searchParams} />
+      </Suspense>
+    </div>
+  );
+}
+
+async function StockMovementsBody({
+  searchParams,
+}: {
+  searchParams: Promise<{ days?: string }>;
+}) {
+  const params = await searchParams;
+  const requested = Number(params.days);
+  const days = (RANGE_OPTIONS as readonly number[]).includes(requested) ? requested : 30;
+
+  const svc = await ReportsService.forCurrentUser();
+  const data = await svc.movementSummary(days);
+
+  return (
+    <>
+      <div className="mb-6">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
             <p className="text-muted-foreground mt-1 text-sm">
               All stock movements over the last {days} days.
             </p>
@@ -173,7 +196,7 @@ export default async function StockMovementsReportPage({
           </Table>
         </CardContent>
       </Card>
-    </div>
+    </>
   );
 }
 

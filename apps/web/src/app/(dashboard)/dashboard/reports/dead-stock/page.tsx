@@ -1,6 +1,8 @@
+import { Suspense } from 'react';
 import { Download } from 'lucide-react';
 import Link from 'next/link';
 
+import { ReportBodySkeleton } from '@/components/reports/report-body-skeleton';
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { Button } from '@/components/ui/button';
 import {
@@ -15,15 +17,20 @@ import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 
-export default async function DeadStockPage({
+export default function DeadStockPage({
   searchParams,
 }: {
   searchParams: Promise<{ days?: string }>;
 }) {
-  const params = await searchParams;
-  const days = clampDays(params.days);
-  const svc = await ReportsService.forCurrentUser();
-  const data = await svc.deadStock(days);
+  const daysPromise = searchParams.then((params) => clampDays(params.days));
+
+  return (
+    <DaysShell daysPromise={daysPromise} />
+  );
+}
+
+async function DaysShell({ daysPromise }: { daysPromise: Promise<number> }) {
+  const days = await daysPromise;
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -55,6 +62,19 @@ export default async function DeadStockPage({
         </div>
       </div>
 
+      <Suspense fallback={<ReportBodySkeleton />}>
+        <DeadStockBody days={days} />
+      </Suspense>
+    </div>
+  );
+}
+
+async function DeadStockBody({ days }: { days: number }) {
+  const svc = await ReportsService.forCurrentUser();
+  const data = await svc.deadStock(days);
+
+  return (
+    <>
       <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Stat label="Stagnant items" value={formatNumber(data.itemCount)} />
         <Stat
@@ -119,7 +139,7 @@ export default async function DeadStockPage({
           </TableBody>
         </Table>
       </div>
-    </div>
+    </>
   );
 }
 
