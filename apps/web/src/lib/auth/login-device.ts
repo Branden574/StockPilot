@@ -92,10 +92,13 @@ export async function noteLoginDevice(args: {
         .eq('user_id', args.userId)
         .limit(5);
       for (const m of (memberships ?? []) as { organization_id: string }[]) {
+        // The delivery body lands in customer-controlled Slack/Teams/webhook
+        // infra, so it must carry NO PII. Send a non-PII user id + the device
+        // string only — NOT the email or IP (those go only to the user's own
+        // email alert above + the internal audit_logs in Supabase).
         void dispatchEvent(m.organization_id, 'security.new_device_login', {
-          email: args.email,
+          userId: args.userId,
           device: ua.slice(0, 120),
-          ip: args.ip ?? undefined,
         });
       }
     }

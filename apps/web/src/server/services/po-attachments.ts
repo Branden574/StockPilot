@@ -109,6 +109,14 @@ export class PoAttachmentsService {
     if (poErr) throw new ServiceError('internal_error', poErr.message);
     if (!po) throw new ServiceError('not_found', 'Purchase order not found.');
 
+    // Defense-in-depth: the storage path must live under THIS org's folder
+    // (mirrors OrderAttachmentsService.add). Bucket RLS already blocks cross-org
+    // signed URLs, but this stops the metadata row from referencing another
+    // org's storage path.
+    if (!input.storagePath.startsWith(`${this.ctx.organizationId}/`)) {
+      throw new ServiceError('validation_error', 'Invalid storage path — wrong org prefix.');
+    }
+
     const { data, error } = await this.ctx.supabase
       .from('po_attachments')
       .insert({
