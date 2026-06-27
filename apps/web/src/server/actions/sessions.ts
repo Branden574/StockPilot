@@ -12,6 +12,12 @@ import { SessionsService } from '@/server/services/sessions';
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 const revokeSchema = z.object({ sessionId: z.string().uuid() });
+// Empty name is allowed and CLEARS the custom name. The upper bound is a
+// defensive payload cap; the DB trims and truncates to 60.
+const renameSchema = z.object({
+  sessionId: z.string().uuid(),
+  name: z.string().max(100),
+});
 
 async function currentSessionId(ctx: ServiceContext): Promise<string | null> {
   const {
@@ -42,6 +48,28 @@ export async function revokeSessionAction(input: {
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Failed to sign out device');
+  }
+}
+
+export async function renameSessionAction(input: {
+  sessionId: string;
+  name: string;
+}): Promise<ActionResult<null>> {
+  const parsed = renameSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid device name');
+  try {
+    const ctx = await withContext();
+    const svc = new SessionsService(ctx);
+    // The DB fn (set_my_session_name) enforces auth.uid() ownership, trims,
+    // caps at 60, and treats a blank name as "clear". Renaming a session that
+    // isn't the caller's is a silent no-op there. No broadcast/audit — a rename
+    // is a cosmetic, self-scoped change that only affects this user's own list.
+    await svc.rename(parsed.data.sessionId, parsed.data.name);
+    revalidatePath('/dashboard/settings/security');
+    return ok(null);
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    return err('internal_error', e instanceof Error ? e.message : 'Failed to rename device');
   }
 }
 
