@@ -7,7 +7,7 @@ import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
-import { ServiceError, assertCurrentAal2, withContext } from '@/server/services/context';
+import { ServiceError } from '@/server/services/context';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -20,22 +20,25 @@ export async function generateMfaRecoveryCodesAction(): Promise<
   ActionResult<{ codes: string[] }>
 > {
   try {
-    await requireSession();
+    const session = await requireSession();
     // Block AAL1: this RPC mints fresh PLAINTEXT codes AND wipes the old set, so
     // an attacker with a stolen pre-MFA (AAL1) session could otherwise mint their
     // own recovery codes and use one to strip all MFA. Require a current AAL2
-    // session (the user passed their MFA challenge this session) — recovery codes
-    // only exist for MFA-enrolled users, who can always step up. Mirrors the
-    // unenroll / change-password / set-mfa-policy gates.
-    const svcCtx = await withContext();
-    await assertCurrentAal2(svcCtx);
+    // session. This is a per-USER check — do NOT use withContext() here: recovery
+    // codes are not org-scoped, and withContext() → requireOrgContext() throws
+    // NEXT_REDIRECT for an org-less caller, which this catch would swallow into a
+    // generic internal_error.
+    const supabase = await createClient();
+    const { data: aal, error: aalErr } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aalErr || aal?.currentLevel !== 'aal2') {
+      return err('forbidden', 'Re-authenticate with MFA before regenerating recovery codes.');
+    }
     // Rate-limit regeneration: defends against a loop that repeatedly invalidates
     // the user's codes (TOTP-loss lockout). 3 / 15 min is generous for a human.
-    const rl = await checkRateLimit(`mfa-recovery-gen:${svcCtx.userId}`, 3, 15 * 60_000, 'closed');
+    const rl = await checkRateLimit(`mfa-recovery-gen:${session.userId}`, 3, 15 * 60_000, 'closed');
     if (!rl.allowed) {
       return err('validation_error', 'Too many recovery-code regenerations. Wait a few minutes and try again.');
     }
-    const supabase = await createClient();
     const { data, error } = await supabase.rpc('generate_mfa_recovery_codes');
     if (error) throw new ServiceError('internal_error', error.message);
     const codes = ((data ?? []) as Array<{ code: string }>).map((r) => r.code);

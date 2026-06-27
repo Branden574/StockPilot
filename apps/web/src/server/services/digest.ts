@@ -184,43 +184,47 @@ async function getOpenCycleCounts(
   supabase: SupabaseClient,
   orgId: string,
 ): Promise<DigestCycleCount[]> {
-  // Load cycle counts without the lines embed (PostgREST caps embedded
-  // relations at 1000 rows, which would silently truncate large counts).
-  const { data, error } = await supabase
-    .from('cycle_counts')
-    .select('id, started_at, warehouse:warehouses!warehouse_id (name)')
-    .eq('organization_id', orgId)
-    .eq('status', 'in_progress')
-    .order('started_at', { ascending: true });
-  if (error) throw new ServiceError('internal_error', error.message);
-
-  const counts = (data ?? []) as Array<{
+  // Load cycle counts PAGINATED (PostgREST caps any query at 1000 rows) and
+  // WITHOUT the lines embed (embeds are capped too, which would silently
+  // truncate large counts). Stable order (started_at, then unique id) so pages
+  // don't overlap or skip.
+  const counts = await fetchAllRows<{
     id: string;
     started_at: string;
     warehouse: { name: string } | { name: string }[] | null;
-  }>;
+  }>((from, to) =>
+    supabase
+      .from('cycle_counts')
+      .select('id, started_at, warehouse:warehouses!warehouse_id (name)')
+      .eq('organization_id', orgId)
+      .eq('status', 'in_progress')
+      .order('started_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to),
+  );
 
   if (counts.length === 0) return [];
 
   const countIds = counts.map((c) => c.id);
 
-  // Fetch ALL lines for the open cycle counts, paginated to avoid the
-  // 1000-row PostgREST cap on both the top-level query and any embed.
-  type LineRow = { count_id: string; counted_quantity: number | null };
+  // Fetch ALL lines for the open cycle counts, paginated to avoid the 1000-row
+  // PostgREST cap. NB: the FK column on cycle_count_lines is `cycle_count_id`
+  // (migration 0023), not `count_id`.
+  type LineRow = { cycle_count_id: string; counted_quantity: number | null };
   const lines = await fetchAllRows<LineRow>((from, to) =>
     supabase
       .from('cycle_count_lines')
-      .select('count_id, counted_quantity')
-      .in('count_id', countIds)
-      .order('count_id', { ascending: true })
+      .select('cycle_count_id, counted_quantity')
+      .in('cycle_count_id', countIds)
+      .order('cycle_count_id', { ascending: true })
       .range(from, to),
   );
 
-  // Group line stats by count_id.
+  // Group line stats by cycle_count_id.
   const statsMap = new Map<string, { total: number; counted: number }>();
   for (const id of countIds) statsMap.set(id, { total: 0, counted: 0 });
   for (const line of lines) {
-    const stats = statsMap.get(line.count_id);
+    const stats = statsMap.get(line.cycle_count_id);
     if (!stats) continue;
     stats.total += 1;
     if (line.counted_quantity != null) stats.counted += 1;

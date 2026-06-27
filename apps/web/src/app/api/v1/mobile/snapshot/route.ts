@@ -152,13 +152,17 @@ async function snapshotGET(req: NextRequest) {
   const serverTime = new Date().toISOString();
 
   // ── Warehouses ──────────────────────────────────────────────────
-  const whQ = ctx.supabase
+  let whQ = ctx.supabase
     .from('warehouses')
     .select('id, name, updated_at')
     .eq('organization_id', ctx.organizationId)
     .order('name', { ascending: true });
+  // Restrict to the caller's readable warehouses. The PostgREST builder is
+  // immutable — `.in()` returns a NEW builder, so the result must be
+  // reassigned or the warehouse-access filter is silently dropped (a
+  // restricted user would otherwise receive the org's full warehouse list).
   if (!access.hasAllAccess && access.readableIds.length) {
-    whQ.in('id', access.readableIds);
+    whQ = whQ.in('id', access.readableIds);
   }
   const { data: warehouses, error: whErr } = await whQ;
   if (whErr) return dbError(ctx, 'warehouses', whErr);
