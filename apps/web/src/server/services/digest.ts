@@ -3,6 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { ServiceError } from './context';
+import { fetchAllRows } from './lib/paginate';
 
 export interface DigestLowStockGroup {
   warehouseName: string;
@@ -183,32 +184,57 @@ async function getOpenCycleCounts(
   supabase: SupabaseClient,
   orgId: string,
 ): Promise<DigestCycleCount[]> {
+  // Load cycle counts without the lines embed (PostgREST caps embedded
+  // relations at 1000 rows, which would silently truncate large counts).
   const { data, error } = await supabase
     .from('cycle_counts')
-    .select(
-      'id, started_at, warehouse:warehouses!warehouse_id (name), lines:cycle_count_lines (counted_quantity)',
-    )
+    .select('id, started_at, warehouse:warehouses!warehouse_id (name)')
     .eq('organization_id', orgId)
     .eq('status', 'in_progress')
     .order('started_at', { ascending: true });
   if (error) throw new ServiceError('internal_error', error.message);
 
-  return (data ?? []).map((row) => {
-    const r = row as {
-      id: string;
-      started_at: string;
-      warehouse: { name: string } | { name: string }[] | null;
-      lines: Array<{ counted_quantity: number | null }> | null;
-    };
-    const wh = Array.isArray(r.warehouse) ? r.warehouse[0] : r.warehouse;
-    const lines = r.lines ?? [];
-    const counted = lines.filter((l) => l.counted_quantity != null).length;
+  const counts = (data ?? []) as Array<{
+    id: string;
+    started_at: string;
+    warehouse: { name: string } | { name: string }[] | null;
+  }>;
+
+  if (counts.length === 0) return [];
+
+  const countIds = counts.map((c) => c.id);
+
+  // Fetch ALL lines for the open cycle counts, paginated to avoid the
+  // 1000-row PostgREST cap on both the top-level query and any embed.
+  type LineRow = { count_id: string; counted_quantity: number | null };
+  const lines = await fetchAllRows<LineRow>((from, to) =>
+    supabase
+      .from('cycle_count_lines')
+      .select('count_id, counted_quantity')
+      .in('count_id', countIds)
+      .order('count_id', { ascending: true })
+      .range(from, to),
+  );
+
+  // Group line stats by count_id.
+  const statsMap = new Map<string, { total: number; counted: number }>();
+  for (const id of countIds) statsMap.set(id, { total: 0, counted: 0 });
+  for (const line of lines) {
+    const stats = statsMap.get(line.count_id);
+    if (!stats) continue;
+    stats.total += 1;
+    if (line.counted_quantity != null) stats.counted += 1;
+  }
+
+  return counts.map((row) => {
+    const wh = Array.isArray(row.warehouse) ? row.warehouse[0] : row.warehouse;
+    const stats = statsMap.get(row.id) ?? { total: 0, counted: 0 };
     return {
-      id: r.id,
+      id: row.id,
       warehouseName: wh?.name ?? null,
-      startedAt: r.started_at,
-      totalLines: lines.length,
-      countedLines: counted,
+      startedAt: row.started_at,
+      totalLines: stats.total,
+      countedLines: stats.counted,
     };
   });
 }
