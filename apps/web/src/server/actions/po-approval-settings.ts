@@ -72,12 +72,17 @@ export async function setPoApprovalSettingsAction(
     const prevSettings = prev && typeof prev === 'object' ? (prev as Record<string, unknown>) : {};
     const settings = { ...prevSettings, approvalThresholdAmount: params.approvalThresholdAmount };
 
-    const { error } = await supabase
+    const { data: updated, error } = await supabase
       .from('organization_modules')
       .update({ settings })
       .eq('organization_id', ctx.organizationId)
-      .eq('module_id', 'purchase_orders');
+      .eq('module_id', 'purchase_orders')
+      .select('module_id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    // Fail closed: a 0-row update (RLS miss / missing row) must not report a
+    // silent success or audit a change that never persisted.
+    if (!updated) throw new ServiceError('not_found', 'Purchase orders module settings row not found.');
 
     await audit({
       event: 'po_approval_threshold.updated',
