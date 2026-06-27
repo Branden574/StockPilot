@@ -3,11 +3,14 @@ import * as ImagePicker from 'expo-image-picker';
 import * as React from 'react';
 import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { isManagerOrAbove, type Role } from '@stockpilot/core';
+
 import { useAuth } from '@/lib/auth-context';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { resizeForUpload } from '@/lib/image-resize';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
+import { useWorkspace } from '@/lib/use-workspace';
 
 const BUCKET = 'po-attachments';
 
@@ -48,8 +51,15 @@ function mimeForExt(ext: string): string {
  */
 export function PoAttachments({ poId }: { poId: string }) {
   const { user } = useAuth();
+  const { activeRole } = useWorkspace();
   const permissions = useEffectivePermissions();
-  const canManage = !!permissions && permissions.has('purchase_orders:manage');
+  // When the effective permission set is loaded, trust it (it reflects org
+  // overrides). Until it loads (e.g. a freshly-launched build before its first
+  // snapshot sync), fall back to the role so managers/admins/owners can attach
+  // immediately instead of seeing no button. Mirrors the web `can()` fallback.
+  const canManage = permissions
+    ? permissions.has('purchase_orders:manage')
+    : isManagerOrAbove((activeRole ?? 'viewer') as Role);
 
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const [items, setItems] = React.useState<AttachmentRow[]>([]);
