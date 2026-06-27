@@ -67,7 +67,19 @@ export const createItemSchema = z.object({
   expiryPolicy: z.enum(['none', 'warn', 'block']).optional(),
   /** 'product' (default), 'book', 'asset', or 'consumable'. Drives which UI tab the row appears under. */
   itemType: z.enum(['product', 'book', 'asset', 'consumable']).default('product'),
-  customFields: z.record(z.string(), z.unknown()).default({}),
+  // Bounded to stop a writer from bloating the JSONB column (e.g. 1000 keys ×
+  // multi-MB values): 64-char keys (matches isSnakeCaseKey), ≤50 keys, and no
+  // single string value over 10k chars. Keys without an active field definition
+  // are ignored by validateCustomFields, but the raw payload still lands in the
+  // column, so the gate belongs here at the schema boundary.
+  customFields: z
+    .record(z.string().max(64), z.unknown())
+    .refine((v) => Object.keys(v).length <= 50, 'Too many custom fields (max 50).')
+    .refine(
+      (v) => Object.values(v).every((x) => typeof x !== 'string' || x.length <= 10_000),
+      'A custom field value is too long (max 10000 characters).',
+    )
+    .default({}),
   status: itemStatusSchema.default('active'),
   /**
    * When true, marks the item as a rental asset (canopy, equipment, etc.).
