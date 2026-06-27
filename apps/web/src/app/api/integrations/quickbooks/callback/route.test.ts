@@ -69,8 +69,11 @@ function buildSession() {
  *  - the caller is an admin (holds integrations:manage).
  * Override any key to exercise a specific gate.
  */
-function userClient(overrides: Record<string, QueryResult> = {}) {
-  return makeSupabaseStub({
+function userClient(
+  overrides: Record<string, QueryResult> = {},
+  user: { id: string } | null = { id: USER_ID },
+) {
+  const stub = makeSupabaseStub({
     'org_connections.select': {
       data: [
         {
@@ -92,6 +95,11 @@ function userClient(overrides: Record<string, QueryResult> = {}) {
     },
     ...overrides,
   });
+  // The route now validates the cookie session via supabase.auth.getUser()
+  // (not the proxy-only getServerSession header). Pin it to the test user, or
+  // null to model "not signed in".
+  stub.client.auth.getUser = vi.fn(async () => ({ data: { user }, error: null }));
+  return stub;
 }
 
 /**
@@ -145,7 +153,8 @@ describe('GET /api/integrations/quickbooks/callback', () => {
   });
 
   it('redirects to /signin (302) when there is no session', async () => {
-    vi.mocked(getServerSession).mockResolvedValueOnce(null);
+    // No authenticated cookie user -> the route bounces to /signin.
+    vi.mocked(createClient).mockResolvedValueOnce(userClient({}, null).client as never);
 
     const res = await GET(
       callbackUrl({ code: 'c', state: STATE, realmId: REALM_ID }),

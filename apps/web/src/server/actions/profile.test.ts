@@ -210,7 +210,7 @@ describe('setOrgLogoUrlAction', () => {
 
   it('persists for admin and writes an organization.updated audit entry', async () => {
     const result = await setOrgLogoUrlAction({
-      url: 'https://example.com/logo.png',
+      url: 'https://supa.example.com/storage/v1/object/public/org-logos/org-1/logo.png',
     });
     expect(result.ok).toBe(true);
     expect(audit).toHaveBeenCalledTimes(1);
@@ -218,6 +218,15 @@ describe('setOrgLogoUrlAction', () => {
       expect.objectContaining({ event: 'organization.updated' }),
     );
     expect(revalidatePath).toHaveBeenCalledWith('/dashboard', 'layout');
+  });
+
+  it('rejects a logo URL outside the org’s own storage folder (SSRF guard)', async () => {
+    // logo_url is fetched server-side by the PDF renderers, so an arbitrary host
+    // is an SSRF sink — it must be rejected before persisting.
+    const result = await setOrgLogoUrlAction({ url: 'https://evil.example.com/x.png' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    expect(audit).not.toHaveBeenCalled();
   });
 });
 

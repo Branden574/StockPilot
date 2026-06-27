@@ -32,6 +32,13 @@ vi.mock('@/lib/error-reporter', () => ({
   reportError: vi.fn(async () => undefined),
 }));
 
+// The route now IP-rate-limits before any DB work (closed mode). Stub it to
+// allow — the limiter has its own tests; here we exercise the webhook logic
+// past the gate.
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: vi.fn(async () => ({ allowed: true, count: 0, resetAt: Date.now() + 60_000 })),
+}));
+
 import { POST } from './route';
 
 const SHIPMENT_ID = 'shp_easypost_123';
