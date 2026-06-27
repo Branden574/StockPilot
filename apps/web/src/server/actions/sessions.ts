@@ -12,11 +12,12 @@ import { SessionsService } from '@/server/services/sessions';
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 const revokeSchema = z.object({ sessionId: z.string().uuid() });
-// Empty name is allowed and CLEARS the custom name. The upper bound is a
-// defensive payload cap; the DB trims and truncates to 60.
+// Empty name is allowed and CLEARS the custom name. Cap matches the DB
+// (set_my_session_name truncates at 60) and the UI's maxLength so a direct
+// caller gets a validation error instead of a silently-truncated name.
 const renameSchema = z.object({
   sessionId: z.string().uuid(),
-  name: z.string().max(100),
+  name: z.string().max(60),
 });
 
 async function currentSessionId(ctx: ServiceContext): Promise<string | null> {

@@ -33,7 +33,24 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState('');
   const [savingId, setSavingId] = React.useState<string | null>(null);
+  // Mirrors editingId so an in-flight save can tell whether the user has since
+  // moved to a different row (the save closure captures a stale editingId).
+  const editingIdRef = React.useRef<string | null>(null);
   const others = sessions.filter((s) => !s.isCurrent);
+
+  function beginEdit(id: string | null, value: string) {
+    editingIdRef.current = id;
+    setEditingId(id);
+    setDraft(value);
+  }
+
+  function focusPencil(id: string) {
+    // Return focus to the row's pencil button after the editor unmounts so a
+    // keyboard user isn't dropped to the top of the page.
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(`[data-pencil="${id}"]`)?.focus();
+    });
+  }
 
   async function signOut(id: string) {
     setBusyId(id);
@@ -60,26 +77,30 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
   }
 
   function startEdit(s: SessionInfo) {
-    setEditingId(s.id);
-    setDraft(s.customName ?? '');
+    beginEdit(s.id, s.customName ?? '');
   }
 
-  function cancelEdit() {
-    setEditingId(null);
-    setDraft('');
+  function cancelEdit(id: string) {
+    beginEdit(null, '');
+    focusPencil(id);
   }
 
   async function saveName(id: string) {
+    const sent = draft.trim();
     setSavingId(id);
-    const res = await renameSessionAction({ sessionId: id, name: draft.trim() });
+    const res = await renameSessionAction({ sessionId: id, name: sent });
     setSavingId(null);
     if (!res.ok) {
       toast.error(res.error.message);
       return;
     }
-    setEditingId(null);
-    setDraft('');
-    toast.success(draft.trim() ? 'Device renamed.' : 'Custom name cleared.');
+    // Only leave edit mode if the user is still on THIS row — they may have
+    // switched to another row while the save was in flight.
+    if (editingIdRef.current === id) {
+      beginEdit(null, '');
+      focusPencil(id);
+    }
+    toast.success(sent ? 'Device renamed.' : 'Custom name cleared.');
     router.refresh();
   }
 
@@ -91,7 +112,7 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
           const isEditing = editingId === s.id;
           return (
             <li key={s.id} className="flex items-center gap-3 px-3 py-3">
-              <MonitorSmartphone className="text-muted-foreground h-4 w-4 shrink-0" />
+              <MonitorSmartphone className="text-muted-foreground h-4 w-4 shrink-0" aria-hidden="true" />
               <div className="min-w-0 flex-1">
                 {isEditing ? (
                   <div className="flex items-center gap-2">
@@ -100,7 +121,7 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
                       value={draft}
                       maxLength={MAX_NAME}
                       placeholder={s.label}
-                      aria-label="Device name"
+                      aria-label={`Rename ${display}`}
                       disabled={savingId === s.id}
                       onChange={(e) => setDraft(e.target.value)}
                       onKeyDown={(e) => {
@@ -109,7 +130,7 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
                           void saveName(s.id);
                         } else if (e.key === 'Escape') {
                           e.preventDefault();
-                          cancelEdit();
+                          cancelEdit(s.id);
                         }
                       }}
                       className="h-8"
@@ -133,8 +154,8 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
                       size="icon"
                       className="h-8 w-8 shrink-0"
                       disabled={savingId === s.id}
-                      aria-label="Cancel"
-                      onClick={cancelEdit}
+                      aria-label="Cancel rename"
+                      onClick={() => cancelEdit(s.id)}
                     >
                       <X className="h-3.5 w-3.5" />
                     </Button>
@@ -156,7 +177,8 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
                       )}
                       <button
                         type="button"
-                        aria-label="Rename device"
+                        data-pencil={s.id}
+                        aria-label={`Rename ${display}`}
                         title="Rename device"
                         className="text-muted-foreground hover:text-foreground shrink-0"
                         onClick={() => startEdit(s)}

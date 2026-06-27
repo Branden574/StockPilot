@@ -1,6 +1,6 @@
 -- pgTAP: editable session-scoped device names (migration 0214).
 begin;
-select plan(10);
+select plan(13);
 
 \set userA '\'d2000000-0000-0000-0000-0000000000a1\''
 \set userB '\'d2000000-0000-0000-0000-0000000000b2\''
@@ -47,13 +47,28 @@ select is(
   'an over-long name is capped at 60 chars'
 );
 select is(
+  public.set_my_session_name(:sessA1, repeat('y', 60)),
+  1,
+  'set_my_session_name accepts a name at exactly the 60-char limit'
+);
+select is(
+  (select length(custom_name) from public.list_my_sessions() where id = :sessA1),
+  60,
+  'a name of exactly 60 chars is stored intact (not truncated)'
+);
+select is(
   public.set_my_session_name(:sessA1, '   '),
   1,
-  'a blank name clears the custom name'
+  'a blank/whitespace name clears the custom name'
 );
 select ok(
   (select custom_name from public.list_my_sessions() where id = :sessA1) is null,
   'a cleared name reverts to null (auto label)'
+);
+select is(
+  public.set_my_session_name(:sessA1, null),
+  1,
+  'an explicit NULL name is accepted and treated as clear'
 );
 select is(
   public.revoke_my_session(:sessA2),
@@ -61,15 +76,20 @@ select is(
   'revoke_my_session deletes the caller''s named session (primes cascade)'
 );
 
+-- Become user B (same authenticated role, switch the JWT subject).
+set local "request.jwt.claim.sub" to 'd2000000-0000-0000-0000-0000000000b2';
+select ok(
+  (select count(*)::int from public.list_my_sessions()) = 1
+    and (select custom_name from public.list_my_sessions() where id = :sessB1) is null,
+  'user B sees only their own 1 session and no custom name (A''s attempt never landed)'
+);
+
 reset role;
 
 select ok(
-  not exists (select 1 from public.user_session_names where session_id = :sessB1),
-  'no name row is ever written for another user''s session'
-);
-select ok(
-  not exists (select 1 from public.user_session_names where session_id = :sessA2),
-  'the name row cascades away when its session is revoked'
+  not exists (select 1 from public.user_session_names where session_id = :sessA2)
+    and not exists (select 1 from public.user_session_names where session_id = :sessB1),
+  'name row cascades away on revoke, and no row was ever written for another user''s session'
 );
 
 select * from finish();
