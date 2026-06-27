@@ -348,14 +348,15 @@ export async function placeStockAction(
     return ok({ toLocationId });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` as a P0001 exception whose
-    // text surfaces verbatim in error.message (see mig 0191). The service wraps
-    // any RPC error as ServiceError('internal_error', error.message), so we map
-    // that specific text to a friendly message here. Case-insensitive so a bare
-    // RPC message ("INSUFFICIENT_STOCK") still matches if the wrapping changes.
+    // text surfaces verbatim in the RPC error. The service wraps any RPC error
+    // as ServiceError('internal_error', error.message); the raw text now lives
+    // on `internalDetail` (the public `message` is sanitized to a generic string
+    // for internal_error — S13), so match against internalDetail. Case-
+    // insensitive so a bare RPC message ("INSUFFICIENT_STOCK") still matches.
     if (
       e instanceof ServiceError &&
       e.code === 'internal_error' &&
-      e.message.toLowerCase().includes('insufficient_stock')
+      (e.internalDetail ?? '').toLowerCase().includes('insufficient_stock')
     ) {
       return err('validation_error', "Can't place more than is staged.");
     }
