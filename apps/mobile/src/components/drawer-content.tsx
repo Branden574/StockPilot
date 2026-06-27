@@ -47,10 +47,11 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const segments = useSegments();
   // Force-logout: when this device's session is revoked from another device,
   // sign out and redirect to the sign-in screen.
-  useSessionRevocation(
-    user?.id ?? null,
-    React.useCallback(() => router.replace('/(auth)/sign-in'), [router]),
+  const handleForcedSignOut = React.useCallback(
+    () => router.replace('/(auth)/sign-in'),
+    [router],
   );
+  useSessionRevocation(user?.id ?? null, handleForcedSignOut);
 
   const activeHref = React.useMemo(() => {
     const path = '/' + segments.filter((s) => !s.startsWith('(')).join('/');

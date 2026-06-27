@@ -19,7 +19,6 @@ export function SessionRevocationListener({ userId }: { userId: string }) {
     try {
       supabaseRef.current = createClient();
     } catch {
-      // eslint-disable-next-line react-hooks/refs -- ref init, not setState
       supabaseRef.current = null;
     }
   }
@@ -56,7 +55,11 @@ export function SessionRevocationListener({ userId }: { userId: string }) {
           (Array.isArray(p.sessionIds) && !!mine && p.sessionIds.includes(mine)) ||
           ('keepId' in p && !!mine && p.keepId !== mine);
         if (!targeted) return;
-        void supabase!.auth.signOut().finally(() => {
+        // scope:'local' clears ONLY this browser. The authoritative server-side
+        // revoke already happened (the broadcaster deleted our auth.sessions
+        // row); a default global signOut here would cascade and revoke the
+        // user's OTHER devices too — defeating "sign out just this one".
+        void supabase!.auth.signOut({ scope: 'local' }).finally(() => {
           toast.message('You were signed out from another device.');
           router.replace('/signin');
         });
