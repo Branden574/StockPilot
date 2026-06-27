@@ -59,23 +59,23 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
     PoAttachmentsService.forCurrentUser(),
   ]);
 
-  let result;
-  try {
-    result = await poSvc.get(id);
-  } catch (e) {
-    if (e instanceof ServiceError && e.code === 'not_found') notFound();
-    throw e;
-  }
-
-  const { po, lines } = result;
-
-  const [suppliers, locations, receiptData, warehouses, attachments] = await Promise.all([
+  // po.get() and all the PO-INDEPENDENT queries (they need only `id`, not the
+  // fetched PO row) start together — one round trip instead of two sequential
+  // stages. Only referencedItems below depends on po.lines, so it still waits.
+  // (P13) The not_found → notFound() handling stays scoped to po.get().
+  const [result, suppliers, locations, receiptData, warehouses, attachments] = await Promise.all([
+    poSvc.get(id).catch((e) => {
+      if (e instanceof ServiceError && e.code === 'not_found') notFound();
+      throw e;
+    }),
     suppliersSvc.list(),
     locationsSvc.list({ excludeSystem: true }),
     receivingSvc.listForPurchaseOrder(id),
     warehousesSvc.list(),
     poAttachSvc.list(id),
   ]);
+
+  const { po, lines } = result;
   const canManagePo = can(ctx, 'purchase_orders:manage');
 
   // Load only the items actually referenced on this PO (lines + receipts)
