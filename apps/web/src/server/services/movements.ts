@@ -165,23 +165,28 @@ export async function getDashboardSummary(
   // Warehouse-scoped path: PostgREST aggregate isn't great here, so we
   // pull just the four numeric columns we need and roll up in TS. Cheap
   // because we filter by warehouse_id (indexed) and project 4 columns.
-  const { data, error } = await ctx.supabase
-    .from('inventory_items')
-    .select('quantity_on_hand, reorder_point, unit_cost, status')
-    .eq('organization_id', ctx.organizationId)
-    .eq('warehouse_id', options.warehouseId)
-    .is('deleted_at', null);
-  if (error) throw new ServiceError('internal_error', error.message);
-  let itemCount = 0;
-  let outOfStockCount = 0;
-  let lowStockCount = 0;
-  let inventoryValue = 0;
-  for (const r of (data ?? []) as Array<{
+  // PAGINATED: a bare select is silently capped at 1000 rows, so a warehouse
+  // with >1000 items would roll up a wrong (truncated) dashboard summary.
+  const data = await fetchAllRows<{
     quantity_on_hand: number;
     reorder_point: number;
     unit_cost: number;
     status: string;
-  }>) {
+  }>((from, to) =>
+    ctx.supabase
+      .from('inventory_items')
+      .select('quantity_on_hand, reorder_point, unit_cost, status')
+      .eq('organization_id', ctx.organizationId)
+      .eq('warehouse_id', options.warehouseId)
+      .is('deleted_at', null)
+      .order('id', { ascending: true })
+      .range(from, to),
+  );
+  let itemCount = 0;
+  let outOfStockCount = 0;
+  let lowStockCount = 0;
+  let inventoryValue = 0;
+  for (const r of data) {
     if (r.status !== 'active') continue;
     itemCount += 1;
     inventoryValue += (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0);

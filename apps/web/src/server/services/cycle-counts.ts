@@ -4,6 +4,7 @@ import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib
 
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
+import { fetchAllRows } from './lib/paginate';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -439,18 +440,25 @@ export class CycleCountsService {
         await assertWarehouseAccess(input.warehouseId, 'write', this.ctx);
       }
 
-      let itemQuery = this.ctx.supabase
-        .from('inventory_items')
-        .select('id, quantity_on_hand, warehouse_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .is('deleted_at', null)
-        .eq('status', 'active');
-      if (input.warehouseId) {
-        itemQuery = itemQuery.eq('warehouse_id', input.warehouseId);
-      }
-      const { data, error: iErr } = await itemQuery;
-      if (iErr) throw new ServiceError('internal_error', iErr.message);
-      items = (data ?? []) as typeof items;
+      // PAGINATED: a bare select caps at 1000 rows, silently dropping items
+      // beyond #1000 from the cycle count for a large warehouse.
+      const wid = input.warehouseId;
+      const data = await fetchAllRows<{
+        id: string;
+        quantity_on_hand: number;
+        warehouse_id: string | null;
+      }>((from, to) => {
+        let q = this.ctx.supabase
+          .from('inventory_items')
+          .select('id, quantity_on_hand, warehouse_id')
+          .eq('organization_id', this.ctx.organizationId)
+          .is('deleted_at', null)
+          .eq('status', 'active')
+          .order('id', { ascending: true });
+        if (wid) q = q.eq('warehouse_id', wid);
+        return q.range(from, to);
+      });
+      items = data as typeof items;
       requested = items.length;
       if (items.length === 0) {
         const where = input.warehouseId ? 'this warehouse' : 'your organization';
