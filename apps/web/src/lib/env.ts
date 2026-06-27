@@ -3,7 +3,14 @@
  * dev never throws on missing values; instead it logs a warning and falls
  * back to placeholders so the marketing pages render without a Supabase
  * project running.
+ *
+ * SERVER-ONLY: this module parses real secrets (SUPABASE_SERVICE_ROLE_KEY,
+ * STRIPE_SECRET_KEY, GEMINI_API_KEY, …), so the `server-only` guard makes any
+ * client-bundle import a BUILD ERROR. Client components read NEXT_PUBLIC_*
+ * values from `lib/env.client.ts` instead.
  */
+import 'server-only';
+
 import { z } from 'zod';
 
 const optionalSecret = z.string().optional().default('');
