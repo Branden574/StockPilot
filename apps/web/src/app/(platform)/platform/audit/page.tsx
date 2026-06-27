@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { listPlatformAudit, type PlatformAuditAction } from '@/server/services/platform/audit';
 
 export const dynamic = 'force-dynamic';
@@ -21,6 +22,10 @@ export default async function PlatformAuditPage({
 }: {
   searchParams: Promise<{ org?: string }>;
 }) {
+  // In-page gate — the layout renders in parallel and can't stop this body's
+  // service-role read of the cross-org platform-admin audit trail.
+  await requirePlatformAdmin();
+
   const { org } = await searchParams;
   const orgFilter = org && /^[0-9a-f-]{36}$/i.test(org) ? org : undefined;
   const rows = await listPlatformAudit({ limit: 200, organizationId: orgFilter });

@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import { ActAsButton } from '@/components/platform/act-as-button';
 import { BillingPanel } from '@/components/platform/billing-panel';
 import { PasswordResetButton } from '@/components/platform/password-reset-button';
+import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import {
@@ -35,6 +36,14 @@ export default async function PlatformOrgDetailPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ tab?: string }>;
 }) {
+  // In-page gate — see note in (platform)/platform/page.tsx. The layout's
+  // requirePlatformAdmin can't stop this page body (it renders in parallel),
+  // and this body does cross-org service-role READS *and a WRITE*
+  // (recordPlatformAudit). Re-gate before any of it runs so a non-admin
+  // hitting /platform/orgs/{anyOrgId} can neither read another tenant's data
+  // nor forge a platform-audit row.
+  await requirePlatformAdmin();
+
   const { id } = await params;
   const { tab: tabParam } = await searchParams;
   const tab: Tab = (TABS.find((t) => t.key === tabParam)?.key ?? 'overview') as Tab;
