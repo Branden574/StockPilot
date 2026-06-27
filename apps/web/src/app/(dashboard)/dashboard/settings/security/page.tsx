@@ -1,15 +1,19 @@
 import { ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 
+import { ActiveSessions } from '@/components/settings/active-sessions';
 import { ChangePasswordForm } from '@/components/settings/change-password-form';
 import { MfaEnrollment } from '@/components/settings/mfa-enrollment';
 import { MfaPolicyEditor } from '@/components/settings/mfa-policy-editor';
 import { MfaRecoveryCodes } from '@/components/settings/mfa-recovery-codes';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { sessionIdFromJwt } from '@/lib/auth/api-context';
 import { requireOrgContext } from '@/lib/auth/session';
-import { getMfaRecoveryCodeStatus } from '@/server/actions/mfa-recovery';
 import { createClient } from '@/lib/supabase/server';
+import { getMfaRecoveryCodeStatus } from '@/server/actions/mfa-recovery';
+import { withContext } from '@/server/services/context';
+import { SessionsService } from '@/server/services/sessions';
 
 type Policy = 'optional' | 'admins_required' | 'all_required';
 
@@ -22,6 +26,14 @@ export default async function SecuritySettingsPage({
   const enrollMode = params.enroll === '1';
   const ctx = await requireOrgContext();
   const supabase = await createClient();
+
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const currentSessionId = session?.access_token ? sessionIdFromJwt(session.access_token) : null;
+  const activeSessions = await new SessionsService(await withContext())
+    .list(currentSessionId)
+    .catch(() => []);
 
   const [factorsRes, orgRow, recoveryStatus, aalRes] = await Promise.all([
     supabase.auth.mfa.listFactors(),
@@ -126,6 +138,18 @@ export default async function SecuritySettingsPage({
               verifiedFactors={verifiedFactors}
               policyRequired={policyRequired}
             />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Active sessions</CardTitle>
+            <CardDescription>
+              Devices you&apos;re signed in on. Sign out any you don&apos;t recognize.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ActiveSessions sessions={activeSessions} />
           </CardContent>
         </Card>
 
