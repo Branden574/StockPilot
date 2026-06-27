@@ -21,6 +21,7 @@ export type AuditEvent =
   | 'user.deactivated'
   | 'user.reactivated'
   | 'user.password.changed'
+  | 'security.session_revoked'
   | 'inventory.item.created'
   | 'inventory.item.updated'
   | 'inventory.item.duplicated'
