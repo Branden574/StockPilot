@@ -38,6 +38,21 @@ export function aalFromJwt(token: string): 'aal1' | 'aal2' | null {
   }
 }
 
+/** Reads the `session_id` claim from a Supabase access token (already validated
+ *  upstream). Used to identify the caller's CURRENT auth.sessions row. */
+export function sessionIdFromJwt(token: string): string | null {
+  try {
+    const part = token.split('.')[1];
+    if (!part) return null;
+    const payload = JSON.parse(Buffer.from(part, 'base64url').toString('utf8')) as {
+      session_id?: unknown;
+    };
+    return typeof payload.session_id === 'string' ? payload.session_id : null;
+  } catch {
+    return null;
+  }
+}
+
 async function resolveApiMfaState(
 
   supabase: any,
