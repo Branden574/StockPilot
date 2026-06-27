@@ -224,6 +224,17 @@ export async function setAvatarUrlAction(input: {
 }
 
 /**
+ * Build the only legal storage-public-URL prefix for an org's logo uploads.
+ * Anything outside this prefix is rejected — the logo_url is later passed to
+ * server-side <Image src> in five PDF/export renderers, so an arbitrary URL
+ * here is an SSRF sink (the render worker would fetch it).
+ */
+function expectedLogoPrefix(orgId: string): string {
+  const base = (env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/$/, '');
+  return `${base}/storage/v1/object/public/org-logos/${orgId}/`;
+}
+
+/**
  * Persists a new logo_url on the organization. Owner/admin only. Same
  * upload-then-record split as setAvatarUrlAction.
  */
@@ -245,6 +256,22 @@ export async function setOrgLogoUrlAction(input: {
     if (ctx.role !== 'owner' && ctx.role !== 'admin') {
       return err('forbidden', 'Only owners and admins can change the logo.');
     }
+    // SSRF guard: the logo_url is fetched server-side by the PDF/export
+    // renderers (<Image src=…>), so it must point at THIS org's own logo in our
+    // public storage bucket — not an arbitrary host (e.g. a metadata endpoint).
+    let persistUrl: string | null = null;
+    if (parsed.data.url !== null) {
+      const prefix = expectedLogoPrefix(ctx.organizationId);
+      const candidate = parsed.data.url.split('?')[0] ?? parsed.data.url;
+      if (!candidate.startsWith(prefix)) {
+        return err(
+          'validation_error',
+          'Logo URL must point at your organization’s logo in the StockPilot storage bucket.',
+        );
+      }
+      // Drop any ?t= cache-buster before persisting (matches the avatar path).
+      persistUrl = candidate;
+    }
     const supabase = await createClient();
     const { data: prev } = await supabase
       .from('organizations')
@@ -253,7 +280,7 @@ export async function setOrgLogoUrlAction(input: {
       .maybeSingle();
     const { data: updated, error } = await supabase
       .from('organizations')
-      .update({ logo_url: parsed.data.url })
+      .update({ logo_url: persistUrl })
       .eq('id', ctx.organizationId)
       .select('id')
       .maybeSingle();
@@ -269,7 +296,7 @@ export async function setOrgLogoUrlAction(input: {
       entityType: 'organization',
       entityId: ctx.organizationId,
       before: { logo_url: prev?.logo_url ?? null },
-      after: { logo_url: parsed.data.url },
+      after: { logo_url: persistUrl },
     });
     // Invalidate the cached org row in lib/dashboard/cached-org.ts so
     // the new logo appears in the dashboard shell on next nav instead

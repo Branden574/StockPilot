@@ -31,6 +31,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
 
+  // Enforce the org's MFA policy before this destructive action, matching the
+  // web `deleteOwnAccountAction` gateMfa() check. withApiContext resolves
+  // mfaRequired/mfaSatisfied but the route must act on them — otherwise an
+  // AAL1 bearer token could delete the account under an MFA-required policy.
+  if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+    return NextResponse.json(
+      { error: 'mfa_required', message: 'Multi-factor authentication required.' },
+      { status: 403 },
+    );
+  }
+
   let body: { confirm?: string } = {};
   try {
     body = (await req.json()) as typeof body;

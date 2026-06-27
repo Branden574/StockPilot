@@ -26,6 +26,13 @@ export class ZendeskClient {
   private readonly base: string;
   private readonly authHeader: string;
   constructor(cfg: ZendeskConfig, private readonly fetchImpl: typeof fetch = fetch) {
+    // Defense-in-depth against host injection / SSRF: the subdomain is
+    // interpolated straight into the request host, so a value containing
+    // `.`, `/`, `:`, `@`, `#`, `?` or whitespace could retarget the host
+    // (e.g. `169.254.169.254#`). Allow only a DNS label.
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(cfg.subdomain)) {
+      throw new ZendeskApiError(400, 'Invalid Zendesk subdomain');
+    }
     this.base = `https://${cfg.subdomain}.zendesk.com/api/v2`;
     const token = Buffer.from(`${cfg.email}/token:${cfg.apiToken}`).toString('base64');
     this.authHeader = `Basic ${token}`;

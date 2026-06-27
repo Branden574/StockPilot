@@ -516,6 +516,13 @@ export class ConnectionsService {
     if (!subdomain || !email || !apiToken) {
       throw new ServiceError('validation_error', 'Subdomain, agent email, and API token are all required.');
     }
+    // SSRF guard: the subdomain is interpolated into the Zendesk request host,
+    // so reject anything that isn't a bare DNS label (no `.`, `/`, `:`, `@`,
+    // `#`, `?`, whitespace) — otherwise `169.254.169.254#` etc. could retarget
+    // the host to an internal/metadata address.
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(subdomain)) {
+      throw new ServiceError('validation_error', 'Invalid Zendesk subdomain — use only letters, numbers, and hyphens.');
+    }
     try {
       await new ZendeskClient({ subdomain, email, apiToken }).validateToken();
     } catch {

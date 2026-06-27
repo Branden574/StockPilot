@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
-import { getServerSession } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from '@/server/services/audit';
@@ -50,8 +49,15 @@ export async function GET(req: Request) {
   };
 
   // The user must be signed in to complete a connect they themselves started.
-  const session = await getServerSession();
-  if (!session) {
+  // NOTE: /api/* routes are NOT covered by the proxy that sets (and strips)
+  // x-stockpilot-user-id, so getServerSession() — which trusts that header — is
+  // both spoofable AND empty here. Validate the cookie session directly with
+  // auth.getUser(), the same way every other /api route does.
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
     return NextResponse.redirect(new URL('/signin', appUrl), { status: 302 });
   }
 
@@ -70,8 +76,6 @@ export async function GET(req: Request) {
   }
 
   try {
-    const supabase = await createClient();
-
     // 1. Verify state against the PENDING row. RLS scopes this to the user's
     //    own orgs, so a hit proves both the CSRF state and org membership.
     const { data: conn, error: connErr } = await supabase
@@ -109,7 +113,7 @@ export async function GET(req: Request) {
       .from('organization_members')
       .select('role')
       .eq('organization_id', organizationId)
-      .eq('user_id', session.userId)
+      .eq('user_id', user.id)
       .not('accepted_at', 'is', null)
       .maybeSingle();
     const role = (member as { role: Role } | null)?.role;
@@ -159,7 +163,7 @@ export async function GET(req: Request) {
       },
       {
         organizationId,
-        userId: session.userId,
+        userId: user.id,
         role,
         supabase,
         mfaRequired: false,
