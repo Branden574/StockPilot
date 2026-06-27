@@ -7,7 +7,7 @@ import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, assertCurrentAal2, withContext } from '@/server/services/context';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -20,11 +20,18 @@ export async function generateMfaRecoveryCodesAction(): Promise<
   ActionResult<{ codes: string[] }>
 > {
   try {
-    const session = await requireSession();
-    // Rate-limit regeneration: this RPC WIPES all existing recovery codes, so an
-    // attacker with a stolen AAL1 session could loop it to repeatedly invalidate
+    await requireSession();
+    // Block AAL1: this RPC mints fresh PLAINTEXT codes AND wipes the old set, so
+    // an attacker with a stolen pre-MFA (AAL1) session could otherwise mint their
+    // own recovery codes and use one to strip all MFA. Require a current AAL2
+    // session (the user passed their MFA challenge this session) — recovery codes
+    // only exist for MFA-enrolled users, who can always step up. Mirrors the
+    // unenroll / change-password / set-mfa-policy gates.
+    const svcCtx = await withContext();
+    await assertCurrentAal2(svcCtx);
+    // Rate-limit regeneration: defends against a loop that repeatedly invalidates
     // the user's codes (TOTP-loss lockout). 3 / 15 min is generous for a human.
-    const rl = await checkRateLimit(`mfa-recovery-gen:${session.userId}`, 3, 15 * 60_000, 'closed');
+    const rl = await checkRateLimit(`mfa-recovery-gen:${svcCtx.userId}`, 3, 15 * 60_000, 'closed');
     if (!rl.allowed) {
       return err('validation_error', 'Too many recovery-code regenerations. Wait a few minutes and try again.');
     }
@@ -96,25 +103,20 @@ export async function consumeMfaRecoveryCodeAction(input: {
       );
     }
 
-    // Password re-confirm: an attacker holding a stolen AAL1 session
-    // cookie + leaked recovery codes can otherwise strip MFA. By
-    // requiring the password here we tie the action to knowledge the
-    // attacker probably doesn't have, even with full cookie theft.
-    // The `password` field is optional in the schema to keep older
-    // mobile/web clients working during rollout, but the verify is
-    // strict when present and the caller is expected to always send
-    // it now that the UI is wired.
-    if (input.password) {
-      const pwRes = await verifyPasswordSideChannel(
-        session.email,
-        input.password,
+    // Password re-confirm is MANDATORY. This flow is inherently AAL1 (the user
+    // lost their TOTP device, so AAL2 step-up is impossible), so the account
+    // password — knowledge a cookie thief lacks — is the ONLY gate stopping a
+    // stolen AAL1 session from stripping all MFA. It used to be optional
+    // (`if (input.password)`), which let a direct call skip the check entirely.
+    if (!input.password) {
+      return err('forbidden', 'Your account password is required to use a recovery code.');
+    }
+    const pwRes = await verifyPasswordSideChannel(session.email, input.password);
+    if (!pwRes.ok) {
+      return err(
+        pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',
+        pwRes.message,
       );
-      if (!pwRes.ok) {
-        return err(
-          pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',
-          pwRes.message,
-        );
-      }
     }
 
     const supabase = await createClient();

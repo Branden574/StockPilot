@@ -1,15 +1,19 @@
 import type { Metadata } from 'next';
 
 import { CreateOrgForForm } from '@/components/admin/create-org-for-form';
+import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 
 export const metadata: Metadata = { title: 'Provision organization · Platform' };
 
 /**
- * Provision a new tenant org for a customer. The gate lives in the
- * (platform) layout (requirePlatformAdmin); the underlying
- * createOrgForCustomerAction re-checks isPlatformAdmin server-side.
+ * Provision a new tenant org for a customer. Gated in-page (the layout renders
+ * in parallel so its gate can't be relied on alone); the underlying
+ * createOrgForCustomerAction also re-checks the platform-admin allowlist +
+ * step-up server-side. No server-side reads here, but the in-page gate keeps
+ * the whole (platform) tree uniform.
  */
-export default function PlatformProvisionPage() {
+export default async function PlatformProvisionPage() {
+  await requirePlatformAdmin();
   return (
     <div className="mx-auto w-full max-w-2xl px-6 pb-20 pt-7">
       <div className="mb-6 border-b border-border pb-4">

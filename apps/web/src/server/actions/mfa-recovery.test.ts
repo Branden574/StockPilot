@@ -14,6 +14,11 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 
+// Password re-confirm is MANDATORY on consume — mock the verifier (default: ok).
+vi.mock('@/lib/auth/verify-password', () => ({
+  verifyPasswordSideChannel: vi.fn(async () => ({ ok: true })),
+}));
+
 const stubHolder: { stub: ReturnType<typeof makeSupabaseStub> | null } = {
   stub: null,
 };
@@ -28,7 +33,11 @@ vi.mock('@/lib/supabase/admin', () => ({
 
 import { revalidatePath } from 'next/cache';
 
+import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
+
 import { consumeMfaRecoveryCodeAction } from './mfa-recovery';
+
+const PW = 'correct horse battery staple';
 
 function attachAdminMfa(
   stub: ReturnType<typeof makeSupabaseStub>,
@@ -56,11 +65,43 @@ describe('consumeMfaRecoveryCodeAction', () => {
     stubHolder.stub = null;
   });
 
+  it('rejects when no password is provided (mandatory re-confirm)', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      'rpc:consume_mfa_recovery_code': { data: true, error: null },
+    });
+    const { deleteFactor } = attachAdminMfa(stubHolder.stub, [
+      { id: 'f1', factor_type: 'totp' },
+    ]);
+    const result = await consumeMfaRecoveryCodeAction({ code: 'good-code' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('forbidden');
+    // The factor-stripping must NEVER run without a verified password.
+    expect(deleteFactor).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the password is wrong', async () => {
+    vi.mocked(verifyPasswordSideChannel).mockResolvedValueOnce({
+      ok: false,
+      reason: 'invalid_password',
+      message: 'Incorrect password.',
+    } as Awaited<ReturnType<typeof verifyPasswordSideChannel>>);
+    stubHolder.stub = makeSupabaseStub({
+      'rpc:consume_mfa_recovery_code': { data: true, error: null },
+    });
+    const { deleteFactor } = attachAdminMfa(stubHolder.stub, [
+      { id: 'f1', factor_type: 'totp' },
+    ]);
+    const result = await consumeMfaRecoveryCodeAction({ code: 'good-code', password: 'wrong' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('forbidden');
+    expect(deleteFactor).not.toHaveBeenCalled();
+  });
+
   it('returns validation_error when the recovery code is invalid', async () => {
     stubHolder.stub = makeSupabaseStub({
       'rpc:consume_mfa_recovery_code': { data: false, error: null },
     });
-    const result = await consumeMfaRecoveryCodeAction({ code: 'bad-code' });
+    const result = await consumeMfaRecoveryCodeAction({ code: 'bad-code', password: PW });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('validation_error');
   });
@@ -72,7 +113,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
         error: { message: 'sql blew up' },
       },
     });
-    const result = await consumeMfaRecoveryCodeAction({ code: 'whatever' });
+    const result = await consumeMfaRecoveryCodeAction({ code: 'whatever', password: PW });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('internal_error');
   });
@@ -88,7 +129,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
       { id: 'f3', factor_type: 'phone' },
     ]);
 
-    const result = await consumeMfaRecoveryCodeAction({ code: 'good-code' });
+    const result = await consumeMfaRecoveryCodeAction({ code: 'good-code', password: PW });
 
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.unenrolled).toBe(2);
@@ -116,7 +157,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
       },
     );
 
-    const result = await consumeMfaRecoveryCodeAction({ code: 'good' });
+    const result = await consumeMfaRecoveryCodeAction({ code: 'good', password: PW });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.unenrolled).toBe(1);
     expect(calls).toHaveLength(2);

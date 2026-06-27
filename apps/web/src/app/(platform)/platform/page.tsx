@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import {
   getPlatformMetrics,
   listOrgsForPlatform,
@@ -57,6 +58,13 @@ export default async function PlatformOrgsPage({
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
+  // In-page gate. The (platform) layout also calls requirePlatformAdmin, but
+  // Next renders the layout and this page IN PARALLEL — a layout notFound()
+  // can't stop this page body's service-role (RLS-bypassing) reads from
+  // executing. Re-gate here so the cross-org fan-out below never runs for a
+  // non-admin. (requireSession/getVerifiedEmail are React-cached → ~free.)
+  await requirePlatformAdmin();
+
   const { q } = await searchParams;
   // Platform-wide metrics + the directory in one fan-out.
   const [{ orgs, capped }, metrics] = await Promise.all([

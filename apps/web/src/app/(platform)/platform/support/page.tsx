@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 
 import { SupportTriage } from '@/components/admin/support-triage';
+import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { listSupportTickets } from '@/server/services/support-tickets';
 
 export const dynamic = 'force-dynamic';
@@ -11,6 +12,10 @@ export const metadata: Metadata = { title: 'Support tickets · Platform' };
  * (platform) layout; the ticket service is service-role behind that gate.
  */
 export default async function PlatformSupportPage() {
+  // In-page gate — the layout renders in parallel and can't stop this body's
+  // service-role read of EVERY tenant's support tickets.
+  await requirePlatformAdmin();
+
   const tickets = await listSupportTickets();
   const open = tickets.filter((t) => t.status === 'open' || t.status === 'in_progress').length;
 
