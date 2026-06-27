@@ -72,8 +72,11 @@ export async function setModuleEnabledAction(
     // org's EFFECTIVE plan meets it. RLS on organization_modules only checks the
     // admin role — without this gate an admin on a free/pro plan could
     // self-enable business/enterprise modules (e.g. the enterprise-only
-    // api_access), bypassing billing. resolveEffectivePlan honors platform-admin
-    // comps/overrides (access_tier), so a comped org still qualifies.
+    // api_access), bypassing billing. resolveEffectivePlan honors the access_tier
+    // override; `all_modules_comp` is a SEPARATE platform-comp flag that grants
+    // ALL modules, so it must be checked explicitly here (mirrors
+    // org_can_enable_module in mig 0219 — otherwise a comped org is wrongly
+    // blocked at this app gate before RLS ever allows it).
     if (enabled) {
       const gated = changes
         .filter((c) => c.enabled && MODULE_REGISTRY[c.moduleId].minPlan)
@@ -82,18 +85,24 @@ export async function setModuleEnabledAction(
         const { data: org } = await supabase
           .from('organizations')
           .select(
-            'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
+            'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier, all_modules_comp',
           )
           .eq('id', ctx.organizationId)
           .maybeSingle();
-        const tier = resolveEffectivePlan((org as OrgBillingState | null) ?? { plan: null }).tier;
-        const rank = PLAN_IDS.indexOf(tier);
-        const blocked = gated.find((m) => PLAN_IDS.indexOf(m.minPlan) > rank);
-        if (blocked) {
-          return err(
-            'forbidden',
-            `${MODULE_REGISTRY[blocked.id].title} requires the ${MODULE_REGISTRY[blocked.id].minPlan} plan or higher. Upgrade to enable it.`,
-          );
+        const orgRow = (org as (OrgBillingState & { all_modules_comp?: boolean }) | null) ?? {
+          plan: null,
+        };
+        // A platform "comp all modules" grant bypasses the plan gate entirely.
+        if (!orgRow.all_modules_comp) {
+          const tier = resolveEffectivePlan(orgRow).tier;
+          const rank = PLAN_IDS.indexOf(tier);
+          const blocked = gated.find((m) => PLAN_IDS.indexOf(m.minPlan) > rank);
+          if (blocked) {
+            return err(
+              'forbidden',
+              `${MODULE_REGISTRY[blocked.id].title} requires the ${MODULE_REGISTRY[blocked.id].minPlan} plan or higher. Upgrade to enable it.`,
+            );
+          }
         }
       }
     }
