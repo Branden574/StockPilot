@@ -49,7 +49,11 @@ export function useSessionRevocation(userId: string | null, onSignedOut: () => v
           (Array.isArray(p.sessionIds) && !!mySessionId && p.sessionIds.includes(mySessionId)) ||
           ('keepId' in p && !!mySessionId && p.keepId !== mySessionId);
         if (!targeted) return;
-        void supabase.auth.signOut().finally(() => {
+        // scope:'local' clears ONLY this device. The authoritative server-side
+        // revoke already happened (the broadcaster deleted our auth.sessions
+        // row); a default global signOut here would cascade and revoke the
+        // user's OTHER devices too — defeating "sign out just this one".
+        void supabase.auth.signOut({ scope: 'local' }).finally(() => {
           Alert.alert(
             'Signed out',
             'You were signed out from another device.',
