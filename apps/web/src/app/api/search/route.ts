@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { ItemImagesService } from '@/server/services/item-images';
 
 export const runtime = 'nodejs';
@@ -16,6 +17,13 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: Request) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  // Per-user rate limit before the 4-table ilike fan-out (open mode: an authed
+  // convenience endpoint shouldn't hard-fail on a limiter blip).
+  const rl = await checkRateLimit(`search:${ctx.userId}`, 120, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json({ error: 'rate_limited' }, { status: 429 });
+  }
 
   const url = new URL(req.url);
   const raw = (url.searchParams.get('q') ?? '').trim();

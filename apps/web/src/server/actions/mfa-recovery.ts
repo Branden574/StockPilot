@@ -20,7 +20,14 @@ export async function generateMfaRecoveryCodesAction(): Promise<
   ActionResult<{ codes: string[] }>
 > {
   try {
-    await requireSession();
+    const session = await requireSession();
+    // Rate-limit regeneration: this RPC WIPES all existing recovery codes, so an
+    // attacker with a stolen AAL1 session could loop it to repeatedly invalidate
+    // the user's codes (TOTP-loss lockout). 3 / 15 min is generous for a human.
+    const rl = await checkRateLimit(`mfa-recovery-gen:${session.userId}`, 3, 15 * 60_000, 'closed');
+    if (!rl.allowed) {
+      return err('validation_error', 'Too many recovery-code regenerations. Wait a few minutes and try again.');
+    }
     const supabase = await createClient();
     const { data, error } = await supabase.rpc('generate_mfa_recovery_codes');
     if (error) throw new ServiceError('internal_error', error.message);

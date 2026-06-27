@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createHash, randomBytes } from 'node:crypto';
 
+import { clientIpFromRequest } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -59,6 +60,23 @@ export async function withApiKey(req: Request): Promise<ApiKeyResult> {
   if (!m || !m[1]) {
     return { ok: false, status: 401, error: 'Missing or malformed API key.' };
   }
+
+  // IP-keyed throttle BEFORE any DB work. Without this, a flood of
+  // well-formed-but-invalid keys drives one indexed api_keys SELECT per request
+  // with no cap (the per-key limiter below is only reached AFTER a key
+  // resolves). Closed mode: a limiter outage denies rather than opening the
+  // unauthenticated path wide.
+  const ip = clientIpFromRequest(req);
+  const ipRl = await checkRateLimit(`public-api-ip:${ip}`, 300, 60_000, 'closed');
+  if (!ipRl.allowed) {
+    return {
+      ok: false,
+      status: 429,
+      error: 'Rate limit exceeded.',
+      retryAfter: Math.max(1, Math.ceil((ipRl.resetAt - Date.now()) / 1000)),
+    };
+  }
+
   const admin = createAdminClient();
   const { data, error } = await admin
     .from('api_keys')

@@ -8,6 +8,7 @@ import {
 import { detectFileKind } from '@/lib/books/isbn-extract';
 import { reportError } from '@/lib/error-reporter';
 import { classifyAiError } from '@/lib/ai/errors';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,17 @@ const MAX_BYTES = 10 * 1024 * 1024;
 export async function POST(req: Request) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  // Rate-limit the Gemini-backed extraction per user. Every other AI endpoint
+  // (ai-chat, po-imports/scan, cycle-count ai-scan) caps this; without it a
+  // single authed session can drain the shared Gemini quota + serverless time.
+  const rl = await checkRateLimit(`ai-isbn-extract:${ctx.userId}`, 20, 60_000, 'closed');
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: 'rate_limited', message: 'Too many extractions. Try again shortly.' },
+      { status: 429 },
+    );
+  }
 
   let form: FormData;
   try {
