@@ -63,6 +63,53 @@ async function currentSessionIsAal2(): Promise<boolean> {
 }
 
 /**
+ * Dangerous god-mode actions require an MFA assertion no older than this. A full
+ * sign-in (which runs the MFA challenge) refreshes it; an AAL2 session whose
+ * TOTP was asserted longer ago must re-authenticate. (#8 — "fresh step-up")
+ */
+const STEP_UP_MAX_AGE_SECONDS = 15 * 60;
+
+/**
+ * Pure: seconds since the most recent SECOND-FACTOR (totp/mfa) assertion encoded
+ * in a JWT's `amr` claim, relative to `nowSec`; null when it can't be
+ * determined (no token, no MFA entry, malformed). `amr` timestamps reflect when
+ * the factor was ACTUALLY asserted and are NOT bumped by token refresh, so this
+ * is true step-up freshness rather than "ever reached AAL2". Exported for tests.
+ */
+export function mfaAssertionAgeFromToken(token: string, nowSec: number): number | null {
+  try {
+    const payload = JSON.parse(
+      Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'),
+    ) as { amr?: Array<{ method?: string; timestamp?: number }> };
+    if (!Array.isArray(payload.amr)) return null;
+    const ts = payload.amr
+      .filter(
+        (e) => e && (e.method === 'totp' || e.method === 'mfa') && typeof e.timestamp === 'number',
+      )
+      .map((e) => e.timestamp as number);
+    if (ts.length === 0) return null;
+    return nowSec - Math.max(...ts);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the current session's MFA step-up is FRESH (asserted within
+ * STEP_UP_MAX_AGE_SECONDS). Fail-closed: an unknown/stale age returns false, so
+ * the caller must re-authenticate. This is what makes the dangerous-action gate
+ * a *fresh* step-up rather than "the session reached AAL2 at some point".
+ */
+async function currentStepUpFresh(): Promise<boolean> {
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) return false;
+  const age = mfaAssertionAgeFromToken(token, Math.floor(Date.now() / 1000));
+  return age !== null && age <= STEP_UP_MAX_AGE_SECONDS;
+}
+
+/**
  * Hard gate for every `/platform` page and god-mode read. Requires:
  *   1. a signed-in session,
  *   2. the VERIFIED auth email on the platform-admin allowlist,
@@ -99,8 +146,12 @@ export async function checkPlatformAdmin(
 ): Promise<PlatformAdminCheck> {
   const session = await requireSession();
   if (!(await currentUserIsPlatformAdmin())) return { ok: false, reason: 'forbidden' };
-  if (opts.requireStepUp && !(await currentSessionIsAal2())) {
-    return { ok: false, reason: 'aal2_required' };
+  if (opts.requireStepUp) {
+    // Dangerous actions need a FRESH step-up: AAL2 must be present AND the MFA
+    // assertion recent (not just "reached AAL2 at login hours ago"). A stale
+    // step-up returns aal2_required; re-authenticating refreshes it.
+    if (!(await currentSessionIsAal2())) return { ok: false, reason: 'aal2_required' };
+    if (!(await currentStepUpFresh())) return { ok: false, reason: 'aal2_required' };
   }
   return { ok: true, session };
 }
