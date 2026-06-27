@@ -8,6 +8,7 @@ import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-short
 import { NavProgressBar } from '@/components/dashboard/nav-progress-bar';
 import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
 import { PermissionsRealtime } from '@/components/realtime/permissions-realtime';
+import { SessionRevocationListener } from '@/components/realtime/session-revocation-listener';
 import { Sidebar } from '@/components/dashboard/sidebar';
 import {
   isDesktopViewport,
@@ -187,6 +188,7 @@ export function DashboardShell({
           section layouts re-evaluate) the instant an admin changes this
           user's access. Renders nothing. */}
       <PermissionsRealtime organizationId={organizationId} userId={userId} role={role} />
+      <SessionRevocationListener userId={userId} />
       {/*
         Skip link: hidden until keyboard-focused. Lets keyboard / screen-
         reader users jump past the sidebar + topbar straight into the
