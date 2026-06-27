@@ -7,6 +7,7 @@ import { renderToStream } from '@react-pdf/renderer';
 import { withApiContext } from '@/lib/auth/api-context';
 import { toCsv } from '@/lib/csv';
 import { reportError } from '@/lib/error-reporter';
+import { exportRateLimited } from '@/lib/export-rate-limit';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import {
   buildInventoryExportRows,
@@ -68,6 +69,11 @@ export async function POST(request: NextRequest) {
     if (!can(ctx, 'items:export')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
+    // Compute-heavy (up to 10k rows -> in-memory xlsx/pdf render). Cap like
+    // every other export route so one account can't sustain a serverless-cost
+    // DoS; this also emits the security.export_rate_limited audit event.
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
 
     const json = await request.json().catch(() => null);
     const parsed = bodySchema.safeParse(json);

@@ -2,7 +2,9 @@ import crypto from 'node:crypto';
 
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { clientIpFromRequest } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getConnectionSecret } from '@/server/connectors/secret-store';
 
@@ -104,6 +106,17 @@ interface MatchableShipment {
 }
 
 export async function POST(req: NextRequest) {
+  // Rate-limit by IP BEFORE any DB access. The shipment/tracking lookups below
+  // run PRE-signature (we must resolve which connection's secret to verify
+  // against), so without this an unauthenticated flood drives 1-2 admin queries
+  // per request unbounded — connection-pool DoS + an existence oracle. Closed
+  // mode: a limiter outage denies rather than opening the floodgate.
+  const ip = clientIpFromRequest(req);
+  const rl = await checkRateLimit(`easypost-webhook:${ip}`, 120, 60_000, 'closed');
+  if (!rl.allowed) {
+    return new NextResponse('Too Many Requests', { status: 429 });
+  }
+
   // Read the RAW body once: HMAC must be computed over the exact bytes EasyPost
   // signed, so we cannot use req.json() (which would re-serialize differently).
   const rawBody = await req.text();
