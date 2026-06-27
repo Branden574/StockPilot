@@ -55,7 +55,10 @@ begin
   insert into public.user_session_names (session_id, user_id, name)
   values (p_session_id, auth.uid(), v_name)
   on conflict (session_id) do update
-    set name = excluded.name, updated_at = now();
+    -- Re-assert user_id = auth.uid() so the ownership invariant is
+    -- self-enforcing even if the row pre-existed (no-op today given the
+    -- ownership gate above, but defends against future schema changes).
+    set name = excluded.name, user_id = auth.uid(), updated_at = now();
   return 1;
 end;
 $$;
@@ -94,7 +97,7 @@ as $$
   order by s.refreshed_at desc nulls last, s.created_at desc;
 $$;
 
-revoke all on function public.set_my_session_name(uuid, text) from public;
-revoke all on function public.list_my_sessions() from public;
+revoke all on function public.set_my_session_name(uuid, text) from public, anon;
+revoke all on function public.list_my_sessions() from public, anon;
 grant execute on function public.set_my_session_name(uuid, text) to authenticated;
 grant execute on function public.list_my_sessions() to authenticated;
