@@ -4,7 +4,7 @@ import posthog from 'posthog-js';
 import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 
-import { env } from '@/lib/env';
+import { env } from '@/lib/env.client';
 
 /**
  * PostHog bootstrap. Mounted at the app root so pageviews + autocapture

@@ -12,7 +12,7 @@
  */
 import posthog from 'posthog-js';
 
-import { env } from '@/lib/env';
+import { env } from '@/lib/env.client';
 
 /** True only when the owner has configured a PostHog key. */
 export const analyticsEnabled = Boolean(env.NEXT_PUBLIC_POSTHOG_KEY);
