@@ -1,0 +1,84 @@
+name: Security Scan
+
+# SAST (Semgrep) + secret scanning (TruffleHog). Complements the existing
+# Dependabot (dependency CVEs) + scripts/check-no-committed-env.sh (.env guard)
+# with code-level static analysis and live-credential detection.
+#
+# Both tools are chosen to work on a PRIVATE repo with NO paid add-on:
+#   - Semgrep runs the OSS registry rulesets (no Semgrep account/token needed).
+#   - TruffleHog --only-verified flags ONLY credentials it can confirm are live
+#     (near-zero false positives), so failing the build on a hit is safe.
+# (CodeQL is deliberately omitted: uploading its SARIF to the Security tab needs
+#  GitHub Advanced Security on private repos. Add it if this repo goes public or
+#  gets GHAS.)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Monday sweep so new rules/secrets surface even without a push.
+    - cron: '0 7 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    # ROLLOUT NOTE: starts NON-BLOCKING so the first runs surface a baseline
+    # without breaking the pipeline on pre-existing WARN/ERROR findings. Once the
+    # baseline is triaged, remove `continue-on-error: true` below to make
+    # ERROR-severity findings a hard gate on PRs.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Semgrep
+        run: pip install --quiet semgrep
+
+      - name: Run Semgrep (security rulesets)
+        run: |
+          semgrep scan \
+            --config p/owasp-top-ten \
+            --config p/javascript \
+            --config p/typescript \
+            --config p/react \
+            --config p/nextjs \
+            --config p/secrets \
+            --severity ERROR \
+            --error \
+            --sarif --output semgrep.sarif \
+            --exclude node_modules --exclude .next --exclude dist
+
+      - name: Upload Semgrep SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif
+          path: semgrep.sarif
+          if-no-files-found: ignore
+
+  secret-scan:
+    name: Secret scan (TruffleHog)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install TruffleHog
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+            | sh -s -- -b /usr/local/bin
+
+      # Scan the working tree for VERIFIED (confirmed-live) secrets. node_modules
+      # isn't installed in this job, so the scan stays fast and source-focused.
+      # --fail => non-zero exit (build fails) if any verified secret is found.
+      - name: Scan tree for verified secrets
+        run: trufflehog filesystem . --only-verified --fail --no-update
