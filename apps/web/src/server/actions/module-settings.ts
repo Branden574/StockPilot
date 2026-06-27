@@ -8,11 +8,15 @@ import { ServiceError, withContext } from '@/server/services/context';
 
 import {
   MODULE_REGISTRY,
+  PLAN_IDS,
   computeModuleChangeSet,
+  resolveEffectivePlan,
   err,
   ok,
   type ActionResult,
   type ModuleId,
+  type OrgBillingState,
+  type PlanId,
 } from '@stockpilot/core';
 
 const schema = z.object({
@@ -63,6 +67,36 @@ export async function setModuleEnabledAction(
 
     const changes = computeModuleChangeSet(current, moduleId, enabled);
     if (changes.length === 0) return ok({ enabled: [...current] });
+
+    // Entitlement gate: a premium module (minPlan) may only be ENABLED when the
+    // org's EFFECTIVE plan meets it. RLS on organization_modules only checks the
+    // admin role — without this gate an admin on a free/pro plan could
+    // self-enable business/enterprise modules (e.g. the enterprise-only
+    // api_access), bypassing billing. resolveEffectivePlan honors platform-admin
+    // comps/overrides (access_tier), so a comped org still qualifies.
+    if (enabled) {
+      const gated = changes
+        .filter((c) => c.enabled && MODULE_REGISTRY[c.moduleId].minPlan)
+        .map((c) => ({ id: c.moduleId, minPlan: MODULE_REGISTRY[c.moduleId].minPlan as PlanId }));
+      if (gated.length > 0) {
+        const { data: org } = await supabase
+          .from('organizations')
+          .select(
+            'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
+          )
+          .eq('id', ctx.organizationId)
+          .maybeSingle();
+        const tier = resolveEffectivePlan((org as OrgBillingState | null) ?? { plan: null }).tier;
+        const rank = PLAN_IDS.indexOf(tier);
+        const blocked = gated.find((m) => PLAN_IDS.indexOf(m.minPlan) > rank);
+        if (blocked) {
+          return err(
+            'forbidden',
+            `${MODULE_REGISTRY[blocked.id].title} requires the ${MODULE_REGISTRY[blocked.id].minPlan} plan or higher. Upgrade to enable it.`,
+          );
+        }
+      }
+    }
 
     // A single action's change set is uniformly all-enable or all-disable
     // (computeModuleChangeSet sets every change to `enabled`), so the column set

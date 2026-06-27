@@ -280,11 +280,19 @@ export async function setOrgMfaPolicyAction(input: {
       .select('mfa_policy')
       .eq('id', ctx.organizationId)
       .maybeSingle();
-    const { error } = await supabase
+    const { data: updated, error } = await supabase
       .from('organizations')
       .update({ mfa_policy: parsed.data.policy })
-      .eq('id', ctx.organizationId);
+      .eq('id', ctx.organizationId)
+      .select('id')
+      .maybeSingle();
     if (error) return err('internal_error', error.message);
+    // Fail CLOSED: a 0-row update means RLS blocked the write (stale/removed
+    // admin) — never audit + report a policy change (incl. a downgrade) that
+    // didn't actually land.
+    if (!updated) {
+      return err('internal_error', 'MFA policy did not persist (0 rows updated).');
+    }
     await audit({
       event: 'organization.mfa_policy.changed',
       entityType: 'organization',
