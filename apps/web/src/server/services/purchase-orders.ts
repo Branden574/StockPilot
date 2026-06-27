@@ -693,17 +693,22 @@ export class PurchaseOrdersService {
           .in('role', ['owner', 'admin'])
           .not('accepted_at', 'is', null)
           .is('impersonation_expires_at', null);
-        for (const m of (members ?? []) as Array<{ user_id: string }>) {
-          if (m.user_id === this.ctx.userId) continue; // don't notify the editor
-          await createNotification({
-            organizationId: this.ctx.organizationId,
-            userId: m.user_id,
-            type: 'purchase_order.updated',
-            title: 'Purchase order updated',
-            body: `PO ${poNumber} was edited (${resolvedLines.length} item(s)).`,
-            link: `/dashboard/purchase-orders/${id}`,
-          });
-        }
+        // Fan out notifications in parallel — createNotification catches its own
+        // errors, so a serial await-loop only adds latency (N round-trips).
+        await Promise.all(
+          ((members ?? []) as Array<{ user_id: string }>)
+            .filter((m) => m.user_id !== this.ctx.userId) // don't notify the editor
+            .map((m) =>
+              createNotification({
+                organizationId: this.ctx.organizationId,
+                userId: m.user_id,
+                type: 'purchase_order.updated',
+                title: 'Purchase order updated',
+                body: `PO ${poNumber} was edited (${resolvedLines.length} item(s)).`,
+                link: `/dashboard/purchase-orders/${id}`,
+              }),
+            ),
+        );
       } catch {
         // Best-effort: notification errors never fail the edit.
       }
@@ -971,19 +976,21 @@ export class PurchaseOrdersService {
         return;
       }
 
-      for (const item of (flippedRows ?? []) as Array<{ id: string; name: string }>) {
-        await audit(
-          {
-            event: 'inventory.item.archived',
-            entityType: 'inventory_item',
-            entityId: item.id,
-            after: { status: 'archived' },
-            before: { status: 'active' },
-            extra: { reason: 'po_cancelled', purchaseOrderId: poId, itemName: item.name },
-          },
-          this.ctx,
-        );
-      }
+      await Promise.all(
+        ((flippedRows ?? []) as Array<{ id: string; name: string }>).map((item) =>
+          audit(
+            {
+              event: 'inventory.item.archived',
+              entityType: 'inventory_item',
+              entityId: item.id,
+              after: { status: 'archived' },
+              before: { status: 'active' },
+              extra: { reason: 'po_cancelled', purchaseOrderId: poId, itemName: item.name },
+            },
+            this.ctx,
+          ),
+        ),
+      );
     } catch (e) {
       void reportError(e, {
         tag: 'po.cancel.archive_custom_items.unhandled',

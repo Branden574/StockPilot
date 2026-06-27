@@ -6,6 +6,7 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { googleBooksClient } from '@/server/pricing/google-books-client';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 import { refreshBookPricesForOrg } from '@/server/services/price-tracking';
 
 export const runtime = 'nodejs';
@@ -34,17 +35,29 @@ export async function GET(req: Request) {
   }
 
   const admin = createAdminClient();
-  const { data: rows, error } = await admin
-    .from('organization_modules')
-    .select('organization_id')
-    .eq('module_id', 'price_tracking')
-    .eq('enabled', true);
-  if (error) {
-    void reportError(new Error(`price-pull org list: ${error.message}`), { tag: 'cron.price-pull' });
+  let rows: Array<{ organization_id: string }>;
+  try {
+    // PAGINATED: a plain select is silently capped at PostgREST's 1000-row max,
+    // skipping orgs once >1000 have price_tracking enabled (every peer cron
+    // paginates this). Stable order for range pagination; fetchAllRows throws on
+    // error (fail-closed).
+    rows = await fetchAllRows<{ organization_id: string }>((from, to) =>
+      admin
+        .from('organization_modules')
+        .select('organization_id')
+        .eq('module_id', 'price_tracking')
+        .eq('enabled', true)
+        .order('organization_id', { ascending: true })
+        .range(from, to),
+    );
+  } catch (error) {
+    void reportError(new Error(`price-pull org list: ${(error as Error).message}`), {
+      tag: 'cron.price-pull',
+    });
     return NextResponse.json({ error: 'org_list_failed' }, { status: 500 });
   }
 
-  const orgIds = Array.from(new Set((rows ?? []).map((r) => r.organization_id as string)));
+  const orgIds = Array.from(new Set(rows.map((r) => r.organization_id)));
   const results: Array<{ orgId: string; scanned: number; written: number; skipped: number }> = [];
 
   // Global budget so one cron invocation can't exceed Vercel's maxDuration=60
