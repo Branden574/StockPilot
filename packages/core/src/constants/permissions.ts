@@ -252,8 +252,19 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   // Exports — no row write; app gate is the sole enforcer.
   'items:export',
   'reports:export',
-  // Purchase orders — write RLS migrated to has_permission() in migration 0208.
+  // Write paths whose RLS has been migrated to has_permission():
+  //   purchase orders (mig 0208); items/stock/locations/categories/suppliers/
+  //   orders (mig 0212). Granting any of these to a role/user is fully
+  //   effective end-to-end.
   'purchase_orders:manage',
+  'items:create',
+  'items:update',
+  'items:delete',
+  'stock:adjust',
+  'locations:manage',
+  'categories:manage',
+  'suppliers:manage',
+  'orders:approve',
 ]);
 
 /**
