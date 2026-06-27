@@ -67,9 +67,11 @@ describe('fetchAllRows', () => {
 
   it('throws a ServiceError when a page reports an error', async () => {
     const build = vi.fn(async () => ({ data: null, error: { message: 'boom' } }));
+    // internal_error messages are sanitized (S13): the public message is
+    // generic and the raw detail is retained on internalDetail.
     await expect(fetchAllRows(build)).rejects.toMatchObject({
       code: 'internal_error',
-      message: 'boom',
+      internalDetail: 'boom',
     });
   });
 });

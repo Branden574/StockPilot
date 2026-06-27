@@ -128,6 +128,14 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
 });
 
 export class ServiceError extends Error {
+  /**
+   * Raw, potentially-sensitive detail behind an `internal_error` (e.g. a
+   * PostgREST/Postgres error string carrying table/column/constraint/RLS-policy
+   * names). Retained SERVER-SIDE for logging/Sentry; it is NEVER used as the
+   * public `message` for an internal_error, so it cannot leak to an API or
+   * server-action caller. (S13)
+   */
+  public readonly internalDetail?: string;
   constructor(
     public code:
       | 'unauthenticated'
@@ -141,8 +149,16 @@ export class ServiceError extends Error {
     message: string,
     public details?: Record<string, unknown>,
   ) {
-    super(message);
+    // `internal_error` messages are routinely raw DB/PostgREST error text —
+    // returning them to a client leaks schema (table/column/constraint/policy
+    // names) and aids recon. Make the PUBLIC message generic and keep the raw
+    // detail server-side. Every other code is app-authored and safe verbatim.
+    const generic = 'An internal error occurred. Please try again.';
+    super(code === 'internal_error' ? generic : message);
     this.name = 'ServiceError';
+    if (code === 'internal_error' && message && message !== generic) {
+      this.internalDetail = message;
+    }
   }
 }
 
