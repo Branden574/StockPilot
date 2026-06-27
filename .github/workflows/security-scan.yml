@@ -42,7 +42,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install Semgrep
-        run: pip install --quiet semgrep
+        # Pinned version (not floating latest) for reproducible, supply-chain-safe
+        # runs. Bump deliberately.
+        run: pip install --quiet semgrep==1.168.0
 
       - name: Run Semgrep (security rulesets)
         run: |
@@ -72,10 +74,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install TruffleHog
+      - name: Install TruffleHog (pinned release)
+        env:
+          # IMMUTABLE release tag — NOT `main`. Piping a script from a mutable
+          # upstream ref into sh means an upstream-branch compromise runs arbitrary
+          # code in CI (with repo + secret access). Pinning to a release tag makes
+          # the installer immutable, and it checksum-verifies the binary for this
+          # version. Bump manually (Dependabot doesn't track curl-pinned versions).
+          TRUFFLEHOG_VERSION: v3.95.6
         run: |
-          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
-            | sh -s -- -b /usr/local/bin
+          curl -sSfL "https://raw.githubusercontent.com/trufflesecurity/trufflehog/${TRUFFLEHOG_VERSION}/scripts/install.sh" \
+            | sh -s -- -b /usr/local/bin "${TRUFFLEHOG_VERSION}"
 
       # Scan the working tree for VERIFIED (confirmed-live) secrets. node_modules
       # isn't installed in this job, so the scan stays fast and source-focused.
