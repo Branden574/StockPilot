@@ -76,6 +76,11 @@ export const PERMISSIONS = [
   // disposition — but NOT staff/viewer. Gated by the off-by-default `returns`
   // module.
   'returns:manage',
+  // Zendesk agent console. Access the native agent dashboard for viewing/managing
+  // support tickets. Admin-only (owner + admin via ALL_PERMISSIONS) to restrict
+  // access to designated support staff. Gated by the off-by-default `zendesk`
+  // module.
+  'zendesk:agent',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -499,6 +504,12 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     label: 'Cancel and edit rentals',
     description:
       'Cancel an active rental, edit lines on an active rental. Manager+ only.',
+  },
+
+  'zendesk:agent': {
+    group: 'Organization',
+    label: 'Access Zendesk agent console',
+    description: 'View and manage support tickets from the Zendesk agent dashboard.',
   },
 };
 
