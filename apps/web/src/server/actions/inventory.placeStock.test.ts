@@ -222,7 +222,7 @@ describe('placeStockAction', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('validation_error');
-      expect(result.error.message).toBe("Can't place more than is staged.");
+      expect(result.error.message).toBe("Can't place more than is available.");
     }
   });
 

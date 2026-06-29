@@ -358,7 +358,7 @@ export async function placeStockAction(
       e.code === 'internal_error' &&
       (e.internalDetail ?? '').toLowerCase().includes('insufficient_stock')
     ) {
-      return err('validation_error', "Can't place more than is staged.");
+      return err('validation_error', "Can't place more than is available.");
     }
     return toResult(e);
   }

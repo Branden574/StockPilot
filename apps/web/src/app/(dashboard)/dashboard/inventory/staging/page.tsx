@@ -43,7 +43,8 @@ export default async function StagingPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Staging</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Stock received from POs and waiting to be placed into a rack or crate.
+            Stock waiting to be placed into a rack or crate — received from POs
+            (staged) or on hand but never placed (unplaced).
           </p>
         </div>
       </div>

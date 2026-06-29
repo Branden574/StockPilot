@@ -39,9 +39,13 @@ interface PlaceFromStagingDialogProps {
   itemId: string;
   itemName: string;
   itemType: string;
-  stagingLocationId: string;
+  /** The not-yet-placed holding location to move stock OUT of (staging or unplaced). */
+  sourceLocationId: string;
+  /** Drives the "From" label + copy. 'unplaced' = on-hand stock that was never racked. */
+  sourceKind: 'staging' | 'unplaced';
   warehouseId: string;
-  stagedQuantity: number;
+  /** Quantity sitting in the source holding (the placement ceiling). */
+  availableQuantity: number;
   destinations: DestinationOption[];
   trigger?: React.ReactNode;
 }
@@ -50,17 +54,20 @@ export function PlaceFromStagingDialog({
   itemId,
   itemName,
   itemType,
-  stagingLocationId,
+  sourceLocationId,
+  sourceKind,
   warehouseId,
-  stagedQuantity,
+  availableQuantity,
   destinations,
   trigger,
 }: PlaceFromStagingDialogProps) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
 
+  const sourceLabel = sourceKind === 'unplaced' ? 'Unplaced' : 'Staging';
+
   const [destId, setDestId] = React.useState<string>('');
-  const [quantity, setQuantity] = React.useState(String(stagedQuantity));
+  const [quantity, setQuantity] = React.useState(String(availableQuantity));
   const [notes, setNotes] = React.useState('');
 
   // Inline new-rack/crate fields
@@ -79,7 +86,7 @@ export function PlaceFromStagingDialog({
     if (!open) return;
     /* eslint-disable react-hooks/set-state-in-effect -- reset all fields when dialog opens */
     setDestId('');
-    setQuantity(String(stagedQuantity));
+    setQuantity(String(availableQuantity));
     setNotes('');
     setRackNumber('');
     setRackRow('');
@@ -90,7 +97,7 @@ export function PlaceFromStagingDialog({
   }, [open]);
 
   const qtyNum = Number.parseInt(quantity, 10);
-  const qtyValid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= stagedQuantity;
+  const qtyValid = Number.isFinite(qtyNum) && qtyNum > 0 && qtyNum <= availableQuantity;
 
   const canSubmit =
     !submitting &&
@@ -99,7 +106,7 @@ export function PlaceFromStagingDialog({
 
   async function submit() {
     if (!qtyValid) {
-      toast.error(`Quantity must be between 1 and ${stagedQuantity}.`);
+      toast.error(`Quantity must be between 1 and ${availableQuantity}.`);
       return;
     }
 
@@ -130,7 +137,7 @@ export function PlaceFromStagingDialog({
     setSubmitting(true);
     const res = await placeStockAction({
       itemId,
-      fromLocationId: stagingLocationId,
+      fromLocationId: sourceLocationId,
       quantity: qtyNum,
       notes: notes.trim() || undefined,
       destination,
@@ -159,11 +166,11 @@ export function PlaceFromStagingDialog({
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Place from staging</DialogTitle>
+          <DialogTitle>Place from {sourceLabel.toLowerCase()}</DialogTitle>
           <DialogDescription>
-            Move <span className="font-medium text-foreground">{itemName}</span> from
-            staging into a rack or crate. Staged:{' '}
-            <span className="tabular-nums">{stagedQuantity}</span>.
+            Move <span className="font-medium text-foreground">{itemName}</span> from{' '}
+            {sourceLabel.toLowerCase()} into a rack or crate. Available:{' '}
+            <span className="tabular-nums">{availableQuantity}</span>.
           </DialogDescription>
         </DialogHeader>
 
@@ -172,7 +179,7 @@ export function PlaceFromStagingDialog({
           <div className="space-y-1.5">
             <Label>From</Label>
             <div className="bg-muted text-muted-foreground flex h-9 items-center rounded-md border px-3 text-sm">
-              Staging
+              {sourceLabel}
             </div>
           </div>
 
@@ -246,20 +253,20 @@ export function PlaceFromStagingDialog({
             <Label>
               Quantity{' '}
               <span className="text-muted-foreground font-normal">
-                (max {stagedQuantity})
+                (max {availableQuantity})
               </span>
             </Label>
             <Input
               type="number"
               step="1"
               min="1"
-              max={stagedQuantity}
+              max={availableQuantity}
               value={quantity}
               onChange={(e) => setQuantity(e.target.value)}
             />
             {quantity !== '' && !qtyValid && (
               <p className="text-destructive text-[11px]">
-                Must be between 1 and {stagedQuantity}.
+                Must be between 1 and {availableQuantity}.
               </p>
             )}
           </div>
