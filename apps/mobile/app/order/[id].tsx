@@ -33,6 +33,7 @@ import {
 } from '@/lib/orders-api';
 import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
 import { supabase } from '@/lib/supabase';
+import { useWorkspace } from '@/lib/use-workspace';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -107,8 +108,7 @@ export default function OrderDetail() {
   const { user } = useAuth();
   const { c, mode } = useTheme();
 
-  const [orgId, setOrgId] = React.useState<string | null>(null);
-  const [role, setRole] = React.useState<string | null>(null);
+  const { activeOrgId: orgId, activeRole: role } = useWorkspace();
   const [order, setOrder] = React.useState<OrderHeader | null>(null);
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -130,20 +130,6 @@ export default function OrderDetail() {
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
 
-  React.useEffect(() => {
-    if (!user) return;
-    supabase
-      .from('organization_members')
-      .select('organization_id, role')
-      .eq('user_id', user.id)
-      .not('accepted_at', 'is', null)
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => {
-        setOrgId((data?.organization_id as string | undefined) ?? null);
-        setRole((data?.role as string | undefined) ?? null);
-      });
-  }, [user]);
 
   const loadAttachments = React.useCallback(async () => {
     if (!orgId || !id) return;

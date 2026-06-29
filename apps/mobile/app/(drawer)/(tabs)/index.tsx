@@ -34,6 +34,7 @@ import { useProfile } from '@/lib/use-profile';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { useWorkspace } from '@/lib/use-workspace';
 
 interface Summary {
   itemCount: number;
@@ -72,6 +73,7 @@ export default function Home() {
   const router = useRouter();
   const navigation = useNavigation();
   const { user } = useAuth();
+  const { activeOrgId, activeOrgName } = useWorkspace();
   const { c } = useTheme();
   const profile = useProfile();
   const tabBarHeight = useBottomTabBarHeight();
@@ -82,20 +84,15 @@ export default function Home() {
   const [loading, setLoading] = React.useState(true);
 
   const load = React.useCallback(async () => {
-    if (!user) return;
-    const { data: member } = await supabase
-      .from('organization_members')
-      .select('organization_id, organizations:organization_id (name)')
-      .eq('user_id', user.id)
-      .not('accepted_at', 'is', null)
-      .limit(1)
-      .maybeSingle();
-    if (!member) return;
-
-    const orgId = member.organization_id as string;
-    const orgsField = (member as { organizations?: unknown }).organizations;
-    const orgObj = Array.isArray(orgsField) ? orgsField[0] : orgsField;
-    setOrgName(((orgObj as { name?: string } | null)?.name as string | undefined) ?? 'Workspace');
+    // Scope to the ACTIVE workspace org — NOT the first membership row. This
+    // screen queries Supabase directly (RLS-scoped), so it must read
+    // activeOrgId from useWorkspace; the old code grabbed the first
+    // organization_members row and ignored the drawer's org switcher entirely
+    // (web switched fine, mobile/iPad didn't). Refetches when the org changes
+    // because activeOrgId is in this callback's deps.
+    if (!user || !activeOrgId) return;
+    const orgId = activeOrgId;
+    setOrgName(activeOrgName ?? 'Workspace');
 
     const [{ count: itemCount }, { count: outOfStockCount }, valueRpc, lowRpc, movements] = await Promise.all([
       supabase
@@ -146,7 +143,7 @@ export default function Home() {
       }),
     );
     setLoading(false);
-  }, [user]);
+  }, [user, activeOrgId, activeOrgName]);
 
   React.useEffect(() => {
     load();

@@ -25,6 +25,7 @@ import {
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { supabase } from '@/lib/supabase';
+import { useOrg } from '@/lib/use-org';
 import { radius, space, theme } from '@/lib/theme';
 
 interface UiLine {
@@ -46,7 +47,7 @@ export default function CycleCountDetail() {
   const { user } = useAuth();
   const syncSnapshot = useSyncStatus();
 
-  const [orgId, setOrgId] = React.useState<string | null>(null);
+  const { orgId } = useOrg();
   const [header, setHeader] = React.useState<CachedCycleCountHeader | null>(null);
   const [lines, setLines] = React.useState<UiLine[]>([]);
   const [draft, setDraft] = React.useState<Record<string, string>>({});
@@ -59,17 +60,6 @@ export default function CycleCountDetail() {
   const debounceRefs = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   // Resolve the user's org once — needed to scope server fetches.
-  React.useEffect(() => {
-    if (!user) return;
-    supabase
-      .from('organization_members')
-      .select('organization_id')
-      .eq('user_id', user.id)
-      .not('accepted_at', 'is', null)
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => setOrgId((data?.organization_id as string | undefined) ?? null));
-  }, [user]);
 
   /**
    * Load order:
