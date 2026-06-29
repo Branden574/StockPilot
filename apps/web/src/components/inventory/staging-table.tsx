@@ -17,8 +17,9 @@ interface StagedRow {
   sku: string;
   itemType: string;
   warehouseId: string | null;
-  stagingLocationId: string;
-  stagedQuantity: number;
+  sourceLocationId: string;
+  sourceKind: 'staging' | 'unplaced';
+  quantity: number;
   sourceReceiptId: string | null;
   sourcePoNumber: string | null;
   receiptNumber: string | null;
@@ -146,7 +147,7 @@ export function StagingTable({
         {/* Empty state */}
         <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
           <p className="text-muted-foreground text-sm">
-            Nothing staged — received stock will appear here to place.
+            Nothing to place — received (staged) or unplaced stock appears here.
           </p>
         </div>
       </div>
@@ -185,7 +186,7 @@ export function StagingTable({
                 Item
               </th>
               <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
-                Staged qty
+                Qty to place
               </th>
               <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
                 Source PO / receipt
@@ -216,21 +217,31 @@ export function StagingTable({
 
               return (
                 <tr
-                  key={row.itemId}
+                  // One item can have BOTH a staging and an unplaced holding, so
+                  // key by the source holding location, not the item id.
+                  key={`${row.itemId}-${row.sourceLocationId}`}
                   className="border-b border-border last:border-0 hover:bg-muted/40 transition-colors"
                 >
-                  {/* Item name + SKU */}
+                  {/* Item name + SKU + source-bucket badge */}
                   <td className="px-3 py-3">
-                    <div className="flex flex-col gap-0.5">
+                    <div className="flex flex-col gap-1">
                       <span className="text-sm font-medium leading-tight">{row.name}</span>
-                      <span className="text-muted-foreground text-xs">{row.sku}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-muted-foreground text-xs">{row.sku}</span>
+                        <Badge
+                          variant={row.sourceKind === 'unplaced' ? 'outline' : 'secondary'}
+                          className="px-1.5 py-0 text-[10px] font-normal capitalize"
+                        >
+                          {row.sourceKind}
+                        </Badge>
+                      </div>
                     </div>
                   </td>
 
-                  {/* Staged qty */}
+                  {/* Qty to place */}
                   <td className="px-3 py-3">
                     <span className="text-sm tabular-nums font-medium">
-                      {row.stagedQuantity}
+                      {row.quantity}
                     </span>
                   </td>
 
@@ -285,9 +296,10 @@ export function StagingTable({
                           itemId={row.itemId}
                           itemName={row.name}
                           itemType={row.itemType}
-                          stagingLocationId={row.stagingLocationId}
+                          sourceLocationId={row.sourceLocationId}
+                          sourceKind={row.sourceKind}
                           warehouseId={row.warehouseId!}
-                          stagedQuantity={row.stagedQuantity}
+                          availableQuantity={row.quantity}
                           destinations={destinations}
                           trigger={
                             <Button size="sm" variant="outline">

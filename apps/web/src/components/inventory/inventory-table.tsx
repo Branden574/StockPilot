@@ -67,6 +67,11 @@ interface Item {
    * Added by Task 6 — optional so older callers that don't pass it
    * still render correctly (defaults to 0 = no staged line shown). */
   staged_quantity?: number;
+  /** Quantity on hand but never placed into a rack (the "Unplaced" bucket).
+   * Like staged, it's NOT counted as placed — surfaced as its own "+N
+   * unplaced" line so racked-looking stock that's actually unplaced (and so
+   * can't be transferred) is visible. Optional; defaults to 0. */
+  unplaced_quantity?: number;
 }
 
 interface Lookups {
@@ -242,6 +247,11 @@ function deriveStatus(qty: number, reorder: number): 'ok' | 'warn' | 'crit' {
   if (reorder > 0 && qty <= reorder) return 'warn';
   return 'ok';
 }
+
+/** Stable empty series for the (shouldn't-happen) miss in the seriesByItem
+ *  map — a module-level constant so its identity never changes, keeping the
+ *  memo'd <Sparkline> from re-rendering on a fallback. */
+const EMPTY_SERIES: number[] = [];
 
 /**
  * Returns the 14-day series to plot for a row, given the active spark
@@ -586,6 +596,21 @@ export function InventoryTable({
   // latency). On no search, both reduce to `items`.
   const displayed = serverHits ?? localMatches;
 
+  // Precompute each row's sparkline series ONCE per (displayed, sparkMode,
+  // trends) instead of inside the row map. `displayed` is stable across
+  // selection toggles (localMatches/serverHits don't depend on `selected`),
+  // so the array refs stay identical when only a checkbox flips — which lets
+  // the memo'd <Sparkline> skip its SVG-path recompute for all 50 rows. This
+  // is the fix for the click-lag: a single checkbox toggle no longer rebuilds
+  // every visible sparkline.
+  const seriesByItem = React.useMemo(() => {
+    const m = new Map<string, number[]>();
+    for (const it of displayed) {
+      m.set(it.id, seriesForRow(it.id, it.quantity_on_hand, sparkMode, trends));
+    }
+    return m;
+  }, [displayed, sparkMode, trends]);
+
   // Idle-prewarm the Vercel-optimized hover-preview URLs for every
   // visible row. Runs via requestIdleCallback so it never competes
   // with the initial paint; by the time the user mouses over any
@@ -867,12 +892,8 @@ export function InventoryTable({
                 : null;
               const status = deriveStatus(item.quantity_on_hand, item.reorder_point);
               const par = Math.max(item.reorder_point * 4, item.quantity_on_hand * 1.5, 10);
-              const series = seriesForRow(
-                item.id,
-                item.quantity_on_hand,
-                sparkMode,
-                trends,
-              );
+              // Stable per (displayed, sparkMode, trends) — see seriesByItem above.
+              const series = seriesByItem.get(item.id) ?? EMPTY_SERIES;
               const isSelected = selected.has(item.id);
 
               return (
@@ -1074,16 +1095,33 @@ export function InventoryTable({
                       // Defensive defaults so rows without the new fields (older
                       // callers, non-service code paths) render exactly as before.
                       const staged = item.staged_quantity ?? 0;
+                      const unplaced = item.unplaced_quantity ?? 0;
                       const placed = item.placed_quantity ?? item.quantity_on_hand;
                       const shown = stockView === 'total' ? item.quantity_on_hand : placed;
+                      // Build the sub-line: in 'total' view lead with the placed
+                      // count, then any not-yet-placed buckets; in 'placed' view
+                      // show each bucket as a "+N" addend.
+                      const parts =
+                        stockView === 'total'
+                          ? [
+                              // Omit "0 placed" — for a fully-unplaced item it
+                              // reads as if the item is unavailable. The main
+                              // number already shows the on-hand total.
+                              placed > 0 ? `${formatNumber(placed)} placed` : null,
+                              staged > 0 ? `${formatNumber(staged)} staged` : null,
+                              unplaced > 0 ? `${formatNumber(unplaced)} unplaced` : null,
+                            ]
+                          : [
+                              staged > 0 ? `+${formatNumber(staged)} staged` : null,
+                              unplaced > 0 ? `+${formatNumber(unplaced)} unplaced` : null,
+                            ];
+                      const subLine = parts.filter(Boolean).join(' · ');
                       return (
                         <>
                           {formatNumber(shown)}
-                          {staged > 0 && (
+                          {(staged > 0 || unplaced > 0) && (
                             <div className="mt-0.5 text-[10.5px] font-normal leading-tight text-[var(--ed-ink-4)]">
-                              {stockView === 'total'
-                                ? `${formatNumber(placed)} placed · ${formatNumber(staged)} staged`
-                                : `+${formatNumber(staged)} staged`}
+                              {subLine}
                             </div>
                           )}
                         </>

@@ -1,3 +1,5 @@
+import { memo } from 'react';
+
 import { cn } from '@/lib/utils';
 
 interface SparklineProps {
@@ -11,7 +13,18 @@ interface SparklineProps {
   tone?: 'up' | 'down' | 'flat' | 'auto';
 }
 
-export function Sparkline({ data, width = 60, height = 18, className, tone = 'auto' }: SparklineProps) {
+// memo'd: this component rebuilds its SVG path (toFixed per point) on every
+// render. In a large list (e.g. the 50-row inventory table) an unrelated state
+// change — toggling a row checkbox — would otherwise recompute every visible
+// sparkline. With a referentially-stable `data` array the shallow-prop compare
+// lets each sparkline skip the work. See InventoryTable's `seriesByItem` memo.
+export const Sparkline = memo(function Sparkline({
+  data,
+  width = 60,
+  height = 18,
+  className,
+  tone = 'auto',
+}: SparklineProps) {
   if (data.length < 2) return <span className={className} style={{ display: 'inline-block', width, height }} />;
 
   const min = Math.min(...data);
@@ -60,4 +73,4 @@ export function Sparkline({ data, width = 60, height = 18, className, tone = 'au
       <path d={path} fill="none" stroke={lineColor} strokeWidth={1.25} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
-}
+});

@@ -199,9 +199,19 @@ export function rackCmp(a: string, b: string): number {
 export function derivePlacement(
   quantityOnHand: number,
   stagedQuantity: number,
-): { staged_quantity: number; placed_quantity: number } {
+  unplacedQuantity = 0,
+): { staged_quantity: number; unplaced_quantity: number; placed_quantity: number } {
   const staged = stagedQuantity || 0;
-  return { staged_quantity: staged, placed_quantity: Math.max(0, quantityOnHand - staged) };
+  const unplaced = unplacedQuantity || 0;
+  // PLACED = on-hand that lives in a real rack/crate. Staging AND Unplaced are
+  // both "not yet put away" buckets, so neither counts as placed — otherwise an
+  // item whose stock sits entirely in Unplaced shows as "in stock / placed" in
+  // the table while the Transfer tool (which only moves placed stock) refuses it.
+  return {
+    staged_quantity: staged,
+    unplaced_quantity: unplaced,
+    placed_quantity: Math.max(0, quantityOnHand - staged - unplaced),
+  };
 }
 
 export class InventoryService {
@@ -589,18 +599,29 @@ export class InventoryService {
       0,
     );
 
-    // Per-item staged quantity = Σ quantity in the warehouse Staging location(s).
+    // Per-item staged + unplaced quantities, summed over the warehouse Staging /
+    // Unplaced holding location(s). Both are "not yet put away" buckets; the table
+    // surfaces them separately so unplaced stock isn't silently counted as placed.
     const ids = (rows ?? []).map((r) => (r as { id: string }).id);
     const stagedByItem = new Map<string, number>();
+    const unplacedByItem = new Map<string, number>();
     if (ids.length > 0) {
       const { data: levels } = await this.ctx.supabase
         .from('item_stock_levels')
         .select('item_id, quantity, locations!inner(kind)')
         .eq('organization_id', this.ctx.organizationId)
-        .eq('locations.kind', 'staging')
+        .in('locations.kind', ['staging', 'unplaced'])
         .in('item_id', ids);
-      for (const lvl of (levels ?? []) as Array<{ item_id: string; quantity: number }>) {
-        stagedByItem.set(lvl.item_id, (stagedByItem.get(lvl.item_id) ?? 0) + Number(lvl.quantity));
+      // `locations` is a to-one embed → a single object at runtime; the
+      // generated PostgREST types model it as an array, so cast via unknown
+      // (same convention as placements() below).
+      for (const lvl of (levels ?? []) as unknown as Array<{
+        item_id: string;
+        quantity: number;
+        locations: { kind: string };
+      }>) {
+        const map = lvl.locations?.kind === 'unplaced' ? unplacedByItem : stagedByItem;
+        map.set(lvl.item_id, (map.get(lvl.item_id) ?? 0) + Number(lvl.quantity));
       }
     }
     const rowsWithPlacement = (rows ?? []).map((r) => ({
@@ -608,6 +629,7 @@ export class InventoryService {
       ...derivePlacement(
         Number((r as { quantity_on_hand: number }).quantity_on_hand),
         stagedByItem.get((r as { id: string }).id) ?? 0,
+        unplacedByItem.get((r as { id: string }).id) ?? 0,
       ),
     }));
 
@@ -635,6 +657,7 @@ export class InventoryService {
         created_at: string;
         updated_at: string;
         staged_quantity: number;
+        unplaced_quantity: number;
         placed_quantity: number;
       }>,
       total: totalCount,
@@ -791,19 +814,27 @@ export class InventoryService {
         throw e;
       }
     }
-    const { data: stagedRows } = await this.ctx.supabase
+    const { data: holdingRows } = await this.ctx.supabase
       .from('item_stock_levels')
       .select('quantity, locations!inner(kind)')
       .eq('organization_id', this.ctx.organizationId)
       .eq('item_id', id)
-      .eq('locations.kind', 'staging');
-    const staged = (stagedRows ?? []).reduce(
-      (s, r) => s + Number((r as { quantity: number }).quantity),
-      0,
-    );
+      .in('locations.kind', ['staging', 'unplaced']);
+    let staged = 0;
+    let unplaced = 0;
+    // `locations` is a to-one embed → object at runtime; cast via unknown
+    // (the generated PostgREST types model it as an array).
+    for (const r of (holdingRows ?? []) as unknown as Array<{
+      quantity: number;
+      locations: { kind: string };
+    }>) {
+      if (r.locations?.kind === 'unplaced') unplaced += Number(r.quantity);
+      else staged += Number(r.quantity);
+    }
     const placement = derivePlacement(
       Number((data as { quantity_on_hand: number }).quantity_on_hand),
       staged,
+      unplaced,
     );
     return Object.assign(data, placement);
   }
@@ -2020,8 +2051,17 @@ export class InventoryService {
   }
 
   /**
-   * Returns not-yet-placed (staged) stock grouped by item, with source PO/receipt + age.
-   * Used by the Staging worklist screen.
+   * Returns not-yet-placed stock grouped by item, with source PO/receipt + age.
+   * Backs the Staging worklist screen.
+   *
+   * Covers BOTH "not yet put away" buckets:
+   *  - kind='staging'  — received from a PO into the staging buffer (carries a
+   *    source PO/receipt + age).
+   *  - kind='unplaced' — on hand but never placed into a rack (e.g. imported or
+   *    manually adjusted stock). No PO source — source/age columns show "—".
+   * Both are placeable into a rack/crate via the same placeStockAction path, so
+   * surfacing unplaced here is the only way that stock can be put away (and then
+   * rack-to-rack transferred — the Transfer tool only moves placed stock).
    *
    * Schema notes:
    * - stock_movements written by post_receipt_v2 (mig 0190) via adjust_stock store
@@ -2042,16 +2082,16 @@ export class InventoryService {
     opts: { itemType?: 'book' | 'non-book'; warehouseId?: string | null } = {},
   ): Promise<Array<{
     itemId: string; name: string; sku: string; itemType: string; warehouseId: string | null;
-    stagingLocationId: string; stagedQuantity: number;
+    sourceLocationId: string; sourceKind: 'staging' | 'unplaced'; quantity: number;
     sourceReceiptId: string | null; sourcePoNumber: string | null; receiptNumber: string | null;
     receivedAt: string | null; ageDays: number | null;
   }>> {
-    // 1. Staged levels (qty>0) joined to item + staging location.
+    // 1. Not-yet-placed levels (qty>0) joined to item + the staging/unplaced location.
     let q = this.ctx.supabase
       .from('item_stock_levels')
       .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at)')
       .eq('organization_id', this.ctx.organizationId)
-      .eq('locations.kind', 'staging')
+      .in('locations.kind', ['staging', 'unplaced'])
       .gt('quantity', 0);
     if (opts.warehouseId) q = q.eq('locations.warehouse_id', opts.warehouseId);
     if (opts.itemType === 'book') q = q.eq('inventory_items.item_type', 'book');
@@ -2064,7 +2104,9 @@ export class InventoryService {
 
     const rows = (levels as Array<Record<string, any>>).filter((r) => r.inventory_items);
     if (rows.length === 0) return [];
-    const itemIds = rows.map((r) => r.item_id);
+    // De-dupe: an item with BOTH a staging and an unplaced holding contributes
+    // two rows but only needs one movement/receipt lookup.
+    const itemIds = [...new Set(rows.map((r) => r.item_id))];
 
     // 2. Earliest receive_po-into-staging movement per item (for age + source).
     // Note: post_receipt_v2 (mig 0190) passes receipts.id as `notes` (p_notes arg),
@@ -2113,7 +2155,11 @@ export class InventoryService {
 
     const nowMs = Date.now();
     return rows.map((r) => {
-      const src = sourceByItem.get(r.item_id) ?? null;
+      const sourceKind: 'staging' | 'unplaced' =
+        r.locations.kind === 'unplaced' ? 'unplaced' : 'staging';
+      // PO/receipt source + age only apply to PO-staged stock. Unplaced stock has
+      // no receive_po movement, so it carries no source (columns render "—").
+      const src = sourceKind === 'staging' ? (sourceByItem.get(r.item_id) ?? null) : null;
       const meta = src?.receiptId ? receiptMeta.get(src.receiptId) : undefined;
       // Prefer receipts.received_at for the displayed date; fall back to sm.created_at.
       const receivedAt = meta?.receivedAt ?? src?.receivedAt ?? null;
@@ -2123,8 +2169,9 @@ export class InventoryService {
         sku: r.inventory_items.sku,
         itemType: r.inventory_items.item_type,
         warehouseId: r.locations.warehouse_id ?? null,
-        stagingLocationId: r.location_id,
-        stagedQuantity: Number(r.quantity),
+        sourceLocationId: r.location_id,
+        sourceKind,
+        quantity: Number(r.quantity),
         sourceReceiptId: src?.receiptId ?? null,
         sourcePoNumber: meta?.poNumber ?? null,
         receiptNumber: meta?.receiptNumber ?? null,
