@@ -36,7 +36,17 @@ create policy user_connections_insert on public.user_connections
                   and m.user_id = auth.uid() and m.accepted_at is not null)
   );
 create policy user_connections_update on public.user_connections
-  for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+  for update using (
+    user_id = auth.uid()
+    and exists (select 1 from public.organization_members m
+                where m.organization_id = user_connections.organization_id
+                  and m.user_id = auth.uid() and m.accepted_at is not null)
+  ) with check (
+    user_id = auth.uid()
+    and exists (select 1 from public.organization_members m
+                where m.organization_id = user_connections.organization_id
+                  and m.user_id = auth.uid() and m.accepted_at is not null)
+  );
 create policy user_connections_delete on public.user_connections
   for delete using (user_id = auth.uid());
 
