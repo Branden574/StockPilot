@@ -2179,24 +2179,34 @@ export class InventoryService {
       if (rackId) rackByWh.set(wh, rackId);
     }
 
-    for (const h of levels) {
-      const wh = whByItem.get(h.item_id) ?? null;
-      const toLoc = wh ? rackByWh.get(wh) : undefined;
-      if (!toLoc || toLoc === h.location_id) continue;
-      try {
-        await this.transferStock({
-          itemId: h.item_id,
-          fromLocationId: h.location_id,
-          toLocationId: toLoc,
-          quantity: Number(h.quantity),
-          notes: `Placed on rack ${name} (bulk Set rack)`,
-        });
-      } catch (e) {
-        console.error('[set_rack place] transfer failed', {
-          item: h.item_id,
-          error: e instanceof Error ? e.message : String(e),
-        });
-      }
+    // Run the per-holding transfers CONCURRENTLY (in capped chunks) instead of
+    // one-at-a-time — a 13-item bulk Set rack was ~13 sequential RPC round-trips
+    // ("took forever"). Different items touch different stock-level rows, so
+    // there's no lock contention; the cap keeps the connection pool sane for the
+    // 500-item ceiling.
+    const CONCURRENCY = 20;
+    for (let i = 0; i < levels.length; i += CONCURRENCY) {
+      await Promise.all(
+        levels.slice(i, i + CONCURRENCY).map(async (h) => {
+          const wh = whByItem.get(h.item_id) ?? null;
+          const toLoc = wh ? rackByWh.get(wh) : undefined;
+          if (!toLoc || toLoc === h.location_id) return;
+          try {
+            await this.transferStock({
+              itemId: h.item_id,
+              fromLocationId: h.location_id,
+              toLocationId: toLoc,
+              quantity: Number(h.quantity),
+              notes: `Placed on rack ${name} (bulk Set rack)`,
+            });
+          } catch (e) {
+            console.error('[set_rack place] transfer failed', {
+              item: h.item_id,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }),
+      );
     }
   }
 
