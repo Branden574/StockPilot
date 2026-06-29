@@ -22,6 +22,7 @@ import { fetchAllRows } from './lib/paginate';
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
 import { CustomFieldsService } from './custom-fields';
+import { LocationsService } from './locations';
 import { TagsService } from './tags';
 import { UserCategoriesService } from './user-categories';
 
@@ -1923,6 +1924,17 @@ export class InventoryService {
           this.ctx,
         );
       }
+      // Beyond writing the rack LABEL above, ACTUALLY PLACE the selected items'
+      // not-yet-placed (staging/unplaced) stock onto that rack — so bulk
+      // "Set rack" moves stock out of staging in ONE action (the label alone
+      // never moved anything, which is the reported bug). Only when a rack is
+      // given (clearing the rack just clears the label). Best-effort: a
+      // placement hiccup must not undo the label set, so failures are logged.
+      if (composedBin) {
+        await this.placeItemsOntoRackByName(allowedIds, num, row, composedBin).catch((e) => {
+          console.error('[bulkUpdate set_rack] bulk placement failed', e);
+        });
+      }
       // RLS filtered the gap (if any). Surface it in `skipped` so the
       // "Updated X · Skipped Y" toast remains truthful.
       return { ok, skipped: skipped + (allowedIds.length - ok) };
@@ -2121,6 +2133,111 @@ export class InventoryService {
     });
     if (error) throw new ServiceError('internal_error', error.message);
     return data;
+  }
+
+  /**
+   * Bulk "Set rack" placement: move each item's NOT-YET-PLACED stock (its
+   * staging + unplaced holdings) onto the rack named `name` in that item's own
+   * warehouse. Used so bulk Set rack physically places stock instead of only
+   * writing a label. Per-holding best-effort — one failed transfer (e.g. a
+   * permission floor) is logged and skipped so the rest still place.
+   */
+  private async placeItemsOntoRackByName(
+    itemIds: string[],
+    num: string | null,
+    row: string | null,
+    name: string,
+  ): Promise<void> {
+    if (itemIds.length === 0 || !num) return;
+
+    const { data: items } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id, warehouse_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('id', itemIds);
+    const rows = (items ?? []) as Array<{ id: string; warehouse_id: string | null }>;
+    const whByItem = new Map(rows.map((i) => [i.id, i.warehouse_id]));
+
+    const { data: holdings } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('item_id, location_id, quantity, locations!inner(kind)')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', itemIds)
+      .in('locations.kind', ['staging', 'unplaced'])
+      .gt('quantity', 0);
+    const levels = (holdings ?? []) as unknown as Array<{
+      item_id: string;
+      location_id: string;
+      quantity: number;
+    }>;
+    if (levels.length === 0) return;
+
+    // Resolve (find or create) the destination rack ONCE per warehouse.
+    const rackByWh = new Map<string, string>();
+    for (const wh of new Set(rows.map((r) => r.warehouse_id).filter((w): w is string => !!w))) {
+      const rackId = await this.findOrCreateRackLocation(wh, num, row, name);
+      if (rackId) rackByWh.set(wh, rackId);
+    }
+
+    for (const h of levels) {
+      const wh = whByItem.get(h.item_id) ?? null;
+      const toLoc = wh ? rackByWh.get(wh) : undefined;
+      if (!toLoc || toLoc === h.location_id) continue;
+      try {
+        await this.transferStock({
+          itemId: h.item_id,
+          fromLocationId: h.location_id,
+          toLocationId: toLoc,
+          quantity: Number(h.quantity),
+          notes: `Placed on rack ${name} (bulk Set rack)`,
+        });
+      } catch (e) {
+        console.error('[set_rack place] transfer failed', {
+          item: h.item_id,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  }
+
+  /** Find an existing rack/crate location named `name` in the warehouse, or
+   *  create a rack (rack_number/row set) if absent. Returns its id, or null on
+   *  a create failure (e.g. missing locations:manage) so placement degrades. */
+  private async findOrCreateRackLocation(
+    warehouseId: string,
+    num: string,
+    row: string | null,
+    name: string,
+  ): Promise<string | null> {
+    const { data: existing } = await this.ctx.supabase
+      .from('locations')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('name', name)
+      .in('kind', ['rack', 'crate'])
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle();
+    if (existing) return (existing as { id: string }).id;
+    try {
+      const created = await new LocationsService(this.ctx).create({
+        name,
+        type: 'shelf',
+        kind: 'rack',
+        warehouseId,
+        rackNumber: num,
+        rackRow: row,
+      });
+      return (created as { id: string }).id;
+    } catch (e) {
+      console.error('[set_rack place] rack create failed', {
+        warehouseId,
+        name,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return null;
+    }
   }
 
   /**
