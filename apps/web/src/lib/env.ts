@@ -116,6 +116,12 @@ const serverSchema = z.object({
 
   // Google Books API key (optional — keyless works at low volume; set to raise quota).
   GOOGLE_BOOKS_API_KEY: optionalSecret.transform((s) => s.trim()),
+
+  // Zendesk per-user agent console OAuth2 credentials (integrations module).
+  // Only required when an agent connects their personal Zendesk account; unset
+  // in environments that don't expose the agent console feature.
+  ZENDESK_OAUTH_CLIENT_ID: optionalSecret.transform((s) => s.trim()),
+  ZENDESK_OAUTH_CLIENT_SECRET: optionalSecret.transform((s) => s.trim()),
 });
 
 const clientSchema = z.object({
