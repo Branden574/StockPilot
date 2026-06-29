@@ -254,7 +254,7 @@ async function InventoryTableSection({
   //                createSignedUrls; falls back to custom_fields.thumbnail_url
   //                stashed by the bulk-ISBN importer for legacy books).
   const itemIdList = inventory.items.map((i) => i.id);
-  const [trends, imagesById] = await Promise.all([
+  const [trends, imagesById, placementMap] = await Promise.all([
     tagged(
       'getItemTrends',
       getItemTrends(
@@ -268,6 +268,8 @@ async function InventoryTableSection({
       // and the inline LQIP base64 for next/image's blurDataURL.
       imagesSvc.primaryImagesWithThumbsForItems(itemIdList),
     ),
+    // Per-(item, location) holdings so the list shows ONE LINE PER RACK.
+    tagged('inventorySvc.placementBreakdown', inventorySvc.placementBreakdown(itemIdList)),
   ]);
   const itemsWithImages = inventory.items.map((i) => {
     const cf = (i as { custom_fields?: Record<string, unknown> | null })
@@ -287,6 +289,36 @@ async function InventoryTableSection({
       // base64 LQIP for next/image's blurDataURL; null pre-0122.
       image_lqip: img?.lqip ?? null,
     };
+  });
+
+  // ONE LINE PER RACK: expand each item into a row per holding location. The
+  // Chromebook placed 250→1-A and 250→2-C becomes two rows. `line_quantity` is
+  // that rack's qty (shown in ON HAND); `quantity_on_hand` is left as the item
+  // TOTAL so status/coverage/sparkline stay item-level and the value footer
+  // (server-computed) isn't double-counted. Items with no holdings fall back to
+  // a single row at their own on-hand. Single-location items stay one row.
+  const placementRows = itemsWithImages.flatMap((item) => {
+    const ps = placementMap.get(item.id) ?? [];
+    // Both branches return the SAME row shape (same keys + property types) so
+    // the result is a single uniform array, not a union.
+    if (ps.length === 0) {
+      return [
+        {
+          ...item,
+          rowKey: item.id,
+          line_quantity: item.quantity_on_hand,
+          placement_label: null as string | null,
+          placement_kind: undefined as string | undefined,
+        },
+      ];
+    }
+    return ps.map((p) => ({
+      ...item,
+      rowKey: `${item.id}:${p.locationId}`,
+      line_quantity: p.quantity,
+      placement_label: p.label as string | null,
+      placement_kind: p.kind as string | undefined,
+    }));
   });
 
   const lookups = {
@@ -369,7 +401,7 @@ async function InventoryTableSection({
 
   return (
     <InventoryTable
-      items={itemsWithImages}
+      items={placementRows}
       total={inventory.total}
       valueOnHand={inventory.valueOnHand}
       lookups={lookups}

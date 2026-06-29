@@ -77,6 +77,19 @@ interface Item {
    * stock really is — not the stale free-text bin_location label. Optional so
    * older callers fall back to the custom_fields label. */
   placed_racks?: string[];
+  // ── "One line per rack" split-row fields (Items inventory page only) ──
+  /** Unique row key when one item is split into multiple placement rows
+   *  (item id + location id). Falls back to `id` when absent. */
+  rowKey?: string;
+  /** This row's per-location quantity (one rack/bucket). When set, the ON HAND
+   *  column shows THIS, not the item total — while `quantity_on_hand` stays the
+   *  item total so status/coverage/value remain item-level. */
+  line_quantity?: number;
+  /** The rack/crate name, or "Staging"/"Unplaced", for this split row. When
+   *  defined (even null), the RACK column shows it. `null` = no holding. */
+  placement_label?: string | null;
+  /** This row's holding kind ('rack' | 'crate' | 'staging' | 'unplaced'). */
+  placement_kind?: string;
 }
 
 interface Lookups {
@@ -909,7 +922,7 @@ export function InventoryTable({
 
               return (
                 <tr
-                  key={item.id}
+                  key={item.rowKey ?? item.id}
                   className={cn(
                     'border-b border-border transition-colors last:border-0',
                     isSelected ? 'bg-[hsl(var(--accent)/0.10)]' : 'hover:bg-muted/60',
@@ -1044,6 +1057,16 @@ export function InventoryTable({
                   {!showBookFields && (
                     <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
                       {(() => {
+                        // Split "one line per rack" row: show THIS row's location
+                        // label (rack/crate name, or "Staging"/"Unplaced"). null
+                        // = no holding → em dash.
+                        if (item.placement_label !== undefined) {
+                          return item.placement_label ? (
+                            <span className="font-mono tabular-nums">{item.placement_label}</span>
+                          ) : (
+                            <span className="text-[var(--ed-ink-4)]">—</span>
+                          );
+                        }
                         // Prefer the ACTUAL placement (rack/crate locations the
                         // stock sits in, from holdings). An empty array means the
                         // stock is unplaced/staged — show "—", not a stale label.
@@ -1120,6 +1143,12 @@ export function InventoryTable({
                     })()}
                   <td className="px-3 text-right font-mono tabular-nums">
                     {(() => {
+                      // Split "one line per rack" row: ON HAND is THIS rack's
+                      // quantity (no placed/staged sub-line, no toggle — the row
+                      // already represents a single bucket).
+                      if (item.line_quantity !== undefined) {
+                        return formatNumber(item.line_quantity);
+                      }
                       // Defensive defaults so rows without the new fields (older
                       // callers, non-service code paths) render exactly as before.
                       const staged = item.staged_quantity ?? 0;

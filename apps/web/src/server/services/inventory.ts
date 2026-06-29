@@ -905,6 +905,56 @@ export class InventoryService {
   }
 
   /**
+   * Per-(item, location) placement breakdown for many items at once — backs the
+   * inventory list's "one line per rack" expansion. For each item id, returns
+   * every non-empty holding with a display label (the rack/crate name, or the
+   * system-bucket words "Staging" / "Unplaced") and its kind, sorted so real
+   * racks/crates come first (alphabetical), then Staging, then Unplaced.
+   *
+   * Org-scoped + RLS; returns an empty map for an empty id list (no round-trip).
+   * Fail-closed: an empty map on any read error (the list degrades to no
+   * placement lines rather than throwing the whole page).
+   */
+  async placementBreakdown(itemIds: string[]): Promise<
+    Map<string, Array<{ locationId: string; label: string; kind: string; quantity: number }>>
+  > {
+    const out = new Map<
+      string,
+      Array<{ locationId: string; label: string; kind: string; quantity: number }>
+    >();
+    if (itemIds.length === 0) return out;
+
+    const { data, error } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('item_id, location_id, quantity, locations!inner(name, kind)')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', itemIds)
+      .gt('quantity', 0);
+    if (error || !data) return out;
+
+    for (const row of data as unknown as Array<{
+      item_id: string;
+      location_id: string;
+      quantity: number;
+      locations: { name: string; kind: string | null };
+    }>) {
+      const kind = row.locations?.kind ?? 'unplaced';
+      const label =
+        kind === 'staging' ? 'Staging' : kind === 'unplaced' ? 'Unplaced' : row.locations.name;
+      const arr = out.get(row.item_id) ?? [];
+      arr.push({ locationId: row.location_id, label, kind, quantity: Number(row.quantity) });
+      out.set(row.item_id, arr);
+    }
+
+    // racks/crates first (A→Z), then Staging, then Unplaced.
+    const rank = (k: string) => (k === 'staging' ? 1 : k === 'unplaced' ? 2 : 0);
+    for (const arr of out.values()) {
+      arr.sort((a, b) => rank(a.kind) - rank(b.kind) || a.label.localeCompare(b.label));
+    }
+    return out;
+  }
+
+  /**
    * Sum of ACTIVE (not-yet-released) stock_reservations per item, keyed by
    * item id. Mirrors the exact reservation math the /rentals/new catalog
    * uses (no reference_type filter — total active reservations across every
