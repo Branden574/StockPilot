@@ -66,19 +66,6 @@ export default function Welcome() {
             Inventory and order operations for teams that actually run a warehouse — counts, costs,
             and movements you can trust, without the dashboard slop.
           </Body>
-
-          <View style={{ marginTop: 22, gap: 10 }}>
-            <Button
-              block
-              onPress={() => router.push('/(auth)/sign-in')}
-              trailing={<ArrowRight size={16} color={c.paper} strokeWidth={1.7} />}
-            >
-              Sign in
-            </Button>
-            <Body size={13} color={c.ink4} style={{ textAlign: 'center', marginTop: 4 }}>
-              New here? Your organization admin can invite you.
-            </Body>
-          </View>
         </View>
 
         {/* Proof stats */}
@@ -129,6 +116,9 @@ export default function Welcome() {
             >
               Sign in
             </Button>
+            <Body size={13} color={c.ink4} style={{ textAlign: 'center', marginTop: 4 }}>
+              New here? Your organization admin can invite you.
+            </Body>
           </View>
         </View>
       </ScrollView>
