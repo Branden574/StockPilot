@@ -4,15 +4,14 @@ const config: ExpoConfig = {
   name: 'StockPilot',
   slug: 'stockpilot',
   scheme: 'stockpilot',
-  // 1.0.3: first UNIVERSAL submission (iPhone + iPad + Mac/Designed-for-iPad).
-  // 1.0.2 is already LIVE on the App Store (iPhone, build 44, pre-supportsTablet),
-  // so the iPad/Mac build must ship under a new version number. Bumping the
-  // version also bumps the appVersion runtimeVersion → 1.0.3; this build bakes
-  // in the org-switch + welcome fixes, so it needs no OTA. NOTE: live 1.0.2
-  // users stay on runtime 1.0.2 — future JS-only fixes must `eas update` BOTH
-  // runtimes (1.0.2 for the live base, 1.0.3 for the new build) to reach all.
+  // 1.0.2 is LIVE on the App Store (iPhone, build 44, pre-supportsTablet).
+  // The first UNIVERSAL (iPhone+iPad+Mac) build ships as 1.0.3 — but BUMP THE
+  // VERSION TO '1.0.3' ONLY AT BUILD TIME. Keeping it 1.0.2 here keeps main
+  // OTA-safe: `eas update --channel production` targets runtime 1.0.2 and so
+  // reaches the LIVE users. (Bump deferred: the EAS free-plan monthly iOS build
+  // quota was exhausted; resets ~2026-07-01.)
   // (1.0.2 added expo-document-picker; 1.0.1 added @sentry/react-native.)
-  version: '1.0.3',
+  version: '1.0.2',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   newArchEnabled: true,
