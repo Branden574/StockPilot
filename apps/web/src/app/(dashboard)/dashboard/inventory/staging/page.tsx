@@ -35,7 +35,11 @@ export default async function StagingPage({
   // and hides the route's existence from unauthorized roles.
   if (!can(sessionCtx, 'items:read')) notFound();
 
-  const canPlace = can(sessionCtx, 'items:create');
+  // Gate the Place / Place-selected buttons on the permission the action
+  // actually asserts (transferStock → 'stock:transfer'), NOT 'items:create'.
+  // With per-role/user permission overrides the two can diverge, which would
+  // otherwise show a Place button that always fails server-side.
+  const canPlace = can(sessionCtx, 'stock:transfer');
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">

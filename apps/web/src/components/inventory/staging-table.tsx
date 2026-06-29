@@ -4,6 +4,7 @@ import { Clock } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
+import { BulkPlaceDialog } from '@/components/inventory/bulk-place-dialog';
 import { PlaceFromStagingDialog } from '@/components/inventory/place-from-staging-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -110,6 +111,35 @@ export function StagingTable({
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  // Multi-select for bulk-place. Keyed by the row's source holding location
+  // (unique per row — an item with both a staging and unplaced holding has two
+  // rows). Only rows that CAN be placed (canPlace + a real warehouse) are
+  // selectable. Stale keys after a filter/refresh are harmless: selectedRows
+  // filters against the current rows, so a vanished key simply drops out.
+  const [selectedKeys, setSelectedKeys] = React.useState<Set<string>>(new Set());
+  const placeableKeys = React.useMemo(
+    () =>
+      rows.filter((r) => canPlace && r.warehouseId !== null).map((r) => r.sourceLocationId),
+    [rows, canPlace],
+  );
+  const selectedRows = rows.filter((r) => selectedKeys.has(r.sourceLocationId));
+  const allSelected =
+    placeableKeys.length > 0 && placeableKeys.every((k) => selectedKeys.has(k));
+  function toggleRow(key: string) {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+  function toggleAll() {
+    setSelectedKeys(allSelected ? new Set() : new Set(placeableKeys));
+  }
+  function clearSelection() {
+    setSelectedKeys(new Set());
+  }
+
   function setTypeFilter(value: ItemTypeFilter) {
     const next = new URLSearchParams(searchParams.toString());
     if (value === 'all') {
@@ -177,11 +207,53 @@ export function StagingTable({
         </span>
       </div>
 
+      {/* Bulk-place action bar — appears when rows are selected */}
+      {canPlace && selectedRows.length > 0 && (
+        <div className="flex items-center gap-3 border-b border-border bg-muted/40 px-3 py-2">
+          <span className="text-sm font-medium">
+            {selectedRows.length} selected
+          </span>
+          <BulkPlaceDialog
+            rows={selectedRows.map((r) => ({
+              itemId: r.itemId,
+              name: r.name,
+              sourceLocationId: r.sourceLocationId,
+              quantity: r.quantity,
+              warehouseId: r.warehouseId,
+            }))}
+            destinationsMap={destinationsMap}
+            onPlaced={clearSelection}
+            trigger={
+              <Button size="sm" variant="outline">
+                Place selected
+              </Button>
+            }
+          />
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="text-muted-foreground hover:text-foreground ml-auto text-sm"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[700px]">
           <thead>
             <tr className="border-b border-border text-left">
+              {canPlace && (
+                <th className="w-8 px-3 py-2.5">
+                  <StagingCheckbox
+                    checked={allSelected}
+                    disabled={placeableKeys.length === 0}
+                    onChange={toggleAll}
+                    label="Select all placeable rows"
+                  />
+                </th>
+              )}
               <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
                 Item
               </th>
@@ -222,6 +294,16 @@ export function StagingTable({
                   key={`${row.itemId}-${row.sourceLocationId}`}
                   className="border-b border-border last:border-0 hover:bg-muted/40 transition-colors"
                 >
+                  {canPlace && (
+                    <td className="px-3 py-3">
+                      <StagingCheckbox
+                        checked={selectedKeys.has(row.sourceLocationId)}
+                        disabled={!canPlaceRow}
+                        onChange={() => toggleRow(row.sourceLocationId)}
+                        label={`Select ${row.name}`}
+                      />
+                    </td>
+                  )}
                   {/* Item name + SKU + source-bucket badge */}
                   <td className="px-3 py-3">
                     <div className="flex flex-col gap-1">
@@ -321,5 +403,46 @@ export function StagingTable({
         </table>
       </div>
     </div>
+  );
+}
+
+// Small inline checkbox for row selection — mirrors the inventory table's
+// control so the two pages feel consistent. Disabled rows (no warehouse) can't
+// be bulk-placed.
+function StagingCheckbox({
+  checked,
+  disabled,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onChange}
+      className={cn(
+        'inline-grid h-3.5 w-3.5 place-items-center rounded-[3px] border bg-card transition-colors',
+        disabled
+          ? 'cursor-not-allowed border-border opacity-40'
+          : checked
+            ? 'border-foreground bg-foreground'
+            : 'border-[var(--ed-line-strong)]',
+      )}
+    >
+      {checked && !disabled && (
+        <span
+          aria-hidden
+          className="h-[7px] w-[4px] -translate-y-px rotate-[-45deg] border-b-[1.5px] border-l-[1.5px] border-background"
+        />
+      )}
+    </button>
   );
 }

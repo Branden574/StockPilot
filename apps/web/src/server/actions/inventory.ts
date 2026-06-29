@@ -25,8 +25,12 @@ function toResult<T>(error: unknown): ActionResult<T> {
   if (error instanceof ServiceError) {
     return err(error.code, error.message);
   }
+  // Never surface a raw exception message (DB / network internals) to the
+  // client — log it server-side for diagnosis and return a generic string.
+  // Mirrors the S13 boundary sanitization applied to ServiceError
+  // internal_errors above.
   console.error(error);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return err('internal_error', 'Something went wrong. Please try again.');
 }
 
 // Validate UUIDs before they hit Postgres. Without this, a malformed string
@@ -360,6 +364,128 @@ export async function placeStockAction(
     ) {
       return err('validation_error', "Can't place more than is available.");
     }
+    return toResult(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// bulkPlaceStockAction — place MANY not-yet-placed items into ONE rack/crate
+// at once (the Staging "Place selected" flow). Each placement moves the full
+// chosen quantity from that item's own staging/unplaced holding into the
+// shared destination. The destination is org-verified ONCE; each transfer is
+// then org-verified per-item by transfer_stock (item org + assert_location_
+// in_org on the source). Returns a per-item success/failure summary so one
+// bad row (e.g. stock moved out from under us) never sinks the whole batch.
+// ---------------------------------------------------------------------------
+
+const bulkPlaceStockSchema = z.object({
+  placements: z
+    .array(
+      z.object({
+        itemId: z.string().uuid(),
+        fromLocationId: z.string().uuid(),
+        quantity: z.number().positive(),
+      }),
+    )
+    .min(1)
+    .max(200),
+  notes: z.string().max(2000).optional(),
+  destination: z.union([
+    z.object({ existingLocationId: z.string().uuid() }),
+    z.object({ newRack: newRackSchema }),
+  ]),
+});
+
+export type BulkPlaceStockInput = z.infer<typeof bulkPlaceStockSchema>;
+
+export async function bulkPlaceStockAction(
+  input: BulkPlaceStockInput,
+): Promise<ActionResult<{ placed: number; failed: Array<{ itemId: string; message: string }> }>> {
+  const parsed = bulkPlaceStockSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  const data = parsed.data;
+
+  try {
+    const ctx = await withContext();
+
+    // Resolve + org-verify the destination ONCE — same tenant-isolation guards
+    // as placeStockAction (destination location/warehouse must be in the
+    // caller's org; can't place INTO a staging/unplaced bucket).
+    let toLocationId: string;
+    if ('existingLocationId' in data.destination) {
+      const { data: loc } = await ctx.supabase
+        .from('locations')
+        .select('id, warehouse_id, kind')
+        .eq('id', data.destination.existingLocationId)
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (!loc) {
+        return err('validation_error', 'Destination location not found in your organization.');
+      }
+      if (loc.kind === 'staging' || loc.kind === 'unplaced') {
+        return err('validation_error', 'Pick a rack or crate as the destination.');
+      }
+      toLocationId = loc.id;
+    } else {
+      const n = data.destination.newRack;
+      const { data: wh } = await ctx.supabase
+        .from('warehouses')
+        .select('id')
+        .eq('id', n.warehouseId)
+        .eq('organization_id', ctx.organizationId)
+        .maybeSingle();
+      if (!wh) {
+        return err('validation_error', 'Warehouse not found in your organization.');
+      }
+      const locationsSvc = new LocationsService(ctx);
+      const created = await locationsSvc.create({
+        name: deriveLocationName(n),
+        type: n.crateColor ? 'bin' : 'shelf',
+        kind: n.crateColor ? 'crate' : 'rack',
+        warehouseId: n.warehouseId,
+        rackNumber: n.rackNumber,
+        rackRow: n.rackRow ?? null,
+        crateColor: n.crateColor ?? null,
+        crateNumber: n.crateNumber ?? null,
+        parentId: n.parentId ?? null,
+      });
+      toLocationId = created.id;
+    }
+
+    // Place each item. A single failure (e.g. insufficient_stock if the row's
+    // qty moved underneath us) is recorded and skipped — the rest still place.
+    const invSvc = new InventoryService(ctx);
+    let placed = 0;
+    const failed: Array<{ itemId: string; message: string }> = [];
+    for (const p of data.placements) {
+      try {
+        await invSvc.transferStock({
+          itemId: p.itemId,
+          fromLocationId: p.fromLocationId,
+          toLocationId,
+          quantity: p.quantity,
+          notes: data.notes,
+        });
+        placed += 1;
+      } catch (e) {
+        const insufficient =
+          e instanceof ServiceError &&
+          e.code === 'internal_error' &&
+          (e.internalDetail ?? '').toLowerCase().includes('insufficient_stock');
+        failed.push({
+          itemId: p.itemId,
+          message: insufficient ? 'Not enough available to place.' : 'Could not place this item.',
+        });
+      }
+    }
+
+    revalidatePath('/dashboard/inventory/staging');
+    revalidatePath('/dashboard/inventory');
+    return ok({ placed, failed });
+  } catch (e) {
     return toResult(e);
   }
 }
