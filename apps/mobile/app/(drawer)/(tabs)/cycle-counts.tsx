@@ -32,6 +32,7 @@ import {
 } from '@/lib/cycle-count-cache';
 import { useSyncStatus } from '@/lib/cycle-count-sync';
 import { supabase } from '@/lib/supabase';
+import { useOrg } from '@/lib/use-org';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -58,24 +59,13 @@ export default function CycleCounts() {
   const tabBarHeight = useBottomTabBarHeight();
   const sync = useSyncStatus();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
-  const [orgId, setOrgId] = React.useState<string | null>(null);
+  const { orgId } = useOrg();
   const [counts, setCounts] = React.useState<OpenCount[]>([]);
   const [pendingByCount, setPendingByCount] = React.useState<Map<string, number>>(new Map());
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [offline, setOffline] = React.useState(false);
 
-  React.useEffect(() => {
-    if (!user) return;
-    supabase
-      .from('organization_members')
-      .select('organization_id')
-      .eq('user_id', user.id)
-      .not('accepted_at', 'is', null)
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => setOrgId((data?.organization_id as string | undefined) ?? null));
-  }, [user]);
 
   const load = React.useCallback(async () => {
     let online = true;

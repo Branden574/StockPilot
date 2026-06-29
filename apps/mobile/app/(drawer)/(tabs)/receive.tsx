@@ -24,6 +24,7 @@ import { StockBar } from '@/components/ui/stock-bar';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
+import { useOrg } from '@/lib/use-org';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -47,22 +48,11 @@ export default function Receive() {
   const { c } = useTheme();
   const tabBarHeight = useBottomTabBarHeight();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
-  const [orgId, setOrgId] = React.useState<string | null>(null);
+  const { orgId } = useOrg();
   const [pos, setPos] = React.useState<OpenPo[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
 
-  React.useEffect(() => {
-    if (!user) return;
-    supabase
-      .from('organization_members')
-      .select('organization_id')
-      .eq('user_id', user.id)
-      .not('accepted_at', 'is', null)
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => setOrgId((data?.organization_id as string | undefined) ?? null));
-  }, [user]);
 
   const load = React.useCallback(async () => {
     if (!orgId) return;

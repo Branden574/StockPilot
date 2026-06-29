@@ -26,6 +26,7 @@ import { useAuth } from '@/lib/auth-context';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
 import { supabase } from '@/lib/supabase';
+import { useOrg } from '@/lib/use-org';
 import { radius, space, theme } from '@/lib/theme';
 
 interface FoundItem {
@@ -127,7 +128,7 @@ export default function Scan() {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = React.useState(true);
   const [mode, setMode] = React.useState<'lookup' | 'cover'>('lookup');
-  const [orgId, setOrgId] = React.useState<string | null>(null);
+  const { orgId } = useOrg();
   const [item, setItem] = React.useState<FoundItem | null>(null);
   const [addBook, setAddBook] = React.useState<IsbnLookupResult | null>(null);
   const [addItem, setAddItem] = React.useState<UpcLookupResult | null>(null);
@@ -136,17 +137,6 @@ export default function Scan() {
   const [signatureToken, setSignatureToken] = React.useState<string | null>(null);
   const [signatureModalVisible, setSignatureModalVisible] = React.useState(false);
 
-  React.useEffect(() => {
-    if (!user) return;
-    supabase
-      .from('organization_members')
-      .select('organization_id')
-      .eq('user_id', user.id)
-      .not('accepted_at', 'is', null)
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => setOrgId((data?.organization_id as string | undefined) ?? null));
-  }, [user]);
 
   /** Loads an item's rich detail (with image + location name) by id. */
   async function loadItemById(id: string): Promise<FoundItem | null> {

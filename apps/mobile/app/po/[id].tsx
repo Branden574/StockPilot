@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { PoAttachments } from '@/components/po-attachments';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
+import { useOrg } from '@/lib/use-org';
 import { radius, space, theme } from '@/lib/theme';
 
 interface PoLine {
@@ -62,7 +63,7 @@ export default function PoReceiveScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
 
-  const [orgId, setOrgId] = React.useState<string | null>(null);
+  const { orgId } = useOrg();
   const [header, setHeader] = React.useState<PoHeader | null>(null);
   const [lines, setLines] = React.useState<PoLine[]>([]);
   const [receipts, setReceipts] = React.useState<ReceiptHistoryItem[]>([]);
@@ -81,17 +82,6 @@ export default function PoReceiveScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [highlightLineId, setHighlightLineId] = React.useState<string | null>(null);
 
-  React.useEffect(() => {
-    if (!user) return;
-    supabase
-      .from('organization_members')
-      .select('organization_id')
-      .eq('user_id', user.id)
-      .not('accepted_at', 'is', null)
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => setOrgId((data?.organization_id as string | undefined) ?? null));
-  }, [user]);
 
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;
