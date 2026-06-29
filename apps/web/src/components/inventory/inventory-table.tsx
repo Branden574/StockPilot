@@ -197,7 +197,11 @@ type SparkMode = 'qty' | 'moves';
 const SPARK_MODE_KEY = 'stockpilot:inventory:sparkline-mode';
 
 type StockView = 'placed' | 'total';
-const STOCK_VIEW_KEY = 'stockpilot:inventory:stock-view';
+// v2: default flipped to 'total' so ON HAND shows the real on-hand quantity
+// (placed + staged + unplaced) rather than placed-only — an all-unplaced item
+// must never read as "0 on hand". Bumping the key resets stale 'placed' saves
+// so existing users pick up the new default.
+const STOCK_VIEW_KEY = 'stockpilot:inventory:stock-view:v2';
 
 const VIEWS = ['All items', 'Low + critical', 'Out of stock'] as const;
 type View = (typeof VIEWS)[number];
@@ -321,15 +325,17 @@ export function InventoryTable({
   }, [sparkMode]);
 
   // Stock view preference: 'placed' = placed-only on-hand; 'total' = placed + staged.
-  // Same SSR-safe init pattern as sparkMode above — server always sees 'placed'
-  // so the hydration markup matches, then we swap in the stored preference post-mount.
-  const [stockView, setStockView] = React.useState<StockView>('placed');
+  // Same SSR-safe init pattern as sparkMode above — server always sees the
+  // 'total' default so the hydration markup matches, then we swap in the stored
+  // preference post-mount. 'total' = full on-hand (placed+staged+unplaced) so a
+  // fully-unplaced item shows its real quantity, not 0.
+  const [stockView, setStockView] = React.useState<StockView>('total');
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     const stored = window.localStorage.getItem(STOCK_VIEW_KEY);
-    if (stored === 'total') {
+    if (stored === 'placed' || stored === 'total') {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
-      setStockView('total');
+      setStockView(stored);
     }
   }, []);
   React.useEffect(() => {
@@ -741,9 +747,9 @@ export function InventoryTable({
           onClick={() => setStockView((v) => (v === 'placed' ? 'total' : 'placed'))}
           className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)] hover:text-foreground"
           aria-label="Toggle on-hand view"
-          title="Switch between placed-only and placed+staged on-hand"
+          title="Switch between total on-hand and placed-only"
         >
-          {stockView === 'placed' ? 'On hand: placed' : 'On hand: placed + staged'}
+          {stockView === 'placed' ? 'On hand: placed only' : 'On hand: total'}
         </button>
 
         <ExportMenu
