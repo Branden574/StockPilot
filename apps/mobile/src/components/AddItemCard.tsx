@@ -133,7 +133,11 @@ export function AddItemCard({ user, result, onCancel, onCreated }: Props) {
           custom_fields: customFields,
           warehouse_id: warehouseId,
           status: 'active',
-          quantity_on_hand: 0,
+          // Set the initial qty ON THE ITEM so the seed-initial-level trigger
+          // places it in UNPLACED — matching the web "+ New item" create.
+          // Previously this inserted qoh=0 then adjust_stock(p_location_id:null),
+          // which routed every mobile-added item's stock into STAGING.
+          quantity_on_hand: initialQty,
           created_by: user.id,
           updated_by: user.id,
         })
@@ -141,16 +145,20 @@ export function AddItemCard({ user, result, onCancel, onCreated }: Props) {
         .single();
       if (insErr) throw new Error(insErr.message);
 
+      // Mirror the web create's audit movement (ledger + sparkline). Best-effort
+      // — the stock already exists (Unplaced) from the trigger above, so a
+      // movement-log hiccup must not fail the add.
       if (initialQty > 0) {
-        const { error: adjErr } = await supabase.rpc('adjust_stock', {
-          p_item_id: (created as { id: string }).id,
-          p_quantity_change: initialQty,
-          p_movement_type: 'initial',
-          p_location_id: null,
-          p_reason: 'Mobile UPC add',
-          p_notes: null,
+        await supabase.from('stock_movements').insert({
+          organization_id: orgId,
+          item_id: (created as { id: string }).id,
+          movement_type: 'initial',
+          quantity_change: initialQty,
+          previous_quantity: 0,
+          new_quantity: initialQty,
+          user_id: user.id,
+          to_location_id: null,
         });
-        if (adjErr) throw new Error(adjErr.message);
       }
       onCreated((created as { id: string }).id);
     } catch (e) {
