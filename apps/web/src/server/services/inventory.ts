@@ -599,39 +599,58 @@ export class InventoryService {
       0,
     );
 
-    // Per-item staged + unplaced quantities, summed over the warehouse Staging /
-    // Unplaced holding location(s). Both are "not yet put away" buckets; the table
-    // surfaces them separately so unplaced stock isn't silently counted as placed.
+    // Per-item placement, derived from the ACTUAL holdings (item_stock_levels),
+    // NOT the free-text bin_location label (which can go stale — an item placed
+    // into rack 1-A/2-C still shows a leftover "1-C" label otherwise). We sum
+    // the staging + unplaced buckets AND collect the real rack/crate location
+    // names the stock sits in, so the table's RACK column shows where the stock
+    // truly is.
     const ids = (rows ?? []).map((r) => (r as { id: string }).id);
     const stagedByItem = new Map<string, number>();
     const unplacedByItem = new Map<string, number>();
+    const placedRacksByItem = new Map<string, string[]>();
     if (ids.length > 0) {
       const { data: levels } = await this.ctx.supabase
         .from('item_stock_levels')
-        .select('item_id, quantity, locations!inner(kind)')
+        .select('item_id, quantity, locations!inner(name, kind)')
         .eq('organization_id', this.ctx.organizationId)
-        .in('locations.kind', ['staging', 'unplaced'])
-        .in('item_id', ids);
+        .in('item_id', ids)
+        .gt('quantity', 0);
       // `locations` is a to-one embed → a single object at runtime; the
       // generated PostgREST types model it as an array, so cast via unknown
       // (same convention as placements() below).
       for (const lvl of (levels ?? []) as unknown as Array<{
         item_id: string;
         quantity: number;
-        locations: { kind: string };
+        locations: { name: string; kind: string };
       }>) {
-        const map = lvl.locations?.kind === 'unplaced' ? unplacedByItem : stagedByItem;
-        map.set(lvl.item_id, (map.get(lvl.item_id) ?? 0) + Number(lvl.quantity));
+        const kind = lvl.locations?.kind;
+        if (kind === 'staging') {
+          stagedByItem.set(lvl.item_id, (stagedByItem.get(lvl.item_id) ?? 0) + Number(lvl.quantity));
+        } else if (kind === 'unplaced') {
+          unplacedByItem.set(lvl.item_id, (unplacedByItem.get(lvl.item_id) ?? 0) + Number(lvl.quantity));
+        } else if (kind === 'rack' || kind === 'crate') {
+          // A real placement — record the location name (dedup, an item could
+          // have two levels in the same rack via different code paths).
+          const arr = placedRacksByItem.get(lvl.item_id) ?? [];
+          if (lvl.locations.name && !arr.includes(lvl.locations.name)) arr.push(lvl.locations.name);
+          placedRacksByItem.set(lvl.item_id, arr);
+        }
       }
     }
-    const rowsWithPlacement = (rows ?? []).map((r) => ({
-      ...(r as object),
-      ...derivePlacement(
-        Number((r as { quantity_on_hand: number }).quantity_on_hand),
-        stagedByItem.get((r as { id: string }).id) ?? 0,
-        unplacedByItem.get((r as { id: string }).id) ?? 0,
-      ),
-    }));
+    const rowsWithPlacement = (rows ?? []).map((r) => {
+      const id = (r as { id: string }).id;
+      return {
+        ...(r as object),
+        ...derivePlacement(
+          Number((r as { quantity_on_hand: number }).quantity_on_hand),
+          stagedByItem.get(id) ?? 0,
+          unplacedByItem.get(id) ?? 0,
+        ),
+        // Sorted for stable display ("1-A, 2-C" not "2-C, 1-A").
+        placed_racks: (placedRacksByItem.get(id) ?? []).sort((a, b) => a.localeCompare(b)),
+      };
+    });
 
     return {
       items: rowsWithPlacement as Array<{
@@ -659,6 +678,10 @@ export class InventoryService {
         staged_quantity: number;
         unplaced_quantity: number;
         placed_quantity: number;
+        /** Actual rack/crate location names this item's stock sits in (from
+         *  holdings), sorted. Drives the table's RACK column so it reflects
+         *  real placement, not the stale bin_location label. */
+        placed_racks: string[];
       }>,
       total: totalCount,
       /** Sum of (unit_cost × quantity_on_hand) over the FULL filtered

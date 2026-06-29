@@ -72,6 +72,11 @@ interface Item {
    * unplaced" line so racked-looking stock that's actually unplaced (and so
    * can't be transferred) is visible. Optional; defaults to 0. */
   unplaced_quantity?: number;
+  /** ACTUAL rack/crate location names this item's stock sits in (from the
+   * holdings model), sorted. Drives the RACK column so it shows where the
+   * stock really is — not the stale free-text bin_location label. Optional so
+   * older callers fall back to the custom_fields label. */
+  placed_racks?: string[];
 }
 
 interface Lookups {
@@ -1039,11 +1044,28 @@ export function InventoryTable({
                   {!showBookFields && (
                     <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
                       {(() => {
+                        // Prefer the ACTUAL placement (rack/crate locations the
+                        // stock sits in, from holdings). An empty array means the
+                        // stock is unplaced/staged — show "—", not a stale label.
+                        const placed = item.placed_racks;
+                        if (placed !== undefined) {
+                          if (placed.length === 0) {
+                            return <span className="text-[var(--ed-ink-4)]">—</span>;
+                          }
+                          const shown = placed.slice(0, 2).join(', ');
+                          const extra = placed.length - 2;
+                          return (
+                            <span className="font-mono tabular-nums" title={placed.join(', ')}>
+                              {shown}
+                              {extra > 0 ? ` +${extra}` : ''}
+                            </span>
+                          );
+                        }
+                        // Fallback for callers that don't compute holdings-based
+                        // placement (kept for backwards-compat).
                         const rack = readItemRack(item.custom_fields);
                         return rack.rackLabel ? (
-                          <span className="font-mono tabular-nums">
-                            {rack.rackLabel}
-                          </span>
+                          <span className="font-mono tabular-nums">{rack.rackLabel}</span>
                         ) : (
                           <span className="text-[var(--ed-ink-4)]">—</span>
                         );
