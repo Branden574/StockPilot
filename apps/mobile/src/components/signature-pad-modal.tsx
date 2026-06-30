@@ -10,7 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Path, Rect, Svg } from 'react-native-svg';
 import { type SignaturePoint, isValidSignatureDataUrl, pointsToSvgPath } from '@stockpilot/core';
 import { api } from '../lib/api';
@@ -144,8 +144,9 @@ export function SignaturePadModal({
       presentationStyle="fullScreen"
       onRequestClose={onClose}
     >
-      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-        <View style={styles.header}>
+      <SafeAreaProvider>
+        <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+          <View style={styles.header}>
           <Text style={styles.title}>Sign Order</Text>
           <TouchableOpacity
             onPress={onClose}
@@ -225,7 +226,8 @@ export function SignaturePadModal({
             <Text style={styles.saveBtnText}>{submitting ? 'Saving…' : 'Save Signature'}</Text>
           </TouchableOpacity>
         </View>
-      </SafeAreaView>
+        </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 }
