@@ -341,6 +341,14 @@ export class UserConnectionsService {
       return { subdomain: row.subdomain, accessToken: secrets.accessToken };
     }
 
+    // If no refresh token was ever issued (e.g. the Zendesk OAuth app isn't
+    // configured for offline access), there's nothing to refresh with — POSTing
+    // an empty refresh_token would just 4xx in a confusing loop. Surface a clean
+    // "reconnect" instead, which maps to the existing not_connected/reauth flow.
+    if (!secrets.refreshToken) {
+      throw new ServiceError('not_found', 'Zendesk session expired. Reconnect your account.');
+    }
+
     // Refresh path: call Zendesk, re-vault the (possibly rotated) bundle, bump row.
     const refreshed = await refreshTokens(row.subdomain, secrets.refreshToken, fetchImpl);
     const newSecretId = await putConnectionSecret(admin, secretName(this.ctx.userId), refreshed);

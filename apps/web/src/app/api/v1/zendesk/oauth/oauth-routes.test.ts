@@ -20,6 +20,10 @@ vi.mock('@/server/services/user-connections', () => ({
 const verifyState = vi.fn();
 vi.mock('@/server/connectors/zendesk/oauth-state', () => ({ verifyState: (...a: unknown[]) => verifyState(...a) }));
 
+// ── Mock reportError (keeps the 500-path test output clean + assertable) ──────
+const reportErrorMock = vi.fn();
+vi.mock('@/lib/error-reporter', () => ({ reportError: (...a: unknown[]) => reportErrorMock(...a) }));
+
 import { GET as startRoute } from './start/route';
 import { GET as callbackRoute } from './callback/route';
 import { UserConnectionsService } from '@/server/services/user-connections';
@@ -33,6 +37,7 @@ beforeEach(() => {
   completeFromState.mockReset();
   withApiContext.mockReset();
   verifyState.mockReset();
+  reportErrorMock.mockReset();
 });
 
 const ctx = { userId: 'u1', organizationId: 'o1', role: 'admin' };
@@ -96,6 +101,7 @@ describe('GET /api/v1/zendesk/oauth/start', () => {
     beginZendeskConnect.mockRejectedValueOnce(new Error('boom'));
     const res = await startRoute(greq('/api/v1/zendesk/oauth/start'));
     expect(res.status).toBe(500);
+    expect(reportErrorMock).toHaveBeenCalledWith(expect.any(Error), { tag: 'zendesk.oauth.start' });
   });
 });
 

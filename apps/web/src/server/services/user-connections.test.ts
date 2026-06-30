@@ -291,6 +291,23 @@ describe('UserConnectionsService.getValidAccessToken', () => {
     expect(stub.fromCalls).toContain('user_connections');
   });
 
+  it('throws not_found (reconnect) when the token is expired but no refresh token was issued', async () => {
+    vi.mocked(getConnectionSecret).mockResolvedValueOnce({
+      accessToken: 'at-old',
+      refreshToken: '', // Zendesk never issued a refresh token (no offline access)
+      expiresAt: new Date(Date.now() - 10_000).toISOString(), // past
+    });
+    const stub = makeSupabaseStub({
+      'user_connections.select': { data: activeUserConnRow, error: null },
+    });
+    const svc = new UserConnectionsService(
+      makeServiceContext(stub.client, { enabledModules: withZendesk() }),
+    );
+    await expect(svc.getValidAccessToken()).rejects.toMatchObject({ code: 'not_found' });
+    // Must NOT POST a blank refresh_token to Zendesk.
+    expect(refreshTokens).not.toHaveBeenCalled();
+  });
+
   it('refreshes when expiresAt is within 60 seconds (near-expiry)', async () => {
     vi.mocked(getConnectionSecret).mockResolvedValueOnce({
       accessToken: 'at-nearexpiry',
