@@ -165,6 +165,7 @@ function RootGate() {
       <Stack.Screen name="rentals/new" options={{ presentation: 'card' }} />
       <Stack.Screen name="schedule/new" options={{ presentation: 'card' }} />
       <Stack.Screen name="ai/chat" options={{ presentation: 'card' }} />
+      <Stack.Screen name="zendesk/web" options={{ presentation: 'card' }} />
     </Stack>
   );
 }

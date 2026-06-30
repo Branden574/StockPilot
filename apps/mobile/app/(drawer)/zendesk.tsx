@@ -254,11 +254,29 @@ export default function ZendeskScreen() {
 
             <Section label="AGENT CONSOLE">
               <Card padding={16}>
-                <Body muted size={14}>
-                  Coming next: view and reply to tickets, set status/priority/assignee, search, and
-                  macros — right here, with order context. Once connected, new returns, public
-                  requests, and order problems open tickets automatically.
-                </Body>
+                {connection?.subdomain ? (
+                  <>
+                    <Body size={14} style={{ marginBottom: 14 }}>
+                      Open your Zendesk agent interface directly in the app. Sign in with your
+                      normal Zendesk credentials — your session is saved between visits.
+                    </Body>
+                    <Button
+                      block
+                      onPress={() =>
+                        router.push({
+                          pathname: '/zendesk/web',
+                          params: { subdomain: connection.subdomain! },
+                        })
+                      }
+                    >
+                      Open Zendesk
+                    </Button>
+                  </>
+                ) : (
+                  <Body muted size={14}>
+                    Ask an admin to set your Zendesk subdomain (on the web app).
+                  </Body>
+                )}
               </Card>
             </Section>
           </>
