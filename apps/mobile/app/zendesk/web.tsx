@@ -1,7 +1,7 @@
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { ArrowLeft, RefreshCw } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Linking, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
@@ -20,6 +20,28 @@ import { useTheme } from '@/lib/use-theme';
  * This screen requires a NEW EAS build — react-native-webview is a native
  * module and cannot be delivered via OTA (Expo Updates).
  */
+/**
+ * Catches a render failure of <WebView> — most likely cause is that the native
+ * `react-native-webview` module isn't in the running binary (e.g. this JS was
+ * OTA'd onto an older build that predates the dependency). Instead of crashing
+ * the screen, fall back to opening Zendesk in the system browser.
+ */
+class WebViewBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch() {
+    // Swallow — the fallback UI is the user-facing recovery.
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
 export default function ZendeskWebScreen() {
   const { c } = useTheme();
   const router = useRouter();
@@ -85,28 +107,50 @@ export default function ZendeskWebScreen() {
               </View>
             </View>
           ) : (
-            <WebView
-              key={reloadKey}
-              source={{ uri }}
-              style={styles.webview}
-              // SSO / auth
-              javaScriptEnabled
-              domStorageEnabled
-              sharedCookiesEnabled
-              thirdPartyCookiesEnabled
-              incognito={false}
-              // UX
-              allowsBackForwardNavigationGestures
-              onLoadStart={() => {
-                setLoading(true);
-                setHasError(false);
-              }}
-              onLoadEnd={() => setLoading(false)}
-              onError={() => {
-                setLoading(false);
-                setHasError(true);
-              }}
-            />
+            <WebViewBoundary
+              fallback={
+                <View style={[styles.center, { backgroundColor: c.paper }]}>
+                  <Body muted size={14} style={styles.errorText}>
+                    Viewing Zendesk in-app needs the latest version of StockPilot.
+                    Open it in your browser instead.
+                  </Body>
+                  <View style={{ marginTop: 16, alignSelf: 'center' }}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onPress={() => {
+                        if (uri) Linking.openURL(uri).catch(() => {});
+                      }}
+                    >
+                      Open in browser
+                    </Button>
+                  </View>
+                </View>
+              }
+            >
+              <WebView
+                key={reloadKey}
+                source={{ uri }}
+                style={styles.webview}
+                // SSO / auth
+                javaScriptEnabled
+                domStorageEnabled
+                sharedCookiesEnabled
+                thirdPartyCookiesEnabled
+                incognito={false}
+                // UX
+                allowsBackForwardNavigationGestures
+                onLoadStart={() => {
+                  setLoading(true);
+                  setHasError(false);
+                }}
+                onLoadEnd={() => setLoading(false)}
+                onError={() => {
+                  setLoading(false);
+                  setHasError(true);
+                }}
+              />
+            </WebViewBoundary>
           )}
         </View>
       )}
