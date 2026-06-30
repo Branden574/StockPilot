@@ -2,6 +2,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { ConnectionsService } from '@/server/services/connections';
 import { ZendeskConnectCard } from '@/components/zendesk/zendesk-connect-card';
+import { ZendeskQuickAccess } from '@/components/zendesk/zendesk-quick-access';
 import { ZendeskLogo } from '@/components/dashboard/zendesk-logo';
 import { withContext } from '@/server/services/context';
 
@@ -51,12 +52,12 @@ export default async function ZendeskPage() {
       </section>
 
       <section className="bg-card rounded-xl border p-4">
-        <h2 className="text-sm font-medium">Agent console</h2>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Coming next: view and reply to tickets, set status/priority/assignee, search, and macros — with the
-          requesting order &amp; inventory context side-by-side, right here in StockPilot. Once connected, these
-          events automatically open tickets: new returns, public order requests, and order problems.
+        <h2 className="text-sm font-medium">Open your Zendesk</h2>
+        <p className="text-muted-foreground mt-1 mb-3 text-sm">
+          View and work your tickets in the full Zendesk agent interface, signed in with your
+          normal Zendesk login — no API key needed.
         </p>
+        <ZendeskQuickAccess subdomain={conn?.subdomain ?? null} canManage={canManage} />
       </section>
     </div>
   );

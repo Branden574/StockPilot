@@ -580,6 +580,57 @@ export class ConnectionsService {
     );
   }
 
+  /**
+   * Save ONLY the org's Zendesk subdomain — no API token, no validation against
+   * Zendesk. This powers the "embedded / SSO" path for orgs that can't issue API
+   * credentials (managed Zendesk accounts): we just need to know which
+   * `{subdomain}.zendesk.com` to open. Deliberately does NOT set `status` so an
+   * insert stays `'pending'` and an existing full (`active`) API connection is
+   * never downgraded; it also never touches `secret_id`.
+   */
+  async setZendeskSubdomain(rawSubdomain: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'zendesk');
+    assertPermission(this.ctx, 'integrations:manage');
+    const subdomain = rawSubdomain.trim().replace(/^https?:\/\//i, '').replace(/\.zendesk\.com$/i, '');
+    if (!subdomain) {
+      throw new ServiceError('validation_error', 'Enter your Zendesk subdomain.');
+    }
+    // Same SSRF-style guard as connectZendesk: the value is interpolated into a
+    // zendesk.com host/URL, so allow only a bare DNS label.
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(subdomain)) {
+      throw new ServiceError('validation_error', 'Invalid Zendesk subdomain — use only letters, numbers, and hyphens.');
+    }
+
+    const { data: existing, error: selErr } = await this.ctx.supabase
+      .from('org_connections')
+      .select('id, settings, created_by')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('provider_id', 'zendesk')
+      .maybeSingle();
+    if (selErr) throw new ServiceError('internal_error', selErr.message);
+    const currentSettings = ((existing as { settings: Record<string, unknown> | null } | null)?.settings) ?? {};
+    const createdBy = ((existing as { created_by: string | null } | null)?.created_by) ?? this.ctx.userId;
+
+    const { error: upErr } = await this.ctx.supabase
+      .from('org_connections')
+      .upsert(
+        {
+          organization_id: this.ctx.organizationId,
+          provider_id: 'zendesk',
+          external_account_id: subdomain,
+          settings: { ...currentSettings, subdomain },
+          created_by: createdBy,
+        },
+        { onConflict: 'organization_id,provider_id' },
+      );
+    if (upErr) throw new ServiceError('internal_error', upErr.message);
+
+    void audit(
+      { event: 'integration.connected', entityType: 'org_connection', entityId: null, extra: { provider: 'zendesk', mode: 'subdomain_only' } },
+      this.ctx,
+    );
+  }
+
   /** Read this org's Zendesk connection (member-level). Null if never connected. */
   async getZendeskConnection(): Promise<
     { status: string; subdomain: string | null; lastConnectedAt: string | null; lastError: string | null } | null
