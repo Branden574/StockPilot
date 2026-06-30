@@ -94,6 +94,7 @@ const config: ExpoConfig = {
     // so getExpoPushTokenAsync() fails on device and no token is ever
     // registered (the web then shows "No registered devices").
     'expo-notifications',
+    'expo-web-browser',
     [
       'expo-local-authentication',
       {

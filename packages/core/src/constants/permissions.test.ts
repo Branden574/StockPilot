@@ -86,3 +86,9 @@ describe('FULLY_GRANTABLE_PERMISSIONS', () => {
     expect(FULLY_GRANTABLE_PERMISSIONS.has('purchase_orders:manage')).toBe(true);
   });
 });
+
+describe('zendesk:agent permission', () => {
+  it('is a recognized permission', () => {
+    expect(PERMISSIONS).toContain('zendesk:agent');
+  });
+});

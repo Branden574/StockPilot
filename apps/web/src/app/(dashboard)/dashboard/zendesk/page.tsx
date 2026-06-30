@@ -3,6 +3,7 @@ import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { ConnectionsService } from '@/server/services/connections';
 import { ZendeskConnectCard } from '@/components/zendesk/zendesk-connect-card';
 import { ZendeskLogo } from '@/components/dashboard/zendesk-logo';
+import { AgentConsole } from '@/components/zendesk/agent-console';
 import { withContext } from '@/server/services/context';
 
 import { can } from '@stockpilot/core';
@@ -15,6 +16,7 @@ export default async function ZendeskPage() {
 
   const ctx = await withContext();
   const canManage = can(ctx, 'integrations:manage');
+  const canAgent = can(ctx, 'zendesk:agent');
 
   const svc = await ConnectionsService.forCurrentUser();
   const conn = await svc.getZendeskConnection();
@@ -51,12 +53,14 @@ export default async function ZendeskPage() {
       </section>
 
       <section className="bg-card rounded-xl border p-4">
-        <h2 className="text-sm font-medium">Agent console</h2>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Coming next: view and reply to tickets, set status/priority/assignee, search, and macros — with the
-          requesting order &amp; inventory context side-by-side, right here in StockPilot. Once connected, these
-          events automatically open tickets: new returns, public order requests, and order problems.
-        </p>
+        <h2 className="text-sm font-medium mb-3">Agent console</h2>
+        {canAgent ? (
+          <AgentConsole />
+        ) : (
+          <p className="text-muted-foreground text-sm">
+            Ask an admin to grant you the Zendesk agent permission.
+          </p>
+        )}
       </section>
     </div>
   );
