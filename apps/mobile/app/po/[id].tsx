@@ -269,6 +269,22 @@ export default function PoReceiveScreen() {
       return;
     }
 
+    // App-side over-receive guard: the post_receipt_v2 RPC also hard-blocks this
+    // (raises over_receive_blocked) and refuses an already-'received' PO, but we
+    // catch it here to show a clear message instead of a raw DB error — so you
+    // can't over-receive chromebooks you've already fully received.
+    for (const l of lines) {
+      const entered = Number((draft[l.id] ?? { received: '' }).received) || 0;
+      const remaining = Math.max(0, l.quantity_ordered - l.quantity_received);
+      if (entered > remaining) {
+        Alert.alert(
+          'Too many',
+          `${l.item?.name ?? 'This item'} has only ${remaining} left to receive — you entered ${entered}. Receiving more would over-receive the PO.`,
+        );
+        return;
+      }
+    }
+
     const payloadLines = lines
       .map((l) => {
         const d = draft[l.id] ?? { received: '', rejected: '' };
@@ -400,28 +416,34 @@ export default function PoReceiveScreen() {
                       <Metric label="Already" value={l.quantity_received} />
                       <Metric label="Variance" value={variance} tone="primary" />
                     </View>
-                    <View style={styles.qtyRow}>
-                      <View style={styles.qtyField}>
-                        <Text style={styles.qtyLabel}>Received now</Text>
-                        <TextInput
-                          value={d.received}
-                          onChangeText={(v) => setField(l.id, 'received', v)}
-                          keyboardType="decimal-pad"
-                          placeholder="0"
-                          placeholderTextColor={theme.textMuted}
-                          style={styles.qtyInput}
-                        />
+                    {remaining === 0 ? (
+                      <Text style={styles.fullyReceived}>
+                        ✓ Fully received — nothing left to receive on this line.
+                      </Text>
+                    ) : (
+                      <View style={styles.qtyRow}>
+                        <View style={styles.qtyField}>
+                          <Text style={styles.qtyLabel}>Received now</Text>
+                          <TextInput
+                            value={d.received}
+                            onChangeText={(v) => setField(l.id, 'received', v)}
+                            keyboardType="decimal-pad"
+                            placeholder="0"
+                            placeholderTextColor={theme.textMuted}
+                            style={styles.qtyInput}
+                          />
+                        </View>
+                        <Pressable
+                          onPress={() => fillRemaining(l)}
+                          style={({ pressed }) => [
+                            styles.allBtn,
+                            pressed && { opacity: 0.7 },
+                          ]}
+                        >
+                          <Text style={styles.allBtnText}>All</Text>
+                        </Pressable>
                       </View>
-                      <Pressable
-                        onPress={() => fillRemaining(l)}
-                        style={({ pressed }) => [
-                          styles.allBtn,
-                          pressed && { opacity: 0.7 },
-                        ]}
-                      >
-                        <Text style={styles.allBtnText}>All</Text>
-                      </Pressable>
-                    </View>
+                    )}
                   </View>
                 );
               })
@@ -448,23 +470,38 @@ export default function PoReceiveScreen() {
               </View>
             )}
 
+            <Text style={styles.attachHint}>
+              Documents save as soon as you add them — you don&apos;t need to post a
+              receipt to keep an attachment.
+            </Text>
             <PoAttachments poId={id} />
           </ScrollView>
 
           <View style={styles.footer}>
-            <Pressable
-              onPress={postReceipt}
-              disabled={posting}
-              style={({ pressed }) => [
-                styles.postBtn,
-                pressed && { opacity: 0.85 },
-                posting && { opacity: 0.6 },
-              ]}
-            >
-              <Text style={styles.postBtnText}>
-                {posting ? 'Posting…' : 'Post receipt'}
-              </Text>
-            </Pressable>
+            {(() => {
+              const anyReceivable = lines.some(
+                (l) => l.quantity_ordered - l.quantity_received > 0,
+              );
+              return (
+                <Pressable
+                  onPress={postReceipt}
+                  disabled={posting || !anyReceivable}
+                  style={({ pressed }) => [
+                    styles.postBtn,
+                    pressed && { opacity: 0.85 },
+                    (posting || !anyReceivable) && { opacity: 0.5 },
+                  ]}
+                >
+                  <Text style={styles.postBtnText}>
+                    {posting
+                      ? 'Posting…'
+                      : anyReceivable
+                        ? 'Post receipt'
+                        : 'Fully received'}
+                  </Text>
+                </Pressable>
+              );
+            })()}
           </View>
         </>
       )}
@@ -553,6 +590,20 @@ const styles = StyleSheet.create({
   title: { color: theme.text, fontSize: 20, fontWeight: '700', fontFamily: 'Menlo' },
   subtitle: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
   muted: { color: theme.textMuted, padding: space.lg, textAlign: 'center' },
+  fullyReceived: {
+    color: theme.success,
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: space.sm,
+  },
+  attachHint: {
+    color: theme.textMuted,
+    fontSize: 12,
+    paddingHorizontal: space.md,
+    marginTop: space.lg,
+    marginBottom: space.xs,
+    textAlign: 'center',
+  },
   scanBtn: {
     backgroundColor: theme.primary,
     paddingHorizontal: space.md,
