@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Path, Rect, Svg } from 'react-native-svg';
 import { type SignaturePoint, isValidSignatureDataUrl, pointsToSvgPath } from '@stockpilot/core';
 import { api } from '../lib/api';
@@ -140,10 +141,10 @@ export function SignaturePadModal({
     <Modal
       visible={visible}
       animationType="slide"
-      presentationStyle="pageSheet"
+      presentationStyle="fullScreen"
       onRequestClose={onClose}
     >
-      <View style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
         <View style={styles.header}>
           <Text style={styles.title}>Sign Order</Text>
           <TouchableOpacity
@@ -224,13 +225,13 @@ export function SignaturePadModal({
             <Text style={styles.saveBtnText}>{submitting ? 'Saving…' : 'Save Signature'}</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </SafeAreaView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8f9fa', padding: 20 },
+  container: { flex: 1, backgroundColor: '#f8f9fa', paddingHorizontal: 20, paddingVertical: 8 },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
