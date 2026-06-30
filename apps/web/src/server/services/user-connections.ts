@@ -22,6 +22,13 @@ import {
 
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
 
+/**
+ * Local alias for the admin-client shape expected by the secret-store helpers.
+ * Derived from the parameter type of putConnectionSecret so that a signature
+ * change there surfaces as a type error here instead of being silently swallowed.
+ */
+type Admin = Parameters<typeof putConnectionSecret>[0];
+
 /** Scopes requested when a user authorizes via OAuth. */
 const ZENDESK_AGENT_SCOPES = 'read write';
 
@@ -131,6 +138,9 @@ export class UserConnectionsService {
     state: string,
     fetchImpl: typeof fetch = fetch,
   ): Promise<void> {
+    assertModuleEnabled(this.ctx, 'zendesk');
+    assertPermission(this.ctx, 'zendesk:agent');
+
     // Verify CSRF state — returns null on tamper/expiry/bad sig.
     const decoded = verifyState(state);
     if (!decoded) {
@@ -168,7 +178,10 @@ export class UserConnectionsService {
     }
 
     // Vault the token bundle (service-role only).
-    const admin = createAdminClient() as never;
+    // SupabaseClient.rpc returns PostgrestFilterBuilder (thenable, not a plain
+    // Promise) so it doesn't satisfy the Admin shape directly — double-cast via
+    // unknown. The Admin alias still documents the expected contract precisely.
+    const admin = createAdminClient() as unknown as Admin;
     const secretId = await putConnectionSecret(admin, secretName(this.ctx.userId), tokens);
 
     // Upsert the user_connections row.
@@ -198,13 +211,15 @@ export class UserConnectionsService {
    * Refreshes automatically when the token is expired or within 60 s of expiry.
    * Throws `not_found` when the caller has no active connection.
    */
-  async getValidAccessToken(): Promise<{ subdomain: string; accessToken: string }> {
+  async getValidAccessToken(
+    fetchImpl: typeof fetch = fetch,
+  ): Promise<{ subdomain: string; accessToken: string }> {
     const row = await this.getUserConnRow();
     if (!row || !row.secret_id) {
       throw new ServiceError('not_found', 'No Zendesk connection found. Connect your Zendesk account first.');
     }
 
-    const admin = createAdminClient() as never;
+    const admin = createAdminClient() as unknown as Admin;
     const secrets = await getConnectionSecret(admin, row.secret_id);
 
     if (!isExpiredOrNearExpiry(secrets.expiresAt)) {
@@ -213,7 +228,7 @@ export class UserConnectionsService {
     }
 
     // Refresh path: call Zendesk, re-vault the (possibly rotated) bundle, bump row.
-    const refreshed = await refreshTokens(row.subdomain, secrets.refreshToken, fetch);
+    const refreshed = await refreshTokens(row.subdomain, secrets.refreshToken, fetchImpl);
     const newSecretId = await putConnectionSecret(admin, secretName(this.ctx.userId), refreshed);
 
     const { error: updErr } = await this.ctx.supabase
@@ -254,14 +269,27 @@ export class UserConnectionsService {
     const row = await this.getUserConnRow();
     if (!row) return;
 
-    const admin = createAdminClient() as never;
+    const secretId = row.secret_id;
 
-    // 1. Delete the Vault secret (if one exists).
-    if (row.secret_id) {
-      await deleteConnectionSecret(admin, row.secret_id);
+    // 1. Null out secret_id first — so a mid-disconnect failure leaves no
+    //    dangling pointer to a Vault entry that no longer exists.
+    if (secretId) {
+      const { error: nullErr } = await this.ctx.supabase
+        .from('user_connections')
+        .update({ secret_id: null })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('user_id', this.ctx.userId)
+        .eq('provider_id', 'zendesk');
+      if (nullErr) throw new ServiceError('internal_error', nullErr.message);
     }
 
-    // 2. Delete the row.
+    // 2. Destroy the Vault secret (if one existed).
+    if (secretId) {
+      const admin = createAdminClient() as unknown as Admin;
+      await deleteConnectionSecret(admin, secretId);
+    }
+
+    // 3. Delete the row.
     const { error: delErr } = await this.ctx.supabase
       .from('user_connections')
       .delete()

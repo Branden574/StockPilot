@@ -151,6 +151,29 @@ describe('UserConnectionsService.beginZendeskConnect', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('UserConnectionsService.completeZendeskConnect', () => {
+  it('throws module_disabled when zendesk module is off', async () => {
+    const stub = makeSupabaseStub({});
+    const svc = new UserConnectionsService(makeServiceContext(stub.client));
+    await expect(
+      svc.completeZendeskConnect('code-x', 'signed:org-test:user-test:web', mockFetch),
+    ).rejects.toMatchObject({ code: 'module_disabled' });
+    // No vault write and no upsert should have happened
+    expect(putConnectionSecret).not.toHaveBeenCalled();
+    expect(stub.fromCalls).not.toContain('user_connections');
+  });
+
+  it('throws forbidden when caller lacks zendesk:agent permission', async () => {
+    const stub = makeSupabaseStub({});
+    const svc = new UserConnectionsService(
+      makeServiceContext(stub.client, { enabledModules: withZendesk(), role: 'viewer' }),
+    );
+    await expect(
+      svc.completeZendeskConnect('code-x', 'signed:org-test:user-test:web', mockFetch),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(putConnectionSecret).not.toHaveBeenCalled();
+    expect(stub.fromCalls).not.toContain('user_connections');
+  });
+
   it('throws forbidden when state is invalid (bad state)', async () => {
     const stub = makeSupabaseStub({});
     const svc = new UserConnectionsService(
@@ -277,7 +300,7 @@ describe('UserConnectionsService.getValidAccessToken', () => {
     expect(refreshTokens).toHaveBeenCalled();
   });
 
-  it('ISOLATION: query filter includes user_id = ctx.userId', async () => {
+  it('ISOLATION: query filter includes user_id = ctx.userId and provider_id = zendesk', async () => {
     const stub = makeSupabaseStub({
       'user_connections.select': { data: activeUserConnRow, error: null },
     });
@@ -294,6 +317,11 @@ describe('UserConnectionsService.getValidAccessToken', () => {
     const eqCalls = args.filter((callArgs) => callArgs[0] === 'user_id');
     expect(eqCalls.length).toBeGreaterThanOrEqual(1);
     expect(eqCalls[0]![1]).toBe('user-test');
+    // The chain must also filter on provider_id = 'zendesk' so the full
+    // row-uniqueness predicate is enforced (user_id alone is not unique).
+    const providerEqCalls = args.filter((callArgs) => callArgs[0] === 'provider_id');
+    expect(providerEqCalls.length).toBeGreaterThanOrEqual(1);
+    expect(providerEqCalls[0]![1]).toBe('zendesk');
   });
 });
 
