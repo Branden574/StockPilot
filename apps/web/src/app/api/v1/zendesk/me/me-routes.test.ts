@@ -19,6 +19,7 @@ const {
   listMyTicketsMock,
   getTicketMock,
   ZendeskApiErrorMock,
+  reportErrorMock,
 } = vi.hoisted(() => {
   const listMyTicketsMock = vi.fn();
   const getTicketMock = vi.fn();
@@ -48,12 +49,17 @@ const {
     listMyTicketsMock,
     getTicketMock,
     ZendeskApiErrorMock,
+    reportErrorMock: vi.fn(),
   };
 });
 
 // ─── Module mocks ────────────────────────────────────────────────────────────
 vi.mock('@/lib/auth/api-context', () => ({
   withApiContext: (...a: unknown[]) => withApiContext(...a),
+}));
+
+vi.mock('@/lib/error-reporter', () => ({
+  reportError: (...a: unknown[]) => reportErrorMock(...a),
 }));
 
 vi.mock('@/server/services/user-connections', () => ({
@@ -107,6 +113,7 @@ beforeEach(() => {
   listMyTicketsMock.mockReset();
   getTicketMock.mockReset();
   withApiContext.mockReset();
+  reportErrorMock.mockReset();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -144,6 +151,16 @@ describe('GET /me', () => {
     statusMock.mockRejectedValueOnce(new ServiceError('module_disabled', 'off'));
     const res = await getMe(makeReq('/api/v1/zendesk/me'));
     expect(res.status).toBe(403);
+  });
+
+  // ── FIX 3: unknown-error logging ───────────────────────────────────────────
+  it('calls reportError with tag zendesk.me.status on unknown errors', async () => {
+    withApiContext.mockResolvedValueOnce(ctxA);
+    const boom = new Error('db exploded');
+    statusMock.mockRejectedValueOnce(boom);
+    const res = await getMe(makeReq('/api/v1/zendesk/me'));
+    expect(res.status).toBe(500);
+    expect(reportErrorMock).toHaveBeenCalledWith(boom, { tag: 'zendesk.me.status' });
   });
 });
 
@@ -238,6 +255,46 @@ describe('GET /me/tickets', () => {
     const body = JSON.parse(text);
     expect(body.error).toBe('zendesk_unavailable');
   });
+
+  // ── FIX 2: query length cap ────────────────────────────────────────────────
+  it('returns 400 query_too_long for a 501-char query and never constructs ZendeskClient', async () => {
+    withApiContext.mockResolvedValueOnce(ctxA);
+    getValidAccessTokenMock.mockResolvedValueOnce({ subdomain: 'acme', accessToken: 'tok-a' });
+
+    const longQuery = 'a'.repeat(501);
+    const res = await getTickets(
+      makeReqWithQuery('/api/v1/zendesk/me/tickets', { query: longQuery }),
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe('query_too_long');
+    expect(ZendeskClientMock).not.toHaveBeenCalled();
+    expect(listMyTicketsMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a 500-char query (boundary)', async () => {
+    withApiContext.mockResolvedValueOnce(ctxA);
+    getValidAccessTokenMock.mockResolvedValueOnce({ subdomain: 'acme', accessToken: 'tok-a' });
+    listMyTicketsMock.mockResolvedValueOnce([]);
+
+    const exactQuery = 'a'.repeat(500);
+    const res = await getTickets(
+      makeReqWithQuery('/api/v1/zendesk/me/tickets', { query: exactQuery }),
+    );
+    expect(res.status).toBe(200);
+    expect(listMyTicketsMock).toHaveBeenCalledWith({ view: 'assigned', query: exactQuery });
+  });
+
+  // ── FIX 3: unknown-error logging ───────────────────────────────────────────
+  it('calls reportError with tag zendesk.me.tickets on unknown errors', async () => {
+    withApiContext.mockResolvedValueOnce(ctxA);
+    getValidAccessTokenMock.mockResolvedValueOnce({ subdomain: 'acme', accessToken: 'tok-a' });
+    const boom = new Error('unexpected failure');
+    listMyTicketsMock.mockRejectedValueOnce(boom);
+    const res = await getTickets(makeReq('/api/v1/zendesk/me/tickets'));
+    expect(res.status).toBe(500);
+    expect(reportErrorMock).toHaveBeenCalledWith(boom, { tag: 'zendesk.me.tickets' });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -279,6 +336,25 @@ describe('GET /me/tickets/[id]', () => {
     const [req, ctx] = makeIdReq('-5');
     const res = await getTicket(req, ctx);
     expect(res.status).toBe(400);
+  });
+
+  // ── FIX 1: integer-strict id validation ───────────────────────────────────
+  it('returns 400 invalid_id for a float id like "4.5"', async () => {
+    withApiContext.mockResolvedValueOnce(ctxA);
+    const [req, ctx] = makeIdReq('4.5');
+    const res = await getTicket(req, ctx);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe('invalid_id');
+  });
+
+  it('returns 400 invalid_id for a scientific notation id like "1e3"', async () => {
+    withApiContext.mockResolvedValueOnce(ctxA);
+    const [req, ctx] = makeIdReq('1e3');
+    const res = await getTicket(req, ctx);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe('invalid_id');
   });
 
   it('returns { ticket, comments } for a valid numeric id', async () => {
@@ -338,6 +414,18 @@ describe('GET /me/tickets/[id]', () => {
     const body = JSON.parse(text);
     expect(body.error).toBe('zendesk_unavailable');
   });
+
+  // ── FIX 3: unknown-error logging ───────────────────────────────────────────
+  it('calls reportError with tag zendesk.me.ticket on unknown errors', async () => {
+    withApiContext.mockResolvedValueOnce(ctxA);
+    getValidAccessTokenMock.mockResolvedValueOnce({ subdomain: 'acme', accessToken: 'tok-a' });
+    const boom = new Error('unexpected db failure');
+    getTicketMock.mockRejectedValueOnce(boom);
+    const [req, ctx] = makeIdReq('42');
+    const res = await getTicket(req, ctx);
+    expect(res.status).toBe(500);
+    expect(reportErrorMock).toHaveBeenCalledWith(boom, { tag: 'zendesk.me.ticket' });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -383,5 +471,17 @@ describe('POST /me/disconnect', () => {
     expect(res.status).toBe(500);
     const body = await res.json();
     expect(body.error).toBe('internal_error');
+  });
+
+  // ── FIX 3: unknown-error logging ───────────────────────────────────────────
+  it('calls reportError with tag zendesk.me.disconnect on unknown errors', async () => {
+    withApiContext.mockResolvedValueOnce(ctxA);
+    const boom = new Error('vault gone');
+    disconnectMock.mockRejectedValueOnce(boom);
+    const res = await postDisconnect(
+      new NextRequest('http://localhost/api/v1/zendesk/me/disconnect', { method: 'POST' }),
+    );
+    expect(res.status).toBe(500);
+    expect(reportErrorMock).toHaveBeenCalledWith(boom, { tag: 'zendesk.me.disconnect' });
   });
 });

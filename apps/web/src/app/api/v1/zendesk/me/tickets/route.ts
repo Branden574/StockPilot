@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { UserConnectionsService } from '@/server/services/user-connections';
 import { ZendeskApiError, ZendeskClient } from '@/server/connectors/zendesk/client';
@@ -43,6 +44,10 @@ export async function GET(req: NextRequest) {
     const view: 'assigned' | 'requested' = rawView === 'requested' ? 'requested' : 'assigned';
     const query = req.nextUrl.searchParams.get('query') ?? undefined;
 
+    if (query !== undefined && query.length > 500) {
+      return NextResponse.json({ error: 'query_too_long' }, { status: 400 });
+    }
+
     const client = new ZendeskClient({ subdomain, accessToken });
     const tickets = await client.listMyTickets({ view, query });
     return NextResponse.json({ tickets });
@@ -57,6 +62,7 @@ export async function GET(req: NextRequest) {
     if (e instanceof ServiceError) {
       return NextResponse.json({ error: e.code }, { status: serviceErrorStatus(e.code) });
     }
+    void reportError(e instanceof Error ? e : new Error(String(e)), { tag: 'zendesk.me.tickets' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 }

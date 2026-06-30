@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { UserConnectionsService } from '@/server/services/user-connections';
 
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
     if (e instanceof ServiceError) {
       return NextResponse.json({ error: e.code }, { status: serviceErrorStatus(e.code) });
     }
+    void reportError(e instanceof Error ? e : new Error(String(e)), { tag: 'zendesk.me.disconnect' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 }

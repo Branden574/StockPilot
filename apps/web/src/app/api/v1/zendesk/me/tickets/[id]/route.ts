@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { UserConnectionsService } from '@/server/services/user-connections';
 import { ZendeskApiError, ZendeskClient } from '@/server/connectors/zendesk/client';
@@ -24,10 +25,10 @@ export async function GET(
     if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
     const { id: idParam } = await params;
-    const id = Number(idParam);
-    if (!Number.isFinite(id) || id <= 0) {
+    if (!/^[1-9]\d*$/.test(idParam)) {
       return NextResponse.json({ error: 'invalid_id' }, { status: 400 });
     }
+    const id = Number(idParam);
 
     // Resolve the caller's own token — throws ServiceError('not_found') when
     // they have no active connection. We MUST do this before constructing a
@@ -59,6 +60,7 @@ export async function GET(
     if (e instanceof ServiceError) {
       return NextResponse.json({ error: e.code }, { status: serviceErrorStatus(e.code) });
     }
+    void reportError(e instanceof Error ? e : new Error(String(e)), { tag: 'zendesk.me.ticket' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 }
