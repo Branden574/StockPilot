@@ -87,7 +87,7 @@ export async function GET(
       `id, status, requester_email, requester_name, notes, denied_reason,
        created_at, approved_at, packing_slip_generated_at, staged_at,
        in_transit_at, signed_at, completed_at, cancelled_at,
-       organization_id, warehouse_id`,
+       organization_id, warehouse_id, fulfillment_type`,
     )
     .eq('id', id)
     .eq('organization_id', orgId)
@@ -112,6 +112,7 @@ export async function GET(
     cancelled_at: string | null;
     organization_id: string;
     warehouse_id: string;
+    fulfillment_type: 'pickup' | 'delivery';
   };
   if (!h.requester_email || h.requester_email.toLowerCase() !== email) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
@@ -179,6 +180,7 @@ export async function GET(
     status: h.status,
     requesterName: h.requester_name,
     warehouseName,
+    fulfillmentType: h.fulfillment_type,
     lines,
     createdAt: h.created_at,
     approvedAt: h.approved_at,

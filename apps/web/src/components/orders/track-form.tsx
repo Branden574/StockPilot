@@ -14,6 +14,7 @@ interface TrackResult {
   status: string;
   requesterName: string | null;
   warehouseName: string | null;
+  fulfillmentType: 'pickup' | 'delivery';
   lines: Array<{
     itemName: string;
     quantityRequested: number;
@@ -199,7 +200,8 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
         ) : null}
         {result.warehouseName ? (
           <p className="text-muted-foreground mt-1 text-sm">
-            Pickup: {result.warehouseName}
+            {result.fulfillmentType === 'pickup' ? 'Pickup' : 'From'}:{' '}
+            {result.warehouseName}
           </p>
         ) : null}
         {result.requesterName ? (
