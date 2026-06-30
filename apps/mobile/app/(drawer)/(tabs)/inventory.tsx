@@ -201,22 +201,47 @@ export default function Inventory() {
       }
 
       if (query.trim()) {
-        // PostgREST .or() splits conditions on top-level commas and treats
-        // parens as grouping, so a raw term with , ( ) . — common in book
-        // titles, model numbers and pasted ISBNs — corrupts the filter and
-        // returns wrong/empty results. Double-quote the value so reserved
-        // chars are literal (backslash + quote escaped within the quotes).
-        const term = query.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        req = req.or(
-          `name.ilike."%${term}%",sku.ilike."%${term}%",barcode.ilike."%${term}%"`,
-        );
+        // Match items containing EVERY word of the query (across name / sku /
+        // barcode), so a multi-word search like "purple shirt" matches
+        // "L4L Purple T-Shirt" — instead of a literal substring search for the
+        // whole phrase, which matched nothing. Each .or() group is AND-ed with
+        // the others by PostgREST. Double-quote each value so reserved chars
+        // (, ( ) . — common in titles / model numbers / ISBNs) stay literal.
+        const words = query.trim().split(/\s+/).filter(Boolean);
+        for (const word of words) {
+          const term = word.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+          req = req.or(
+            `name.ilike."%${term}%",sku.ilike."%${term}%",barcode.ilike."%${term}%"`,
+          );
+        }
       }
 
       if (f.categoryIds.length > 0) {
         req = req.in('category_id', f.categoryIds);
       }
       if (f.locationIds.length > 0) {
-        req = req.in('primary_location_id', f.locationIds);
+        // The LOCATION filter lists racks/zones, but an item's real placement
+        // lives in item_stock_levels — NOT primary_location_id (a home/zone
+        // hint that's usually null or a zone, so filtering it by a rack matched
+        // nothing). Resolve the items that physically hold stock at the
+        // selected locations, then constrain the list to them.
+        const { data: levelRows } = await supabase
+          .from('item_stock_levels')
+          .select('item_id')
+          .eq('organization_id', orgIdParam)
+          .in('location_id', f.locationIds)
+          .gt('quantity', 0);
+        const placedItemIds = Array.from(
+          new Set((levelRows ?? []).map((r) => (r as { item_id: string }).item_id)),
+        );
+        // No items at those locations → match nothing (sentinel id) rather than
+        // silently dropping the filter.
+        req = req.in(
+          'id',
+          placedItemIds.length
+            ? placedItemIds
+            : ['00000000-0000-0000-0000-000000000000'],
+        );
       }
       if (f.charterIds.length > 0) {
         const wantsGeneric = f.charterIds.includes(FILTER_GENERIC_CHARTER_ID);
