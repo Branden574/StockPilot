@@ -24,17 +24,23 @@ export async function GET(req: NextRequest) {
       ? 'stockpilot://zendesk/error'
       : new URL('/dashboard/zendesk?error=connect_failed', req.url).toString();
 
-  // This is a browser landing, so EVERY failure — including an expired/absent
-  // session — redirects to the console error page, never dumps JSON at the user.
-  const ctx = await withApiContext(req);
-  if (!ctx) return NextResponse.redirect(errorTarget, { status: 302 });
-
   if (!code || !state) {
     return NextResponse.redirect(errorTarget, { status: 302 });
   }
 
+  // Dual completion path:
+  //   - Web: withApiContext succeeds (cookie session) → use the session-bound
+  //     instance method, which re-checks module + permission gates.
+  //   - Mobile: the system browser carries no app session, so ctx is null.
+  //     Trust the HMAC-signed state (capability token) instead. Authorization
+  //     was enforced when the state was issued at GET /api/v1/zendesk/me/connect-url.
+  const ctx = await withApiContext(req);
   try {
-    await new UserConnectionsService(ctx).completeZendeskConnect(code, state);
+    if (ctx) {
+      await new UserConnectionsService(ctx).completeZendeskConnect(code, state);
+    } else {
+      await UserConnectionsService.completeFromState(code, state);
+    }
     return NextResponse.redirect(successTarget, { status: 302 });
   } catch {
     return NextResponse.redirect(errorTarget, { status: 302 });

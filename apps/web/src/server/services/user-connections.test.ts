@@ -53,7 +53,12 @@ vi.mock('@/server/connectors/secret-store', () => ({
   deleteConnectionSecret: vi.fn(async () => {}),
 }));
 
-vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => ({}) }));
+// The admin client mock is a vi.fn() so tests can override it per-test.
+// The default returns an empty object (sufficient for instance-method tests
+// that use ctx.supabase for DB interactions and only cast admin for secrets).
+// completeFromState tests supply a real makeSupabaseStub client instead.
+const createAdminClientMock = vi.fn(() => ({} as ReturnType<typeof import('@/lib/supabase/admin').createAdminClient>));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => createAdminClientMock() }));
 
 // Fetch stub for /users/me Zendesk API call during completeZendeskConnect
 const mockFetch = vi.fn(async (_url: string) =>
@@ -97,6 +102,9 @@ beforeEach(() => {
     refreshToken: 'rt-stored',
     expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
   });
+  // Restore admin mock to default empty object (instance-method tests use
+  // ctx.supabase for DB operations and only use admin for Vault secrets).
+  createAdminClientMock.mockReturnValue({} as never);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -374,5 +382,97 @@ describe('UserConnectionsService.disconnect', () => {
     await svc.disconnect();
     expect(deleteConnectionSecret).toHaveBeenCalledWith(expect.anything(), 'vault-secret-id-1');
     expect(stub.fromCalls.filter((t) => t === 'user_connections').length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// completeFromState (static, sessionless mobile OAuth completion)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('UserConnectionsService.completeFromState', () => {
+  /**
+   * Build an admin stub that returns configured results for org_connections and
+   * user_connections. completeFromState uses the raw adminRaw value for .from()
+   * chains, so we pass a makeSupabaseStub client here.
+   */
+  function makeAdminStub(extraResults: Record<string, unknown> = {}) {
+    return makeSupabaseStub({
+      'org_connections.select': { data: orgConnRow, error: null },
+      'user_connections.insert': { data: { id: 'uc-mobile-1' }, error: null },
+      ...extraResults,
+    });
+  }
+
+  it('throws forbidden when verifyState returns null (invalid/expired state) and performs NO write', async () => {
+    vi.mocked(verifyState).mockReturnValueOnce(null);
+    const adminStub = makeAdminStub();
+    createAdminClientMock.mockReturnValue(adminStub.client);
+
+    await expect(
+      UserConnectionsService.completeFromState('code-x', 'bad-state', mockFetch),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+
+    // No vault write and no upsert should have happened
+    expect(putConnectionSecret).not.toHaveBeenCalled();
+    expect(adminStub.fromCalls).not.toContain('user_connections');
+  });
+
+  it('vaults token and upserts with organization_id and user_id from the verified state', async () => {
+    vi.mocked(verifyState).mockReturnValueOnce({ orgId: 'oB', userId: 'uB', platform: 'mobile' });
+    const adminStub = makeAdminStub();
+    createAdminClientMock.mockReturnValue(adminStub.client);
+
+    await UserConnectionsService.completeFromState('mobile-auth-code', 'signed:oB:uB:mobile', mockFetch);
+
+    // Token exchange used the correct subdomain
+    expect(exchangeCode).toHaveBeenCalledWith('acme', 'mobile-auth-code', mockFetch);
+
+    // Vault write used secretName(userId from STATE, not from anywhere else)
+    expect(putConnectionSecret).toHaveBeenCalledWith(
+      expect.anything(),
+      'user:uB:zendesk',   // identity from STATE
+      expect.objectContaining({ accessToken: 'at-new' }),
+    );
+
+    // Upsert landed on user_connections
+    expect(adminStub.fromCalls).toContain('user_connections');
+
+    // Verify the upsert payload contained the state's org/user identity
+    const upsertArgs = adminStub.chainArgs.get('user_connections.insert');
+    expect(upsertArgs).toBeDefined();
+    // First chain arg to upsert is the record payload
+    const upsertPayload = upsertArgs?.find((args) => Array.isArray(args) && args[0] && typeof args[0] === 'object');
+    expect(upsertPayload?.[0]).toMatchObject({
+      organization_id: 'oB',
+      user_id: 'uB',
+      provider_id: 'zendesk',
+      status: 'active',
+    });
+  });
+
+  it('throws validation_error when org has no Zendesk subdomain', async () => {
+    vi.mocked(verifyState).mockReturnValueOnce({ orgId: 'oB', userId: 'uB', platform: 'mobile' });
+    const adminStub = makeAdminStub({
+      'org_connections.select': { data: null, error: null }, // no subdomain row
+    });
+    createAdminClientMock.mockReturnValue(adminStub.client);
+
+    await expect(
+      UserConnectionsService.completeFromState('code-x', 'signed:oB:uB:mobile', mockFetch),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+
+    expect(putConnectionSecret).not.toHaveBeenCalled();
+    expect(adminStub.fromCalls).not.toContain('user_connections');
+  });
+
+  it('invokes createAdminClient exactly once per call', async () => {
+    vi.mocked(verifyState).mockReturnValueOnce({ orgId: 'oB', userId: 'uB', platform: 'mobile' });
+    const adminStub = makeAdminStub();
+    createAdminClientMock.mockReturnValue(adminStub.client);
+
+    await UserConnectionsService.completeFromState('code-y', 'signed:oB:uB:mobile', mockFetch);
+
+    // createAdminClientMock is the actual spy for the mocked module
+    expect(createAdminClientMock).toHaveBeenCalledOnce();
   });
 });

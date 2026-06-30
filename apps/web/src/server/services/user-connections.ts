@@ -206,6 +206,120 @@ export class UserConnectionsService {
     if (upErr) throw new ServiceError('internal_error', upErr.message);
   }
 
+  // ────────────────────────────────────────────────────────────────────────────
+  // Static / sessionless helpers
+  // ────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Complete the Zendesk OAuth flow from a signed state token with NO session.
+   *
+   * SECURITY CONTRACT (read before modifying):
+   *
+   * (a) The admin client BYPASSES RLS, so every value that scopes the write
+   *     (`organization_id`, `user_id`) MUST come from the verified signed
+   *     `state`, never from request input or any other ambient source.
+   *
+   * (b) There is intentionally NO assertModuleEnabled / assertPermission call
+   *     here. Those gates were enforced when the state was ISSUED — at
+   *     `GET /api/v1/zendesk/me/connect-url` which goes through
+   *     `withApiContext` + `beginZendeskConnect('mobile')`. The HMAC-signed
+   *     state is the cryptographic proof that the caller was authorized at
+   *     issuance time. Adding the gates here would require a ctx (which we
+   *     don't have) and would not add security beyond the HMAC verification.
+   *
+   * (c) Replay is bounded: Zendesk authorization codes are single-use, so a
+   *     replayed state carrying a consumed code causes `exchangeCode` to fail.
+   *     Additionally the state embeds a 10-minute TTL (`exp`) enforced by
+   *     `verifyState`, so a stale state is always rejected.
+   */
+  static async completeFromState(
+    code: string,
+    state: string,
+    fetchImpl: typeof fetch = fetch,
+  ): Promise<void> {
+    // Step 1: verify the HMAC-signed state — null on tamper/expiry/bad sig.
+    const decoded = verifyState(state);
+    if (!decoded) {
+      throw new ServiceError('forbidden', 'Invalid or expired OAuth state. Please start the connection again.');
+    }
+
+    // Step 2: identity comes SOLELY from the verified state.
+    const { userId, orgId } = decoded;
+
+    // Step 3: obtain the service-role admin client (bypasses RLS — all
+    //         subsequent writes are scoped explicitly via the state identity).
+    const adminRaw = createAdminClient();
+    const admin = adminRaw as unknown as Admin;
+
+    // Step 4: read the org's Zendesk subdomain via admin, scoped to orgId.
+    const { data: connRow, error: connErr } = await adminRaw
+      .from('org_connections')
+      .select('external_account_id, settings')
+      .eq('organization_id', orgId)
+      .eq('provider_id', 'zendesk')
+      .maybeSingle();
+    if (connErr) throw new ServiceError('internal_error', connErr.message);
+    const row = connRow as {
+      external_account_id: string | null;
+      settings: Record<string, unknown> | null;
+    } | null;
+    const subdomain =
+      row?.external_account_id ??
+      (row?.settings?.subdomain as string | undefined) ??
+      null;
+    if (!subdomain) {
+      throw new ServiceError('validation_error', "Set your organization's Zendesk subdomain first.");
+    }
+
+    // Step 5: exchange the authorization code for tokens.
+    const tokens = await exchangeCode(subdomain, code, fetchImpl);
+
+    // Step 6: best-effort fetch the agent's Zendesk identity.
+    let account: Record<string, unknown> = {};
+    try {
+      const resp = await fetchImpl(
+        `https://${subdomain}.zendesk.com/api/v2/users/me.json`,
+        {
+          headers: {
+            Authorization: `Bearer ${tokens.accessToken}`,
+            Accept: 'application/json',
+          },
+        },
+      );
+      if (resp.ok) {
+        const body = (await resp.json()) as { user?: Record<string, unknown> };
+        account = body.user ?? {};
+      }
+    } catch {
+      // Non-fatal — we store an empty object and the agent can still use the token.
+    }
+
+    // Step 7: vault the token bundle (service-role only).
+    const secretId = await putConnectionSecret(admin, secretName(userId), tokens);
+
+    // Step 8: upsert the user_connections row, scoped EXPLICITLY to the
+    //         identity from the verified state — never from request input.
+    const { error: upErr } = await adminRaw
+      .from('user_connections')
+      .upsert(
+        {
+          organization_id: orgId,
+          user_id: userId,
+          provider_id: 'zendesk',
+          subdomain,
+          external_account: account,
+          secret_id: secretId,
+          status: 'active' as const,
+          last_error: null,
+          last_connected_at: new Date().toISOString(),
+        },
+        { onConflict: 'organization_id,user_id,provider_id' },
+      )
+      .select('id')
+      .maybeSingle();
+    if (upErr) throw new ServiceError('internal_error', upErr.message);
+  }
+
   /**
    * Return a valid (possibly refreshed) access token + the org subdomain.
    * Refreshes automatically when the token is expired or within 60 s of expiry.

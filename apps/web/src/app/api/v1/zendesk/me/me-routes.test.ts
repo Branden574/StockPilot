@@ -15,6 +15,7 @@ const {
   statusMock,
   getValidAccessTokenMock,
   disconnectMock,
+  beginZendeskConnectMock,
   ZendeskClientMock,
   listMyTicketsMock,
   getTicketMock,
@@ -45,6 +46,7 @@ const {
     statusMock: vi.fn(),
     getValidAccessTokenMock: vi.fn(),
     disconnectMock: vi.fn(),
+    beginZendeskConnectMock: vi.fn(),
     ZendeskClientMock,
     listMyTicketsMock,
     getTicketMock,
@@ -67,6 +69,7 @@ vi.mock('@/server/services/user-connections', () => ({
     status: statusMock,
     getValidAccessToken: getValidAccessTokenMock,
     disconnect: disconnectMock,
+    beginZendeskConnect: beginZendeskConnectMock,
   })),
 }));
 
@@ -77,6 +80,7 @@ vi.mock('@/server/connectors/zendesk/client', () => ({
 
 // ─── Import routes (after mocks are registered) ──────────────────────────────
 import { GET as getMe } from './route';
+import { GET as getConnectUrl } from './connect-url/route';
 import { GET as getTickets } from './tickets/route';
 import { GET as getTicket } from './tickets/[id]/route';
 import { POST as postDisconnect } from './disconnect/route';
@@ -101,10 +105,12 @@ beforeEach(() => {
     status: statusMock,
     getValidAccessToken: getValidAccessTokenMock,
     disconnect: disconnectMock,
+    beginZendeskConnect: beginZendeskConnectMock,
   }) as never);
   statusMock.mockReset();
   getValidAccessTokenMock.mockReset();
   disconnectMock.mockReset();
+  beginZendeskConnectMock.mockReset();
   ZendeskClientMock.mockReset();
   ZendeskClientMock.mockImplementation(() => ({
     listMyTickets: listMyTicketsMock,
@@ -483,5 +489,61 @@ describe('POST /me/disconnect', () => {
     );
     expect(res.status).toBe(500);
     expect(reportErrorMock).toHaveBeenCalledWith(boom, { tag: 'zendesk.me.disconnect' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /me/connect-url
+// ─────────────────────────────────────────────────────────────────────────────
+describe('GET /me/connect-url', () => {
+  it('returns 401 when unauthenticated', async () => {
+    withApiContext.mockResolvedValueOnce(null);
+    const res = await getConnectUrl(makeReq('/api/v1/zendesk/me/connect-url'));
+    expect(res.status).toBe(401);
+  });
+
+  it('returns { authorizeUrl } from beginZendeskConnect("mobile")', async () => {
+    withApiContext.mockResolvedValueOnce(ctxA);
+    beginZendeskConnectMock.mockResolvedValueOnce({
+      authorizeUrl: 'https://acme.zendesk.com/oauth/authorizations/new?state=signed:org-1:user-a:mobile',
+    });
+    const res = await getConnectUrl(makeReq('/api/v1/zendesk/me/connect-url'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.authorizeUrl).toContain('acme.zendesk.com');
+    expect(beginZendeskConnectMock).toHaveBeenCalledWith('mobile');
+  });
+
+  it('maps ServiceError(forbidden) to 403', async () => {
+    const { ServiceError } = await import('@/server/services/context');
+    withApiContext.mockResolvedValueOnce(ctxA);
+    beginZendeskConnectMock.mockRejectedValueOnce(new ServiceError('forbidden', 'no zendesk:agent'));
+    const res = await getConnectUrl(makeReq('/api/v1/zendesk/me/connect-url'));
+    expect(res.status).toBe(403);
+  });
+
+  it('maps ServiceError(module_disabled) to 403', async () => {
+    const { ServiceError } = await import('@/server/services/context');
+    withApiContext.mockResolvedValueOnce(ctxA);
+    beginZendeskConnectMock.mockRejectedValueOnce(new ServiceError('module_disabled', 'zendesk off'));
+    const res = await getConnectUrl(makeReq('/api/v1/zendesk/me/connect-url'));
+    expect(res.status).toBe(403);
+  });
+
+  it('maps ServiceError(validation_error) to 400', async () => {
+    const { ServiceError } = await import('@/server/services/context');
+    withApiContext.mockResolvedValueOnce(ctxA);
+    beginZendeskConnectMock.mockRejectedValueOnce(new ServiceError('validation_error', 'no subdomain'));
+    const res = await getConnectUrl(makeReq('/api/v1/zendesk/me/connect-url'));
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 500 and calls reportError with tag zendesk.me.connect-url on unknown errors', async () => {
+    withApiContext.mockResolvedValueOnce(ctxA);
+    const boom = new Error('unexpected failure');
+    beginZendeskConnectMock.mockRejectedValueOnce(boom);
+    const res = await getConnectUrl(makeReq('/api/v1/zendesk/me/connect-url'));
+    expect(res.status).toBe(500);
+    expect(reportErrorMock).toHaveBeenCalledWith(boom, { tag: 'zendesk.me.connect-url' });
   });
 });
