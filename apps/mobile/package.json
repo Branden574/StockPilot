@@ -13,7 +13,8 @@
     "clean": "rm -rf .expo node_modules",
     "release:ios": "pnpm dlx eas-cli@20.3.0 build --platform ios --profile production --auto-submit --no-wait --non-interactive",
     "release:android": "pnpm dlx eas-cli@20.3.0 build --platform android --profile production --auto-submit --no-wait --non-interactive",
-    "submit:review": "node scripts/asc-submit-for-review.mjs"
+    "submit:review": "node scripts/asc-submit-for-review.mjs",
+    "test": "vitest run"
   },
   "dependencies": {
     "@expo-google-fonts/instrument-serif": "^0.4.1",
@@ -47,6 +48,7 @@
     "expo-status-bar": "~2.2.3",
     "expo-system-ui": "~5.0.11",
     "expo-updates": "~0.28.18",
+    "expo-web-browser": "~14.2.0",
     "lucide-react-native": "^1.16.0",
     "query-string": "7.1.3",
     "react": "19.0.0",
@@ -63,6 +65,7 @@
     "@stockpilot/config": "workspace:*",
     "@types/react": "~19.0.0",
     "eslint-config-expo": "~9.2.0",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^3.2.4"
   }
 }
