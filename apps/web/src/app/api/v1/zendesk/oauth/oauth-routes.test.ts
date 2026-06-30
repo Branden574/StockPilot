@@ -85,15 +85,24 @@ describe('GET /api/v1/zendesk/oauth/start', () => {
     const res = await startRoute(greq('/api/v1/zendesk/oauth/start'));
     expect(res.status).toBe(400);
   });
+
+  it('returns 500 when beginZendeskConnect throws a non-ServiceError', async () => {
+    withApiContext.mockResolvedValueOnce(ctx);
+    beginZendeskConnect.mockRejectedValueOnce(new Error('boom'));
+    const res = await startRoute(greq('/api/v1/zendesk/oauth/start'));
+    expect(res.status).toBe(500);
+  });
 });
 
 // ── callback/route ────────────────────────────────────────────────────────────
 describe('GET /api/v1/zendesk/oauth/callback', () => {
-  it('returns 401 when withApiContext returns null', async () => {
+  it('redirects to the error page (not JSON 401) when unauthenticated — it is a browser landing', async () => {
     withApiContext.mockResolvedValueOnce(null);
     verifyState.mockReturnValueOnce({ orgId: 'o1', userId: 'u1', platform: 'web' });
     const res = await callbackRoute(greq('/api/v1/zendesk/oauth/callback?code=abc&state=xyz'));
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toContain('/dashboard/zendesk?error=connect_failed');
+    expect(completeZendeskConnect).not.toHaveBeenCalled();
   });
 
   it('calls completeZendeskConnect(code, state) and redirects to /dashboard/zendesk?connected=1 for web', async () => {
@@ -141,5 +150,22 @@ describe('GET /api/v1/zendesk/oauth/callback', () => {
     const res = await callbackRoute(greq('/api/v1/zendesk/oauth/callback'));
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toContain('/dashboard/zendesk?error=connect_failed');
+  });
+
+  it('redirects to error target when code is present but state is missing (no connect attempt)', async () => {
+    withApiContext.mockResolvedValueOnce(ctx);
+    const res = await callbackRoute(greq('/api/v1/zendesk/oauth/callback?code=abc'));
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toContain('/dashboard/zendesk?error=connect_failed');
+    expect(completeZendeskConnect).not.toHaveBeenCalled();
+  });
+
+  it('redirects to error target when state is present but code is missing (no connect attempt)', async () => {
+    withApiContext.mockResolvedValueOnce(ctx);
+    verifyState.mockReturnValueOnce({ orgId: 'o1', userId: 'u1', platform: 'web' });
+    const res = await callbackRoute(greq('/api/v1/zendesk/oauth/callback?state=xyz'));
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toContain('/dashboard/zendesk?error=connect_failed');
+    expect(completeZendeskConnect).not.toHaveBeenCalled();
   });
 });
