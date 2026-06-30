@@ -1,10 +1,10 @@
 import React, { useRef, useState } from 'react';
 import {
   Alert,
-  KeyboardAvoidingView,
+  Keyboard,
   Modal,
   PanResponder,
-  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -40,6 +40,10 @@ export function SignaturePadModal({
   const [strokes, setStrokes] = useState<SignaturePoint[][]>([]);
   const [currentStroke, setCurrentStroke] = useState<SignaturePoint[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  // While the pen is down we lock the surrounding ScrollView so the layout
+  // can't shift under the stroke (the old KeyboardAvoidingView shuffled the
+  // pad around when the keyboard showed/hid, making it impossible to sign).
+  const [isDrawing, setIsDrawing] = useState(false);
   const svgRef = useRef<any>(null);
 
   const panResponder = useRef(
@@ -47,6 +51,10 @@ export function SignaturePadModal({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (evt) => {
+        // Drop the keyboard the moment signing starts + lock scrolling so
+        // nothing moves while the user draws.
+        Keyboard.dismiss();
+        setIsDrawing(true);
         const { locationX, locationY } = evt.nativeEvent;
         setCurrentStroke([{ x: locationX, y: locationY }]);
       },
@@ -55,6 +63,7 @@ export function SignaturePadModal({
         setCurrentStroke((prev) => [...prev, { x: locationX, y: locationY }]);
       },
       onPanResponderRelease: () => {
+        setIsDrawing(false);
         setCurrentStroke((prev) => {
           if (prev.length > 0) {
             setStrokes((s) => [...s, prev]);
@@ -62,6 +71,7 @@ export function SignaturePadModal({
           return [];
         });
       },
+      onPanResponderTerminate: () => setIsDrawing(false),
     }),
   ).current;
 
@@ -101,7 +111,10 @@ export function SignaturePadModal({
           Alert.alert('Error', 'Failed to capture signature. Please try again.');
           return;
         }
-        await api('/api/orders/sign', {
+        // Use the /api/v1 alias so the request is covered by the Vercel
+        // Firewall bypass for /api/v1* — the bare /api/orders/sign path gets
+        // bot-challenged and 429s the app. Same handler server-side.
+        await api('/api/v1/orders/sign', {
           method: 'POST',
           body: {
             token: signatureToken,
@@ -133,9 +146,12 @@ export function SignaturePadModal({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <KeyboardAvoidingView
+      <ScrollView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        scrollEnabled={!isDrawing}
+        showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
           <Text style={styles.title}>Sign Order</Text>
@@ -166,6 +182,7 @@ export function SignaturePadModal({
             keyboardType="email-address"
             autoCapitalize="none"
             returnKeyType="done"
+            onSubmitEditing={() => Keyboard.dismiss()}
           />
         </View>
 
@@ -216,13 +233,14 @@ export function SignaturePadModal({
             <Text style={styles.saveBtnText}>{submitting ? 'Saving…' : 'Save Signature'}</Text>
           </TouchableOpacity>
         </View>
-      </KeyboardAvoidingView>
+      </ScrollView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8f9fa', padding: 20 },
+  container: { flex: 1, backgroundColor: '#f8f9fa' },
+  content: { padding: 20, flexGrow: 1 },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
