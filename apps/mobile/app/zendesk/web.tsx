@@ -29,10 +29,14 @@ export default function ZendeskWebScreen() {
   const [hasError, setHasError] = React.useState(false);
   const [reloadKey, setReloadKey] = React.useState(0);
 
-  const uri =
-    subdomain && subdomain.trim().length > 0
-      ? `https://${subdomain.trim()}.zendesk.com/agent`
-      : null;
+  // Re-validate the subdomain param against the same DNS-label guard the server
+  // enforces on write — the value is interpolated into the WebView host, so a
+  // deep-link like ?subdomain=evil must not retarget it off zendesk.com. An
+  // invalid value falls through to the "no subdomain set" guard message below.
+  const trimmed = subdomain?.trim() ?? '';
+  const uri = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(trimmed)
+    ? `https://${trimmed}.zendesk.com/agent`
+    : null;
 
   function handleRetry() {
     setHasError(false);

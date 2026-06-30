@@ -79,7 +79,11 @@ export function ZendeskQuickAccess({
               </span>
             </span>
           </label>
-          <Button onClick={() => void save()} disabled={saving || !value.trim()} size="sm">
+          <Button
+            onClick={() => void save()}
+            disabled={saving || !value.trim() || value.trim() === (subdomain ?? '')}
+            size="sm"
+          >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
           </Button>
         </div>
