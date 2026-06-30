@@ -7,4 +7,12 @@
 // handler. The public web sign page (/orders/sign/[token]) keeps calling
 // /api/orders/sign directly — a real browser passes the challenge.
 // Same handler, same behavior; see reference_mobile_blocked_by_vercel_botprotection.
-export { POST, runtime, dynamic } from '../../../orders/sign/route';
+//
+// NOTE: route-segment config (`runtime`/`dynamic`) must be declared INLINE here
+// — Next.js/Turbopack statically parses these and refuses a re-export
+// (`export { runtime } from …` fails the build). Only the POST handler is
+// re-exported.
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+export { POST } from '../../../orders/sign/route';
