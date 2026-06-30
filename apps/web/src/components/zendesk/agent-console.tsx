@@ -4,6 +4,8 @@ import * as React from 'react';
 
 import type { ZendeskComment, ZendeskTicket } from '@/server/connectors/zendesk/client';
 
+import { toast } from 'sonner';
+
 import { Button } from '@/components/ui/button';
 
 import { TicketDetail } from './ticket-detail';
@@ -42,10 +44,17 @@ export function AgentConsole() {
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
+      let hasParam = false;
       if (params.get('connected') === '1') {
         setUrlNote({ kind: 'success', message: 'Zendesk connected successfully.' });
+        hasParam = true;
       } else if (params.get('error') === 'connect_failed') {
         setUrlNote({ kind: 'error', message: 'Failed to connect Zendesk — please try again.' });
+        hasParam = true;
+      }
+      // Clean up so the banner doesn't reappear on refresh.
+      if (hasParam) {
+        window.history.replaceState(null, '', window.location.pathname);
       }
     }
   }, []);
@@ -161,12 +170,18 @@ export function AgentConsole() {
   async function handleDisconnect() {
     setDisconnecting(true);
     try {
-      await fetch('/api/v1/zendesk/me/disconnect', { method: 'POST' });
+      const res = await fetch('/api/v1/zendesk/me/disconnect', { method: 'POST' });
+      if (!res.ok) {
+        toast.error('Failed to disconnect Zendesk — please try again.');
+        return;
+      }
       setState({ phase: 'disconnected' });
       setTickets([]);
       setSelectedId(null);
       setDetailTicket(null);
       setDetailComments([]);
+    } catch {
+      toast.error('Network error — could not disconnect. Please try again.');
     } finally {
       setDisconnecting(false);
     }
@@ -213,7 +228,6 @@ export function AgentConsole() {
               silently and never send the user to Zendesk. */}
           <a
             href="/api/v1/zendesk/oauth/start"
-            role="link"
             className="bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-ring inline-flex h-9 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1"
           >
             Connect my Zendesk

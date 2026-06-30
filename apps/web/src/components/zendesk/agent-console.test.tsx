@@ -128,6 +128,24 @@ describe('AgentConsole', () => {
     });
   });
 
+  it('shows the Connect card with session-expired copy when GET /me returns 401', async () => {
+    mockFetch([
+      { url: '/api/v1/zendesk/me', data: { error: 'reauth_required' }, status: 401 },
+    ]);
+
+    render(<AgentConsole />);
+
+    // The connect link must be present (reauth also shows the connect card).
+    await waitFor(() => {
+      expect(
+        screen.getByRole('link', { name: /connect/i }),
+      ).toHaveAttribute('href', '/api/v1/zendesk/oauth/start');
+    });
+
+    // Session-expired copy should be visible.
+    expect(screen.getByText(/session expired/i)).toBeInTheDocument();
+  });
+
   it('loads ticket detail with comments when a row is clicked', async () => {
     mockFetch([
       { url: '/api/v1/zendesk/me', data: { connected: true, account: {} } },
