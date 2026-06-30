@@ -99,7 +99,9 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`API ${res.status}: ${text || res.statusText}`);
+      const err = new Error(`API ${res.status}: ${text || res.statusText}`) as Error & { status?: number };
+      err.status = res.status;
+      throw err;
     }
     return (await res.json()) as T;
   } catch (err) {

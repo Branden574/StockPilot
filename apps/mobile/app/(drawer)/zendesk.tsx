@@ -1,7 +1,7 @@
 import { useNavigation, useRouter } from 'expo-router';
 import { ArrowLeft, HelpCircle, Menu } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ZendeskLogo } from '@/components/zendesk-logo';
@@ -332,7 +332,8 @@ function AgentConsole() {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes('401') || msg.includes('reauth')) {
+      const status = (e as { status?: number })?.status;
+      if (status === 401 || msg.includes('401') || msg.includes('reauth')) {
         setMeConnected(false);
         setView('me');
       } else {
@@ -356,7 +357,8 @@ function AgentConsole() {
       setTickets(res.tickets);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes('401') || msg.includes('reauth')) {
+      const status = (e as { status?: number })?.status;
+      if (status === 401 || msg.includes('401') || msg.includes('reauth')) {
         setMeConnected(false);
         setView('me');
       } else {
@@ -387,7 +389,8 @@ function AgentConsole() {
       setComments(res.comments);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes('401') || msg.includes('reauth')) {
+      const status = (e as { status?: number })?.status;
+      if (status === 401 || msg.includes('401') || msg.includes('reauth')) {
         setMeConnected(false);
         setView('me');
       } else {
@@ -406,7 +409,11 @@ function AgentConsole() {
     try {
       const result = await connectZendesk();
       if (result.ok) {
+        // Browser is closed — clear the "Opening browser…" label immediately
+        // so loadMe()'s own loading state takes over, not the connecting label.
+        setConnecting(false);
         await loadMe();
+        return;
       } else if (result.reason === 'unavailable') {
         setMeError('Update the app to connect Zendesk.');
       } else if (result.reason === 'failed') {
@@ -590,21 +597,26 @@ function AgentConsole() {
 function TicketRow({ ticket, onPress }: { ticket: Ticket; onPress: () => void }) {
   const { c } = useTheme();
   return (
-    <Card padding={14} style={{ marginBottom: 8 }}>
-      <View
-        style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}
-      >
-        <Body
-          size={14.5}
-          style={{ flex: 1, fontFamily: FONT.display }}
-          numberOfLines={2}
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, marginBottom: 8 })}
+      accessibilityRole="button"
+      accessibilityLabel={`View ticket: ${ticket.subject}`}
+    >
+      <Card padding={14}>
+        <View
+          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}
         >
-          {ticket.subject}
-        </Body>
-        <StatusPill status={ticket.status} />
-      </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
-        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+          <Body
+            size={14.5}
+            style={{ flex: 1, fontFamily: FONT.display }}
+            numberOfLines={2}
+          >
+            {ticket.subject}
+          </Body>
+          <StatusPill status={ticket.status} />
+        </View>
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 8 }}>
           {ticket.priority ? (
             <Pill status={priorityStatus(ticket.priority)} dot={false}>
               {ticket.priority.toUpperCase()}
@@ -616,11 +628,8 @@ function TicketRow({ ticket, onPress }: { ticket: Ticket; onPress: () => void })
             </Body>
           ) : null}
         </View>
-        <Button variant="outline" size="sm" onPress={onPress}>
-          View
-        </Button>
-      </View>
-    </Card>
+      </Card>
+    </Pressable>
   );
 }
 
