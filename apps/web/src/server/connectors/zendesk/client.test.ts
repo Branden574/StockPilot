@@ -96,6 +96,13 @@ describe('ZendeskClient', () => {
       .toThrow(expect.objectContaining({ status: 400 }));
   });
 
+  it('lowercases a mixed-case subdomain so the request host is canonical', async () => {
+    const f = mockFetch(200, { user: { id: 1 } });
+    await new ZendeskClient({ subdomain: 'AcMe', accessToken: 'tok' }, f).validateToken();
+    const call = (f as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]!;
+    expect(call[0]).toBe('https://acme.zendesk.com/api/v2/users/me.json');
+  });
+
   // ── listMyTickets ──────────────────────────────────────────────────────────
 
   it('listMyTickets defaults to assigned view and hits the search endpoint', async () => {
@@ -206,8 +213,12 @@ describe('ZendeskClient', () => {
       body: 'Internal note',
       public: false,
     });
-    // Should have made exactly 2 fetch calls
-    expect((f as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(2);
+    // Should have made exactly 2 fetch calls, to the ticket + comments endpoints
+    // (in that order — Promise.all preserves the array order).
+    const calls = (f as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]![0]).toBe('https://acme.zendesk.com/api/v2/tickets/7.json');
+    expect(calls[1]![0]).toBe('https://acme.zendesk.com/api/v2/tickets/7/comments.json');
   });
 
   it('getTicket throws ZendeskApiError when the ticket fetch returns 404', async () => {

@@ -117,8 +117,11 @@ export class ZendeskClient {
 
   constructor(cfg: ZendeskConfig | ZendeskBearerConfig, private readonly fetchImpl: typeof fetch = fetch) {
     assertSubdomain(cfg.subdomain);
-    this.subdomain = cfg.subdomain;
-    this.base = `https://${cfg.subdomain}.zendesk.com/api/v2`;
+    // Normalize to lowercase so the request host (and ticket deep-links) are
+    // always canonical, even though the SSRF guard's regex is case-insensitive.
+    const subdomain = cfg.subdomain.toLowerCase();
+    this.subdomain = subdomain;
+    this.base = `https://${subdomain}.zendesk.com/api/v2`;
 
     if ('accessToken' in cfg) {
       this.authHeader = `Bearer ${cfg.accessToken}`;
