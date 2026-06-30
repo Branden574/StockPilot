@@ -101,7 +101,7 @@ describe('GET /api/v1/zendesk/oauth/start', () => {
 
 // ── callback/route ────────────────────────────────────────────────────────────
 describe('GET /api/v1/zendesk/oauth/callback', () => {
-  it('(web) when ctx is null and state decodes as web platform, calls completeFromState and redirects to web error target on throw', async () => {
+  it('ctx=null routes to completeFromState regardless of state.platform; redirect target derives from state.platform (here web → web error target on throw)', async () => {
     withApiContext.mockResolvedValueOnce(null);
     verifyState.mockReturnValueOnce({ orgId: 'o1', userId: 'u1', platform: 'web' });
     completeFromState.mockRejectedValueOnce(new Error('bad state'));

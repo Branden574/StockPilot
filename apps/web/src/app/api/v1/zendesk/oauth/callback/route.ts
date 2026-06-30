@@ -34,6 +34,10 @@ export async function GET(req: NextRequest) {
   //   - Mobile: the system browser carries no app session, so ctx is null.
   //     Trust the HMAC-signed state (capability token) instead. Authorization
   //     was enforced when the state was issued at GET /api/v1/zendesk/me/connect-url.
+  // The branch is chosen by SESSION PRESENCE (ctx), NOT state.platform — and
+  // identity safety doesn't depend on platform either way: completeFromState
+  // binds org_id/user_id solely to the verified state's own embedded identity.
+  // (state.platform only selects the redirect target above.)
   const ctx = await withApiContext(req);
   try {
     if (ctx) {
