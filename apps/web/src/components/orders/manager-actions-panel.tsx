@@ -109,7 +109,11 @@ export function ManagerActionsPanel({
   const [sigLoading, setSigLoading] = React.useState(false);
 
   React.useEffect(() => {
-    if (!sigOpen || sigUrl || sigLoading) return;
+    // NOTE: `sigLoading` must NOT be a dependency here — setting it below
+    // would re-run the effect, whose cleanup cancels the in-flight fetch, so
+    // the spinner would hang forever. The `sigUrl` guard prevents a re-fetch
+    // after success.
+    if (!sigOpen || sigUrl) return;
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
     setSigLoading(true);
@@ -129,7 +133,7 @@ export function ManagerActionsPanel({
     return () => {
       cancelled = true;
     };
-  }, [sigOpen, sigUrl, sigLoading, orderId]);
+  }, [sigOpen, sigUrl, orderId]);
   const [notes, setNotes] = React.useState(internalNotes ?? '');
   const initialNotes = React.useRef(internalNotes ?? '');
 

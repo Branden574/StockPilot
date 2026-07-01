@@ -230,7 +230,9 @@ export default function OrderDetail() {
   // image seen inside a closed-by-default modal, so shipping it in the order
   // payload to every viewer wasted bandwidth on every screen focus.
   React.useEffect(() => {
-    if (!sigOpen || sigUrl || sigLoading || !orgId || !id) return;
+    // `sigLoading` must NOT be a dep — setting it below would re-run the
+    // effect, whose cleanup cancels the in-flight query, hanging the spinner.
+    if (!sigOpen || sigUrl || !orgId || !id) return;
     let cancelled = false;
     setSigLoading(true);
     void (async () => {
@@ -253,7 +255,7 @@ export default function OrderDetail() {
     return () => {
       cancelled = true;
     };
-  }, [sigOpen, sigUrl, sigLoading, orgId, id]);
+  }, [sigOpen, sigUrl, orgId, id]);
 
   async function refresh() {
     setRefreshing(true);
