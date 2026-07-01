@@ -25,6 +25,7 @@ import type { CatalogItem } from '../v2/types';
 import {
   availabilityLabel,
   availableOf,
+  clampQty,
   glyphFor,
   statusOf,
   type ItemStatus,
@@ -33,7 +34,90 @@ import {
 export interface CardCallbacks {
   onAdd: (itemId: string) => void;
   onDec: (itemId: string) => void;
+  /** Set an exact quantity (typed into a stepper); ≤0 removes the line. */
+  onSetQty: (itemId: string, quantity: number) => void;
   onQuickView: (itemId: string) => void;
+}
+
+/* ---- typeable quantity field (shared by every stepper) --------------- */
+
+interface QtyFieldProps {
+  itemId: string;
+  qty: number;
+  available: number;
+  onSetQty: (itemId: string, quantity: number) => void;
+  /** Card-size stepper shows the tiny "IN CART" suffix label. */
+  showInCartLabel?: boolean;
+}
+
+/**
+ * The stepper's center count as an editable field: click and type the
+ * exact quantity. Local string state while focused, select-all on
+ * focus, commit on blur/Enter (clamped to available stock — set-qty at
+ * ≤0 removes the line), Escape reverts, non-numeric keystrokes are
+ * ignored. Styled to be indistinguishable from the static mono count.
+ */
+export function QtyField({
+  itemId,
+  qty,
+  available,
+  onSetQty,
+  showInCartLabel,
+}: QtyFieldProps) {
+  const [draft, setDraft] = React.useState<string | null>(null);
+  const cancelled = React.useRef(false);
+
+  const commit = (raw: string) => {
+    setDraft(null);
+    const trimmed = raw.trim();
+    if (trimmed === '') return; // blank = keep current qty
+    const parsed = Number(trimmed);
+    if (!Number.isFinite(parsed)) return;
+    const clamped = clampQty(parsed, available);
+    if (clamped !== qty) onSetQty(itemId, clamped);
+  };
+
+  return (
+    <span className="q">
+      <input
+        className="qi"
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9]*"
+        value={draft ?? String(qty)}
+        aria-label="Quantity"
+        onClick={(e) => e.stopPropagation()}
+        onFocus={(e) => {
+          cancelled.current = false;
+          setDraft(String(qty));
+          e.currentTarget.select();
+        }}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (/^\d*$/.test(v)) setDraft(v); // ignore non-numeric input
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            e.currentTarget.blur(); // commit via onBlur
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelled.current = true;
+            e.currentTarget.blur();
+          }
+        }}
+        onBlur={(e) => {
+          if (cancelled.current) {
+            cancelled.current = false;
+            setDraft(null); // revert
+            return;
+          }
+          commit(e.currentTarget.value);
+        }}
+      />
+      {showInCartLabel && <span className="in-lbl">IN CART</span>}
+    </span>
+  );
 }
 
 /* ---- photo box ---------------------------------------------------- */
@@ -82,9 +166,10 @@ interface AddControlProps {
   qty: number;
   onAdd: (itemId: string) => void;
   onDec: (itemId: string) => void;
+  onSetQty: (itemId: string, quantity: number) => void;
 }
 
-export function SfAddControl({ item, qty, onAdd, onDec }: AddControlProps) {
+export function SfAddControl({ item, qty, onAdd, onDec, onSetQty }: AddControlProps) {
   const available = availableOf(item);
   if (available <= 0 && qty === 0) {
     return (
@@ -106,10 +191,13 @@ export function SfAddControl({ item, qty, onAdd, onDec }: AddControlProps) {
       <button type="button" onClick={() => onDec(item.id)} aria-label="Decrease">
         <Minus size={13} />
       </button>
-      <span className="q">
-        {qty}
-        <span className="in-lbl">IN CART</span>
-      </span>
+      <QtyField
+        itemId={item.id}
+        qty={qty}
+        available={available}
+        onSetQty={onSetQty}
+        showInCartLabel
+      />
       <button
         type="button"
         onClick={() => onAdd(item.id)}
@@ -135,6 +223,7 @@ export const ProductCard = React.memo(function ProductCard({
   qty,
   onAdd,
   onDec,
+  onSetQty,
   onQuickView,
 }: ProductCardProps) {
   const available = availableOf(item);
@@ -163,7 +252,13 @@ export const ProductCard = React.memo(function ProductCard({
           <span className="cat">{item.categoryName ?? 'Uncategorized'}</span>
         </div>
         <div className="sf-card-ctl">
-          <SfAddControl item={item} qty={qty} onAdd={onAdd} onDec={onDec} />
+          <SfAddControl
+            item={item}
+            qty={qty}
+            onAdd={onAdd}
+            onDec={onDec}
+            onSetQty={onSetQty}
+          />
         </div>
       </div>
     </div>
@@ -182,6 +277,7 @@ export const CompactRow = React.memo(function CompactRow({
   qty,
   onAdd,
   onDec,
+  onSetQty,
   onQuickView,
 }: CompactRowProps) {
   const available = availableOf(item);
@@ -211,7 +307,13 @@ export const CompactRow = React.memo(function CompactRow({
             : `${available} avail`}
       </div>
       <div>
-        <SfAddControl item={item} qty={qty} onAdd={onAdd} onDec={onDec} />
+        <SfAddControl
+          item={item}
+          qty={qty}
+          onAdd={onAdd}
+          onDec={onDec}
+          onSetQty={onSetQty}
+        />
       </div>
     </div>
   );
@@ -303,6 +405,7 @@ export function FreqCarousel({
   loading,
   onAdd,
   onDec,
+  onSetQty,
   onQuickView,
 }: FreqCarouselProps) {
   const trackRef = React.useRef<HTMLDivElement>(null);
@@ -391,7 +494,12 @@ export function FreqCarousel({
                           >
                             <Minus size={11} />
                           </button>
-                          <span className="q">{qty}</span>
+                          <QtyField
+                            itemId={item.id}
+                            qty={qty}
+                            available={available}
+                            onSetQty={onSetQty}
+                          />
                           <button
                             type="button"
                             onClick={() => onAdd(item.id)}

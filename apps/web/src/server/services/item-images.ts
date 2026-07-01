@@ -115,6 +115,27 @@ async function getCachedItemImageTransformedSignedUrl(
 // object-cover cells. Picker sharpness should come from PRE-GENERATED
 // thumbs instead — see THUMB_DIMENSION in lib/image-variants.ts.
 
+/**
+ * Catalog-thumbnail resolver for server-rendered picker payloads:
+ * prefer the pre-generated thumb (plain signed URL, no transform tax),
+ * fall back to a server-side resize of the master at `width`, else
+ * null. Reuses this module's 25-day cached signers — same cache keys
+ * as every other thumbnail consumer, so no extra signing traffic.
+ *
+ * Authorization contract matches the signers above: the caller must
+ * have selected the paths through an org-scoped query before handing
+ * them here (signing is org-agnostic).
+ */
+export async function cachedCatalogThumbUrl(
+  storagePath: string | null,
+  thumbPath: string | null,
+  width = 200,
+): Promise<string | null> {
+  if (thumbPath) return getCachedItemImageSignedUrl(thumbPath);
+  if (storagePath) return getCachedItemImageTransformedSignedUrl(storagePath, width);
+  return null;
+}
+
 export class ItemImagesService {
   constructor(private readonly ctx: ServiceContext) {}
 

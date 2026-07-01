@@ -170,6 +170,16 @@ export function fullKitLines(
     .map((it) => ({ itemId: it.id, quantity: 1 }));
 }
 
+/**
+ * Clamp a typed quantity to what a stepper can legally hold:
+ * integers between 0 and the item's available stock. Non-finite input
+ * clamps to 0 (the cart reducer removes lines at ≤0).
+ */
+export function clampQty(value: number, available: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(Math.max(0, available), Math.floor(value)));
+}
+
 export interface CartTotals {
   lineCount: number;
   unitCount: number;

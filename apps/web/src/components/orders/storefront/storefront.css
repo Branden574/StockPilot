@@ -320,6 +320,11 @@
   box-shadow: var(--sf-shadow-pop);
   padding: 6px;
   animation: sf-pop-in 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Long option lists (15+ delivery sites) scroll INSIDE the popover;
+     overscroll-behavior stops the wheel from chaining to the page. */
+  max-height: min(340px, 60vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .sp-storefront .sf-popwrap > .sf-pop {
   left: 0;
@@ -1126,8 +1131,10 @@
   background: none;
 }
 .sp-storefront .sf-step .q {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
   font-family: var(--sf-font-mono);
   font-size: 12px;
   font-weight: 600;
@@ -1140,6 +1147,30 @@
   color: var(--sf-ink-3);
   letter-spacing: 0.08em;
   margin-left: 5px;
+  flex: none;
+}
+/* Typeable quantity: styled to be indistinguishable from the static
+   mono count (transparent, centered, borderless). */
+.sp-storefront .sf-step .q .qi {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  text-align: center;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  appearance: textfield;
+}
+.sp-storefront .sf-step .q .qi:focus-visible {
+  outline: none; /* the stepper's accent border is the focus affordance */
+}
+.sp-storefront .sf-step .q .qi::selection {
+  background: color-mix(in oklab, var(--sf-accent) 35%, transparent);
 }
 .sp-storefront .sf-step.mini {
   height: 26px;

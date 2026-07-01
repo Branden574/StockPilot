@@ -79,6 +79,7 @@ interface QuickViewDrawerProps {
   qty: number;
   onAdd: (itemId: string) => void;
   onDec: (itemId: string) => void;
+  onSetQty: (itemId: string, quantity: number) => void;
   onClose: () => void;
 }
 
@@ -87,6 +88,7 @@ export function QuickViewDrawer({
   qty,
   onAdd,
   onDec,
+  onSetQty,
   onClose,
 }: QuickViewDrawerProps) {
   const open = item !== null;
@@ -165,7 +167,13 @@ export function QuickViewDrawer({
           )}
         </div>
         <div className="sf-drawer-foot">
-          <SfAddControl item={item} qty={qty} onAdd={onAdd} onDec={onDec} />
+          <SfAddControl
+            item={item}
+            qty={qty}
+            onAdd={onAdd}
+            onDec={onDec}
+            onSetQty={onSetQty}
+          />
         </div>
       </div>
     </>

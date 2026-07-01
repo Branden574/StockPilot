@@ -27,7 +27,6 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { useCatalogThumbnails } from '@/lib/use-catalog-thumbnails';
 import { createOrderRequestAction } from '@/server/actions/order-requests';
 
 import { isManagerOrAbove } from '@stockpilot/core';
@@ -173,7 +172,7 @@ function FlowIndicator({ stage }: { stage: FlowStage }) {
 function StorefrontInner({
   warehouses,
   warehouseId,
-  items: rawItems,
+  items,
   aisles,
   chartersForWarehouse,
   viewerRole,
@@ -183,17 +182,10 @@ function StorefrontInner({
   const router = useRouter();
   const { state, dispatch } = useCart();
 
-  /* --- catalog data: deferred thumbnails merged onto server items --- */
-  const thumbUrls = useCatalogThumbnails(
-    `/api/orders/catalog-thumbnails?warehouseId=${encodeURIComponent(warehouseId)}`,
-  );
-  const items = React.useMemo<CatalogItem[]>(() => {
-    if (Object.keys(thumbUrls).length === 0) return rawItems;
-    return rawItems.map((it) =>
-      thumbUrls[it.id] ? { ...it, imageUrl: thumbUrls[it.id]! } : it,
-    );
-  }, [rawItems, thumbUrls]);
-
+  // Thumbnail URLs arrive server-embedded on each item (the page
+  // loader resolves them through the 25-day cached signers), so the
+  // old deferred /api/orders/catalog-thumbnails fetch + merge is gone.
+  // LQIP blur-up still renders for any item whose URL failed to sign.
   const itemMap = React.useMemo(
     () => new Map(items.map((it) => [it.id, it])),
     [items],
@@ -205,7 +197,13 @@ function StorefrontInner({
     () =>
       freqApiItems.flatMap((f) => {
         const item = itemMap.get(f.itemId);
-        return item ? [{ item, count: f.count }] : [];
+        if (!item) return [];
+        // The freq endpoint signs its own 200px thumbnails — fall back
+        // to them when the catalog row has no resolved URL so items
+        // with photos never show a letter glyph in the carousel.
+        return [
+          { item: { ...item, imageUrl: item.imageUrl ?? f.imageUrl }, count: f.count },
+        ];
       }),
     [freqApiItems, itemMap],
   );
@@ -265,6 +263,12 @@ function StorefrontInner({
   );
   const handleDec = React.useCallback(
     (itemId: string) => dispatch({ type: 'dec', itemId }),
+    [dispatch],
+  );
+  // Typed quantities arrive pre-clamped by QtyField (0..available);
+  // set-qty at ≤0 removes the line.
+  const handleSetQty = React.useCallback(
+    (itemId: string, quantity: number) => dispatch({ type: 'set-qty', itemId, quantity }),
     [dispatch],
   );
   const handleQuickView = React.useCallback((itemId: string) => setQuickId(itemId), []);
@@ -446,6 +450,7 @@ function StorefrontInner({
             qty={qtyMap.get(it.id) ?? 0}
             onAdd={handleAdd}
             onDec={handleDec}
+            onSetQty={handleSetQty}
             onQuickView={handleQuickView}
           />
         ))}
@@ -459,6 +464,7 @@ function StorefrontInner({
             qty={qtyMap.get(it.id) ?? 0}
             onAdd={handleAdd}
             onDec={handleDec}
+            onSetQty={handleSetQty}
             onQuickView={handleQuickView}
           />
         ))}
@@ -982,6 +988,7 @@ function StorefrontInner({
                 loading={freqLoading}
                 onAdd={handleAdd}
                 onDec={handleDec}
+                onSetQty={handleSetQty}
                 onQuickView={handleQuickView}
               />
             )}
@@ -1040,6 +1047,7 @@ function StorefrontInner({
               context={cartContext}
               onAdd={handleAdd}
               onDec={handleDec}
+              onSetQty={handleSetQty}
               onReview={() => setReviewStage('review')}
             />
           </div>
@@ -1060,6 +1068,7 @@ function StorefrontInner({
         qty={quickItem ? (qtyMap.get(quickItem.id) ?? 0) : 0}
         onAdd={handleAdd}
         onDec={handleDec}
+        onSetQty={handleSetQty}
         onClose={() => setQuickId(null)}
       />
 

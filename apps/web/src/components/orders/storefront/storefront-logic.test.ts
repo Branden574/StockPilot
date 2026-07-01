@@ -7,6 +7,7 @@ import {
   availableOf,
   buildQtyMap,
   cartTotals,
+  clampQty,
   filterCatalog,
   fullKitLines,
   glyphFor,
@@ -310,6 +311,23 @@ describe('cartTotals / buildQtyMap', () => {
     expect(map.get('a')).toBe(3);
     expect(map.get('b')).toBe(1);
     expect(map.get('zzz')).toBeUndefined();
+  });
+});
+
+describe('clampQty', () => {
+  it('floors fractional input and clamps to [0, available]', () => {
+    expect(clampQty(5.7, 10)).toBe(5);
+    expect(clampQty(99, 10)).toBe(10);
+    expect(clampQty(-2, 10)).toBe(0);
+    expect(clampQty(0, 10)).toBe(0);
+    expect(clampQty(10, 10)).toBe(10);
+  });
+
+  it('treats non-finite input as 0 and tolerates non-positive available', () => {
+    expect(clampQty(Number.NaN, 10)).toBe(0);
+    expect(clampQty(Number.POSITIVE_INFINITY, 10)).toBe(0);
+    expect(clampQty(3, 0)).toBe(0);
+    expect(clampQty(3, -4)).toBe(0);
   });
 });
 

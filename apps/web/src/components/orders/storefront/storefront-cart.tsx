@@ -23,7 +23,7 @@ import * as React from 'react';
 import { useCart } from '../v2/cart-context';
 import type { CatalogItem } from '../v2/types';
 
-import { SfPhoto } from './storefront-cards';
+import { QtyField, SfPhoto } from './storefront-cards';
 import { availableOf, cartTotals } from './storefront-logic';
 
 export interface CartSuggestion {
@@ -46,6 +46,7 @@ interface CartRailProps {
   context: CartContextInfo;
   onAdd: (itemId: string) => void;
   onDec: (itemId: string) => void;
+  onSetQty: (itemId: string, quantity: number) => void;
   onReview: () => void;
 }
 
@@ -55,6 +56,7 @@ export function CartRail({
   context,
   onAdd,
   onDec,
+  onSetQty,
   onReview,
 }: CartRailProps) {
   const { state, dispatch } = useCart();
@@ -194,7 +196,12 @@ export function CartRail({
                     >
                       <Minus size={11} />
                     </button>
-                    <span className="q">{line.quantity}</span>
+                    <QtyField
+                      itemId={line.itemId}
+                      qty={line.quantity}
+                      available={Number.isFinite(available) ? available : line.quantity}
+                      onSetQty={onSetQty}
+                    />
                     <button
                       type="button"
                       onClick={() => onAdd(line.itemId)}
