@@ -88,7 +88,7 @@ export async function GET(req: NextRequest) {
     // doesn't call assertModuleEnabled and `inventory` is a core module.
     enabledModules: new Set(),
   });
-  const urlMap = await imagesSvc.primaryImagesForDisplay(itemIds, 400);
+  const urlMap = await imagesSvc.primaryImagesForPdfRendering(itemIds, 200);
 
   const urls: Record<string, string> = {};
   for (const [k, v] of urlMap) urls[k] = v;

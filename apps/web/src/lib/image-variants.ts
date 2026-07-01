@@ -20,7 +20,13 @@
  */
 
 const MAX_DIMENSION = 2048;
-const THUMB_DIMENSION = 200;
+// 400 (was 200, bumped 2026-07-01): the order picker / public portal render
+// these thumbs in ~170-300 CSS px retina cells, where a 200px source upscales
+// 2-4x and reads blurry. Pre-generating at 400 keeps thumbnails STATIC files
+// (never resize-on-demand — an attempt at on-demand master transforms caused
+// multi-second stalls and was reverted the same day). Applies to NEW uploads;
+// existing 200px thumbs keep working.
+const THUMB_DIMENSION = 400;
 const LQIP_DIMENSION = 16;
 const WEBP_QUALITY = 0.85;
 const THUMB_QUALITY = 0.8;

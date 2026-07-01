@@ -107,43 +107,13 @@ async function getCachedItemImageTransformedSignedUrl(
   }
 }
 
-/**
- * Width-only variant for on-screen DISPLAY: preserves the image's aspect
- * ratio (no forced square center-crop). The square signer above stays for
- * PDF rendering, whose fixed-cell layouts depend on it. Book covers are
- * portrait — square-cropping them for the order picker chopped titles, and
- * the picker's ~300px retina cells then re-cropped and upscaled the result.
- */
-// THROWS on failure (see signItemImageMaster note); public wrapper catches → null.
-const signItemImageTransformedFit = unstable_cache(
-  async (storagePath: string, width: number): Promise<string> => {
-    const admin = createAdminClient();
-    const { data, error } = await admin.storage
-      .from('item-images')
-      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
-        transform: { width },
-      });
-    if (error || !data?.signedUrl) {
-      throw new Error(`sign fit-transform failed: ${error?.message ?? 'no signedUrl'}`);
-    }
-    return data.signedUrl;
-  },
-  ['item-image-signed-url-fit-v1'],
-  { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
-);
-async function getCachedItemImageFitSignedUrl(
-  storagePath: string,
-  width: number,
-): Promise<string | null> {
-  try {
-    return await signItemImageTransformedFit(storagePath, width);
-  } catch (err) {
-    console.warn(
-      `[item-image] fit sign failed (${storagePath}): ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return null;
-  }
-}
+// NOTE (2026-07-01, media audit): a "width-only on-demand transform of the
+// master at 400px" variant for picker cards was tried here and REVERTED the
+// same day. On-demand transforms re-render from the 2048px master on first
+// view (seconds-long stalls + failures under a 350-item burst), and
+// aspect-preserving variants get grossly re-cropped by the cards'
+// object-cover cells. Picker sharpness should come from PRE-GENERATED
+// thumbs instead — see THUMB_DIMENSION in lib/image-variants.ts.
 
 export class ItemImagesService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -392,77 +362,6 @@ export class ItemImagesService {
     return result;
   }
 
-  /**
-   * Primary image per item for ON-SCREEN catalog cards (order picker, public
-   * portal, rental form). Differs from primaryImagesForPdfRendering in two
-   * deliberate ways:
-   *   - resolves the MASTER through a width-only transform (aspect ratio
-   *     preserved — no square center-crop chopping book covers), and
-   *   - defaults to 400px so ~170-300 CSS px retina cells render sharp
-   *     instead of 2-4x upscaling a 200px source.
-   * Falls back to the stored 200px thumb when the transform fails, then to
-   * custom_fields.thumbnail_url (bulk-imported book covers), same as the PDF
-   * resolver. The PDF path is untouched — its fixed square cells depend on
-   * the 200px cover-crop variant.
-   */
-  async primaryImagesForDisplay(
-    itemIds: string[],
-    targetWidth = 400,
-  ): Promise<Map<string, string>> {
-    if (itemIds.length === 0) return new Map();
-
-    const { data, error } = await this.ctx.supabase
-      .from('item_images')
-      .select('item_id, storage_path, thumb_path, is_primary, sort_order')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
-
-    type Row = { item_id: string; storage_path: string; thumb_path: string | null };
-    const pickByItem = new Map<string, Row>();
-    for (const row of (data ?? []) as Row[]) {
-      if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
-    }
-
-    const signed = await Promise.all(
-      [...pickByItem.entries()].map(async ([itemId, row]) => {
-        const url =
-          (await getCachedItemImageFitSignedUrl(row.storage_path, targetWidth)) ??
-          (row.thumb_path ? await getCachedItemImageSignedUrl(row.thumb_path) : null);
-        return url ? ([itemId, url] as const) : null;
-      }),
-    );
-    const result = new Map<string, string>();
-    for (const entry of signed) {
-      if (entry) result.set(entry[0], entry[1]);
-    }
-
-    // Same external-cover fallback as the PDF resolver (bulk-imported books).
-    const unresolved = itemIds.filter((id) => !result.has(id));
-    if (unresolved.length > 0) {
-      const { data: cfRows, error: cfErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, custom_fields')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', unresolved);
-      if (cfErr) throw new ServiceError('internal_error', cfErr.message);
-      for (const row of (cfRows ?? []) as Array<{
-        id: string;
-        custom_fields: Record<string, unknown> | null;
-      }>) {
-        const cf = row.custom_fields;
-        if (cf && typeof cf === 'object') {
-          const url = (cf as { thumbnail_url?: unknown }).thumbnail_url;
-          if (typeof url === 'string' && url.length > 0 && url.length < 2000) {
-            result.set(row.id, url);
-          }
-        }
-      }
-    }
-    return result;
-  }
 
   async record(
     itemId: string,

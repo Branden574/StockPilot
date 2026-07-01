@@ -40,23 +40,27 @@ const signAttachmentFull = unstable_cache(
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['order-attachment-signed-url'] },
 );
 
-/** ~400px grid variant via Supabase's server-side transform (web-only usage;
- *  width-only keeps the aspect ratio). Cached separately — the transform
- *  params are part of the URL signature. */
+/** ~400px grid variant via Supabase's server-side transform. resize:'contain'
+ *  is EXPLICIT — the image fits within 400x400 with its aspect ratio intact.
+ *  (A width-only transform was found to crop, which blew tiles up into
+ *  unrecognizable close-ups on the order picker — never rely on the
+ *  default.) Cached separately — transform params are part of the URL
+ *  signature. */
 const signAttachmentThumb = unstable_cache(
   async (storagePath: string, width: number): Promise<string> => {
     const admin = createAdminClient();
     const { data, error } = await admin.storage
       .from(BUCKET)
       .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
-        transform: { width },
+        transform: { width, height: width, resize: 'contain' },
       });
     if (error || !data?.signedUrl) {
       throw new Error(`sign attachment thumb failed: ${error?.message ?? 'no signedUrl'}`);
     }
     return data.signedUrl;
   },
-  ['order-attachment-signed-url-thumb-v1'],
+  // v2: v1 briefly cached width-only (implicit-crop) variants.
+  ['order-attachment-signed-url-thumb-v2'],
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['order-attachment-signed-url'] },
 );
 
