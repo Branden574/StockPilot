@@ -39,6 +39,9 @@ export interface ProcedureListRow {
   video_count: number;
   comment_count: number;
   thumbnail_url: string | null;
+  /** 'poster' = a small JPEG poster (render as <img>); 'video' = legacy rows
+   *  with no poster — the grid falls back to <video preload="metadata">. */
+  thumbnail_kind: 'poster' | 'video' | null;
 }
 
 export interface ProcedureDetailRow {
@@ -144,7 +147,7 @@ export class ProceduresService {
         category:procedure_categories!category_id (id, name, color),
         authoring_warehouse:warehouses!authoring_warehouse_id (id, name),
         author:user_profiles!created_by (id, full_name),
-        videos:procedure_videos!procedure_id (id, storage_path, order_idx),
+        videos:procedure_videos!procedure_id (id, storage_path, thumbnail_path, order_idx),
         comments:procedure_comments!procedure_id (id, deleted_at)`;
 
     // NOTE: We currently use `count: 'exact'` because the procedures
@@ -207,19 +210,35 @@ export class ProceduresService {
       count = res.count ?? data.length;
     }
 
-    // Collect first-video paths for signed-URL minting (thumbnail row).
-    const firstVideoPathByProc = new Map<string, string>();
+    // Collect the grid-thumbnail path per procedure: prefer the first
+    // video's POSTER (small JPEG captured at upload) and only fall back to
+    // the full video file for legacy rows uploaded before the poster
+    // pipeline — the <video preload="metadata"> trick range-fetches into
+    // files up to 1 GB just to paint a tile.
+    const thumbByProc = new Map<string, { path: string; kind: 'poster' | 'video' }>();
     for (const r of data) {
-      const videos = r.videos as Array<{ storage_path: string; order_idx: number }> | null;
+      const videos = r.videos as Array<{
+        storage_path: string;
+        thumbnail_path: string | null;
+        order_idx: number;
+      }> | null;
       if (Array.isArray(videos) && videos.length > 0) {
         const sorted = [...videos].sort((a, b) => a.order_idx - b.order_idx);
-        firstVideoPathByProc.set(r.id as string, sorted[0]!.storage_path);
+        const first = sorted[0]!;
+        thumbByProc.set(
+          r.id as string,
+          first.thumbnail_path
+            ? { path: first.thumbnail_path, kind: 'poster' }
+            : { path: first.storage_path, kind: 'video' },
+        );
       }
     }
     let thumbUrlByPath = new Map<string, string>();
-    if (firstVideoPathByProc.size > 0) {
+    if (thumbByProc.size > 0) {
       const videosSvc = new ProcedureVideosService(this.ctx);
-      thumbUrlByPath = await videosSvc.signedUrls([...firstVideoPathByProc.values()]);
+      thumbUrlByPath = await videosSvc.signedUrls(
+        [...thumbByProc.values()].map((t) => t.path),
+      );
     }
 
     const rows: ProcedureListRow[] = data.map((r) => {
@@ -231,7 +250,7 @@ export class ProceduresService {
       const videos = (r.videos as Array<{ id: string }> | null) ?? [];
       const comments = (r.comments as Array<{ deleted_at: string | null }> | null) ?? [];
       const liveCommentCount = comments.filter((c) => c.deleted_at === null).length;
-      const firstPath = firstVideoPathByProc.get(r.id as string);
+      const thumb = thumbByProc.get(r.id as string);
       return {
         id: r.id as string,
         title: r.title as string,
@@ -247,7 +266,8 @@ export class ProceduresService {
         updated_at: r.updated_at as string,
         video_count: videos.length,
         comment_count: liveCommentCount,
-        thumbnail_url: firstPath ? thumbUrlByPath.get(firstPath) ?? null : null,
+        thumbnail_url: thumb ? thumbUrlByPath.get(thumb.path) ?? null : null,
+        thumbnail_kind: thumb ? thumb.kind : null,
       };
     });
 

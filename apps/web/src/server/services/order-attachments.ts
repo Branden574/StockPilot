@@ -1,10 +1,95 @@
 import 'server-only';
 
+import { unstable_cache } from 'next/cache';
+
 import { isManagerOrAbove } from '@stockpilot/core';
+
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
 
 const BUCKET = 'order-attachments';
+
+/**
+ * Long-lived, CACHED signed URLs — same design as item-images.ts (sign 30d,
+ * cache 25d). The old code minted fresh 1-hour URLs on every RSC render, so
+ * the browser cache never hit: every order visit re-downloaded every proof
+ * photo at full size (up to 15MB each). A stable URL per storage path makes
+ * revisits free.
+ *
+ * Why service-role: signing a path is org-agnostic — authorization already
+ * happened in list()'s RLS-scoped row select. THROWS on failure so
+ * unstable_cache never persists a null for 25 days (recurring-bug pattern
+ * #6); the wrappers below catch → null.
+ */
+const SIGNED_URL_TTL_SEC = 30 * 24 * 60 * 60;
+const SIGNED_URL_CACHE_SEC = 25 * 24 * 60 * 60;
+
+const signAttachmentFull = unstable_cache(
+  async (storagePath: string): Promise<string> => {
+    const admin = createAdminClient();
+    const { data, error } = await admin.storage
+      .from(BUCKET)
+      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC);
+    if (error || !data?.signedUrl) {
+      throw new Error(`sign attachment failed: ${error?.message ?? 'no signedUrl'}`);
+    }
+    return data.signedUrl;
+  },
+  ['order-attachment-signed-url-v1'],
+  { revalidate: SIGNED_URL_CACHE_SEC, tags: ['order-attachment-signed-url'] },
+);
+
+/** ~400px grid variant via Supabase's server-side transform (web-only usage;
+ *  width-only keeps the aspect ratio). Cached separately — the transform
+ *  params are part of the URL signature. */
+const signAttachmentThumb = unstable_cache(
+  async (storagePath: string, width: number): Promise<string> => {
+    const admin = createAdminClient();
+    const { data, error } = await admin.storage
+      .from(BUCKET)
+      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
+        transform: { width },
+      });
+    if (error || !data?.signedUrl) {
+      throw new Error(`sign attachment thumb failed: ${error?.message ?? 'no signedUrl'}`);
+    }
+    return data.signedUrl;
+  },
+  ['order-attachment-signed-url-thumb-v1'],
+  { revalidate: SIGNED_URL_CACHE_SEC, tags: ['order-attachment-signed-url'] },
+);
+
+async function cachedFullUrl(storagePath: string): Promise<string | null> {
+  try {
+    return await signAttachmentFull(storagePath);
+  } catch (err) {
+    console.warn(
+      `[order-attachments] sign failed (${storagePath}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
+
+async function cachedThumbUrl(storagePath: string, width: number): Promise<string | null> {
+  try {
+    return await signAttachmentThumb(storagePath, width);
+  } catch (err) {
+    console.warn(
+      `[order-attachments] thumb sign failed (${storagePath}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
+
+/** Only raster images the transform pipeline can decode get a thumb request;
+ *  HEIC/HEIF (iPhone) and non-images fall through to the full URL. */
+export function attachmentWantsThumb(contentType: string | null): boolean {
+  if (!contentType?.startsWith('image/')) return false;
+  return !/heic|heif/i.test(contentType);
+}
+
+const GRID_THUMB_WIDTH = 400;
 
 /** Statuses where proof-of-delivery attachments are allowed: from the
  *  moment an order is staged / out for delivery through completed. */
@@ -28,8 +113,11 @@ export interface OrderAttachment {
   kind: OrderAttachmentKind;
   uploadedBy: string | null;
   createdAt: string;
-  /** Short-lived signed URL for viewing/downloading. Null if signing failed. */
+  /** Long-lived signed URL to the ORIGINAL (open/download). Null if signing failed. */
   url: string | null;
+  /** ~400px grid variant for image attachments; falls back to `url` when the
+   *  transform isn't applicable (HEIC, PDFs) or signing failed. */
+  thumbUrl: string | null;
 }
 
 export class OrderAttachmentsService {
@@ -49,29 +137,35 @@ export class OrderAttachmentsService {
     if (error) throw new ServiceError('internal_error', error.message);
 
     const rows = (data ?? []) as Array<Record<string, unknown>>;
-    const paths = rows.map((r) => r.storage_path as string);
-    const signed = new Map<string, string>();
-    if (paths.length > 0) {
-      const { data: urls } = await this.ctx.supabase.storage
-        .from(BUCKET)
-        .createSignedUrls(paths, 60 * 60);
-      for (const u of (urls ?? []) as Array<{ path?: string | null; signedUrl: string }>) {
-        if (u.path) signed.set(u.path, u.signedUrl);
-      }
-    }
 
-    return rows.map((r) => ({
-      id: r.id as string,
-      orderRequestId: r.order_request_id as string,
-      storagePath: r.storage_path as string,
-      fileName: (r.file_name as string | null) ?? null,
-      contentType: (r.content_type as string | null) ?? null,
-      sizeBytes: (r.size_bytes as number | null) ?? null,
-      kind: ((r.kind as string | null) ?? 'other') as OrderAttachmentKind,
-      uploadedBy: (r.uploaded_by as string | null) ?? null,
-      createdAt: r.created_at as string,
-      url: signed.get(r.storage_path as string) ?? null,
-    }));
+    // Sign per path through the 25-day cache: same URL every render, so the
+    // browser (and any CDN) can actually cache the bytes. Thumb + full sign
+    // in parallel per row; a failed thumb falls back to the full URL.
+    return Promise.all(
+      rows.map(async (r) => {
+        const storagePath = r.storage_path as string;
+        const contentType = (r.content_type as string | null) ?? null;
+        const [url, thumb] = await Promise.all([
+          cachedFullUrl(storagePath),
+          attachmentWantsThumb(contentType)
+            ? cachedThumbUrl(storagePath, GRID_THUMB_WIDTH)
+            : Promise.resolve(null),
+        ]);
+        return {
+          id: r.id as string,
+          orderRequestId: r.order_request_id as string,
+          storagePath,
+          fileName: (r.file_name as string | null) ?? null,
+          contentType,
+          sizeBytes: (r.size_bytes as number | null) ?? null,
+          kind: ((r.kind as string | null) ?? 'other') as OrderAttachmentKind,
+          uploadedBy: (r.uploaded_by as string | null) ?? null,
+          createdAt: r.created_at as string,
+          url,
+          thumbUrl: thumb ?? url,
+        };
+      }),
+    );
   }
 
   async add(input: {

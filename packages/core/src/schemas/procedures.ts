@@ -66,6 +66,10 @@ const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 export const recordProcedureVideoSchema = z.object({
   procedureId: uuidSchema,
   storagePath: z.string().min(1).max(1024),
+  /** Poster frame captured client-side at upload (JPEG in the same bucket,
+   *  `{org}/{procedure}/{uuid}.poster.jpg`). Optional — capture is
+   *  best-effort; the grid falls back to the video-first-frame trick. */
+  thumbnailPath: z.string().min(1).max(1024).nullable().optional(),
   title: z.string().trim().max(200).nullable().optional(),
   durationSeconds: z.number().int().min(0).max(86_400).nullable().optional(),
   sizeBytes: z.number().int().min(0).max(MAX_VIDEO_BYTES).nullable().optional(),

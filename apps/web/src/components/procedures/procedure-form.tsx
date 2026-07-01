@@ -26,6 +26,7 @@ import {
 import {
   VideoUploader,
   extensionFromMime,
+  uploadPosterFor,
   type StagedVideo,
   type UploadedVideo,
 } from './video-uploader';
@@ -156,9 +157,18 @@ export function ProcedureForm({
           });
         if (upErr) throw new Error(upErr.message);
 
+        // Best-effort poster frame so the Procedures grid renders a small
+        // <img> instead of range-fetching the full video (see uploadPosterFor).
+        const posterPath = await uploadPosterFor(
+          supabase,
+          entry.file,
+          `${organizationId}/${procedureId}/${uuid}.poster.jpg`,
+        );
+
         const record = await recordProcedureVideoAction({
           procedureId,
           storagePath: path,
+          thumbnailPath: posterPath,
           title: entry.title.trim() || entry.file.name,
           durationSeconds: entry.durationSeconds,
           sizeBytes: entry.sizeBytes,

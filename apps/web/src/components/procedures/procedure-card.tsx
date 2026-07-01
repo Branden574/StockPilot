@@ -37,6 +37,7 @@ export function ProcedureCard({ procedure }: ProcedureCardProps) {
           {procedure.thumbnail_url ? (
             <ProcedureVideoThumb
               src={procedure.thumbnail_url}
+              kind={procedure.thumbnail_kind === 'poster' ? 'poster' : 'video'}
               fallbackColor={fallbackBg}
             />
           ) : (

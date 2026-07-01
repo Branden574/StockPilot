@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import * as React from 'react';
 
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
@@ -61,13 +62,21 @@ export default async function OrderDetailPage({
   const ctx = await requireOrgContext();
   const canApprove = can(ctx, 'orders:approve');
 
-  const svc = await OrderRequestsService.forCurrentUser();
-  let detail;
-  try {
-    detail = await svc.get(id);
-  } catch {
+  // The order fetch and the attachments fetch are independent (both need only
+  // the route id) — run them together instead of serially. This page re-renders
+  // on every realtime router.refresh() during a delivery, so the waterfall was
+  // paid over and over. notFound() stays scoped to the order fetch: a missing
+  // order 404s, a failed attachments read degrades to an empty panel.
+  const [detailRes, attachmentsRes] = await Promise.allSettled([
+    OrderRequestsService.forCurrentUser().then((svc) => svc.get(id)),
+    OrderAttachmentsService.forCurrentUser().then((attSvc) => attSvc.list(id)),
+  ]);
+  if (detailRes.status === 'rejected') {
     notFound();
   }
+  const detail = detailRes.value;
+  const attachments =
+    attachmentsRes.status === 'fulfilled' ? attachmentsRes.value : [];
 
   const { request, lines, reservations, warehouseName, requesterDisplay } = detail;
 
@@ -77,13 +86,6 @@ export default async function OrderDetailPage({
   const canAttach =
     canManageAttachments &&
     (ATTACHABLE_ORDER_STATUSES as readonly string[]).includes(request.status);
-  let attachments: Awaited<ReturnType<OrderAttachmentsService['list']>> = [];
-  try {
-    const attSvc = await OrderAttachmentsService.forCurrentUser();
-    attachments = await attSvc.list(id);
-  } catch {
-    attachments = [];
-  }
   const isOwnRequest =
     request.requester_user_id !== null && request.requester_user_id === ctx.userId;
   // Phase 4 — the assigned delivery driver may be a staff user who lacks
@@ -378,7 +380,21 @@ export default async function OrderDetailPage({
 
           <section className="bg-card rounded-xl border p-4">
             <h2 className="font-display mb-3 text-base font-medium">Timeline</h2>
-            <OrderTimeline orderId={request.id} organizationId={ctx.organizationId} />
+            {/* Async RSC (audit_logs + user_profiles) — Suspense lets the rest
+                of the order page flush immediately and the timeline stream in,
+                instead of its queries blocking every render (including each
+                realtime router.refresh() during a delivery). */}
+            <React.Suspense
+              fallback={
+                <div className="space-y-2" aria-hidden>
+                  <div className="bg-muted h-4 w-2/3 animate-pulse rounded" />
+                  <div className="bg-muted h-4 w-1/2 animate-pulse rounded" />
+                  <div className="bg-muted h-4 w-3/5 animate-pulse rounded" />
+                </div>
+              }
+            >
+              <OrderTimeline orderId={request.id} organizationId={ctx.organizationId} />
+            </React.Suspense>
           </section>
         </div>
 

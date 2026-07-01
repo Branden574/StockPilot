@@ -1,6 +1,10 @@
 import 'server-only';
 
+import { unstable_cache } from 'next/cache';
+
 import type { RecordProcedureVideoInput } from '@stockpilot/core';
+
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
@@ -25,14 +29,42 @@ export interface ProcedureVideoWithUrl extends ProcedureVideoRow {
 }
 
 const PROCEDURE_VIDEOS_BUCKET = 'procedure-videos';
-// Two TTLs. Thumbnails are short — they're embedded in the list page,
-// re-rendered on every reload, and only handed out in batches of 24.
-// A 1-hour URL cuts the blast radius if a list response leaks. The
-// player URL stays long (24 hours) so a user mid-watch doesn't have
-// their stream snapped from under them — and the URL is only minted
-// when they hit the detail page, not in bulk.
-const SIGNED_URL_THUMBNAIL_TTL_SECONDS = 60 * 60; // 1 hour
-const SIGNED_URL_PLAYER_TTL_SECONDS = 24 * 60 * 60; // 24 hours
+// Signed URLs are minted once per path and CACHED (sign 7d / cache 6d) so
+// every render returns the SAME URL. The old per-request 1h/24h URLs meant
+// every list/detail reload minted fresh tokens — the browser cache never hit,
+// so all ~24 grid tiles re-range-fetched video metadata on every visit and a
+// mid-watch stream could expire under the viewer. 7 days (vs item-images'
+// 30) keeps the leak blast-radius bounded — these are the org's internal
+// training videos, and a leaked URL still dies within a week.
+const SIGNED_URL_TTL_SEC = 7 * 24 * 60 * 60;
+const SIGNED_URL_CACHE_SEC = 6 * 24 * 60 * 60;
+
+// THROWS on failure so unstable_cache never persists a null for 6 days
+// (recurring-bug pattern #6). The wrapper below catches → null per path.
+const signProcedureVideoPath = unstable_cache(
+  async (storagePath: string): Promise<string> => {
+    const admin = createAdminClient();
+    const { data, error } = await admin.storage
+      .from(PROCEDURE_VIDEOS_BUCKET)
+      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC);
+    if (error || !data?.signedUrl) {
+      throw new Error(`sign video failed: ${error?.message ?? 'no signedUrl'}`);
+    }
+    return data.signedUrl;
+  },
+  ['procedure-video-signed-url-v1'],
+  { revalidate: SIGNED_URL_CACHE_SEC, tags: ['procedure-video-signed-url'] },
+);
+async function cachedVideoUrl(storagePath: string): Promise<string | null> {
+  try {
+    return await signProcedureVideoPath(storagePath);
+  } catch (err) {
+    console.warn(
+      `[procedure-videos] sign failed (${storagePath}): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
 // Max retry attempts on a unique-violation conflict when computing
 // order_idx. Two concurrent uploads can race on max(order_idx)+1; the
 // (procedure_id, order_idx) unique constraint added in migration 0089
@@ -77,16 +109,13 @@ export class ProcedureVideosService {
   async listForProcedureWithUrls(procedureId: string): Promise<ProcedureVideoWithUrl[]> {
     const rows = await this.listForProcedure(procedureId);
     if (rows.length === 0) return [];
-    const videoUrls = await this.signedUrls(
-      rows.map((r) => r.storage_path),
-      SIGNED_URL_PLAYER_TTL_SECONDS,
-    );
+    const videoUrls = await this.signedUrls(rows.map((r) => r.storage_path));
     const thumbPaths = rows
       .map((r) => r.thumbnail_path)
       .filter((p): p is string => Boolean(p));
     const thumbUrls = thumbPaths.length > 0
-      ? await this.signedUrls(thumbPaths, SIGNED_URL_THUMBNAIL_TTL_SECONDS)
-      : new Map();
+      ? await this.signedUrls(thumbPaths)
+      : new Map<string, string>();
     return rows.map((r) => ({
       ...r,
       signed_url: videoUrls.get(r.storage_path) ?? null,
@@ -95,34 +124,29 @@ export class ProcedureVideosService {
   }
 
   /**
-   * Mirror of ItemImagesService.signedUrls. TTL defaults to the THUMBNAIL
-   * length (1h) because the list page is the dominant caller; callers
-   * needing a longer-lived URL pass `SIGNED_URL_PLAYER_TTL_SECONDS`
-   * explicitly.
+   * Signed URL per path, via the module-level 6-day cache — the same URL
+   * comes back for the same path across renders, so the browser can actually
+   * cache the bytes. Signing is org-agnostic (authorization happened in the
+   * RLS-scoped row selects that produced these paths).
    */
-  async signedUrls(
-    paths: string[],
-    ttlSeconds: number = SIGNED_URL_THUMBNAIL_TTL_SECONDS,
-  ): Promise<Map<string, string>> {
+  async signedUrls(paths: string[]): Promise<Map<string, string>> {
     if (paths.length === 0) return new Map();
-    const { data, error } = await this.ctx.supabase.storage
-      .from(PROCEDURE_VIDEOS_BUCKET)
-      .createSignedUrls(paths, ttlSeconds);
-    if (error) throw new ServiceError('internal_error', error.message);
+    const entries = await Promise.all(
+      paths.map(async (p) => {
+        const url = await cachedVideoUrl(p);
+        return url ? ([p, url] as const) : null;
+      }),
+    );
     const map = new Map<string, string>();
-    for (const entry of data ?? []) {
-      if (entry.signedUrl && entry.path) map.set(entry.path, entry.signedUrl);
+    for (const entry of entries) {
+      if (entry) map.set(entry[0], entry[1]);
     }
     return map;
   }
 
   /** Internal helper. Single-path variant of `signedUrls`. */
-  async signedUrlFor(
-    storagePath: string,
-    ttlSeconds: number = SIGNED_URL_THUMBNAIL_TTL_SECONDS,
-  ): Promise<string | null> {
-    const urls = await this.signedUrls([storagePath], ttlSeconds);
-    return urls.get(storagePath) ?? null;
+  async signedUrlFor(storagePath: string): Promise<string | null> {
+    return cachedVideoUrl(storagePath);
   }
 
   /**
@@ -155,6 +179,14 @@ export class ProcedureVideosService {
       throw new ServiceError(
         'validation_error',
         'Invalid storage path — does not match this procedure.',
+      );
+    }
+    // The poster (if captured) must live under the same org/procedure prefix
+    // as the video — same defense-in-depth as storagePath above.
+    if (input.thumbnailPath && !input.thumbnailPath.startsWith(procPrefix)) {
+      throw new ServiceError(
+        'validation_error',
+        'Invalid thumbnail path — does not match this procedure.',
       );
     }
 
@@ -198,6 +230,7 @@ export class ProcedureVideosService {
           procedure_id: input.procedureId,
           title: input.title ?? null,
           storage_path: input.storagePath,
+          thumbnail_path: input.thumbnailPath ?? null,
           duration_seconds: input.durationSeconds ?? null,
           size_bytes: input.sizeBytes ?? null,
           mime_type: input.mimeType ?? null,

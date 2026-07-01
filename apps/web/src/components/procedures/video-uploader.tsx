@@ -17,6 +17,7 @@ import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
+import { captureVideoPoster } from '@/components/procedures/capture-poster';
 import {
   deleteProcedureVideoAction,
   recordProcedureVideoAction,
@@ -114,6 +115,33 @@ export async function probeVideoMetadata(
 function stripExtension(name: string): string {
   const i = name.lastIndexOf('.');
   return i > 0 ? name.slice(0, i) : name;
+}
+
+/**
+ * Capture + upload a poster JPEG for a video file. Best-effort: returns the
+ * poster storage path on success, null on any failure (capture or upload) —
+ * the video records without a poster and the grid falls back to the
+ * video-first-frame trick.
+ */
+export async function uploadPosterFor(
+  supabase: ReturnType<typeof createClient>,
+  file: File,
+  posterPath: string,
+): Promise<string | null> {
+  try {
+    const blob = await captureVideoPoster(file);
+    if (!blob) return null;
+    const { error } = await supabase.storage
+      .from(PROCEDURE_VIDEOS_BUCKET)
+      .upload(posterPath, blob, {
+        cacheControl: '3600',
+        contentType: 'image/jpeg',
+        upsert: false,
+      });
+    return error ? null : posterPath;
+  } catch {
+    return null;
+  }
 }
 
 function formatBytes(bytes: number | null | undefined): string {
@@ -248,6 +276,14 @@ function ImmediateUploader({
           continue;
         }
 
+        // Poster frame — best-effort. A ~30 KB JPEG lets the Procedures grid
+        // render an <img> instead of range-fetching the full video file.
+        const posterPath = await uploadPosterFor(
+          supabase,
+          file,
+          `${organizationId}/${procedureId}/${uuid}.poster.jpg`,
+        );
+
         setPending((p) =>
           p.map((x) => (x.key === key ? { ...x, status: 'recording' } : x)),
         );
@@ -255,6 +291,7 @@ function ImmediateUploader({
         const record = await recordProcedureVideoAction({
           procedureId,
           storagePath: path,
+          thumbnailPath: posterPath,
           title: file.name,
           durationSeconds: duration,
           sizeBytes: file.size,

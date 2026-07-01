@@ -63,7 +63,7 @@ export async function GET(req: NextRequest) {
   }
 
   const imagesSvc = new ItemImagesService(ctx);
-  const urlMap = await imagesSvc.primaryImagesForPdfRendering(itemIds, 200);
+  const urlMap = await imagesSvc.primaryImagesForDisplay(itemIds, 400);
 
   const urls: Record<string, string> = {};
   for (const [itemId, signedUrl] of urlMap) {

@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { compressImageVariants } from '@/lib/image-variants';
 import { createClient } from '@/lib/supabase/client';
 import {
   addOrderAttachmentAction,
@@ -61,10 +62,24 @@ export function OrderAttachmentsPanel({
     setBusy(true);
     const supabase = createClient();
     let uploaded = 0;
-    for (const file of Array.from(files)) {
-      if (file.size > MAX_BYTES) {
-        toast.error(`${file.name} is too large (max 15 MB).`);
+    for (const rawFile of Array.from(files)) {
+      if (rawFile.size > MAX_BYTES) {
+        toast.error(`${rawFile.name} is too large (max 15 MB).`);
         continue;
+      }
+      // Compress image proofs before upload (2048px WebP, visually lossless)
+      // — same treatment item photos and the mobile app already get. This
+      // also transcodes iPhone HEIC to a browser-renderable format at the
+      // source. Owner-approved 2026-07-01: raw originals are not kept.
+      // Non-images (PDFs) and any compression failure upload the raw file.
+      let file = rawFile;
+      if (rawFile.type.startsWith('image/')) {
+        try {
+          const { master } = await compressImageVariants(rawFile);
+          file = master;
+        } catch {
+          /* compression failure — upload the original */
+        }
       }
       const ext = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
       const path = `${organizationId}/${orderId}/${crypto.randomUUID()}.${ext}`;
@@ -184,11 +199,13 @@ export function OrderAttachmentsPanel({
                   rel="noopener noreferrer"
                   className="block"
                 >
-                  {isImage && a.url ? (
-                    // Signed URL to a private bucket object — plain img, not next/image.
+                  {isImage && (a.thumbUrl ?? a.url) ? (
+                    // ~400px cached grid variant (thumbUrl) — the anchor above
+                    // still opens the full original. Signed URL to a private
+                    // bucket object — plain img, not next/image.
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
-                      src={a.url}
+                      src={(a.thumbUrl ?? a.url)!}
                       alt={a.fileName ?? 'Attachment'}
                       className="h-28 w-full object-cover"
                       loading="lazy"
