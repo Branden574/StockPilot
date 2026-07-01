@@ -22,6 +22,7 @@ const IsbnScanner = dynamic(
   { ssr: false },
 );
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
+import { composeBookCustomFields } from '@/components/inventory/book-custom-fields';
 import { Button } from '@/components/ui/button';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Input } from '@/components/ui/input';
@@ -629,42 +630,28 @@ export function ItemForm({
     // Empty fields are omitted so we don't overwrite an existing value
     // with an empty string on edit.
     const mergedValues = isBook
-      ? (() => {
-          const num = rackNumber.trim();
-          const row = rackRow.trim().toUpperCase();
-          // Explicitly delete rack keys before re-adding so emptying
-          // the inputs on edit actually clears the stored value
-          // instead of being preserved by the spread merge.
-          const baseCf = { ...(values.customFields ?? {}) } as Record<string, unknown>;
-          delete baseCf.book_rack_number;
-          delete baseCf.book_rack_row;
-          // Drop every defined custom-field key first so clearing an input on
-          // edit actually removes the stored value (the spread below only adds
-          // the keys still present in customFieldValues).
-          for (const def of customFieldDefs) delete baseCf[def.fieldKey];
-          // Generic per-org custom fields write last under their own keys.
-          // They can never collide with a reserved key (book_*/author/size/
-          // isbn*/rack_* — the full set in @stockpilot/core's
-          // RESERVED_CUSTOM_FIELD_KEYS, which the action + service reject at
-          // definition time), so the dedicated inputs below never fight a
-          // generic input over the same jsonb key.
-          return {
-            ...values,
-            itemType: 'book' as const,
-            customFields: {
-              ...baseCf,
-              ...customFieldValues,
-              ...(author.trim() ? { author: author.trim() } : {}),
-              ...(num ? { book_rack_number: num } : {}),
-              ...(row ? { book_rack_row: row } : {}),
-              ...(crateColor ? { book_crate_color: crateColor } : {}),
-              ...(crateNumber.trim()
-                ? { book_crate_number: crateNumber.trim() }
-                : {}),
-              ...(grade ? { book_grade: grade } : {}),
-            },
-          };
-        })()
+      ? {
+          ...values,
+          itemType: 'book' as const,
+          // composeBookCustomFields strips every form-owned key (rack/crate/
+          // grade/author) up front, then re-adds only the ones still set — so
+          // clearing a field (e.g. switching the crate color to "No crate")
+          // actually removes it instead of the old value sticking via the
+          // spread merge. Generic per-org custom fields can never collide with
+          // a reserved key (the action + service reject that at definition
+          // time), so the dedicated inputs never fight a generic input.
+          customFields: composeBookCustomFields({
+            existing: values.customFields as Record<string, unknown> | null | undefined,
+            customFieldDefKeys: customFieldDefs.map((d) => d.fieldKey),
+            customFieldValues,
+            author,
+            rackNumber,
+            rackRow,
+            crateColor,
+            crateNumber,
+            grade,
+          }),
+        }
       : (() => {
           const num = rackNumber.trim();
           const row = rackRow.trim().toUpperCase();
