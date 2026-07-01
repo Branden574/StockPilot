@@ -710,11 +710,30 @@ export default function OrderDetail() {
           }}
         >
           {viewerUrl ? (
-            <Image
-              source={{ uri: viewerUrl }}
-              style={{ width: '100%', height: '82%' }}
-              resizeMode="contain"
-            />
+            <View
+              style={{
+                width: '100%',
+                height: '82%',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {/* Spinner sits behind the image — visible only until the photo
+                  paints, instead of a silent black gap. */}
+              <ActivityIndicator
+                color="rgba(255,255,255,0.8)"
+                style={{ position: 'absolute' }}
+              />
+              {/* CachedImage shares the tile's disk cache (keyed by the
+                  token-stripped storage path), so the full view opens
+                  instantly from bytes expo-image already has — the old plain
+                  RN Image re-downloaded them through its separate cache. */}
+              <CachedImage
+                uri={viewerUrl}
+                style={{ width: '100%', height: '100%' }}
+                contentFit="contain"
+              />
+            </View>
           ) : null}
           <Mono size={11} color="rgba(255,255,255,0.7)" style={{ marginTop: 16 }}>
             Tap anywhere to close

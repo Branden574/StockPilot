@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { useCatalogThumbnails } from '@/lib/use-catalog-thumbnails';
 import { createRentalAction } from '@/server/actions/rentals';
 
 const RENTAL_PREFS_KEY = 'rental-new-prefs';
@@ -73,25 +74,11 @@ function RentalCreateFormInner({
   const [availabilityFilter, setAvailabilityFilter] = React.useState<AvailabilityFilter>('any');
   const [sortKey, setSortKey] = React.useState<SortKey>('name');
 
-  // Deferred thumbnail URLs (same pattern as orders v2)
-  const [thumbUrls, setThumbUrls] = React.useState<Record<string, string>>({});
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/orders/catalog-thumbnails?warehouseId=${encodeURIComponent(warehouseId)}&includeRentals=1`,
-          { credentials: 'same-origin' },
-        );
-        if (!res.ok) return;
-        const data = (await res.json()) as { urls?: Record<string, string> };
-        if (!cancelled && data.urls) setThumbUrls(data.urls);
-      } catch {
-        /* network blip — placeholders stay */
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [warehouseId]);
+  // Deferred thumbnail URLs (same pattern as orders v2) — the hook retries
+  // with backoff so one blip doesn't blank the whole session.
+  const thumbUrls = useCatalogThumbnails(
+    `/api/orders/catalog-thumbnails?warehouseId=${encodeURIComponent(warehouseId)}&includeRentals=1`,
+  );
 
   const items = React.useMemo<CatalogItem[]>(() => {
     if (Object.keys(thumbUrls).length === 0) return rawItems;

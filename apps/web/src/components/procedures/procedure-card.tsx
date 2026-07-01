@@ -1,6 +1,7 @@
 import { BookOpen, MessageSquare, Video } from 'lucide-react';
 import Link from 'next/link';
 
+import { ProcedureVideoThumb } from '@/components/procedures/procedure-video-thumb';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { formatRelative } from '@/lib/utils';
@@ -34,13 +35,9 @@ export function ProcedureCard({ procedure }: ProcedureCardProps) {
           }
         >
           {procedure.thumbnail_url ? (
-             
-            <video
+            <ProcedureVideoThumb
               src={procedure.thumbnail_url}
-              preload="metadata"
-              playsInline
-              muted
-              className="h-full w-full object-cover"
+              fallbackColor={fallbackBg}
             />
           ) : (
             <BookOpen className="h-10 w-10 opacity-80" aria-hidden />

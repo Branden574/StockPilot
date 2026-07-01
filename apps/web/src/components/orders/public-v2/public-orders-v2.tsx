@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 
+import { useCatalogThumbnails } from '@/lib/use-catalog-thumbnails';
+
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -111,27 +113,12 @@ function PublicOrdersV2Inner({
   const [availabilityFilter, setAvailabilityFilter] = React.useState<AvailabilityFilter>('any');
   const [sortKey, setSortKey] = React.useState<SortKey>('name');
 
-  // Deferred thumbnail URLs — fetched after first paint, token-gated
-  const [thumbUrls, setThumbUrls] = React.useState<Record<string, string>>({});
-
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/v1/public/catalog-thumbnails?token=${encodeURIComponent(token)}&warehouseId=${encodeURIComponent(initialWarehouseId)}`,
-        );
-        if (!res.ok) return;
-        const data = (await res.json()) as { urls?: Record<string, string> };
-        if (!cancelled && data.urls) setThumbUrls(data.urls);
-      } catch {
-        /* network blip — placeholders stay; not blocking */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [token, initialWarehouseId]);
+  // Deferred thumbnail URLs — fetched after first paint, token-gated. The
+  // hook retries with backoff so one blip doesn't blank the whole session
+  // (customers on phones hit this constantly).
+  const thumbUrls = useCatalogThumbnails(
+    `/api/v1/public/catalog-thumbnails?token=${encodeURIComponent(token)}&warehouseId=${encodeURIComponent(initialWarehouseId)}`,
+  );
 
   // Merge fetched thumbnail URLs onto the server-rendered items
   const items = React.useMemo<CatalogItem[]>(() => {

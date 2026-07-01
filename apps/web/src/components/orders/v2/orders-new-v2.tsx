@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 
+import { useCatalogThumbnails } from '@/lib/use-catalog-thumbnails';
+
 import { CartProvider, initialCartState } from './cart-context';
 import { AisleBar } from './aisle-bar';
 import { CartRail } from './cart-rail';
@@ -66,28 +68,11 @@ function OrdersNewV2Inner({
   // so the page renders instantly instead of waiting on Supabase's
   // signed-URL service for hundreds of items. While the map is
   // empty, cards render with their placeholder; once URLs arrive,
-  // the same cards swap to real thumbnails.
-  const [thumbUrls, setThumbUrls] = React.useState<Record<string, string>>({});
-
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/orders/catalog-thumbnails?warehouseId=${encodeURIComponent(warehouseId)}`,
-          { credentials: 'same-origin' },
-        );
-        if (!res.ok) return;
-        const data = (await res.json()) as { urls?: Record<string, string> };
-        if (!cancelled && data.urls) setThumbUrls(data.urls);
-      } catch {
-        /* network blip — placeholders stay; not blocking */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [warehouseId]);
+  // the same cards swap to real thumbnails. The hook retries with
+  // backoff so one network blip doesn't blank the whole session.
+  const thumbUrls = useCatalogThumbnails(
+    `/api/orders/catalog-thumbnails?warehouseId=${encodeURIComponent(warehouseId)}`,
+  );
 
   // Merge fetched thumbnail URLs onto the server-rendered items.
   const items = React.useMemo<CatalogItem[]>(() => {

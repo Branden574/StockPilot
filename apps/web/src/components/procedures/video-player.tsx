@@ -24,6 +24,10 @@ interface VideoPlayerProps {
  */
 export function VideoPlayer({ videos }: VideoPlayerProps) {
   const [activeIdx, setActiveIdx] = React.useState(0);
+  // Video ids whose <video> errored (expired signed URL, network failure,
+  // unplayable codec). Without this a failure is a black box with dead
+  // controls — indistinguishable from "still loading".
+  const [erroredIds, setErroredIds] = React.useState<Set<string>>(new Set());
   if (videos.length === 0) return null;
   const active = videos[Math.min(activeIdx, videos.length - 1)]!;
   return (
@@ -60,19 +64,23 @@ export function VideoPlayer({ videos }: VideoPlayerProps) {
         </div>
       )}
       <div className="overflow-hidden rounded-xl border bg-black">
-        {active.signed_url ? (
-           
+        {active.signed_url && !erroredIds.has(active.id) ? (
           <video
             key={active.id}
             src={active.signed_url}
             controls
             preload="metadata"
             playsInline
+            onError={() =>
+              setErroredIds((prev) => new Set(prev).add(active.id))
+            }
             className="aspect-video w-full bg-black"
           />
         ) : (
-          <div className="grid aspect-video place-items-center text-sm text-muted-foreground">
-            Video unavailable.
+          <div className="grid aspect-video place-items-center bg-card px-4 text-center text-sm text-muted-foreground">
+            {active.signed_url
+              ? 'This video failed to load — its link may have expired. Refresh the page to try again.'
+              : 'Video unavailable.'}
           </div>
         )}
       </div>

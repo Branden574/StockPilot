@@ -64,6 +64,20 @@ const nextConfig: NextConfig = {
       { protocol: 'https', hostname: '*.supabase.in' },
       { protocol: 'https', hostname: 'images.unsplash.com' },
       { protocol: 'https', hostname: 'avatars.githubusercontent.com' },
+      // External book-cover hosts. Bulk-imported books keep their lookup
+      // cover as custom_fields.thumbnail_url (raw external URL — only the
+      // single-item flow rehosts covers into Storage), and the order picker /
+      // public portal / Books tab render that fallback. Without these
+      // patterns next/image 400s and every such cover is silently blank.
+      // Mirrors COVER_HOST_ALLOWLIST in server/services/books-import.ts —
+      // keep the two lists in sync.
+      { protocol: 'https', hostname: 'books.google.com' },
+      { protocol: 'https', hostname: 'books.googleusercontent.com' },
+      { protocol: 'https', hostname: 'covers.openlibrary.org' },
+      { protocol: 'https', hostname: 'archive.org' },
+      { protocol: 'https', hostname: '**.archive.org' },
+      { protocol: 'https', hostname: 'www.loc.gov' },
+      { protocol: 'https', hostname: 'tile.loc.gov' },
     ],
     formats: ['image/avif', 'image/webp'],
     // Supabase signed URLs expire on a 7-day cadence (SIGNED_URL_TTL_SEC).
@@ -112,7 +126,11 @@ const nextConfig: NextConfig = {
       "form-action 'self'",
       // tile.openstreetmap.org + api.maptiler.com power the live delivery-tracking
       // basemap (MapLibre). Without them the customer's tracking map is blank.
-      "img-src 'self' data: blob: https://*.supabase.co https://*.supabase.in https://images.unsplash.com https://avatars.githubusercontent.com https://q.stripe.com https://www.googletagmanager.com https://tile.openstreetmap.org https://api.maptiler.com",
+      // External book-cover hosts (books.google.com … tile.loc.gov) mirror
+      // images.remotePatterns above + COVER_HOST_ALLOWLIST in
+      // server/services/books-import.ts — bulk-imported covers are plain
+      // <img>/next-image loads from these origins.
+      "img-src 'self' data: blob: https://*.supabase.co https://*.supabase.in https://images.unsplash.com https://avatars.githubusercontent.com https://q.stripe.com https://www.googletagmanager.com https://tile.openstreetmap.org https://api.maptiler.com https://books.google.com https://books.googleusercontent.com https://covers.openlibrary.org https://archive.org https://*.archive.org https://www.loc.gov https://tile.loc.gov",
       // Supabase storage signed URLs power procedure video playback —
       // without them in media-src the <video> tag is blocked by CSP
       // and the user sees a black box on the procedure detail page.

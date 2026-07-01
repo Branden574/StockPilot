@@ -51,6 +51,9 @@ export function OrderAttachmentsPanel({
   const [kind, setKind] = React.useState<OrderAttachmentKind>('dropoff_photo');
   const [busy, setBusy] = React.useState(false);
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
+  // Attachment ids whose <img> failed to decode (HEIC on desktop, expired
+  // URL) — those tiles fall back to the file chip instead of a broken glyph.
+  const [failedIds, setFailedIds] = React.useState<Set<string>>(new Set());
   const inputRef = React.useRef<HTMLInputElement | null>(null);
 
   async function onFiles(files: FileList | null) {
@@ -164,7 +167,12 @@ export function OrderAttachmentsPanel({
       ) : (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
           {attachments.map((a) => {
-            const isImage = (a.contentType ?? '').startsWith('image/');
+            // HEIC/HEIF (iPhone default) is bucket-allowed but most desktop
+            // browsers can't decode it — without onError those tiles render
+            // as a broken-image glyph that reads like lost delivery proof.
+            // Failed images fall back to the file tile below instead.
+            const isImage =
+              (a.contentType ?? '').startsWith('image/') && !failedIds.has(a.id);
             return (
               <div
                 key={a.id}
@@ -183,6 +191,11 @@ export function OrderAttachmentsPanel({
                       src={a.url}
                       alt={a.fileName ?? 'Attachment'}
                       className="h-28 w-full object-cover"
+                      loading="lazy"
+                      decoding="async"
+                      onError={() =>
+                        setFailedIds((prev) => new Set(prev).add(a.id))
+                      }
                     />
                   ) : (
                     <div className="text-muted-foreground flex h-28 w-full flex-col items-center justify-center gap-1">
