@@ -5,6 +5,8 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { locationGroup, type LocationGroup } from '@/lib/locations/groups';
+import { cn } from '@/lib/utils';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
@@ -47,8 +49,35 @@ interface LocationRow {
   id: string;
   name: string;
   type: string | null;
+  kind: string | null;
   notes: string | null;
 }
+
+const TAB_ORDER: LocationGroup[] = ['site', 'rack-shelf', 'system'];
+
+const TAB_META: Record<
+  LocationGroup,
+  { label: string; emptyTitle: string; emptyDescription: string }
+> = {
+  site: {
+    label: 'Sites',
+    emptyTitle: 'No sites yet',
+    emptyDescription:
+      'Warehouses, rooms, vehicles, and job sites — the places stock lives. Use New location above to add one.',
+  },
+  'rack-shelf': {
+    label: 'Racks & shelves',
+    emptyTitle: 'No racks or shelves yet',
+    emptyDescription:
+      'Racks, shelves, and crates are the spots inside a site. They appear here as you place stock or add shelf locations.',
+  },
+  system: {
+    label: 'System',
+    emptyTitle: 'No system locations',
+    emptyDescription:
+      'Staging and Unplaced are created automatically for each warehouse to hold stock that has not been put away yet.',
+  },
+};
 
 interface FormValues {
   name: string;
@@ -84,6 +113,18 @@ export function LocationsManager({
   const [archiveBusy, setArchiveBusy] = React.useState(false);
   const [restoreTarget, setRestoreTarget] = React.useState<LocationRow | null>(null);
   const [restoreBusy, setRestoreBusy] = React.useState(false);
+  const [tab, setTab] = React.useState<LocationGroup>('site');
+
+  // Partition the loaded rows into Sites / Racks & shelves / System once, so
+  // switching tabs is instant (no refetch). The predicate is the same one the
+  // location pickers use, so "Sites" here exactly matches what a picker offers.
+  const grouped = React.useMemo(() => {
+    const g: Record<LocationGroup, LocationRow[]> = { site: [], 'rack-shelf': [], system: [] };
+    for (const row of initial) g[locationGroup(row)].push(row);
+    return g;
+  }, [initial]);
+  const rows = grouped[tab];
+  const activeTab = TAB_META[tab];
 
   function openNew() {
     setEditing(null);
@@ -148,56 +189,89 @@ export function LocationsManager({
           />
         )
       ) : (
-        <div className="overflow-x-auto rounded-xl border bg-card">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Notes</TableHead>
-                <TableHead className="w-32 text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {initial.map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell className="font-medium">{row.name}</TableCell>
-                  <TableCell className="text-xs uppercase tracking-wider text-muted-foreground">
-                    {row.type ?? '—'}
-                  </TableCell>
-                  <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
-                    {row.notes ?? '—'}
-                  </TableCell>
-                  <TableCell className="flex justify-end gap-2">
-                    {canManage && (isArchivedView ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setRestoreTarget(row)}
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" /> Restore
-                      </Button>
-                    ) : (
-                      <>
-                        <Button variant="outline" size="sm" onClick={() => openEdit(row)}>
-                          Edit
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setArchiveTarget(row)}
-                          aria-label={`Archive ${row.name}`}
-                        >
-                          <Trash2 className="h-4 w-4 text-muted-foreground" />
-                        </Button>
-                      </>
-                    ))}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <>
+          {/* Sites vs Racks & shelves vs System are three different kinds of
+              place — keep them on separate tabs instead of one flat list. */}
+          <div className="mb-4 flex flex-wrap gap-1 border-b">
+            {TAB_ORDER.map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key)}
+                className={cn(
+                  'relative -mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+                  tab === key
+                    ? 'border-primary text-foreground'
+                    : 'border-transparent text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {TAB_META[key].label}
+                <span className="ml-1.5 text-xs tabular-nums text-muted-foreground">
+                  {grouped[key].length}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {rows.length === 0 ? (
+            <EmptyState
+              icon={Building2}
+              title={activeTab.emptyTitle}
+              description={activeTab.emptyDescription}
+            />
+          ) : (
+            <div className="overflow-x-auto rounded-xl border bg-card">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Notes</TableHead>
+                    <TableHead className="w-32 text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="font-medium">{row.name}</TableCell>
+                      <TableCell className="text-xs uppercase tracking-wider text-muted-foreground">
+                        {row.type ?? '—'}
+                      </TableCell>
+                      <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
+                        {row.notes ?? '—'}
+                      </TableCell>
+                      <TableCell className="flex justify-end gap-2">
+                        {canManage && (isArchivedView ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setRestoreTarget(row)}
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" /> Restore
+                          </Button>
+                        ) : (
+                          <>
+                            <Button variant="outline" size="sm" onClick={() => openEdit(row)}>
+                              Edit
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setArchiveTarget(row)}
+                              aria-label={`Archive ${row.name}`}
+                            >
+                              <Trash2 className="h-4 w-4 text-muted-foreground" />
+                            </Button>
+                          </>
+                        ))}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </>
       )}
 
       <LocationDialog open={open} onOpenChange={setOpen} editing={editing} />

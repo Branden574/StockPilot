@@ -48,7 +48,7 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
   const [inventory, suppliers, locations, charters] = await Promise.all([
     inventorySvc.list({ limit: 1000 }),
     suppliersSvc.list(),
-    locationsSvc.list({ excludeSystem: true }),
+    locationsSvc.list({ sitesOnly: true }),
     chartersSvc.list(),
   ]);
 

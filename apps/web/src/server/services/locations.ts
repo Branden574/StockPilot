@@ -2,6 +2,8 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { isSiteLocation } from '@/lib/locations/groups';
+
 import { audit } from './audit';
 import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 
@@ -38,10 +40,16 @@ export class LocationsService {
   /**
    * Lists active locations by default. When `opts.includeArchived` is true,
    * returns ONLY archived rows (rows with `deleted_at` set).
-   * When `opts.excludeSystem` is true, rows with kind 'staging' or 'unplaced'
-   * are filtered out (appropriate for user-facing pickers).
+   *
+   * Picker scoping (mutually exclusive; sitesOnly wins if both are set):
+   *   - `sitesOnly`     → only real stocking SITES (warehouse/room/vehicle/job
+   *                       site). Excludes racks/shelves/crates/bins/areas AND
+   *                       staging/unplaced. This is what an item's primary
+   *                       location / a PO's receiving destination should offer.
+   *   - `excludeSystem` → only drops staging/unplaced (kept for callers that
+   *                       still want racks in the list, e.g. put-away flows).
    */
-  async list(opts: { includeArchived?: boolean; excludeSystem?: boolean } = {}) {
+  async list(opts: { includeArchived?: boolean; excludeSystem?: boolean; sitesOnly?: boolean } = {}) {
     let query = this.ctx.supabase
       .from('locations')
       .select('id, parent_id, name, type, kind, notes, warehouse_id, deleted_at, created_at, updated_at')
@@ -53,6 +61,7 @@ export class LocationsService {
     const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     const rows = data ?? [];
+    if (opts.sitesOnly) return rows.filter(isSiteLocation);
     return opts.excludeSystem ? rows.filter(isUserFacingLocation) : rows;
   }
 

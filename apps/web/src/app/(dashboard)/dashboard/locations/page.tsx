@@ -35,6 +35,7 @@ export default async function LocationsPage({ searchParams }: LocationsPageProps
           id: r.id as string,
           name: r.name as string,
           type: (r.type as string | null) ?? null,
+          kind: (r.kind as string | null) ?? null,
           notes: (r.notes as string | null) ?? null,
         }))}
       />

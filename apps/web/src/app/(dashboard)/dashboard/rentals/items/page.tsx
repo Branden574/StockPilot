@@ -119,7 +119,7 @@ export default async function RentalItemsPage({
 
   const [categories, locations, suppliers, tags] = await Promise.all([
     categoriesSvc.list(),
-    locationsSvc.list({ excludeSystem: true }),
+    locationsSvc.list({ sitesOnly: true }),
     suppliersSvc.list(),
     tagsSvc.list(),
   ]);

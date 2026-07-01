@@ -136,6 +136,9 @@ export default function Inventory() {
         .select('id, name')
         .eq('organization_id', orgIdParam)
         .is('deleted_at', null)
+        // Sites only — racks/shelves/crates and the staging/unplaced system
+        // slots aren't stocking locations to filter or assign items by.
+        .in('type', ['warehouse', 'room', 'vehicle', 'jobsite'])
         .order('name', { ascending: true }),
       supabase
         .from('charters')
