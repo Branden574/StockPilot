@@ -659,16 +659,18 @@ export default function Scan() {
                 {storage?.rackLabel && (
                   <LocRow label="Rack" value={storage.rackLabel} mono />
                 )}
-                {storage?.crateNumber && crateHex && (
+                {storage?.crateNumber && (
                   <View style={styles.locRow}>
                     <Text style={styles.locLabel}>Crate</Text>
                     <View
                       style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
                     >
+                      {/* Number identifies the crate; the color is optional.
+                          A hollow dot (bordered, no fill) means "no color set". */}
                       <View
                         style={[
                           styles.crateDot,
-                          { backgroundColor: crateHex },
+                          crateHex ? { backgroundColor: crateHex } : null,
                         ]}
                       />
                       <Text style={styles.locValue}>{storage.crateNumber}</Text>

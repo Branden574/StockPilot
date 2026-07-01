@@ -78,7 +78,11 @@ export interface BookStorageInfo {
   grade: string | null;
   /** Compact "rack-row" label, e.g. "38-A" — null when both pieces missing. */
   rackLabel: string | null;
-  /** Compact "color #N" label, e.g. "Red 5" — null when either piece missing. */
+  /**
+   * Compact crate label. The NUMBER identifies the crate; the color is an
+   * optional visual aid. "Red 5" when a known color + number are set, "5" for
+   * a number with no (or unknown) color, null when there's no number.
+   */
   crateLabel: string | null;
 }
 
@@ -122,8 +126,15 @@ export function readBookStorage(
   const rackLabel =
     rackNumber || rackRow ? [rackNumber, rackRow].filter(Boolean).join('-') : null;
   const color = getCrateColor(crateColor);
-  const crateLabel =
-    color && crateNumber ? `${color.label} ${crateNumber}` : null;
+  // A crate is identified by its NUMBER; the color is an optional visual aid
+  // (staff often assign a crate number before they know which colored crate it
+  // will land in). Show the crate whenever a number is present — prefix the
+  // color label only when a known color is set.
+  const crateLabel = crateNumber
+    ? color
+      ? `${color.label} ${crateNumber}`
+      : crateNumber
+    : null;
   return {
     rackNumber,
     rackRow,

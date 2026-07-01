@@ -1152,6 +1152,10 @@ export function ItemForm({
                 />
               </div>
             </div>
+            <p className="text-muted-foreground text-xs">
+              A crate number is enough — the color is an optional label you can add
+              later.
+            </p>
           </>
         )}
       </Section>

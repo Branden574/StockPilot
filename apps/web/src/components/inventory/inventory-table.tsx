@@ -1122,13 +1122,15 @@ export function InventoryTable({
                             )}
                           </td>
                           <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                            {color && storage.crateNumber ? (
+                            {storage.crateNumber ? (
                               <span className="inline-flex items-center gap-1.5">
                                 <span
                                   aria-hidden
-                                  title={color.label}
+                                  title={color ? color.label : 'No color set'}
                                   className="border-border inline-block h-2.5 w-2.5 rounded-full border"
-                                  style={{ backgroundColor: color.hex }}
+                                  style={
+                                    color ? { backgroundColor: color.hex } : undefined
+                                  }
                                 />
                                 <span className="font-mono tabular-nums">
                                   {storage.crateNumber}

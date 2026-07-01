@@ -69,19 +69,22 @@ describe('readBookStorage', () => {
     expect(readBookStorage({ book_rack_row: 'B' }).rackLabel).toBe('B');
   });
 
-  it('formats crateLabel only when both color and number present', () => {
+  it('builds crateLabel from the number, prefixing a known color when set', () => {
     expect(
       readBookStorage({ book_crate_color: 'red', book_crate_number: '5' }).crateLabel,
     ).toBe('Red 5');
+    // The number identifies the crate; color is an optional visual aid, so a
+    // number with no color still shows.
+    expect(readBookStorage({ book_crate_number: '5' }).crateLabel).toBe('5');
+    // A color with no number is not a crate — the number is the identity.
     expect(readBookStorage({ book_crate_color: 'red' }).crateLabel).toBeNull();
-    expect(readBookStorage({ book_crate_number: '5' }).crateLabel).toBeNull();
   });
 
-  it('ignores crateLabel when crate color is unknown', () => {
+  it('shows the crate number even when the crate color is unknown/unset', () => {
     expect(
       readBookStorage({ book_crate_color: 'taupe', book_crate_number: '5' })
         .crateLabel,
-    ).toBeNull();
+    ).toBe('5');
   });
 
   it('trims whitespace + treats blank strings as missing', () => {

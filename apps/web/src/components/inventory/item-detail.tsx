@@ -445,7 +445,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     isBook ||
                     storage.grade ||
                     storage.rackLabel ||
-                    (color && storage.crateNumber) ||
+                    storage.crateNumber ||
                     isbn;
                   if (!hasAny) return null;
                   return (
@@ -469,16 +469,17 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                           <span className="font-mono tabular-nums">{storage.rackLabel}</span>
                         </DetailRow>
                       )}
-                      {color && storage.crateNumber && (
+                      {storage.crateNumber && (
                         <DetailRow icon={Box} label="Crate">
                           <span className="inline-flex items-center gap-2">
                             <span
                               aria-hidden
+                              title={color ? color.label : 'No color set'}
                               className="border-border inline-block h-3 w-3 rounded-full border"
-                              style={{ backgroundColor: color.hex }}
+                              style={color ? { backgroundColor: color.hex } : undefined}
                             />
                             <span>
-                              {color.label}{' '}
+                              {color ? `${color.label} ` : ''}
                               <span className="font-mono tabular-nums">{storage.crateNumber}</span>
                             </span>
                           </span>
