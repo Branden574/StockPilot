@@ -20,6 +20,8 @@ interface TopbarProps {
   avatarUrl: string | null;
   organizationName: string;
   userId: string;
+  /** Active org — scopes the notification bell to this workspace. */
+  organizationId: string;
   initialUnreadNotifications: number;
   isPlatformAdmin?: boolean;
   onToggleSidebar?: () => void;
@@ -220,6 +222,7 @@ export function Topbar({
   avatarUrl,
   organizationName,
   userId,
+  organizationId,
   initialUnreadNotifications,
   isPlatformAdmin,
   onToggleSidebar,
@@ -289,7 +292,11 @@ export function Topbar({
         </span>
       </button>
 
-      <NotificationBell userId={userId} initialUnread={initialUnreadNotifications} />
+      <NotificationBell
+        userId={userId}
+        organizationId={organizationId}
+        initialUnread={initialUnreadNotifications}
+      />
 
       <button
         type="button"

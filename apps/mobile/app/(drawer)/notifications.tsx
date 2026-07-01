@@ -9,6 +9,7 @@ import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
+import { useWorkspace } from '@/lib/use-workspace';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -30,22 +31,27 @@ interface NotificationRow {
  */
 export default function NotificationsScreen() {
   const { user } = useAuth();
+  const { activeOrgId } = useWorkspace();
   const router = useRouter();
   const [rows, setRows] = React.useState<NotificationRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
 
   const load = React.useCallback(async () => {
-    if (!user) return;
+    if (!user || !activeOrgId) return;
     const { data } = await supabase
       .from('notifications')
       .select('id, type, title, body, link, read_at, created_at')
       .eq('user_id', user.id)
+      // Scope to the ACTIVE workspace — a user in several orgs otherwise
+      // sees other workspaces' notifications in this inbox (their links
+      // would navigate into the wrong org). Mirrors the web bell.
+      .eq('organization_id', activeOrgId)
       .order('created_at', { ascending: false })
       .limit(100);
     setRows((data ?? []) as NotificationRow[]);
     setLoading(false);
-  }, [user]);
+  }, [user, activeOrgId]);
 
   React.useEffect(() => {
     void load();

@@ -10,6 +10,11 @@ import { createClient } from '@/lib/supabase/client';
 
 interface Props {
   userId: string;
+  /** Active workspace — the bell only counts/toasts THIS org's rows. A user
+      in multiple orgs otherwise sees other workspaces' notifications bleed
+      into the badge + toasts (the server-rendered initial count is already
+      org-scoped; the client refetch must match it). */
+  organizationId: string;
   initialUnread: number;
 }
 
@@ -31,7 +36,7 @@ interface Props {
  * and reopening the dashboard tab resets it, which is fine — the user
  * has already seen those toasts.
  */
-export function NotificationBell({ userId, initialUnread }: Props) {
+export function NotificationBell({ userId, organizationId, initialUnread }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const [count, setCount] = React.useState(initialUnread);
@@ -71,6 +76,10 @@ export function NotificationBell({ userId, initialUnread }: Props) {
         .from('notifications')
         .select('id, type, title, body, link, created_at')
         .eq('user_id', userId)
+        // Scope to the ACTIVE workspace. Without this, a user in several
+        // orgs gets other workspaces' rows in the badge/toasts (and their
+        // links navigate into the wrong org).
+        .eq('organization_id', organizationId)
         .is('read_at', null)
         .order('created_at', { ascending: false })
         .limit(20);
@@ -119,7 +128,7 @@ export function NotificationBell({ userId, initialUnread }: Props) {
     } catch {
       /* ignore — realtime path may still cover it */
     }
-  }, [userId, navigate]);
+  }, [userId, organizationId, navigate]);
 
   // Throttle to at most once every 500ms so a burst of postgres_changes
   // events doesn't run surfaceUnread 50 times. Leading-edge + trailing
@@ -160,6 +169,10 @@ export function NotificationBell({ userId, initialUnread }: Props) {
           event: '*',
           schema: 'public',
           table: 'notifications',
+          // postgres_changes accepts a single filter, so the channel stays
+          // user-scoped. An event from ANOTHER org only triggers the
+          // refetch below, which IS org-scoped — so cross-org rows never
+          // reach the badge or toasts.
           filter: `user_id=eq.${userId}`,
         },
         () => {

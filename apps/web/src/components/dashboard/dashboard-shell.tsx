@@ -225,6 +225,7 @@ export function DashboardShell({
           avatarUrl={avatarUrl}
           organizationName={organizationName}
           userId={userId}
+          organizationId={organizationId}
           initialUnreadNotifications={initialUnreadNotifications}
           isPlatformAdmin={isPlatformAdmin}
           onToggleSidebar={handleToggleSidebar}
