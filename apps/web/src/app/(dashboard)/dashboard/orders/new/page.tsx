@@ -2,7 +2,7 @@ import { unstable_cache } from 'next/cache';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
-import { OrdersNewV2 } from '@/components/orders/v2/orders-new-v2';
+import { OrdersStorefront } from '@/components/orders/storefront/orders-storefront';
 import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -64,32 +64,22 @@ export default async function NewOrderPage({
   ]);
   const aisles = buildAisles(items);
 
+  // The storefront owns its own page head (back link, H1, flow
+  // indicator) and dark-scoped frame — no dashboard container here.
+  // Viewer identity for the "Requesting for → Myself" cell comes from
+  // requireOrgContext, which already reads user_profiles
+  // (full_name/email) in this same request.
   return (
-    <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
-      <div className="mb-6">
-        <Link
-          href="/dashboard/orders"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to orders
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-          Place an order
-        </h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Browse the catalog, add items to your cart, and submit. A manager will
-          approve before stock is reserved.
-        </p>
-      </div>
-      <OrdersNewV2
-        warehouses={warehouses}
-        warehouseId={warehouseId}
-        items={items}
-        aisles={aisles}
-        chartersForWarehouse={chartersForWarehouse}
-        viewerRole={ctx.role}
-      />
-    </div>
+    <OrdersStorefront
+      warehouses={warehouses}
+      warehouseId={warehouseId}
+      items={items}
+      aisles={aisles}
+      chartersForWarehouse={chartersForWarehouse}
+      viewerRole={ctx.role}
+      viewerName={ctx.fullName}
+      viewerEmail={ctx.email}
+    />
   );
 }
 

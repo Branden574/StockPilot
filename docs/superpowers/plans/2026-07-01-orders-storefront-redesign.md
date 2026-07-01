@@ -18,16 +18,16 @@
 
 ## Stages (commit after each green stage)
 - [x] S0: handoff folder copied into repo root; plan committed.
-- [x] S1: `storefront.css` tokens + shell; `OrdersStorefront` root (CartProvider wrap, thumbnails merge, 2-col layout, page head + flow indicator); page.tsx wired. (`2c1e1a51`)
-- [x] S2: Order setup bar (warehouse popover, requesting-for popover, Pickup/Delivery segmented, deliver-to/pickup cell). (`2c1e1a51`)
-- [x] S3: Sticky catalog toolbar: search (clear ×, focus ring), availability popover (+count badge), sort popover, grid/list toggle, category pills row, active filter chips + clear-all. (`2c1e1a51`)
-- [x] S4: Product card (grid) + category sections (collapsible, view-all, Add-full-kit) + compact list view + skeletons + empty results. Cards: photo 4:3 + LQIP/glyph placeholder, availability pill, quick-view eye, Add→stepper, out-of-stock, React.memo+qty prop. (`2c1e1a51`)
-- [x] S5: Frequently-ordered carousel (rank chips, scroll-snap, arrows, mask fade, mini add/stepper) via /api/orders/freq. (`2c1e1a51`)
-- [x] S6: Order Cart rail (header + pulse badge + clear-all, context strip, empty state + suggestions, line items + entrance + trash + mini stepper + stock warnings, collapsible manager notes, footer totals + Submit) + <1280px stacking + floating Cart FAB. (`2c1e1a51`)
-- [x] S7: Quick-view drawer (430px, spec grid, add/stepper). (`2c1e1a51`)
-- [x] S8: Review modal (summary grid, lines, notes echo, keep browsing / confirm & submit) + success state (springy check, order ref, View order / Done). Submit wiring per decision 3. (`2c1e1a51`)
-- [x] S9: Responsive pass + a11y (focus traps in popovers/modal via existing primitives where possible, aria-live cart announcements — copy v2 pattern) + unit tests (filter/sort/status derivation + full-kit) + `pnpm build`. (`2c1e1a51`, 16 tests in storefront-logic.test.ts)
-- [x] S10: Demo-org Playwright visual pass vs prototype (open `design_handoff_storefront_order_page/design/StockPilot Storefront - Place an Order.html` side-by-side; compare region by region per PROMPT.md; fix diffs; screenshot evidence). Ship + OTA n/a (web only). Teach owner. (verified live 2026-07-01: all regions render, add→stepper→cart→review→success flow works E2E in demo org; SO ref shown; order created)
+- [x] S1: `storefront.css` tokens + shell; `OrdersStorefront` root (CartProvider wrap, thumbnails merge, 2-col layout, page head + flow indicator); page.tsx wired. (implemented in single pass — see commit below)
+- [x] S2: Order setup bar (warehouse popover, requesting-for popover, Pickup/Delivery segmented, deliver-to/pickup cell). (implemented in single pass — see commit below)
+- [x] S3: Sticky catalog toolbar: search (clear ×, focus ring), availability popover (+count badge), sort popover, grid/list toggle, category pills row, active filter chips + clear-all. (implemented in single pass — see commit below)
+- [x] S4: Product card (grid) + category sections (collapsible, view-all, Add-full-kit) + compact list view + skeletons + empty results. Cards: photo 4:3 + LQIP/glyph placeholder, availability pill, quick-view eye, Add→stepper, out-of-stock, React.memo+qty prop. (implemented in single pass — see commit below)
+- [x] S5: Frequently-ordered carousel (rank chips, scroll-snap, arrows, mask fade, mini add/stepper) via /api/orders/freq. (implemented in single pass — see commit below)
+- [x] S6: Order Cart rail (header + pulse badge + clear-all, context strip, empty state + suggestions, line items + entrance + trash + mini stepper + stock warnings, collapsible manager notes, footer totals + Submit) + <1280px stacking + floating Cart FAB. (implemented in single pass — see commit below)
+- [x] S7: Quick-view drawer (430px, spec grid, add/stepper). (implemented in single pass — see commit below)
+- [x] S8: Review modal (summary grid, lines, notes echo, keep browsing / confirm & submit) + success state (springy check, order ref, View order / Done). Submit wiring per decision 3. (implemented in single pass — see commit below)
+- [x] S9: Responsive pass + a11y (focus traps in popovers/modal via existing primitives where possible, aria-live cart announcements — copy v2 pattern) + unit tests (filter/sort/status derivation + full-kit) + `pnpm build`. (26 tests in storefront-logic.test.ts)
+- [ ] S10: Demo-org Playwright visual pass vs prototype (open `design_handoff_storefront_order_page/design/StockPilot Storefront - Place an Order.html` side-by-side; compare region by region per PROMPT.md; fix diffs; screenshot evidence). Ship + OTA n/a (web only). Teach owner. (PENDING — done by coordinator after commit)
 
 ## Verification gates
 - Every stage: `pnpm exec tsc --noEmit` + eslint on touched files.
