@@ -4,6 +4,7 @@ import { renderToStream } from '@react-pdf/renderer';
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
+import { countSheetLocationLabel } from '@/lib/pdf/count-sheet-location';
 import { CycleCountSheetPdf, type CycleCountPdfLine } from '@/lib/pdf/cycle-count';
 import { audit } from '@/server/services/audit';
 import { assertPermission, ServiceError } from '@/server/services/context';
@@ -44,10 +45,12 @@ export async function GET(
       warehouseName = warehouses.find((w) => w.id === header.warehouse_id)?.name ?? null;
     }
 
-    // Pull bin / primary-location labels for each item in one shot so the
-    // counter knows where to physically look. Items can be missing a
-    // bin_location, so render '—' in that slot. inventory_items already
-    // belongs to the same org via RLS.
+    // Pull the walk-to label for each item in one shot so the counter knows
+    // where to physically look: the structured rack/crate from custom_fields
+    // first (books "Rack 39-B · Crate Red 5", items "Rack 38-A"), then the
+    // free-text bin_location, then the site name. The site name alone (old
+    // behavior) printed "DC4" on every row — useless for finding the stock.
+    // inventory_items already belongs to the same org via RLS.
     const itemIds = lines
       .map((l) => l.item_id)
       .filter((v): v is string => Boolean(v));
@@ -55,17 +58,24 @@ export async function GET(
     if (itemIds.length > 0) {
       const { data } = await ctx.supabase
         .from('inventory_items')
-        .select('id, bin_location, primary_location_id, locations:locations!primary_location_id (name)')
+        .select('id, item_type, custom_fields, bin_location, primary_location_id, locations:locations!primary_location_id (name)')
         .eq('organization_id', ctx.organizationId)
         .in('id', itemIds);
       for (const row of (data ?? []) as Array<{
         id: string;
+        item_type: string | null;
+        custom_fields: Record<string, unknown> | null;
         bin_location: string | null;
         locations: { name: string } | { name: string }[] | null;
       }>) {
         const locField = row.locations;
         const loc = Array.isArray(locField) ? locField[0] : locField;
-        const label = row.bin_location || loc?.name || null;
+        const label = countSheetLocationLabel({
+          item_type: row.item_type,
+          custom_fields: row.custom_fields,
+          bin_location: row.bin_location,
+          primaryLocationName: loc?.name ?? null,
+        });
         binByItem.set(row.id, label);
       }
     }
