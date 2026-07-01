@@ -2056,6 +2056,55 @@ export class InventoryService {
     );
   }
 
+  /**
+   * Where should a location-less POSITIVE stock adjustment land? Staging is
+   * reserved for PO receipts awaiting put-away, so a manual add must never go
+   * there. Prefer the item's dominant PLACED holding (rack/crate) so the added
+   * units stay on the shelf; otherwise the warehouse's Unplaced location.
+   * Returns null only when neither exists (a warehouse with no Unplaced loc),
+   * in which case adjust_stock's default routing is the last resort.
+   */
+  private async resolveAdjustLocation(
+    itemId: string,
+    warehouseId: string | null,
+  ): Promise<string | null> {
+    const { data: levels } = await this.ctx.supabase
+      .from('item_stock_levels')
+      .select('location_id, quantity')
+      .eq('item_id', itemId)
+      .gt('quantity', 0);
+    const rows = (levels ?? []) as Array<{ location_id: string; quantity: number }>;
+    if (rows.length > 0) {
+      const { data: locs } = await this.ctx.supabase
+        .from('locations')
+        .select('id, kind')
+        .in('id', rows.map((r) => r.location_id));
+      const kindById = new Map(
+        ((locs ?? []) as Array<{ id: string; kind: string | null }>).map((l) => [l.id, l.kind]),
+      );
+      const placed = rows
+        .filter((r) => {
+          const k = kindById.get(r.location_id);
+          return k === 'rack' || k === 'crate';
+        })
+        .sort((a, b) => Number(b.quantity) - Number(a.quantity))[0];
+      if (placed) return placed.location_id;
+    }
+    if (warehouseId) {
+      const { data: unplaced } = await this.ctx.supabase
+        .from('locations')
+        .select('id')
+        .eq('warehouse_id', warehouseId)
+        .eq('kind', 'unplaced')
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle();
+      const id = (unplaced as { id?: string } | null)?.id;
+      if (id) return id;
+    }
+    return null;
+  }
+
   async adjustStock(input: AdjustStockInput) {
     assertPermission(this.ctx, 'stock:adjust');
     // Verify the item is in a warehouse the user can write to before
@@ -2071,11 +2120,23 @@ export class InventoryService {
     }
     const wh = (item as { warehouse_id?: string | null }).warehouse_id ?? null;
     if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
+
+    // A manual ADD with no explicit location must NOT land in Staging: the
+    // adjust_stock RPC routes a null positive delta there (Staging is only for
+    // PO receipts awaiting put-away). Default it to the item's current rack so
+    // an adjustment stays on the shelf; fall back to the warehouse Unplaced
+    // location. Negative deltas keep the null path (adjust_stock draws down from
+    // placed stock, which correctly removes from the rack).
+    let locationId = input.locationId ?? null;
+    if (locationId == null && input.quantityChange > 0) {
+      locationId = await this.resolveAdjustLocation(input.itemId, wh);
+    }
+
     const { data, error } = await this.ctx.supabase.rpc('adjust_stock', {
       p_item_id: input.itemId,
       p_quantity_change: input.quantityChange,
       p_movement_type: input.movementType,
-      p_location_id: input.locationId ?? null,
+      p_location_id: locationId,
       p_reason: input.reason ?? null,
       p_notes: input.notes ?? null,
     });
