@@ -1,6 +1,7 @@
 'use client';
 
 import { Loader2, Paperclip, Trash2, Upload } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -35,6 +36,16 @@ const BUCKET = 'order-attachments';
 const ACCEPT = 'image/*,application/pdf';
 const MAX_BYTES = 15 * 1024 * 1024; // 15 MB
 
+// Lazy — the lightbox chunk (zoom/pan/pinch handlers) only loads when a
+// proof photo is actually opened.
+const ImageLightbox = dynamic(
+  () =>
+    import('@/components/inventory/image-lightbox').then((m) => ({
+      default: m.ImageLightbox,
+    })),
+  { ssr: false },
+);
+
 export function OrderAttachmentsPanel({
   orderId,
   organizationId,
@@ -55,7 +66,25 @@ export function OrderAttachmentsPanel({
   // Attachment ids whose <img> failed to decode (HEIC on desktop, expired
   // URL) — those tiles fall back to the file chip instead of a broken glyph.
   const [failedIds, setFailedIds] = React.useState<Set<string>>(new Set());
+  const [lightboxIndex, setLightboxIndex] = React.useState<number | null>(null);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
+
+  // Image attachments only (in display order), for the lightbox's prev/next.
+  // Each uses the FULL original url — the grid tiles use the smaller thumb.
+  const lightboxImages = React.useMemo(
+    () =>
+      attachments
+        .filter(
+          (a) => (a.contentType ?? '').startsWith('image/') && !failedIds.has(a.id) && a.url,
+        )
+        .map((a) => ({ id: a.id, url: a.url! })),
+    [attachments, failedIds],
+  );
+
+  function openViewer(attachmentId: string) {
+    const idx = lightboxImages.findIndex((img) => img.id === attachmentId);
+    if (idx >= 0) setLightboxIndex(idx);
+  }
 
   async function onFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -188,41 +217,53 @@ export function OrderAttachmentsPanel({
             // Failed images fall back to the file tile below instead.
             const isImage =
               (a.contentType ?? '').startsWith('image/') && !failedIds.has(a.id);
+            const tile =
+              isImage && (a.thumbUrl ?? a.url) ? (
+                // ~400px cached grid variant (thumbUrl). Signed URL to a
+                // private bucket object — plain img, not next/image.
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={(a.thumbUrl ?? a.url)!}
+                  alt={a.fileName ?? 'Attachment'}
+                  className="h-28 w-full object-cover"
+                  loading="lazy"
+                  decoding="async"
+                  onError={() => setFailedIds((prev) => new Set(prev).add(a.id))}
+                />
+              ) : (
+                <div className="text-muted-foreground flex h-28 w-full flex-col items-center justify-center gap-1">
+                  <Paperclip className="h-5 w-5" />
+                  <span className="max-w-[90%] truncate px-2 text-[10.5px]">
+                    {a.fileName ?? 'File'}
+                  </span>
+                </div>
+              );
             return (
               <div
                 key={a.id}
                 className="group bg-background relative overflow-hidden rounded-md border"
               >
-                <a
-                  href={a.url ?? '#'}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block"
-                >
-                  {isImage && (a.thumbUrl ?? a.url) ? (
-                    // ~400px cached grid variant (thumbUrl) — the anchor above
-                    // still opens the full original. Signed URL to a private
-                    // bucket object — plain img, not next/image.
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={(a.thumbUrl ?? a.url)!}
-                      alt={a.fileName ?? 'Attachment'}
-                      className="h-28 w-full object-cover"
-                      loading="lazy"
-                      decoding="async"
-                      onError={() =>
-                        setFailedIds((prev) => new Set(prev).add(a.id))
-                      }
-                    />
-                  ) : (
-                    <div className="text-muted-foreground flex h-28 w-full flex-col items-center justify-center gap-1">
-                      <Paperclip className="h-5 w-5" />
-                      <span className="max-w-[90%] truncate px-2 text-[10.5px]">
-                        {a.fileName ?? 'File'}
-                      </span>
-                    </div>
-                  )}
-                </a>
+                {isImage ? (
+                  // Images open in the shared lightbox (zoom + prev/next across
+                  // the order's photos, with an Open-original link inside).
+                  <button
+                    type="button"
+                    onClick={() => openViewer(a.id)}
+                    className="block w-full"
+                  >
+                    {tile}
+                  </button>
+                ) : (
+                  // PDFs / non-images keep the new-tab download path.
+                  <a
+                    href={a.url ?? '#'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block"
+                  >
+                    {tile}
+                  </a>
+                )}
                 <div className="flex items-center justify-between gap-1 px-2 py-1.5">
                   <span className="text-muted-foreground truncate text-[10.5px]">
                     {KIND_LABELS[a.kind] ?? 'Other'}
@@ -247,6 +288,15 @@ export function OrderAttachmentsPanel({
             );
           })}
         </div>
+      )}
+
+      {lightboxIndex !== null && lightboxImages.length > 0 && (
+        <ImageLightbox
+          images={lightboxImages}
+          startIndex={Math.min(lightboxIndex, lightboxImages.length - 1)}
+          open
+          onClose={() => setLightboxIndex(null)}
+        />
       )}
     </section>
   );

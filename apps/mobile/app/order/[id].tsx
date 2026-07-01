@@ -83,7 +83,9 @@ interface OrderHeader {
   requesterEmail: string | null;
   orgLabel: string | null;
   warehouseName: string | null;
-  signatureDataUrl: string | null;
+  /** Whether a signature exists. The blob itself is fetched on modal-open,
+   *  not shipped in the order payload to every viewer. */
+  hasSignature: boolean;
   signedByName: string | null;
   signedAt: string | null;
   createdAt: string | null;
@@ -114,8 +116,14 @@ export default function OrderDetail() {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
+  const [uploadProgress, setUploadProgress] = React.useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const [kind, setKind] = React.useState<Kind>('dropoff_photo');
   const [sigOpen, setSigOpen] = React.useState(false);
+  const [sigUrl, setSigUrl] = React.useState<string | null>(null);
+  const [sigLoading, setSigLoading] = React.useState(false);
   const [viewerUrl, setViewerUrl] = React.useState<string | null>(null);
   const [shipment, setShipment] = React.useState<OrderShipment | null>(null);
 
@@ -170,7 +178,7 @@ export default function OrderDetail() {
         // name that internal orders DON'T denormalize onto the row (else they
         // showed "Unknown requester"). RLS lets org members read each other.
         `id, status, requester_name, requester_email, requester_user_id, requester_org_label,
-         signature_data_url, signed_by_name, signed_at, created_at,
+         signed_by_name, signed_at, created_at,
          assigned_delivery_user_id, fulfillment_type, signature_token,
          warehouse:warehouses!warehouse_id (name),
          requester:user_profiles!requester_user_id (full_name, email)`,
@@ -195,7 +203,7 @@ export default function OrderDetail() {
         requesterEmail: (r.requester_email as string | null) ?? null,
         orgLabel: (r.requester_org_label as string | null) ?? null,
         warehouseName: whObj?.name ?? null,
-        signatureDataUrl: (r.signature_data_url as string | null) ?? null,
+        hasSignature: (r.signed_at as string | null) != null,
         signedByName: (r.signed_by_name as string | null) ?? null,
         signedAt: (r.signed_at as string | null) ?? null,
         createdAt: (r.created_at as string | null) ?? null,
@@ -217,6 +225,35 @@ export default function OrderDetail() {
       void load();
     }, [load]),
   );
+
+  // Fetch the signature blob only when the viewer opens the dialog — it's an
+  // image seen inside a closed-by-default modal, so shipping it in the order
+  // payload to every viewer wasted bandwidth on every screen focus.
+  React.useEffect(() => {
+    if (!sigOpen || sigUrl || sigLoading || !orgId || !id) return;
+    let cancelled = false;
+    setSigLoading(true);
+    void (async () => {
+      try {
+        const { data } = await supabase
+          .from('order_requests')
+          .select('signature_data_url')
+          .eq('organization_id', orgId)
+          .eq('id', id)
+          .maybeSingle();
+        if (!cancelled) {
+          setSigUrl((data?.signature_data_url as string | null) ?? null);
+        }
+      } catch {
+        /* leave null — modal shows nothing */
+      } finally {
+        if (!cancelled) setSigLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sigOpen, sigUrl, sigLoading, orgId, id]);
 
   async function refresh() {
     setRefreshing(true);
@@ -316,9 +353,12 @@ export default function OrderDetail() {
     );
   };
 
-  async function uploadAsset(uri: string) {
-    if (!orgId || !id) return;
-    setUploading(true);
+  // Uploads ONE asset (resize → storage → row). Returns success/failure
+  // WITHOUT touching the shared `uploading` flag or refetching, so the single
+  // and batch flows can share it. Per-file storage rollback on a row-insert
+  // failure is preserved so we never leave an orphaned object behind.
+  async function uploadOne(uri: string): Promise<{ ok: boolean; error?: string }> {
+    if (!orgId || !id) return { ok: false, error: 'Not ready' };
     try {
       const resized = await resizeForUpload(uri);
       const path = `${orgId}/${id}/${Math.random().toString(36).slice(2, 14)}.${resized.ext}`;
@@ -326,10 +366,7 @@ export default function OrderDetail() {
       const { error: upErr } = await supabase.storage
         .from(BUCKET)
         .upload(path, arrayBuffer, { contentType: mimeForExt(resized.ext) });
-      if (upErr) {
-        Alert.alert('Upload failed', upErr.message);
-        return;
-      }
+      if (upErr) return { ok: false, error: upErr.message };
       const { error: rowErr } = await supabase.from('order_request_attachments').insert({
         organization_id: orgId,
         order_request_id: id,
@@ -339,15 +376,65 @@ export default function OrderDetail() {
         kind,
       });
       if (rowErr) {
-        Alert.alert('Could not save attachment', rowErr.message);
         await supabase.storage.from(BUCKET).remove([path]);
-        return;
+        return { ok: false, error: rowErr.message };
       }
-      await loadAttachments();
+      return { ok: true };
     } catch (e) {
-      Alert.alert('Upload error', e instanceof Error ? e.message : 'Please try again.');
+      return { ok: false, error: e instanceof Error ? e.message : 'Please try again.' };
+    }
+  }
+
+  async function uploadAsset(uri: string) {
+    setUploading(true);
+    try {
+      const res = await uploadOne(uri);
+      if (!res.ok) Alert.alert('Upload failed', res.error ?? 'Please try again.');
+      await loadAttachments();
     } finally {
       setUploading(false);
+    }
+  }
+
+  // Multi-file upload: concurrency capped at 2 (peak memory during concurrent
+  // resize on older iPhones), a live 'N/M' progress label, ONE refetch at the
+  // end, and a SINGLE aggregated failure Alert (stacked concurrent Alerts are
+  // unreliable on Android). Airplane-mode mid-batch → failures are reported,
+  // the batch finishes, and no storage objects are orphaned.
+  async function uploadAssets(uris: string[]) {
+    if (uris.length === 0) return;
+    if (uris.length === 1) {
+      await uploadAsset(uris[0]!);
+      return;
+    }
+    setUploading(true);
+    setUploadProgress({ done: 0, total: uris.length });
+    const failures: string[] = [];
+    let done = 0;
+    const queue = [...uris];
+    const worker = async () => {
+      while (queue.length > 0) {
+        const uri = queue.shift()!;
+        const res = await uploadOne(uri);
+        if (!res.ok) failures.push(res.error ?? 'Upload failed');
+        done += 1;
+        setUploadProgress({ done, total: uris.length });
+      }
+    };
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(2, uris.length) }, () => worker()),
+      );
+      await loadAttachments();
+      if (failures.length > 0) {
+        Alert.alert(
+          `${failures.length} of ${uris.length} uploads failed`,
+          failures.slice(0, 3).join('\n'),
+        );
+      }
+    } finally {
+      setUploading(false);
+      setUploadProgress(null);
     }
   }
 
@@ -385,9 +472,7 @@ export default function OrderDetail() {
       selectionLimit: 5,
     });
     if (result.canceled) return;
-    for (const a of result.assets) {
-      await uploadAsset(a.uri);
-    }
+    await uploadAssets(result.assets.map((a) => a.uri));
   }
 
   function addProof() {
@@ -512,7 +597,7 @@ export default function OrderDetail() {
             </View>
           ) : null}
 
-          {order.signatureDataUrl ? (
+          {order.hasSignature ? (
             <Pressable onPress={() => setSigOpen(true)}>
               <Card padding={14}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -604,7 +689,14 @@ export default function OrderDetail() {
                     style={[styles.addBtn, { backgroundColor: c.ink, opacity: uploading ? 0.6 : 1 }]}
                   >
                     {uploading ? (
-                      <ActivityIndicator color={c.paper} />
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <ActivityIndicator color={c.paper} />
+                        {uploadProgress ? (
+                          <Mono size={13} color={c.paper}>
+                            {`Uploading ${uploadProgress.done}/${uploadProgress.total}…`}
+                          </Mono>
+                        ) : null}
+                      </View>
                     ) : (
                       <>
                         <Camera size={16} color={c.paper} strokeWidth={1.8} />
@@ -676,10 +768,14 @@ export default function OrderDetail() {
                 <X size={18} color={c.ink4} />
               </Pressable>
             </View>
-            {order?.signatureDataUrl ? (
+            {sigLoading ? (
+              <View style={{ height: 180, alignItems: 'center', justifyContent: 'center' }}>
+                <ActivityIndicator color={c.ink4} />
+              </View>
+            ) : sigUrl ? (
               <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 8 }}>
                 <Image
-                  source={{ uri: order.signatureDataUrl }}
+                  source={{ uri: sigUrl }}
                   style={{ width: '100%', height: 180 }}
                   resizeMode="contain"
                 />

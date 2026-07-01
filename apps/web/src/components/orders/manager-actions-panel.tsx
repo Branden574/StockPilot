@@ -55,9 +55,10 @@ interface Props {
   fulfillmentType: 'pickup' | 'delivery';
   assignedDeliveryUserId: string | null;
   signatureToken: string | null;
-  /** Captured digital signature (data URL PNG) + who/when, for the
-   *  "View signature" dialog. Null until the order is signed. */
-  signatureDataUrl: string | null;
+  /** Whether a signature exists — drives the "View signature" button. The
+   *  actual data-URL blob is fetched lazily on dialog-open (see the sig
+   *  dialog) instead of shipped in the RSC payload. */
+  hasSignature: boolean;
   signedByName: string | null;
   signedAt: string | null;
   drivers: DriverOption[];
@@ -94,7 +95,7 @@ export function ManagerActionsPanel({
   fulfillmentType,
   assignedDeliveryUserId,
   signatureToken,
-  signatureDataUrl,
+  hasSignature,
   signedByName,
   signedAt,
   drivers,
@@ -103,6 +104,32 @@ export function ManagerActionsPanel({
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
   const [sigOpen, setSigOpen] = React.useState(false);
+  // Signature blob is fetched on first dialog-open, then cached for the mount.
+  const [sigUrl, setSigUrl] = React.useState<string | null>(null);
+  const [sigLoading, setSigLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!sigOpen || sigUrl || sigLoading) return;
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
+    setSigLoading(true);
+    void (async () => {
+      try {
+        const res = await fetch(`/api/orders/${orderId}/signature`, {
+          credentials: 'same-origin',
+        });
+        const data = (await res.json()) as { signatureDataUrl?: string | null };
+        if (!cancelled) setSigUrl(data.signatureDataUrl ?? null);
+      } catch {
+        /* leave null — dialog shows the "no signature" fallback */
+      } finally {
+        if (!cancelled) setSigLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sigOpen, sigUrl, sigLoading, orderId]);
   const [notes, setNotes] = React.useState(internalNotes ?? '');
   const initialNotes = React.useRef(internalNotes ?? '');
 
@@ -384,7 +411,7 @@ export function ManagerActionsPanel({
                 <Printer className="h-3.5 w-3.5" />
                 Print warehouse slip
               </Button>
-              {signatureDataUrl && (
+              {hasSignature && (
                 <Button
                   variant="outline"
                   onClick={() => setSigOpen(true)}
@@ -572,13 +599,17 @@ export function ManagerActionsPanel({
                 : ''}
             </DialogDescription>
           </DialogHeader>
-          {signatureDataUrl ? (
+          {sigLoading ? (
+            <div className="grid h-40 place-items-center">
+              <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" />
+            </div>
+          ) : sigUrl ? (
             <div className="rounded-md border bg-white p-3">
               {/* Signatures are dark ink on a transparent background, so they
                   vanish on a dark card — always back them with white. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={signatureDataUrl}
+                src={sigUrl}
                 alt="Customer signature"
                 className="mx-auto max-h-64 w-full object-contain"
               />

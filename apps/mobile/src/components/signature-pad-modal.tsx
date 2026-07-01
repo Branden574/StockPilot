@@ -8,11 +8,12 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Path, Rect, Svg } from 'react-native-svg';
-import { type SignaturePoint, isValidSignatureDataUrl, pointsToSvgPath } from '@stockpilot/core';
+import { type SignaturePoint, isValidSignatureDataUrl, pointsToSmoothSvgPath } from '@stockpilot/core';
 import { api } from '../lib/api';
 
 interface SignaturePadModalProps {
@@ -24,8 +25,11 @@ interface SignaturePadModalProps {
   defaultEmail?: string;
 }
 
-const PAD_WIDTH = 320;
 const PAD_HEIGHT = 200;
+// Screen chrome: 20px horizontal page padding on each side (styles.container).
+const PAD_H_MARGIN = 40;
+const PAD_MIN_WIDTH = 280;
+const PAD_MAX_WIDTH = 560;
 
 export function SignaturePadModal({
   visible,
@@ -35,6 +39,13 @@ export function SignaturePadModal({
   defaultName = '',
   defaultEmail = '',
 }: SignaturePadModalProps) {
+  // Fill the available width (up to a cap) so tablets and large phones get a
+  // proportionate pad instead of a fixed 320px box floating in the middle.
+  const { width: windowWidth } = useWindowDimensions();
+  const padWidth = Math.max(
+    PAD_MIN_WIDTH,
+    Math.min(PAD_MAX_WIDTH, windowWidth - PAD_H_MARGIN),
+  );
   const [signerName, setSignerName] = useState(defaultName);
   const [signerEmail, setSignerEmail] = useState(defaultEmail);
   const [strokes, setStrokes] = useState<SignaturePoint[][]>([]);
@@ -183,16 +194,16 @@ export function SignaturePadModal({
         <View style={styles.padWrapper}>
           <Svg
             ref={svgRef}
-            width={PAD_WIDTH}
+            width={padWidth}
             height={PAD_HEIGHT}
             style={styles.svg}
             {...panResponder.panHandlers}
           >
-            <Rect x={0} y={0} width={PAD_WIDTH} height={PAD_HEIGHT} fill="white" />
+            <Rect x={0} y={0} width={padWidth} height={PAD_HEIGHT} fill="white" />
             {strokes.map((stroke, i) => (
               <Path
                 key={i}
-                d={pointsToSvgPath(stroke)}
+                d={pointsToSmoothSvgPath(stroke)}
                 stroke="#1a1a1a"
                 strokeWidth={2}
                 fill="none"
@@ -202,7 +213,7 @@ export function SignaturePadModal({
             ))}
             {currentStroke.length > 0 && (
               <Path
-                d={pointsToSvgPath(currentStroke)}
+                d={pointsToSmoothSvgPath(currentStroke)}
                 stroke="#1a1a1a"
                 strokeWidth={2}
                 fill="none"

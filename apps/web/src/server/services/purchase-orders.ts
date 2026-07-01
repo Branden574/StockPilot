@@ -219,16 +219,23 @@ export class PurchaseOrdersService {
     const lineItemIds = rawLines
       .map((l) => l.item_id)
       .filter((id): id is string => Boolean(id));
+    // Thumb for the small line-table tile + master for the sharp hover
+    // preview — the tile used to download the 2048px master into a 40px cell.
     const imageMap =
       lineItemIds.length > 0
-        ? await new ItemImagesService(this.ctx).primaryImagesForItems(lineItemIds)
-        : new Map<string, string>();
+        ? await new ItemImagesService(this.ctx).primaryImagesWithThumbsForItems(lineItemIds)
+        : new Map<string, { url: string; thumbUrl: string | null; lqip: string | null }>();
 
-    const linesWithImages: Array<RawLine & { imageUrl: string | null }> =
-      rawLines.map((l) => ({
+    const linesWithImages: Array<
+      RawLine & { imageUrl: string | null; previewUrl: string | null }
+    > = rawLines.map((l) => {
+      const img = l.item_id ? imageMap.get(l.item_id) : undefined;
+      return {
         ...l,
-        imageUrl: l.item_id ? (imageMap.get(l.item_id) ?? null) : null,
-      }));
+        imageUrl: img ? (img.thumbUrl ?? img.url) : null,
+        previewUrl: img ? img.url : null,
+      };
+    });
 
     return { po, lines: linesWithImages };
   }

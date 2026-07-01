@@ -33,6 +33,9 @@ vi.mock('./item-images', () => ({
     async primaryImagesForItems() {
       return new Map<string, string>();
     }
+    async primaryImagesWithThumbsForItems() {
+      return new Map();
+    }
   },
 }));
 

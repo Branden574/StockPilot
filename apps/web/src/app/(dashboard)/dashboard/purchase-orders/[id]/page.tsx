@@ -118,6 +118,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
       lineTotal: l.line_total as number,
       trackingType: (item?.tracking_type ?? 'none') as 'none' | 'lot' | 'serial',
       imageUrl: (l.imageUrl as string | null | undefined) ?? null,
+      previewUrl: (l.previewUrl as string | null | undefined) ?? null,
     };
   });
 
@@ -224,6 +225,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                     <TableCell>
                       <ItemThumb
                         imageUrl={l.imageUrl}
+                        previewUrl={l.previewUrl}
                         alt={l.name}
                         size="sm"
                         itemId={l.itemId}

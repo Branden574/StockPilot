@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 interface LightboxImage {
   id: string;
   url: string;
-  isPrimary: boolean;
+  isPrimary?: boolean;
 }
 
 interface ImageLightboxProps {
@@ -27,7 +27,10 @@ interface ImageLightboxProps {
   startIndex: number;
   open: boolean;
   onClose: () => void;
-  onDelete: (imageId: string) => Promise<void> | void;
+  /** Optional — when omitted, the delete affordance is hidden (e.g. order
+   *  proof attachments, where deletion lives in the panel and viewers may
+   *  lack permission). */
+  onDelete?: (imageId: string) => Promise<void> | void;
 }
 
 const MIN_ZOOM = 1;
@@ -229,6 +232,7 @@ export function ImageLightbox({
   };
 
   const confirmDelete = async () => {
+    if (!onDelete) return;
     setDeleteBusy(true);
     try {
       await onDelete(current.id);
@@ -313,13 +317,15 @@ export function ImageLightbox({
               >
                 <Download className="h-4 w-4" />
               </a>
-              <ToolbarButton
-                onClick={handleDelete}
-                ariaLabel="Delete image"
-                tone="danger"
-              >
-                <Trash2 className="h-4 w-4" />
-              </ToolbarButton>
+              {onDelete && (
+                <ToolbarButton
+                  onClick={handleDelete}
+                  ariaLabel="Delete image"
+                  tone="danger"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </ToolbarButton>
+              )}
 
               <span className="mx-1 h-5 w-px bg-white/20" />
 

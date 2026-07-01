@@ -89,21 +89,26 @@ export async function GET(req: Request) {
   // `item_images IN (...)` + one createSignedUrls call). Skipped when
   // there are zero matches so we don't emit no-op DB traffic.
   const itemRows = items.data ?? [];
+  // Thumb for the ⌘K row tile + master for the hover preview.
   const imageMap =
     itemRows.length > 0
-      ? await new ItemImagesService(ctx).primaryImagesForItems(
+      ? await new ItemImagesService(ctx).primaryImagesWithThumbsForItems(
           itemRows.map((i) => i.id as string),
         )
-      : new Map<string, string>();
+      : new Map<string, { url: string; thumbUrl: string | null; lqip: string | null }>();
 
   return NextResponse.json({
-    items: itemRows.map((i) => ({
-      id: i.id as string,
-      name: i.name as string,
-      sku: i.sku as string,
-      quantity: i.quantity_on_hand as number,
-      imageUrl: imageMap.get(i.id as string) ?? null,
-    })),
+    items: itemRows.map((i) => {
+      const img = imageMap.get(i.id as string);
+      return {
+        id: i.id as string,
+        name: i.name as string,
+        sku: i.sku as string,
+        quantity: i.quantity_on_hand as number,
+        imageUrl: img ? (img.thumbUrl ?? img.url) : null,
+        previewUrl: img ? img.url : null,
+      };
+    }),
     purchaseOrders: (pos.data ?? []).map((p) => ({
       id: p.id as string,
       poNumber: p.po_number as string,

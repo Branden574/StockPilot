@@ -32,6 +32,7 @@ interface SearchResult {
     sku: string;
     quantity: number;
     imageUrl: string | null;
+    previewUrl?: string | null;
   }>;
   purchaseOrders: Array<{ id: string; poNumber: string; status: string }>;
   suppliers: Array<{ id: string; name: string }>;
@@ -197,6 +198,7 @@ export function CommandPalette() {
                   >
                     <ItemThumb
                       imageUrl={i.imageUrl}
+                      previewUrl={i.previewUrl}
                       alt={i.name}
                       size="sm"
                       itemId={i.id}

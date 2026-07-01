@@ -25,7 +25,12 @@ import { cn } from '@/lib/utils';
  * genuinely sharp rather than a stretched 28px frame.
  */
 interface Props {
+  /** Small tile source (a ~200px thumb where available) — kept lightweight so
+   *  a 28-40px tile doesn't download a 2048px master. */
   imageUrl: string | null | undefined;
+  /** Larger source for the floating hover preview (the master). Falls back to
+   *  `imageUrl` when omitted, so callers that only have one URL still work. */
+  previewUrl?: string | null;
   alt: string;
   /** sm = 28×28 (compact rows); md = 40×40 (line tables / pickers). Default md. */
   size?: 'sm' | 'md';
@@ -43,6 +48,7 @@ interface Props {
 
 export function ItemThumb({
   imageUrl,
+  previewUrl,
   alt,
   size = 'md',
   itemId,
@@ -91,7 +97,7 @@ export function ItemThumb({
 
   return (
     <ImageHoverPreview
-      src={imageUrl && !failed ? imageUrl : null}
+      src={imageUrl && !failed ? (previewUrl ?? imageUrl) : null}
       alt={alt}
       title={previewTitle ?? alt}
       subtitle={previewSubtitle ?? null}
