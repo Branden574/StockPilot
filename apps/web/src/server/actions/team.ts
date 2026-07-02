@@ -4,11 +4,13 @@ import { revalidatePath } from 'next/cache';
 
 import {
   assertCurrentAal2,
+  assertPermission,
   ServiceError,
   withContext,
 } from '@/server/services/context';
 import { audit } from '@/server/services/audit';
 import { TeamService, acceptInviteWithToken } from '@/server/services/team';
+import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { requireSession } from '@/lib/auth/session';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -126,6 +128,88 @@ export async function removeMemberAction(memberId: string): Promise<ActionResult
     await svc.removeMember(parsed.data.memberId);
     revalidatePath('/dashboard/team');
     return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const sendMemberPasswordResetSchema = z.object({ targetUserId: z.string().uuid() });
+
+/**
+ * Org-admin action: email an accepted member a password-reset link.
+ *
+ * Gated on `members:invite` (admin+) — the same permission the invite /
+ * resend-invite flows use for "send this member an account email". The
+ * target is resolved STRICTLY from the caller's org membership: we never
+ * accept a raw email from the client, because a recovery link is an
+ * account-takeover primitive — org membership is the security boundary.
+ *
+ * Rate limit shares the self-serve key family (`pwreset-req:<email>`,
+ * 3/15min, closed) so an admin can't blast a user past the budget the
+ * public forgot-password form already enforces. Unlike the public form
+ * there is NO anti-enumeration theater here — the admin already knows the
+ * member exists, so rate-limit and send failures are surfaced verbatim.
+ */
+export async function sendMemberPasswordResetAction(
+  targetUserId: string,
+): Promise<ActionResult<{ email: string }>> {
+  const parsed = sendMemberPasswordResetSchema.safeParse({ targetUserId });
+  if (!parsed.success) return err('validation_error', 'Invalid user id');
+  try {
+    const ctx = await withContext();
+    assertPermission(ctx, 'members:invite');
+
+    const { data: member, error: memberErr } = await ctx.supabase
+      .from('organization_members')
+      .select('user_id, accepted_at')
+      .eq('organization_id', ctx.organizationId)
+      .eq('user_id', parsed.data.targetUserId)
+      .maybeSingle();
+    if (memberErr) return err('internal_error', memberErr.message);
+    if (!member) return err('not_found', 'Member not found in this organization.');
+    if (!member.accepted_at) {
+      return err(
+        'validation_error',
+        'This member has not accepted their invite yet — resend the invite instead.',
+      );
+    }
+
+    const { data: profile, error: profileErr } = await ctx.supabase
+      .from('user_profiles')
+      .select('email')
+      .eq('id', parsed.data.targetUserId)
+      .maybeSingle();
+    if (profileErr) return err('internal_error', profileErr.message);
+    const email = (profile?.email as string | null | undefined) ?? null;
+    if (!email) return err('validation_error', 'That member has no email on file.');
+
+    const rl = await checkRateLimit(
+      `pwreset-req:${email.toLowerCase()}`,
+      3,
+      15 * 60_000,
+      'closed',
+    );
+    if (!rl.allowed) {
+      return err(
+        'rate_limited',
+        'Too many reset emails for this member. Try again in 15 minutes.',
+      );
+    }
+
+    const sent = await sendPasswordResetEmail(email);
+    if (!sent) return err('internal_error', 'Email failed to send — check Resend.');
+
+    await audit(
+      {
+        event: 'member.password_reset_sent',
+        entityType: 'user',
+        entityId: parsed.data.targetUserId,
+        extra: { email },
+      },
+      ctx,
+    );
+
+    return ok({ email });
   } catch (e) {
     return toResult(e);
   }

@@ -134,6 +134,10 @@ export type AuditEvent =
   | 'user.signed_out'
   | 'user.password.reset_requested'
   | 'user.password.reset_completed'
+  // An org admin/owner emailed a member a password-reset link from the
+  // Team page (distinct from the self-serve 'user.password.reset_requested'
+  // so operator-initiated sends stay attributable in the org audit trail).
+  | 'member.password_reset_sent'
   | 'user.profile.updated'
   | 'user.session.invalidated'
   // Org-level admin actions (replacing prior misuse of warehouse.updated

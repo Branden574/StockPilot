@@ -65,17 +65,24 @@ export async function updateSession(request: NextRequest) {
   // the whole point of the challenge page. Treating it as a generic auth
   // route caused a redirect loop with the dashboard layout's MFA gate.
   //
-  // /reset/complete is similarly reachable while signed in — Supabase's
-  // password recovery flow exchanges the magic-link code for a real
-  // session before the user lands on the form, so updateUser({ password })
-  // can authenticate as them. Bouncing them to /dashboard before they
-  // pick a new password breaks the whole reset flow.
+  // ALL of /reset is similarly reachable while signed in:
+  //   - /reset/complete: the recovery flow establishes a real session
+  //     BEFORE the user lands on the form (verifyOtp in /auth/confirm),
+  //     so updateUser({ password }) can authenticate as them. Bouncing
+  //     them to /dashboard before they pick a new password breaks the
+  //     whole reset flow.
+  //   - /reset itself: /auth/confirm redirects expired/used links to
+  //     /reset?error=link_expired. When the clicker already had a
+  //     session, the old rule bounced that to /dashboard — the user saw
+  //     "clicked the email and it just signed me back in" with no
+  //     explanation (owner-reported 2026-07-02). A signed-in user
+  //     requesting a reset link is harmless, so exempt the whole tree.
   const isAuthRoute =
     AUTH_ROUTES.some((p) => pathname.startsWith(p)) &&
     pathname !== '/signin/mfa' &&
     !pathname.startsWith('/signin/mfa/') &&
-    pathname !== '/reset/complete' &&
-    !pathname.startsWith('/reset/complete/');
+    pathname !== '/reset' &&
+    !pathname.startsWith('/reset/');
 
   if (isProtected && !user) {
     const url = request.nextUrl.clone();

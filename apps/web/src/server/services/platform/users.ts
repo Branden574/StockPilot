@@ -1,15 +1,14 @@
 import 'server-only';
 
-import { env } from '@/lib/env';
+import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { createClient } from '@/lib/supabase/server';
 
 import { recordPlatformAudit } from './audit';
 
 /**
  * Platform-admin user actions. Today: trigger a password-reset email for any
- * user on the platform. The admin never sees or sets a password — Supabase
- * emails the user a recovery link, exactly like the self-serve "forgot
+ * user on the platform. The admin never sees or sets a password — the user
+ * gets a one-time recovery link, exactly like the self-serve "forgot
  * password" flow, just initiated by the operator.
  *
  * The CALLER must have passed the platform-admin gate (and step-up where
@@ -43,14 +42,14 @@ export async function sendPasswordResetForUser(
   const email = (profile as { email: string | null }).email;
   if (!email) return { ok: false, reason: 'no_email' };
 
-  // Send the recovery email through the configured mailer — same call the
-  // self-serve flow uses. resetPasswordForEmail takes an explicit address, so
-  // the caller's session is irrelevant; we use the server client for it.
-  const supabase = await createClient();
-  const { error: sendErr } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/reset/complete`,
-  });
-  if (sendErr) return { ok: false, reason: 'send_failed' };
+  // Mint + send via the shared helper — the SAME path the self-serve
+  // forgot-password form uses (admin.generateLink → our /auth/confirm URL →
+  // Resend). NOT resetPasswordForEmail: that routes through Supabase's
+  // built-in mailer, capped at ~2 emails/hour project-wide, which is
+  // exactly how this action failed live with "Could not send the reset
+  // email" (see sendPasswordResetEmail for the full WHY).
+  const sent = await sendPasswordResetEmail(email);
+  if (!sent) return { ok: false, reason: 'send_failed' };
 
   await recordPlatformAudit({
     actorUserId: input.actorUserId,

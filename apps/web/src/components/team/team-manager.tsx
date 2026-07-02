@@ -49,6 +49,7 @@ import {
   removeMemberAction,
   resendInviteAction,
   revokeInviteAction,
+  sendMemberPasswordResetAction,
   setMemberChartersAction,
   transferOwnershipAction,
   updateMemberRoleAction,
@@ -227,6 +228,8 @@ function MemberRow({
   const [transferBusy, setTransferBusy] = React.useState(false);
   const [categoryAccessOpen, setCategoryAccessOpen] = React.useState(false);
   const [chartersOpen, setChartersOpen] = React.useState(false);
+  const [resetOpen, setResetOpen] = React.useState(false);
+  const [resetBusy, setResetBusy] = React.useState(false);
   const initials = (member.fullName || member.email)
     .split(/\s+/)
     .map((s) => s[0])
@@ -264,6 +267,18 @@ function MemberRow({
     setRemoveOpen(false);
     toast.success(`"${displayName}" removed from the workspace.`);
     router.refresh();
+  }
+
+  async function confirmSendReset() {
+    setResetBusy(true);
+    const res = await sendMemberPasswordResetAction(member.userId);
+    setResetBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    setResetOpen(false);
+    toast.success(`Reset link sent to ${member.email}.`);
   }
 
   async function confirmTransfer() {
@@ -350,6 +365,13 @@ function MemberRow({
                   Category access…
                 </DropdownMenuItem>
               )}
+              {/* Only accepted members have an account to recover — pending
+                  invitees get "Resend invite" in the invites table instead. */}
+              {member.acceptedAt !== null && (
+                <DropdownMenuItem onClick={() => setResetOpen(true)}>
+                  Send password reset…
+                </DropdownMenuItem>
+              )}
               {canTransferOwnership && (
                 <DropdownMenuItem onClick={() => setTransferOpen(true)}>
                   Transfer ownership…
@@ -372,6 +394,16 @@ function MemberRow({
           confirmLabel="Remove"
           pending={removeBusy}
           onConfirm={confirmRemove}
+        />
+        <DestructiveConfirm
+          open={resetOpen}
+          onOpenChange={setResetOpen}
+          tone="primary"
+          title="Send password reset?"
+          description={`Email ${displayName} (${member.email}) a password-reset link? The link works once and expires in 1 hour.`}
+          confirmLabel="Send reset link"
+          pending={resetBusy}
+          onConfirm={confirmSendReset}
         />
         {member.warehouseId && chartersOpen && (
           // Mounted only while open + freshly keyed so its state initializer
