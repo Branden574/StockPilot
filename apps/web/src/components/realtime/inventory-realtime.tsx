@@ -4,6 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import * as React from 'react';
 
 import { createClient } from '@/lib/supabase/client';
+import { revalidateInventoryViewAction } from '@/server/actions/revalidate-inventory-view';
 
 interface InventoryRealtimeProps {
   organizationId: string;
@@ -87,19 +88,34 @@ export function InventoryRealtime({
       const supabase = createClient();
       const channel = supabase.channel(`org:${organizationId}:inventory`);
 
+      // Bust this org's cached default list view BEFORE refreshing, so the
+      // RSC re-fetch can never read the ≤60s inventory-list cache entry.
+      // Web writes already invalidate it server-side; this covers writes
+      // that bypass this server entirely (mobile direct-to-Supabase, SQL)
+      // — the change event reaches watching browsers either way, and the
+      // watcher invalidates on the writer's behalf. If the action call
+      // fails, refresh anyway: the TTL still bounds staleness at 60s.
+      function refreshWithFreshCache() {
+        void revalidateInventoryViewAction()
+          .catch(() => {
+            /* noop — TTL bounds staleness */
+          })
+          .finally(() => router.refresh());
+      }
+
       function nudge() {
         const now = Date.now();
         const since = now - lastRefreshRef.current;
         if (since >= THROTTLE_MS) {
           lastRefreshRef.current = now;
-          router.refresh();
+          refreshWithFreshCache();
           return;
         }
         if (pendingRef.current) return;
         pendingRef.current = setTimeout(() => {
           pendingRef.current = null;
           lastRefreshRef.current = Date.now();
-          router.refresh();
+          refreshWithFreshCache();
         }, THROTTLE_MS - since);
       }
 
