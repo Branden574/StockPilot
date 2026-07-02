@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { OrdersStorefront } from '@/components/orders/storefront/orders-storefront';
+import type { StorefrontCatalogData } from '@/components/orders/storefront/orders-storefront';
 import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -59,19 +60,12 @@ export default async function NewOrderPage({
   const warehouseId =
     warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
 
-  const [items, chartersForWarehouse, thumbMap] = await Promise.all([
-    loadCatalogItems(ctx.organizationId, warehouseId, ctx.userId),
-    loadChartersForWarehouse(warehouseId),
-    loadCatalogThumbMapCached(ctx.organizationId, warehouseId),
-  ]);
-  const aisles = buildAisles(items);
-
-  // Merge the 4h-cached thumbnail URLs onto the 30s-cached catalog rows
-  // so cards render with photos on first paint without the stock loader
-  // ever paying the URL-signing fan-out.
-  const itemsWithThumbs = items.map((it) =>
-    thumbMap[it.id] ? { ...it, imageUrl: thumbMap[it.id]! } : it,
-  );
+  // STREAMING: the catalog bundle is deliberately NOT awaited. The
+  // shell (head + setup bar) only needs warehouses/charters/viewer, so
+  // it flushes immediately; the client suspends just the grid + cart
+  // rail on this promise and React streams the resolved payload in.
+  const catalogPromise = loadCatalogBundle(ctx.organizationId, warehouseId, ctx.userId);
+  const chartersForWarehouse = await loadChartersForWarehouse(warehouseId);
 
   // The storefront owns its own page head (back link, H1, flow
   // indicator) and dark-scoped frame — no dashboard container here.
@@ -82,14 +76,46 @@ export default async function NewOrderPage({
     <OrdersStorefront
       warehouses={warehouses}
       warehouseId={warehouseId}
-      items={itemsWithThumbs}
-      aisles={aisles}
+      catalogPromise={catalogPromise}
       chartersForWarehouse={chartersForWarehouse}
       viewerRole={ctx.role}
       viewerName={ctx.fullName}
       viewerEmail={ctx.email}
     />
   );
+}
+
+/**
+ * Catalog items + thumbnail media merged into the streamed payload.
+ *
+ * PAYLOAD DIET: an item that has a resolved thumbnail URL ships with
+ * `lqip: null` — the blur-up only matters while no real image URL
+ * exists, and 350 inline ~1-2KB base64 blurs were the single heaviest
+ * chunk of the RSC payload (hundreds of KB serialized, parsed, and
+ * hydrated on every visit). Items whose URL failed to sign keep their
+ * lqip so cards still blur-up instead of flashing the glyph.
+ */
+async function loadCatalogBundle(
+  organizationId: string,
+  warehouseId: string,
+  userId: string,
+): Promise<StorefrontCatalogData> {
+  const [items, mediaMap] = await Promise.all([
+    loadCatalogItems(organizationId, warehouseId, userId),
+    loadCatalogThumbMapCached(organizationId, warehouseId),
+  ]);
+
+  const merged = items.map((it) => {
+    const media = mediaMap[it.id];
+    if (!media) return it;
+    return {
+      ...it,
+      imageUrl: media.url,
+      lqip: media.url ? null : media.lqip,
+    };
+  });
+
+  return { items: merged, aisles: buildAisles(merged) };
 }
 
 /**
@@ -103,19 +129,32 @@ export default async function NewOrderPage({
  * recompute is mostly warm reads). Thumbnails aren't access-scoped
  * (any org member who can open the picker may see product photos), so
  * no accessKey in the cache key.
+ *
+ * Also carries each item's LQIP blur: image rows change on the same
+ * cadence as their thumbnails, so pulling the blurs out of the 30s
+ * stock loader saves that loader an entire item_images query (~700KB
+ * of base64 transfer per recompute for a 350-item catalog).
  */
+interface CatalogItemMedia {
+  url: string | null;
+  lqip: string | null;
+}
+
+// v2 (FIX 5): value shape changed from Record<string, string> to
+// Record<string, CatalogItemMedia> — key bumped so stale v1 entries
+// can't be read as the new shape for up to 4h.
 const loadCatalogThumbMapCached = unstable_cache(
   async (
     organizationId: string,
     warehouseId: string,
-  ): Promise<Record<string, string>> => {
+  ): Promise<Record<string, CatalogItemMedia>> => {
     const supabase = createAdminClient();
     // Mirror the catalog loader's item scoping with an inner join on
     // inventory_items so only this warehouse's images get signed.
     const { data } = await supabase
       .from('item_images')
       .select(
-        'item_id, thumb_path, storage_path, is_primary, sort_order, item:inventory_items!inner(warehouse_id)',
+        'item_id, lqip, thumb_path, storage_path, is_primary, sort_order, item:inventory_items!inner(warehouse_id)',
       )
       .eq('organization_id', organizationId)
       .eq('item.warehouse_id', warehouseId)
@@ -125,31 +164,33 @@ const loadCatalogThumbMapCached = unstable_cache(
     // First row per item wins (is_primary DESC + sort_order ASC).
     const rowByItem = new Map<
       string,
-      { thumbPath: string | null; storagePath: string | null }
+      { lqip: string | null; thumbPath: string | null; storagePath: string | null }
     >();
     for (const row of (data ?? []) as Array<{
       item_id: string;
+      lqip: string | null;
       thumb_path: string | null;
       storage_path: string | null;
     }>) {
       if (!rowByItem.has(row.item_id)) {
         rowByItem.set(row.item_id, {
+          lqip: row.lqip ?? null,
           thumbPath: row.thumb_path ?? null,
           storagePath: row.storage_path ?? null,
         });
       }
     }
 
-    const urls: Record<string, string> = {};
+    const media: Record<string, CatalogItemMedia> = {};
     await Promise.all(
       [...rowByItem.entries()].map(async ([itemId, row]) => {
         const url = await cachedCatalogThumbUrl(row.storagePath, row.thumbPath);
-        if (url) urls[itemId] = url;
+        if (url || row.lqip) media[itemId] = { url, lqip: row.lqip };
       }),
     );
-    return urls;
+    return media;
   },
-  ['orders-new-thumbmap-v1'],
+  ['orders-new-thumbmap-v2'],
   { revalidate: 4 * 60 * 60, tags: ['orders-new-thumbmap'] },
 );
 
@@ -236,7 +277,7 @@ async function loadAccessibleCategoryKey(
  * available-to-promise, rack label, category name. Bundles are
  * filtered out (phantom rows).
  *
- * Wrapped in unstable_cache (30s TTL, keyed by orgId + warehouseId +
+ * Wrapped in unstable_cache (60s TTL, keyed by orgId + warehouseId +
  * accessKey). The accessKey is critical: without it a manager's
  * full-catalog payload would be served to a restricted viewer
  * hitting the same warehouse (RLS is bypassed in here because the
@@ -247,6 +288,12 @@ async function loadAccessibleCategoryKey(
  * capture per-user cookies. The page-level perimeter (requireOrgContext
  * + warehousesSvc.list scoping) guarantees only warehouseIds the user
  * is authorized to see ever get passed in.
+ *
+ * TTL tradeoff (FIX 5): 30s → 60s halves the cache-miss rate for the
+ * heaviest per-request work. The cost is availability numbers being up
+ * to a minute stale on cards — acceptable because they're advisory:
+ * the submit path re-validates against live stock/reservations, and
+ * the cap warnings in the cart handle any drift.
  */
 const loadCatalogItemsCached = unstable_cache(
   async (
@@ -257,7 +304,7 @@ const loadCatalogItemsCached = unstable_cache(
     return loadCatalogItemsUncached(organizationId, warehouseId, accessKey);
   },
   ['orders-new-v2-catalog-v2'],
-  { revalidate: 30, tags: ['orders-new-v2-catalog'] },
+  { revalidate: 60, tags: ['orders-new-v2-catalog'] },
 );
 
 async function loadCatalogItems(
@@ -334,15 +381,14 @@ async function loadCatalogItemsUncached(
   const categoryIds = [...new Set(items.map((i) => i.category_id).filter((v): v is string => Boolean(v)))];
   const charterIds = [...new Set(items.map((i) => i.charter_id).filter((v): v is string => Boolean(v)))];
 
-  // Reservations + category names + charter names + LQIP blurs in
-  // parallel. Thumbnail URL SIGNING deliberately does NOT happen in
-  // here: this loader recomputes every 30s (stock freshness) and
-  // resolving ~350 signed URLs inside the recompute made one visitor
-  // per window eat the whole fan-out in TTFB (~3s skeleton). URLs come
-  // from loadCatalogThumbMapCached instead (4h cadence) and are merged
-  // in the page component. LQIP blurs are tiny base64 data URIs (≤2KB)
-  // shipped inline as instant placeholders.
-  const [rsRes, categoriesRes, chartersRes, lqipRes] = await Promise.all([
+  // Reservations + category names + charter names in parallel. NO
+  // media work happens in here (FIX 5): thumbnail URL signing lived in
+  // this loader briefly and put ~350 nested cache lookups in TTFB for
+  // one visitor per cache window, and the LQIP query alone transferred
+  // ~700KB of base64 per recompute. Both now come from
+  // loadCatalogThumbMapCached (4h cadence) and are merged in the page
+  // component — this loader is pure stock/catalog reads.
+  const [rsRes, categoriesRes, chartersRes] = await Promise.all([
     supabase
       .from('stock_reservations')
       .select('item_id, quantity')
@@ -365,14 +411,6 @@ async function loadCatalogItemsUncached(
       : Promise.resolve({
           data: [] as Array<{ id: string; name: string; code: string | null }>,
         }),
-    supabase
-      .from('item_images')
-      .select('item_id, lqip, is_primary, sort_order')
-      .eq('organization_id', organizationId)
-      .in('item_id', itemIds)
-      .not('lqip', 'is', null)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true }),
   ]);
 
   const reservedByItem = new Map<string, number>();
@@ -395,15 +433,6 @@ async function loadCatalogItemsUncached(
     code: string | null;
   }>) {
     charterById.set(c.id, { name: c.name, code: c.code ?? null });
-  }
-
-  // Pick one LQIP per item (the query is_primary DESC + sort_order ASC
-  // so the first row per item is the canonical primary image).
-  const lqipByItem = new Map<string, string>();
-  for (const row of (lqipRes.data ?? []) as Array<{ item_id: string; lqip: string | null }>) {
-    if (!lqipByItem.has(row.item_id) && row.lqip) {
-      lqipByItem.set(row.item_id, row.lqip);
-    }
   }
 
   function rackLabelFor(it: typeof items[number]): string | null {
@@ -433,10 +462,10 @@ async function loadCatalogItemsUncached(
     charterName: it.charter_id ? charterById.get(it.charter_id)?.name ?? null : null,
     charterCode: it.charter_id ? charterById.get(it.charter_id)?.code ?? null : null,
     rackLabel: rackLabelFor(it),
-    // Merged in the page component from loadCatalogThumbMapCached —
-    // signing lives on a 4h cadence, not this 30s stock loader.
+    // Both merged in loadCatalogBundle from loadCatalogThumbMapCached —
+    // media lives on a 4h cadence, not this 60s stock loader.
     imageUrl: null,
-    lqip: lqipByItem.get(it.id) ?? null,
+    lqip: null,
     // Price: retail first, then cost, then null. The v2 picker shows
     // "—" for null, and the cart estimated total excludes them.
     price:

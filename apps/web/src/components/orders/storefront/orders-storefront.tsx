@@ -5,6 +5,11 @@
 // frequently-ordered carousel, and the review → submit → success flow.
 // Cart state + draft persistence come verbatim from the v2 cart
 // context; the submit payload matches v2/cart-rail.tsx exactly.
+//
+// STREAMING: the page passes the catalog as an un-awaited promise so
+// the frame (head, flow indicator, setup bar) flushes immediately;
+// only the grid + cart rail suspend behind <Suspense> with a skeleton
+// grid while the 353-item payload resolves and streams in.
 
 import {
   ArrowUpDown,
@@ -40,6 +45,7 @@ import {
   EmptyResults,
   FreqCarousel,
   ProductCard,
+  SkeletonCard,
   type FreqEntry,
 } from './storefront-cards';
 import { CartFab, CartRail, type CartContextInfo } from './storefront-cart';
@@ -67,16 +73,25 @@ const GRID_PREVIEW = 4;
 const LIST_PREVIEW = 6;
 const NEW_HIRE_RE = /new hire/i;
 
+/** Resolved catalog payload streamed in behind the page frame. */
+export interface StorefrontCatalogData {
+  items: CatalogItem[];
+  aisles: AisleSummary[];
+}
+
 export interface OrdersStorefrontProps {
   warehouses: Array<{ id: string; name: string }>;
   warehouseId: string;
-  items: CatalogItem[];
-  aisles: AisleSummary[];
+  /** Un-awaited on the server so the shell streams ahead of the grid. */
+  catalogPromise: Promise<StorefrontCatalogData>;
   chartersForWarehouse: Array<{ id: string; name: string; code: string | null }>;
   viewerRole: string;
   viewerName: string | null;
   viewerEmail: string;
 }
+
+type ReviewStage = null | 'review' | 'success';
+type SubmittedOrder = { id: string; unitCount: number } | null;
 
 export function OrdersStorefront(props: OrdersStorefrontProps) {
   const initial = initialCartState({
@@ -86,7 +101,7 @@ export function OrdersStorefront(props: OrdersStorefrontProps) {
 
   return (
     <CartProvider initial={initial}>
-      <StorefrontInner {...props} />
+      <StorefrontShell {...props} />
     </CartProvider>
   );
 }
@@ -167,13 +182,63 @@ function FlowIndicator({ stage }: { stage: FlowStage }) {
   );
 }
 
-/* ---- page ----------------------------------------------------------------- */
+/* ---- streaming fallback: skeleton toolbar + grid + cart ------------------- */
 
-function StorefrontInner({
+function CatalogSkeleton() {
+  return (
+    <div className="sf-shell" aria-busy="true" aria-label="Loading catalog">
+      <div style={{ minWidth: 0 }}>
+        <div
+          className="sf-sk"
+          style={{ height: 40, borderRadius: 10, margin: '10px 0 12px' }}
+        />
+        <div style={{ display: 'flex', gap: 6, margin: '0 0 18px' }}>
+          {[64, 118, 96, 132, 88].map((w, i) => (
+            <div
+              key={i}
+              className="sf-sk"
+              style={{ width: w, height: 34, borderRadius: 999 }}
+            />
+          ))}
+        </div>
+        <div className="sf-grid">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </div>
+      </div>
+      <div className="sf-rail">
+        <div className="sf-cart">
+          <div className="sf-cart-head">
+            <div className="sf-sk" style={{ width: 130, height: 16 }} />
+          </div>
+          <div
+            style={{
+              padding: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+              flex: 1,
+            }}
+          >
+            <div className="sf-sk" style={{ height: 44, borderRadius: 9 }} />
+            <div className="sf-sk" style={{ height: 44, borderRadius: 9 }} />
+          </div>
+          <div className="sf-cart-foot">
+            <div className="sf-sk" style={{ height: 42, borderRadius: 11 }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---- shell: head + setup bar render immediately --------------------------- */
+
+function StorefrontShell({
   warehouses,
   warehouseId,
-  items,
-  aisles,
+  catalogPromise,
   chartersForWarehouse,
   viewerRole,
   viewerName,
@@ -182,146 +247,15 @@ function StorefrontInner({
   const router = useRouter();
   const { state, dispatch } = useCart();
 
-  // Thumbnail URLs arrive server-embedded on each item (the page
-  // loader resolves them through the 25-day cached signers), so the
-  // old deferred /api/orders/catalog-thumbnails fetch + merge is gone.
-  // LQIP blur-up still renders for any item whose URL failed to sign.
-  const itemMap = React.useMemo(
-    () => new Map(items.map((it) => [it.id, it])),
-    [items],
-  );
-
-  /* --- frequently ordered --- */
-  const { items: freqApiItems, loading: freqLoading } = useFreqItems(warehouseId);
-  const freqEntries = React.useMemo<FreqEntry[]>(
-    () =>
-      freqApiItems.flatMap((f) => {
-        const item = itemMap.get(f.itemId);
-        if (!item) return [];
-        // The freq endpoint signs its own 200px thumbnails — fall back
-        // to them when the catalog row has no resolved URL so items
-        // with photos never show a letter glyph in the carousel.
-        return [
-          { item: { ...item, imageUrl: item.imageUrl ?? f.imageUrl }, count: f.count },
-        ];
-      }),
-    [freqApiItems, itemMap],
-  );
-  const freqByItemId = React.useMemo(
-    () => new Map(freqApiItems.map((f) => [f.itemId, f.count])),
-    [freqApiItems],
-  );
-  const suggestions = React.useMemo(
-    () =>
-      freqEntries
-        .filter((e) => availableOf(e.item) > 0)
-        .slice(0, 3)
-        .map((e) => ({ itemId: e.item.id, name: e.item.name })),
-    [freqEntries],
-  );
-
-  /* --- catalog UI state --- */
-  const [category, setCategory] = React.useState<CategoryFilter>('all');
-  const [searchInput, setSearchInput] = React.useState('');
-  const deferredSearch = React.useDeferredValue(searchInput);
-  const [availability, setAvailability] = React.useState<ReadonlySet<ItemStatus>>(
-    () => new Set<ItemStatus>(),
-  );
-  const [sort, setSort] = React.useState<SortKey>('featured');
-  const [view, setView] = React.useState<ViewMode>('grid');
-  const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(
-    () => new Set<string>(),
-  );
-
   const [openPop, setOpenPop] = React.useState<null | 'wh' | 'person' | 'site'>(null);
-  const [toolPop, setToolPop] = React.useState<null | 'avail' | 'sort'>(null);
+  const [pendingName, setPendingName] = React.useState('');
+  const [pendingEmail, setPendingEmail] = React.useState('');
 
-  /* --- overlays --- */
-  const [quickId, setQuickId] = React.useState<string | null>(null);
-  const [reviewStage, setReviewStage] = React.useState<null | 'review' | 'success'>(null);
-  const [submitted, setSubmitted] = React.useState<{ id: string; unitCount: number } | null>(
-    null,
-  );
-  const [isPending, startTransition] = React.useTransition();
+  // Review stage lives up here (not in the streamed catalog) so the
+  // flow indicator in the always-visible head can reflect it.
+  const [reviewStage, setReviewStage] = React.useState<ReviewStage>(null);
+  const [submitted, setSubmitted] = React.useState<SubmittedOrder>(null);
 
-  /* --- cart callbacks (stable so React.memo cards actually skip) --- */
-  const linesRef = React.useRef(state.lines);
-  React.useEffect(() => {
-    linesRef.current = state.lines;
-  }, [state.lines]);
-
-  const handleAdd = React.useCallback(
-    (itemId: string) => {
-      const item = itemMap.get(itemId);
-      if (!item) return;
-      const avail = availableOf(item);
-      const qty = linesRef.current.find((l) => l.itemId === itemId)?.quantity ?? 0;
-      if (avail <= 0 || qty >= avail) return;
-      dispatch({ type: 'add', itemId });
-    },
-    [itemMap, dispatch],
-  );
-  const handleDec = React.useCallback(
-    (itemId: string) => dispatch({ type: 'dec', itemId }),
-    [dispatch],
-  );
-  // Typed quantities arrive pre-clamped by QtyField (0..available);
-  // set-qty at ≤0 removes the line.
-  const handleSetQty = React.useCallback(
-    (itemId: string, quantity: number) => dispatch({ type: 'set-qty', itemId, quantity }),
-    [dispatch],
-  );
-  const handleQuickView = React.useCallback((itemId: string) => setQuickId(itemId), []);
-
-  const handleAddKit = React.useCallback(
-    (kitItems: CatalogItem[]) => {
-      for (const line of fullKitLines(kitItems)) {
-        const item = itemMap.get(line.itemId);
-        if (!item) continue;
-        const qty = linesRef.current.find((l) => l.itemId === line.itemId)?.quantity ?? 0;
-        if (qty < availableOf(item)) {
-          dispatch({ type: 'add', itemId: line.itemId, quantity: line.quantity });
-        }
-      }
-    },
-    [itemMap, dispatch],
-  );
-
-  /* --- filtering + grouping --- */
-  const filterInput = React.useMemo(
-    () => ({ category, search: deferredSearch, availability }),
-    [category, deferredSearch, availability],
-  );
-  const filtered = React.useMemo(
-    () => sortCatalog(filterCatalog(items, filterInput), sort, freqByItemId),
-    [items, filterInput, sort, freqByItemId],
-  );
-  const browsingAll = isBrowsingAll(filterInput);
-
-  const statusCounts = React.useMemo(() => {
-    const counts: Record<ItemStatus, number> = { ok: 0, low: 0, out: 0 };
-    for (const it of items) counts[statusOf(it)] += 1;
-    return counts;
-  }, [items]);
-
-  const grouped = React.useMemo(() => {
-    if (!browsingAll) return null;
-    return aisles
-      .map((a) => {
-        const key = a.id ?? 'uncategorized';
-        return {
-          key,
-          name: a.name,
-          items: filtered.filter((it) => (it.categoryId ?? 'uncategorized') === key),
-        };
-      })
-      .filter((g) => g.items.length > 0);
-  }, [aisles, filtered, browsingAll]);
-
-  const qtyMap = React.useMemo(() => buildQtyMap(state.lines), [state.lines]);
-  const { unitCount } = cartTotals(state.lines);
-
-  /* --- setup derivations --- */
   const warehouseName =
     warehouses.find((w) => w.id === warehouseId)?.name ?? warehouseId;
   const charter = chartersForWarehouse.find((c) => c.id === state.charterId) ?? null;
@@ -330,9 +264,7 @@ function StorefrontInner({
   );
   const viewerLabel = viewerName?.trim() || viewerEmail;
 
-  const [pendingName, setPendingName] = React.useState('');
-  const [pendingEmail, setPendingEmail] = React.useState('');
-
+  const { unitCount } = cartTotals(state.lines);
   const flowStage: FlowStage =
     reviewStage === 'success'
       ? 'submit'
@@ -341,139 +273,6 @@ function StorefrontInner({
         : unitCount > 0
           ? 'cart'
           : 'browse';
-
-  const cartContext: CartContextInfo = {
-    warehouseName,
-    method: state.fulfillmentType,
-    siteName: charter?.name ?? null,
-    requesterLabel: state.onBehalfOf
-      ? `For ${state.onBehalfOf.name.split(/\s+/)[0]}`
-      : 'For you',
-  };
-
-  const railRef = React.useRef<HTMLDivElement>(null);
-
-  /* --- submit (payload + validation identical to v2/cart-rail.tsx) --- */
-  function handleConfirmSubmit() {
-    const lines = state.lines;
-    if (lines.length === 0) {
-      toast.error('Add at least one item to your cart before submitting.');
-      return;
-    }
-    if (state.fulfillmentType === 'delivery' && !state.charterId) {
-      toast.error('Select a delivery site in the setup bar above.');
-      return;
-    }
-    if (state.onBehalfOf) {
-      if (!state.onBehalfOf.name.trim() || !state.onBehalfOf.email.trim()) {
-        toast.error("Complete the requester's name and email above.");
-        return;
-      }
-    }
-
-    startTransition(async () => {
-      const res = await createOrderRequestAction({
-        warehouseId: state.warehouseId,
-        notes: state.notes.trim() || null,
-        fulfillmentType: state.fulfillmentType,
-        requesterPhone: null,
-        deliveryCharterId:
-          state.fulfillmentType === 'delivery' ? (state.charterId ?? null) : null,
-        pickupLocationNotes: null,
-        onBehalfOf: state.onBehalfOf
-          ? {
-              name: state.onBehalfOf.name.trim(),
-              email: state.onBehalfOf.email.trim(),
-            }
-          : null,
-        lines: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
-      });
-
-      if (!res.ok) {
-        toast.error(res.error.message);
-        return;
-      }
-
-      // Clear the persisted draft right away so a reload doesn't
-      // resurrect the just-submitted cart. In-memory lines stay until
-      // "Done" so the success screen can still show them.
-      clearCartDraft(warehouseId);
-      setSubmitted({
-        id: res.data.id,
-        unitCount: lines.reduce((s, l) => s + l.quantity, 0),
-      });
-      setReviewStage('success');
-    });
-  }
-
-  function handleDone() {
-    clearCartDraft(warehouseId);
-    dispatch({ type: 'clear' });
-    dispatch({ type: 'set-notes', value: '' });
-    setReviewStage(null);
-    setSubmitted(null);
-  }
-
-  function handleViewOrder() {
-    if (submitted) router.push(`/dashboard/orders/${submitted.id}`);
-  }
-
-  /* --- small helpers --- */
-  const toggleAvailability = (status: ItemStatus) => {
-    setAvailability((prev) => {
-      const next = new Set(prev);
-      if (next.has(status)) next.delete(status);
-      else next.add(status);
-      return next;
-    });
-  };
-
-  const clearAllFilters = () => {
-    setSearchInput('');
-    setAvailability(new Set<ItemStatus>());
-    setCategory('all');
-  };
-
-  const activeCategoryName =
-    category === 'all'
-      ? 'All products'
-      : (aisles.find((a) => (a.id ?? 'uncategorized') === category)?.name ??
-        'Category');
-
-  const renderItems = (list: CatalogItem[]) =>
-    view === 'grid' ? (
-      <div className="sf-grid">
-        {list.map((it) => (
-          <ProductCard
-            key={it.id}
-            item={it}
-            qty={qtyMap.get(it.id) ?? 0}
-            onAdd={handleAdd}
-            onDec={handleDec}
-            onSetQty={handleSetQty}
-            onQuickView={handleQuickView}
-          />
-        ))}
-      </div>
-    ) : (
-      <div className="sf-rows">
-        {list.map((it) => (
-          <CompactRow
-            key={it.id}
-            item={it}
-            qty={qtyMap.get(it.id) ?? 0}
-            onAdd={handleAdd}
-            onDec={handleDec}
-            onSetQty={handleSetQty}
-            onQuickView={handleQuickView}
-          />
-        ))}
-      </div>
-    );
-
-  const previewCount = view === 'grid' ? GRID_PREVIEW : LIST_PREVIEW;
-  const quickItem = quickId ? (itemMap.get(quickId) ?? null) : null;
-  const hasFilterChips = searchInput.trim() !== '' || availability.size > 0;
 
   return (
     <div className="sp-storefront">
@@ -789,268 +588,582 @@ function StorefrontInner({
           )}
         </div>
 
-        {/* ---------- Shell: catalog + cart ---------- */}
-        <div className="sf-shell">
-          <div style={{ minWidth: 0 }}>
-            {/* Sticky toolbar */}
-            <div className="sf-sticky">
-              <div className="sf-tools">
-                <div className="sf-search">
-                  <span className="icon">
-                    <Search size={15} />
-                  </span>
-                  <input
-                    placeholder="Search products, SKU, category…"
-                    value={searchInput}
-                    onChange={(e) => setSearchInput(e.target.value)}
-                    aria-label="Search catalog"
-                  />
-                  {searchInput !== '' && (
-                    <button
-                      type="button"
-                      className="clear"
-                      onClick={() => setSearchInput('')}
-                      aria-label="Clear search"
-                    >
-                      <X size={11} />
-                    </button>
-                  )}
-                </div>
+        {/* ---------- Catalog + cart: stream in behind the frame ---------- */}
+        <React.Suspense fallback={<CatalogSkeleton />}>
+          <StorefrontCatalog
+            catalogPromise={catalogPromise}
+            warehouseId={warehouseId}
+            warehouseName={warehouseName}
+            chartersForWarehouse={chartersForWarehouse}
+            viewerLabel={viewerLabel}
+            reviewStage={reviewStage}
+            setReviewStage={setReviewStage}
+            submitted={submitted}
+            setSubmitted={setSubmitted}
+          />
+        </React.Suspense>
+      </div>
+    </div>
+  );
+}
 
-                <div className="sf-popwrap">
-                  <button
-                    type="button"
-                    className="sf-tool-btn"
-                    data-on={availability.size > 0}
-                    onClick={() => setToolPop(toolPop === 'avail' ? null : 'avail')}
-                    aria-haspopup="dialog"
-                    aria-expanded={toolPop === 'avail'}
-                  >
-                    <Filter size={13} /> Availability
-                    {availability.size > 0 && (
-                      <span className="bdg">{availability.size}</span>
-                    )}
-                    <ChevronDown size={11} />
-                  </button>
-                  <SfPopover
-                    open={toolPop === 'avail'}
-                    onClose={() => setToolPop(null)}
-                    width={216}
-                  >
-                    {(['ok', 'low', 'out'] as const).map((id) => (
-                      <button
-                        key={id}
-                        type="button"
-                        className="sf-opt"
-                        data-on={availability.has(id)}
-                        onClick={() => toggleAvailability(id)}
-                      >
-                        <span className="sf-cb" data-checked={availability.has(id)} />
-                        <span className="nm" style={{ fontWeight: 400 }}>
-                          {AVAILABILITY_LABELS[id]}
-                        </span>
-                        <span className="ct">{statusCounts[id]}</span>
-                      </button>
-                    ))}
-                  </SfPopover>
-                </div>
+/* ---- catalog body (suspends on the streamed items payload) ---------------- */
 
-                <div className="sf-popwrap">
-                  <button
-                    type="button"
-                    className="sf-tool-btn"
-                    onClick={() => setToolPop(toolPop === 'sort' ? null : 'sort')}
-                    aria-haspopup="dialog"
-                    aria-expanded={toolPop === 'sort'}
-                  >
-                    <ArrowUpDown size={13} />{' '}
-                    {SORT_OPTIONS.find((s) => s.id === sort)?.label ?? 'Featured'}
-                    <ChevronDown size={11} />
-                  </button>
-                  <SfPopover
-                    open={toolPop === 'sort'}
-                    onClose={() => setToolPop(null)}
-                    right
-                    width={210}
-                  >
-                    {SORT_OPTIONS.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        className="sf-opt"
-                        data-on={s.id === sort}
-                        onClick={() => {
-                          setSort(s.id);
-                          setToolPop(null);
-                        }}
-                      >
-                        <span className="nm" style={{ fontWeight: 400 }}>
-                          {s.label}
-                        </span>
-                        <span className="tick">
-                          <Check size={14} />
-                        </span>
-                      </button>
-                    ))}
-                  </SfPopover>
-                </div>
+interface StorefrontCatalogProps {
+  catalogPromise: Promise<StorefrontCatalogData>;
+  warehouseId: string;
+  warehouseName: string;
+  chartersForWarehouse: Array<{ id: string; name: string; code: string | null }>;
+  viewerLabel: string;
+  reviewStage: ReviewStage;
+  setReviewStage: React.Dispatch<React.SetStateAction<ReviewStage>>;
+  submitted: SubmittedOrder;
+  setSubmitted: React.Dispatch<React.SetStateAction<SubmittedOrder>>;
+}
 
-                <div className="sf-viewseg">
+function StorefrontCatalog({
+  catalogPromise,
+  warehouseId,
+  warehouseName,
+  chartersForWarehouse,
+  viewerLabel,
+  reviewStage,
+  setReviewStage,
+  submitted,
+  setSubmitted,
+}: StorefrontCatalogProps) {
+  // Suspends until the server streams the catalog payload.
+  const { items, aisles } = React.use(catalogPromise);
+
+  const router = useRouter();
+  const { state, dispatch } = useCart();
+
+  const itemMap = React.useMemo(
+    () => new Map(items.map((it) => [it.id, it])),
+    [items],
+  );
+
+  /* --- frequently ordered --- */
+  const { items: freqApiItems, loading: freqLoading } = useFreqItems(warehouseId);
+  const freqEntries = React.useMemo<FreqEntry[]>(
+    () =>
+      freqApiItems.flatMap((f) => {
+        const item = itemMap.get(f.itemId);
+        if (!item) return [];
+        // The freq endpoint signs its own 200px thumbnails — fall back
+        // to them when the catalog row has no resolved URL so items
+        // with photos never show a letter glyph in the carousel.
+        return [
+          { item: { ...item, imageUrl: item.imageUrl ?? f.imageUrl }, count: f.count },
+        ];
+      }),
+    [freqApiItems, itemMap],
+  );
+  const freqByItemId = React.useMemo(
+    () => new Map(freqApiItems.map((f) => [f.itemId, f.count])),
+    [freqApiItems],
+  );
+  const suggestions = React.useMemo(
+    () =>
+      freqEntries
+        .filter((e) => availableOf(e.item) > 0)
+        .slice(0, 3)
+        .map((e) => ({ itemId: e.item.id, name: e.item.name })),
+    [freqEntries],
+  );
+
+  /* --- catalog UI state --- */
+  const [category, setCategory] = React.useState<CategoryFilter>('all');
+  const [searchInput, setSearchInput] = React.useState('');
+  const deferredSearch = React.useDeferredValue(searchInput);
+  const [availability, setAvailability] = React.useState<ReadonlySet<ItemStatus>>(
+    () => new Set<ItemStatus>(),
+  );
+  const [sort, setSort] = React.useState<SortKey>('featured');
+  const [view, setView] = React.useState<ViewMode>('grid');
+  const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const [toolPop, setToolPop] = React.useState<null | 'avail' | 'sort'>(null);
+
+  /* --- overlays --- */
+  const [quickId, setQuickId] = React.useState<string | null>(null);
+  const [isPending, startTransition] = React.useTransition();
+
+  /* --- cart callbacks (stable so React.memo cards actually skip) --- */
+  const linesRef = React.useRef(state.lines);
+  React.useEffect(() => {
+    linesRef.current = state.lines;
+  }, [state.lines]);
+
+  const handleAdd = React.useCallback(
+    (itemId: string) => {
+      const item = itemMap.get(itemId);
+      if (!item) return;
+      const avail = availableOf(item);
+      const qty = linesRef.current.find((l) => l.itemId === itemId)?.quantity ?? 0;
+      if (avail <= 0 || qty >= avail) return;
+      dispatch({ type: 'add', itemId });
+    },
+    [itemMap, dispatch],
+  );
+  const handleDec = React.useCallback(
+    (itemId: string) => dispatch({ type: 'dec', itemId }),
+    [dispatch],
+  );
+  // Typed quantities arrive pre-clamped by QtyField (0..available);
+  // set-qty at ≤0 removes the line.
+  const handleSetQty = React.useCallback(
+    (itemId: string, quantity: number) => dispatch({ type: 'set-qty', itemId, quantity }),
+    [dispatch],
+  );
+  const handleQuickView = React.useCallback((itemId: string) => setQuickId(itemId), []);
+
+  const handleAddKit = React.useCallback(
+    (kitItems: CatalogItem[]) => {
+      for (const line of fullKitLines(kitItems)) {
+        const item = itemMap.get(line.itemId);
+        if (!item) continue;
+        const qty = linesRef.current.find((l) => l.itemId === line.itemId)?.quantity ?? 0;
+        if (qty < availableOf(item)) {
+          dispatch({ type: 'add', itemId: line.itemId, quantity: line.quantity });
+        }
+      }
+    },
+    [itemMap, dispatch],
+  );
+
+  /* --- filtering + grouping --- */
+  const filterInput = React.useMemo(
+    () => ({ category, search: deferredSearch, availability }),
+    [category, deferredSearch, availability],
+  );
+  const filtered = React.useMemo(
+    () => sortCatalog(filterCatalog(items, filterInput), sort, freqByItemId),
+    [items, filterInput, sort, freqByItemId],
+  );
+  const browsingAll = isBrowsingAll(filterInput);
+
+  const statusCounts = React.useMemo(() => {
+    const counts: Record<ItemStatus, number> = { ok: 0, low: 0, out: 0 };
+    for (const it of items) counts[statusOf(it)] += 1;
+    return counts;
+  }, [items]);
+
+  const grouped = React.useMemo(() => {
+    if (!browsingAll) return null;
+    return aisles
+      .map((a) => {
+        const key = a.id ?? 'uncategorized';
+        return {
+          key,
+          name: a.name,
+          items: filtered.filter((it) => (it.categoryId ?? 'uncategorized') === key),
+        };
+      })
+      .filter((g) => g.items.length > 0);
+  }, [aisles, filtered, browsingAll]);
+
+  const qtyMap = React.useMemo(() => buildQtyMap(state.lines), [state.lines]);
+  const { unitCount } = cartTotals(state.lines);
+
+  const charter = chartersForWarehouse.find((c) => c.id === state.charterId) ?? null;
+
+  const cartContext: CartContextInfo = {
+    warehouseName,
+    method: state.fulfillmentType,
+    siteName: charter?.name ?? null,
+    requesterLabel: state.onBehalfOf
+      ? `For ${state.onBehalfOf.name.split(/\s+/)[0]}`
+      : 'For you',
+  };
+
+  const railRef = React.useRef<HTMLDivElement>(null);
+
+  /* --- submit (payload + validation identical to v2/cart-rail.tsx) --- */
+  function handleConfirmSubmit() {
+    const lines = state.lines;
+    if (lines.length === 0) {
+      toast.error('Add at least one item to your cart before submitting.');
+      return;
+    }
+    if (state.fulfillmentType === 'delivery' && !state.charterId) {
+      toast.error('Select a delivery site in the setup bar above.');
+      return;
+    }
+    if (state.onBehalfOf) {
+      if (!state.onBehalfOf.name.trim() || !state.onBehalfOf.email.trim()) {
+        toast.error("Complete the requester's name and email above.");
+        return;
+      }
+    }
+
+    startTransition(async () => {
+      const res = await createOrderRequestAction({
+        warehouseId: state.warehouseId,
+        notes: state.notes.trim() || null,
+        fulfillmentType: state.fulfillmentType,
+        requesterPhone: null,
+        deliveryCharterId:
+          state.fulfillmentType === 'delivery' ? (state.charterId ?? null) : null,
+        pickupLocationNotes: null,
+        onBehalfOf: state.onBehalfOf
+          ? {
+              name: state.onBehalfOf.name.trim(),
+              email: state.onBehalfOf.email.trim(),
+            }
+          : null,
+        lines: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+      });
+
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+
+      // Clear the persisted draft right away so a reload doesn't
+      // resurrect the just-submitted cart. In-memory lines stay until
+      // "Done" so the success screen can still show them.
+      clearCartDraft(warehouseId);
+      setSubmitted({
+        id: res.data.id,
+        unitCount: lines.reduce((s, l) => s + l.quantity, 0),
+      });
+      setReviewStage('success');
+    });
+  }
+
+  function handleDone() {
+    clearCartDraft(warehouseId);
+    dispatch({ type: 'clear' });
+    dispatch({ type: 'set-notes', value: '' });
+    setReviewStage(null);
+    setSubmitted(null);
+  }
+
+  function handleViewOrder() {
+    if (submitted) router.push(`/dashboard/orders/${submitted.id}`);
+  }
+
+  /* --- small helpers --- */
+  const toggleAvailability = (status: ItemStatus) => {
+    setAvailability((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
+  };
+
+  const clearAllFilters = () => {
+    setSearchInput('');
+    setAvailability(new Set<ItemStatus>());
+    setCategory('all');
+  };
+
+  const activeCategoryName =
+    category === 'all'
+      ? 'All products'
+      : (aisles.find((a) => (a.id ?? 'uncategorized') === category)?.name ??
+        'Category');
+
+  const renderItems = (list: CatalogItem[]) =>
+    view === 'grid' ? (
+      <div className="sf-grid">
+        {list.map((it) => (
+          <ProductCard
+            key={it.id}
+            item={it}
+            qty={qtyMap.get(it.id) ?? 0}
+            onAdd={handleAdd}
+            onDec={handleDec}
+            onSetQty={handleSetQty}
+            onQuickView={handleQuickView}
+          />
+        ))}
+      </div>
+    ) : (
+      <div className="sf-rows">
+        {list.map((it) => (
+          <CompactRow
+            key={it.id}
+            item={it}
+            qty={qtyMap.get(it.id) ?? 0}
+            onAdd={handleAdd}
+            onDec={handleDec}
+            onSetQty={handleSetQty}
+            onQuickView={handleQuickView}
+          />
+        ))}
+      </div>
+    );
+
+  const previewCount = view === 'grid' ? GRID_PREVIEW : LIST_PREVIEW;
+  const quickItem = quickId ? (itemMap.get(quickId) ?? null) : null;
+  const hasFilterChips = searchInput.trim() !== '' || availability.size > 0;
+
+  return (
+    <>
+      <div className="sf-shell">
+        <div style={{ minWidth: 0 }}>
+          {/* Sticky toolbar */}
+          <div className="sf-sticky">
+            <div className="sf-tools">
+              <div className="sf-search">
+                <span className="icon">
+                  <Search size={15} />
+                </span>
+                <input
+                  placeholder="Search products, SKU, category…"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  aria-label="Search catalog"
+                />
+                {searchInput !== '' && (
                   <button
                     type="button"
-                    data-active={view === 'grid'}
-                    title="Grid view"
-                    aria-label="Grid view"
-                    onClick={() => setView('grid')}
+                    className="clear"
+                    onClick={() => setSearchInput('')}
+                    aria-label="Clear search"
                   >
-                    <LayoutGrid size={14} />
+                    <X size={11} />
                   </button>
-                  <button
-                    type="button"
-                    data-active={view === 'compact'}
-                    title="Compact view"
-                    aria-label="Compact view"
-                    onClick={() => setView('compact')}
-                  >
-                    <List size={14} />
-                  </button>
-                </div>
+                )}
               </div>
 
-              {/* Category pills */}
-              <div className="sf-pills">
+              <div className="sf-popwrap">
                 <button
                   type="button"
-                  className="sf-pill"
-                  data-active={category === 'all'}
-                  onClick={() => setCategory('all')}
+                  className="sf-tool-btn"
+                  data-on={availability.size > 0}
+                  onClick={() => setToolPop(toolPop === 'avail' ? null : 'avail')}
+                  aria-haspopup="dialog"
+                  aria-expanded={toolPop === 'avail'}
                 >
-                  All <span className="ct">{items.length}</span>
+                  <Filter size={13} /> Availability
+                  {availability.size > 0 && (
+                    <span className="bdg">{availability.size}</span>
+                  )}
+                  <ChevronDown size={11} />
                 </button>
-                {aisles.map((a) => {
-                  const key = a.id ?? 'uncategorized';
-                  return (
+                <SfPopover
+                  open={toolPop === 'avail'}
+                  onClose={() => setToolPop(null)}
+                  width={216}
+                >
+                  {(['ok', 'low', 'out'] as const).map((id) => (
                     <button
-                      key={key}
+                      key={id}
                       type="button"
-                      className="sf-pill"
-                      data-active={category === key}
-                      onClick={() => setCategory(category === key ? 'all' : key)}
+                      className="sf-opt"
+                      data-on={availability.has(id)}
+                      onClick={() => toggleAvailability(id)}
                     >
-                      <span className="icon">
-                        <Package size={13} />
+                      <span className="sf-cb" data-checked={availability.has(id)} />
+                      <span className="nm" style={{ fontWeight: 400 }}>
+                        {AVAILABILITY_LABELS[id]}
                       </span>
-                      {a.name} <span className="ct">{a.itemCount}</span>
+                      <span className="ct">{statusCounts[id]}</span>
                     </button>
-                  );
-                })}
+                  ))}
+                </SfPopover>
+              </div>
+
+              <div className="sf-popwrap">
+                <button
+                  type="button"
+                  className="sf-tool-btn"
+                  onClick={() => setToolPop(toolPop === 'sort' ? null : 'sort')}
+                  aria-haspopup="dialog"
+                  aria-expanded={toolPop === 'sort'}
+                >
+                  <ArrowUpDown size={13} />{' '}
+                  {SORT_OPTIONS.find((s) => s.id === sort)?.label ?? 'Featured'}
+                  <ChevronDown size={11} />
+                </button>
+                <SfPopover
+                  open={toolPop === 'sort'}
+                  onClose={() => setToolPop(null)}
+                  right
+                  width={210}
+                >
+                  {SORT_OPTIONS.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className="sf-opt"
+                      data-on={s.id === sort}
+                      onClick={() => {
+                        setSort(s.id);
+                        setToolPop(null);
+                      }}
+                    >
+                      <span className="nm" style={{ fontWeight: 400 }}>
+                        {s.label}
+                      </span>
+                      <span className="tick">
+                        <Check size={14} />
+                      </span>
+                    </button>
+                  ))}
+                </SfPopover>
+              </div>
+
+              <div className="sf-viewseg">
+                <button
+                  type="button"
+                  data-active={view === 'grid'}
+                  title="Grid view"
+                  aria-label="Grid view"
+                  onClick={() => setView('grid')}
+                >
+                  <LayoutGrid size={14} />
+                </button>
+                <button
+                  type="button"
+                  data-active={view === 'compact'}
+                  title="Compact view"
+                  aria-label="Compact view"
+                  onClick={() => setView('compact')}
+                >
+                  <List size={14} />
+                </button>
               </div>
             </div>
 
-            {/* Active filter chips */}
-            {hasFilterChips && (
-              <div className="sf-chips">
-                {searchInput.trim() !== '' && (
-                  <span className="sf-chip">
-                    “{searchInput.trim()}”
-                    <button
-                      type="button"
-                      onClick={() => setSearchInput('')}
-                      aria-label="Clear search filter"
-                    >
-                      <X size={10} />
-                    </button>
-                  </span>
-                )}
-                {[...availability].map((a) => (
-                  <span className="sf-chip" key={a}>
-                    {AVAILABILITY_LABELS[a]}
-                    <button
-                      type="button"
-                      onClick={() => toggleAvailability(a)}
-                      aria-label={`Remove ${AVAILABILITY_LABELS[a]} filter`}
-                    >
-                      <X size={10} />
-                    </button>
-                  </span>
-                ))}
-                <button type="button" className="clear-all" onClick={clearAllFilters}>
-                  Clear all
-                </button>
-              </div>
-            )}
-
-            {/* Frequently ordered (unfiltered All view only) */}
-            {browsingAll && (
-              <FreqCarousel
-                entries={freqEntries}
-                qtyByItemId={qtyMap}
-                loading={freqLoading}
-                onAdd={handleAdd}
-                onDec={handleDec}
-                onSetQty={handleSetQty}
-                onQuickView={handleQuickView}
-              />
-            )}
-
-            {/* Catalog: grouped sections or flat filtered grid */}
-            {grouped && grouped.length > 0 ? (
-              grouped.map((g) => (
-                <CategorySection
-                  key={g.key}
-                  name={g.name}
-                  itemCount={g.items.length}
-                  open={!collapsed.has(g.key)}
-                  onToggle={() =>
-                    setCollapsed((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(g.key)) next.delete(g.key);
-                      else next.add(g.key);
-                      return next;
-                    })
-                  }
-                  shownCount={previewCount}
-                  onViewAll={() => setCategory(g.key)}
-                  showKitButton={NEW_HIRE_RE.test(g.name)}
-                  onAddKit={() => handleAddKit(g.items)}
-                  icon={<Package size={15} />}
-                >
-                  {renderItems(g.items.slice(0, previewCount))}
-                </CategorySection>
-              ))
-            ) : (
-              <>
-                <div className="sf-result-line">
-                  <span className="n">{activeCategoryName}</span>
-                  <span className="m">
-                    {filtered.length} {filtered.length === 1 ? 'item' : 'items'}
-                    {deferredSearch.trim() ? ' matching' : ''}
-                  </span>
-                </div>
-                {filtered.length === 0 ? (
-                  <EmptyResults
-                    query={deferredSearch.trim()}
-                    onClear={clearAllFilters}
-                  />
-                ) : (
-                  renderItems(filtered)
-                )}
-              </>
-            )}
+            {/* Category pills */}
+            <div className="sf-pills">
+              <button
+                type="button"
+                className="sf-pill"
+                data-active={category === 'all'}
+                onClick={() => setCategory('all')}
+              >
+                All <span className="ct">{items.length}</span>
+              </button>
+              {aisles.map((a) => {
+                const key = a.id ?? 'uncategorized';
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    className="sf-pill"
+                    data-active={category === key}
+                    onClick={() => setCategory(category === key ? 'all' : key)}
+                  >
+                    <span className="icon">
+                      <Package size={13} />
+                    </span>
+                    {a.name} <span className="ct">{a.itemCount}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Cart rail */}
-          <div className="sf-rail" ref={railRef}>
-            <CartRail
-              itemMap={itemMap}
-              suggestions={suggestions}
-              context={cartContext}
+          {/* Active filter chips */}
+          {hasFilterChips && (
+            <div className="sf-chips">
+              {searchInput.trim() !== '' && (
+                <span className="sf-chip">
+                  “{searchInput.trim()}”
+                  <button
+                    type="button"
+                    onClick={() => setSearchInput('')}
+                    aria-label="Clear search filter"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              )}
+              {[...availability].map((a) => (
+                <span className="sf-chip" key={a}>
+                  {AVAILABILITY_LABELS[a]}
+                  <button
+                    type="button"
+                    onClick={() => toggleAvailability(a)}
+                    aria-label={`Remove ${AVAILABILITY_LABELS[a]} filter`}
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+              <button type="button" className="clear-all" onClick={clearAllFilters}>
+                Clear all
+              </button>
+            </div>
+          )}
+
+          {/* Frequently ordered (unfiltered All view only) */}
+          {browsingAll && (
+            <FreqCarousel
+              entries={freqEntries}
+              qtyByItemId={qtyMap}
+              loading={freqLoading}
               onAdd={handleAdd}
               onDec={handleDec}
               onSetQty={handleSetQty}
-              onReview={() => setReviewStage('review')}
+              onQuickView={handleQuickView}
             />
-          </div>
+          )}
+
+          {/* Catalog: grouped sections or flat filtered grid */}
+          {grouped && grouped.length > 0 ? (
+            grouped.map((g) => (
+              <CategorySection
+                key={g.key}
+                name={g.name}
+                itemCount={g.items.length}
+                open={!collapsed.has(g.key)}
+                onToggle={() =>
+                  setCollapsed((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(g.key)) next.delete(g.key);
+                    else next.add(g.key);
+                    return next;
+                  })
+                }
+                shownCount={previewCount}
+                onViewAll={() => setCategory(g.key)}
+                showKitButton={NEW_HIRE_RE.test(g.name)}
+                onAddKit={() => handleAddKit(g.items)}
+                icon={<Package size={15} />}
+              >
+                {renderItems(g.items.slice(0, previewCount))}
+              </CategorySection>
+            ))
+          ) : (
+            <>
+              <div className="sf-result-line">
+                <span className="n">{activeCategoryName}</span>
+                <span className="m">
+                  {filtered.length} {filtered.length === 1 ? 'item' : 'items'}
+                  {deferredSearch.trim() ? ' matching' : ''}
+                </span>
+              </div>
+              {filtered.length === 0 ? (
+                <EmptyResults
+                  query={deferredSearch.trim()}
+                  onClear={clearAllFilters}
+                />
+              ) : (
+                renderItems(filtered)
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Cart rail */}
+        <div className="sf-rail" ref={railRef}>
+          <CartRail
+            itemMap={itemMap}
+            suggestions={suggestions}
+            context={cartContext}
+            onAdd={handleAdd}
+            onDec={handleDec}
+            onSetQty={handleSetQty}
+            onReview={() => setReviewStage('review')}
+          />
         </div>
       </div>
 
@@ -1094,6 +1207,6 @@ function StorefrontInner({
         onViewOrder={handleViewOrder}
         onDone={handleDone}
       />
-    </div>
+    </>
   );
 }
