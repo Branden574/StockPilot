@@ -66,6 +66,13 @@ const serverSchema = z.object({
   // Vercel project env. Only required if Vercel Cron is enabled — local
   // dev and test runs ignore it.
   CRON_SECRET: optionalSecret.transform((s) => s.trim()),
+  // Operator-invocable admin maintenance secret (Encrypted, Production).
+  // Exists because SUPABASE_SERVICE_ROLE_KEY / CRON_SECRET are marked
+  // Sensitive in Vercel (unpullable), so one-off backfills run as
+  // secret-gated server routes instead of local scripts. Gates
+  // /api/admin/backfill-item-thumbs and is accepted as an alternate
+  // bearer on /api/cron/prewarm-orders-catalog.
+  BACKFILL_ADMIN_SECRET: optionalSecret.transform((s) => s.trim()),
 
   GEMINI_API_KEY: optionalSecret.transform((s) => s.trim()),
   // Model override. Different Google AI Studio keys get different free-

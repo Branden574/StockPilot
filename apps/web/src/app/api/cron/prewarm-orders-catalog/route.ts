@@ -44,14 +44,22 @@ function secretsEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
-export async function GET(req: Request) {
-  // Fail-closed when CRON_SECRET is unset/empty so an unauthenticated
-  // GET can't drive admin-client work. Matches cron/drain-outbox.
-  if (!env.CRON_SECRET) {
-    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  }
+/**
+ * Accepts EITHER bearer: CRON_SECRET (Vercel Cron) or
+ * BACKFILL_ADMIN_SECRET (operator-invocable — CRON_SECRET is marked
+ * Sensitive in Vercel so the owner can't pull it to curl this route).
+ * Fail-closed: unset/empty secrets are never compared against, so an
+ * unauthenticated GET can't drive admin-client work when neither is
+ * configured.
+ */
+function isAuthorized(req: Request): boolean {
   const auth = req.headers.get('authorization') ?? '';
-  if (!secretsEqual(auth, `Bearer ${env.CRON_SECRET}`)) {
+  const secrets = [env.CRON_SECRET, env.BACKFILL_ADMIN_SECRET].filter(Boolean);
+  return secrets.some((secret) => secretsEqual(auth, `Bearer ${secret}`));
+}
+
+export async function GET(req: Request) {
+  if (!isAuthorized(req)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
