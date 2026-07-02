@@ -8,6 +8,7 @@ import { after } from 'next/server';
 import { noteLoginDevice } from '@/lib/auth/login-device';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { env } from '@/lib/env';
+import { broadcastToChannel } from '@/lib/realtime/broadcast';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -303,6 +304,14 @@ export async function signOutAction(): Promise<void> {
   // alive until natural expiry (~1h). For an internal enterprise
   // tool, "Sign out" should mean "log me out everywhere."
   await supabase.auth.signOut({ scope: 'global' });
+  // The revoke above only kills REFRESH tokens — devices coast on their
+  // current access token for up to ~1h ("signed out on web, phone still
+  // let me in", owner-observed 2026-07-02). The broadcast makes every
+  // device's session-revocation listener sign out locally within ~1s.
+  // keepId:null targets ALL sessions (see use-session-revocation.ts).
+  if (user) {
+    await broadcastToChannel(`user:${user.id}:sessions`, 'revoked', { keepId: null });
+  }
   const cookieStore = await cookies();
   cookieStore.delete(REMEMBER_SESSION_COOKIE);
 
@@ -392,6 +401,12 @@ export async function completePasswordResetAction(
   // other live session for this user across all devices so a leaked
   // legitimate session is forcibly evicted.
   await supabase.auth.signOut({ scope: 'global' });
+  // Evict live devices NOW, not at access-token expiry (≤1h): the whole
+  // point of resetting a password is that existing sessions may be in
+  // hostile hands. Same broadcast contract as device management.
+  if (preUser) {
+    await broadcastToChannel(`user:${preUser.id}:sessions`, 'revoked', { keepId: null });
+  }
 
   // Audit the successful recovery-based reset.
   if (preUser) {
