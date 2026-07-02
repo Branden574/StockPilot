@@ -59,11 +59,19 @@ export default async function NewOrderPage({
   const warehouseId =
     warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
 
-  const [items, chartersForWarehouse] = await Promise.all([
+  const [items, chartersForWarehouse, thumbMap] = await Promise.all([
     loadCatalogItems(ctx.organizationId, warehouseId, ctx.userId),
     loadChartersForWarehouse(warehouseId),
+    loadCatalogThumbMapCached(ctx.organizationId, warehouseId),
   ]);
   const aisles = buildAisles(items);
+
+  // Merge the 4h-cached thumbnail URLs onto the 30s-cached catalog rows
+  // so cards render with photos on first paint without the stock loader
+  // ever paying the URL-signing fan-out.
+  const itemsWithThumbs = items.map((it) =>
+    thumbMap[it.id] ? { ...it, imageUrl: thumbMap[it.id]! } : it,
+  );
 
   // The storefront owns its own page head (back link, H1, flow
   // indicator) and dark-scoped frame — no dashboard container here.
@@ -74,7 +82,7 @@ export default async function NewOrderPage({
     <OrdersStorefront
       warehouses={warehouses}
       warehouseId={warehouseId}
-      items={items}
+      items={itemsWithThumbs}
       aisles={aisles}
       chartersForWarehouse={chartersForWarehouse}
       viewerRole={ctx.role}
@@ -83,6 +91,67 @@ export default async function NewOrderPage({
     />
   );
 }
+
+/**
+ * Warehouse-scoped thumbnail-URL map, cached INDEPENDENTLY of the 30s
+ * catalog loader. Signing ~350 URLs inside every catalog recompute
+ * made one visitor per 30s window pay the whole fan-out in TTFB (~3s
+ * skeleton). Decoupled cadences: stock stays fresh at 30s, the
+ * expensive URL map recomputes at most every 4 hours — safe because
+ * the signed URLs are 30-day valid and the per-path signers inside
+ * cachedCatalogThumbUrl are themselves 25-day cached (so even the 4h
+ * recompute is mostly warm reads). Thumbnails aren't access-scoped
+ * (any org member who can open the picker may see product photos), so
+ * no accessKey in the cache key.
+ */
+const loadCatalogThumbMapCached = unstable_cache(
+  async (
+    organizationId: string,
+    warehouseId: string,
+  ): Promise<Record<string, string>> => {
+    const supabase = createAdminClient();
+    // Mirror the catalog loader's item scoping with an inner join on
+    // inventory_items so only this warehouse's images get signed.
+    const { data } = await supabase
+      .from('item_images')
+      .select(
+        'item_id, thumb_path, storage_path, is_primary, sort_order, item:inventory_items!inner(warehouse_id)',
+      )
+      .eq('organization_id', organizationId)
+      .eq('item.warehouse_id', warehouseId)
+      .order('is_primary', { ascending: false })
+      .order('sort_order', { ascending: true });
+
+    // First row per item wins (is_primary DESC + sort_order ASC).
+    const rowByItem = new Map<
+      string,
+      { thumbPath: string | null; storagePath: string | null }
+    >();
+    for (const row of (data ?? []) as Array<{
+      item_id: string;
+      thumb_path: string | null;
+      storage_path: string | null;
+    }>) {
+      if (!rowByItem.has(row.item_id)) {
+        rowByItem.set(row.item_id, {
+          thumbPath: row.thumb_path ?? null,
+          storagePath: row.storage_path ?? null,
+        });
+      }
+    }
+
+    const urls: Record<string, string> = {};
+    await Promise.all(
+      [...rowByItem.entries()].map(async ([itemId, row]) => {
+        const url = await cachedCatalogThumbUrl(row.storagePath, row.thumbPath);
+        if (url) urls[itemId] = url;
+      }),
+    );
+    return urls;
+  },
+  ['orders-new-thumbmap-v1'],
+  { revalidate: 4 * 60 * 60, tags: ['orders-new-thumbmap'] },
+);
 
 /**
  * Charters per warehouse change rarely — cache for 5 minutes. Same
@@ -265,17 +334,15 @@ async function loadCatalogItemsUncached(
   const categoryIds = [...new Set(items.map((i) => i.category_id).filter((v): v is string => Boolean(v)))];
   const charterIds = [...new Set(items.map((i) => i.charter_id).filter((v): v is string => Boolean(v)))];
 
-  // Reservations + category names + charter names + primary-image rows
-  // in parallel. Thumbnail URLs ARE embedded server-side now: the
-  // signers in item-images.ts are unstable_cache'd per path for 25
-  // days, so after first population this is a warm cache read — not
-  // the per-request signing burst that originally motivated the
-  // deferred /api/orders/catalog-thumbnails fetch (which left cards
-  // photo-less for ~10s on cold loads). This loader is itself
-  // unstable_cache'd (30s) and the signed URLs stay valid for 30 days,
-  // so embedding them in the cached payload is safe. LQIP blurs still
-  // ship inline as instant placeholders while the real thumbs download.
-  const [rsRes, categoriesRes, chartersRes, imagesRes] = await Promise.all([
+  // Reservations + category names + charter names + LQIP blurs in
+  // parallel. Thumbnail URL SIGNING deliberately does NOT happen in
+  // here: this loader recomputes every 30s (stock freshness) and
+  // resolving ~350 signed URLs inside the recompute made one visitor
+  // per window eat the whole fan-out in TTFB (~3s skeleton). URLs come
+  // from loadCatalogThumbMapCached instead (4h cadence) and are merged
+  // in the page component. LQIP blurs are tiny base64 data URIs (≤2KB)
+  // shipped inline as instant placeholders.
+  const [rsRes, categoriesRes, chartersRes, lqipRes] = await Promise.all([
     supabase
       .from('stock_reservations')
       .select('item_id, quantity')
@@ -300,9 +367,10 @@ async function loadCatalogItemsUncached(
         }),
     supabase
       .from('item_images')
-      .select('item_id, lqip, thumb_path, storage_path, is_primary, sort_order')
+      .select('item_id, lqip, is_primary, sort_order')
       .eq('organization_id', organizationId)
       .in('item_id', itemIds)
+      .not('lqip', 'is', null)
       .order('is_primary', { ascending: false })
       .order('sort_order', { ascending: true }),
   ]);
@@ -329,41 +397,14 @@ async function loadCatalogItemsUncached(
     charterById.set(c.id, { name: c.name, code: c.code ?? null });
   }
 
-  // Pick one image row per item (the query is_primary DESC + sort_order
-  // ASC so the first row per item is the canonical primary image). The
-  // row carries the lqip blur (may be null) plus the storage paths for
-  // server-side thumbnail signing.
-  const imageRowByItem = new Map<
-    string,
-    { lqip: string | null; thumbPath: string | null; storagePath: string | null }
-  >();
-  for (const row of (imagesRes.data ?? []) as Array<{
-    item_id: string;
-    lqip: string | null;
-    thumb_path: string | null;
-    storage_path: string | null;
-  }>) {
-    if (!imageRowByItem.has(row.item_id)) {
-      imageRowByItem.set(row.item_id, {
-        lqip: row.lqip ?? null,
-        thumbPath: row.thumb_path ?? null,
-        storagePath: row.storage_path ?? null,
-      });
+  // Pick one LQIP per item (the query is_primary DESC + sort_order ASC
+  // so the first row per item is the canonical primary image).
+  const lqipByItem = new Map<string, string>();
+  for (const row of (lqipRes.data ?? []) as Array<{ item_id: string; lqip: string | null }>) {
+    if (!lqipByItem.has(row.item_id) && row.lqip) {
+      lqipByItem.set(row.item_id, row.lqip);
     }
   }
-
-  // Resolve one thumbnail URL per item with an image. The signers are
-  // 25-day-cached per path, so this fan-out is memoized after the
-  // first population.
-  const thumbUrlByItem = new Map<string, string | null>();
-  await Promise.all(
-    [...imageRowByItem.entries()].map(async ([itemId, row]) => {
-      thumbUrlByItem.set(
-        itemId,
-        await cachedCatalogThumbUrl(row.storagePath, row.thumbPath),
-      );
-    }),
-  );
 
   function rackLabelFor(it: typeof items[number]): string | null {
     if (it.bin_location && it.bin_location.trim()) return it.bin_location.trim();
@@ -392,9 +433,10 @@ async function loadCatalogItemsUncached(
     charterName: it.charter_id ? charterById.get(it.charter_id)?.name ?? null : null,
     charterCode: it.charter_id ? charterById.get(it.charter_id)?.code ?? null : null,
     rackLabel: rackLabelFor(it),
-    // Server-resolved via the 25-day cached signers (see fan-out above).
-    imageUrl: thumbUrlByItem.get(it.id) ?? null,
-    lqip: imageRowByItem.get(it.id)?.lqip ?? null,
+    // Merged in the page component from loadCatalogThumbMapCached —
+    // signing lives on a 4h cadence, not this 30s stock loader.
+    imageUrl: null,
+    lqip: lqipByItem.get(it.id) ?? null,
     // Price: retail first, then cost, then null. The v2 picker shows
     // "—" for null, and the cart estimated total excludes them.
     price:
