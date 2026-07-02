@@ -45,10 +45,10 @@ import {
   EmptyResults,
   FreqCarousel,
   ProductCard,
-  SkeletonCard,
   type FreqEntry,
 } from './storefront-cards';
 import { CartFab, CartRail, type CartContextInfo } from './storefront-cart';
+import { CatalogSkeleton } from './storefront-skeleton';
 import {
   AVAILABILITY_LABELS,
   SORT_OPTIONS,
@@ -182,58 +182,9 @@ function FlowIndicator({ stage }: { stage: FlowStage }) {
   );
 }
 
-/* ---- streaming fallback: skeleton toolbar + grid + cart ------------------- */
-
-function CatalogSkeleton() {
-  return (
-    <div className="sf-shell" aria-busy="true" aria-label="Loading catalog">
-      <div style={{ minWidth: 0 }}>
-        <div
-          className="sf-sk"
-          style={{ height: 40, borderRadius: 10, margin: '10px 0 12px' }}
-        />
-        <div style={{ display: 'flex', gap: 6, margin: '0 0 18px' }}>
-          {[64, 118, 96, 132, 88].map((w, i) => (
-            <div
-              key={i}
-              className="sf-sk"
-              style={{ width: w, height: 34, borderRadius: 999 }}
-            />
-          ))}
-        </div>
-        <div className="sf-grid">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <SkeletonCard key={i} />
-          ))}
-        </div>
-      </div>
-      <div className="sf-rail">
-        <div className="sf-cart">
-          <div className="sf-cart-head">
-            <div className="sf-sk" style={{ width: 130, height: 16 }} />
-          </div>
-          <div
-            style={{
-              padding: 16,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 10,
-              flex: 1,
-            }}
-          >
-            <div className="sf-sk" style={{ height: 44, borderRadius: 9 }} />
-            <div className="sf-sk" style={{ height: 44, borderRadius: 9 }} />
-          </div>
-          <div className="sf-cart-foot">
-            <div className="sf-sk" style={{ height: 42, borderRadius: 11 }} />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ---- shell: head + setup bar render immediately --------------------------- */
+/* (CatalogSkeleton lives in storefront-skeleton.tsx, shared with the
+   route-level loading.tsx so the two loading states can't drift.) */
 
 function StorefrontShell({
   warehouses,

@@ -520,23 +520,8 @@ export function FreqCarousel({
   );
 }
 
-/* ---- skeleton card --------------------------------------------------------- */
-
-export function SkeletonCard() {
-  return (
-    <div className="sf-sk-card">
-      <div className="sf-sk ph" />
-      <div className="bd">
-        <div className="sf-sk" style={{ height: 13, width: '85%' }} />
-        <div className="sf-sk" style={{ height: 13, width: '55%' }} />
-        <div
-          className="sf-sk"
-          style={{ height: 30, width: '100%', marginTop: 6, borderRadius: 9 }}
-        />
-      </div>
-    </div>
-  );
-}
+/* (SkeletonCard moved to storefront-skeleton.tsx, shared with the
+   route-level loading.tsx.) */
 
 /* ---- empty results ----------------------------------------------------------- */
 
