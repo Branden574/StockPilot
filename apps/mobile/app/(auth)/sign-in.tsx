@@ -30,6 +30,7 @@ import {
   isBiometricEnabledForUser,
   promptBiometric,
 } from '@/lib/biometric';
+import { API_BASE } from '@/lib/api';
 import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/use-theme';
 
@@ -117,9 +118,13 @@ export default function SignIn() {
     setBusy(false);
   }
 
-  // Password reset: Supabase emails a reset link (resolves on the web). We
-  // intentionally don't confirm whether the address exists, to avoid leaking
-  // which emails have accounts.
+  // Password reset: the WEB backend mints the link and emails it via
+  // Resend (POST /api/v1/auth/password-reset, anti-enumeration: always
+  // ok). Never call supabase.auth.resetPasswordForEmail from the device —
+  // it routes through Supabase's built-in mailer (capped ~2 emails/hour,
+  // silently) and emails a link whose session comes back in a URL
+  // fragment no server can read, stranding the user on /signin. The
+  // emailed link completes in the phone's browser.
   async function forgotPassword() {
     const target = email.trim();
     if (!target) {
@@ -127,9 +132,18 @@ export default function SignIn() {
       return;
     }
     setError(null);
-    const { error: resetErr } = await supabase.auth.resetPasswordForEmail(target);
-    if (resetErr) {
-      setError(resetErr.message);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/auth/password-reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: target }),
+      });
+      if (!res.ok) {
+        setError('Could not request a reset right now. Try again shortly.');
+        return;
+      }
+    } catch {
+      setError('Could not request a reset right now. Check your connection.');
       return;
     }
     Alert.alert(

@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Button } from '@/components/ui/button';
@@ -9,7 +8,6 @@ import { IconMark } from '@/components/ui/icon-mark';
 import { getServerSession } from '@/lib/auth/session';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { acceptInviteAction } from '@/server/actions/team';
 
 import { AcceptInviteButton } from './accept-button';
 import { InviteSignupForm } from './signup-form';
@@ -71,11 +69,16 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   const expired = invite ? new Date(invite.expires_at as string).getTime() < Date.now() : false;
   const accepted = Boolean(invite?.accepted_at);
 
-  // If signed in and invite is for current user, auto-accept and redirect.
-  if (session && invite && !accepted && !expired && session.email.toLowerCase() === (invite.email as string).toLowerCase()) {
-    const res = await acceptInviteAction({ token });
-    if (res.ok) redirect('/dashboard');
-  }
+  // NO auto-accept during render. Two reasons:
+  //  1. acceptInviteAction ends with revalidatePath, which Next 16 throws
+  //     on during the render phase — the membership was committed but the
+  //     action reported failure, so the invitee saw a stale "You're
+  //     invited" page and then an "Invite already accepted" error on
+  //     click (silently-broken onboarding, found in the 2026-07-02 sweep).
+  //  2. Mutating on a bare GET means any cookie-carrying prefetch would
+  //     accept the invite without a human action.
+  // The signed-in matching user simply presses Accept (one click, POSTs
+  // through the action like every other mutation).
 
   return (
     <div className="relative flex min-h-screen flex-col bg-background">

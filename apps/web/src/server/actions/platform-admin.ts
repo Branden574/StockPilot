@@ -214,7 +214,12 @@ export async function createOrgForCustomerAction(
   // callback can't read, bouncing invitees to /signin.
   const inviteHashedToken = invited.properties?.hashed_token;
   const actionLink = inviteHashedToken
-    ? `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(inviteHashedToken)}&type=invite&next=${encodeURIComponent('/dashboard')}`
+    // next=/reset/complete, NOT /dashboard: the invite creates a
+    // PASSWORD-LESS auth user. Landing them on the dashboard leaves them
+    // with no credential — once that session expires, their only way back
+    // in is guessing to use "Forgot password". Force the set-a-password
+    // form while the invite session is live.
+    ? `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(inviteHashedToken)}&type=invite&next=${encodeURIComponent('/reset/complete')}`
     : invited.properties?.action_link;
   if (actionLink) {
     const sent = await sendEmail({
