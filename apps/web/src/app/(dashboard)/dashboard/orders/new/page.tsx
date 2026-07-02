@@ -8,7 +8,6 @@ import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { cachedCatalogThumbUrl } from '@/server/services/item-images';
 import { WarehousesService } from '@/server/services/warehouses';
 
 export default async function NewOrderPage({
@@ -21,9 +20,22 @@ export default async function NewOrderPage({
     redirect('/dashboard');
   }
 
-  const params = await searchParams;
+  // SHELL-PATH AUDIT (FIX 6): everything awaited before returning JSX
+  // must be cheap or cached, because it gates the first flush:
+  //   - requireOrgContext: React.cache()d, shared with the layout.
+  //   - warehouses list: one small RLS-scoped query; needed here to
+  //     resolve warehouseId (which everything else keys on).
+  //   - charters: 5-min unstable_cache, needed by the setup bar.
+  //   - viewer identity: ctx fields — no extra query.
+  // Anything only the CATALOG needs (items, media map, and the
+  // uncached loadAccessibleCategoryKey queries that build the catalog
+  // cache key) runs inside catalogPromise, which is never awaited here.
   const warehousesSvc = await WarehousesService.forCurrentUser();
-  const warehouses = (await warehousesSvc.list()).map((w) => ({
+  const [params, warehouseRows] = await Promise.all([
+    searchParams,
+    warehousesSvc.list(),
+  ]);
+  const warehouses = warehouseRows.map((w) => ({
     id: w.id,
     name: w.name,
   }));
@@ -102,7 +114,16 @@ async function loadCatalogBundle(
 ): Promise<StorefrontCatalogData> {
   const [items, mediaMap] = await Promise.all([
     loadCatalogItems(organizationId, warehouseId, userId),
-    loadCatalogThumbMapCached(organizationId, warehouseId),
+    // A thrown batch-sign failure is deliberately NOT cached (see the
+    // map fn); degrade to a photo-less catalog for THIS request and
+    // let the next one retry instead of rejecting the Suspense
+    // boundary into the error page.
+    loadCatalogThumbMapCached(organizationId, warehouseId).catch((err) => {
+      console.warn(
+        `[orders-new] thumb map unavailable: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return {} as Record<string, CatalogItemMedia>;
+    }),
   ]);
 
   const merged = items.map((it) => {
@@ -119,30 +140,31 @@ async function loadCatalogBundle(
 }
 
 /**
- * Warehouse-scoped thumbnail-URL map, cached INDEPENDENTLY of the 30s
- * catalog loader. Signing ~350 URLs inside every catalog recompute
- * made one visitor per 30s window pay the whole fan-out in TTFB (~3s
- * skeleton). Decoupled cadences: stock stays fresh at 30s, the
- * expensive URL map recomputes at most every 4 hours — safe because
- * the signed URLs are 30-day valid and the per-path signers inside
- * cachedCatalogThumbUrl are themselves 25-day cached (so even the 4h
- * recompute is mostly warm reads). Thumbnails aren't access-scoped
- * (any org member who can open the picker may see product photos), so
- * no accessKey in the cache key.
+ * Warehouse-scoped thumbnail-URL map, cached INDEPENDENTLY of the
+ * stock loader. Decoupled cadences: stock stays fresh at 60s, the URL
+ * map recomputes at most every 4 hours — safe because the signed URLs
+ * are 30-day valid. Thumbnails aren't access-scoped (any org member
+ * who can open the picker may see product photos), so no accessKey in
+ * the cache key.
  *
  * Also carries each item's LQIP blur: image rows change on the same
- * cadence as their thumbnails, so pulling the blurs out of the 30s
- * stock loader saves that loader an entire item_images query (~700KB
- * of base64 transfer per recompute for a 350-item catalog).
+ * cadence as their thumbnails, so pulling the blurs out of the stock
+ * loader saves that loader an entire item_images query (~700KB of
+ * base64 transfer per recompute for a 350-item catalog).
  */
 interface CatalogItemMedia {
   url: string | null;
   lqip: string | null;
 }
 
+/** Signed URLs valid 30 days; the 4h map cadence re-signs well inside it. */
+const THUMB_SIGNED_URL_TTL_SEC = 30 * 24 * 60 * 60;
+const THUMB_TRANSFORM_WIDTH = 200;
+
 // v2 (FIX 5): value shape changed from Record<string, string> to
 // Record<string, CatalogItemMedia> — key bumped so stale v1 entries
-// can't be read as the new shape for up to 4h.
+// can't be read as the new shape for up to 4h. (FIX 6 changed only the
+// signing strategy, not the shape, so the key stays v2.)
 const loadCatalogThumbMapCached = unstable_cache(
   async (
     organizationId: string,
@@ -181,13 +203,72 @@ const loadCatalogThumbMapCached = unstable_cache(
       }
     }
 
+    // BATCH signing (FIX 6): the previous version resolved every path
+    // through the per-path unstable_cache signers — ~353 NESTED cache
+    // reads, each a network GET, turning the 4h recompute into a ~5s
+    // cold path. Now ONE createSignedUrls call covers every
+    // pre-generated thumb; only legacy rows without a thumb_path
+    // (uploads predating migration 0122) need individual transform
+    // signs, because createSignedUrls doesn't support transforms.
     const media: Record<string, CatalogItemMedia> = {};
+    const thumbBatch: Array<{ itemId: string; path: string }> = [];
+    const transformBatch: Array<{ itemId: string; path: string }> = [];
+    for (const [itemId, row] of rowByItem) {
+      if (row.thumbPath) thumbBatch.push({ itemId, path: row.thumbPath });
+      else if (row.storagePath) transformBatch.push({ itemId, path: row.storagePath });
+      else if (row.lqip) media[itemId] = { url: null, lqip: row.lqip };
+    }
+
+    if (thumbBatch.length > 0) {
+      const { data: signed, error } = await supabase.storage
+        .from('item-images')
+        .createSignedUrls(
+          thumbBatch.map((t) => t.path),
+          THUMB_SIGNED_URL_TTL_SEC,
+        );
+      // THROW on whole-batch failure so unstable_cache does NOT persist
+      // a photo-less map for 4h (same throw-don't-cache posture as the
+      // signers in item-images.ts). loadCatalogBundle catches → the
+      // page degrades to glyph/lqip cards and the next visit retries.
+      if (error) {
+        throw new Error(`thumb batch sign failed: ${error.message}`);
+      }
+      const urlByPath = new Map<string, string>();
+      for (const s of signed ?? []) {
+        if (s.path && s.signedUrl && !s.error) urlByPath.set(s.path, s.signedUrl);
+      }
+      for (const t of thumbBatch) {
+        const row = rowByItem.get(t.itemId)!;
+        const url = urlByPath.get(t.path) ?? null;
+        if (url || row.lqip) media[t.itemId] = { url, lqip: row.lqip };
+      }
+    }
+
+    // Legacy no-thumb rows: individually signed 200px transforms
+    // (typically a handful). Per-path failures fall back to lqip-only
+    // rather than throwing — one broken legacy object shouldn't
+    // invalidate the whole map.
     await Promise.all(
-      [...rowByItem.entries()].map(async ([itemId, row]) => {
-        const url = await cachedCatalogThumbUrl(row.storagePath, row.thumbPath);
-        if (url || row.lqip) media[itemId] = { url, lqip: row.lqip };
+      transformBatch.map(async ({ itemId, path }) => {
+        const row = rowByItem.get(itemId)!;
+        try {
+          const { data: t } = await supabase.storage
+            .from('item-images')
+            .createSignedUrl(path, THUMB_SIGNED_URL_TTL_SEC, {
+              transform: {
+                width: THUMB_TRANSFORM_WIDTH,
+                height: THUMB_TRANSFORM_WIDTH,
+                resize: 'cover',
+              },
+            });
+          const url = t?.signedUrl ?? null;
+          if (url || row.lqip) media[itemId] = { url, lqip: row.lqip };
+        } catch {
+          if (row.lqip) media[itemId] = { url: null, lqip: row.lqip };
+        }
       }),
     );
+
     return media;
   },
   ['orders-new-thumbmap-v2'],
@@ -332,10 +413,16 @@ async function loadCatalogItemsUncached(
     allowedCategoryIds = new Set(accessKey.slice(2).split(',').filter(Boolean));
   }
 
+  // custom_fields is fetched as FOUR flattened rack keys (PostgREST
+  // `->>` extraction) instead of wholesale: the picker only needs the
+  // rack/row pair for the rackLabel, and book rows carry large
+  // custom_fields blobs (descriptions, grades, authors) that were
+  // inflating the query transfer for nothing. `is_bundle` is filter-only
+  // (the .or below), so it isn't selected either.
   let itemsQuery = supabase
     .from('inventory_items')
     .select(
-      'id, name, sku, quantity_on_hand, warehouse_id, item_type, is_bundle, custom_fields, bin_location, category_id, charter_id, retail_price, unit_cost, reorder_point',
+      'id, name, sku, quantity_on_hand, warehouse_id, item_type, bin_location, category_id, charter_id, retail_price, unit_cost, reorder_point, rack_number:custom_fields->>rack_number, rack_row:custom_fields->>rack_row, book_rack_number:custom_fields->>book_rack_number, book_rack_row:custom_fields->>book_rack_row',
     )
     .eq('organization_id', organizationId)
     .eq('warehouse_id', warehouseId)
@@ -360,20 +447,24 @@ async function loadCatalogItemsUncached(
 
   const { data: itemsData } = await itemsQuery;
 
-  const items = (itemsData ?? []) as Array<{
+  const items = (itemsData ?? []) as unknown as Array<{
     id: string;
     name: string;
     sku: string;
     quantity_on_hand: number;
     warehouse_id: string;
     item_type: string | null;
-    custom_fields: Record<string, unknown> | null;
     bin_location: string | null;
     category_id: string | null;
     charter_id: string | null;
     retail_price: number | null;
     unit_cost: number | null;
     reorder_point: number | null;
+    // Flattened from custom_fields via `->>` (always text or null).
+    rack_number: string | null;
+    rack_row: string | null;
+    book_rack_number: string | null;
+    book_rack_row: string | null;
   }>;
   if (items.length === 0) return [];
 
@@ -437,13 +528,8 @@ async function loadCatalogItemsUncached(
 
   function rackLabelFor(it: typeof items[number]): string | null {
     if (it.bin_location && it.bin_location.trim()) return it.bin_location.trim();
-    const cf = it.custom_fields ?? {};
-    const num = (it.item_type === 'book'
-      ? (cf as { book_rack_number?: unknown }).book_rack_number
-      : (cf as { rack_number?: unknown }).rack_number) as string | undefined;
-    const row = (it.item_type === 'book'
-      ? (cf as { book_rack_row?: unknown }).book_rack_row
-      : (cf as { rack_row?: unknown }).rack_row) as string | undefined;
+    const num = it.item_type === 'book' ? it.book_rack_number : it.rack_number;
+    const row = it.item_type === 'book' ? it.book_rack_row : it.rack_row;
     if (!num) return null;
     return row ? `${num}-${row}` : String(num);
   }

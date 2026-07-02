@@ -114,27 +114,13 @@ async function getCachedItemImageTransformedSignedUrl(
 // aspect-preserving variants get grossly re-cropped by the cards'
 // object-cover cells. Picker sharpness should come from PRE-GENERATED
 // thumbs instead — see THUMB_DIMENSION in lib/image-variants.ts.
-
-/**
- * Catalog-thumbnail resolver for server-rendered picker payloads:
- * prefer the pre-generated thumb (plain signed URL, no transform tax),
- * fall back to a server-side resize of the master at `width`, else
- * null. Reuses this module's 25-day cached signers — same cache keys
- * as every other thumbnail consumer, so no extra signing traffic.
- *
- * Authorization contract matches the signers above: the caller must
- * have selected the paths through an org-scoped query before handing
- * them here (signing is org-agnostic).
- */
-export async function cachedCatalogThumbUrl(
-  storagePath: string | null,
-  thumbPath: string | null,
-  width = 200,
-): Promise<string | null> {
-  if (thumbPath) return getCachedItemImageSignedUrl(thumbPath);
-  if (storagePath) return getCachedItemImageTransformedSignedUrl(storagePath, width);
-  return null;
-}
+//
+// NOTE (2026-07-01, storefront FIX 6): a per-path `cachedCatalogThumbUrl`
+// helper briefly lived here for the orders storefront. It was removed —
+// resolving a whole catalog through per-path unstable_cache reads means
+// hundreds of nested cache GETs per recompute (~5s cold). Whole-catalog
+// consumers should BATCH via storage.createSignedUrls inside their own
+// coarse-grained cache instead (see orders/new/page.tsx's thumb map).
 
 export class ItemImagesService {
   constructor(private readonly ctx: ServiceContext) {}
