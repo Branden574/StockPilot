@@ -54,7 +54,7 @@ export default async function NewRentalPage({
     TeamService.forCurrentUser(),
   ]);
 
-  const warehouses = (await warehousesSvc.list()).map((w) => ({
+  const warehouses = (await warehousesSvc.listNames()).map((w) => ({
     id: w.id,
     name: w.name,
   }));

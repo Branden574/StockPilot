@@ -71,7 +71,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
     suppliersSvc.list(),
     locationsSvc.list({ excludeSystem: true }),
     receivingSvc.listForPurchaseOrder(id),
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
     poAttachSvc.list(id),
   ]);
 

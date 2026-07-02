@@ -1,9 +1,11 @@
 import 'server-only';
 
 import { cache } from 'react';
+import { headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 
 import { env } from '@/lib/env';
+import { SESSION_HEADER_USER_EMAIL } from '@/lib/supabase/middleware';
 import { createClient } from '@/lib/supabase/server';
 
 import { requireSession, type ServerSession } from './session';
@@ -48,6 +50,32 @@ export const getVerifiedEmail = cache(async (): Promise<string | null> => {
 /** Whether the current request's VERIFIED auth email is an allowlisted admin. */
 export async function currentUserIsPlatformAdmin(): Promise<boolean> {
   return isPlatformAdmin(await getVerifiedEmail());
+}
+
+/**
+ * LINK-VISIBILITY-ONLY variant of {@link currentUserIsPlatformAdmin} that
+ * reads the middleware-verified email header instead of making a second
+ * GoTrue round-trip (perf plan 2026-07-02 P1d / orders-new plan P6).
+ *
+ * TRUST CHAIN (security-reviewed, keep this comment in sync with
+ * `src/lib/supabase/middleware.ts` + `src/proxy.ts`):
+ *   1. The proxy matcher covers every /dashboard and /platform route, so
+ *      no request reaches those layouts without `updateSession()` running.
+ *   2. `updateSession()` sets `x-stockpilot-user-email` ONLY after
+ *      `auth.getUser()` validates the session, and unconditionally DELETES
+ *      it otherwise — a client-supplied header can never survive.
+ *   3. This is the exact trust level the entire org context already rides:
+ *      `session.ts` sources the user id from the sibling
+ *      `x-stockpilot-user-id` header.
+ *
+ * SCOPE: use this ONLY for cosmetic gating (the "Platform admin" link in
+ * the dashboard account menu). Every real platform-admin gate —
+ * `requirePlatformAdmin()` (pages) and `checkPlatformAdmin()` (actions) —
+ * MUST keep the live `auth.getUser()` + AAL2 (+ fresh step-up) checks.
+ */
+export async function currentUserIsPlatformAdminFromRequestHeader(): Promise<boolean> {
+  const h = await headers();
+  return isPlatformAdmin(h.get(SESSION_HEADER_USER_EMAIL));
 }
 
 /**

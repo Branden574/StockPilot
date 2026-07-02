@@ -101,7 +101,7 @@ export default async function EditBookPage({
     suppliersSvc.list(),
     tagsSvc.list(),
     tagsSvc.listForItem(id),
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
     chartersSvc.list(),
     whChartersSvc.listPairs(),
     customFieldsSvc.listDefinitions('item'),

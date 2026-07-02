@@ -63,7 +63,14 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
   const email = h.get(SESSION_HEADER_USER_EMAIL) ?? '';
   const supabase = await createClient();
 
-  const [profileRes, anyMemberRes] = await Promise.all([
+  // Memberships are fetched WITHOUT a limit(1) on purpose (perf plan
+  // 2026-07-02 P1e): the old shape grabbed ONE arbitrary membership and,
+  // whenever it wasn't the user's default org, issued a SECOND sequential
+  // membership query — a per-request penalty for every multi-org user on
+  // every dashboard render. A user's accepted memberships are a handful of
+  // tiny rows; fetching them all and picking in JS costs the same single
+  // round-trip for everyone.
+  const [profileRes, membersRes] = await Promise.all([
     supabase
       .from('user_profiles')
       .select('id, email, full_name, avatar_url, default_organization_id')
@@ -73,9 +80,7 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
       .from('organization_members')
       .select('organization_id, role, organizations:organization_id (name)')
       .eq('user_id', userId)
-      .not('accepted_at', 'is', null)
-      .limit(1)
-      .maybeSingle(),
+      .not('accepted_at', 'is', null),
   ]);
 
   const profile = profileRes.data as
@@ -104,36 +109,21 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
         defaultOrganizationId: null,
       };
 
-  const memberRow = anyMemberRes.data as
-    | {
-        organization_id: string;
-        role: Role;
-        organizations: { name: string } | { name: string }[] | null;
-      }
-    | null;
+  const memberRows = (membersRes.data ?? []) as Array<{
+    organization_id: string;
+    role: Role;
+    organizations: { name: string } | { name: string }[] | null;
+  }>;
 
-  if (
-    memberRow &&
-    session.defaultOrganizationId &&
-    memberRow.organization_id !== session.defaultOrganizationId
-  ) {
-    const { data: targeted } = await supabase
-      .from('organization_members')
-      .select('organization_id, role, organizations:organization_id (name)')
-      .eq('user_id', userId)
-      .eq('organization_id', session.defaultOrganizationId)
-      .not('accepted_at', 'is', null)
-      .maybeSingle();
-    if (targeted) {
-      const t = targeted as typeof memberRow;
-      return {
-        session,
-        orgRole: t.role,
-        orgId: t.organization_id,
-        orgName: pickOrgName(t.organizations),
-      };
-    }
-  }
+  // Same selection semantics as the old two-query shape: prefer the
+  // membership matching the profile's default org; otherwise fall back to
+  // the first row PostgREST returned (previously the arbitrary limit(1) row).
+  const memberRow =
+    (session.defaultOrganizationId
+      ? memberRows.find((m) => m.organization_id === session.defaultOrganizationId)
+      : undefined) ??
+    memberRows[0] ??
+    null;
 
   return {
     session,

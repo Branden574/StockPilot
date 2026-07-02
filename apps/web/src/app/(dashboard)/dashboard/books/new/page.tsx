@@ -77,7 +77,7 @@ export default async function NewBookPage() {
     locationsSvc.list({ sitesOnly: true }),
     suppliersSvc.list(),
     tagsSvc.list(),
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
     chartersSvc.list(),
     whChartersSvc.listPairs(),
     // Default warehouse + primary location to the user's most-recent

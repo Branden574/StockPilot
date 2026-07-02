@@ -90,7 +90,7 @@ async function StagingTableSection({
       warehouseId: warehouseFilter,
     }),
     locationsSvc.list(),
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
   ]);
 
   // warehouse id → display name for the Warehouse column. list() returns only

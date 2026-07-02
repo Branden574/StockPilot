@@ -20,7 +20,7 @@ export default async function NewCycleCountPage() {
 
   const warehousesSvc = await WarehousesService.forCurrentUser();
   const [warehouses, supabase] = await Promise.all([
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
     createClient(),
   ]);
 

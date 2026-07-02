@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import * as React from 'react';
 
-import { DASHBOARD_NAV_HREFS, navForRole, type NavSection } from '@/components/dashboard/nav';
+import { navForRole, type NavSection } from '@/components/dashboard/nav';
 import { NavLinkPending } from '@/components/dashboard/nav-link-pending';
 import { OrgSwitcher } from '@/components/dashboard/org-switcher';
 import { IconMark } from '@/components/ui/icon-mark';
@@ -101,18 +101,20 @@ export function Sidebar({
     [pathname, router],
   );
 
-  // Two-phase prefetch warmup:
-  //   1. Immediately on mount, warm the top-5 highest-click routes
-  //      (Overview, Inventory, Books, Orders, Movements). Each is a
-  //      single RSC fetch and these are the routes ~95% of users click
-  //      first. Cuts the cold-cache window to roughly zero on the
-  //      paths that matter most.
-  //   2. After the browser is idle (timeout 600ms, down from 1600ms),
-  //      warm the rest of DASHBOARD_NAV_HREFS. The lower timeout
-  //      means users who click between 600ms-1600ms after page load
-  //      no longer hit a stone-cold prefetch cache. Still kept on
-  //      requestIdleCallback so it doesn't compete with the critical
-  //      paint or hydration work.
+  // Prefetch warmup — top-5 highest-click routes ONLY (Overview,
+  // Inventory, Books, Orders, Movements). Each is a single RSC fetch
+  // and these are the routes ~95% of users click first.
+  //
+  // The previous phase-2 "warm the other ~20 sidebar routes at idle"
+  // was removed on purpose (perf plan 2026-07-02 P1b): every warmed
+  // route is a FULL dynamic RSC render server-side — ~20 lambda
+  // invocations + ~20 middleware auth round-trips + on the order of
+  // 150 DB queries fired within seconds of every hard landing, all
+  // competing with the page the user is actually reading. And with
+  // `staleTimes.dynamic = 90`, any entry not clicked within 90s was
+  // re-fetched on navigation anyway. Rarely-clicked tabs are covered
+  // by the hover/focus/pointer-down warmRoute below plus their
+  // route-true loading.tsx skeletons.
   const TOP_ROUTES = React.useMemo(
     () => [
       '/dashboard',
@@ -125,29 +127,7 @@ export function Sidebar({
   );
 
   React.useEffect(() => {
-    // Phase 1 — immediate top-routes warmup. Cheap (5 RSC fetches),
-    // covers the bulk of first-click destinations.
     TOP_ROUTES.forEach((href) => warmRoute(href));
-
-    // Phase 2 — idle warmup of the rest of the sidebar.
-    const remaining = DASHBOARD_NAV_HREFS.filter(
-      (href) => !TOP_ROUTES.includes(href),
-    );
-    const warmRest = () => {
-      remaining.forEach((href) => warmRoute(href));
-    };
-    const idleWindow = window as Window & {
-      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
-      cancelIdleCallback?: (handle: number) => void;
-    };
-
-    if (typeof idleWindow.requestIdleCallback === 'function') {
-      const idleId = idleWindow.requestIdleCallback(warmRest, { timeout: 600 });
-      return () => idleWindow.cancelIdleCallback?.(idleId);
-    }
-
-    const timeoutId = globalThis.setTimeout(warmRest, 300);
-    return () => globalThis.clearTimeout(timeoutId);
   }, [warmRoute, TOP_ROUTES]);
 
   return (

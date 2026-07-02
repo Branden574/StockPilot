@@ -167,6 +167,29 @@ export class WarehousesService {
   }
 
   /**
+   * Dropdown-weight list: `{ id, name }` of ACTIVE warehouses only, same
+   * RLS client + name ordering as {@link list}.
+   *
+   * WHY (perf plan 2026-07-02 P1a): the full `list()` embeds the manager
+   * profile, every user assignment, EVERY inventory_items id (to count
+   * them), and the charter M:N — `pg_stat_statements` showed it as the
+   * dashboard's single worst repeated statement (6,045 calls, mean 25ms,
+   * max 732ms). Almost every caller was a dropdown that threw all of that
+   * away. Use `list()` only where the counts/manager/charter fields are
+   * actually rendered (the warehouses manager surfaces).
+   */
+  async listNames(): Promise<Array<{ id: string; name: string }>> {
+    const { data, error } = await this.ctx.supabase
+      .from('warehouses')
+      .select('id, name')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('status', 'active')
+      .order('name', { ascending: true });
+    if (error) throw new ServiceError('internal_error', error.message);
+    return (data ?? []) as Array<{ id: string; name: string }>;
+  }
+
+  /**
    * Loads a single warehouse by id along with the manager profile (joined via
    * manager_user_id → user_profiles). RLS gates whether the row is returned at
    * all; if the user can't see it we throw `not_found` so callers can map to

@@ -46,7 +46,7 @@ export default async function NewScheduleEventPage({
   conflictTo.setDate(anchor.getDate() + 30);
 
   const [warehouses, bundles, nearbyEvents] = await Promise.all([
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
     bundlesSvc.list(),
     scheduleSvc.listInRange(conflictFrom, conflictTo),
   ]);

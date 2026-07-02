@@ -94,7 +94,7 @@ export default async function ScheduleEventDetailPage({
   if (event.bundleWarehouseId) {
     try {
       const whSvc = await WarehousesService.forCurrentUser();
-      const all = await whSvc.list();
+      const all = await whSvc.listNames();
       bundleWarehouseName = all.find((w) => w.id === event.bundleWarehouseId)?.name ?? null;
     } catch {
       /* ignore */

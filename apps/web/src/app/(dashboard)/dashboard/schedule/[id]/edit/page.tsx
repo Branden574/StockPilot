@@ -37,7 +37,7 @@ export default async function EditScheduleEventPage({
     throw e;
   }
   const [warehouses, bundles] = await Promise.all([
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
     bundlesSvc.list(),
   ]);
 

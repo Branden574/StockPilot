@@ -4,7 +4,7 @@ import { WarehousesService } from '@/server/services/warehouses';
 
 export default async function BinsAdminPage() {
   const [warehouses, bins] = await Promise.all([
-    (await WarehousesService.forCurrentUser()).list(),
+    (await WarehousesService.forCurrentUser()).listNames(),
     (await BinsService.forCurrentUser()).list(),
   ]);
 

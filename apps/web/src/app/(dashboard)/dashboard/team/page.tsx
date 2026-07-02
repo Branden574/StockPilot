@@ -46,7 +46,7 @@ export default async function TeamPage() {
       team.listMembers(),
       team.listPendingInvites(),
       charterSvc.list(),
-      warehouseSvc.list(),
+      warehouseSvc.listNames(),
       whCharterSvc.listPairs(),
     ]);
 

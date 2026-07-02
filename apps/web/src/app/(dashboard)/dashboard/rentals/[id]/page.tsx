@@ -31,7 +31,7 @@ export default async function RentalDetailPage({
   const itemIds = rental.lines.map((l) => l.item_id);
   const [itemRows, warehouses] = await Promise.all([
     itemIds.length > 0 ? inventorySvc.byIds(itemIds) : Promise.resolve([]),
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
   ]);
   const itemMap = new Map(itemRows.map((i) => [i.id, i]));
   const warehouse = warehouses.find((w) => w.id === rental.warehouse_id);

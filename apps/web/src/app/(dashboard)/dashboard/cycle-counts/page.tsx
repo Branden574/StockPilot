@@ -40,7 +40,7 @@ export default async function CycleCountsPage() {
   ]);
   const [counts, warehouses] = await Promise.all([
     ccSvc.list(),
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
   ]);
   const warehouseMap = new Map(warehouses.map((w) => [w.id, w.name]));
 

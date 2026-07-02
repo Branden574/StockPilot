@@ -41,7 +41,7 @@ export default async function BundleDetailPage({
   }
 
   const [whs, recent, upcomingEvents] = await Promise.all([
-    (await WarehousesService.forCurrentUser()).list(),
+    (await WarehousesService.forCurrentUser()).listNames(),
     svc.recentDistributions({ bundleId: id, limit: 20 }),
     fetchUpcomingEvents(),
   ]);

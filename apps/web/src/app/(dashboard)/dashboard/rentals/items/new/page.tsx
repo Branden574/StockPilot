@@ -74,7 +74,7 @@ export default async function NewRentalItemPage() {
     locationsSvc.list({ sitesOnly: true }),
     suppliersSvc.list(),
     tagsSvc.list(),
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
     chartersSvc.list(),
     whChartersSvc.listPairs(),
     inventorySvc.getRecentDefaults('product'),

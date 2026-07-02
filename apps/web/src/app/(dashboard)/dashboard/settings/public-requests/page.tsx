@@ -35,7 +35,7 @@ export default async function PublicRequestsSettingsPage() {
   ]);
   const [settings, warehouses] = await Promise.all([
     orderSvc.getPublicSettings(),
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
   ]);
 
   const publicWarehouseSet = new Set(settings.publicOrderableWarehouseIds);

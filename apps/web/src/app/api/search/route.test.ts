@@ -81,9 +81,9 @@ describe('GET /api/search', () => {
     expect(orCall?.[0]).toBe('name.ilike.%foo%,sku.ilike.%foo%,barcode.ilike.%foo%');
 
     const body = await res.json();
-    // No item_images stub seeded → imageUrl falls through to null.
+    // No item_images stub seeded → imageUrl/previewUrl fall through to null.
     expect(body.items).toEqual([
-      { id: 'i-1', name: 'Widget', sku: 'W-1', quantity: 10, imageUrl: null },
+      { id: 'i-1', name: 'Widget', sku: 'W-1', quantity: 10, imageUrl: null, previewUrl: null },
     ]);
   });
 

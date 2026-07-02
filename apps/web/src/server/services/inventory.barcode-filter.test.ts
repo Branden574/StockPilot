@@ -25,6 +25,9 @@ function buildSupabaseStub(rows: Array<{ id: string; barcode: string }>) {
     range: () => chain,
     in: () => chain,
     or: () => chain,
+    // list() now follows up with an item_stock_levels read that chains
+    // .gt('quantity', 0) (placement breakdown) — the stub predates it.
+    gt: () => chain,
     then: (cb: (r: { data: unknown; count: number; error: null }) => unknown) =>
       cb({ data: rows, count: rows.length, error: null }),
   };

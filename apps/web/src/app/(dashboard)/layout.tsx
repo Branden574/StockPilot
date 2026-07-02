@@ -7,7 +7,7 @@ import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
 import { SIDEBAR_HIDDEN_COOKIE, parseSidebarHidden } from '@/components/dashboard/sidebar-pref';
 import { ImpersonationBanner } from '@/components/platform/impersonation-banner';
-import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
+import { currentUserIsPlatformAdminFromRequestHeader } from '@/lib/auth/platform-admin';
 import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
 import { requireOrgContext } from '@/lib/auth/session';
 import {
@@ -47,8 +47,16 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // same render — zero extra DB round trips beyond the page's own.
   const ctx = await requireOrgContext();
   const supabase = await createClient();
-  // Gates the "Platform admin" link in the account menu (verified auth email).
-  const platformAdmin = await currentUserIsPlatformAdmin();
+  // Gates the "Platform admin" link in the account menu. Header-based on
+  // purpose (perf plan 2026-07-02 P1d): the previous
+  // `currentUserIsPlatformAdmin()` made a SECOND GoTrue `auth.getUser()`
+  // round-trip on every hard dashboard render just to decide link
+  // visibility. The middleware already validated the user and forwards the
+  // verified email header (set-after-validation, deleted otherwise, matcher
+  // covers all of /dashboard). The real gates on /platform pages/actions
+  // still use the live-verified checks — see the trust-chain comment on
+  // currentUserIsPlatformAdminFromRequestHeader.
+  const platformAdmin = await currentUserIsPlatformAdminFromRequestHeader();
 
   const cookieStore = await cookies();
   const initialSidebarHidden = parseSidebarHidden(

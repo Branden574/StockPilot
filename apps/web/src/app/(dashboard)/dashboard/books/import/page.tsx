@@ -43,7 +43,7 @@ export default async function BulkIsbnImportPage() {
   ]);
 
   const [warehouses, charters, warehouseCharters] = await Promise.all([
-    warehousesSvc.list(),
+    warehousesSvc.listNames(),
     chartersSvc.list(),
     whChartersSvc.listPairs(),
   ]);

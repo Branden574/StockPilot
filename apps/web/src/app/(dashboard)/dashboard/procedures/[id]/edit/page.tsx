@@ -39,7 +39,7 @@ export default async function EditProcedurePage({
     throw e;
   }
 
-  const [categories, warehouses] = await Promise.all([catService.list(), whService.list()]);
+  const [categories, warehouses] = await Promise.all([catService.list(), whService.listNames()]);
 
   const videos = procedure.videos.map((v) => ({
     id: v.id,

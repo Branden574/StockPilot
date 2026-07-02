@@ -47,7 +47,7 @@ export default async function CycleCountDetailPage({
     }
   }
 
-  const warehouses = await warehousesSvc.list();
+  const warehouses = await warehousesSvc.listNames();
   const warehouseName = header.warehouse_id
     ? (warehouses.find((w) => w.id === header.warehouse_id)?.name ?? null)
     : null;

@@ -68,7 +68,7 @@ export default async function ProceduresListPage({
       includeArchived: isArchivedView,
     }),
     catService.list(),
-    whService.list(),
+    whService.listNames(),
   ]);
 
   const hasFilters = q.length > 0 || cat.length > 0 || wh.length > 0;

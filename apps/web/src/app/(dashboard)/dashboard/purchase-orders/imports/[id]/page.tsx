@@ -28,7 +28,7 @@ export default async function PoImportDetailPage({
 
   const [suppliers, warehouses, items, charters, locations] = await Promise.all([
     (await SuppliersService.forCurrentUser()).list(),
-    (await WarehousesService.forCurrentUser()).list(),
+    (await WarehousesService.forCurrentUser()).listNames(),
     (await InventoryService.forCurrentUser()).list({ limit: 500, itemType: 'all' }),
     (await ChartersService.forCurrentUser()).list(),
     (await LocationsService.forCurrentUser()).list({ sitesOnly: true }),

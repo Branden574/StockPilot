@@ -21,7 +21,7 @@ export default async function NewProcedurePage() {
     ProcedureCategoriesService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
   ]);
-  const [categories, warehouses] = await Promise.all([catService.list(), whService.list()]);
+  const [categories, warehouses] = await Promise.all([catService.list(), whService.listNames()]);
 
   if (!ctx.organizationId) redirect('/dashboard');
 
