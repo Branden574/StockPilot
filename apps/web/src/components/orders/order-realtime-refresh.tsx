@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
 import { createClient } from '@/lib/supabase/client';
+import { ensureRealtimeAuth } from '@/lib/supabase/realtime-auth';
 
 interface Props {
   orderId: string;
@@ -66,23 +67,34 @@ export function OrderRealtimeRefresh({ orderId }: Props) {
     const supabase = supabaseRef.current;
     if (!supabase) return;
     let channel: ReturnType<typeof supabase.channel> | null = null;
-    try {
-      channel = supabase.channel(`order:${orderId}`);
-      channel.on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'order_requests',
-          filter: `id=eq.${orderId}`,
-        },
-        () => requestRefresh(),
-      );
-      channel.subscribe();
-    } catch {
-      /* realtime unavailable — manual refresh still works */
-    }
+    let cancelled = false;
+    let stopAuthSync: (() => void) | null = null;
+    void (async () => {
+      try {
+        // Join AFTER the auth token reaches the realtime socket — a join
+        // that races session hydration registers as `anon` and RLS filters
+        // every event server-side. See lib/supabase/realtime-auth.ts.
+        stopAuthSync = await ensureRealtimeAuth(supabase);
+        if (cancelled) return;
+        channel = supabase.channel(`order:${orderId}`);
+        channel.on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'order_requests',
+            filter: `id=eq.${orderId}`,
+          },
+          () => requestRefresh(),
+        );
+        channel.subscribe();
+      } catch {
+        /* realtime unavailable — manual refresh still works */
+      }
+    })();
     return () => {
+      cancelled = true;
+      stopAuthSync?.();
       if (channel && supabase) {
         try {
           supabase.removeChannel(channel);

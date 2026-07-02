@@ -7,6 +7,7 @@ import * as React from 'react';
 
 import { queueLiveNotification } from '@/lib/notifications/live-toast';
 import { createClient } from '@/lib/supabase/client';
+import { ensureRealtimeAuth } from '@/lib/supabase/realtime-auth';
 
 interface Props {
   userId: string;
@@ -161,41 +162,54 @@ export function NotificationBell({ userId, organizationId, initialUnread }: Prop
     const supabase = supabaseRef.current;
     if (!supabase) return;
     let channel: ReturnType<typeof supabase.channel> | null = null;
-    try {
-      channel = supabase.channel(`user:${userId}:notifications`);
-      channel.on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'notifications',
-          // postgres_changes accepts a single filter, so the channel stays
-          // user-scoped. An event from ANOTHER org only triggers the
-          // refetch below, which IS org-scoped — so cross-org rows never
-          // reach the badge or toasts.
-          filter: `user_id=eq.${userId}`,
-        },
-        () => {
-          requestRefresh();
-        },
-      );
-      // Capture subscribe status. On CHANNEL_ERROR or TIMED_OUT, the
-      // refetch path still works — we deliberately don't surface the
-      // failure to the user because a working bell is more important
-      // than a "realtime broken" message.
-      channel.subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          // Initial seed: this also marks already-unread rows as seen
-          // so we don't pop stale toasts on page load.
-          void surfaceUnread();
-        }
-      });
-    } catch {
-      // realtime client construction failed — fall back to refetch on
-      // path change / focus, both wired below.
-    }
+    let cancelled = false;
+    let stopAuthSync: (() => void) | null = null;
+    void (async () => {
+      try {
+        // The channel must join AFTER the auth token reaches the realtime
+        // socket — subscribing straight from the mount effect races session
+        // hydration, and a lost race registers the subscription as `anon`
+        // (RLS then filters every event server-side, silently). See
+        // lib/supabase/realtime-auth.ts.
+        stopAuthSync = await ensureRealtimeAuth(supabase);
+        if (cancelled) return;
+        channel = supabase.channel(`user:${userId}:notifications`);
+        channel.on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'notifications',
+            // postgres_changes accepts a single filter, so the channel stays
+            // user-scoped. An event from ANOTHER org only triggers the
+            // refetch below, which IS org-scoped — so cross-org rows never
+            // reach the badge or toasts.
+            filter: `user_id=eq.${userId}`,
+          },
+          () => {
+            requestRefresh();
+          },
+        );
+        // Capture subscribe status. On CHANNEL_ERROR or TIMED_OUT, the
+        // refetch path still works — we deliberately don't surface the
+        // failure to the user because a working bell is more important
+        // than a "realtime broken" message.
+        channel.subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            // Initial seed: this also marks already-unread rows as seen
+            // so we don't pop stale toasts on page load.
+            void surfaceUnread();
+          }
+        });
+      } catch {
+        // realtime client construction failed — fall back to refetch on
+        // path change / focus, both wired below.
+      }
+    })();
 
     return () => {
+      cancelled = true;
+      stopAuthSync?.();
       if (channel && supabase) {
         try {
           supabase.removeChannel(channel);

@@ -4,6 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import * as React from 'react';
 
 import { createClient } from '@/lib/supabase/client';
+import { ensureRealtimeAuth } from '@/lib/supabase/realtime-auth';
 import { revalidateInventoryViewAction } from '@/server/actions/revalidate-inventory-view';
 
 interface InventoryRealtimeProps {
@@ -84,8 +85,18 @@ export function InventoryRealtime({
     // feature isn't worth that. Worst case: stale-until-refresh, which
     // is exactly what we had before realtime existed.
     const cleanup: Array<() => void> = [];
+    let cancelled = false;
+    void (async () => {
     try {
       const supabase = createClient();
+      // Join AFTER the auth token reaches the realtime socket. Subscribing
+      // straight from the mount effect races session hydration; a lost race
+      // registers the subscription as `anon`, auth.uid() is NULL, and RLS
+      // filters EVERY event server-side while the channel still reports
+      // SUBSCRIBED. See lib/supabase/realtime-auth.ts (diagnosed live
+      // 2026-07-02 via realtime.subscription.claims_role).
+      cleanup.push(await ensureRealtimeAuth(supabase));
+      if (cancelled) return;
       const channel = supabase.channel(`org:${organizationId}:inventory`);
 
       // Bust this org's cached default list view BEFORE refreshing, so the
@@ -143,8 +154,10 @@ export function InventoryRealtime({
     } catch (err) {
       console.warn('[realtime] subscription failed; falling back to manual refresh', err);
     }
+    })();
 
     return () => {
+      cancelled = true;
       if (pendingRef.current) {
         clearTimeout(pendingRef.current);
         pendingRef.current = null;
