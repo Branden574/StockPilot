@@ -113,6 +113,7 @@ export default function OrderDetail() {
   const { activeOrgId: orgId, activeRole: role } = useWorkspace();
   const [order, setOrder] = React.useState<OrderHeader | null>(null);
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
+  const [attachmentsError, setAttachmentsError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
@@ -141,12 +142,16 @@ export default function OrderDetail() {
 
   const loadAttachments = React.useCallback(async () => {
     if (!orgId || !id) return;
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('order_request_attachments')
       .select('id, storage_path, kind, content_type, file_name, created_at')
       .eq('organization_id', orgId)
       .eq('order_request_id', id)
       .order('created_at', { ascending: false });
+    // A failed read must NOT masquerade as "No attachments yet." — surface it
+    // as an error state so a member seeing an empty gallery is distinguishable
+    // from a member whose read actually failed (offline / RLS denial).
+    setAttachmentsError(error ? error.message : null);
     const rows = (data ?? []) as Record<string, unknown>[];
     const paths = rows.map((r) => r.storage_path as string);
     const signed = new Map<string, string>();
@@ -496,7 +501,15 @@ export default function OrderDetail() {
   }
 
   function openAttachment(a: Attachment) {
-    if (!a.url) return;
+    if (!a.url) {
+      // Signed-URL minting failed (offline, or a storage-RLS denial) — say so
+      // instead of a dead tap on the tile.
+      Alert.alert(
+        'Couldn’t open file',
+        'No download link is available right now. Pull to refresh and try again.',
+      );
+      return;
+    }
     // Images open in an in-app full-screen viewer; PDFs/other open in the
     // device's browser/viewer via the signed URL.
     if ((a.contentType ?? '').startsWith('image/')) {
@@ -716,7 +729,13 @@ export default function OrderDetail() {
               </Mono>
             )}
 
-            {attachments.length === 0 ? (
+            {attachments.length === 0 && attachmentsError ? (
+              <Pressable onPress={() => void loadAttachments()}>
+                <Mono size={11} color="#b42318" style={{ marginTop: 4 }}>
+                  {`Couldn’t load attachments — tap to retry. (${attachmentsError})`}
+                </Mono>
+              </Pressable>
+            ) : attachments.length === 0 ? (
               <Mono size={11} color={c.ink4} style={{ marginTop: 4 }}>No attachments yet.</Mono>
             ) : (
               <View style={styles.grid}>

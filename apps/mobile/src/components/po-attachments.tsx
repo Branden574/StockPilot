@@ -64,6 +64,7 @@ export function PoAttachments({ poId }: { poId: string }) {
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const [items, setItems] = React.useState<AttachmentRow[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
 
   const load = React.useCallback(async () => {
@@ -76,19 +77,23 @@ export function PoAttachments({ poId }: { poId: string }) {
     const org = (po?.organization_id as string | undefined) ?? null;
     setOrgId(org);
 
-    const { data: rows } = await supabase
+    const { data: rows, error: rowsErr } = await supabase
       .from('po_attachments')
       .select('id, storage_path, file_name')
       .eq('purchase_order_id', poId)
       .order('created_at', { ascending: false });
-    const list = (rows ?? []) as Array<{ id: string; storage_path: string; file_name: string | null }>;
+    // A failed read must NOT masquerade as the "No files attached." empty
+    // state (that hid a real outage as "there are no files" — undebuggable
+    // from a user report). Surface it distinctly instead.
+    setLoadError(rowsErr ? rowsErr.message : null);
+    const list = (rows ?? []) as { id: string; storage_path: string; file_name: string | null }[];
 
     const signed = new Map<string, string>();
     if (list.length > 0) {
       const { data: urls } = await supabase.storage
         .from(BUCKET)
         .createSignedUrls(list.map((r) => r.storage_path), 60 * 60);
-      for (const u of (urls ?? []) as Array<{ path?: string | null; signedUrl: string }>) {
+      for (const u of (urls ?? []) as { path?: string | null; signedUrl: string }[]) {
         if (u.path) signed.set(u.path, u.signedUrl);
       }
     }
@@ -278,6 +283,12 @@ export function PoAttachments({ poId }: { poId: string }) {
 
       {loading ? (
         <ActivityIndicator color={theme.primary} style={{ marginTop: space.sm }} />
+      ) : loadError && items.length === 0 ? (
+        <Pressable onPress={() => void load()}>
+          <Text style={styles.errorText}>
+            Couldn’t load attachments — tap to retry. ({loadError})
+          </Text>
+        </Pressable>
       ) : items.length === 0 ? (
         <Text style={styles.muted}>
           {canManage ? 'No files yet. Add a photo or PDF of the packing slip.' : 'No files attached.'}
@@ -287,7 +298,18 @@ export function PoAttachments({ poId }: { poId: string }) {
           <View key={row.id} style={styles.fileRow}>
             <Pressable
               style={{ flex: 1 }}
-              onPress={() => row.url && void Linking.openURL(row.url)}
+              onPress={() => {
+                if (row.url) {
+                  void Linking.openURL(row.url);
+                } else {
+                  // Signed-URL minting failed (offline, or a storage-RLS
+                  // denial) — say so instead of a dead tap.
+                  Alert.alert(
+                    'Couldn’t open file',
+                    'No download link is available right now. Pull to refresh and try again.',
+                  );
+                }
+              }}
             >
               <Text style={styles.fileName} numberOfLines={1}>
                 📎 {row.file_name ?? 'File'}
@@ -326,6 +348,7 @@ const styles = StyleSheet.create({
   },
   addBtnText: { color: theme.bg, fontWeight: '700', fontSize: 13 },
   muted: { color: theme.textMuted, fontSize: 13, marginTop: space.sm },
+  errorText: { color: '#c0392b', fontSize: 13, marginTop: space.sm },
   fileRow: {
     flexDirection: 'row',
     alignItems: 'center',

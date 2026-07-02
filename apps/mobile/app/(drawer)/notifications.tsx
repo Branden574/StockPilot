@@ -8,6 +8,7 @@ import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { ensureRealtimeAuth } from '@/lib/realtime-auth';
 import { supabase } from '@/lib/supabase';
 import { useWorkspace } from '@/lib/use-workspace';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -62,23 +63,33 @@ export default function NotificationsScreen() {
   // the web's "new bell badge appears live" behavior.
   React.useEffect(() => {
     if (!user) return;
-    const channel = supabase
-      .channel(`notif-${user.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'notifications',
-          filter: `user_id=eq.${user.id}`,
-        },
-        () => {
-          void load();
-        },
-      )
-      .subscribe();
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
+    void (async () => {
+      // Join AFTER the JWT reaches the realtime socket — a channel joined
+      // off a restored session (INITIAL_SESSION) registers as `anon` and
+      // RLS silently drops every event. See lib/realtime-auth.ts.
+      await ensureRealtimeAuth();
+      if (cancelled) return;
+      channel = supabase
+        .channel(`notif-${user.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'notifications',
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            void load();
+          },
+        )
+        .subscribe();
+    })();
     return () => {
-      void supabase.removeChannel(channel);
+      cancelled = true;
+      if (channel) void supabase.removeChannel(channel);
     };
   }, [user, load]);
 
