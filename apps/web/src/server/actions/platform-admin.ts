@@ -4,6 +4,8 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
+import { sendEmail } from '@/lib/email/resend';
+import { inviteEmailHtml, inviteEmailText } from '@/lib/email/templates';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -74,18 +76,22 @@ export async function createOrgForCustomerAction(
     );
   }
 
-  // 1. Invite the user. inviteUserByEmail creates the auth row AND sends
-  //    a magic-link email automatically via the Supabase mailer (or
-  //    Resend, if SMTP is configured at the project level).
+  // 1. Invite the user. generateLink({type:'invite'}) creates the auth row
+  //    and returns the magic link WITHOUT sending mail — we deliver it via
+  //    the app's own Resend transport below. (inviteUserByEmail sends
+  //    through Supabase's BUILT-IN mailer, which is capped at ~2 emails/hr
+  //    project-wide — the same cap that silently broke password resets,
+  //    see requestPasswordResetAction.)
   //
   //    If the email already has an auth account, we fail loudly rather
   //    than silently re-inviting — the operator should pick a different
   //    flow (e.g. inviting them to an existing org).
   const redirectTo = `${env.NEXT_PUBLIC_APP_URL}/dashboard`;
-  const { data: invited, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(
-    parsed.data.email,
-    { redirectTo },
-  );
+  const { data: invited, error: inviteErr } = await admin.auth.admin.generateLink({
+    type: 'invite',
+    email: parsed.data.email,
+    options: { redirectTo },
+  });
 
   if (inviteErr || !invited?.user) {
     await reportError(inviteErr ?? new Error('invite_user_no_data'), {
@@ -197,6 +203,38 @@ export async function createOrgForCustomerAction(
     });
   } catch (e) {
     await reportError(e, { tag: 'platform-admin.audit', extra: { orgId } });
+  }
+
+  // 9. Deliver the sign-in link via the app's Resend transport (see step 1
+  //    — generateLink minted the link but sent nothing). If the send fails,
+  //    the org is still provisioned; surface the failure to the operator
+  //    instead of rolling back.
+  const actionLink = invited.properties?.action_link;
+  if (actionLink) {
+    const sent = await sendEmail({
+      to: parsed.data.email,
+      subject: `Your ${parsed.data.name} workspace on StockPilot is ready`,
+      html: inviteEmailHtml({
+        organizationName: parsed.data.name,
+        inviterName: 'The StockPilot team',
+        acceptUrl: actionLink,
+      }),
+      text: inviteEmailText({
+        organizationName: parsed.data.name,
+        inviterName: 'The StockPilot team',
+        acceptUrl: actionLink,
+      }),
+    });
+    if (!sent.ok) {
+      await reportError(new Error(sent.error ?? 'invite email send failed'), {
+        tag: 'platform-admin.invite-email',
+        extra: { orgId, email: parsed.data.email },
+      });
+      return err(
+        'internal_error',
+        'Org created, but the invite email failed to send. Re-send it manually or check Resend.',
+      );
+    }
   }
 
   revalidatePath('/dashboard/admin/orgs');

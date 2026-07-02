@@ -6,6 +6,8 @@ import { redirect } from 'next/navigation';
 import { after } from 'next/server';
 
 import { noteLoginDevice } from '@/lib/auth/login-device';
+import { sendEmail } from '@/lib/email/resend';
+import { passwordResetEmailHtml, passwordResetEmailText } from '@/lib/email/templates';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -334,14 +336,41 @@ export async function requestPasswordResetAction(
     return ok({ ok: true });
   }
 
-  const supabase = await createClient();
-  await supabase.auth.resetPasswordForEmail(parsed.data.email, {
-    redirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/reset/complete`,
-  });
+  // The recovery link is minted server-side and delivered through the
+  // app's own Resend transport — NOT supabase.auth.resetPasswordForEmail.
+  // That call routes through Supabase's BUILT-IN mailer, which is capped
+  // at a couple of emails per hour project-wide; observed live 2026-07-02:
+  // POST /recover → 429 over_email_send_rate_limit while the UI reported
+  // success, so reset emails silently never arrived.
+  // admin.generateLink() creates the same one-time recovery link without
+  // sending anything. Every failure below (unknown email, link or send
+  // error) is swallowed on purpose: the caller always gets the same
+  // generic ok() — account-enumeration resistance.
+  try {
+    const admin = createAdminClient();
+    const { data, error: linkError } = await admin.auth.admin.generateLink({
+      type: 'recovery',
+      email: parsed.data.email,
+      options: {
+        redirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/reset/complete`,
+      },
+    });
+    const actionLink = data?.properties?.action_link;
+    if (!linkError && actionLink) {
+      await sendEmail({
+        to: parsed.data.email,
+        subject: 'Reset your StockPilot password',
+        html: passwordResetEmailHtml({ resetUrl: actionLink }),
+        text: passwordResetEmailText({ resetUrl: actionLink }),
+      });
+    }
+  } catch (e) {
+    void reportError(e, { tag: 'auth.password_reset_send_failed', level: 'warning' });
+  }
 
-  // Audit reset requests (email only; resetPasswordForEmail does not
-  // return the user, and looking it up would leak account-enumeration
-  // signal back to the caller). user_id stays null.
+  // Audit reset requests (email only; looking the user up to attach an id
+  // would leak account-enumeration signal back to the caller). user_id
+  // stays null.
   await emitAuthAudit({
     event: 'user.password.reset_requested',
     userId: null,

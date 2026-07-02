@@ -52,6 +52,46 @@ Accept the invite: ${acceptUrl}
 This link expires in 7 days. If you weren't expecting this, ignore it.`;
 }
 
+interface PasswordResetEmailParams {
+  resetUrl: string;
+}
+
+export function passwordResetEmailHtml({ resetUrl }: PasswordResetEmailParams): string {
+  return `<!doctype html>
+<html><body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,Segoe UI,sans-serif;">
+  <div style="max-width:560px;margin:40px auto;background:white;border-radius:12px;padding:40px;">
+    <div style="display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:18px;margin-bottom:24px;">
+      ${emailLogoImg(28)}
+      StockPilot
+    </div>
+    <h1 style="font-size:24px;margin:0 0 12px;">Reset your password</h1>
+    <p style="color:#52525b;line-height:1.6;margin:0 0 24px;">
+      Someone (hopefully you) asked to reset the password for this StockPilot account.
+      Click the button below to choose a new one.
+    </p>
+    <a href="${resetUrl}" style="display:inline-block;background:linear-gradient(135deg,#3b82f6,#6366f1);color:white;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;">
+      Set a new password
+    </a>
+    <p style="color:#71717a;font-size:13px;margin-top:32px;">
+      Or paste this link in your browser:<br>
+      <span style="color:#3f3f46;word-break:break-all;">${resetUrl}</span>
+    </p>
+    <p style="color:#a1a1aa;font-size:12px;margin-top:32px;border-top:1px solid #e4e4e7;padding-top:16px;">
+      This link expires in 1 hour and can be used once. If you didn't ask for a reset,
+      you can safely ignore this email — your password is unchanged.
+    </p>
+  </div>
+</body></html>`;
+}
+
+export function passwordResetEmailText({ resetUrl }: PasswordResetEmailParams): string {
+  return `Reset your StockPilot password.
+
+Set a new password: ${resetUrl}
+
+This link expires in 1 hour and can be used once. If you didn't ask for a reset, ignore this email — your password is unchanged.`;
+}
+
 function escapeHtml(s: string) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }
