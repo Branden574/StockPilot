@@ -2,7 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
 
-vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
+// unstable_cache/revalidateTag: the actions under test import the
+// inventory-list loader (cache invalidation helper), whose module graph
+// builds unstable_cache wrappers at import time.
+vi.mock('next/cache', () => ({
+  revalidatePath: vi.fn(),
+  revalidateTag: vi.fn(),
+  unstable_cache: vi.fn((fn: unknown) => fn),
+}));
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — must be declared before any imports that trigger the mocked

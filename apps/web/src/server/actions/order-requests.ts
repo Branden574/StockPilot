@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
@@ -121,6 +122,8 @@ export async function cancelOrderRequestAction(
     await svc.cancel(parsed.data.id, parsed.data.reason ?? null);
     revalidatePath('/dashboard/orders');
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    // Cancel restocks already-picked stock — the cached list view must drop.
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);
@@ -208,6 +211,7 @@ export async function recordPickedLineAction(
     );
     revalidatePath(`/dashboard/orders/${parsed.data.orderId}`);
     revalidatePath(`/dashboard/orders/${parsed.data.orderId}/pick`);
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);
@@ -227,6 +231,7 @@ export async function completePickingAction(
     revalidatePath('/dashboard/orders');
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);

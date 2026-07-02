@@ -5,7 +5,14 @@ const refreshOrgBookPrices = vi.fn();
 vi.mock('@/server/services/price-tracking', () => ({
   PriceTrackingService: { forCurrentUser: vi.fn(async () => ({ fetchItemPrice, refreshOrgBookPrices })) },
 }));
-vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
+// unstable_cache/revalidateTag: the actions under test import the
+// inventory-list loader (cache invalidation helper), whose module graph
+// builds unstable_cache wrappers at import time.
+vi.mock('next/cache', () => ({
+  revalidatePath: vi.fn(),
+  revalidateTag: vi.fn(),
+  unstable_cache: vi.fn((fn: unknown) => fn),
+}));
 
 import { fetchItemPriceAction, refreshBookPricesAction } from './price-tracking';
 

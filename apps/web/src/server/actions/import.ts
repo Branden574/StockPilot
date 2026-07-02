@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
@@ -85,6 +86,7 @@ export async function importItemsAction(input: z.infer<typeof importSchema>): Pr
 
     revalidatePath('/dashboard');
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     return ok(summary);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);

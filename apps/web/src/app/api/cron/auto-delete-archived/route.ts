@@ -10,6 +10,7 @@ import {
   purgeExpiredArchivedItems,
   type AutoDeleteArchivedSettings,
 } from '@/server/services/archive-cleanup';
+import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import type { ServiceContext } from '@/server/services/context';
 
@@ -86,6 +87,8 @@ export async function GET(req: Request) {
         const { deleted, truncated } = await purgeExpiredArchivedItems(ctx, settings.days);
         orgsProcessed++;
         itemsDeleted += deleted;
+        // Soft-deleted items vanish from the cached Items/Books default views.
+        if (deleted > 0) revalidateInventoryList(orgId);
         if (truncated) {
           orgsTruncated++;
           // Disclose the silent cap (recurring-bug-patterns rule) so a backlogged

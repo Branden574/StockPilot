@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { ServiceError, withContext } from '@/server/services/context';
@@ -52,6 +53,7 @@ export async function createItemAction(input: CreateItemInput): Promise<ActionRe
     const item = await svc.create(parsed.data);
     revalidatePath('/dashboard');
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/books');
     return ok({ id: item.id as string });
   } catch (e) {
@@ -71,6 +73,7 @@ export async function updateItemAction(
     const svc = await InventoryService.forCurrentUser();
     await svc.update(id, parsed.data);
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/books');
     revalidatePath(`/dashboard/inventory/${id}`);
     return ok({ id });
@@ -84,6 +87,7 @@ export async function archiveItemAction(id: string): Promise<ActionResult<void>>
     const svc = await InventoryService.forCurrentUser();
     await svc.archive(id);
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);
@@ -95,6 +99,7 @@ export async function deleteItemAction(id: string): Promise<ActionResult<void>> 
     const svc = await InventoryService.forCurrentUser();
     await svc.softDelete(id);
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);
@@ -144,6 +149,7 @@ export async function bulkCreateSizedVariantsAction(
     const svc = await InventoryService.forCurrentUser();
     const rows = await svc.bulkCreateSizedVariants(parsed.data);
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/books');
     revalidatePath('/dashboard');
     return ok({ created: rows.length, ids: rows.map((r) => r.id) });
@@ -196,6 +202,7 @@ export async function bulkUpdateInventoryAction(input: {
     const svc = await InventoryService.forCurrentUser();
     const result = await svc.bulkUpdate(input);
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/books');
     revalidatePath('/dashboard');
     return ok(result);
@@ -214,6 +221,7 @@ export async function adjustStockAction(input: AdjustStockInput): Promise<Action
     await svc.adjustStock(parsed.data);
     revalidatePath('/dashboard');
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath(`/dashboard/inventory/${parsed.data.itemId}`);
     return ok(undefined);
   } catch (e) {
@@ -230,6 +238,7 @@ export async function transferStockAction(input: TransferStockInput): Promise<Ac
     const svc = await InventoryService.forCurrentUser();
     await svc.transferStock(parsed.data);
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);
@@ -349,6 +358,7 @@ export async function placeStockAction(
 
     revalidatePath('/dashboard/inventory/staging');
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     return ok({ toLocationId });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` as a P0001 exception whose
@@ -484,6 +494,7 @@ export async function bulkPlaceStockAction(
 
     revalidatePath('/dashboard/inventory/staging');
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     return ok({ placed, failed });
   } catch (e) {
     return toResult(e);

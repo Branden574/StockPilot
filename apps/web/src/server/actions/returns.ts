@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import {
   RMAService,
@@ -134,6 +135,7 @@ export async function closeReturnAction(id: string): Promise<ActionResult<Return
     const row = await svc.close(id);
     revalidateReturn(id);
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard');
     return ok(row);
   } catch (e) {

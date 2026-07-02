@@ -11,7 +11,15 @@ import { InventoryTable } from '@/components/inventory/inventory-table';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
-import { can } from '@stockpilot/core';
+import { can, isManagerOrAbove } from '@stockpilot/core';
+import {
+  ALL_WAREHOUSES_KEY,
+  isDefaultInventoryView,
+  loadInventoryList,
+  resolveInventoryListImages,
+  type InventoryListItemRow,
+  type InventoryPlacementLine,
+} from '@/server/loaders/inventory-list';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
@@ -180,6 +188,25 @@ export default async function InventoryPage({
  * the chrome immediately and only the table body streams. Same components,
  * same props as before — purely relocated behind <Suspense>.
  */
+/**
+ * Data both acquisition paths (cached default view / live filtered
+ * view) normalize into before the shared render tail below. The item
+ * rows carry the same columns either way — the loader's row type
+ * mirrors InventoryService.list()'s select verbatim.
+ */
+type SectionData = {
+  items: InventoryListItemRow[];
+  total: number;
+  valueOnHand: number;
+  categories: Array<{ id: string; name: string; color: string | null }>;
+  locations: Array<{ id: string; name: string }>;
+  suppliers: Array<{ id: string; name: string }>;
+  tags: Array<{ id: string; name: string; color: string | null }>;
+  charters: Array<{ id: string; name: string; code: string | null }>;
+  trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
+  placementMap: Map<string, InventoryPlacementLine[]>;
+};
+
 async function InventoryTableSection({
   params,
   lifecycleStatus,
@@ -190,24 +217,17 @@ async function InventoryTableSection({
   itemType: 'all' | 'book' | 'asset' | 'consumable' | 'product';
 }) {
   const page = Math.max(1, Number(params.page) || 1);
-  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, chartersSvc, imagesSvc, savedViewsSvc, warehouseFilter, sessionCtx] = await Promise.all([
-    InventoryService.forCurrentUser(),
-    CategoriesService.forCurrentUser(),
-    LocationsService.forCurrentUser(),
-    SuppliersService.forCurrentUser(),
-    TagsService.forCurrentUser(),
-    ChartersService.forCurrentUser(),
-    ItemImagesService.forCurrentUser(),
-    SavedViewsService.forCurrentUser(),
-    getActiveWarehouseFilter(),
+  const [sessionCtx, warehouseFilter, savedViewsSvc] = await Promise.all([
     requireOrgContext(),
+    getActiveWarehouseFilter(),
+    SavedViewsService.forCurrentUser(),
   ]);
-
-  const sort = parseSort(params.sort);
-  const categoryIds = parseIdList(params.cat);
-  const locationIds = parseIdList(params.loc);
-  const charterIds = parseIdList(params.charter);
-  const rack = typeof params.rack === 'string' ? params.rack : undefined;
+  // Saved views are strictly per-user — they never enter the shared
+  // cache. Kick the query off now so it overlaps either data path.
+  const savedViewsPromise = savedViewsSvc.list('inventory');
+  // Keep the rejection observed even if the data path throws before the
+  // await below — an unobserved rejection would crash the lambda.
+  savedViewsPromise.catch(() => {});
 
   // Wrap each query so a single failure surfaces with its tag in Vercel
   // logs instead of the generic "Server Components render" error
@@ -219,77 +239,161 @@ async function InventoryTableSection({
       throw err;
     });
   }
-  const [inventory, categories, locations, suppliers, tags, charters, savedViews] = await Promise.all([
-    tagged(
-      'inventorySvc.list',
-      inventorySvc.list({
-        q: params.q,
-        status: lifecycleStatus,
-        lowStock: params.stock === 'low',
-        outOfStock: params.stock === 'out',
-        itemType,
-        warehouseId: warehouseFilter,
-        categoryIds,
-        locationIds,
-        charterIds,
-        rack,
-        sort,
-        limit: PAGE_SIZE,
-        offset: (page - 1) * PAGE_SIZE,
-      }),
-    ),
-    tagged('categoriesSvc.list', categoriesSvc.list()),
-    tagged('locationsSvc.list', locationsSvc.list({ sitesOnly: true })),
-    tagged('suppliersSvc.list', suppliersSvc.list()),
-    tagged('tagsSvc.list', tagsSvc.list()),
-    tagged('chartersSvc.list', chartersSvc.list()),
-    tagged('savedViewsSvc.list', savedViewsSvc.list('inventory')),
-  ]);
 
-  // Per-row trends + primary images both depend on the resolved item
-  // list, but they're independent of each other — run them in parallel.
-  // Previously sequential, which doubled the second-wave latency.
-  //   trends    → 14-day sparkline data (1 round trip via stock_movements)
-  //   imagesById → primary photo signed URL per item (1 select + 1 batch
-  //                createSignedUrls; falls back to custom_fields.thumbnail_url
-  //                stashed by the bulk-ISBN importer for legacy books).
-  const itemIdList = inventory.items.map((i) => i.id);
-  const [trends, imagesById, placementMap] = await Promise.all([
-    tagged(
-      'getItemTrends',
-      getItemTrends(
-        inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+  let data: SectionData | null = null;
+
+  // COLD-CLICK FAST PATH: the exact default view (page 1, default sort,
+  // no search/filters) is served from an org-keyed 60s cache that the
+  // prewarm cron keeps warm. Gates, all mandatory:
+  //   • isDefaultInventoryView — any data-affecting param takes the
+  //     live path unchanged.
+  //   • isManagerOrAbove — staff/viewer results are user-scoped
+  //     (warehouse assignments / category restrictions) and must never
+  //     be served from, or into, an org-shared cache.
+  //   • can(items:read) — the cache must not out-live a permission
+  //     revocation the way raw RLS rows would not.
+  // The warehouse-filter cookie changes the data, so it's part of the
+  // cache key. A loader failure falls through to the live path.
+  if (
+    isDefaultInventoryView(params, 'items') &&
+    isManagerOrAbove(sessionCtx.role) &&
+    can(sessionCtx, 'items:read')
+  ) {
+    try {
+      const payload = await loadInventoryList(
+        sessionCtx.organizationId,
+        warehouseFilter ?? ALL_WAREHOUSES_KEY,
+        'items',
+      );
+      data = {
+        // Cached rows carry image PATHS; the signed URLs are resolved
+        // per request through the shared 25-day per-path cache (never
+        // inside the loader's cache — see the loader's header note).
+        items: await resolveInventoryListImages(sessionCtx.organizationId, payload.items),
+        total: payload.total,
+        valueOnHand: payload.valueOnHand,
+        categories: payload.categories,
+        locations: payload.locations,
+        suppliers: payload.suppliers,
+        tags: payload.tags,
+        charters: payload.charters,
+        trends: new Map(Object.entries(payload.trends)),
+        placementMap: new Map(Object.entries(payload.placement)),
+      };
+    } catch (err) {
+      console.warn('[inventory page] cached default view unavailable, using live path:', err);
+    }
+  }
+
+  if (!data) {
+    const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, chartersSvc, imagesSvc] = await Promise.all([
+      InventoryService.forCurrentUser(),
+      CategoriesService.forCurrentUser(),
+      LocationsService.forCurrentUser(),
+      SuppliersService.forCurrentUser(),
+      TagsService.forCurrentUser(),
+      ChartersService.forCurrentUser(),
+      ItemImagesService.forCurrentUser(),
+    ]);
+
+    const sort = parseSort(params.sort);
+    const categoryIds = parseIdList(params.cat);
+    const locationIds = parseIdList(params.loc);
+    const charterIds = parseIdList(params.charter);
+    const rack = typeof params.rack === 'string' ? params.rack : undefined;
+
+    const [inventory, categories, locations, suppliers, tags, charters] = await Promise.all([
+      tagged(
+        'inventorySvc.list',
+        inventorySvc.list({
+          q: params.q,
+          status: lifecycleStatus,
+          lowStock: params.stock === 'low',
+          outOfStock: params.stock === 'out',
+          itemType,
+          warehouseId: warehouseFilter,
+          categoryIds,
+          locationIds,
+          charterIds,
+          rack,
+          sort,
+          limit: PAGE_SIZE,
+          offset: (page - 1) * PAGE_SIZE,
+        }),
       ),
-    ),
-    tagged(
-      'imagesSvc.primaryImagesWithThumbsForItems',
-      // Richer shape than primaryImagesForItems — also returns the
-      // 200px thumb signed URL (when the row has one — 0122 onward)
-      // and the inline LQIP base64 for next/image's blurDataURL.
-      imagesSvc.primaryImagesWithThumbsForItems(itemIdList),
-    ),
-    // Per-(item, location) holdings so the list shows ONE LINE PER RACK.
-    tagged('inventorySvc.placementBreakdown', inventorySvc.placementBreakdown(itemIdList)),
-  ]);
-  const itemsWithImages = inventory.items.map((i) => {
-    const cf = (i as { custom_fields?: Record<string, unknown> | null })
-      .custom_fields;
-    const cfThumb =
-      cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
-        ? (cf.thumbnail_url as string)
-        : null;
-    const img = imagesById.get(i.id);
-    return {
-      ...i,
-      // master URL (hover preview prefetch + lightbox still use this)
-      image_url: img?.url ?? cfThumb ?? null,
-      // pre-resized 200px thumb URL when available; rows pre-dating
-      // 0122 fall back to image_url at the rendering site.
-      image_thumb_url: img?.thumbUrl ?? null,
-      // base64 LQIP for next/image's blurDataURL; null pre-0122.
-      image_lqip: img?.lqip ?? null,
+      tagged('categoriesSvc.list', categoriesSvc.list()),
+      tagged('locationsSvc.list', locationsSvc.list({ sitesOnly: true })),
+      tagged('suppliersSvc.list', suppliersSvc.list()),
+      tagged('tagsSvc.list', tagsSvc.list()),
+      tagged('chartersSvc.list', chartersSvc.list()),
+    ]);
+
+    // Per-row trends + primary images both depend on the resolved item
+    // list, but they're independent of each other — run them in parallel.
+    // Previously sequential, which doubled the second-wave latency.
+    //   trends    → 14-day sparkline data (1 round trip via stock_movements)
+    //   imagesById → primary photo signed URL per item (1 select + 1 batch
+    //                createSignedUrls; falls back to custom_fields.thumbnail_url
+    //                stashed by the bulk-ISBN importer for legacy books).
+    const itemIdList = inventory.items.map((i) => i.id);
+    const [trends, imagesById, placementMap] = await Promise.all([
+      tagged(
+        'getItemTrends',
+        getItemTrends(
+          inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+        ),
+      ),
+      tagged(
+        'imagesSvc.primaryImagesWithThumbsForItems',
+        // Richer shape than primaryImagesForItems — also returns the
+        // 200px thumb signed URL (when the row has one — 0122 onward)
+        // and the inline LQIP base64 for next/image's blurDataURL.
+        imagesSvc.primaryImagesWithThumbsForItems(itemIdList),
+      ),
+      // Per-(item, location) holdings so the list shows ONE LINE PER RACK.
+      tagged('inventorySvc.placementBreakdown', inventorySvc.placementBreakdown(itemIdList)),
+    ]);
+    const itemsWithImages = inventory.items.map((i) => {
+      const cf = (i as { custom_fields?: Record<string, unknown> | null })
+        .custom_fields;
+      const cfThumb =
+        cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
+          ? (cf.thumbnail_url as string)
+          : null;
+      const img = imagesById.get(i.id);
+      return {
+        ...i,
+        // master URL (hover preview prefetch + lightbox still use this)
+        image_url: img?.url ?? cfThumb ?? null,
+        // pre-resized 200px thumb URL when available; rows pre-dating
+        // 0122 fall back to image_url at the rendering site.
+        image_thumb_url: img?.thumbUrl ?? null,
+        // base64 LQIP for next/image's blurDataURL; null pre-0122.
+        image_lqip: img?.lqip ?? null,
+      };
+    });
+
+    data = {
+      items: itemsWithImages,
+      total: inventory.total,
+      valueOnHand: inventory.valueOnHand,
+      categories: categories.map((c) => ({
+        id: c.id as string,
+        name: c.name as string,
+        color: (c.color as string | null) ?? null,
+      })),
+      locations: locations.map((l) => ({ id: l.id as string, name: l.name as string })),
+      suppliers: suppliers.map((s) => ({ id: s.id as string, name: s.name as string })),
+      tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
+      charters: charters.map((c) => ({ id: c.id, name: c.name, code: c.code ?? null })),
+      trends,
+      placementMap,
     };
-  });
+  }
+
+  const savedViews = await savedViewsPromise;
+  const itemsWithImages = data.items;
+  const placementMap = data.placementMap;
 
   // ONE LINE PER RACK: expand each item into a row per holding location. The
   // Chromebook placed 250→1-A and 250→2-C becomes two rows. `line_quantity` is
@@ -323,20 +427,17 @@ async function InventoryTableSection({
 
   const lookups = {
     categories: new Map(
-      categories.map((c) => [
-        c.id as string,
-        { name: c.name as string, color: (c.color as string | null) ?? null },
-      ]),
+      data.categories.map((c) => [c.id, { name: c.name, color: c.color }]),
     ),
-    locations: new Map(locations.map((l) => [l.id as string, { name: l.name as string }])),
+    locations: new Map(data.locations.map((l) => [l.id, { name: l.name }])),
     charters: new Map(
-      charters.map((c) => [c.id, { name: c.name, code: c.code ?? null }]),
+      data.charters.map((c) => [c.id, { name: c.name, code: c.code }]),
     ),
   };
 
   const canCreate = can(sessionCtx, 'items:create');
 
-  if (inventory.total === 0 && lifecycleStatus === 'archived' && !params.q && !params.stock) {
+  if (data.total === 0 && lifecycleStatus === 'archived' && !params.q && !params.stock) {
     return (
       <EmptyState
         icon={Boxes}
@@ -346,7 +447,7 @@ async function InventoryTableSection({
       />
     );
   }
-  if (inventory.total === 0 && !params.q && !params.stock) {
+  if (data.total === 0 && !params.q && !params.stock) {
     return (
       <EmptyState
         icon={Boxes}
@@ -364,7 +465,7 @@ async function InventoryTableSection({
       />
     );
   }
-  if (inventory.total === 0 && params.stock === 'low') {
+  if (data.total === 0 && params.stock === 'low') {
     return (
       <EmptyState
         icon={Boxes}
@@ -374,7 +475,7 @@ async function InventoryTableSection({
       />
     );
   }
-  if (inventory.total === 0 && params.stock === 'out') {
+  if (data.total === 0 && params.stock === 'out') {
     return (
       <EmptyState
         icon={Boxes}
@@ -384,7 +485,7 @@ async function InventoryTableSection({
       />
     );
   }
-  if (inventory.total === 0 && params.q) {
+  if (data.total === 0 && params.q) {
     // Search returned zero results. Without this branch the page
     // fell through to InventoryTable rendering a single bare cell
     // ("No items match your filters.") — the only empty state on
@@ -402,32 +503,19 @@ async function InventoryTableSection({
   return (
     <InventoryTable
       items={placementRows}
-      total={inventory.total}
-      valueOnHand={inventory.valueOnHand}
+      total={data.total}
+      valueOnHand={data.valueOnHand}
       lookups={lookups}
       canCreate={canCreate}
-      categories={categories.map((c) => ({
-        id: c.id as string,
-        name: c.name as string,
-      }))}
-      locations={locations.map((l) => ({
-        id: l.id as string,
-        name: l.name as string,
-      }))}
-      charters={charters.map((c) => ({
-        id: c.id,
-        name: c.name,
-        code: c.code ?? null,
-      }))}
-      suppliers={suppliers.map((s) => ({
-        id: s.id as string,
-        name: s.name as string,
-      }))}
-      tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
+      categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
+      locations={data.locations}
+      charters={data.charters}
+      suppliers={data.suppliers}
+      tags={data.tags}
       initialQuery={params.q}
       page={page}
       pageSize={PAGE_SIZE}
-      trends={trends}
+      trends={data.trends}
       savedViews={savedViews}
       savedViewScope="inventory"
       activeWarehouseId={warehouseFilter}

@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
 
@@ -67,6 +68,7 @@ export async function recordImageAction(input: z.infer<typeof recordSchema>): Pr
       },
     );
     revalidatePath(`/dashboard/inventory/${parsed.data.itemId}`);
+    await revalidateInventoryListForCurrentOrg();
     return ok({ id: row.id as string });
   } catch (e) {
     return toResult(e);
@@ -78,6 +80,7 @@ export async function removeImageAction(imageId: string, itemId: string): Promis
     const svc = await ItemImagesService.forCurrentUser();
     await svc.remove(imageId);
     revalidatePath(`/dashboard/inventory/${itemId}`);
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);

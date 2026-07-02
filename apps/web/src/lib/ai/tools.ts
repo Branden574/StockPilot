@@ -6,6 +6,7 @@ import { lookupIsbn as lookupIsbnLib } from '@/lib/books/lookup';
 import { env } from '@/lib/env';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
+import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { assertPermission, type ServiceContext } from '@/server/services/context';
 import { BooksImportService } from '@/server/services/books-import';
 import { CategoriesService } from '@/server/services/categories';
@@ -786,6 +787,7 @@ const adjustStockTool: ToolExecutor = {
       movementType: movementType as never,
       reason,
     });
+    revalidateInventoryList(ctx.organizationId);
     // Re-fetch the item so the model can echo the new on-hand back.
     const updated = (await svc.get(itemId)) as Record<string, unknown>;
     return {
@@ -942,6 +944,7 @@ const executeBulkBookImportTool: ToolExecutor = {
       defaultQuantity: Number.isFinite(defaultQuantity) ? defaultQuantity : 1,
       skipDuplicates: true,
     });
+    revalidateInventoryList(ctx.organizationId);
     return result;
   },
 };

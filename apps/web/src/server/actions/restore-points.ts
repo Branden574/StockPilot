@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
 import {
   createSnapshot,
@@ -51,6 +52,7 @@ export async function restoreFromPointAction(
     const res = await restoreSnapshot(ctx, { id: parsed.data.id, confirm: parsed.data.confirm });
     revalidatePath('/dashboard/settings/restore-points');
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     return ok(res);
   } catch (e) {
     if (e instanceof ServiceError) {

@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { BundlesService } from '@/server/services/bundles';
 
@@ -140,6 +141,7 @@ export async function assembleBundleAction(
       parsed.data.notes ?? null,
     );
     revalidatePath(`/dashboard/bundles/${parsed.data.id}`);
+    await revalidateInventoryListForCurrentOrg();
     return ok(out);
   } catch (e) {
     return toResult(e);
@@ -172,6 +174,7 @@ export async function distributeBundleAction(
     });
     revalidatePath(`/dashboard/bundles/${parsed.data.id}`);
     revalidatePath('/dashboard/bundles');
+    await revalidateInventoryListForCurrentOrg();
     return ok(out);
   } catch (e) {
     return toResult(e);

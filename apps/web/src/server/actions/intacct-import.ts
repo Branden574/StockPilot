@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
 import {
   importItemsFromIntacct,
@@ -33,6 +34,7 @@ export async function importFromIntacctAction(
     const ctx = await withContext();
     const summary = await importItemsFromIntacct(ctx, parsed.data);
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/settings/integrations');
     return ok(summary);
   } catch (e) {

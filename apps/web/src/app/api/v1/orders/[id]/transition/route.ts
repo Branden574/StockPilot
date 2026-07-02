@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
@@ -111,6 +112,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       case 'cancel':
         order = await svc.cancel(id, a.reason?.trim() || null);
         break;
+    }
+    // complete_picking decrements stock and cancel restocks picked stock —
+    // both change the cached Items/Books default views. The other actions
+    // are status-only; one cheap tag revalidate covers the set.
+    if (a.action === 'complete_picking' || a.action === 'cancel') {
+      revalidateInventoryList(ctx.organizationId);
     }
     return NextResponse.json({ order });
   } catch (e) {

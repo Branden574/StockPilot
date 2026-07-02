@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { googleBooksClient } from '@/server/pricing/google-books-client';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { refreshBookPricesForOrg } from '@/server/services/price-tracking';
@@ -76,6 +77,8 @@ export async function GET(req: Request) {
       });
       used += r.written;
       results.push({ orgId, ...r });
+      // last_priced_at stamps bump updated_at → page-1 order changes.
+      if (r.written > 0) revalidateInventoryList(orgId);
     } catch (e) {
       // FAIL-OPEN per org: report and continue; one org must not 500 the cron.
       void reportError(e, { tag: 'cron.price-pull', extra: { orgId } });

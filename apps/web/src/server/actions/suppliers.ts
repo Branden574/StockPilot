@@ -9,6 +9,7 @@ import {
   type CreateSupplierInput,
   type UpdateSupplierInput,
 } from '@/server/services/suppliers';
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -26,6 +27,7 @@ export async function createSupplierAction(input: CreateSupplierInput): Promise<
     const svc = await SuppliersService.forCurrentUser();
     const row = await svc.create(parsed.data);
     revalidatePath('/dashboard/suppliers');
+    await revalidateInventoryListForCurrentOrg();
     return ok({ id: row.id as string });
   } catch (e) {
     return toResult(e);
@@ -42,6 +44,7 @@ export async function updateSupplierAction(
     const svc = await SuppliersService.forCurrentUser();
     await svc.update(id, parsed.data);
     revalidatePath('/dashboard/suppliers');
+    await revalidateInventoryListForCurrentOrg();
     return ok({ id });
   } catch (e) {
     return toResult(e);
@@ -53,6 +56,7 @@ export async function archiveSupplierAction(id: string): Promise<ActionResult<vo
     const svc = await SuppliersService.forCurrentUser();
     await svc.archive(id);
     revalidatePath('/dashboard/suppliers');
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);
@@ -64,6 +68,7 @@ export async function restoreSupplierAction(id: string): Promise<ActionResult<vo
     const svc = await SuppliersService.forCurrentUser();
     await svc.restore(id);
     revalidatePath('/dashboard/suppliers');
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);

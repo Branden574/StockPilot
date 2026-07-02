@@ -126,9 +126,21 @@ export function Sidebar({
     [],
   );
 
+  // STAGGERED, not simultaneous: five concurrent prefetches on a hard
+  // landing all race the same (possibly cold) lambda, so a fast human
+  // click within the first second queued behind 5 in-flight RSC
+  // renders. A 150ms gap keeps the pipeline mostly-one-deep while
+  // still warming all five within ~1s. The current route is skipped
+  // (nothing to warm), and pending timers are cleared on unmount /
+  // route change so a navigation mid-burst can't fire stale prefetches.
   React.useEffect(() => {
-    TOP_ROUTES.forEach((href) => warmRoute(href));
-  }, [warmRoute, TOP_ROUTES]);
+    const timers = TOP_ROUTES.filter((href) => href !== pathname).map((href, i) =>
+      setTimeout(() => warmRoute(href), i * 150),
+    );
+    return () => {
+      for (const t of timers) clearTimeout(t);
+    };
+  }, [warmRoute, pathname, TOP_ROUTES]);
 
   return (
     <aside

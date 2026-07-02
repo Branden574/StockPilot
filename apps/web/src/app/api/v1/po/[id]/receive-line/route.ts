@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { ReceivingService } from '@/server/services/receiving';
 import { ServiceError } from '@/server/services/context';
 
@@ -156,6 +157,7 @@ export async function POST(
       ],
       notes: 'Mobile scan-to-receive',
     });
+    revalidateInventoryList(ctx.organizationId);
     return NextResponse.json({
       receiptId: receipt.id,
       receiptNumber: receipt.receipt_number,

@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { fetchAllRows } from '@/server/services/lib/paginate';
@@ -232,6 +233,7 @@ export async function importSage50Action(
 
     revalidatePath('/dashboard');
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     return ok(summary);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);

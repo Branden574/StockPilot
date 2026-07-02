@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { PoImportsService } from '@/server/services/po-imports';
@@ -449,6 +450,7 @@ export async function createItemsFromPoLinesAction(input: {
 
     revalidatePath(`/dashboard/purchase-orders/imports/${parsed.data.poImportId}`);
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard');
     return ok({ created, mapped, linked, skipped });
   } catch (e) {

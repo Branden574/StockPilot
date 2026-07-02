@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import {
   ChartersService,
@@ -28,6 +29,7 @@ export async function createCharterAction(
     const svc = await ChartersService.forCurrentUser();
     const result = await svc.create(parsed.data);
     revalidatePath('/dashboard/admin/charters');
+    await revalidateInventoryListForCurrentOrg();
     return ok(result);
   } catch (e) {
     return toResult(e);
@@ -44,6 +46,7 @@ export async function updateCharterAction(
     const svc = await ChartersService.forCurrentUser();
     await svc.update(id, parsed.data);
     revalidatePath('/dashboard/admin/charters');
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);
@@ -55,6 +58,7 @@ export async function archiveCharterAction(id: string): Promise<ActionResult<voi
     const svc = await ChartersService.forCurrentUser();
     await svc.archive(id);
     revalidatePath('/dashboard/admin/charters');
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);
@@ -66,6 +70,7 @@ export async function restoreCharterAction(id: string): Promise<ActionResult<voi
     const svc = await ChartersService.forCurrentUser();
     await svc.restore(id);
     revalidatePath('/dashboard/admin/charters');
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);

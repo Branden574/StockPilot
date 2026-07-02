@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
@@ -25,6 +26,7 @@ export async function duplicateItemAction(
     const id = await svc.duplicateItem(parsed.data);
     revalidatePath('/dashboard');
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/books');
     revalidatePath(`/dashboard/inventory/${parsed.data.originalId}`);
     return ok({ id });

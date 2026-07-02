@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { BinsService, type BinType } from '@/server/services/bins';
 
@@ -43,6 +44,7 @@ export async function createBinAction(input: {
     const svc = await BinsService.forCurrentUser();
     const result = await svc.create(parsed.data);
     revalidatePath('/dashboard/admin/bins');
+    await revalidateInventoryListForCurrentOrg();
     return ok(result);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
@@ -59,6 +61,7 @@ export async function archiveBinAction(id: string): Promise<ActionResult<void>> 
     const svc = await BinsService.forCurrentUser();
     await svc.archive(parsed.data);
     revalidatePath('/dashboard/admin/bins');
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);

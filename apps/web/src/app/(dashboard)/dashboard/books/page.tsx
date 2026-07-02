@@ -15,7 +15,14 @@ import { BooksInventoryTable } from '@/components/books/books-inventory-table';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
-import { can } from '@stockpilot/core';
+import { can, isManagerOrAbove } from '@stockpilot/core';
+import {
+  ALL_WAREHOUSES_KEY,
+  isDefaultInventoryView,
+  loadInventoryList,
+  resolveInventoryListImages,
+  type InventoryListItemRow,
+} from '@/server/loaders/inventory-list';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
@@ -163,6 +170,22 @@ export default async function BooksPage({
  * the chrome immediately and only the table body streams. Same components,
  * same props as before — purely relocated behind <Suspense>.
  */
+/**
+ * Data both acquisition paths (cached default view / live filtered
+ * view) normalize into before the shared render tail below.
+ */
+type SectionData = {
+  items: InventoryListItemRow[];
+  total: number;
+  valueOnHand: number;
+  categories: Array<{ id: string; name: string; color: string | null }>;
+  locations: Array<{ id: string; name: string }>;
+  suppliers: Array<{ id: string; name: string }>;
+  tags: Array<{ id: string; name: string; color: string | null }>;
+  charters: Array<{ id: string; name: string; code: string | null }>;
+  trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
+};
+
 async function BooksTableSection({
   params,
   lifecycleStatus,
@@ -171,90 +194,153 @@ async function BooksTableSection({
   lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
 }) {
   const page = Math.max(1, Number(params.page) || 1);
-  const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, chartersSvc, imagesSvc, savedViewsSvc, warehouseFilter, sessionCtx] = await Promise.all([
-    InventoryService.forCurrentUser(),
-    CategoriesService.forCurrentUser(),
-    LocationsService.forCurrentUser(),
-    SuppliersService.forCurrentUser(),
-    TagsService.forCurrentUser(),
-    ChartersService.forCurrentUser(),
-    ItemImagesService.forCurrentUser(),
-    SavedViewsService.forCurrentUser(),
-    getActiveWarehouseFilter(),
+  const [sessionCtx, warehouseFilter, savedViewsSvc] = await Promise.all([
     requireOrgContext(),
+    getActiveWarehouseFilter(),
+    SavedViewsService.forCurrentUser(),
   ]);
+  // Saved views are strictly per-user — they never enter the shared
+  // cache. Kick the query off now so it overlaps either data path.
+  const savedViewsPromise = savedViewsSvc.list('books');
+  // Keep the rejection observed even if the data path throws before the
+  // await below — an unobserved rejection would crash the lambda.
+  savedViewsPromise.catch(() => {});
 
-  const sort = parseSort(params.sort);
-  const categoryIds = parseIdList(params.cat);
-  const locationIds = parseIdList(params.loc);
-  const charterIds = parseIdList(params.charter);
-  const rack = typeof params.rack === 'string' ? params.rack : undefined;
+  let data: SectionData | null = null;
 
-  const [inventory, categories, locations, suppliers, tags, charters, savedViews] = await Promise.all([
-    inventorySvc.list({
-      q: params.q,
-      status: lifecycleStatus,
-      lowStock: params.stock === 'low',
-      outOfStock: params.stock === 'out',
-      warehouseId: warehouseFilter,
-      itemType: 'book',
-      categoryIds,
-      locationIds,
-      charterIds,
-      rack,
-      sort,
-      limit: PAGE_SIZE,
-      offset: (page - 1) * PAGE_SIZE,
-    }),
-    categoriesSvc.list(),
-    locationsSvc.list({ sitesOnly: true }),
-    suppliersSvc.list(),
-    tagsSvc.list(),
-    chartersSvc.list(),
-    savedViewsSvc.list('books'),
-  ]);
+  // COLD-CLICK FAST PATH — same contract as the Items page: only the
+  // exact default view, only manager-and-above (staff/viewer results
+  // are user-scoped), only with items:read, keyed by the warehouse-
+  // filter cookie. Any loader failure falls through to the live path.
+  // (The 'books' module gate already ran in the page shell above.)
+  if (
+    isDefaultInventoryView(params, 'books') &&
+    isManagerOrAbove(sessionCtx.role) &&
+    can(sessionCtx, 'items:read')
+  ) {
+    try {
+      const payload = await loadInventoryList(
+        sessionCtx.organizationId,
+        warehouseFilter ?? ALL_WAREHOUSES_KEY,
+        'books',
+      );
+      data = {
+        // Cached rows carry image PATHS; the signed URLs are resolved
+        // per request through the shared 25-day per-path cache (never
+        // inside the loader's cache — see the loader's header note).
+        items: await resolveInventoryListImages(sessionCtx.organizationId, payload.items),
+        total: payload.total,
+        valueOnHand: payload.valueOnHand,
+        categories: payload.categories,
+        locations: payload.locations,
+        suppliers: payload.suppliers,
+        tags: payload.tags,
+        charters: payload.charters,
+        trends: new Map(Object.entries(payload.trends)),
+      };
+    } catch (err) {
+      console.warn('[books page] cached default view unavailable, using live path:', err);
+    }
+  }
 
-  // Trends + primary images are independent — run in parallel.
-  // trends: 14-day sparkline series.
-  // imagesById: signed URLs (master + 200px thumb when available) +
-  //   inline LQIP base64. Pre-0122 rows render the master with no
-  //   blur placeholder via the fallbacks below.
-  const [trends, imagesById] = await Promise.all([
-    getItemTrends(
-      inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
-    ),
-    imagesSvc.primaryImagesWithThumbsForItems(inventory.items.map((i) => i.id)),
-  ]);
-  const itemsWithImages = inventory.items.map((i) => {
-    const cf = (i as { custom_fields?: Record<string, unknown> | null })
-      .custom_fields;
-    const cfThumb =
-      cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
-        ? (cf.thumbnail_url as string)
-        : null;
-    const img = imagesById.get(i.id);
-    return {
-      ...i,
-      image_url: img?.url ?? cfThumb ?? null,
-      image_thumb_url: img?.thumbUrl ?? null,
-      image_lqip: img?.lqip ?? null,
+  if (!data) {
+    const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, chartersSvc, imagesSvc] = await Promise.all([
+      InventoryService.forCurrentUser(),
+      CategoriesService.forCurrentUser(),
+      LocationsService.forCurrentUser(),
+      SuppliersService.forCurrentUser(),
+      TagsService.forCurrentUser(),
+      ChartersService.forCurrentUser(),
+      ItemImagesService.forCurrentUser(),
+    ]);
+
+    const sort = parseSort(params.sort);
+    const categoryIds = parseIdList(params.cat);
+    const locationIds = parseIdList(params.loc);
+    const charterIds = parseIdList(params.charter);
+    const rack = typeof params.rack === 'string' ? params.rack : undefined;
+
+    const [inventory, categories, locations, suppliers, tags, charters] = await Promise.all([
+      inventorySvc.list({
+        q: params.q,
+        status: lifecycleStatus,
+        lowStock: params.stock === 'low',
+        outOfStock: params.stock === 'out',
+        warehouseId: warehouseFilter,
+        itemType: 'book',
+        categoryIds,
+        locationIds,
+        charterIds,
+        rack,
+        sort,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+      }),
+      categoriesSvc.list(),
+      locationsSvc.list({ sitesOnly: true }),
+      suppliersSvc.list(),
+      tagsSvc.list(),
+      chartersSvc.list(),
+    ]);
+
+    // Trends + primary images are independent — run in parallel.
+    // trends: 14-day sparkline series.
+    // imagesById: signed URLs (master + 200px thumb when available) +
+    //   inline LQIP base64. Pre-0122 rows render the master with no
+    //   blur placeholder via the fallbacks below.
+    const [trends, imagesById] = await Promise.all([
+      getItemTrends(
+        inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+      ),
+      imagesSvc.primaryImagesWithThumbsForItems(inventory.items.map((i) => i.id)),
+    ]);
+    const itemsWithImages = inventory.items.map((i) => {
+      const cf = (i as { custom_fields?: Record<string, unknown> | null })
+        .custom_fields;
+      const cfThumb =
+        cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
+          ? (cf.thumbnail_url as string)
+          : null;
+      const img = imagesById.get(i.id);
+      return {
+        ...i,
+        image_url: img?.url ?? cfThumb ?? null,
+        image_thumb_url: img?.thumbUrl ?? null,
+        image_lqip: img?.lqip ?? null,
+      };
+    });
+
+    data = {
+      items: itemsWithImages,
+      total: inventory.total,
+      valueOnHand: inventory.valueOnHand,
+      categories: categories.map((c) => ({
+        id: c.id as string,
+        name: c.name as string,
+        color: (c.color as string | null) ?? null,
+      })),
+      locations: locations.map((l) => ({ id: l.id as string, name: l.name as string })),
+      suppliers: suppliers.map((s) => ({ id: s.id as string, name: s.name as string })),
+      tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
+      charters: charters.map((c) => ({ id: c.id, name: c.name, code: c.code ?? null })),
+      trends,
     };
-  });
+  }
+
+  const savedViews = await savedViewsPromise;
+  const itemsWithImages = data.items;
 
   const lookups = {
     categories: new Map(
-      categories.map((c) => [
-        c.id as string,
-        { name: c.name as string, color: (c.color as string | null) ?? null },
-      ]),
+      data.categories.map((c) => [c.id, { name: c.name, color: c.color }]),
     ),
-    locations: new Map(locations.map((l) => [l.id as string, { name: l.name as string }])),
+    locations: new Map(data.locations.map((l) => [l.id, { name: l.name }])),
     charters: new Map(
-      charters.map((c) => [c.id, { name: c.name, code: c.code ?? null }]),
+      data.charters.map((c) => [c.id, { name: c.name, code: c.code }]),
     ),
   };
 
-  if (inventory.total === 0 && lifecycleStatus === 'archived' && !params.q && !params.stock) {
+  if (data.total === 0 && lifecycleStatus === 'archived' && !params.q && !params.stock) {
     return (
       <EmptyState
         icon={BookOpen}
@@ -264,7 +350,7 @@ async function BooksTableSection({
       />
     );
   }
-  if (inventory.total === 0 && !params.q && !params.stock) {
+  if (data.total === 0 && !params.q && !params.stock) {
     return (
       <EmptyState
         icon={BookOpen}
@@ -282,7 +368,7 @@ async function BooksTableSection({
       />
     );
   }
-  if (inventory.total === 0 && params.stock === 'low') {
+  if (data.total === 0 && params.stock === 'low') {
     return (
       <EmptyState
         icon={BookOpen}
@@ -292,7 +378,7 @@ async function BooksTableSection({
       />
     );
   }
-  if (inventory.total === 0 && params.stock === 'out') {
+  if (data.total === 0 && params.stock === 'out') {
     return (
       <EmptyState
         icon={BookOpen}
@@ -306,35 +392,22 @@ async function BooksTableSection({
   return (
     <BooksInventoryTable
       items={itemsWithImages}
-      total={inventory.total}
-      valueOnHand={inventory.valueOnHand}
+      total={data.total}
+      valueOnHand={data.valueOnHand}
       lookups={lookups}
       canCreate={can(sessionCtx, 'items:create')}
-      categories={categories.map((c) => ({
-        id: c.id as string,
-        name: c.name as string,
-      }))}
-      locations={locations.map((l) => ({
-        id: l.id as string,
-        name: l.name as string,
-      }))}
-      charters={charters.map((c) => ({
-        id: c.id,
-        name: c.name,
-        code: c.code ?? null,
-      }))}
-      suppliers={suppliers.map((s) => ({
-        id: s.id as string,
-        name: s.name as string,
-      }))}
-      tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
+      categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
+      locations={data.locations}
+      charters={data.charters}
+      suppliers={data.suppliers}
+      tags={data.tags}
       initialQuery={params.q}
       rowLinkPrefix="/dashboard/books"
       basePath="/dashboard/books"
       showBookFields
       page={page}
       pageSize={PAGE_SIZE}
-      trends={trends}
+      trends={data.trends}
       savedViews={savedViews}
       savedViewScope="books"
       activeWarehouseId={warehouseFilter}

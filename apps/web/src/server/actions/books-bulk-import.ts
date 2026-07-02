@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { InventoryService } from '@/server/services/inventory';
 import { ServiceError } from '@/server/services/context';
 
@@ -103,6 +104,7 @@ export async function bulkCreateBooksAction(
 
     revalidatePath('/dashboard/books');
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard');
 
     return ok({

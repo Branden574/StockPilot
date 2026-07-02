@@ -9,6 +9,7 @@ import {
   type CreateCategoryInput,
   type UpdateCategoryInput,
 } from '@/server/services/categories';
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -26,6 +27,7 @@ export async function createCategoryAction(input: CreateCategoryInput): Promise<
     const svc = await CategoriesService.forCurrentUser();
     const row = await svc.create(parsed.data);
     revalidatePath('/dashboard/categories');
+    await revalidateInventoryListForCurrentOrg();
     return ok({ id: row.id as string });
   } catch (e) {
     return toResult(e);
@@ -42,6 +44,7 @@ export async function updateCategoryAction(
     const svc = await CategoriesService.forCurrentUser();
     await svc.update(id, parsed.data);
     revalidatePath('/dashboard/categories');
+    await revalidateInventoryListForCurrentOrg();
     return ok({ id });
   } catch (e) {
     return toResult(e);
@@ -53,6 +56,7 @@ export async function archiveCategoryAction(id: string): Promise<ActionResult<vo
     const svc = await CategoriesService.forCurrentUser();
     await svc.archive(id);
     revalidatePath('/dashboard/categories');
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);
@@ -64,6 +68,7 @@ export async function restoreCategoryAction(id: string): Promise<ActionResult<vo
     const svc = await CategoriesService.forCurrentUser();
     await svc.restore(id);
     revalidatePath('/dashboard/categories');
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);

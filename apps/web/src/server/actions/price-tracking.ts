@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { PriceTrackingService, type PriceObservationRow } from '@/server/services/price-tracking';
 import { ServiceError } from '@/server/services/context';
 
@@ -13,6 +14,7 @@ export async function fetchItemPriceAction(itemId: string): Promise<ActionResult
     const svc = await PriceTrackingService.forCurrentUser();
     const obs = await svc.fetchItemPrice(itemId);
     revalidatePath(`/dashboard/inventory/${itemId}`);
+    await revalidateInventoryListForCurrentOrg();
     return ok(obs);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
@@ -25,6 +27,7 @@ export async function refreshBookPricesAction(): Promise<ActionResult<{ scanned:
     const svc = await PriceTrackingService.forCurrentUser();
     const summary = await svc.refreshOrgBookPrices();
     revalidatePath('/dashboard/books');
+    await revalidateInventoryListForCurrentOrg();
     return ok(summary);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);

@@ -5,6 +5,10 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
+  prewarmInventoryList,
+  type InventoryListPrewarmResult,
+} from '@/server/loaders/inventory-list';
+import {
   prewarmOrdersNewCatalog,
   type PrewarmPairResult,
 } from '@/server/loaders/orders-new-catalog';
@@ -91,10 +95,29 @@ export async function GET(req: Request) {
       results.push(await prewarmOrdersNewCatalog(pair.organization_id, pair.id));
     }
 
+    // Also prewarm the Items/Books default-view caches (perf: cold
+    // first click on Items/Books). One 'all' variant per org — the
+    // no-warehouse-cookie key nearly every manager request resolves to
+    // — plus one variant per warehouse for users with the filter
+    // cookie set. The 'all' variants come straight from the known-hot
+    // org id LIST, not from the warehouse pairs: an org with zero
+    // non-archived warehouses has no pairs but still serves its 'all'
+    // default view. Sequential for the same contention reason as
+    // above; per-view errors are captured inside prewarmInventoryList.
+    const inventory: InventoryListPrewarmResult[] = [];
+    for (const orgId of KNOWN_HOT_ORG_IDS) {
+      inventory.push(await prewarmInventoryList(orgId));
+    }
+    for (const pair of pairs) {
+      inventory.push(await prewarmInventoryList(pair.organization_id, pair.id));
+    }
+
     return NextResponse.json({
       prewarmed: results.length,
       totalMs: Date.now() - startedAt,
       results,
+      inventoryPrewarmed: inventory.length,
+      inventory,
     });
   } catch (err) {
     return NextResponse.json(

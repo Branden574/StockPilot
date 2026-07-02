@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { BooksImportService } from '@/server/services/books-import';
 import { ServiceError, withContext } from '@/server/services/context';
 
@@ -30,6 +31,7 @@ export async function backfillBookCoversAction(): Promise<ActionResult<BackfillR
     const result = await svc.backfillCovers({ limit: 500 });
     revalidatePath('/dashboard/books');
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     return ok(result);
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);

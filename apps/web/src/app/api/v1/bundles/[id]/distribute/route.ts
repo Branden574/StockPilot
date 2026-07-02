@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 
@@ -64,6 +65,7 @@ export async function POST(
       notes: parsed.data.notes ?? null,
       allowShortage: parsed.data.allowShortage ?? false,
     });
+    revalidateInventoryList(ctx.organizationId);
     return NextResponse.json(out);
   } catch (e) {
     if (e instanceof ServiceError) {

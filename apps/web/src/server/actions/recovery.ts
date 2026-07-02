@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { RecoveryService, type RecoveryEntity } from '@/server/services/recovery';
 import { ServiceError } from '@/server/services/context';
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -31,6 +32,7 @@ export async function restoreDeletedAction(
     await svc.restore(parsed.data.entity as RecoveryEntity, parsed.data.id);
     revalidatePath('/dashboard/settings/recovery');
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/books');
     revalidatePath('/dashboard/categories');
     revalidatePath('/dashboard/locations');

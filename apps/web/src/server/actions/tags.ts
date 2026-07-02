@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { TagsService, type TagRow } from '@/server/services/tags';
 
@@ -34,6 +35,7 @@ export async function createTagAction(
     const svc = await TagsService.forCurrentUser();
     const row = await svc.create(parsed.data);
     revalidatePath('/dashboard/tags');
+    await revalidateInventoryListForCurrentOrg();
     return ok(row);
   } catch (e) {
     return toResult(e);
@@ -52,6 +54,7 @@ export async function updateTagAction(
     const svc = await TagsService.forCurrentUser();
     const row = await svc.update(id, parsed.data);
     revalidatePath('/dashboard/tags');
+    await revalidateInventoryListForCurrentOrg();
     return ok(row);
   } catch (e) {
     return toResult(e);
@@ -63,6 +66,7 @@ export async function deleteTagAction(id: string): Promise<ActionResult<void>> {
     const svc = await TagsService.forCurrentUser();
     await svc.delete(id);
     revalidatePath('/dashboard/tags');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard/inventory');
     revalidatePath('/dashboard/books');
     return ok(undefined);

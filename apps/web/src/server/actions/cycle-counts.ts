@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { ForbiddenError } from '@/lib/auth/warehouse';
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 
@@ -120,6 +121,7 @@ export async function postCycleCountAction(id: string): Promise<ActionResult<voi
     revalidatePath('/dashboard/cycle-counts');
     revalidatePath(`/dashboard/cycle-counts/${id}`);
     revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
     revalidatePath('/dashboard');
     return ok(undefined);
   } catch (e) {

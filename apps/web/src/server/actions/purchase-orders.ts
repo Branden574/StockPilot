@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { requireOrgContext } from '@/lib/auth/session';
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { createClient } from '@/lib/supabase/server';
+import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import {
   createPoSchema,
@@ -28,6 +29,9 @@ export async function createPoAction(input: CreatePoInput): Promise<ActionResult
     const svc = await PurchaseOrdersService.forCurrentUser();
     const result = await svc.create(parsed.data);
     revalidatePath('/dashboard/purchase-orders');
+    // PO create/update can stamp created_from_purchase_order_id on custom
+    // items (bumps updated_at → reorders the default list sort).
+    await revalidateInventoryListForCurrentOrg();
     return ok({ id: result.id });
   } catch (e) {
     return toResult(e);
@@ -50,6 +54,7 @@ export async function updatePoAction(
     revalidatePath('/dashboard/purchase-orders');
     revalidatePath(`/dashboard/purchase-orders/${id}`);
     revalidatePath(`/dashboard/purchase-orders/${id}/edit`);
+    await revalidateInventoryListForCurrentOrg();
     return ok(result);
   } catch (e) {
     return toResult(e);
@@ -184,6 +189,8 @@ export async function updatePoStatusAction(id: string, status: 'draft' | 'ordere
     await svc.updateStatus(id, status);
     revalidatePath('/dashboard/purchase-orders');
     revalidatePath(`/dashboard/purchase-orders/${id}`);
+    // Cancelling auto-archives PO-created custom items (visible status flip).
+    await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
     return toResult(e);
