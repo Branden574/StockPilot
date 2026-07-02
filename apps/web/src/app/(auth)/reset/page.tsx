@@ -8,7 +8,12 @@ export const metadata: Metadata = {
   title: 'Reset password',
 };
 
-export default function ResetPage() {
+export default async function ResetPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
   return (
     <AuthCard
       title="Reset your password"
@@ -22,6 +27,12 @@ export default function ResetPage() {
         </>
       }
     >
+      {error === 'link_expired' && (
+        <p className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          That reset link has expired or was already used. Enter your email
+          below and we&apos;ll send a fresh one.
+        </p>
+      )}
       <ResetForm />
     </AuthCard>
   );

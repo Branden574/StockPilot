@@ -44,9 +44,12 @@ describe('requestPasswordResetAction', () => {
     sendEmail.mockResolvedValue({ ok: true });
   });
 
-  it('mints a recovery link and emails it via Resend', async () => {
+  it('mints a recovery link and emails OUR /auth/confirm URL via Resend', async () => {
     generateLink.mockResolvedValue({
-      data: { user: { id: 'u-1' }, properties: { action_link: 'https://sb/verify?token=abc' } },
+      data: {
+        user: { id: 'u-1' },
+        properties: { action_link: 'https://sb/verify?token=abc', hashed_token: 'hash123' },
+      },
       error: null,
     });
 
@@ -59,8 +62,12 @@ describe('requestPasswordResetAction', () => {
     expect(sendEmail).toHaveBeenCalledTimes(1);
     const msg = sendEmail.mock.calls[0]![0] as { to: string; html: string; text: string };
     expect(msg.to).toBe('user@example.com');
-    expect(msg.html).toContain('https://sb/verify?token=abc');
-    expect(msg.text).toContain('https://sb/verify?token=abc');
+    // MUST be our server-verified confirm route (token_hash + verifyOtp) —
+    // the raw action_link returns the session in a URL fragment the server
+    // callback can't read, bouncing users to /signin.
+    expect(msg.html).toContain('/auth/confirm?token_hash=hash123&type=recovery');
+    expect(msg.text).toContain('/auth/confirm?token_hash=hash123&type=recovery');
+    expect(msg.html).not.toContain('https://sb/verify');
     // the capped Supabase mailer must never be used
     expect(resetPasswordForEmail).not.toHaveBeenCalled();
   });

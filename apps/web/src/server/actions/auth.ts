@@ -355,13 +355,22 @@ export async function requestPasswordResetAction(
         redirectTo: `${env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/reset/complete`,
       },
     });
-    const actionLink = data?.properties?.action_link;
-    if (!linkError && actionLink) {
+    // Email OUR /auth/confirm URL carrying the hashed token — NOT the
+    // action_link. action_link runs through Supabase's /auth/v1/verify,
+    // which hands the session back in the URL FRAGMENT; the server-side
+    // /auth/callback never sees it and bounced users to /signin.
+    // /auth/confirm verifies the hash server-side (verifyOtp) and lands
+    // the user on /reset/complete with cookies set.
+    const hashedToken = data?.properties?.hashed_token;
+    const resetUrl = hashedToken
+      ? `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(hashedToken)}&type=recovery&next=${encodeURIComponent('/reset/complete')}`
+      : (data?.properties?.action_link ?? null);
+    if (!linkError && resetUrl) {
       await sendEmail({
         to: parsed.data.email,
         subject: 'Reset your StockPilot password',
-        html: passwordResetEmailHtml({ resetUrl: actionLink }),
-        text: passwordResetEmailText({ resetUrl: actionLink }),
+        html: passwordResetEmailHtml({ resetUrl }),
+        text: passwordResetEmailText({ resetUrl }),
       });
     }
   } catch (e) {

@@ -209,7 +209,13 @@ export async function createOrgForCustomerAction(
   //    — generateLink minted the link but sent nothing). If the send fails,
   //    the org is still provisioned; surface the failure to the operator
   //    instead of rolling back.
-  const actionLink = invited.properties?.action_link;
+  // Same /auth/confirm construction as the password-reset email: the raw
+  // action_link returns the session in a URL fragment that the server-side
+  // callback can't read, bouncing invitees to /signin.
+  const inviteHashedToken = invited.properties?.hashed_token;
+  const actionLink = inviteHashedToken
+    ? `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(inviteHashedToken)}&type=invite&next=${encodeURIComponent('/dashboard')}`
+    : invited.properties?.action_link;
   if (actionLink) {
     const sent = await sendEmail({
       to: parsed.data.email,
