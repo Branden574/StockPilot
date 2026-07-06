@@ -429,7 +429,7 @@ function StagingCheckbox({
       disabled={disabled}
       onClick={onChange}
       className={cn(
-        'inline-grid h-4 w-4 place-items-center rounded-[4px] border bg-card transition-colors',
+        'inline-grid h-5 w-5 place-items-center rounded-[5px] border bg-card transition-colors',
         disabled
           ? 'cursor-not-allowed border-border opacity-40'
           : checked
@@ -442,7 +442,7 @@ function StagingCheckbox({
           aria-hidden
           // CSS-drawn ✓: bottom+RIGHT borders rotated +45° (bottom+LEFT at
           // -45° mirrors the mark — same fix as inventory-table.tsx).
-          className="h-[9px] w-[5px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background"
+          className="h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background"
         />
       )}
     </button>

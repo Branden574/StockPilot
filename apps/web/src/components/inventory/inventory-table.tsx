@@ -1369,7 +1369,7 @@ function Checkbox({ checked, onChange }: { checked: boolean; onChange: (c: boole
       aria-checked={checked}
       onClick={() => onChange(!checked)}
       className={cn(
-        'inline-grid h-4 w-4 place-items-center rounded-[4px] border bg-card transition-colors',
+        'inline-grid h-5 w-5 place-items-center rounded-[5px] border bg-card transition-colors',
         checked ? 'border-foreground bg-foreground' : 'border-[var(--ed-line-strong)]',
       )}
     >
@@ -1379,7 +1379,7 @@ function Checkbox({ checked, onChange }: { checked: boolean; onChange: (c: boole
           // CSS-drawn ✓: bottom+RIGHT borders rotated +45°. bottom+LEFT at
           // -45° renders the MIRROR of a checkmark (owner-reported
           // "backwards checkmark", hard to read at 14px).
-          className="h-[9px] w-[5px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background"
+          className="h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background"
         />
       )}
     </button>
