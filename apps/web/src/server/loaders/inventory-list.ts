@@ -53,6 +53,9 @@ import 'server-only';
 //   • lookup tables    (org)                      'inventory-lookups-v1'
 //   • valueOnHand      (org, warehouseKey, view)  'inventory-value-v1'
 //   • trend buckets    (org)                      'inventory-trend-buckets-v1'
+//   • INSTANT dataset  (org, warehouseKey, view)  'inventory-dataset-v1'
+//     (full ≤INSTANT_MODE_MAX_ROWS row set for client-side instant mode;
+//      over-cap views THROW a sentinel → wrapper returns null, uncached)
 // The default view (loadInventoryList) consumes all four. FILTERED
 // views can't reuse rows/placement (they vary with searchParams) but —
 // behind the SAME manager+ && items:read gate, see
@@ -75,6 +78,7 @@ import { revalidateTag, unstable_cache } from 'next/cache';
 
 import { can, isManagerOrAbove, type Permission, type Role } from '@stockpilot/core';
 
+import { INSTANT_MODE_MAX_ROWS } from '@/lib/inventory/instant-mode';
 import { isSiteLocation } from '@/lib/locations/groups';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { withContext, type ServiceContext } from '@/server/services/context';
@@ -448,17 +452,7 @@ async function loadInventoryRowsUncached(
   // Throw on ANY read error so a failed pass is never cached.
   if (mainRes.error) throw new Error(`inventory-list items query failed: ${mainRes.error.message}`);
 
-  type RawRow = Omit<
-    InventoryListCachedRow,
-    | 'staged_quantity'
-    | 'unplaced_quantity'
-    | 'placed_quantity'
-    | 'placed_racks'
-    | 'image_storage_path'
-    | 'image_thumb_path'
-    | 'image_lqip'
-  >;
-  const rows = (mainRes.data ?? []) as unknown as RawRow[];
+  const rows = (mainRes.data ?? []) as unknown as RawItemRow[];
   const total = mainRes.count ?? 0;
 
   const ids = rows.map((r) => r.id);
@@ -493,19 +487,64 @@ async function loadInventoryRowsUncached(
     throw new Error(`inventory-list item_images query failed: ${imageRowsRes.error.message}`);
   }
 
-  // ONE holdings query feeds both derivations the live path computes
+  const { items, placement } = assembleInventoryRows(
+    rows,
+    (levelsRes.data ?? []) as unknown as HoldingLevelRow[],
+    (imageRowsRes.data ?? []) as unknown as PrimaryImageRow[],
+  );
+
+  return { items, total, placement };
+}
+
+/** A main-query row before the derived placement/image fields land. */
+type RawItemRow = Omit<
+  InventoryListCachedRow,
+  | 'staged_quantity'
+  | 'unplaced_quantity'
+  | 'placed_quantity'
+  | 'placed_racks'
+  | 'image_storage_path'
+  | 'image_thumb_path'
+  | 'image_lqip'
+>;
+
+interface HoldingLevelRow {
+  item_id: string;
+  location_id: string;
+  quantity: number;
+  locations: { name: string; kind: string | null };
+}
+
+interface PrimaryImageRow {
+  item_id: string;
+  storage_path: string;
+  thumb_path: string | null;
+  lqip: string | null;
+}
+
+/**
+ * The SHARED row-building tail for the paged rows loader AND the
+ * instant-mode dataset loader: holdings scan (staged/unplaced/
+ * placed_racks + placement lines) and primary-image pick, then the final
+ * cached-row mapping. Extracted (not duplicated) so the two loaders'
+ * rows can never drift in shape or math. Inputs must already be scoped
+ * to the caller's item set; `imageRows` must arrive ordered
+ * is_primary DESC, sort_order ASC (first row per item wins — same pick
+ * as primaryImagesWithThumbsForItems).
+ */
+function assembleInventoryRows(
+  rows: RawItemRow[],
+  levels: HoldingLevelRow[],
+  imageRows: PrimaryImageRow[],
+): { items: InventoryListCachedRow[]; placement: Record<string, InventoryPlacementLine[]> } {
+  // ONE holdings pass feeds both derivations the live path computes
   // separately (list()'s staged/unplaced/placed_racks scan and
   // placementBreakdown()) — identical inputs, identical outputs.
   const stagedByItem = new Map<string, number>();
   const unplacedByItem = new Map<string, number>();
   const placedRacksByItem = new Map<string, string[]>();
   const placement: Record<string, InventoryPlacementLine[]> = {};
-  for (const lvl of (levelsRes.data ?? []) as unknown as Array<{
-    item_id: string;
-    location_id: string;
-    quantity: number;
-    locations: { name: string; kind: string | null };
-  }>) {
+  for (const lvl of levels) {
     // Row-summary math uses the RAW kind — identical to the live
     // list() scan in InventoryService, where a NULL locations.kind
     // counts toward neither staged, unplaced, nor placed_racks.
@@ -540,18 +579,12 @@ async function loadInventoryRowsUncached(
   }
 
   // Primary image per item (is_primary DESC, sort_order ASC — first row
-  // wins). PATHS ONLY — no URL is ever minted inside this cached fn
+  // wins). PATHS ONLY — no URL is ever minted inside a cached fn
   // (see the header note: a nested signedUrls call would overwrite the
   // shared 25-day per-path entries on every recompute). URLs are
   // resolved per request by resolveInventoryListImages.
-  type ImageRow = {
-    item_id: string;
-    storage_path: string;
-    thumb_path: string | null;
-    lqip: string | null;
-  };
-  const pickByItem = new Map<string, ImageRow>();
-  for (const row of (imageRowsRes.data ?? []) as ImageRow[]) {
+  const pickByItem = new Map<string, PrimaryImageRow>();
+  for (const row of imageRows) {
     if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
   }
 
@@ -573,7 +606,170 @@ async function loadInventoryRowsUncached(
     };
   });
 
-  return { items, total, placement };
+  return { items, placement };
+}
+
+/* ---- instant-mode dataset loader --------------------------------------- */
+
+/**
+ * The FULL per-view dataset instant mode ships to the client: every
+ * non-deleted, non-rental row of the view's item_type (ACTIVE, ARCHIVED
+ * and DISCONTINUED — the status field rides along so the Active/Archived
+ * tabs and ?status= deep links derive client-side), plus the placement
+ * lines for the Items page's one-line-per-rack expansion. Rows are
+ * shape-identical to the paged loader's (same assembleInventoryRows
+ * tail), so the table renders either source interchangeably.
+ */
+export interface InventoryDatasetPayload {
+  items: InventoryListCachedRow[];
+  placement: Record<string, InventoryPlacementLine[]>;
+}
+
+/**
+ * Sentinel THROWN (never returned) inside the cached fn when the view
+ * exceeds INSTANT_MODE_MAX_ROWS. Throwing is load-bearing: it rides the
+ * existing throw-don't-cache short-circuit, so "too large" — like every
+ * other non-result — is never written to the data cache (recurring bug
+ * pattern: never cache a null). The public wrapper translates it to the
+ * `null` its callers switch on.
+ */
+const DATASET_TOO_LARGE = 'inventory-dataset: view exceeds INSTANT_MODE_MAX_ROWS';
+
+function isDatasetTooLarge(err: unknown): boolean {
+  return err instanceof Error && err.message === DATASET_TOO_LARGE;
+}
+
+/**
+ * Cached instant-mode dataset for one (org, warehouseKey, view) — the
+ * same key axes, org tag, 60s TTL, admin-read + explicit-org-filter
+ * contract, and manager+/items:read page perimeter as the sibling
+ * loaders above (see the header SECURITY CONTRACT; the pages gate with
+ * canUseSharedInventoryCaches before calling this).
+ *
+ * Returns `null` — WITHOUT caching anything — when the view's row count
+ * exceeds INSTANT_MODE_MAX_ROWS: callers fall back to server mode, and
+ * the next request re-checks (a truncated or empty stand-in must never
+ * be cached as if it were the full set). Real query errors still throw,
+ * exactly like the other loaders, so the pages' catch → live-path
+ * fallback keeps working.
+ */
+export async function loadInventoryDataset(
+  organizationId: string,
+  warehouseKey: string,
+  view: InventoryListView,
+): Promise<InventoryDatasetPayload | null> {
+  const cached = unstable_cache(loadInventoryDatasetUncached, ['inventory-dataset-v1'], {
+    revalidate: LIST_TTL_SEC,
+    tags: [inventoryListTag(organizationId)],
+  });
+  try {
+    return await cached(organizationId, warehouseKey, view);
+  } catch (err) {
+    if (isDatasetTooLarge(err)) return null;
+    throw err;
+  }
+}
+
+async function loadInventoryDatasetUncached(
+  organizationId: string,
+  warehouseKey: string,
+  view: InventoryListView,
+): Promise<InventoryDatasetPayload> {
+  const admin = createAdminClient();
+  const itemType = view === 'books' ? 'book' : 'product';
+  const warehouseId = warehouseKey === ALL_WAREHOUSES_KEY ? null : warehouseKey;
+
+  // The dataset filter = list()'s filter axes that are CONSTANT for the
+  // view (org, not deleted, item_type, non-rental, optional warehouse).
+  // Everything the user can change per request — status, q, stock,
+  // cat/loc/charter, rack, sort, page — deliberately stays OUT so the
+  // client derives it (lib/inventory/instant-mode.ts mirrors list()).
+  //
+  // CAP FIRST, with a HEAD count — over-cap orgs pay one count query per
+  // request (nothing cacheable exists for them), never the full fetch.
+  let countQuery = admin
+    .from('inventory_items')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .is('deleted_at', null)
+    .eq('item_type', itemType)
+    .eq('is_rental', false);
+  if (warehouseId) countQuery = countQuery.eq('warehouse_id', warehouseId);
+  const countRes = await countQuery;
+  if (countRes.error) {
+    throw new Error(`inventory-dataset count query failed: ${countRes.error.message}`);
+  }
+  if ((countRes.count ?? 0) > INSTANT_MODE_MAX_ROWS) throw new Error(DATASET_TOO_LARGE);
+
+  // Full row fetch, paginated past PostgREST's 1000-row cap. cap+1 so a
+  // count-vs-fetch race (rows inserted in between) is still detectable
+  // below instead of silently shipping a truncated set.
+  const rows = await fetchAllRows<RawItemRow>(
+    (from, to) => {
+      let q = admin
+        .from('inventory_items')
+        .select(ITEM_SELECT_COLUMNS)
+        .eq('organization_id', organizationId)
+        .is('deleted_at', null)
+        .eq('item_type', itemType)
+        .eq('is_rental', false);
+      if (warehouseId) q = q.eq('warehouse_id', warehouseId);
+      return q.order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{
+        data: RawItemRow[] | null;
+        error: { message: string } | null;
+      }>;
+    },
+    { cap: INSTANT_MODE_MAX_ROWS + 1 },
+  );
+  if (rows.length > INSTANT_MODE_MAX_ROWS) throw new Error(DATASET_TOO_LARGE);
+
+  // Second wave: holdings + images. ORG-WIDE + in-memory narrowing, not
+  // `.in('item_id', ids)` — 2000 uuids in a PostgREST query string blows
+  // the URL length limit. Both are org-scoped, paginated, and pruned to
+  // the dataset's ids before assembly so foreign rows (other item types,
+  // rentals, other warehouses) never inflate the cached payload.
+  const ids = new Set(rows.map((r) => r.id));
+  const [levelsAll, imagesAll] = await Promise.all([
+    fetchAllRows<HoldingLevelRow>(
+      (from, to) =>
+        admin
+          .from('item_stock_levels')
+          .select('item_id, location_id, quantity, locations!inner(name, kind)')
+          .eq('organization_id', organizationId)
+          .gt('quantity', 0)
+          .order('id', { ascending: true })
+          // The to-one `locations` embed types as an array in generated
+          // PostgREST types but is a single object at runtime — same
+          // cast convention as the loaders above and placements().
+          .range(from, to) as unknown as PromiseLike<{
+          data: HoldingLevelRow[] | null;
+          error: { message: string } | null;
+        }>,
+    ),
+    fetchAllRows<PrimaryImageRow>(
+      (from, to) =>
+        admin
+          .from('item_images')
+          .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
+          .eq('organization_id', organizationId)
+          // Same pick order as the paged loader (primary first, then
+          // sort_order) + the id tiebreak fetchAllRows needs for a total
+          // order across pages.
+          .order('is_primary', { ascending: false })
+          .order('sort_order', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: PrimaryImageRow[] | null;
+          error: { message: string } | null;
+        }>,
+    ),
+  ]);
+
+  return assembleInventoryRows(
+    rows,
+    levelsAll.filter((l) => ids.has(l.item_id)),
+    imagesAll.filter((img) => ids.has(img.item_id)),
+  );
 }
 
 /* ---- filter-independent sub-loaders ------------------------------------ */
@@ -943,6 +1139,22 @@ export async function prewarmInventoryList(
   let itemsError: string | null = null;
   let booksError: string | null = null;
 
+  // Instant-mode dataset warm (≤ INSTANT_MODE_MAX_ROWS orgs): the full-
+  // view rows AND their per-path signed URLs, same robot-pays-cold
+  // philosophy as the default view below. Over-cap orgs return null
+  // after one cheap head count — nothing to warm. Failures only warn:
+  // the dataset cache is independent of the default-view cache, so a
+  // dataset hiccup must not report the view's warm as failed (the pages
+  // fall back to server mode on their own).
+  const warmDataset = async (view: InventoryListView): Promise<void> => {
+    try {
+      const dataset = await loadInventoryDataset(organizationId, warehouseKey, view);
+      if (dataset) await resolveInventoryListImages(organizationId, dataset.items);
+    } catch (err) {
+      console.warn(`[inventory-list] ${view} dataset prewarm skipped:`, err);
+    }
+  };
+
   const t0 = Date.now();
   try {
     const payload = await loadInventoryList(organizationId, warehouseKey, 'items');
@@ -955,6 +1167,7 @@ export async function prewarmInventoryList(
   } catch (err) {
     itemsError = err instanceof Error ? err.message : String(err);
   }
+  await warmDataset('items');
   const t1 = Date.now();
   try {
     const payload = await loadInventoryList(organizationId, warehouseKey, 'books');
@@ -963,6 +1176,7 @@ export async function prewarmInventoryList(
   } catch (err) {
     booksError = err instanceof Error ? err.message : String(err);
   }
+  await warmDataset('books');
   const t2 = Date.now();
 
   return {

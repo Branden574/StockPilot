@@ -30,8 +30,17 @@ import { StockBar } from '@/components/ui/stock-bar';
 import { getCrateColor, readBookStorage, readItemRack } from '@/lib/book-storage';
 import {
   EMPTY_MULTI_FILTER_STATE,
+  multiFilterStatesEqual,
+  readMultiFilterState,
   useInstantFilters,
 } from '@/components/inventory/use-instant-filters';
+import {
+  deriveInstantView,
+  expandInstantPlacementRows,
+  instantStateFromSearchParams,
+  type InstantModeState,
+  type InstantPlacementLine,
+} from '@/lib/inventory/instant-mode';
 import {
   deselectPage,
   isPageFullySelected,
@@ -55,6 +64,13 @@ interface Item {
   charter_id: string | null;
   primary_location_id: string | null;
   updated_at: string;
+  /** Optional on the base row (server mode never reads them here); the
+   * instant-mode dataset always carries them — they're two of the four
+   * authoritative search fields (name/sku/barcode/model_number). */
+  barcode?: string | null;
+  model_number?: string | null;
+  /** Needed by the created_asc/created_desc local sorts in instant mode. */
+  created_at?: string;
   custom_fields?: Record<string, unknown> | null;
   /** Signed URL to the master (2048px) image. Used by hover-preview
    * prefetch + the lightbox. Falls back to a custom_fields.thumbnail_url
@@ -108,6 +124,40 @@ interface Lookups {
   /** Charter id → display name + short code. Missing-key rows render
    *  the "Generic" pill (any charter the warehouse services can use). */
   charters?: Map<string, { name: string; code: string | null }>;
+}
+
+/** A full-dataset row for instant mode: the table row shape plus the
+ *  columns the local matcher (barcode/model_number) and the created_*
+ *  sorts read. The pages build these from InventoryListItemRow. */
+export type InstantDatasetItem = Item & {
+  barcode: string | null;
+  model_number: string | null;
+  created_at: string;
+};
+
+/**
+ * INSTANT MODE dataset (owner-approved design, ≤ INSTANT_MODE_MAX_ROWS
+ * orgs, manager+ only — the pages gate). When present, the table stops
+ * being a window over server-computed rows and derives EVERYTHING
+ * locally from this full per-view dataset + the URL state: search (one
+ * complete answer per keystroke — no two-phase serverHits fallback, no
+ * "(searching…)"), filters, sort, status/stock, pagination, and the
+ * footer totals. URL updates ride App Router-integrated
+ * window.history.pushState/replaceState (shallow — zero server round
+ * trips), so URLs stay shareable and back/forward-able. Props refresh
+ * via realtime router.refresh() + the 60s dataset cache; because the
+ * derivation is a pure function of (dataset, URL state), refreshes
+ * reconcile automatically and selection survives (id-identity
+ * semantics, selection-utils).
+ */
+export interface InstantInventoryDataset {
+  /** ALL rows for the view — every status, every page. */
+  items: InstantDatasetItem[];
+  /** Items page only: holdings for the one-line-per-rack expansion.
+   *  Omitted by the Books page (books never split rows). */
+  placement?: Record<string, InstantPlacementLine[]>;
+  /** Which per-view semantics apply (rack custom-field keys). */
+  view: 'items' | 'books';
 }
 
 export interface InventoryTableProps {
@@ -198,6 +248,10 @@ export interface InventoryTableProps {
       On hand cell. Absent (inventory + books lists) → the On hand cell
       renders exactly as before, byte-identical. */
   reservedByItem?: Map<string, number>;
+  /** Instant mode — see InstantInventoryDataset. Absent (staff/viewer,
+      over-cap orgs, every other caller) → server mode, byte-identical
+      to today. */
+  instant?: InstantInventoryDataset;
 }
 
 interface SavedViewSummary {
@@ -282,6 +336,25 @@ function deriveStatus(qty: number, reorder: number): 'ok' | 'warn' | 'crit' {
 const EMPTY_SERIES: number[] = [];
 
 /**
+ * Instant-mode <Link>/<a> click interception: plain left clicks become a
+ * shallow history update (no server round trip — the rows derive
+ * locally); modified clicks (cmd/ctrl/shift/alt, middle button) are left
+ * to the browser so open-in-new-tab still works and the href still
+ * server-renders as a deep link. preventDefault() also tells next/link
+ * to skip its own router navigation.
+ */
+function interceptShallowNav(
+  e: React.MouseEvent<HTMLAnchorElement>,
+  href: string,
+  navigate: (href: string) => void,
+): void {
+  if (e.defaultPrevented) return;
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  navigate(href);
+}
+
+/**
  * Returns the 14-day series to plot for a row, given the active spark
  * mode and the trends map from getItemTrends. Falls back to a flat
  * line at current qty (or zero, for moves) when trends data is missing
@@ -322,7 +395,9 @@ export function InventoryTable({
   activeWarehouseId = null,
   currentUserId = null,
   reservedByItem,
+  instant,
 }: InventoryTableProps) {
+  const instantMode = instant != null;
   // Sparkline mode preference. localStorage-backed so it sticks across
   // reloads + tabs but doesn't pollute URLs (it's a personal preference,
   // not a query filter). MUST initialize to the server-safe default
@@ -370,6 +445,20 @@ export function InventoryTable({
   const router = useRouter();
   const addToCount = useCountSelection((s) => s.add);
   const params = useSearchParams();
+  // INSTANT-MODE URL SYNC: App Router-integrated shallow history updates
+  // (official since Next 14.1) — the address bar moves, usePathname/
+  // useSearchParams reflect the new URL (so every URL-derived control
+  // stays in sync), but NO server component re-runs and no RSC fetch
+  // fires. Filter/sort/search mirror server mode's router.replace with
+  // replaceState; pagination + view chips mirror their <Link> pushes
+  // with pushState, so back/forward keep stepping through pages.
+  const shallowReplace = React.useCallback((url: string) => {
+    window.history.replaceState(null, '', url);
+  }, []);
+  const shallowPush = React.useCallback((url: string) => {
+    window.history.pushState(null, '', url);
+  }, []);
+
   // Filter / sort navigations re-run the server component — a multi-second
   // round-trip at real-org scale. useInstantFilters makes the CONTROLS
   // optimistic: a checkbox flips synchronously on click, rapid toggles
@@ -378,9 +467,15 @@ export function InventoryTable({
   // isFilterPending drives a subtle "updating" treatment while the current
   // rows stay visible AND interactive. Once the navigation settles, the
   // controls mirror the URL again, so settled URL == visible state.
+  // Instant mode swaps the transport to a shallow replaceState — the
+  // optimistic/coalescing model is unchanged, but the commit costs zero
+  // server work because the rows derive locally.
   const replaceUrl = React.useCallback(
-    (url: string) => router.replace(url, { scroll: false }),
-    [router],
+    (url: string) => {
+      if (instantMode) shallowReplace(url);
+      else router.replace(url, { scroll: false });
+    },
+    [router, instantMode, shallowReplace],
   );
   const filters = useInstantFilters({ params, basePath, replace: replaceUrl });
   const isFilterPending = filters.isPending;
@@ -396,8 +491,10 @@ export function InventoryTable({
   // name / sku / barcode of the rows already on this page. Renders
   // before the server fetch comes back so the user gets immediate
   // feedback; the server result then supersedes via `displayed` below.
+  // (SERVER MODE ONLY — instant mode's matcher runs over the FULL
+  // dataset in instantView below and this memo reduces to `items`.)
   const localMatches = React.useMemo(() => {
-    const needle = q.trim().toLowerCase();
+    const needle = instantMode ? '' : q.trim().toLowerCase();
     if (!needle) return items;
     return items.filter((i) => {
       const name = (i.name ?? '').toLowerCase();
@@ -409,7 +506,49 @@ export function InventoryTable({
         name.includes(needle) || sku.includes(needle) || barcode.includes(needle)
       );
     });
-  }, [items, q]);
+  }, [items, q, instantMode]);
+
+  // INSTANT MODE derivation — a pure function of (dataset, URL state,
+  // optimistic control state). q comes from local state and cat/loc/
+  // charter from filters.visible so rows respond in the SAME FRAME as
+  // the control; the URL catches up via the debounced shallow commits
+  // and, once settled, produces the identical state (so realtime prop
+  // refreshes reconcile automatically). While q or the filter set is
+  // ahead of the URL, page snaps to 1 — mirroring how every server-mode
+  // q/filter commit deletes ?page.
+  const instantState: InstantModeState | null = React.useMemo(() => {
+    if (!instantMode) return null;
+    const urlState = instantStateFromSearchParams(params);
+    const visible = {
+      cat: [...filters.visible.cat],
+      loc: [...filters.visible.loc],
+      charter: [...filters.visible.charter],
+    };
+    const aheadOfUrl =
+      q.trim() !== urlState.q.trim() ||
+      !multiFilterStatesEqual(visible, readMultiFilterState(params));
+    return {
+      ...urlState,
+      q,
+      ...visible,
+      page: aheadOfUrl ? 1 : urlState.page,
+    };
+  }, [instantMode, params, q, filters.visible]);
+
+  const instantView = React.useMemo(() => {
+    if (!instant || !instantState) return null;
+    return deriveInstantView(instant.items, instantState, instant.view, pageSize);
+  }, [instant, instantState, pageSize]);
+
+  // Items view: expand the page's items into one row per holding line —
+  // the client twin of the page's server-mode placementRows flatMap.
+  // Books view (no placement passed): the page items render as-is.
+  const instantRows: Item[] | null = React.useMemo(() => {
+    if (!instant || !instantView) return null;
+    return instant.placement
+      ? expandInstantPlacementRows(instantView.pageItems, instant.placement)
+      : instantView.pageItems;
+  }, [instant, instantView]);
 
   const view = paramsToView(params.get('stock'));
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
@@ -511,7 +650,14 @@ export function InventoryTable({
   // AbortController cancels in-flight requests on rapid typing. On
   // any error we silently fall back to localMatches (which is still
   // mounted) — no toast, no UX disruption.
+  //
+  // INSTANT MODE SKIPS ALL OF THIS: the dataset is complete, so there is
+  // no server search to phase in (`serverHits` stays null forever) and
+  // no "(searching…)" hedge — one complete answer per keystroke. The
+  // dedicated effect below keeps the URL in sync via shallow
+  // replaceState instead.
   React.useEffect(() => {
+    if (instantMode) return;
     const needle = q.trim();
     if (!needle) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
@@ -590,14 +736,40 @@ export function InventoryTable({
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q]);
+  }, [q, instantMode]);
+
+  // INSTANT-MODE URL SYNC for the search box: mirror server mode's URL
+  // shape (?q=needle, ?page dropped on any q change) with a debounced
+  // SHALLOW replaceState — the rows already updated synchronously via
+  // instantView, so this is purely about keeping the URL shareable.
+  // Skips when the URL already matches (mount with a ?q= deep link).
+  React.useEffect(() => {
+    if (!instantMode) return;
+    const needle = q.trim();
+    // URL already reflects this search state → leave it (and ?page)
+    // alone. Only a CHANGED q rewrites the URL and drops ?page — the
+    // same rule every server-mode q commit follows.
+    if (needle === (params.get('q') ?? '').trim()) return;
+    const next = new URLSearchParams(params.toString());
+    if (needle) next.set('q', needle);
+    else next.delete('q');
+    next.delete('page');
+    const qs = next.toString();
+    const newUrl = qs ? `${basePath}?${qs}` : basePath;
+    const timer = setTimeout(() => shallowReplace(newUrl), 150);
+    return () => clearTimeout(timer);
+  }, [q, instantMode, params, basePath, shallowReplace]);
 
   // Page-scoped select-all (see selection-utils.ts): adds/removes the
   // VISIBLE ids while preserving off-page selection. The old
   // replace-with-page / clear-everything shape combined with the
   // size-equality header test below desynced permanently on live orgs
-  // whose realtime refreshes reorder rows under the selection.
-  const pageIds = React.useMemo(() => items.map((i) => i.id), [items]);
+  // whose realtime refreshes reorder rows under the selection. In
+  // instant mode the "visible page" is the locally-derived one.
+  const pageIds = React.useMemo(
+    () => (instantRows ?? items).map((i) => i.id),
+    [instantRows, items],
+  );
   const allVisibleSelected = isPageFullySelected(selected, pageIds);
   const someVisibleSelected = isPagePartiallySelected(selected, pageIds);
   function toggleAll(checked: boolean) {
@@ -614,16 +786,25 @@ export function InventoryTable({
 
   // Prefer the server-computed org-wide value (covers ALL pages of
   // the current filter set). Falls back to a page-only sum for any
-  // legacy caller that doesn't pass the prop yet.
-  const valueOnHand =
-    valueOnHandProp ??
-    items.reduce((s, it) => s + it.quantity_on_hand * it.unit_cost, 0);
+  // legacy caller that doesn't pass the prop yet. Instant mode computes
+  // it locally over the FULL filtered set — the buildSumPage mirror
+  // (deriveInstantView), so it tracks every active filter including q.
+  const valueOnHand = instantView
+    ? instantView.valueOnHand
+    : valueOnHandProp ??
+      items.reduce((s, it) => s + it.quantity_on_hand * it.unit_cost, 0);
 
-  // What the table actually renders. Priority: server-authoritative
+  // Total + current page: locally derived in instant mode (clamped to
+  // the filtered set), server-provided otherwise.
+  const effectiveTotal = instantView ? instantView.total : total;
+  const effectivePage = instantView ? instantView.page : page;
+
+  // What the table actually renders. Instant mode: the one complete
+  // locally-derived answer. Server mode priority: server-authoritative
   // result if we have one (covers cross-page matches), else the
   // synchronous local filter (covers in-page matches with zero
-  // latency). On no search, both reduce to `items`.
-  const displayed = serverHits ?? localMatches;
+  // latency). On no search, the server-mode pair reduces to `items`.
+  const displayed = instantRows ?? serverHits ?? localMatches;
 
   // Precompute each row's sparkline series ONCE per (displayed, sparkMode,
   // trends) instead of inside the row map. `displayed` is stable across
@@ -664,6 +845,13 @@ export function InventoryTable({
             key={v}
             href={hrefForView(v)}
             scroll={false}
+            // Instant mode: the stock filter derives locally, so the chip
+            // becomes a shallow push (same URL, zero server work).
+            onClick={
+              instantMode
+                ? (e) => interceptShallowNav(e, hrefForView(v), shallowPush)
+                : undefined
+            }
             className={cn(
               'inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[11.5px] transition-colors',
               v === view
@@ -804,6 +992,18 @@ export function InventoryTable({
             <Loader2 aria-label="Updating results" className="h-3 w-3 animate-spin" />
           )}
           {(() => {
+            // Instant mode: the totals ARE the filtered set (the
+            // buildSumPage mirror runs locally over the full dataset),
+            // so the footer never needs the "Showing N matching" hedge
+            // or the "(searching…)" phase — every keystroke's answer is
+            // complete.
+            if (instantMode) {
+              return (
+                <>
+                  {formatNumber(effectiveTotal)} SKUs · {formatCurrency(valueOnHand)} on hand
+                </>
+              );
+            }
             const needle = q.trim();
             if (!needle) {
               return (
@@ -837,7 +1037,9 @@ export function InventoryTable({
           locations={locations}
           tags={tags}
           onClear={() => setSelected(new Set())}
-          hasArchivedSelection={items.some(
+          // Instant mode holds the FULL dataset, so cross-page selections
+          // resolve against it; server mode keeps today's page-row scan.
+          hasArchivedSelection={(instant?.items ?? items).some(
             (i) => selected.has(i.id) && i.status === 'archived',
           )}
           onCycleCount={() => {
@@ -847,7 +1049,7 @@ export function InventoryTable({
             // re-validates by id.
             const itemType = basePath.includes('/books') ? 'book' : 'product';
             const byId = new Map<string, Item>();
-            for (const r of items) byId.set(r.id, r);
+            for (const r of instant?.items ?? items) byId.set(r.id, r);
             for (const r of serverHits ?? []) byId.set(r.id, r);
             const picks = [...selected].map((id) => {
               const r = byId.get(id);
@@ -864,16 +1066,19 @@ export function InventoryTable({
       {/* Top pagination — mirrors the bottom one so users on long lists
           don't have to scroll to the bottom to flip pages. Same component,
           same URL state, same buildHref. Hides on single-page lists for
-          the same reason the bottom one does. Also hides during an active
-          search because the server response delivers the full filtered
-          set up to the limit — pages recompose once `q` clears. */}
-      {!q.trim() && total > pageSize && (
+          the same reason the bottom one does. SERVER mode also hides it
+          during an active search because the server response delivers the
+          full filtered set up to the limit — pages recompose once `q`
+          clears. INSTANT mode keeps it: search results are complete and
+          paginate locally like any other filter. */}
+      {(instantMode ? effectiveTotal > pageSize : !q.trim() && total > pageSize) && (
         <div className="flex items-center justify-end">
           <Pagination
-            page={page}
+            page={effectivePage}
             pageSize={pageSize}
-            total={total}
+            total={effectiveTotal}
             buildHref={hrefForPage}
+            onNavigate={instantMode ? shallowPush : undefined}
           />
         </div>
       )}
@@ -1290,14 +1495,16 @@ export function InventoryTable({
       <div className="flex flex-wrap items-center justify-between gap-3">
         {/* Pagination — hides when everything fits on one page so the
             single-screen empty/typical case stays clean. URL-driven so
-            paginated views are bookmarkable + shareable. Also hides
-            during an active search (see top-pagination comment). */}
-        {!q.trim() && total > pageSize ? (
+            paginated views are bookmarkable + shareable. Server mode also
+            hides during an active search; instant mode paginates search
+            results locally (see top-pagination comment). */}
+        {(instantMode ? effectiveTotal > pageSize : !q.trim() && total > pageSize) ? (
           <Pagination
-            page={page}
+            page={effectivePage}
             pageSize={pageSize}
-            total={total}
+            total={effectiveTotal}
             buildHref={hrefForPage}
+            onNavigate={instantMode ? shallowPush : undefined}
           />
         ) : (
           <span />
@@ -1319,11 +1526,17 @@ export function Pagination({
   pageSize,
   total,
   buildHref,
+  onNavigate,
 }: {
   page: number;
   pageSize: number;
   total: number;
   buildHref: (page: number) => string;
+  /** Instant mode: plain left clicks on the page links become
+   *  `onNavigate(href)` (a shallow history push — pagination without a
+   *  server round trip). Modified clicks and copied hrefs keep working
+   *  as real deep links. Absent → plain <Link> navigation, unchanged. */
+  onNavigate?: (href: string) => void;
 }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(Math.max(1, page), totalPages);
@@ -1331,6 +1544,10 @@ export function Pagination({
   const endRow = Math.min(safePage * pageSize, total);
   const prevDisabled = safePage <= 1;
   const nextDisabled = safePage >= totalPages;
+  const linkClick = onNavigate
+    ? (href: string) => (e: React.MouseEvent<HTMLAnchorElement>) =>
+        interceptShallowNav(e, href, onNavigate)
+    : () => undefined;
   return (
     <div className="text-muted-foreground flex items-center gap-3 text-[12px]">
       <span>
@@ -1345,7 +1562,11 @@ export function Pagination({
               ← Prev
             </span>
           ) : (
-            <Link href={buildHref(safePage - 1)} prefetch={false}>
+            <Link
+              href={buildHref(safePage - 1)}
+              prefetch={false}
+              onClick={linkClick(buildHref(safePage - 1))}
+            >
               ← Prev
             </Link>
           )}
@@ -1377,6 +1598,7 @@ export function Pagination({
                   <Link
                     href={buildHref(n)}
                     prefetch={false}
+                    onClick={linkClick(buildHref(n))}
                     aria-current={n === safePage ? 'page' : undefined}
                   >
                     {n}
@@ -1392,7 +1614,11 @@ export function Pagination({
               Next →
             </span>
           ) : (
-            <Link href={buildHref(safePage + 1)} prefetch={false}>
+            <Link
+              href={buildHref(safePage + 1)}
+              prefetch={false}
+              onClick={linkClick(buildHref(safePage + 1))}
+            >
               Next →
             </Link>
           )}

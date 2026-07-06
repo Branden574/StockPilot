@@ -17,10 +17,15 @@ import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
 import { can } from '@stockpilot/core';
 import {
+  deriveInstantView,
+  instantStateFromPageParams,
+} from '@/lib/inventory/instant-mode';
+import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
   deriveInventoryTrends,
   isDefaultInventoryView,
+  loadInventoryDataset,
   loadInventoryList,
   loadInventoryLookups,
   loadInventoryTrendBuckets,
@@ -222,6 +227,105 @@ async function BooksTableSection({
   // read a shared cache.
   const useSharedCaches = canUseSharedInventoryCaches(sessionCtx);
 
+  const canCreate = can(sessionCtx, 'items:create');
+
+  // INSTANT MODE — same contract as the Items page: manager+ orgs at or
+  // under INSTANT_MODE_MAX_ROWS get the FULL Books dataset and the
+  // table derives search/filter/sort/status/stock/pagination locally
+  // (zero server round trips; shallow URL sync). Deep links still
+  // server-render correctly — the same pure derivation runs here for
+  // the empty-state branches and in the table's SSR pass. Staff/viewer,
+  // over-cap orgs (dataset === null) and loader failures fall through
+  // byte-identical to today. (Books never split placement rows, so no
+  // placement is passed.)
+  let instantData: {
+    items: InventoryListItemRow[];
+    lookups: InventoryListLookups;
+    trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
+  } | null = null;
+  if (useSharedCaches) {
+    // Data acquisition only in here — the JSX renders after the
+    // try/catch (react-hooks/error-boundaries). Any failure →
+    // instantData stays null → the server path below runs unchanged.
+    try {
+      const [dataset, lookups, trendBuckets] = await Promise.all([
+        loadInventoryDataset(
+          sessionCtx.organizationId,
+          warehouseFilter ?? ALL_WAREHOUSES_KEY,
+          'books',
+        ),
+        loadInventoryLookups(sessionCtx.organizationId),
+        loadInventoryTrendBuckets(sessionCtx.organizationId),
+      ]);
+      if (dataset) {
+        // Paths → signed URLs per request, through the same shared
+        // 25-day per-path cache as every other list surface.
+        const items = await resolveInventoryListImages(sessionCtx.organizationId, dataset.items);
+        instantData = {
+          items,
+          lookups,
+          // Full-dataset trends from the org-wide buckets — pure CPU.
+          trends: deriveInventoryTrends(
+            items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+            trendBuckets,
+          ),
+        };
+      }
+    } catch (err) {
+      console.warn('[books page] instant dataset unavailable, using server mode:', err);
+    }
+  }
+
+  if (instantData) {
+    const savedViews = await savedViewsPromise;
+    const { items: instantItems, lookups } = instantData;
+    const derived = deriveInstantView(
+      instantItems,
+      instantStateFromPageParams(params),
+      'books',
+      PAGE_SIZE,
+    );
+    const emptyState = booksEmptyState({
+      total: derived.total,
+      params,
+      lifecycleStatus,
+      canCreate,
+    });
+    if (emptyState) return emptyState;
+    return (
+      <BooksInventoryTable
+        items={instantItems}
+        total={derived.total}
+        valueOnHand={derived.valueOnHand}
+        lookups={{
+          categories: new Map(
+            lookups.categories.map((c) => [c.id, { name: c.name, color: c.color }]),
+          ),
+          locations: new Map(lookups.locations.map((l) => [l.id, { name: l.name }])),
+          charters: new Map(lookups.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
+        }}
+        canCreate={canCreate}
+        categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
+        locations={lookups.locations}
+        charters={lookups.charters}
+        suppliers={lookups.suppliers}
+        tags={lookups.tags}
+        initialQuery={params.q}
+        rowLinkPrefix="/dashboard/books"
+        basePath="/dashboard/books"
+        showBookFields
+        page={derived.page}
+        pageSize={PAGE_SIZE}
+        trends={instantData.trends}
+        savedViews={savedViews}
+        savedViewScope="books"
+        activeWarehouseId={warehouseFilter}
+        currentUserId={sessionCtx.userId}
+        instant={{ items: instantItems, view: 'books' }}
+      />
+    );
+  }
+
   // COLD-CLICK FAST PATH — same contract as the Items page: only the
   // exact default view, keyed by the warehouse-filter cookie. Any
   // loader failure falls through to the live path. (The 'books' module
@@ -387,54 +491,13 @@ async function BooksTableSection({
     ),
   };
 
-  if (data.total === 0 && lifecycleStatus === 'archived' && !params.q && !params.stock) {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No archived books"
-        description="Nothing here yet. Books you archive will show up in this view."
-        cta={{ label: 'Back to active books', href: '/dashboard/books' }}
-      />
-    );
-  }
-  if (data.total === 0 && !params.q && !params.stock) {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No books yet"
-        description={
-          can(sessionCtx, 'items:create')
-            ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
-            : 'No books have been added to this workspace yet.'
-        }
-        cta={
-          can(sessionCtx, 'items:create')
-            ? { label: 'Add your first book', href: '/dashboard/books/new' }
-            : undefined
-        }
-      />
-    );
-  }
-  if (data.total === 0 && params.stock === 'low') {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No low-stock books"
-        description="No books are at or below their reorder point right now. Clear the filter to see all books."
-        cta={{ label: 'Show all books', href: '/dashboard/books' }}
-      />
-    );
-  }
-  if (data.total === 0 && params.stock === 'out') {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No out-of-stock books"
-        description="Nothing is at zero quantity right now. Clear the filter to see all books."
-        cta={{ label: 'Show all books', href: '/dashboard/books' }}
-      />
-    );
-  }
+  const emptyState = booksEmptyState({
+    total: data.total,
+    params,
+    lifecycleStatus,
+    canCreate,
+  });
+  if (emptyState) return emptyState;
 
   return (
     <BooksInventoryTable
@@ -442,7 +505,7 @@ async function BooksTableSection({
       total={data.total}
       valueOnHand={data.valueOnHand}
       lookups={lookups}
-      canCreate={can(sessionCtx, 'items:create')}
+      canCreate={canCreate}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}
@@ -461,4 +524,72 @@ async function BooksTableSection({
       currentUserId={sessionCtx.userId}
     />
   );
+}
+
+/**
+ * The rich zero-result EmptyStates, shared VERBATIM by the instant and
+ * server branches (extracted, not duplicated, so the two modes can't
+ * drift). Returns null when the table should render.
+ */
+function booksEmptyState({
+  total,
+  params,
+  lifecycleStatus,
+  canCreate,
+}: {
+  total: number;
+  params: BooksSearchParams;
+  lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
+  canCreate: boolean;
+}) {
+  if (total !== 0) return null;
+  if (lifecycleStatus === 'archived' && !params.q && !params.stock) {
+    return (
+      <EmptyState
+        icon={BookOpen}
+        title="No archived books"
+        description="Nothing here yet. Books you archive will show up in this view."
+        cta={{ label: 'Back to active books', href: '/dashboard/books' }}
+      />
+    );
+  }
+  if (!params.q && !params.stock) {
+    return (
+      <EmptyState
+        icon={BookOpen}
+        title="No books yet"
+        description={
+          canCreate
+            ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
+            : 'No books have been added to this workspace yet.'
+        }
+        cta={
+          canCreate
+            ? { label: 'Add your first book', href: '/dashboard/books/new' }
+            : undefined
+        }
+      />
+    );
+  }
+  if (params.stock === 'low') {
+    return (
+      <EmptyState
+        icon={BookOpen}
+        title="No low-stock books"
+        description="No books are at or below their reorder point right now. Clear the filter to see all books."
+        cta={{ label: 'Show all books', href: '/dashboard/books' }}
+      />
+    );
+  }
+  if (params.stock === 'out') {
+    return (
+      <EmptyState
+        icon={BookOpen}
+        title="No out-of-stock books"
+        description="Nothing is at zero quantity right now. Clear the filter to see all books."
+        cta={{ label: 'Show all books', href: '/dashboard/books' }}
+      />
+    );
+  }
+  return null;
 }

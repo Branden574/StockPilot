@@ -13,10 +13,15 @@ import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
 import { can } from '@stockpilot/core';
 import {
+  deriveInstantView,
+  instantStateFromPageParams,
+} from '@/lib/inventory/instant-mode';
+import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
   deriveInventoryTrends,
   isDefaultInventoryView,
+  loadInventoryDataset,
   loadInventoryList,
   loadInventoryLookups,
   loadInventoryTrendBuckets,
@@ -258,6 +263,117 @@ async function InventoryTableSection({
   // cache the way raw RLS rows would not.
   const useSharedCaches = canUseSharedInventoryCaches(sessionCtx);
 
+  const canCreate = can(sessionCtx, 'items:create');
+
+  // INSTANT MODE — the whole-view fast path (owner-approved design):
+  // manager+ orgs at or under INSTANT_MODE_MAX_ROWS get the FULL Items
+  // dataset (every status, every page — one cached loader read), and
+  // the table searches/filters/sorts/paginates locally with ZERO server
+  // round trips. Deep links still server-render correctly: the SAME
+  // pure derivation (lib/inventory/instant-mode.ts) runs here for the
+  // empty-state branches and inside the table's SSR pass.
+  //
+  // Coverage boundary: only the view's own item type — a ?type=book|
+  // asset|consumable|all deep link asks for rows the 'items' dataset
+  // doesn't carry, so it takes the server path below unchanged. Staff/
+  // viewer (useSharedCaches false), over-cap orgs (dataset === null)
+  // and any loader failure also fall through — byte-identical to today.
+  let instantData: {
+    items: InventoryListItemRow[];
+    placement: Record<string, InventoryPlacementLine[]>;
+    lookups: InventoryListLookups;
+    trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
+  } | null = null;
+  if (useSharedCaches && itemType === 'product') {
+    // Data acquisition only in here — the JSX renders after the
+    // try/catch (react-hooks/error-boundaries: a thrown render wouldn't
+    // be caught here anyway). Any failure → instantData stays null →
+    // the server path below runs unchanged.
+    try {
+      const [dataset, lookups, trendBuckets] = await Promise.all([
+        tagged(
+          'loadInventoryDataset',
+          loadInventoryDataset(
+            sessionCtx.organizationId,
+            warehouseFilter ?? ALL_WAREHOUSES_KEY,
+            'items',
+          ),
+        ),
+        loadInventoryLookups(sessionCtx.organizationId),
+        loadInventoryTrendBuckets(sessionCtx.organizationId),
+      ]);
+      if (dataset) {
+        // Paths → signed URLs per request, through the same shared
+        // 25-day per-path cache as every other list surface (never
+        // inside the loader's cache — see the loader's header note).
+        const items = await resolveInventoryListImages(sessionCtx.organizationId, dataset.items);
+        instantData = {
+          items,
+          placement: dataset.placement,
+          lookups,
+          // Full-dataset trends from the org-wide buckets — pure CPU,
+          // so every locally-derived page has its sparklines ready.
+          trends: deriveInventoryTrends(
+            items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+            trendBuckets,
+          ),
+        };
+      }
+    } catch (err) {
+      console.warn('[inventory page] instant dataset unavailable, using server mode:', err);
+    }
+  }
+
+  if (instantData) {
+    const savedViews = await savedViewsPromise;
+    const { items: instantItems, lookups } = instantData;
+    // Server-side run of the client's exact derivation: keeps the rich
+    // EmptyState branches (and the table's SSR HTML) identical to what
+    // the server path would have shown for this URL.
+    const derived = deriveInstantView(
+      instantItems,
+      instantStateFromPageParams(params),
+      'items',
+      PAGE_SIZE,
+    );
+    const emptyState = inventoryEmptyState({
+      total: derived.total,
+      params,
+      lifecycleStatus,
+      canCreate,
+    });
+    if (emptyState) return emptyState;
+    return (
+      <InventoryTable
+        items={instantItems}
+        total={derived.total}
+        valueOnHand={derived.valueOnHand}
+        lookups={{
+          categories: new Map(
+            lookups.categories.map((c) => [c.id, { name: c.name, color: c.color }]),
+          ),
+          locations: new Map(lookups.locations.map((l) => [l.id, { name: l.name }])),
+          charters: new Map(lookups.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
+        }}
+        canCreate={canCreate}
+        categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
+        locations={lookups.locations}
+        charters={lookups.charters}
+        suppliers={lookups.suppliers}
+        tags={lookups.tags}
+        initialQuery={params.q}
+        page={derived.page}
+        pageSize={PAGE_SIZE}
+        trends={instantData.trends}
+        savedViews={savedViews}
+        savedViewScope="inventory"
+        activeWarehouseId={warehouseFilter}
+        currentUserId={sessionCtx.userId}
+        instant={{ items: instantItems, placement: instantData.placement, view: 'items' }}
+      />
+    );
+  }
+
   // COLD-CLICK FAST PATH: the exact default view (page 1, default sort,
   // no search/filters) is served from an org-keyed 60s cache that the
   // prewarm cron keeps warm. isDefaultInventoryView is mandatory — any
@@ -482,70 +598,13 @@ async function InventoryTableSection({
     ),
   };
 
-  const canCreate = can(sessionCtx, 'items:create');
-
-  if (data.total === 0 && lifecycleStatus === 'archived' && !params.q && !params.stock) {
-    return (
-      <EmptyState
-        icon={Boxes}
-        title="No archived items"
-        description="Nothing here yet. Items you archive will show up in this view."
-        cta={{ label: 'Back to active items', href: '/dashboard/inventory' }}
-      />
-    );
-  }
-  if (data.total === 0 && !params.q && !params.stock) {
-    return (
-      <EmptyState
-        icon={Boxes}
-        title="No items yet"
-        description={
-          canCreate
-            ? 'Add your first item to start tracking stock, locations, and movements.'
-            : 'No items have been added to this workspace yet.'
-        }
-        cta={
-          canCreate
-            ? { label: 'Add your first item', href: '/dashboard/inventory/new' }
-            : undefined
-        }
-      />
-    );
-  }
-  if (data.total === 0 && params.stock === 'low') {
-    return (
-      <EmptyState
-        icon={Boxes}
-        title="No low-stock items"
-        description="Nothing is at or below its reorder point right now. Nice."
-        cta={{ label: 'Show all items', href: '/dashboard/inventory' }}
-      />
-    );
-  }
-  if (data.total === 0 && params.stock === 'out') {
-    return (
-      <EmptyState
-        icon={Boxes}
-        title="Nothing is out of stock"
-        description="No active items have a quantity of zero. Clear the filter to see all items."
-        cta={{ label: 'Show all items', href: '/dashboard/inventory' }}
-      />
-    );
-  }
-  if (data.total === 0 && params.q) {
-    // Search returned zero results. Without this branch the page
-    // fell through to InventoryTable rendering a single bare cell
-    // ("No items match your filters.") — the only empty state on
-    // the page that wasn't using the rich <EmptyState> component.
-    return (
-      <EmptyState
-        icon={Boxes}
-        title="No items match your search"
-        description={`Nothing matched "${params.q.slice(0, 40)}". Try a different SKU, name, or barcode.`}
-        cta={{ label: 'Clear search', href: '/dashboard/inventory' }}
-      />
-    );
-  }
+  const emptyState = inventoryEmptyState({
+    total: data.total,
+    params,
+    lifecycleStatus,
+    canCreate,
+  });
+  if (emptyState) return emptyState;
 
   return (
     <InventoryTable
@@ -569,4 +628,89 @@ async function InventoryTableSection({
       currentUserId={sessionCtx.userId}
     />
   );
+}
+
+/**
+ * The rich zero-result EmptyStates, shared VERBATIM by the instant and
+ * server branches (extracted, not duplicated, so the two modes can't
+ * drift). `total` is the current view's filtered total — the server
+ * branch passes InventoryService.list()'s count, the instant branch the
+ * local derivation's (same semantics by the instant-mode parity
+ * contract). Returns null when the table should render.
+ */
+function inventoryEmptyState({
+  total,
+  params,
+  lifecycleStatus,
+  canCreate,
+}: {
+  total: number;
+  params: InventorySearchParams;
+  lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
+  canCreate: boolean;
+}) {
+  if (total !== 0) return null;
+  if (lifecycleStatus === 'archived' && !params.q && !params.stock) {
+    return (
+      <EmptyState
+        icon={Boxes}
+        title="No archived items"
+        description="Nothing here yet. Items you archive will show up in this view."
+        cta={{ label: 'Back to active items', href: '/dashboard/inventory' }}
+      />
+    );
+  }
+  if (!params.q && !params.stock) {
+    return (
+      <EmptyState
+        icon={Boxes}
+        title="No items yet"
+        description={
+          canCreate
+            ? 'Add your first item to start tracking stock, locations, and movements.'
+            : 'No items have been added to this workspace yet.'
+        }
+        cta={
+          canCreate
+            ? { label: 'Add your first item', href: '/dashboard/inventory/new' }
+            : undefined
+        }
+      />
+    );
+  }
+  if (params.stock === 'low') {
+    return (
+      <EmptyState
+        icon={Boxes}
+        title="No low-stock items"
+        description="Nothing is at or below its reorder point right now. Nice."
+        cta={{ label: 'Show all items', href: '/dashboard/inventory' }}
+      />
+    );
+  }
+  if (params.stock === 'out') {
+    return (
+      <EmptyState
+        icon={Boxes}
+        title="Nothing is out of stock"
+        description="No active items have a quantity of zero. Clear the filter to see all items."
+        cta={{ label: 'Show all items', href: '/dashboard/inventory' }}
+      />
+    );
+  }
+  if (params.q) {
+    // Search returned zero results. Without this branch the page
+    // fell through to InventoryTable rendering a single bare cell
+    // ("No items match your filters.") — the only empty state on
+    // the page that wasn't using the rich <EmptyState> component.
+    return (
+      <EmptyState
+        icon={Boxes}
+        title="No items match your search"
+        description={`Nothing matched "${params.q.slice(0, 40)}". Try a different SKU, name, or barcode.`}
+        cta={{ label: 'Clear search', href: '/dashboard/inventory' }}
+      />
+    );
+  }
+  return null;
 }

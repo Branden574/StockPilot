@@ -54,11 +54,14 @@ import { withContext, type ServiceContext } from '@/server/services/context';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { getItemTrends } from '@/server/services/movements';
 
+import { INSTANT_MODE_MAX_ROWS } from '@/lib/inventory/instant-mode';
+
 import {
   canUseSharedInventoryCaches,
   deriveInventoryTrends,
   inventoryListTag,
   isDefaultInventoryView,
+  loadInventoryDataset,
   loadInventoryList,
   loadInventoryLookups,
   loadInventoryTrendBuckets,
@@ -677,5 +680,245 @@ describe('sub-loader cache wiring', () => {
       ]);
       expect(opts.revalidate, `${keyParts[0]} must keep the 60s TTL`).toBe(60);
     }
+  });
+});
+
+/* ---- instant-mode dataset loader ---------------------------------------- */
+
+describe('loadInventoryDataset (instant-mode full-view rows)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** makeAdmin + per-table builder capture, so tests can assert QUERY
+   *  CONSTRUCTION (which filters were applied) — not just results. */
+  function makeRecordingAdmin(resultsByTable: Record<string, unknown>) {
+    const buildersByTable: Record<string, Array<Record<string, ReturnType<typeof vi.fn>>>> = {};
+    const admin = {
+      from: vi.fn((table: string) => {
+        const b = makeBuilder(resultsByTable[table] ?? { data: [], error: null });
+        (buildersByTable[table] ??= []).push(b as never);
+        return b;
+      }),
+    };
+    return { admin, buildersByTable };
+  }
+
+  /** fetchAllRows stand-in that actually INVOKES buildPage once, so the
+   *  query chain runs against the recording admin and its data flows
+   *  back — mirrors one-page fetch behavior. */
+  function fetchAllRowsInvokesBuildPage() {
+    vi.mocked(fetchAllRows).mockImplementation(async (buildPage) => {
+      const res = await (buildPage as (f: number, t: number) => Promise<{ data: unknown[] | null; error: { message: string } | null }>)(0, 999);
+      if (res.error) throw new Error(res.error.message);
+      return (res.data ?? []) as never;
+    });
+  }
+
+  const archivedItem = { ...baseItem, id: 'i2', sku: 'SKU-2', name: 'Old Widget', status: 'archived' as const };
+  const discontinuedItem = { ...baseItem, id: 'i3', sku: 'SKU-3', name: 'Dead Widget', status: 'discontinued' as const };
+
+  it('includes EVERY status (no status filter on the query) and applies exactly the view-constant filters', async () => {
+    fetchAllRowsInvokesBuildPage();
+    const { admin, buildersByTable } = makeRecordingAdmin({
+      inventory_items: {
+        data: [baseItem, archivedItem, discontinuedItem],
+        count: 3,
+        error: null,
+      },
+      item_stock_levels: { data: [], error: null },
+      item_images: { data: [], error: null },
+    });
+    createAdminClientMock.mockReturnValue(admin);
+
+    const payload = await loadInventoryDataset('org-1', 'all', 'items');
+
+    expect(payload).not.toBeNull();
+    expect(payload!.items.map((r) => r.status)).toEqual(['active', 'archived', 'discontinued']);
+
+    // Query construction: count query + rows query both carry the
+    // view-constant filters and NOTHING request-variable.
+    const itemBuilders = buildersByTable['inventory_items']!;
+    expect(itemBuilders).toHaveLength(2); // head count + one rows page
+    for (const b of itemBuilders) {
+      const eqCalls = (b.eq as ReturnType<typeof vi.fn>).mock.calls as Array<[string, unknown]>;
+      expect(eqCalls).toEqual(
+        expect.arrayContaining([
+          ['organization_id', 'org-1'],
+          ['item_type', 'product'],
+          ['is_rental', false],
+        ]),
+      );
+      // status must NEVER be filtered — the client derives it. No
+      // warehouse filter for the 'all' key either.
+      expect(eqCalls.map(([col]) => col)).not.toContain('status');
+      expect(eqCalls.map(([col]) => col)).not.toContain('warehouse_id');
+      expect((b.is as ReturnType<typeof vi.fn>).mock.calls).toEqual(
+        expect.arrayContaining([['deleted_at', null]]),
+      );
+    }
+  });
+
+  it('scopes to the warehouse when the key is a warehouse id, and to item_type=book for the books view', async () => {
+    fetchAllRowsInvokesBuildPage();
+    const { admin, buildersByTable } = makeRecordingAdmin({
+      inventory_items: { data: [], count: 0, error: null },
+      item_stock_levels: { data: [], error: null },
+      item_images: { data: [], error: null },
+    });
+    createAdminClientMock.mockReturnValue(admin);
+
+    await loadInventoryDataset('org-1', 'wh-7', 'books');
+
+    for (const b of buildersByTable['inventory_items']!) {
+      const eqCalls = (b.eq as ReturnType<typeof vi.fn>).mock.calls as Array<[string, unknown]>;
+      expect(eqCalls).toEqual(
+        expect.arrayContaining([
+          ['warehouse_id', 'wh-7'],
+          ['item_type', 'book'],
+        ]),
+      );
+    }
+  });
+
+  it('rows are SHAPE-IDENTICAL to the paged v3 loader over the same underlying data (same assembleInventoryRows tail)', async () => {
+    const tables = {
+      ...emptyModuleGate,
+      inventory_items: { data: [baseItem], count: 1, error: null },
+      item_stock_levels: {
+        data: [
+          { item_id: 'i1', location_id: 'L1', quantity: 4, locations: { name: '1-A', kind: 'rack' } },
+          { item_id: 'i1', location_id: 'L2', quantity: 3, locations: { name: 'Stage', kind: 'staging' } },
+        ],
+        error: null,
+      },
+      item_images: {
+        data: [
+          {
+            item_id: 'i1',
+            storage_path: 'p/a.jpg',
+            thumb_path: 'p/a-thumb.webp',
+            lqip: 'blur',
+            is_primary: true,
+            sort_order: 0,
+          },
+        ],
+        error: null,
+      },
+    };
+
+    // Paged loader (its second wave reads the builders directly).
+    createAdminClientMock.mockReturnValue(makeAdmin(tables));
+    vi.mocked(fetchAllRows).mockResolvedValue([] as never); // value + trend sub-loaders
+    const paged = await loadInventoryList('org-1', 'all', 'items');
+
+    // Dataset loader over the same rows (its second wave rides
+    // fetchAllRows → invoke buildPage against the same tables).
+    vi.clearAllMocks();
+    fetchAllRowsInvokesBuildPage();
+    createAdminClientMock.mockReturnValue(makeRecordingAdmin(tables).admin);
+    const dataset = await loadInventoryDataset('org-1', 'all', 'items');
+
+    expect(dataset).not.toBeNull();
+    expect(dataset!.items).toEqual(paged.items);
+    expect(dataset!.placement).toEqual(paged.placement);
+    // Paths only, never URLs — same contract as the paged rows.
+    expect(dataset!.items[0]).not.toHaveProperty('image_url');
+    expect(dataset!.items[0]!.image_storage_path).toBe('p/a.jpg');
+    expect(signedUrlsMock).not.toHaveBeenCalled();
+  });
+
+  it('narrows the org-wide second wave to the dataset ids (foreign holdings/images never inflate the payload)', async () => {
+    fetchAllRowsInvokesBuildPage();
+    const { admin } = makeRecordingAdmin({
+      inventory_items: { data: [baseItem], count: 1, error: null },
+      item_stock_levels: {
+        data: [
+          { item_id: 'i1', location_id: 'L1', quantity: 2, locations: { name: '1-A', kind: 'rack' } },
+          { item_id: 'FOREIGN', location_id: 'L9', quantity: 9, locations: { name: '9-Z', kind: 'rack' } },
+        ],
+        error: null,
+      },
+      item_images: {
+        data: [
+          { item_id: 'FOREIGN', storage_path: 'p/foreign.jpg', thumb_path: null, lqip: null, is_primary: true, sort_order: 0 },
+          { item_id: 'i1', storage_path: 'p/own.jpg', thumb_path: null, lqip: null, is_primary: true, sort_order: 0 },
+        ],
+        error: null,
+      },
+    });
+    createAdminClientMock.mockReturnValue(admin);
+
+    const payload = await loadInventoryDataset('org-1', 'all', 'items');
+
+    expect(Object.keys(payload!.placement)).toEqual(['i1']);
+    expect(payload!.items[0]!.image_storage_path).toBe('p/own.jpg');
+  });
+
+  it('over-cap view → resolves null WITHOUT fetching rows, and the cached fn THROWS (so "too large" — like null — is never cached)', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({
+        inventory_items: { data: null, count: INSTANT_MODE_MAX_ROWS + 1, error: null },
+      }),
+    );
+
+    await expect(loadInventoryDataset('org-1', 'all', 'items')).resolves.toBeNull();
+    // The head count short-circuits before any row fetch.
+    expect(fetchAllRows).not.toHaveBeenCalled();
+
+    // THROW-DON'T-CACHE, verified at the seam: the fn handed to
+    // unstable_cache must REJECT for the over-cap org — a returned null
+    // would be written into the shared entry and served for a TTL.
+    const datasetCall = vi
+      .mocked(unstable_cache)
+      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v1');
+    expect(datasetCall).toBeDefined();
+    const cachedFn = datasetCall![0] as (o: string, w: string, v: string) => Promise<unknown>;
+    await expect(cachedFn('org-1', 'all', 'items')).rejects.toThrow(/INSTANT_MODE_MAX_ROWS/);
+  });
+
+  it('count-vs-fetch race (rows grew past the cap between the two queries) → null, never a truncated set', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({
+        inventory_items: { data: null, count: 10, error: null },
+      }),
+    );
+    vi.mocked(fetchAllRows).mockResolvedValueOnce(
+      Array.from({ length: INSTANT_MODE_MAX_ROWS + 1 }, (_, i) => ({ ...baseItem, id: `i${i}` })) as never,
+    );
+
+    await expect(loadInventoryDataset('org-1', 'all', 'items')).resolves.toBeNull();
+  });
+
+  it('REAL query errors still throw (page falls back to server mode; nothing cached)', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({
+        inventory_items: { data: null, count: null, error: { message: 'boom' } },
+      }),
+    );
+
+    await expect(loadInventoryDataset('org-1', 'all', 'items')).rejects.toThrow(
+      /count query failed: boom/,
+    );
+  });
+
+  it('caches under the SAME org tag revalidateInventoryList expires, keyPart inventory-dataset-v1, 60s TTL (write-path invalidation covers instant mode with zero extra wiring)', async () => {
+    fetchAllRowsInvokesBuildPage();
+    createAdminClientMock.mockReturnValue(
+      makeRecordingAdmin({
+        inventory_items: { data: [], count: 0, error: null },
+      }).admin,
+    );
+
+    await loadInventoryDataset('org-9', 'all', 'items');
+
+    const call = vi
+      .mocked(unstable_cache)
+      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v1') as
+      | [unknown, string[], { revalidate: number; tags: string[] }]
+      | undefined;
+    expect(call).toBeDefined();
+    expect(call![2].tags).toEqual([inventoryListTag('org-9')]);
+    expect(call![2].revalidate).toBe(60);
   });
 });
