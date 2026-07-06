@@ -219,52 +219,31 @@ export interface ThirtyDayMetrics {
   byType: Array<{ type: string; count: number; share: number }>;
 }
 
-/**
- * Real 30-day movement metrics for the dashboard charts. Replaces the
- * synthetic `barValues` + `breakdownRows` arrays the dashboard used to
- * render. Single round trip to stock_movements.
- */
-export async function getThirtyDayMetrics(
-  options: { warehouseId?: string | null; ctx?: ServiceContext } = {},
-): Promise<ThirtyDayMetrics> {
-  const ctx = options.ctx ?? (await withContext());
-  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  // Always inner-join inventory_items so we can filter out movements whose
-  // parent item has been soft-deleted. Without this the 30-day series
-  // double-counts events for SKUs that no longer exist on the dash.
-  // Paginated: a single .select() is silently capped at 1000 rows by PostgREST,
-  // and the old ascending order dropped the NEWEST days for any org with >1000
-  // movements in the 30-day window. Page by a stable id (day-bucketing below is
-  // order-independent).
-  const data = await fetchAllRows<{ movement_type: string; created_at: string }>(
-    (from, to) => {
-      let q = ctx.supabase
-        .from('stock_movements')
-        .select(
-          'movement_type, created_at, item:inventory_items!item_id!inner (warehouse_id, deleted_at)',
-        )
-        .eq('organization_id', ctx.organizationId)
-        .is('item.deleted_at', null)
-        .gte('created_at', since.toISOString());
-      if (options.warehouseId) q = q.eq('item.warehouse_id', options.warehouseId);
-      return q.order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{
-        data: { movement_type: string; created_at: string }[] | null;
-        error: { message: string } | null;
-      }>;
-    },
-    { cap: 100_000 },
-  );
+/** One row of dashboard_movement_metrics (migration 0224): a per
+ *  (day-bucket, movement_type) count. move_count is bigint → may arrive as a
+ *  number or a numeric string, so mapMovementMetrics coerces with Number(). */
+export interface MovementMetricRow {
+  day_index: number;
+  movement_type: string;
+  move_count: number | string | null;
+}
 
+/**
+ * Rolls dashboard_movement_metrics rows into the ThirtyDayMetrics shape the
+ * dashboard renders: dailyCounts[30] (Σ move_count per day-bucket) and byType
+ * (Σ per movement_type, sorted desc, share = count / max). Pure — exported so
+ * the parity suite can drive it with fixture rows. Reproduces the pre-0224 JS
+ * bucketing exactly (day_index already clamped to [0,29] by the RPC).
+ */
+export function mapMovementMetrics(rows: MovementMetricRow[]): ThirtyDayMetrics {
   const dailyCounts = new Array<number>(30).fill(0);
   const byTypeMap = new Map<string, number>();
-  const dayMs = 24 * 60 * 60 * 1000;
-  const startMs = since.getTime();
 
-  for (const r of data) {
-    const t = new Date(r.created_at).getTime();
-    const dayIdx = Math.min(29, Math.max(0, Math.floor((t - startMs) / dayMs)));
-    dailyCounts[dayIdx] = (dailyCounts[dayIdx] ?? 0) + 1;
-    byTypeMap.set(r.movement_type, (byTypeMap.get(r.movement_type) ?? 0) + 1);
+  for (const r of rows) {
+    const c = Number(r.move_count) || 0;
+    const d = r.day_index;
+    if (d >= 0 && d < 30) dailyCounts[d] = (dailyCounts[d] ?? 0) + c;
+    byTypeMap.set(r.movement_type, (byTypeMap.get(r.movement_type) ?? 0) + c);
   }
 
   const byTypeRaw = [...byTypeMap.entries()]
@@ -274,6 +253,33 @@ export async function getThirtyDayMetrics(
   const byType = byTypeRaw.map((r) => ({ ...r, share: r.count / max }));
 
   return { dailyCounts, byType };
+}
+
+/**
+ * Real 30-day movement metrics for the dashboard charts. Replaces the
+ * synthetic `barValues` + `breakdownRows` arrays the dashboard used to
+ * render.
+ *
+ * SCALE FIX (migration 0224): was `fetchAllRows` paging up to 100 000
+ * stock_movements into Node just to COUNT them per-day/per-type in JS
+ * (silently truncating past the 100k cap). Now a single set-based RPC returns
+ * only the per (day, type) counts — bounded by 30 × distinct-movement-types
+ * rows regardless of movement volume. dashboard_movement_metrics is SECURITY
+ * INVOKER and called via the USER client (ctx.supabase), so RLS on
+ * inventory_items keeps the exact per-warehouse/category scope the old
+ * inner-join had.
+ */
+export async function getThirtyDayMetrics(
+  options: { warehouseId?: string | null; ctx?: ServiceContext } = {},
+): Promise<ThirtyDayMetrics> {
+  const ctx = options.ctx ?? (await withContext());
+  const { data, error } = await ctx.supabase.rpc('dashboard_movement_metrics', {
+    p_organization_id: ctx.organizationId,
+    p_warehouse_id: options.warehouseId ?? null,
+    p_days: 30,
+  });
+  if (error) throw new ServiceError('internal_error', error.message);
+  return mapMovementMetrics((data ?? []) as MovementMetricRow[]);
 }
 
 export interface DashboardHistory {
@@ -302,22 +308,64 @@ export interface DashboardHistory {
  *  needs a daily snapshot table — deferred to a later phase. */
 export type HistoryRangeDays = 30 | 90;
 
+/** One row of dashboard_history_series (migration 0224). inventory_value is
+ *  numeric → may arrive as a number or a numeric string, so mapHistorySeries
+ *  coerces with Number(). */
+export interface HistorySeriesRow {
+  day_index: number;
+  item_count: number;
+  inventory_value: number | string | null;
+  low_out_count: number;
+}
+
 /**
- * Real 30-day history series for the dashboard StatCards. Replaces the
- * hardcoded sparkline arrays and fake deltas that lived in
- * apps/web/src/app/(dashboard)/dashboard/page.tsx. Pulls each org's
- * active inventory items + 30 days of movements (two queries) and
- * derives three series via reverse-walk.
+ * Maps dashboard_history_series rows into the three oldest→newest series arrays
+ * the StatCards + value widget consume. Pure — exported so the parity suite can
+ * drive it with fixture rows. day_index is the array index; rows may arrive in
+ * any order. The RPC emits exactly one row per day 0..rangeDays-1, so every
+ * slot is filled; the guard is defensive.
+ */
+export function mapHistorySeries(rows: HistorySeriesRow[], rangeDays: number): DashboardHistory {
+  const itemCountSeries = new Array<number>(rangeDays).fill(0);
+  const inventoryValueSeries = new Array<number>(rangeDays).fill(0);
+  const lowOutSeries = new Array<number>(rangeDays).fill(0);
+  for (const r of rows) {
+    const d = r.day_index;
+    if (d < 0 || d >= rangeDays) continue;
+    itemCountSeries[d] = Number(r.item_count) || 0;
+    const v = Number(r.inventory_value);
+    inventoryValueSeries[d] = Number.isFinite(v) ? v : 0;
+    lowOutSeries[d] = Number(r.low_out_count) || 0;
+  }
+  return { rangeDays, itemCountSeries, inventoryValueSeries, lowOutSeries };
+}
+
+/**
+ * Real N-day history series for the dashboard StatCards / value widget.
  *
- * Approximation notes:
- * - Items deleted in the last 30 days are excluded (we only know about
- *   items still active today). Their historical contribution is lost.
- * - unit_cost is treated as constant at today's value. If cost changed,
- *   historical valuations are slightly off.
- * - reorder_point is also treated as constant at today's value.
+ * SCALE FIX (migration 0224): this was THE #1 scale-blocking bug. The dashboard
+ * called this TWICE per login (30d + 90d), each time paging EVERY active item
+ * AND the whole stock_movements window into Node via uncapped fetchAllRows,
+ * then running an O(rangeDays × items) JS reverse-walk. At ~1M+ movements that
+ * meant 1000+ sequential PostgREST round trips + 100+MB of JS objects per
+ * render → Vercel timeout / Node OOM.
  *
- * For a finance-grade history we'd snapshot daily into a separate
- * table; this is a pragmatic dashboard-quality approximation.
+ * Now a single set-based RPC (dashboard_history_series) returns only the
+ * ~rangeDays daily rows the chart renders. The RPC reproduces the reverse-walk
+ * math EXACTLY (asserted by the vitest parity suite + 0224 pgTAP): valueToday
+ * minus the reverse-cumulative per-day value delta, per-item qty reconstruction
+ * for the low/out count, and the created_at forward sweep for item count.
+ *
+ * SECURITY: dashboard_history_series is SECURITY INVOKER and is called via the
+ * USER client (ctx.supabase), so RLS on inventory_items enforces the SAME
+ * per-warehouse/category scope the old inline item query relied on — a
+ * warehouse-restricted user still sees only their warehouses' numbers.
+ *
+ * Approximation notes (unchanged from the JS version — the RPC mirrors them):
+ * - Items deleted since the window opened are excluded (only items still
+ *   active today are known); their historical contribution is lost.
+ * - unit_cost and reorder_point are treated as constant at today's value.
+ * For a finance-grade history we'd snapshot daily into a separate table.
  */
 export async function getDashboardHistory(
   options: {
@@ -330,138 +378,13 @@ export async function getDashboardHistory(
 ): Promise<DashboardHistory> {
   const ctx = options.ctx ?? (await withContext());
   const rangeDays: number = options.rangeDays ?? 30;
-  const dayMs = 24 * 60 * 60 * 1000;
-  const now = Date.now();
-  const startMs = now - rangeDays * dayMs;
-
-  // 1 & 2. Items in scope + 30-day movements. These are independent —
-  // run them concurrently to halve the wall-clock for this function.
-  // Previously they were sequential, costing ~1 RTT extra per dashboard
-  // render.
-  type ItemRow = {
-    id: string;
-    created_at: string;
-    quantity_on_hand: number | null;
-    unit_cost: number | null;
-    reorder_point: number | null;
-  };
-
-  // Paginate BOTH selects through fetchAllRows: a single .select() is silently
-  // capped at 1000 rows (PostgREST max_rows), which on a large org would
-  // undercount inventory value (>1000 active items) or movements (>1000 in the
-  // window) and quietly skew the whole dashboard history (audit 2026-06-09).
-  // Stable .order('id') is required so no row lands on two pages / none.
-  const itemsPage = (from: number, to: number) => {
-    let q = ctx.supabase
-      .from('inventory_items')
-      .select('id, created_at, quantity_on_hand, unit_cost, reorder_point')
-      .eq('organization_id', ctx.organizationId)
-      .eq('status', 'active')
-      .is('deleted_at', null);
-    if (options.warehouseId) q = q.eq('warehouse_id', options.warehouseId);
-    return q.order('id', { ascending: true }).range(from, to);
-  };
-
-  type MovRow = { item_id: string; quantity_change: number; created_at: string };
-  const movSelect = options.warehouseId
-    ? 'item_id, quantity_change, created_at, item:inventory_items!item_id!inner (warehouse_id)'
-    : 'item_id, quantity_change, created_at';
-  const movPage = (from: number, to: number) => {
-    let q = ctx.supabase
-      .from('stock_movements')
-      .select(movSelect)
-      .eq('organization_id', ctx.organizationId)
-      .gte('created_at', new Date(startMs).toISOString());
-    if (options.warehouseId) q = q.eq('item.warehouse_id', options.warehouseId);
-    // The dynamic embed `select()` string can't be statically typed by the
-    // PostgREST type parser, so cast to the page shape fetchAllRows expects.
-    return q.order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{
-      data: MovRow[] | null;
-      error: { message: string } | null;
-    }>;
-  };
-
-  const [items, movData] = await Promise.all([
-    fetchAllRows<ItemRow>(itemsPage),
-    fetchAllRows<MovRow>(movPage),
-  ]);
-
-  // Mutable per-item state (reverse-walked through movements below).
-  const qtyById = new Map<string, number>();
-  const costById = new Map<string, number>();
-  const reorderById = new Map<string, number>();
-  const createdAtTimes: number[] = [];
-  let valueToday = 0;
-  for (const r of items) {
-    const qty = Number(r.quantity_on_hand) || 0;
-    const cost = Number(r.unit_cost) || 0;
-    const reorder = Number(r.reorder_point) || 0;
-    qtyById.set(r.id, qty);
-    costById.set(r.id, cost);
-    reorderById.set(r.id, reorder);
-    createdAtTimes.push(new Date(r.created_at).getTime());
-    valueToday += qty * cost;
-  }
-
-  // Bucket movements by day so we can replay them in reverse order.
-  type Move = { item_id: string; quantity_change: number };
-  const lastIdx = rangeDays - 1;
-  const movesByDay: Move[][] = Array.from({ length: rangeDays }, () => []);
-  for (const r of (movData ?? []) as unknown as Array<{
-    item_id: string;
-    quantity_change: number;
-    created_at: string;
-  }>) {
-    const t = new Date(r.created_at).getTime();
-    const dayIdx = Math.min(lastIdx, Math.max(0, Math.floor((t - startMs) / dayMs)));
-    movesByDay[dayIdx]!.push({
-      item_id: r.item_id,
-      quantity_change: Number(r.quantity_change) || 0,
-    });
-  }
-
-  // 3. Reverse-walk: last index = today (current state), then undo each day's
-  //    movements to recover the previous day's end-of-day state.
-  const inventoryValueSeries = new Array<number>(rangeDays).fill(0);
-  const lowOutSeries = new Array<number>(rangeDays).fill(0);
-  let value = valueToday;
-
-  const countLowOut = () => {
-    let n = 0;
-    for (const [id, qty] of qtyById) {
-      const reorder = reorderById.get(id) ?? 0;
-      if (reorder > 0 && qty <= reorder) n++;
-      else if (qty <= 0) n++;
-    }
-    return n;
-  };
-
-  for (let d = lastIdx; d >= 0; d--) {
-    inventoryValueSeries[d] = value;
-    lowOutSeries[d] = countLowOut();
-    // Undo this day's movements to step back to (d-1)'s end-of-day state.
-    const today = movesByDay[d] ?? [];
-    for (const m of today) {
-      const cost = costById.get(m.item_id);
-      if (cost === undefined) continue; // item no longer exists
-      value -= m.quantity_change * cost;
-      const prev = qtyById.get(m.item_id) ?? 0;
-      qtyById.set(m.item_id, prev - m.quantity_change);
-    }
-  }
-
-  // 4. Item-count series from created_at. itemCountSeries[d] = items where
-  //    created_at <= end of day d. Sort once, single forward sweep.
-  const sorted = [...createdAtTimes].sort((a, b) => a - b);
-  const itemCountSeries = new Array<number>(rangeDays).fill(0);
-  let cursor = 0;
-  for (let d = 0; d < rangeDays; d++) {
-    const dayEnd = startMs + (d + 1) * dayMs;
-    while (cursor < sorted.length && sorted[cursor]! <= dayEnd) cursor++;
-    itemCountSeries[d] = cursor;
-  }
-
-  return { rangeDays, itemCountSeries, inventoryValueSeries, lowOutSeries };
+  const { data, error } = await ctx.supabase.rpc('dashboard_history_series', {
+    p_organization_id: ctx.organizationId,
+    p_warehouse_id: options.warehouseId ?? null,
+    p_days: rangeDays,
+  });
+  if (error) throw new ServiceError('internal_error', error.message);
+  return mapHistorySeries((data ?? []) as HistorySeriesRow[], rangeDays);
 }
 
 /**

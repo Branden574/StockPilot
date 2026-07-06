@@ -40,6 +40,7 @@ vi.mock('./context', async () => {
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import {
   MovementsService,
+  getDashboardHistory,
   getDashboardSummary,
   getThirtyDayMetrics,
 } from './movements';
@@ -252,15 +253,16 @@ describe('getDashboardSummary', () => {
 });
 
 describe('getThirtyDayMetrics', () => {
-  it('buckets per-day counts and aggregates byType sorted desc with share', async () => {
-    const now = Date.now();
-    const dayMs = 24 * 60 * 60 * 1000;
+  // Post-0224: getThirtyDayMetrics calls the dashboard_movement_metrics RPC
+  // (per day-bucket + movement_type counts) and rolls the rows up in JS. These
+  // tests drive that mapping via a stubbed RPC. The bucket-vs-individual-count
+  // equivalence to the pre-0224 JS path is proven in dashboard-metrics-parity.
+  it('rolls RPC (day,type) counts into dailyCounts + byType sorted desc with share', async () => {
     const stub = makeSupabaseStub({
-      'stock_movements.select': {
+      'rpc:dashboard_movement_metrics': {
         data: [
-          { movement_type: 'adjust', created_at: new Date(now - 2 * dayMs).toISOString() },
-          { movement_type: 'adjust', created_at: new Date(now - 2 * dayMs).toISOString() },
-          { movement_type: 'transfer', created_at: new Date(now - 5 * dayMs).toISOString() },
+          { day_index: 5, movement_type: 'adjust', move_count: 2 },
+          { day_index: 2, movement_type: 'transfer', move_count: 1 },
         ],
         error: null,
       },
@@ -268,18 +270,47 @@ describe('getThirtyDayMetrics', () => {
     mockedCtx.value = makeServiceContext(stub.client);
 
     const metrics = await getThirtyDayMetrics();
+
+    expect(stub.rpcCalls).toEqual([
+      {
+        name: 'dashboard_movement_metrics',
+        args: { p_organization_id: 'org-test', p_warehouse_id: null, p_days: 30 },
+      },
+    ]);
     expect(metrics.dailyCounts).toHaveLength(30);
     // Total events distributed across the 30-day window equals 3.
     const total = metrics.dailyCounts.reduce((s, n) => s + n, 0);
     expect(total).toBe(3);
+    expect(metrics.dailyCounts[5]).toBe(2);
+    expect(metrics.dailyCounts[2]).toBe(1);
 
     expect(metrics.byType[0]).toEqual({ type: 'adjust', count: 2, share: 1 });
     expect(metrics.byType[1]).toEqual({ type: 'transfer', count: 1, share: 0.5 });
   });
 
-  it('returns empty buckets and empty byType when no rows exist', async () => {
+  it('coerces bigint move_count strings and sums same-type rows across days', async () => {
     const stub = makeSupabaseStub({
-      'stock_movements.select': { data: [], error: null },
+      'rpc:dashboard_movement_metrics': {
+        data: [
+          { day_index: 1, movement_type: 'adjust', move_count: '3' },
+          { day_index: 9, movement_type: 'adjust', move_count: '4' },
+          { day_index: 9, movement_type: 'receive_po', move_count: '4' },
+        ],
+        error: null,
+      },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const metrics = await getThirtyDayMetrics();
+    // adjust = 3 + 4 = 7 across two days; receive_po = 4.
+    expect(metrics.byType[0]).toEqual({ type: 'adjust', count: 7, share: 1 });
+    expect(metrics.byType[1]).toEqual({ type: 'receive_po', count: 4, share: 4 / 7 });
+    expect(metrics.dailyCounts.reduce((s, n) => s + n, 0)).toBe(11);
+  });
+
+  it('returns empty buckets and empty byType when the RPC returns no rows', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:dashboard_movement_metrics': { data: [], error: null },
     });
     mockedCtx.value = makeServiceContext(stub.client);
 
@@ -289,20 +320,105 @@ describe('getThirtyDayMetrics', () => {
     expect(metrics.dailyCounts).toHaveLength(30);
   });
 
-  it('adds item.warehouse_id eq filter when warehouseId is set', async () => {
+  it('passes p_warehouse_id when warehouseId is set', async () => {
     const stub = makeSupabaseStub({
-      'stock_movements.select': { data: [], error: null },
+      'rpc:dashboard_movement_metrics': { data: [], error: null },
     });
     mockedCtx.value = makeServiceContext(stub.client);
 
     await getThirtyDayMetrics({ warehouseId: 'wh-x' });
 
-    const chain = stub.chains.get('stock_movements.select') ?? [];
-    const args = stub.chainArgs.get('stock_movements.select') ?? [];
-    const eqCalls = chain
-      .map((m, i) => ({ m, args: args[i] }))
-      .filter((c) => c.m === 'eq');
-    const eqMap = new Map(eqCalls.map((c) => [c.args![0] as string, c.args![1]]));
-    expect(eqMap.get('item.warehouse_id')).toBe('wh-x');
+    expect(stub.rpcCalls).toEqual([
+      {
+        name: 'dashboard_movement_metrics',
+        args: { p_organization_id: 'org-test', p_warehouse_id: 'wh-x', p_days: 30 },
+      },
+    ]);
+  });
+
+  it('throws ServiceError when the RPC errors', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:dashboard_movement_metrics': { data: null, error: { message: 'boom' } },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    await expect(getThirtyDayMetrics()).rejects.toBeInstanceOf(ServiceError);
+  });
+});
+
+describe('getDashboardHistory', () => {
+  // Post-0224: getDashboardHistory calls the dashboard_history_series RPC (one
+  // row per day: item_count, inventory_value, low_out_count) and maps rows into
+  // the three oldest→newest series arrays. Parity with the old reverse-walk is
+  // proven in dashboard-history-parity; these tests cover the wiring + mapping.
+  it('maps RPC rows into the three series and calls with default 30-day window', async () => {
+    const rows = [
+      { day_index: 0, item_count: 4, inventory_value: 100, low_out_count: 1 },
+      { day_index: 1, item_count: 5, inventory_value: 150.25, low_out_count: 0 },
+      { day_index: 2, item_count: 6, inventory_value: 200, low_out_count: 2 },
+    ];
+    // Real windows are 30/90 rows; three rows keep the assertion readable.
+    const stub = makeSupabaseStub({
+      'rpc:dashboard_history_series': { data: rows, error: null },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const history = await getDashboardHistory();
+
+    expect(stub.rpcCalls).toEqual([
+      {
+        name: 'dashboard_history_series',
+        args: { p_organization_id: 'org-test', p_warehouse_id: null, p_days: 30 },
+      },
+    ]);
+    expect(history.rangeDays).toBe(30);
+    expect(history.itemCountSeries).toHaveLength(30);
+    expect(history.itemCountSeries.slice(0, 3)).toEqual([4, 5, 6]);
+    expect(history.inventoryValueSeries.slice(0, 3)).toEqual([100, 150.25, 200]);
+    expect(history.lowOutSeries.slice(0, 3)).toEqual([1, 0, 2]);
+  });
+
+  it('coerces numeric-string inventory_value and tolerates out-of-order rows', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:dashboard_history_series': {
+        data: [
+          { day_index: 2, item_count: 6, inventory_value: '200.0000', low_out_count: 2 },
+          { day_index: 0, item_count: 4, inventory_value: '100.5000', low_out_count: 1 },
+        ],
+        error: null,
+      },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const history = await getDashboardHistory();
+    expect(history.inventoryValueSeries[0]).toBe(100.5);
+    expect(history.inventoryValueSeries[2]).toBe(200);
+  });
+
+  it('passes rangeDays as p_days and p_warehouse_id through', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:dashboard_history_series': { data: [], error: null },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const history = await getDashboardHistory({ warehouseId: 'wh-x', rangeDays: 90 });
+
+    expect(stub.rpcCalls).toEqual([
+      {
+        name: 'dashboard_history_series',
+        args: { p_organization_id: 'org-test', p_warehouse_id: 'wh-x', p_days: 90 },
+      },
+    ]);
+    expect(history.rangeDays).toBe(90);
+    expect(history.itemCountSeries).toHaveLength(90);
+  });
+
+  it('throws ServiceError when the RPC errors', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:dashboard_history_series': { data: null, error: { message: 'boom' } },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    await expect(getDashboardHistory()).rejects.toBeInstanceOf(ServiceError);
   });
 });
