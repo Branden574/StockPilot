@@ -52,7 +52,7 @@ import 'server-only';
 //   • rows+placement   (org, warehouseKey, view)  'inventory-list-v3'
 //   • lookup tables    (org)                      'inventory-lookups-v1'
 //   • valueOnHand      (org, warehouseKey, view)  'inventory-value-v1'
-//   • trend buckets    (org)                      'inventory-trend-buckets-v1'
+//   • trend buckets    (org)                      'inventory-trend-buckets-v2'
 //   • INSTANT dataset  (org, warehouseKey, view)  'inventory-dataset-v1'
 //     (full ≤INSTANT_MODE_MAX_ROWS row set for client-side instant mode;
 //      over-cap views THROW a sentinel → wrapper returns null, uncached)
@@ -63,10 +63,12 @@ import 'server-only';
 // org-wide trend buckets, so a filter navigation only pays for
 // rows + placement + image resolution.
 //   • Trend buckets are ORG-WIDE (every item's 14-day movement
-//     aggregates); the per-row sparkline series are derived per request
-//     from whatever rows the current filter surfaced, with the same
-//     shared math getItemTrends uses (lib/item-trends.ts) — so any
-//     filtered row set gets series identical to the live path's.
+//     aggregates), cold-filled by ONE SQL aggregate RPC
+//     (inventory_trend_buckets, migration 0223 — service-role-only);
+//     the per-row sparkline series are derived per request from
+//     whatever rows the current filter surfaced, with the same shared
+//     math getItemTrends uses (lib/item-trends.ts) — so any filtered
+//     row set gets series identical to the live path's.
 //   • valueOnHand is NOT reused on filtered views: InventoryService.
 //     list()'s footer sum mirrors the active filters (q/cat/loc/charter/
 //     stock/status/type), so the filtered figure must come from the live
@@ -84,11 +86,12 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { withContext, type ServiceContext } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
 import {
-  bucketTrendMovements,
+  bucketsFromTrendAggregates,
   deriveItemTrend,
   TREND_WINDOW_DAYS,
   type ItemTrend,
   type ItemTrendBuckets,
+  type TrendAggregateRow,
 } from '@/server/services/lib/item-trends';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
@@ -932,11 +935,17 @@ async function loadInventoryValueOnHandUncached(
  * and are invalidated by every stock-writing path via the shared tag,
  * so the anchor drifts at most one TTL from request time — the same
  * staleness class the fully-cached default view has always had.
+ *
+ * keyPart is v2 (was v1): the cold fill moved from a JS bucketing pass
+ * over paged raw rows to the inventory_trend_buckets SQL aggregate
+ * (migration 0223). Same value shape, different provenance — the bump
+ * orphans the v1 entries deliberately (one cheap recompute per org,
+ * covered by the prewarm cron) instead of mixing provenances in one key.
  */
 export async function loadInventoryTrendBuckets(
   organizationId: string,
 ): Promise<ItemTrendBuckets> {
-  const cached = unstable_cache(loadInventoryTrendBucketsUncached, ['inventory-trend-buckets-v1'], {
+  const cached = unstable_cache(loadInventoryTrendBucketsUncached, ['inventory-trend-buckets-v2'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
@@ -947,29 +956,26 @@ async function loadInventoryTrendBucketsUncached(
   organizationId: string,
 ): Promise<ItemTrendBuckets> {
   const admin = createAdminClient();
-  const startMs = Date.now() - TREND_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
-  // Same projection/window/cap as getItemTrends, minus its `.in(item_id,
-  // …)` narrowing — org-wide so the buckets cover any filtered row set.
-  // fetchAllRows THROWS on any page error → a failed pass is never
-  // cached.
-  const rows = await fetchAllRows<{
-    item_id: string;
-    quantity_change: number;
-    created_at: string;
-  }>(
-    (from, to) =>
-      admin
-        .from('stock_movements')
-        .select('item_id, quantity_change, created_at')
-        .eq('organization_id', organizationId)
-        .gte('created_at', new Date(startMs).toISOString())
-        .order('id', { ascending: true })
-        .range(from, to),
-    { cap: 100_000 },
-  );
+  // ONE SQL aggregate round trip (cold-start plan item 2, migration
+  // 0223) instead of paging every org movement row in the window
+  // through sequential 1000-row PostgREST pages. The RPC reproduces
+  // getItemTrends' window semantics (org + 14×24h created_at window, no
+  // other narrowing) and bucketTrendMovements' day math exactly —
+  // asserted by the vitest parity suite and the 0223 pgTAP behavioral
+  // test. SECURITY: execute is revoked from anon/authenticated; only
+  // this service-role client may call it, and the ORG SCOPE comes from
+  // the loader's own cache key — never from user input.
+  const { data, error } = await admin.rpc('inventory_trend_buckets', {
+    p_organization_id: organizationId,
+    p_days: TREND_WINDOW_DAYS,
+  });
+  // THROW-DON'T-CACHE: an RPC error must skip the unstable_cache write.
+  if (error) {
+    throw new Error(`inventory-list trend-buckets rpc failed: ${error.message}`);
+  }
 
-  return bucketTrendMovements(rows, startMs);
+  return bucketsFromTrendAggregates((data ?? []) as TrendAggregateRow[]);
 }
 
 /**

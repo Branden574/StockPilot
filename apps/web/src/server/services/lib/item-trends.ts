@@ -1,9 +1,10 @@
 // Pure 14-day item-trend math, shared by:
 //   • movements.ts getItemTrends() — the live path (fetches only the
 //     requested items' movements, then buckets + derives here), and
-//   • loaders/inventory-list.ts — the cached path (caches ORG-WIDE
-//     movement buckets once per org, then derives per request for
-//     whatever rows the current filter surfaced).
+//   • loaders/inventory-list.ts — the cached path (fills ORG-WIDE
+//     buckets once per org via the inventory_trend_buckets SQL aggregate
+//     — migration 0223, mapped here by bucketsFromTrendAggregates — then
+//     derives per request for whatever rows the current filter surfaced).
 // Keeping the bucketing + reverse-walk in ONE place is what guarantees
 // the cached filtered views and the live path produce identical series
 // for identical inputs. No imports (not even 'server-only') so the
@@ -62,6 +63,48 @@ export function bucketTrendMovements(
     const bucket = days[dayIdx]!;
     bucket.change += Number(r.quantity_change) || 0;
     bucket.count += 1;
+  }
+  return buckets;
+}
+
+/**
+ * One row of the SQL aggregate `inventory_trend_buckets` (migration
+ * 0223): per (item, day-bucket) sums over the same window/clamp math as
+ * bucketTrendMovements. numeric/bigint may arrive from PostgREST as
+ * strings depending on the client — both fields are coerced on mapping.
+ */
+export interface TrendAggregateRow {
+  item_id: string;
+  day_index: number;
+  quantity_change: number | string;
+  move_count: number | string;
+}
+
+/**
+ * Maps the RPC's aggregate rows into the exact ItemTrendBuckets shape
+ * bucketTrendMovements produces from raw rows (asserted bucket-for-bucket
+ * by the parity test in loaders/inventory-list.test.ts): items with any
+ * aggregate row get a full TREND_WINDOW_DAYS array with untouched days at
+ * {change: 0, count: 0}; items with no rows get no entry (deriveItemTrend
+ * treats that as "no movements" — flat series). day_index is re-clamped
+ * defensively; the SQL already clamps identically.
+ */
+export function bucketsFromTrendAggregates(
+  rows: ReadonlyArray<TrendAggregateRow>,
+): ItemTrendBuckets {
+  const buckets: ItemTrendBuckets = {};
+  for (const r of rows) {
+    const days = (buckets[r.item_id] ??= Array.from({ length: TREND_WINDOW_DAYS }, () => ({
+      change: 0,
+      count: 0,
+    })));
+    const idx = Math.min(
+      TREND_WINDOW_DAYS - 1,
+      Math.max(0, Math.floor(Number(r.day_index) || 0)),
+    );
+    const bucket = days[idx]!;
+    bucket.change += Number(r.quantity_change) || 0;
+    bucket.count += Number(r.move_count) || 0;
   }
   return buckets;
 }

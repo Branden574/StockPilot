@@ -51,6 +51,11 @@ import type { Permission } from '@stockpilot/core';
 
 import { isSiteLocation } from '@/lib/locations/groups';
 import { withContext, type ServiceContext } from '@/server/services/context';
+import {
+  bucketsFromTrendAggregates,
+  bucketTrendMovements,
+  type TrendAggregateRow,
+} from '@/server/services/lib/item-trends';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { getItemTrends } from '@/server/services/movements';
 
@@ -217,11 +222,15 @@ function makeBuilder(result: unknown) {
   return builder;
 }
 
-function makeAdmin(resultsByTable: Record<string, unknown>) {
+function makeAdmin(
+  resultsByTable: Record<string, unknown>,
+  rpcResults: Record<string, unknown> = {},
+) {
   return {
     from: vi.fn((table: string) =>
       makeBuilder(resultsByTable[table] ?? { data: [], error: null }),
     ),
+    rpc: vi.fn((fn: string) => Promise.resolve(rpcResults[fn] ?? { data: [], error: null })),
   };
 }
 
@@ -683,15 +692,81 @@ describe('loadInventoryTrendBuckets + deriveInventoryTrends (filtered-view trend
 
   const dayMs = 24 * 60 * 60 * 1000;
 
-  it('derives series IDENTICAL to the live getItemTrends for the same movements (cached-vs-live parity)', async () => {
-    const now = Date.now();
-    // Mid-day offsets so the two paths' independently computed window
-    // anchors (ms apart) can never flip a movement across a day bucket.
-    const movementRows = [
+  /**
+   * Independent simulation of migration 0223's SQL aggregate over raw
+   * movement rows: WHERE created_at >= start_at, day_index =
+   * clamp(floor(epoch diff / 86400), 0, 13), GROUP BY (item, day) with
+   * SUM(quantity_change) + COUNT(*). Deliberately NOT written in terms
+   * of bucketTrendMovements so the parity assertions compare two
+   * implementations rather than one with itself. (The DB-side twin of
+   * this simulation is the behavioral results_eq in
+   * supabase/tests/0223_inventory_trend_buckets.test.sql.)
+   */
+  function simulateTrendAggregateRpc(
+    rows: ReadonlyArray<{ item_id: string; quantity_change: number; created_at: string }>,
+    startMs: number,
+  ): TrendAggregateRow[] {
+    const groups = new Map<string, { item_id: string; day_index: number; quantity_change: number; move_count: number }>();
+    for (const r of rows) {
+      const t = new Date(r.created_at).getTime();
+      if (t < startMs) continue; // WHERE sm.created_at >= params.start_at
+      const dayIdx = Math.min(13, Math.max(0, Math.floor((t - startMs) / dayMs)));
+      const key = `${r.item_id}|${dayIdx}`;
+      const g = groups.get(key) ?? {
+        item_id: r.item_id,
+        day_index: dayIdx,
+        quantity_change: 0,
+        move_count: 0,
+      };
+      g.quantity_change += r.quantity_change;
+      g.move_count += 1;
+      groups.set(key, g);
+    }
+    return [...groups.values()];
+  }
+
+  // Mid-day offsets so independently computed window anchors (ms apart)
+  // can never flip a movement across a day bucket. All rows sit INSIDE
+  // the window or in the future: the production query/RPC both filter
+  // created_at >= start, so an out-of-window row can never reach the JS
+  // bucketing (whose lower clamp only ever fires on the boundary row).
+  function fixtureMovements(now: number) {
+    return [
+      // i1: two movements in the SAME day bucket (aggregation), a third
+      // in another day, and a FUTURE-dated row (clamps to day 13 on both
+      // paths — reachable in prod: the window has no upper bound).
       { item_id: 'i1', quantity_change: 5, created_at: new Date(now - 2.5 * dayMs).toISOString() },
+      { item_id: 'i1', quantity_change: -3, created_at: new Date(now - 2.6 * dayMs).toISOString() },
       { item_id: 'i1', quantity_change: -2, created_at: new Date(now - 0.5 * dayMs).toISOString() },
+      { item_id: 'i1', quantity_change: 4, created_at: new Date(now + 0.1 * dayMs).toISOString() },
+      // i2: single movement near the old edge of the window.
       { item_id: 'i2', quantity_change: 7, created_at: new Date(now - 12.5 * dayMs).toISOString() },
     ];
+  }
+
+  it('old JS bucketing and the RPC aggregate mapping produce DEEP-EQUAL buckets for identical fixture movements (provenance parity)', () => {
+    const startMs = Date.now() - 14 * dayMs;
+    const movementRows = fixtureMovements(startMs + 14 * dayMs);
+
+    // (a) the pre-0223 cold-fill math: bucket raw rows in JS.
+    const jsBuckets = bucketTrendMovements(movementRows, startMs);
+    // (b) the new cold fill: simulated SQL aggregate → mapper.
+    const rpcBuckets = bucketsFromTrendAggregates(
+      simulateTrendAggregateRpc(movementRows, startMs),
+    );
+
+    expect(rpcBuckets).toEqual(jsBuckets);
+    // Spot-check the aggregation actually merged the same-day pair and
+    // clamped the future row rather than trivially matching on emptiness.
+    expect(rpcBuckets['i1']![11]).toEqual({ change: 2, count: 2 }); // 5 + (−3)
+    expect(rpcBuckets['i1']![13]).toEqual({ change: 2, count: 2 }); // −2 + clamped +4
+    expect(rpcBuckets['i2']![1]).toEqual({ change: 7, count: 1 });
+    expect(Object.keys(rpcBuckets).sort()).toEqual(['i1', 'i2']);
+  });
+
+  it('derives series IDENTICAL to the live getItemTrends for the same movements (cached-vs-live parity)', async () => {
+    const now = Date.now();
+    const movementRows = fixtureMovements(now);
     const pageItems = [
       { id: 'i1', quantityOnHand: 10 },
       { id: 'i2', quantityOnHand: 7 },
@@ -704,11 +779,28 @@ describe('loadInventoryTrendBuckets + deriveInventoryTrends (filtered-view trend
       ctx: { organizationId: 'org-1', supabase: {} } as unknown as ServiceContext,
     });
 
-    // CACHED path: org-wide buckets → per-request derivation.
-    vi.mocked(fetchAllRows).mockResolvedValueOnce(movementRows as never);
-    createAdminClientMock.mockReturnValue(makeAdmin({}));
+    // CACHED path: the cold fill is now ONE RPC (migration 0223) — feed
+    // the loader the SQL aggregate simulated over the SAME raw rows.
+    const admin = makeAdmin(
+      {},
+      {
+        inventory_trend_buckets: {
+          data: simulateTrendAggregateRpc(movementRows, Date.now() - 14 * dayMs),
+          error: null,
+        },
+      },
+    );
+    createAdminClientMock.mockReturnValue(admin);
     const buckets = await loadInventoryTrendBuckets('org-1');
     const derived = deriveInventoryTrends(pageItems, buckets);
+
+    // The org scope must come from the loader's argument (cache key),
+    // and the window from the shared TREND_WINDOW_DAYS constant.
+    expect(admin.rpc).toHaveBeenCalledTimes(1);
+    expect(admin.rpc).toHaveBeenCalledWith('inventory_trend_buckets', {
+      p_organization_id: 'org-1',
+      p_days: 14,
+    });
 
     expect(derived).toEqual(live);
     // Shape parity: EVERY requested row gets a series, even with no
@@ -720,11 +812,24 @@ describe('loadInventoryTrendBuckets + deriveInventoryTrends (filtered-view trend
     expect(derived.get('i1')!.qtySeries[13]).toBe(10);
   });
 
-  it('throws (never caches) when the movements pagination fails', async () => {
-    vi.mocked(fetchAllRows).mockRejectedValueOnce(new Error('movements page failed'));
-    createAdminClientMock.mockReturnValue(makeAdmin({}));
+  it('coerces string-typed numeric/bigint aggregate values (PostgREST may serialize numerics as strings)', () => {
+    const buckets = bucketsFromTrendAggregates([
+      { item_id: 'i1', day_index: 3, quantity_change: '2.5', move_count: '4' },
+    ]);
+    expect(buckets['i1']![3]).toEqual({ change: 2.5, count: 4 });
+  });
 
-    await expect(loadInventoryTrendBuckets('org-1')).rejects.toThrow('movements page failed');
+  it('throws (never caches) when the RPC fails', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin(
+        {},
+        { inventory_trend_buckets: { data: null, error: { message: 'rpc boom' } } },
+      ),
+    );
+
+    await expect(loadInventoryTrendBuckets('org-1')).rejects.toThrow(
+      'inventory-list trend-buckets rpc failed: rpc boom',
+    );
   });
 });
 
@@ -755,7 +860,9 @@ describe('sub-loader cache wiring', () => {
     expect(calls.map(([, keyParts]) => keyParts[0]).sort()).toEqual([
       'inventory-list-v3',
       'inventory-lookups-v1',
-      'inventory-trend-buckets-v1',
+      // v2 = cold fill moved to the inventory_trend_buckets SQL
+      // aggregate (mig 0223); provenance changed, so the key bumped.
+      'inventory-trend-buckets-v2',
       'inventory-value-v1',
     ]);
     for (const [, keyParts, opts] of calls) {
