@@ -13,12 +13,28 @@ import { formatRelative } from '@/lib/utils';
 
 import { can } from '@stockpilot/core';
 
+const LINE_PAGE_SIZE = 50;
+
+type DetailSearchParams = {
+  page?: string;
+  q?: string;
+  filter?: string;
+};
+
 export default async function CycleCountDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<DetailSearchParams>;
 }) {
   const { id } = await params;
+  const sp = await searchParams;
+  const requestedPage = Math.max(1, Number(sp.page) || 1);
+  const search = (sp.q ?? '').trim();
+  const filter: 'all' | 'uncounted' | 'variance' =
+    sp.filter === 'uncounted' || sp.filter === 'variance' ? sp.filter : 'all';
+
   const [ccSvc, warehousesSvc, ctx, supabase] = await Promise.all([
     CycleCountsService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
@@ -26,9 +42,14 @@ export default async function CycleCountDetailPage({
     createClient(),
   ]);
 
-  let header, lines;
+  let header, lines, summary, total, pageSize, page;
   try {
-    ({ header, lines } = await ccSvc.get(id));
+    ({ header, lines, summary, total, pageSize, page } = await ccSvc.getDetailPage(id, {
+      page: requestedPage,
+      pageSize: LINE_PAGE_SIZE,
+      search,
+      filter,
+    }));
   } catch (e) {
     if (e instanceof ServiceError && e.code === 'not_found') notFound();
     throw e;
@@ -141,6 +162,12 @@ export default async function CycleCountDetailPage({
       <CycleCountDetail
         header={header}
         lines={lines}
+        summary={summary}
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        search={search}
+        filter={filter}
         canAssign={canAssign}
         members={members}
         assigneeName={assigneeName}

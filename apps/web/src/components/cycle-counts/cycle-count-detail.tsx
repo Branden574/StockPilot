@@ -1,7 +1,8 @@
 'use client';
 
 import { Loader2, Search, UserCircle2, X } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -41,8 +42,10 @@ import {
 } from '@/server/actions/cycle-counts';
 
 import type {
+  CycleCountLineFilter,
   CycleCountLineWithItem,
   CycleCountRow,
+  CycleCountSummary,
 } from '@/server/services/cycle-counts';
 
 interface Member {
@@ -53,7 +56,25 @@ interface Member {
 
 interface Props {
   header: CycleCountRow;
+  /** ONE server-paginated + searched + filtered page of lines. */
   lines: CycleCountLineWithItem[];
+  /** Whole-count roll-up (every line) — the stat cards + post dialog read
+      this instead of deriving from the page, which only holds pageSize
+      lines now. */
+  summary: CycleCountSummary;
+  /** 1-based page ACTUALLY RENDERED — the server's effective page, which
+      getDetailPage clamps to the real last page when the URL's ?page= is
+      past the end (e.g. after counting the last `uncounted` line,
+      router.refresh() re-requests a now-empty window). Never derive this
+      from the URL param. */
+  page: number;
+  pageSize: number;
+  /** Filtered total (matches search + filter) — drives the page controls. */
+  total: number;
+  /** Current server-side search term (from ?q). */
+  search: string;
+  /** Current server-side filter (from ?filter). */
+  filter: CycleCountLineFilter;
   /** Whether the current user has cycle_counts:assign (manager / admin /
       owner). When false, the AssigneePicker renders read-only. */
   canAssign?: boolean;
@@ -64,8 +85,8 @@ interface Props {
       read-only badge has a name to show. */
   assigneeName?: string | null;
   /** Live count of items in scope right now (org-active items in the
-      session's warehouse). When this exceeds lines.length, new items
-      were added after start() — surfaced as a warning so the counter
+      session's warehouse). When this exceeds the snapshot line total, new
+      items were added after start() — surfaced as a warning so the counter
       can decide to cancel + restart. */
   itemsInScopeCount?: number;
 }
@@ -73,52 +94,78 @@ interface Props {
 export function CycleCountDetail({
   header,
   lines,
+  summary,
+  page,
+  pageSize,
+  total,
+  search,
+  filter,
   canAssign = false,
   members = [],
   assigneeName = null,
   itemsInScopeCount,
 }: Props) {
   const router = useRouter();
-  const [search, setSearch] = React.useState('');
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [busyLine, setBusyLine] = React.useState<string | null>(null);
   const [postBusy, setPostBusy] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [cancelOpen, setCancelOpen] = React.useState(false);
   const [cancelBusy, setCancelBusy] = React.useState(false);
-  const [filter, setFilter] = React.useState<'all' | 'uncounted' | 'variance'>('all');
 
   const completed = header.status === 'completed';
   const canceled = header.status === 'canceled';
   const open = header.status === 'in_progress';
 
-  const term = search.trim().toLowerCase();
-  const visibleLines = lines.filter((l) => {
-    const item = l.item;
-    if (!item) return false;
-    if (filter === 'uncounted' && l.counted_quantity !== null) return false;
-    if (filter === 'variance') {
-      if (l.counted_quantity === null) return false;
-      const variance = l.counted_quantity - l.expected_quantity;
-      if (variance === 0) return false;
-    }
-    if (!term) return true;
-    return (
-      item.name.toLowerCase().includes(term) ||
-      item.sku.toLowerCase().includes(term) ||
-      (item.barcode ?? '').toLowerCase().includes(term)
-    );
-  });
+  // Search + filter + pagination are ALL server-side now (a >1000-SKU count
+  // can't ship every line to the client). Build the target URL for a given
+  // {q, filter, page}, preserving the params we're not changing.
+  const buildHref = React.useCallback(
+    (overrides: { q?: string; filter?: CycleCountLineFilter; page?: number }) => {
+      const params = new URLSearchParams(searchParams?.toString() ?? '');
+      if ('q' in overrides) {
+        if (overrides.q) params.set('q', overrides.q);
+        else params.delete('q');
+      }
+      if ('filter' in overrides) {
+        if (overrides.filter && overrides.filter !== 'all') params.set('filter', overrides.filter);
+        else params.delete('filter');
+      }
+      if ('page' in overrides) {
+        if (overrides.page && overrides.page > 1) params.set('page', String(overrides.page));
+        else params.delete('page');
+      }
+      const qs = params.toString();
+      return qs ? `${pathname}?${qs}` : pathname;
+    },
+    [pathname, searchParams],
+  );
 
-  // Summary
-  const counted = lines.filter((l) => l.counted_quantity !== null);
-  const uncounted = lines.length - counted.length;
-  const variances = counted.filter(
-    (l) => (l.counted_quantity ?? 0) - l.expected_quantity !== 0,
-  );
-  const totalDelta = variances.reduce(
-    (sum, l) => sum + ((l.counted_quantity ?? 0) - l.expected_quantity),
-    0,
-  );
+  // Debounced search box: local input, pushed to ?q (resetting to page 1)
+  // 350ms after the user stops typing. Re-sync to the server value whenever
+  // it changes (e.g. after a router.refresh from saving a count).
+  const [searchInput, setSearchInput] = React.useState(search);
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resync to server value
+    setSearchInput(search);
+  }, [search]);
+  React.useEffect(() => {
+    if (searchInput === search) return;
+    const t = setTimeout(() => {
+      router.push(buildHref({ q: searchInput, page: 1 }));
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchInput, search, buildHref, router]);
+
+  function changeFilter(next: CycleCountLineFilter) {
+    if (next === filter) return;
+    router.push(buildHref({ filter: next, page: 1 }));
+  }
+
+  // Whole-count summary (server-computed set-based).
+  const uncounted = summary.total - summary.counted;
+  const totalDelta = summary.netDelta;
 
   // New-items-added warning. If the snapshot has fewer lines than the
   // current items-in-scope count, someone added items to inventory
@@ -127,8 +174,13 @@ export function CycleCountDetail({
   // counter can decide to cancel + restart.
   const newItemsCount =
     open && typeof itemsInScopeCount === 'number'
-      ? Math.max(0, itemsInScopeCount - lines.length)
+      ? Math.max(0, itemsInScopeCount - summary.total)
       : 0;
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  // `page` is already the server-clamped effective page; this min/max is
+  // defense-in-depth only, so Prev/Next hrefs can never leave the range.
+  const safePage = Math.min(Math.max(1, page), totalPages);
 
   // Browser-leave guard for in-progress counts with unsaved input.
   // We can't directly observe Input draft state from here, so we
@@ -204,9 +256,9 @@ export function CycleCountDetail({
     }
     setConfirmOpen(false);
     toast.success(
-      variances.length === 0
+      summary.varianceCount === 0
         ? 'Cycle count posted. No adjustments needed.'
-        : `Cycle count posted. ${variances.length} adjustment${variances.length === 1 ? '' : 's'} applied.`,
+        : `Cycle count posted. ${summary.varianceCount} adjustment${summary.varianceCount === 1 ? '' : 's'} applied.`,
     );
     router.refresh();
   }
@@ -216,7 +268,8 @@ export function CycleCountDetail({
       <div className="flex flex-wrap items-center gap-3">
         <StatusBadge status={header.status} />
         <span className="text-muted-foreground text-xs">
-          {counted.length} of {lines.length} counted · {variances.length} with variance
+          {formatNumber(summary.counted)} of {formatNumber(summary.total)} counted ·{' '}
+          {formatNumber(summary.varianceCount)} with variance
         </span>
         {open && (
           <div className="ml-auto flex gap-2">
@@ -232,7 +285,7 @@ export function CycleCountDetail({
               variant="gradient"
               size="sm"
               onClick={() => setConfirmOpen(true)}
-              disabled={postBusy || counted.length === 0}
+              disabled={postBusy || summary.counted === 0}
             >
               Review & post
             </Button>
@@ -258,8 +311,8 @@ export function CycleCountDetail({
       )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Items in scope" value={formatNumber(lines.length)} />
-        <Stat label="Counted" value={formatNumber(counted.length)} />
+        <Stat label="Items in scope" value={formatNumber(summary.total)} />
+        <Stat label="Counted" value={formatNumber(summary.counted)} />
         <Stat label="Uncounted" value={formatNumber(uncounted)} tone={uncounted > 0 ? 'warn' : 'default'} />
         <Stat
           label="Net variance"
@@ -272,13 +325,13 @@ export function CycleCountDetail({
         <div className="relative max-w-md flex-1">
           <Search className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
           <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search by name, SKU, barcode…"
             className="h-8 pl-8 text-[12.5px]"
           />
         </div>
-        <FilterChips value={filter} onChange={setFilter} />
+        <FilterChips value={filter} onChange={changeFilter} />
       </div>
 
       <div className="bg-card overflow-x-auto rounded-xl border">
@@ -294,19 +347,19 @@ export function CycleCountDetail({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {visibleLines.length === 0 && (
+            {lines.length === 0 && (
               <TableRow>
                 <TableCell
                   colSpan={6}
                   className="text-muted-foreground py-8 text-center text-xs"
                 >
-                  {lines.length === 0
+                  {summary.total === 0
                     ? 'No items in this count.'
-                    : 'No items match the current filter.'}
+                    : 'No items match the current search or filter.'}
                 </TableCell>
               </TableRow>
             )}
-            {visibleLines.map((l) => (
+            {lines.map((l) => (
               <CountRow
                 key={l.id}
                 line={l}
@@ -319,6 +372,49 @@ export function CycleCountDetail({
           </TableBody>
         </Table>
       </div>
+
+      {totalPages > 1 && (
+        <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-3 text-[12px]">
+          <span>
+            Showing{' '}
+            <span className="text-foreground font-medium">
+              {formatNumber((safePage - 1) * pageSize + 1)}
+            </span>
+            –
+            <span className="text-foreground font-medium">
+              {formatNumber(Math.min(safePage * pageSize, total))}
+            </span>{' '}
+            of <span className="text-foreground font-medium">{formatNumber(total)}</span>
+          </span>
+          <div className="flex items-center gap-1">
+            <Button asChild variant="outline" size="sm" disabled={safePage <= 1}>
+              {safePage <= 1 ? (
+                <span aria-disabled className="pointer-events-none opacity-50">
+                  ← Prev
+                </span>
+              ) : (
+                <Link href={buildHref({ page: safePage - 1 })} prefetch={false}>
+                  ← Prev
+                </Link>
+              )}
+            </Button>
+            <span className="px-2 text-[11.5px]">
+              Page {safePage} of {totalPages}
+            </span>
+            <Button asChild variant="outline" size="sm" disabled={safePage >= totalPages}>
+              {safePage >= totalPages ? (
+                <span aria-disabled className="pointer-events-none opacity-50">
+                  Next →
+                </span>
+              ) : (
+                <Link href={buildHref({ page: safePage + 1 })} prefetch={false}>
+                  Next →
+                </Link>
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
 
       <DestructiveConfirm
         open={cancelOpen}
@@ -339,8 +435,8 @@ export function CycleCountDetail({
           <div className="text-muted-foreground space-y-2 text-sm">
             <p>
               This will post{' '}
-              <strong className="text-foreground">{variances.length}</strong>{' '}
-              adjustment{variances.length === 1 ? '' : 's'} (net{' '}
+              <strong className="text-foreground">{formatNumber(summary.varianceCount)}</strong>{' '}
+              adjustment{summary.varianceCount === 1 ? '' : 's'} (net{' '}
               <strong className="text-foreground">
                 {totalDelta > 0 ? '+' : ''}
                 {formatNumber(totalDelta)}
@@ -349,7 +445,7 @@ export function CycleCountDetail({
             </p>
             {uncounted > 0 && (
               <p className="text-warning">
-                {uncounted} item{uncounted === 1 ? '' : 's'} weren't counted —
+                {formatNumber(uncounted)} item{uncounted === 1 ? '' : 's'} weren't counted —
                 they'll be left unchanged.
               </p>
             )}

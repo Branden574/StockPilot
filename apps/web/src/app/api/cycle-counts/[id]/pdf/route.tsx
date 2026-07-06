@@ -55,29 +55,55 @@ export async function GET(
       .map((l) => l.item_id)
       .filter((v): v is string => Boolean(v));
     const binByItem = new Map<string, string | null>();
-    if (itemIds.length > 0) {
-      const { data } = await ctx.supabase
-        .from('inventory_items')
-        .select('id, item_type, custom_fields, bin_location, primary_location_id, locations:locations!primary_location_id (name)')
-        .eq('organization_id', ctx.organizationId)
-        .in('id', itemIds);
-      for (const row of (data ?? []) as Array<{
-        id: string;
-        item_type: string | null;
-        custom_fields: Record<string, unknown> | null;
-        bin_location: string | null;
-        locations: { name: string } | { name: string }[] | null;
-      }>) {
-        const locField = row.locations;
-        const loc = Array.isArray(locField) ? locField[0] : locField;
-        const label = countSheetLocationLabel({
-          item_type: row.item_type,
-          custom_fields: row.custom_fields,
-          bin_location: row.bin_location,
-          primaryLocationName: loc?.name ?? null,
-        });
-        binByItem.set(row.id, label);
-      }
+    // CHUNKED: get() now returns EVERY line (no 1000-row cap), so a big-warehouse
+    // count can carry tens of thousands of item ids. A single `.in('id', ids)`
+    // would both build a giant statement AND clamp its RESULT to [api]
+    // max_rows = 1000, silently dropping the location hint for every row past
+    // #1000. 100 uuids ≈ 3.7KB of query string — comfortably under the
+    // 8–16KB gateway/URL rejection threshold (same ID_CHUNK_SIZE rationale as
+    // server/loaders/inventory-list.ts; a 1000-id chunk was a ~37KB GET the
+    // edge would bounce). Chunks run in PARALLEL, and any chunk error THROWS:
+    // a count sheet printing without walk-to locations is a silent
+    // correctness failure, so it must surface as the route's 500, never as a
+    // quietly location-less printout.
+    type LookupRow = {
+      id: string;
+      item_type: string | null;
+      custom_fields: Record<string, unknown> | null;
+      bin_location: string | null;
+      locations: { name: string } | { name: string }[] | null;
+    };
+    const LOOKUP_CHUNK = 100;
+    const chunks: string[][] = [];
+    for (let i = 0; i < itemIds.length; i += LOOKUP_CHUNK) {
+      chunks.push(itemIds.slice(i, i + LOOKUP_CHUNK));
+    }
+    const chunkResults = await Promise.all(
+      chunks.map(async (chunk) => {
+        const { data, error } = await ctx.supabase
+          .from('inventory_items')
+          .select('id, item_type, custom_fields, bin_location, primary_location_id, locations:locations!primary_location_id (name)')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', chunk);
+        if (error) {
+          throw new ServiceError(
+            'internal_error',
+            `Count-sheet location lookup failed: ${error.message}`,
+          );
+        }
+        return (data ?? []) as LookupRow[];
+      }),
+    );
+    for (const row of chunkResults.flat()) {
+      const locField = row.locations;
+      const loc = Array.isArray(locField) ? locField[0] : locField;
+      const label = countSheetLocationLabel({
+        item_type: row.item_type,
+        custom_fields: row.custom_fields,
+        bin_location: row.bin_location,
+        primaryLocationName: loc?.name ?? null,
+      });
+      binByItem.set(row.id, label);
     }
 
     const lineRows: CycleCountPdfLine[] = lines.map((l) => ({

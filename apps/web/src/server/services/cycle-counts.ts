@@ -55,6 +55,39 @@ export interface CycleCountLineWithItem extends CycleCountLineRow {
   } | null;
 }
 
+/** Whole-count roll-up the server-paginated detail page can no longer derive
+ *  from a single page of lines (computed set-based by cycle_count_summary). */
+export interface CycleCountSummary {
+  /** Total lines in the count (every line, regardless of page / filter). */
+  total: number;
+  /** Lines with a recorded counted_quantity. */
+  counted: number;
+  /** Counted lines whose count differs from the expected snapshot. */
+  varianceCount: number;
+  /** Σ (counted_quantity − expected_quantity) over counted lines. */
+  netDelta: number;
+}
+
+export interface CycleCountDetailPage {
+  header: CycleCountRow;
+  /** ONE server-paginated page of lines, ordered like the on-screen list. */
+  lines: CycleCountLineWithItem[];
+  summary: CycleCountSummary;
+  /** 1-based page actually returned — the EFFECTIVE page, which can be
+   *  LOWER than the requested one: a past-end request (stale ?page= after
+   *  counting shrank an `uncounted` filter, deep link, etc.) is clamped to
+   *  the real last page so the counter always lands on rows. The UI must
+   *  render THIS page number, not the URL param. */
+  page: number;
+  pageSize: number;
+  /** Filtered total (matches search + filter) — drives the page controls. */
+  total: number;
+  search: string;
+  filter: CycleCountLineFilter;
+}
+
+export type CycleCountLineFilter = 'all' | 'uncounted' | 'variance';
+
 /**
  * Maps stable PG raise-exception codes from post_cycle_count (v2,
  * migration 0079) into user-friendly errors. Codes are kept stable
@@ -81,6 +114,35 @@ function mapPostCycleCountError(message: string): ServiceError {
     return new ServiceError(
       'validation_error',
       'An item moved to a different warehouse mid-count. Cancel this count and restart it for the new warehouse, or clear the affected lines.',
+    );
+  }
+  return new ServiceError('internal_error', message);
+}
+
+/**
+ * Maps the stable raise from start_cycle_count (migration 0226) back to the
+ * exact user-facing errors the old TypeScript start() produced. The RPC
+ * raises `cycle_count_no_items` when the scope snapshotted zero active items
+ * (the header insert rolls back with it — no orphan); every other failure
+ * (RLS-blocked header for a cross-org / non-manager caller, etc.) stays an
+ * internal_error, matching the old bulk-insert error path.
+ */
+function mapStartCycleCountError(
+  message: string,
+  scope: 'warehouse' | 'selection',
+  warehouseId: string | null,
+): ServiceError {
+  if (message.includes('cycle_count_no_items')) {
+    if (scope === 'selection') {
+      return new ServiceError(
+        'validation_error',
+        'None of the selected items are still active. Refresh and try again.',
+      );
+    }
+    const where = warehouseId ? 'this warehouse' : 'your organization';
+    return new ServiceError(
+      'validation_error',
+      `No active items found in ${where}. Add items first, or pick a different warehouse.`,
     );
   }
   return new ServiceError('internal_error', message);
@@ -268,22 +330,28 @@ export class CycleCountsService {
       }
     }
 
-    const { data: lines, error: lErr } = await this.ctx.supabase
-      .from('cycle_count_lines')
-      .select(
-        `id, cycle_count_id, item_id, warehouse_id, expected_quantity, counted_quantity,
-         reason, notes, counted_by, counted_at,
-         item:inventory_items!item_id (id, name, sku, unit_of_measure, barcode)`,
-      )
-      .eq('cycle_count_id', id)
-      // In-progress lines: sort by SKU so the on-screen list matches
-      // the printed count-sheet order (also SKU-sorted in the PDF).
-      // Completed lines: sort by counted_at descending so the most
-      // recent activity is at the top. Tie-broken on SKU either way.
-      .order('counted_at', { ascending: false, nullsFirst: false });
-    if (lErr) throw new ServiceError('internal_error', lErr.message);
+    // Fetch EVERY line. The PDF count sheet + variance report print all of
+    // them, and a bare select silently clamps to [api] max_rows = 1000 —
+    // which for a >1000-SKU count dropped the tail off the printout and the
+    // on-screen list. Page by a stable id order, then apply the on-screen
+    // sort below. The detail PAGE does NOT use this method (it pulls one
+    // server-paginated page via getDetailPage), so shipping the whole set
+    // here stays bounded to the print / export callers that genuinely need
+    // every row.
+    const rawLines = await fetchAllRows<Record<string, unknown>>((from, to) =>
+      this.ctx.supabase
+        .from('cycle_count_lines')
+        .select(
+          `id, cycle_count_id, item_id, warehouse_id, expected_quantity, counted_quantity,
+           reason, notes, counted_by, counted_at,
+           item:inventory_items!item_id (id, name, sku, unit_of_measure, barcode)`,
+        )
+        .eq('cycle_count_id', id)
+        .order('id', { ascending: true })
+        .range(from, to),
+    );
 
-    const flattened = (lines ?? []).map((row) => {
+    const flattened = rawLines.map((row) => {
       const r = row as Record<string, unknown>;
       const itemField = r.item as
         | { id: string; name: string; sku: string; unit_of_measure: string; barcode: string | null }
@@ -294,18 +362,180 @@ export class CycleCountsService {
       return { ...r, item } as CycleCountLineWithItem;
     });
 
-    // Stable secondary sort by SKU for the in-progress view. Lines
-    // without an item (deleted mid-count) sort last by name/sku, which
-    // keeps the active rows clustered at the top.
+    // Reproduce the exact on-screen / count-sheet ordering the caller saw
+    // before pagination:
+    //   • in_progress → SKU ascending (matches the printable count sheet);
+    //     lines without an item sort last.
+    //   • completed / canceled → counted_at descending, nulls last (the old
+    //     DB `.order('counted_at', …)` order).
+    // JS Array.sort is stable, so the id-ascending fetch order breaks any
+    // ties deterministically.
     if (h.status === 'in_progress') {
       flattened.sort((a, b) => {
         const ak = a.item?.sku ?? '￿';
         const bk = b.item?.sku ?? '￿';
         return ak.localeCompare(bk);
       });
+    } else {
+      flattened.sort((a, b) => {
+        const at = a.counted_at ? Date.parse(a.counted_at) : -Infinity;
+        const bt = b.counted_at ? Date.parse(b.counted_at) : -Infinity;
+        return bt - at;
+      });
     }
 
     return { header: h, lines: flattened };
+  }
+
+  /**
+   * ONE server-paginated page of a count's lines for the detail page, plus
+   * the whole-count summary. Replaces get() on the interactive page so a
+   * >1000-SKU count no longer ships (or silently caps at) the entire line
+   * set — the counter pages / searches through every line server-side.
+   *
+   * The line page + filtered total come from cycle_count_lines_page (which
+   * can order + search by the joined item's columns and filter on the
+   * column-vs-column variance predicate — none of which PostgREST can do);
+   * the summary (total / counted / variance / net delta the stat cards +
+   * post dialog need) comes from cycle_count_summary. Both are SECURITY
+   * INVOKER, so the caller's RLS applies exactly like get() did.
+   *
+   * A past-end page request is CLAMPED to the real last page (honest total
+   * via an offset-0 probe, then that page's rows) and the returned `page`
+   * is the effective one — see CycleCountDetailPage.page.
+   */
+  async getDetailPage(
+    id: string,
+    opts: {
+      page?: number;
+      pageSize?: number;
+      search?: string;
+      filter?: CycleCountLineFilter;
+    } = {},
+  ): Promise<CycleCountDetailPage> {
+    assertModuleEnabled(this.ctx, 'cycle_counts');
+    const { data: header, error: hErr } = await this.ctx.supabase
+      .from('cycle_counts')
+      .select('*')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (hErr) throw new ServiceError('internal_error', hErr.message);
+    if (!header) throw new ServiceError('not_found', 'Cycle count not found');
+
+    const h = header as unknown as CycleCountRow;
+    // Same warehouse-access gate as get(): a warehouse-scoped count needs
+    // read access to its warehouse; org-wide counts skip it. 404 (not 403)
+    // so we don't leak the existence of a count in a hidden warehouse.
+    if (h.warehouse_id) {
+      try {
+        await assertWarehouseAccess(h.warehouse_id, 'read', this.ctx);
+      } catch (e) {
+        if (e instanceof ForbiddenError) {
+          throw new ServiceError('not_found', 'Cycle count not found');
+        }
+        throw e;
+      }
+    }
+
+    const pageSize = Math.min(Math.max(Math.trunc(opts.pageSize ?? 50), 1), 200);
+    const page = Math.max(Math.trunc(opts.page ?? 1), 1);
+    const filter: CycleCountLineFilter = opts.filter ?? 'all';
+    const search = (opts.search ?? '').trim();
+    // Open counts sort by SKU (matches the count sheet); closed counts by
+    // most-recent activity — the same split get() applies.
+    const order = h.status === 'in_progress' ? 'sku' : 'recent';
+
+    const linesPageArgs = {
+      p_cycle_count_id: id,
+      p_search: search || null,
+      p_filter: filter,
+      p_order: order,
+    };
+    const [pageRes, sumRes] = await Promise.all([
+      this.ctx.supabase.rpc('cycle_count_lines_page', {
+        ...linesPageArgs,
+        p_limit: pageSize,
+        p_offset: (page - 1) * pageSize,
+      }),
+      this.ctx.supabase.rpc('cycle_count_summary', { p_cycle_count_id: id }),
+    ]);
+    if (pageRes.error) throw new ServiceError('internal_error', pageRes.error.message);
+    if (sumRes.error) throw new ServiceError('internal_error', sumRes.error.message);
+
+    let rows = (pageRes.data ?? []) as Array<Record<string, unknown>>;
+    let total = rows.length > 0 ? Number(rows[0]?.full_count) || 0 : 0;
+    let effectivePage = page;
+
+    // Past-end CLAMP. An empty window past the last page carries no
+    // window-count row, so `total` would read 0 and the UI would collapse to
+    // a bogus "no items match" while lines remain — a deterministic strand
+    // for the counter: finish the last page's lines under filter=uncounted
+    // and the router.refresh() re-requests the same now-past-end ?page=N.
+    // This is the PRIMARY counting flow, so don't just report the honest
+    // total (the listPage probe pattern) — land the counter on real rows:
+    // probe offset 0 for the true filtered total, then fetch the REAL last
+    // page and return its number as the effective page.
+    if (rows.length === 0 && page > 1) {
+      const probe = await this.ctx.supabase.rpc('cycle_count_lines_page', {
+        ...linesPageArgs,
+        p_limit: 1,
+        p_offset: 0,
+      });
+      if (probe.error) throw new ServiceError('internal_error', probe.error.message);
+      const probeRows = (probe.data ?? []) as Array<Record<string, unknown>>;
+      total = probeRows.length > 0 ? Number(probeRows[0]?.full_count) || 0 : 0;
+
+      if (total > 0) {
+        effectivePage = Math.max(1, Math.ceil(total / pageSize));
+        const lastRes = await this.ctx.supabase.rpc('cycle_count_lines_page', {
+          ...linesPageArgs,
+          p_limit: pageSize,
+          p_offset: (effectivePage - 1) * pageSize,
+        });
+        if (lastRes.error) throw new ServiceError('internal_error', lastRes.error.message);
+        rows = (lastRes.data ?? []) as Array<Record<string, unknown>>;
+        // Prefer the fetched page's own window count — the filtered set can
+        // shift between probe and fetch under concurrent counting.
+        if (rows.length > 0) total = Number(rows[0]?.full_count) || total;
+      } else {
+        // Genuinely empty filtered set: normalize to page 1 so the UI
+        // renders the true empty state with no phantom paginator.
+        effectivePage = 1;
+      }
+    }
+    const lines: CycleCountLineWithItem[] = rows.map((r) => ({
+      id: r.id as string,
+      cycle_count_id: r.cycle_count_id as string,
+      item_id: r.item_id as string,
+      warehouse_id: (r.warehouse_id as string | null) ?? null,
+      expected_quantity: Number(r.expected_quantity) || 0,
+      counted_quantity: r.counted_quantity == null ? null : Number(r.counted_quantity),
+      reason: (r.reason as string | null) ?? null,
+      notes: (r.notes as string | null) ?? null,
+      counted_by: (r.counted_by as string | null) ?? null,
+      counted_at: (r.counted_at as string | null) ?? null,
+      item: {
+        id: r.item_id as string,
+        name: (r.item_name as string) ?? '',
+        sku: (r.item_sku as string) ?? '',
+        unit_of_measure: (r.item_uom as string) ?? '',
+        barcode: (r.item_barcode as string | null) ?? null,
+      },
+    }));
+
+    const sumRow = (Array.isArray(sumRes.data) ? sumRes.data[0] : sumRes.data) as
+      | { total: number; counted: number; variance_count: number; net_delta: number }
+      | null
+      | undefined;
+    const summary: CycleCountSummary = {
+      total: Number(sumRow?.total) || 0,
+      counted: Number(sumRow?.counted) || 0,
+      varianceCount: Number(sumRow?.variance_count) || 0,
+      netDelta: Number(sumRow?.net_delta) || 0,
+    };
+
+    return { header: h, lines, summary, page: effectivePage, pageSize, total, search, filter };
   }
 
   /**
@@ -379,12 +609,16 @@ export class CycleCountsService {
     assertPermission(this.ctx, 'stock:adjust');
     const scope = input.scope ?? 'warehouse';
 
-    let items: Array<{ id: string; quantity_on_hand: number; warehouse_id: string | null }>;
-    let requested: number;
     // Header warehouse: for a warehouse-scoped count it's the chosen
     // warehouse; for a selection it's derived below (the picks' shared
     // warehouse, or null when they span warehouses / have none).
     let headerWarehouseId: string | null = input.warehouseId;
+    // Warehouse-scope item filter for the snapshot RPC (null = org-wide).
+    let filterWarehouseId: string | null = null;
+    // Selection-scope item filter for the snapshot RPC (null for warehouse
+    // scope). The validated, active pick ids the RPC re-selects.
+    let selectionItemIds: string[] | null = null;
+    let requested = 0;
 
     if (scope === 'selection') {
       const ids = Array.from(new Set(input.itemIds ?? []));
@@ -392,15 +626,20 @@ export class CycleCountsService {
       if (ids.length === 0) {
         throw new ServiceError('validation_error', 'Pick at least one item to count.');
       }
+      // Fetch the picked items under the caller's RLS to (a) gate write
+      // access per distinct warehouse, (b) derive the header warehouse,
+      // (c) surface the "none active" error before snapshotting. Same org +
+      // deleted_at + status predicate the snapshot RPC re-selects with, so
+      // the gated set and the snapshotted set are the same items.
       const { data, error } = await this.ctx.supabase
         .from('inventory_items')
-        .select('id, quantity_on_hand, warehouse_id')
+        .select('id, warehouse_id')
         .eq('organization_id', this.ctx.organizationId)
         .is('deleted_at', null)
         .eq('status', 'active')
         .in('id', ids);
       if (error) throw new ServiceError('internal_error', error.message);
-      items = (data ?? []) as typeof items;
+      const items = (data ?? []) as Array<{ id: string; warehouse_id: string | null }>;
       if (items.length === 0) {
         throw new ServiceError(
           'validation_error',
@@ -430,6 +669,8 @@ export class CycleCountsService {
       // the active workspace). Mixed- or no-warehouse selections stay null.
       headerWarehouseId =
         distinctWh.size === 1 && !hasNullWh ? (Array.from(distinctWh)[0] as string) : null;
+      // Snapshot exactly the active picks we just validated + gated.
+      selectionItemIds = items.map((it) => it.id);
     } else {
       // Defense-in-depth: warehouse-write check so a manager can't
       // start a cycle count for a warehouse they can't write to (the
@@ -439,70 +680,44 @@ export class CycleCountsService {
       if (input.warehouseId) {
         await assertWarehouseAccess(input.warehouseId, 'write', this.ctx);
       }
-
-      // PAGINATED: a bare select caps at 1000 rows, silently dropping items
-      // beyond #1000 from the cycle count for a large warehouse.
-      const wid = input.warehouseId;
-      const data = await fetchAllRows<{
-        id: string;
-        quantity_on_hand: number;
-        warehouse_id: string | null;
-      }>((from, to) => {
-        let q = this.ctx.supabase
-          .from('inventory_items')
-          .select('id, quantity_on_hand, warehouse_id')
-          .eq('organization_id', this.ctx.organizationId)
-          .is('deleted_at', null)
-          .eq('status', 'active')
-          .order('id', { ascending: true });
-        if (wid) q = q.eq('warehouse_id', wid);
-        return q.range(from, to);
-      });
-      items = data as typeof items;
-      requested = items.length;
-      if (items.length === 0) {
-        const where = input.warehouseId ? 'this warehouse' : 'your organization';
-        throw new ServiceError(
-          'validation_error',
-          `No active items found in ${where}. Add items first, or pick a different warehouse.`,
-        );
-      }
+      filterWarehouseId = input.warehouseId;
+      headerWarehouseId = input.warehouseId;
     }
 
-    const { data: cc, error: ccErr } = await this.ctx.supabase
-      .from('cycle_counts')
-      .insert({
-        organization_id: this.ctx.organizationId,
-        warehouse_id: headerWarehouseId,
-        scope,
-        status: 'in_progress',
-        notes: input.notes ?? null,
-        started_by: this.ctx.userId,
-      })
-      .select('id')
-      .single();
-    if (ccErr) throw new ServiceError('internal_error', ccErr.message);
-
-    const linesPayload = items.map((it) => ({
-      cycle_count_id: cc.id as string,
-      item_id: it.id as string,
-      // Snapshot the item's warehouse at start() time. post() refuses
-      // to apply variance if the item has moved warehouses since.
-      warehouse_id: (it.warehouse_id as string | null) ?? null,
-      expected_quantity: Number(it.quantity_on_hand) || 0,
-    }));
-
-    const { error: linesErr } = await this.ctx.supabase
-      .from('cycle_count_lines')
-      .insert(linesPayload);
-    if (linesErr) throw new ServiceError('internal_error', linesErr.message);
+    // Atomic snapshot: the cycle_counts header + one cycle_count_lines row
+    // per in-scope item are inserted in ONE transaction via INSERT … SELECT
+    // (migration 0226). This (a) never ships the per-row payload over the
+    // wire, so a 50k-SKU warehouse count actually starts instead of blowing
+    // the 8s statement_timeout, and (b) can't orphan a header — an empty
+    // scope raises and rolls the header back. SECURITY INVOKER, so item RLS
+    // scopes the snapshot to the caller's visible items exactly like the old
+    // user-client fetch did, and the manager-level header/line INSERT
+    // policies still apply.
+    const { data: rpcData, error: rpcErr } = await this.ctx.supabase.rpc('start_cycle_count', {
+      p_organization_id: this.ctx.organizationId,
+      p_scope: scope,
+      p_header_warehouse_id: headerWarehouseId,
+      p_filter_warehouse_id: filterWarehouseId,
+      p_item_ids: selectionItemIds,
+      p_notes: input.notes ?? null,
+    });
+    if (rpcErr) throw mapStartCycleCountError(rpcErr.message, scope, input.warehouseId);
+    const row = (Array.isArray(rpcData) ? rpcData[0] : rpcData) as
+      | { cycle_count_id: string; line_count: number }
+      | null
+      | undefined;
+    if (!row?.cycle_count_id) {
+      throw new ServiceError('internal_error', 'Cycle count could not be started.');
+    }
+    const ccId = row.cycle_count_id;
+    const lineCount = Number(row.line_count) || 0;
 
     // Assign as a SEPARATE update so trg_cycle_counts_assigned (0042)
     // fires and the assignee gets the in-app + push notification — the
-    // insert above wouldn't trip an AFTER UPDATE OF assigned_to trigger.
+    // RPC's inserts wouldn't trip an AFTER UPDATE OF assigned_to trigger.
     if (input.assignedTo) {
       try {
-        await this.assign(cc.id as string, input.assignedTo);
+        await this.assign(ccId, input.assignedTo);
       } catch {
         // Non-fatal: the count exists; the assignment just didn't stick.
         // The starter can re-assign from the detail page.
@@ -513,20 +728,22 @@ export class CycleCountsService {
       {
         event: 'cycle_count.started',
         entityType: 'cycle_count',
-        entityId: cc.id as string,
+        entityId: ccId,
         after: {
           scope,
           warehouseId: headerWarehouseId,
-          lineCount: linesPayload.length,
+          lineCount,
         },
       },
       this.ctx,
     );
 
     return {
-      id: cc.id as string,
-      lineCount: linesPayload.length,
-      skipped: requested - linesPayload.length,
+      id: ccId,
+      // Warehouse scope never "skips" (the snapshot IS the scope); selection
+      // skips picks that were archived / deleted / left the org.
+      lineCount,
+      skipped: scope === 'selection' ? requested - lineCount : 0,
     };
   }
 

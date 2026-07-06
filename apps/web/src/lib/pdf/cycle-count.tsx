@@ -1,6 +1,7 @@
 import { Document, Page, Text, View } from '@react-pdf/renderer';
 
 import { BrandedHeader } from './branding';
+import { capCountSheetLines } from './count-sheet-cap';
 import { PDF_COLORS, formatDateForPdf, pdfStyles } from './styles';
 
 export interface CycleCountPdfLine {
@@ -80,6 +81,13 @@ export function CycleCountSheetPdf({
     return (a.sku ?? '').localeCompare(b.sku ?? '');
   });
 
+  // DISCLOSED render cap (PDF_MAX_LINES): react-pdf builds the whole document
+  // in memory, so an unbounded line set is an OOM/timeout, not a big PDF.
+  // Applied AFTER the sort so the rendered prefix is the sheet's first N
+  // (SKU order / biggest variances). ≤ cap renders the full sheet unchanged;
+  // over the cap, `capBanner` discloses the cut on the first page below.
+  const { lines: renderLines, banner: capBanner } = capCountSheetLines(sortedLines);
+
   return (
     <Document title={title}>
       <Page size="LETTER" style={pdfStyles.page}>
@@ -90,6 +98,27 @@ export function CycleCountSheetPdf({
           subtitle={subtitle}
           documentDate={new Date()}
         />
+
+        {/* Truncation disclosure — first page, above everything else, so a
+            capped sheet can never pass as complete coverage. */}
+        {capBanner ? (
+          <View
+            style={{
+              marginBottom: 14,
+              paddingVertical: 8,
+              paddingHorizontal: 10,
+              backgroundColor: PDF_COLORS.bgSunk,
+              borderWidth: 1,
+              borderColor: PDF_COLORS.lineStrong,
+              borderStyle: 'solid',
+            }}
+            wrap={false}
+          >
+            <Text style={[pdfStyles.bold, { fontSize: 9, color: PDF_COLORS.ink }]}>
+              {capBanner}
+            </Text>
+          </View>
+        ) : null}
 
         {cycle.notes ? (
           <View style={pdfStyles.section}>
@@ -123,14 +152,14 @@ export function CycleCountSheetPdf({
                 {isVarianceReport ? 'Variance' : 'Notes'}
               </Text>
             </View>
-            {sortedLines.length === 0 ? (
+            {renderLines.length === 0 ? (
               <View style={pdfStyles.tRow}>
                 <Text style={[pdfStyles.tCell, pdfStyles.muted, { flex: 1 }]}>
                   No items in this cycle count.
                 </Text>
               </View>
             ) : (
-              sortedLines.map((l, i) => {
+              renderLines.map((l, i) => {
                 const counted = l.countedQuantity ?? null;
                 const variance =
                   counted == null ? null : counted - l.expectedQuantity;
