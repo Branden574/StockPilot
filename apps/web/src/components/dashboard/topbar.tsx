@@ -12,6 +12,8 @@ import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { WarehouseFilterPicker } from '@/components/dashboard/warehouse-filter-picker';
 import { cn } from '@/lib/utils';
 
+import type { NavSection } from './nav';
+import { applyNavLabelsToCrumbs, crumbsForPathname, navLabelMap } from './topbar-crumbs';
 import { UserMenu } from './user-menu';
 
 interface TopbarProps {
@@ -33,187 +35,13 @@ interface TopbarProps {
     activeId: string | null;
     warehouseLabel: string;
   };
-}
-
-interface Crumb {
-  label: string;
-  /** When non-null, the segment renders as a clickable Link. The current
-      page (last segment) and section labels with no canonical URL stay
-      as plain text. */
-  href: string | null;
-}
-
-const SECTION_INVENTORY: Crumb = { label: 'Inventory', href: null };
-const SECTION_WORKSPACE: Crumb = { label: 'Workspace', href: null };
-const SECTION_ADMIN: Crumb = { label: 'Admin', href: null };
-const ITEMS_LIST: Crumb = { label: 'Items', href: '/dashboard/inventory' };
-const BOOKS_LIST: Crumb = { label: 'Books', href: '/dashboard/books' };
-const POS_LIST: Crumb = { label: 'Purchase orders', href: '/dashboard/purchase-orders' };
-const PO_IMPORTS_LIST: Crumb = {
-  label: 'PO imports',
-  href: '/dashboard/purchase-orders/imports',
-};
-const CYCLE_COUNTS_LIST: Crumb = { label: 'Cycle counts', href: '/dashboard/cycle-counts' };
-const BUNDLES_LIST: Crumb = { label: 'Bundles', href: '/dashboard/bundles' };
-const ORDERS_LIST: Crumb = { label: 'Orders', href: '/dashboard/orders' };
-const SCHEDULE_LIST: Crumb = { label: 'Schedule', href: '/dashboard/schedule' };
-const SETTINGS_LIST: Crumb = { label: 'Settings', href: '/dashboard/settings' };
-
-const CRUMBS: Array<[RegExp, Crumb[]]> = [
-  [/^\/dashboard$/, [{ label: 'Overview', href: null }]],
-  // /import must precede /[^/]+ so it isn't caught by the detail catch-all
-  [/^\/dashboard\/inventory\/new$/, [SECTION_INVENTORY, ITEMS_LIST, { label: 'New', href: null }]],
-  [
-    /^\/dashboard\/inventory\/import$/,
-    [SECTION_INVENTORY, ITEMS_LIST, { label: 'Import', href: null }],
-  ],
-  [
-    /^\/dashboard\/inventory\/[^/]+\/edit$/,
-    [SECTION_INVENTORY, ITEMS_LIST, { label: 'Edit', href: null }],
-  ],
-  [
-    /^\/dashboard\/inventory\/[^/]+$/,
-    [SECTION_INVENTORY, ITEMS_LIST, { label: 'Detail', href: null }],
-  ],
-  [/^\/dashboard\/inventory$/, [SECTION_INVENTORY, { label: 'Items', href: null }]],
-  [/^\/dashboard\/books\/new$/, [SECTION_INVENTORY, BOOKS_LIST, { label: 'New', href: null }]],
-  [
-    /^\/dashboard\/books\/import$/,
-    [SECTION_INVENTORY, BOOKS_LIST, { label: 'Import', href: null }],
-  ],
-  [
-    /^\/dashboard\/books\/[^/]+\/edit$/,
-    [SECTION_INVENTORY, BOOKS_LIST, { label: 'Edit', href: null }],
-  ],
-  [
-    /^\/dashboard\/books\/[^/]+$/,
-    [SECTION_INVENTORY, BOOKS_LIST, { label: 'Detail', href: null }],
-  ],
-  [/^\/dashboard\/books$/, [SECTION_INVENTORY, { label: 'Books', href: null }]],
-  [/^\/dashboard\/categories$/, [SECTION_INVENTORY, { label: 'Categories', href: null }]],
-  [/^\/dashboard\/movements$/, [SECTION_INVENTORY, { label: 'Movements', href: null }]],
-
-  // Cycle counts
-  [
-    /^\/dashboard\/cycle-counts\/new$/,
-    [SECTION_INVENTORY, CYCLE_COUNTS_LIST, { label: 'New', href: null }],
-  ],
-  [
-    /^\/dashboard\/cycle-counts\/[^/]+$/,
-    [SECTION_INVENTORY, CYCLE_COUNTS_LIST, { label: 'Detail', href: null }],
-  ],
-  [/^\/dashboard\/cycle-counts$/, [SECTION_INVENTORY, { label: 'Cycle counts', href: null }]],
-
-  // Bundles
-  [/^\/dashboard\/bundles\/new$/, [SECTION_INVENTORY, BUNDLES_LIST, { label: 'New', href: null }]],
-  [
-    /^\/dashboard\/bundles\/[^/]+\/edit$/,
-    [SECTION_INVENTORY, BUNDLES_LIST, { label: 'Edit', href: null }],
-  ],
-  [
-    /^\/dashboard\/bundles\/[^/]+$/,
-    [SECTION_INVENTORY, BUNDLES_LIST, { label: 'Detail', href: null }],
-  ],
-  [/^\/dashboard\/bundles$/, [SECTION_INVENTORY, { label: 'Bundles', href: null }]],
-
-  // Orders (order requests). The /new and /[id]/print patterns MUST come
-  // before the bare /[^/]+$ detail catch-all.
-  [/^\/dashboard\/orders\/new$/, [SECTION_INVENTORY, ORDERS_LIST, { label: 'New', href: null }]],
-  [
-    /^\/dashboard\/orders\/[^/]+\/print$/,
-    [SECTION_INVENTORY, ORDERS_LIST, { label: 'Print', href: null }],
-  ],
-  [
-    /^\/dashboard\/orders\/[^/]+\/edit$/,
-    [SECTION_INVENTORY, ORDERS_LIST, { label: 'Edit', href: null }],
-  ],
-  [
-    /^\/dashboard\/orders\/[^/]+$/,
-    [SECTION_INVENTORY, ORDERS_LIST, { label: 'Detail', href: null }],
-  ],
-  [/^\/dashboard\/orders$/, [SECTION_INVENTORY, { label: 'Orders', href: null }]],
-
-  // Purchase orders. Imports patterns MUST precede the bare /[^/]+$
-  // detail pattern, otherwise "imports" matches as if it were a PO id.
-  [
-    /^\/dashboard\/purchase-orders\/new$/,
-    [SECTION_INVENTORY, POS_LIST, { label: 'New', href: null }],
-  ],
-  [
-    /^\/dashboard\/purchase-orders\/imports\/new$/,
-    [SECTION_INVENTORY, POS_LIST, PO_IMPORTS_LIST, { label: 'New', href: null }],
-  ],
-  [
-    /^\/dashboard\/purchase-orders\/imports\/[^/]+$/,
-    [SECTION_INVENTORY, POS_LIST, PO_IMPORTS_LIST, { label: 'Detail', href: null }],
-  ],
-  [
-    /^\/dashboard\/purchase-orders\/imports$/,
-    [SECTION_INVENTORY, POS_LIST, { label: 'PO imports', href: null }],
-  ],
-  [
-    /^\/dashboard\/purchase-orders\/[^/]+$/,
-    [SECTION_INVENTORY, POS_LIST, { label: 'Detail', href: null }],
-  ],
-  [/^\/dashboard\/purchase-orders$/, [SECTION_INVENTORY, { label: 'Purchase orders', href: null }]],
-
-  [/^\/dashboard\/locations$/, [SECTION_INVENTORY, { label: 'Locations', href: null }]],
-  [/^\/dashboard\/suppliers$/, [SECTION_INVENTORY, { label: 'Suppliers', href: null }]],
-  [/^\/dashboard\/reports$/, [SECTION_INVENTORY, { label: 'Reports', href: null }]],
-
-  // Workspace
-  [/^\/dashboard\/ai$/, [SECTION_WORKSPACE, { label: 'AI Assistant', href: null }]],
-  [
-    /^\/dashboard\/schedule\/new$/,
-    [SECTION_WORKSPACE, SCHEDULE_LIST, { label: 'New', href: null }],
-  ],
-  [
-    /^\/dashboard\/schedule\/[^/]+\/edit$/,
-    [SECTION_WORKSPACE, SCHEDULE_LIST, { label: 'Edit', href: null }],
-  ],
-  [
-    /^\/dashboard\/schedule\/[^/]+$/,
-    [SECTION_WORKSPACE, SCHEDULE_LIST, { label: 'Detail', href: null }],
-  ],
-  [/^\/dashboard\/schedule$/, [SECTION_WORKSPACE, { label: 'Schedule', href: null }]],
-  [/^\/dashboard\/notifications$/, [SECTION_WORKSPACE, { label: 'Notifications', href: null }]],
-  [/^\/dashboard\/team$/, [SECTION_WORKSPACE, { label: 'Team', href: null }]],
-  [
-    /^\/dashboard\/settings\/billing$/,
-    [SECTION_WORKSPACE, SETTINGS_LIST, { label: 'Billing', href: null }],
-  ],
-  [
-    /^\/dashboard\/settings\/public-requests$/,
-    [SECTION_WORKSPACE, SETTINGS_LIST, { label: 'Public requests', href: null }],
-  ],
-  [/^\/dashboard\/settings$/, [SECTION_WORKSPACE, { label: 'Settings', href: null }]],
-
-  // Admin (all flat sub-routes; no list/detail nesting)
-  [/^\/dashboard\/admin\/audit$/, [SECTION_ADMIN, { label: 'Audit log', href: null }]],
-  [/^\/dashboard\/admin\/bins$/, [SECTION_ADMIN, { label: 'Bins', href: null }]],
-  [/^\/dashboard\/admin\/charters$/, [SECTION_ADMIN, { label: 'Charters', href: null }]],
-  [
-    /^\/dashboard\/admin\/reconciliation$/,
-    [SECTION_ADMIN, { label: 'Reconciliation', href: null }],
-  ],
-  [
-    /^\/dashboard\/admin\/uom-conversions$/,
-    [SECTION_ADMIN, { label: 'UoM conversions', href: null }],
-  ],
-  [/^\/dashboard\/admin\/users$/, [SECTION_ADMIN, { label: 'Users', href: null }]],
-  [
-    /^\/dashboard\/admin\/vendor-mappings$/,
-    [SECTION_ADMIN, { label: 'Vendor mappings', href: null }],
-  ],
-  [/^\/dashboard\/admin\/warehouses$/, [SECTION_ADMIN, { label: 'Warehouses', href: null }]],
-  [/^\/dashboard\/admin$/, [SECTION_ADMIN, { label: 'Overview', href: null }]],
-];
-
-function useCrumbs(pathname: string): Crumb[] {
-  for (const [pattern, crumbs] of CRUMBS) {
-    if (pattern.test(pathname)) return crumbs;
-  }
-  return [{ label: '—', href: null }];
+  /**
+   * The org's OVERRIDDEN nav (navForRole output — same pass the Sidebar
+   * renders). Breadcrumb segments whose canonical href matches a nav item
+   * inherit its per-org renamed label so sidebar + crumbs always agree.
+   * Optional: omitted (older callers/tests) → static crumb labels.
+   */
+  navSections?: NavSection[];
 }
 
 export function Topbar({
@@ -228,9 +56,17 @@ export function Topbar({
   onToggleSidebar,
   sidebarHidden = false,
   warehouseFilter,
+  navSections,
 }: TopbarProps) {
   const pathname = usePathname();
-  const crumbs = useCrumbs(pathname);
+  // Static crumb trail + per-org rename overlay. The map is derived from the
+  // ALREADY-overridden nav the shell passes down (no extra fetch); crumbs
+  // whose href isn't in it keep their static label (fail-closed).
+  const labelByHref = React.useMemo(() => navLabelMap(navSections ?? []), [navSections]);
+  const crumbs = React.useMemo(
+    () => applyNavLabelsToCrumbs(crumbsForPathname(pathname), labelByHref),
+    [pathname, labelByHref],
+  );
 
   return (
     <header

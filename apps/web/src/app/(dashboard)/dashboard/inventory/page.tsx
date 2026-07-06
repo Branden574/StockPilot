@@ -30,6 +30,7 @@ import { SavedViewsService } from '@/server/services/saved-views';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
 // Dropped from 50 → 30 after the Playwright speed sweep showed the
@@ -125,10 +126,12 @@ export default async function InventoryPage({
   // dashboard layout already resolved it) gates the create/import buttons,
   // and the rack list feeds the toolbar dropdown. Both are needed to paint
   // the toolbar synchronously; the heavy item list + trends + images stream
-  // behind <Suspense> below.
-  const [sessionCtx, inventorySvc] = await Promise.all([
+  // behind <Suspense> below. The heading inherits a per-org nav rename
+  // (Settings → Navigation) off the request-cached org row — no extra fetch.
+  const [sessionCtx, inventorySvc, heading] = await Promise.all([
     requireOrgContext(),
     InventoryService.forCurrentUser(),
+    effectiveNavLabel('/dashboard/inventory', 'Inventory'),
   ]);
   const racks = await inventorySvc.listDistinctRacks({ scope: rackScope });
 
@@ -142,7 +145,7 @@ export default async function InventoryPage({
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
       <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Inventory</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{heading}</h1>
           <p className="text-muted-foreground mt-1 text-sm">
             {lifecycleStatus === 'archived'
               ? 'Items you archived. Restore one by editing it and setting status to Active.'

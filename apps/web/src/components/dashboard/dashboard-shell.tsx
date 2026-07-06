@@ -5,6 +5,7 @@ import * as React from 'react';
 import { CommandPalette } from '@/components/dashboard/command-palette';
 import { EdgeSwipeOpener } from '@/components/dashboard/edge-swipe-opener';
 import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
+import { navForRole } from '@/components/dashboard/nav';
 import { NavProgressBar } from '@/components/dashboard/nav-progress-bar';
 import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
 import { PermissionsRealtime } from '@/components/realtime/permissions-realtime';
@@ -22,7 +23,7 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { VersionNotifier } from '@/components/version-notifier';
 import { identify } from '@/lib/analytics';
 
-import type { Role } from '@stockpilot/core';
+import type { ModuleId, NavOverrides, Permission, Role } from '@stockpilot/core';
 
 interface DashboardShellProps {
   children: React.ReactNode;
@@ -94,6 +95,22 @@ export function DashboardShell({
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const [desktopSidebarHidden, setDesktopSidebarHidden] =
     React.useState(initialSidebarHidden);
+
+  // The org's OVERRIDDEN nav — the exact same navForRole pass the Sidebar
+  // runs internally, memoized here for the Topbar so breadcrumbs inherit
+  // per-org renames (Settings → Navigation) and always agree with the
+  // sidebar. Pure + registry-backed: no fetch, and applyNavOverrides inside
+  // navForRole fails CLOSED to the derived nav on null/garbage overrides.
+  const navSections = React.useMemo(
+    () =>
+      navForRole(
+        role,
+        new Set(enabledModules as ModuleId[]),
+        (navOverrides as NavOverrides | null) ?? null,
+        permissions ? new Set(permissions as Permission[]) : undefined,
+      ),
+    [role, enabledModules, navOverrides, permissions],
+  );
 
   // Persist to the cookie whenever the preference changes (skip the very
   // first render so we don't rewrite the server-provided value on mount).
@@ -231,6 +248,7 @@ export function DashboardShell({
           onToggleSidebar={handleToggleSidebar}
           sidebarHidden={desktopSidebarHidden}
           warehouseFilter={warehouseFilter}
+          navSections={navSections}
         />
         {/*
           main bg matches the Card bg so any empty area below short

@@ -33,6 +33,7 @@ import { SavedViewsService } from '@/server/services/saved-views';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
+import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
 // Lowered 50 → 30 in line with the inventory page. Book covers
@@ -113,10 +114,12 @@ export default async function BooksPage({
   // Chrome-only dependencies: the request-cached auth context (fast — already
   // resolved by the dashboard layout) gates the create/import buttons, and the
   // rack list feeds the toolbar dropdown. The heavy book list + trends + covers
-  // stream behind <Suspense> below.
-  const [sessionCtx, inventorySvc] = await Promise.all([
+  // stream behind <Suspense> below. The heading inherits a per-org nav rename
+  // (Settings → Navigation) off the request-cached org row — no extra fetch.
+  const [sessionCtx, inventorySvc, heading] = await Promise.all([
     requireOrgContext(),
     InventoryService.forCurrentUser(),
+    effectiveNavLabel('/dashboard/books', 'Books'),
   ]);
   const racks = await inventorySvc.listDistinctRacks({ scope: 'books' });
 
@@ -125,7 +128,7 @@ export default async function BooksPage({
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
       <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Books</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{heading}</h1>
           <p className="text-muted-foreground mt-1 text-sm">
             {lifecycleStatus === 'archived'
               ? 'Books you archived. Restore one by editing it and setting status to Active.'
