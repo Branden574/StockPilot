@@ -801,8 +801,17 @@ export function InventoryTable({
       // trip from the detail page that started with ?q=lanyard,
       // clearing the box would leave only the lanyard rows on
       // screen because the page-level fetch never re-ran).
+      //
+      // Gate on a STALE ?q ONLY. This effect also runs on mount with an
+      // empty box, and the old `|| next.has('page')` arm made any bare
+      // ?page=N deep link router.replace straight back to page 1 —
+      // server-mode pagination was unusable for every over-instant-cap
+      // org (>2000 items; invisible below that, where instantMode
+      // early-returns above). Found by the 50k load test 2026-07-06.
+      // ?page still drops WHEN a q is cleared — emptying a search
+      // resets pagination, the same rule as every q commit.
       const next = new URLSearchParams(params.toString());
-      if (next.has('q') || next.has('page')) {
+      if (next.has('q')) {
         next.delete('q');
         next.delete('page');
         const qs = next.toString();
