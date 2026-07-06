@@ -32,6 +32,12 @@ import {
   EMPTY_MULTI_FILTER_STATE,
   useInstantFilters,
 } from '@/components/inventory/use-instant-filters';
+import {
+  deselectPage,
+  isPageFullySelected,
+  isPagePartiallySelected,
+  selectPage,
+} from '@/components/inventory/selection-utils';
 import { rememberLastListUrl } from '@/lib/last-list-url';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
@@ -586,8 +592,16 @@ export function InventoryTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
+  // Page-scoped select-all (see selection-utils.ts): adds/removes the
+  // VISIBLE ids while preserving off-page selection. The old
+  // replace-with-page / clear-everything shape combined with the
+  // size-equality header test below desynced permanently on live orgs
+  // whose realtime refreshes reorder rows under the selection.
+  const pageIds = React.useMemo(() => items.map((i) => i.id), [items]);
+  const allVisibleSelected = isPageFullySelected(selected, pageIds);
+  const someVisibleSelected = isPagePartiallySelected(selected, pageIds);
   function toggleAll(checked: boolean) {
-    setSelected(checked ? new Set(items.map((i) => i.id)) : new Set());
+    setSelected((prev) => (checked ? selectPage(prev, pageIds) : deselectPage(prev, pageIds)));
   }
   function toggleOne(id: string) {
     setSelected((prev) => {
@@ -883,7 +897,8 @@ export function InventoryTable({
             <tr className="border-b border-border">
               <th className="w-8 px-3">
                 <Checkbox
-                  checked={items.length > 0 && selected.size === items.length}
+                  checked={allVisibleSelected}
+                  indeterminate={someVisibleSelected}
                   onChange={(c) => toggleAll(c)}
                 />
               </th>
@@ -1408,16 +1423,29 @@ function CheckTick() {
   );
 }
 
-function Checkbox({ checked, onChange }: { checked: boolean; onChange: (c: boolean) => void }) {
+function Checkbox({
+  checked,
+  indeterminate = false,
+  onChange,
+}: {
+  checked: boolean;
+  /** Some-but-not-all state (header over a partially selected page). */
+  indeterminate?: boolean;
+  onChange: (c: boolean) => void;
+}) {
   return (
     <button
       type="button"
       role="checkbox"
-      aria-checked={checked}
+      aria-checked={checked ? 'true' : indeterminate ? 'mixed' : 'false'}
       onClick={() => onChange(!checked)}
-      className={checkboxBoxClasses(checked)}
+      className={checkboxBoxClasses(checked || indeterminate)}
     >
-      {checked && <CheckTick />}
+      {checked ? (
+        <CheckTick />
+      ) : indeterminate ? (
+        <span aria-hidden className="h-[2px] w-[10px] rounded-full bg-background" />
+      ) : null}
     </button>
   );
 }
