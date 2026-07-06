@@ -203,6 +203,25 @@ export function BulkActions({
   return (
     <>
       <div className="border-border bg-card flex flex-wrap items-center gap-3 rounded-md border px-3 py-2 text-[12.5px]">
+        {/* Leading checked box — the bar swaps in over the toolbar when rows
+            are selected, so this sits right where the user's attention is.
+            Mirrors the table's header select-all: one click unselects
+            everything (same as the Clear button at the far end). Visuals
+            match the table Checkbox exactly. */}
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked="true"
+          title="Unselect all"
+          aria-label={`Unselect all ${count} selected item${count === 1 ? '' : 's'}`}
+          onClick={onClear}
+          className="inline-grid h-5 w-5 place-items-center rounded-[5px] border border-foreground bg-foreground transition-colors"
+        >
+          <span
+            aria-hidden
+            className="h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background"
+          />
+        </button>
         <span className="font-mono tabular-nums text-[var(--ed-ink-2)]">
           {count} selected
         </span>

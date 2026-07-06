@@ -28,6 +28,10 @@ import { downloadInventoryExport, type InventoryExportRequest } from '@/lib/down
 import { Sparkline } from '@/components/ui/sparkline';
 import { StockBar } from '@/components/ui/stock-bar';
 import { getCrateColor, readBookStorage, readItemRack } from '@/lib/book-storage';
+import {
+  EMPTY_MULTI_FILTER_STATE,
+  useInstantFilters,
+} from '@/components/inventory/use-instant-filters';
 import { rememberLastListUrl } from '@/lib/last-list-url';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
@@ -260,10 +264,6 @@ function paramsToSort(value: string | null): SortKey {
   return found?.value ?? 'updated_desc';
 }
 
-function paramsToIdSet(params: URLSearchParams, key: string): Set<string> {
-  return new Set(params.getAll(key).filter(Boolean));
-}
-
 function deriveStatus(qty: number, reorder: number): 'ok' | 'warn' | 'crit' {
   if (qty <= 0) return 'crit';
   if (reorder > 0 && qty <= reorder) return 'warn';
@@ -362,14 +362,22 @@ export function InventoryTable({
   }, [stockView]);
 
   const router = useRouter();
-  // Filter / sort / page navigations re-run the server component. Wrapping the
-  // router.replace in a transition keeps the current rows interactive and
-  // exposes isFilterPending so we can show an immediate "updating" state —
-  // otherwise a category/charter/location change looks frozen until the
-  // round-trip lands, which reads as "super slow".
-  const [isFilterPending, startFilterTransition] = React.useTransition();
   const addToCount = useCountSelection((s) => s.add);
   const params = useSearchParams();
+  // Filter / sort navigations re-run the server component — a multi-second
+  // round-trip at real-org scale. useInstantFilters makes the CONTROLS
+  // optimistic: a checkbox flips synchronously on click, rapid toggles
+  // coalesce into ONE debounced router.replace carrying the final filter set
+  // (last-click-wins — no queue of stale intermediate navigations), and
+  // isFilterPending drives a subtle "updating" treatment while the current
+  // rows stay visible AND interactive. Once the navigation settles, the
+  // controls mirror the URL again, so settled URL == visible state.
+  const replaceUrl = React.useCallback(
+    (url: string) => router.replace(url, { scroll: false }),
+    [router],
+  );
+  const filters = useInstantFilters({ params, basePath, replace: replaceUrl });
+  const isFilterPending = filters.isPending;
   const [q, setQ] = React.useState(initialQuery);
   // Server-authoritative search hits — populated after a debounced
   // fetch to /api/items/search. `null` means "no server result yet,
@@ -401,18 +409,14 @@ export function InventoryTable({
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
 
   const sort = paramsToSort(params.get('sort'));
-  const categoryIds = React.useMemo(
-    () => paramsToIdSet(new URLSearchParams(params.toString()), 'cat'),
-    [params],
-  );
-  const locationIds = React.useMemo(
-    () => paramsToIdSet(new URLSearchParams(params.toString()), 'loc'),
-    [params],
-  );
-  const charterIds = React.useMemo(
-    () => paramsToIdSet(new URLSearchParams(params.toString()), 'charter'),
-    [params],
-  );
+  // OPTIMISTIC filter selections — these flip synchronously on click and
+  // settle back to mirroring the URL once the coalesced navigation lands
+  // (see useInstantFilters). Never derive checkbox state from `params`
+  // directly: that gave zero feedback until the server round-trip finished,
+  // which read as "I had to click 3-4 times".
+  const categoryIds = filters.visible.cat;
+  const locationIds = filters.visible.loc;
+  const charterIds = filters.visible.charter;
 
   function hrefForView(v: View): string {
     const next = new URLSearchParams(params.toString());
@@ -459,44 +463,31 @@ export function InventoryTable({
     rememberLastListUrl(basePath, currentListUrl);
   }, [basePath, currentListUrl]);
 
-  function navigateWith(mutator: (p: URLSearchParams) => void) {
-    const next = new URLSearchParams(params.toString());
-    mutator(next);
-    // Filter / sort changes always reset to page 1 — staying on page 5
-    // would be wrong if the new result set is shorter.
-    next.delete('page');
-    const qs = next.toString();
-    // Transition so the click registers instantly (table shows a pending
-    // state) instead of appearing frozen during the server round-trip.
-    startFilterTransition(() => {
-      router.replace(qs ? `${basePath}?${qs}` : basePath, { scroll: false });
-    });
-  }
-
   function setSort(key: SortKey) {
-    navigateWith((next) => {
+    // Immediate navigation via the hook so any un-flushed filter toggles
+    // fold into the SAME URL — a sort change 200ms after a category click
+    // must not clobber (or race) the pending filter commit.
+    filters.navigate((next) => {
       if (key === 'updated_desc') next.delete('sort');
       else next.set('sort', key);
     });
   }
 
   function setMultiParam(key: 'cat' | 'loc' | 'charter', ids: Set<string>) {
-    navigateWith((next) => {
-      next.delete(key);
-      for (const id of ids) next.append(key, id);
-    });
+    // Instant visually, debounced on the wire: checking 3 categories fast
+    // produces ONE navigation with the final set (see useInstantFilters).
+    filters.setFilter(key, ids);
   }
 
   const activeFilterCount = categoryIds.size + locationIds.size + charterIds.size;
   function clearAllFilters() {
-    navigateWith((next) => {
-      next.delete('cat');
-      next.delete('loc');
-      next.delete('charter');
+    setQ('');
+    // One navigation clears the three filter keys (the override) plus
+    // sort + q, so two navigations can't race each other.
+    filters.navigate((next) => {
       next.delete('sort');
       next.delete('q');
-      setQ('');
-    });
+    }, EMPTY_MULTI_FILTER_STATE);
   }
 
   // Instant-search flow. On every q change:
@@ -687,8 +678,24 @@ export function InventoryTable({
         )}
       </div>
 
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-2">
+      {/* Toolbar row + bulk-actions bar: GRID-STACKED in the same cell and
+          swapped via `invisible`. Both layers stay mounted so the row's
+          height is always the taller of the two — toggling selection causes
+          ZERO vertical layout shift. The previous conditional mount inserted
+          the bar as a NEW block above the table the moment selection became
+          non-empty, pushing the table and every checkbox down by the bar's
+          height: the just-clicked select-all "vanished" from under the
+          cursor and the next click landed on the wrong element (owner's
+          "select-all disappears" / "3-4 clicks for row checkmarks"
+          reports). Gmail-style swap keeps every table pixel exactly where
+          it was. */}
+      <div className="grid">
+      <div
+        className={cn(
+          'col-start-1 row-start-1 flex flex-wrap items-center gap-2',
+          selected.size > 0 && 'invisible',
+        )}
+      >
         <div className="relative min-w-[180px] max-w-md flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ed-ink-4)]" />
           <Input
@@ -775,7 +782,13 @@ export function InventoryTable({
           itemType={showBookFields ? 'book' : params.get('type') ?? 'product'}
         />
 
-        <p className="ml-auto font-mono text-[11px] tabular-nums text-[var(--ed-ink-3)]">
+        <p className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-[var(--ed-ink-3)]">
+          {/* Filter round-trip affordance: rows stay visible (dimmed) while
+              the new result set loads; this small spinner is the "working"
+              signal — mirrors the search box's "(searching…)" treatment. */}
+          {isFilterPending && (
+            <Loader2 aria-label="Updating results" className="h-3 w-3 animate-spin" />
+          )}
           {(() => {
             const needle = q.trim();
             if (!needle) {
@@ -795,8 +808,14 @@ export function InventoryTable({
         </p>
       </div>
 
-      {/* Bulk actions bar */}
-      {selected.size > 0 && (
+      {/* Bulk actions layer — always mounted (see grid-stack note above),
+          revealed in place of the toolbar while rows are selected. */}
+      <div
+        className={cn(
+          'col-start-1 row-start-1 flex min-w-0 flex-col justify-center',
+          selected.size === 0 && 'invisible',
+        )}
+      >
         <BulkActions
           selectedIds={[...selected]}
           categories={categories}
@@ -825,7 +844,8 @@ export function InventoryTable({
             router.push('/dashboard/cycle-counts/new');
           }}
         />
-      )}
+      </div>
+      </div>
 
       {/* Top pagination — mirrors the bottom one so users on long lists
           don't have to scroll to the bottom to flip pages. Same component,
@@ -849,7 +869,13 @@ export function InventoryTable({
         aria-busy={isFilterPending}
         className={cn(
           'overflow-x-auto rounded-[10px] border border-border bg-card transition-opacity',
-          isFilterPending && 'pointer-events-none opacity-60',
+          // Subtle pending treatment ONLY — never pointer-events-none. The
+          // old pointer-events-none silently swallowed every row-checkbox
+          // click for the full filter round-trip (seconds at org scale),
+          // which is exactly the owner's "click 3-4 times" report. Rows stay
+          // interactive: selection is keyed by item id, so clicks landing
+          // during the transition still select the right items.
+          isFilterPending && 'opacity-60',
         )}
       >
         <table className="w-full min-w-[720px] text-[12.5px]">
@@ -1361,6 +1387,27 @@ export function Pagination({
   );
 }
 
+/** Shared box styling for the interactive Checkbox and the non-interactive
+ *  CheckGlyph so the two can never drift apart visually. */
+function checkboxBoxClasses(checked: boolean): string {
+  return cn(
+    'inline-grid h-5 w-5 place-items-center rounded-[5px] border bg-card transition-colors',
+    checked ? 'border-foreground bg-foreground' : 'border-[var(--ed-line-strong)]',
+  );
+}
+
+/** CSS-drawn ✓: bottom+RIGHT borders rotated +45°. bottom+LEFT at -45°
+ *  renders the MIRROR of a checkmark (owner-reported "backwards checkmark",
+ *  hard to read at 14px). */
+function CheckTick() {
+  return (
+    <span
+      aria-hidden
+      className="h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background"
+    />
+  );
+}
+
 function Checkbox({ checked, onChange }: { checked: boolean; onChange: (c: boolean) => void }) {
   return (
     <button
@@ -1368,21 +1415,28 @@ function Checkbox({ checked, onChange }: { checked: boolean; onChange: (c: boole
       role="checkbox"
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className={cn(
-        'inline-grid h-5 w-5 place-items-center rounded-[5px] border bg-card transition-colors',
-        checked ? 'border-foreground bg-foreground' : 'border-[var(--ed-line-strong)]',
-      )}
+      className={checkboxBoxClasses(checked)}
     >
-      {checked && (
-        <span
-          aria-hidden
-          // CSS-drawn ✓: bottom+RIGHT borders rotated +45°. bottom+LEFT at
-          // -45° renders the MIRROR of a checkmark (owner-reported
-          // "backwards checkmark", hard to read at 14px).
-          className="h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background"
-        />
-      )}
+      {checked && <CheckTick />}
     </button>
+  );
+}
+
+/**
+ * NON-INTERACTIVE checkbox visual, for use INSIDE another interactive
+ * element. MultiSelectFilter's option rows used to nest the <button>
+ * Checkbox inside the row <button>: a click directly on the box fired the
+ * inner onChange AND bubbled to the row's onClick — two toggles in one
+ * click, batched by React into a visual no-op. That self-cancelling
+ * double-toggle is the owner's "I had to click the filter boxes 3-4 times"
+ * report (only clicks on the label text registered once). The wrapping
+ * element owns role="checkbox" + aria-checked; this is just the picture.
+ */
+function CheckGlyph({ checked }: { checked: boolean }) {
+  return (
+    <span aria-hidden className={checkboxBoxClasses(checked)}>
+      {checked && <CheckTick />}
+    </span>
   );
 }
 
@@ -1426,7 +1480,23 @@ function SortMenu({ value, onChange }: { value: SortKey; onChange: (k: SortKey) 
   );
 }
 
-function MultiSelectFilter({
+/**
+ * Multi-select filter dropdown. LIVE-APPLY + OPTIMISTIC: every toggle calls
+ * onChange immediately — the parent (useInstantFilters) flips the visible
+ * state synchronously and debounces the actual navigation, so each click
+ * gives instant feedback while rapid picks coalesce into ONE server
+ * round-trip. Two prior designs both produced the owner's "3-4 clicks"
+ * report and must not come back:
+ *   • per-click router.replace — zero feedback until the round-trip landed;
+ *   • draft-commit-on-popover-close — nothing applied while picking, and
+ *     its Checkbox was a <button> NESTED inside the row <button>, so a
+ *     direct click on the box fired both handlers and self-cancelled.
+ * The row button is now the single interactive element (role="checkbox");
+ * the box itself is the non-interactive CheckGlyph.
+ *
+ * Exported for tests (inventory-table.filters.test.tsx).
+ */
+export function MultiSelectFilter({
   label,
   options,
   selected,
@@ -1439,54 +1509,32 @@ function MultiSelectFilter({
 }) {
   const [open, setOpen] = React.useState(false);
   const [filter, setFilter] = React.useState('');
-  // Local DRAFT selection. Toggling options mutates the draft only — instant,
-  // no navigation — and we commit ONCE when the dropdown closes. Previously
-  // every checkbox click fired onChange → a full server round-trip, so picking
-  // 3 categories meant 3 sequential re-fetches (the "super slow" report).
-  const [draft, setDraft] = React.useState<Set<string>>(() => new Set(selected));
   const visible = filter.trim()
     ? options.filter((o) => o.name.toLowerCase().includes(filter.trim().toLowerCase()))
     : options;
   function toggle(id: string) {
-    setDraft((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange(next);
   }
-  function handleOpenChange(next: boolean) {
-    if (next) {
-      // Opening: re-sync the draft to the applied selection (covers an external
-      // change such as the toolbar's "Clear all filters").
-      setDraft(new Set(selected));
-    } else {
-      // Closing: commit once, only if the draft actually changed.
-      const changed =
-        draft.size !== selected.size || [...draft].some((id) => !selected.has(id));
-      if (changed) onChange(new Set(draft));
-    }
-    setOpen(next);
-  }
-  // While open, reflect the in-progress draft; when closed, the applied count.
-  const shownSelected = open ? draft : selected;
   return (
-    <Popover open={open} onOpenChange={handleOpenChange}>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
           className={cn(
             'inline-flex h-8 items-center gap-1.5 rounded-md border bg-background px-2.5 text-[12px] transition-colors hover:border-[var(--ed-line-strong)]',
-            shownSelected.size > 0
+            selected.size > 0
               ? 'border-foreground text-foreground'
               : 'border-border text-[var(--ed-ink-2)]',
           )}
           aria-label={`Filter by ${label}`}
         >
           <span>{label}</span>
-          {shownSelected.size > 0 && (
+          {selected.size > 0 && (
             <span className="grid h-4 min-w-4 place-items-center rounded-full bg-foreground px-1 font-mono text-[10px] tabular-nums text-background">
-              {shownSelected.size}
+              {selected.size}
             </span>
           )}
           <ChevronDown className="h-3 w-3 text-[var(--ed-ink-4)]" />
@@ -1511,15 +1559,17 @@ function MultiSelectFilter({
             ) : (
               <ul className="flex flex-col">
                 {visible.map((opt) => {
-                  const isOn = shownSelected.has(opt.id);
+                  const isOn = selected.has(opt.id);
                   return (
                     <li key={opt.id}>
                       <button
                         type="button"
+                        role="checkbox"
+                        aria-checked={isOn}
                         onClick={() => toggle(opt.id)}
                         className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-muted"
                       >
-                        <Checkbox checked={isOn} onChange={() => toggle(opt.id)} />
+                        <CheckGlyph checked={isOn} />
                         <span className="truncate">{opt.name}</span>
                       </button>
                     </li>
@@ -1528,11 +1578,11 @@ function MultiSelectFilter({
               </ul>
             )}
           </div>
-          {shownSelected.size > 0 && (
+          {selected.size > 0 && (
             <div className="border-t border-border pt-2">
               <button
                 type="button"
-                onClick={() => setDraft(new Set())}
+                onClick={() => onChange(new Set())}
                 className="text-[11.5px] text-[var(--ed-ink-3)] underline-offset-2 hover:text-foreground hover:underline"
               >
                 Clear {label.toLowerCase()}

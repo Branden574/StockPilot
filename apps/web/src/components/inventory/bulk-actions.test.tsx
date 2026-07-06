@@ -231,7 +231,31 @@ describe('BulkActions', () => {
         onCycleCount={() => {}}
       />,
     );
-    await user.click(screen.getByRole('button', { name: /Clear/i }));
+    await user.click(screen.getByRole('button', { name: /^Clear$/i }));
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  // The bar swaps in over the toolbar when rows are selected, so this
+  // leading checked box sits right where the user's attention is after a
+  // select-all. It mirrors the table header's select-all: one click
+  // unselects everything.
+  it('renders a leading checked checkbox that unselects all on click', async () => {
+    const user = userEvent.setup();
+    const onClear = vi.fn();
+    render(
+      <BulkActions
+        selectedIds={['a', 'b']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={onClear}
+        onCycleCount={() => {}}
+      />,
+    );
+    const box = screen.getByRole('checkbox', { name: /unselect all 2 selected items/i });
+    expect(box).toHaveAttribute('aria-checked', 'true');
+    await user.click(box);
     expect(onClear).toHaveBeenCalledTimes(1);
   });
 });
