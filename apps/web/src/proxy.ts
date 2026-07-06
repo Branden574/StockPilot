@@ -11,8 +11,9 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Explicit allowlist of paths that actually need an auth.getUser() round
-  // trip + cookie refresh. The previous matcher caught everything except
+  // Explicit allowlist of paths that actually need session verification
+  // (getClaims local verify / getUser fallback — see lib/supabase/middleware.ts)
+  // + cookie refresh. The previous matcher caught everything except
   // /_next, /api, and static images, which meant the marketing landing,
   // /p/items, /r/* public order pages, /orders/sign/*, /i/* shortcuts —
   // all anonymous surfaces — paid for a Supabase Auth API call on every

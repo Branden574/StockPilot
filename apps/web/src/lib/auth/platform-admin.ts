@@ -62,8 +62,10 @@ export async function currentUserIsPlatformAdmin(): Promise<boolean> {
  *   1. The proxy matcher covers every /dashboard and /platform route, so
  *      no request reaches those layouts without `updateSession()` running.
  *   2. `updateSession()` sets `x-stockpilot-user-email` ONLY after
- *      `auth.getUser()` validates the session, and unconditionally DELETES
- *      it otherwise — a client-supplied header can never survive.
+ *      cryptographically verifying the session (`auth.getClaims()` local
+ *      ES256 verify, with an `auth.getUser()` network fallback), and
+ *      unconditionally DELETES it otherwise — a client-supplied header can
+ *      never survive.
  *   3. This is the exact trust level the entire org context already rides:
  *      `session.ts` sources the user id from the sibling
  *      `x-stockpilot-user-id` header.

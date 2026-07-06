@@ -63,7 +63,9 @@ function pickOrgName(
 /**
  * Loads user, profile, active membership, and active org name in
  * **one** parallel-pair Supabase round trip. The user id comes from a
- * request header set by the proxy after auth.getUser() validation.
+ * request header set by the proxy after session verification
+ * (auth.getClaims() local JWT verify, auth.getUser() fallback — see
+ * lib/supabase/middleware.ts).
  *
  * Wrapped in React.cache() so every consumer in the same render shares
  * one fetch — layout, page, and every service. Layouts no longer need

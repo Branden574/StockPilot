@@ -21,9 +21,15 @@ export const SESSION_HEADER_USER_EMAIL = 'x-stockpilot-user-email';
 
 /**
  * Refreshes the Supabase session on every request and gates protected routes.
- * After validating with auth.getUser() (the only secure path), exposes the
- * user id + email as request headers so server components can trust them
- * without making a second round trip to the Auth API.
+ * After CRYPTOGRAPHICALLY verifying the session (auth.getClaims() local ES256
+ * verify on the warm path, auth.getUser() network verify as the fallback),
+ * exposes the user id + email as request headers so server components can
+ * trust them without making a second round trip to the Auth API.
+ *
+ * TRUST CHAIN (cited by src/lib/auth/platform-admin.ts + src/lib/auth/session.ts
+ * — keep those comments in sync): the identity headers are set ONLY after one
+ * of the two verification paths above succeeds, and are unconditionally
+ * DELETED otherwise, so a client-supplied header can never survive.
  */
 export async function updateSession(request: NextRequest) {
   // Track any cookies the supabase client wants to set (token refreshes).
@@ -54,10 +60,60 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  // The single auth.getUser() call per request.
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // ── Session verification: local-first, network only when needed ────
+  //
+  // FAST PATH — auth.getClaims() (cold-start perf plan item 1): verifies the
+  // session JWT LOCALLY with WebCrypto against the project's asymmetric ES256
+  // signing key (JWKS fetched from /auth/v1/.well-known/jwks.json and held in
+  // a module-GLOBAL cache shared by every per-request client in this runtime,
+  // 10-min TTL — see GLOBAL_JWKS in @supabase/auth-js). This removes the
+  // per-request GoTrue round trip (~40-150ms of TTFB) that getUser() paid.
+  //
+  // Token REFRESH still works: no-arg getClaims() loads the session via
+  // getSession(), which refreshes an expired/near-expiry (≤90s) access token
+  // over the network first — the "returning after >1h idle" user gets fresh
+  // cookies through the same setAll plumbing above, THEN a local verify.
+  // On an HS256 token or missing WebCrypto, getClaims() itself falls back to
+  // a getUser() network verify, so local dev (HS256) keeps working unchanged.
+  //
+  // SECURITY — revocation semantics: a locally-verified token is accepted
+  // until exp even if the session was revoked server-side. This matches the
+  // enforcement level of the actual data boundary: Postgres RLS also accepts
+  // any validly-signed unexpired JWT without consulting GoTrue. Revocation UX
+  // is handled by the device-eviction broadcast (sign-out/password-reset fire
+  // it; listeners sign out in ~1s). Every stronger-than-RLS gate (platform
+  // admin, AAL2, step-up) makes its OWN live auth calls — see
+  // src/lib/auth/platform-admin.ts.
+  //
+  // SLOW PATH — when the fast path can't establish identity (no session,
+  // failed refresh, JWKS fetch hiccup, malformed cookie), fall back to
+  // exactly the pre-getClaims behavior: one auth.getUser() network round
+  // trip. With no session at all this returns immediately without a network
+  // call, so anonymous requests don't regress.
+  let userId: string | null = null;
+  let userEmail: string | null = null;
+
+  try {
+    const { data: claimsData } = await supabase.auth.getClaims();
+    if (claimsData?.claims.sub) {
+      userId = claimsData.claims.sub;
+      userEmail = claimsData.claims.email ?? null;
+    }
+  } catch {
+    // getClaims() rethrows non-Auth errors (e.g. WebCrypto import failures on
+    // a garbage JWK). Never 500 the whole request over that — let the slow
+    // path give the authoritative answer.
+  }
+
+  if (userId === null) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      userId = user.id;
+      userEmail = user.email ?? null;
+    }
+  }
 
   const { pathname, search } = request.nextUrl;
   const isProtected = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
@@ -84,7 +140,7 @@ export async function updateSession(request: NextRequest) {
     pathname !== '/reset' &&
     !pathname.startsWith('/reset/');
 
-  if (isProtected && !user) {
+  if (isProtected && !userId) {
     const url = request.nextUrl.clone();
     url.pathname = '/signin';
     url.searchParams.set('redirect', `${pathname}${search}`);
@@ -95,7 +151,7 @@ export async function updateSession(request: NextRequest) {
     return redirectRes;
   }
 
-  if (isAuthRoute && user) {
+  if (isAuthRoute && userId) {
     const url = request.nextUrl.clone();
     url.pathname = '/dashboard';
     url.search = '';
@@ -111,9 +167,9 @@ export async function updateSession(request: NextRequest) {
   // Pathname is exposed so layouts/RSCs can branch on the current route
   // without re-parsing the URL (server components don't have usePathname).
   requestHeaders.set('x-pathname', request.nextUrl.pathname);
-  if (user) {
-    requestHeaders.set(SESSION_HEADER_USER_ID, user.id);
-    requestHeaders.set(SESSION_HEADER_USER_EMAIL, user.email ?? '');
+  if (userId) {
+    requestHeaders.set(SESSION_HEADER_USER_ID, userId);
+    requestHeaders.set(SESSION_HEADER_USER_EMAIL, userEmail ?? '');
   } else {
     requestHeaders.delete(SESSION_HEADER_USER_ID);
     requestHeaders.delete(SESSION_HEADER_USER_EMAIL);
