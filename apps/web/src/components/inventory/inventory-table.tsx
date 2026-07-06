@@ -161,14 +161,19 @@ export interface InstantInventoryDataset {
 }
 
 /**
- * FIRST-ROWS-FIRST STREAMING (cold-start plan rank 4): what the page's
- * UNAWAITED dataset promise resolves to. The default view server-renders
+ * FIRST-ROWS-FIRST STREAMING (React 19 use()): what the page's UNAWAITED
+ * dataset promise resolves to. The default manager+ view server-renders
  * immediately from the small 30-row cached payload (server mode), while
- * this full dataset streams behind it over the same RSC response; the
- * table adopts it in an effect and flips into instant mode — same
- * components, same data, only the delivery order changed. `null` =
- * dataset unavailable (over-cap org or loader failure) → the table stays
- * in server mode, byte-identical to today.
+ * this full dataset streams behind it over the same RSC response; an
+ * invisible <InstantDatasetAdopter> reads it with React.use() and hands
+ * it to the (still-mounted) table, which flips into instant mode — SAME
+ * component instance, same data, only the delivery order changed. `null`
+ * = dataset unavailable (over-cap org or loader failure) → the table
+ * stays in server mode, byte-identical to today. The promise NEVER
+ * rejects (the page resolves null on failure), so nothing in the client
+ * path ever calls `.catch` — this is the supported replacement for the
+ * reverted `.then().catch()` effect that crashed hydration (recurring
+ * bug pattern #15).
  */
 export interface InstantAdoptedPayload {
   items: InstantDatasetItem[];
@@ -272,13 +277,14 @@ export interface InventoryTableProps {
       over-cap orgs, every other caller) → server mode, byte-identical
       to today. */
   instant?: InstantInventoryDataset;
-  /** First-rows-first streaming (rank 4) — see InstantAdoptedPayload.
-      Only the manager+ DEFAULT view passes this; deep links pass the
-      awaited `instant` prop instead. While it's pending the table runs
-      in server mode over the initial 30 rows, EXCEPT that keystrokes
-      never route to the server-filter path — they buffer in local state
-      (with the synchronous local match as interim feedback) and apply
-      through the instant pipeline the moment the dataset lands. */
+  /** First-rows-first streaming — see InstantAdoptedPayload. Only the
+      manager+ DEFAULT view passes this; deep links pass the awaited
+      `instant` prop instead. While it's pending the table runs in server
+      mode over the initial 30 rows; keystrokes take today's server-search
+      path until the dataset lands, at which point the SAME (preserved)
+      search box re-derives locally over the full dataset. Consumed via
+      React.use() in <InstantDatasetAdopter> — NEVER a `.then().catch()`
+      effect (pattern #15). */
   instantPromise?: Promise<InstantAdoptedPayload | null>;
 }
 
@@ -422,6 +428,38 @@ function seriesForRow(
   return new Array<number>(14).fill(mode === 'qty' ? currentQty : 0);
 }
 
+/**
+ * Invisible dataset adopter (React 19 use()). The default manager+ table
+ * mounts in server mode over the fast 30-row payload and the FULL instant
+ * dataset arrives as `promise` — an unawaited server promise streamed
+ * across the RSC boundary. This leaf reads it with React.use(), which
+ * suspends ONLY this leaf (behind the table's own `<Suspense fallback=
+ * {null}>`, so the 30 rows stay painted the whole time), then hands the
+ * resolved value to the still-mounted table via `onResolve`. Because the
+ * table never unmounts, its search box, selection, scroll and every other
+ * local state survive the server→instant flip.
+ *
+ * This is the supported replacement for the reverted
+ * `instantPromise.then().catch()` effect (recurring bug pattern #15): the
+ * promise is consumed by use(), never a hand-rolled effect, and it
+ * resolves `null` on failure so there is no `.catch` anywhere in the
+ * client path. `onResolve` only ever receives an already-settled plain
+ * value (dataset object or null) — never a floating promise.
+ */
+function InstantDatasetAdopter({
+  promise,
+  onResolve,
+}: {
+  promise: Promise<InstantAdoptedPayload | null>;
+  onResolve: (payload: InstantAdoptedPayload | null) => void;
+}): null {
+  const payload = React.use(promise);
+  React.useEffect(() => {
+    onResolve(payload);
+  }, [payload, onResolve]);
+  return null;
+}
+
 export function InventoryTable({
   items,
   lookups,
@@ -449,35 +487,25 @@ export function InventoryTable({
   instant,
   instantPromise,
 }: InventoryTableProps) {
-  // ── Streamed-dataset adoption (rank 4) ──────────────────────────────
-  // The default view mounts in server mode with the 30-row payload while
-  // the full dataset streams behind as `instantPromise`. When it
-  // resolves, the table flips into instant mode with zero visual change
-  // for the current URL state (the 30 cached rows ARE page 1 of the
-  // default derivation, by the loader parity contract). `null` resolution
-  // (over-cap org / loader failure) drops back to plain server mode.
+  // ── Streamed-dataset adoption (React 19 use()) ──────────────────────
+  // The default manager+ view mounts in server mode over the fast 30-row
+  // payload while the FULL instant dataset arrives as `instantPromise` —
+  // an unawaited server promise streamed across the RSC boundary. The
+  // invisible <InstantDatasetAdopter> rendered below reads it with
+  // React.use() (suspending ONLY itself, behind a `fallback={null}` — the
+  // 30 rows stay painted) and calls setAdopted with the resolved value.
+  // Because THIS component instance never unmounts, the search box,
+  // selection, scroll and sparkline mode all survive the server→instant
+  // flip, and any keystrokes typed during the gap re-derive over the full
+  // dataset the moment it lands (the 30 cached rows ARE page 1 of the
+  // default derivation, by the loader parity contract). `null` (over-cap
+  // org / loader failure) keeps plain server mode. The promise is
+  // consumed by use(), NEVER a `.then().catch()` effect — that was the
+  // reverted crash (recurring bug pattern #15).
   const [adopted, setAdopted] = React.useState<InstantAdoptedPayload | null>(null);
-  const [awaitingInstant, setAwaitingInstant] = React.useState<boolean>(
-    instant == null && instantPromise != null,
-  );
-  React.useEffect(() => {
-    if (!instantPromise) return;
-    let cancelled = false;
-    instantPromise
-      .then((payload) => {
-        if (cancelled) return;
-        setAdopted(payload);
-        setAwaitingInstant(false);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setAdopted(null);
-        setAwaitingInstant(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [instantPromise]);
+  const handleAdopt = React.useCallback((payload: InstantAdoptedPayload | null) => {
+    setAdopted(payload);
+  }, []);
 
   // The dataset the derivation actually runs over: the awaited prop
   // (deep links) wins; otherwise the adopted streamed payload.
@@ -753,13 +781,13 @@ export function InventoryTable({
   // dedicated effect below keeps the URL in sync via shallow
   // replaceState instead.
   React.useEffect(() => {
-    // HARD CONTRACT (rank 4): while the streamed dataset is pending,
-    // keystrokes must NOT route to the server-filter path — they buffer
-    // in local state (localMatches gives interim feedback) and apply
-    // through the instant pipeline when the dataset lands. If the
-    // dataset resolves null instead, this effect re-runs (awaitingInstant
-    // flipped) and the buffered q takes today's server-search path.
-    if (instantMode || awaitingInstant) return;
+    // Streamed default view (instantPromise pending, not yet adopted):
+    // the table is still in server mode here, so keystrokes take today's
+    // server-search path until the dataset lands. The instant of adoption
+    // instantMode flips true, this effect re-runs and early-returns, and
+    // the SAME q re-derives locally over the full dataset (the search box
+    // is preserved — the table never remounts).
+    if (instantMode) return;
     const needle = q.trim();
     if (!needle) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
@@ -838,7 +866,7 @@ export function InventoryTable({
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, instantMode, awaitingInstant]);
+  }, [q, instantMode]);
 
   // INSTANT-MODE URL SYNC for the search box: mirror server mode's URL
   // shape (?q=needle, ?page dropped on any q change) with a debounced
@@ -943,6 +971,18 @@ export function InventoryTable({
 
   return (
     <div className="space-y-4">
+      {/* React 19 use() dataset handoff: an invisible leaf that suspends
+          on `instantPromise` behind its OWN `fallback={null}` (so the
+          table rows above stay painted) and adopts the full dataset into
+          local state the moment it streams in. Only the streamed default
+          view passes instantPromise; deep links pass the awaited `instant`
+          prop and never mount this. See the adoption note by the `adopted`
+          state above. */}
+      {instantPromise != null && instant == null && (
+        <React.Suspense fallback={null}>
+          <InstantDatasetAdopter promise={instantPromise} onResolve={handleAdopt} />
+        </React.Suspense>
+      )}
       {/* Saved views — built-in chips first, then user-saved, then save button */}
       <div className="flex flex-wrap items-center gap-2">
         {VIEWS.map((v) => (

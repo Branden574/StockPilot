@@ -310,19 +310,20 @@ describe('InventoryTable instant mode', () => {
   });
 });
 
-// FIRST-ROWS-FIRST STREAMING (cold-start plan rank 4): the default view
+// FIRST-ROWS-FIRST STREAMING (React 19 use() handoff): the default view
 // mounts in server mode with the 30-row payload while the full dataset
-// streams behind as `instantPromise`. HARD CONTRACT under test:
-//   (a) rows are visible before the dataset settles,
-//   (b) keystrokes during the gap NEVER route to the server-filter path
-//       (no /api/items/search fetch, no router navigation) — they buffer
-//       locally,
-//   (c) the moment the dataset lands, the buffered search applies through
-//       the instant pipeline and yields the identical complete answer,
-//   (d) a null resolution (over-cap org / loader failure) drops back to
-//       plain server mode, including re-enabling the server search for
-//       any buffered keystrokes.
-describe('InventoryTable streamed instant adoption (rank 4)', () => {
+// streams behind as `instantPromise`. An invisible <InstantDatasetAdopter>
+// reads it with React.use() and adopts it into the STILL-MOUNTED table
+// (no `.then().catch()` effect — that was the reverted crash, pattern
+// #15). HARD CONTRACT under test:
+//   (a) the server rows are visible before the dataset settles,
+//   (b) once the dataset lands the table flips into instant mode and an
+//       in-progress search re-derives over the FULL dataset — the search
+//       box survives because the table instance never remounts,
+//   (c) a null resolution (over-cap org / loader failure) leaves the
+//       table in plain server mode, where search keeps routing to
+//       /api/items/search.
+describe('InventoryTable streamed instant adoption (use() handoff)', () => {
   const fetchSpy = vi.fn();
 
   beforeEach(() => {
@@ -348,7 +349,7 @@ describe('InventoryTable streamed instant adoption (rank 4)', () => {
     );
   }
 
-  it('renders the server rows immediately, buffers keystrokes off the server-search path, then applies them via the instant pipeline when the dataset lands', async () => {
+  it('renders the server rows immediately, then re-derives an in-progress search over the FULL dataset once it lands (search box preserved — the table never remounts)', async () => {
     const user = userEvent.setup();
     let resolvePayload!: (p: InstantAdoptedPayload | null) => void;
     const promise = new Promise<InstantAdoptedPayload | null>((resolve) => {
@@ -360,19 +361,16 @@ describe('InventoryTable streamed instant adoption (rank 4)', () => {
     expect(screen.getByRole('link', { name: 'Alpha Widget' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Beta Gadget' })).toBeInTheDocument();
 
-    // (b) type during the gap: local narrowing only — give the 150ms
-    // server-search debounce ample time to prove it never fires.
-    await user.type(screen.getByRole('textbox', { name: /search items/i }), 'beta');
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(routerMock.replace).not.toHaveBeenCalled();
-    expect(routerMock.push).not.toHaveBeenCalled();
+    // Type during the gap: local narrowing gives immediate feedback.
+    const box = screen.getByRole('textbox', { name: /search items/i });
+    await user.type(box, 'beta');
     expect(screen.getByRole('link', { name: 'Beta Gadget' })).toBeInTheDocument();
     expect(screen.queryByText('Alpha Widget')).not.toBeInTheDocument();
 
-    // (c) dataset lands (includes an OFF-PAGE row the 30-row payload
-    // never had) → the buffered q now derives over the FULL dataset with
-    // complete instant-mode totals, still zero server traffic.
+    // (b) dataset lands (includes an OFF-PAGE row the 30-row payload never
+    // had) → the PRESERVED q='beta' now derives over the FULL dataset with
+    // complete instant-mode totals, and the search box still reads 'beta'
+    // (proving the table instance was never torn down and re-mounted).
     resolvePayload({
       items: [
         item({ id: 'a', name: 'Alpha Widget' }),
@@ -383,9 +381,10 @@ describe('InventoryTable streamed instant adoption (rank 4)', () => {
     });
     expect(await screen.findByRole('link', { name: 'Beta Offpage' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Beta Gadget' })).toBeInTheDocument();
+    expect(screen.queryByText('Alpha Widget')).not.toBeInTheDocument();
+    expect(box).toHaveValue('beta');
     expect(screen.getByText(/2 SKUs/)).toBeInTheDocument();
     expect(screen.queryByText(/searching…/)).not.toBeInTheDocument();
-    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('adopts the streamed dataset with no URL state: the visible rows stay identical (30-row payload IS page 1 of the derivation)', async () => {
@@ -406,21 +405,15 @@ describe('InventoryTable streamed instant adoption (rank 4)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('null resolution (over-cap org / loader failure) drops back to plain server mode and re-enables the server search for buffered keystrokes', async () => {
+  it('null resolution (over-cap org / loader failure) leaves the table in plain server mode — search still routes to /api/items/search', async () => {
     const user = userEvent.setup();
-    let resolvePayload!: (p: InstantAdoptedPayload | null) => void;
-    const promise = new Promise<InstantAdoptedPayload | null>((resolve) => {
-      resolvePayload = resolve;
-    });
-    renderStreaming(promise);
+    renderStreaming(Promise.resolve(null));
 
+    // Server rows present; the null adoption is a no-op (no instant flip).
+    expect(await screen.findByRole('link', { name: 'Alpha Widget' })).toBeInTheDocument();
+
+    // A search now takes today's server path (instant mode never engaged).
     await user.type(screen.getByRole('textbox', { name: /search items/i }), 'beta');
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(fetchSpy).not.toHaveBeenCalled();
-
-    resolvePayload(null);
-    // Server mode resumes: the buffered q now takes today's
-    // /api/items/search path.
     await vi.waitFor(() => {
       expect(fetchSpy).toHaveBeenCalled();
     });

@@ -7,7 +7,7 @@ export const metadata: Metadata = { title: 'Inventory' };
 
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
-import { InventoryTable } from '@/components/inventory/inventory-table';
+import { InventoryTable, type InstantAdoptedPayload } from '@/components/inventory/inventory-table';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
@@ -227,6 +227,55 @@ type SectionData = {
   placementMap: Map<string, InventoryPlacementLine[]>;
 };
 
+/**
+ * The full instant-mode dataset as an UNAWAITED promise for the streamed
+ * default view. Assembly mirrors the awaited instant branch verbatim
+ * (dataset rows → payload-diet signed URLs → full-dataset trends), but it
+ * NEVER rejects: every failure — over-cap org (loadInventoryDataset →
+ * null), a loader error, an image-signing error — resolves `null`, which
+ * the client table reads via React.use() as "no instant upgrade, stay in
+ * server mode." A rejecting promise crossing the RSC boundary would
+ * surface as a client error; resolving null is the hard contract that
+ * keeps recurring bug pattern #15 dead. The floating promise is observed
+ * by React (it's a client-component prop), and its internal catch means
+ * it can never become an unhandled rejection either.
+ */
+async function buildInstantAdoptedPayload(
+  organizationId: string,
+  warehouseKey: string,
+): Promise<InstantAdoptedPayload | null> {
+  try {
+    const [dataset, trendBuckets] = await Promise.all([
+      loadInventoryDataset(organizationId, warehouseKey, 'items'),
+      loadInventoryTrendBuckets(organizationId),
+    ]);
+    if (!dataset) return null;
+    // Payload-diet (thumb-only) rows — identical shape to the awaited
+    // instant branch so a realtime refresh never flips the row shape.
+    const items = await resolveInventoryListImages(organizationId, dataset.items, {
+      payloadDiet: true,
+    });
+    return {
+      items,
+      placement: dataset.placement,
+      // Full-dataset trends from the org-wide buckets (pure CPU) so every
+      // locally-derived page has its sparklines ready the moment the
+      // table flips into instant mode.
+      trends: deriveInventoryTrends(
+        items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+        trendBuckets,
+      ),
+      view: 'items',
+    };
+  } catch (err) {
+    console.warn(
+      '[inventory page] instant dataset stream unavailable, staying in server mode:',
+      err,
+    );
+    return null;
+  }
+}
+
 async function InventoryTableSection({
   params,
   lifecycleStatus,
@@ -272,13 +321,16 @@ async function InventoryTableSection({
 
   const canCreate = can(sessionCtx, 'items:create');
 
-  // INSTANT MODE — the whole-view fast path (owner-approved design):
-  // manager+ orgs at or under INSTANT_MODE_MAX_ROWS get the FULL Items
-  // dataset (every status, every page — one cached loader read), and
-  // the table searches/filters/sorts/paginates locally with ZERO server
-  // round trips. Deep links still server-render correctly: the SAME
-  // pure derivation (lib/inventory/instant-mode.ts) runs here for the
-  // empty-state branches and inside the table's SSR pass.
+  // INSTANT MODE (AWAITED) — DEEP LINKS ONLY (see the streaming note
+  // below for the default view). For a manager+ deep link at or under
+  // INSTANT_MODE_MAX_ROWS this AWAITS the FULL Items dataset (every
+  // status, every page — one cached loader read) so the table's SSR HTML
+  // reflects the exact URL state, then searches/filters/sorts/paginates
+  // locally with ZERO server round trips. The SAME pure derivation
+  // (lib/inventory/instant-mode.ts) runs here for the empty-state
+  // branches and inside the table's SSR pass. The DEFAULT view no longer
+  // enters this branch (`!isDefaultView`): it paints the 30-row server
+  // payload immediately and STREAMS this dataset instead (unawaited).
   //
   // Coverage boundary: only the view's own item type — a ?type=book|
   // asset|consumable|all deep link asks for rows the 'items' dataset
@@ -292,28 +344,28 @@ async function InventoryTableSection({
     trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
   } | null = null;
 
-  // FIRST-ROWS-FIRST STREAMING (cold-start plan rank 4) — DEFAULT VIEW
-  // ONLY: instead of awaiting the full dataset pipeline before anything
-  // renders, the default view server-renders immediately from the small
-  // cached 30-row payload (the branch below) and ships the full instant
-  // dataset as this UNAWAITED promise, which React streams over the same
-  // RSC response when it resolves. The client table adopts it in an
-  // effect and flips into instant mode (~<1s later) with zero visual
-  // change — the 30 cached rows ARE page 1 of the default derivation by
-  // the loader parity contract. Deep links (any data-affecting param)
-  // keep the AWAITED instant branch below so their SSR HTML still
-  // reflects the exact URL state. Never rejects: every failure resolves
-  // null → the table stays in server mode (today's behavior).
-  // NOTE (2026-07-06): rank-4 "first-rows-first streaming" was reverted —
-  // passing the unawaited dataset promise to the client table crashed the
-  // page render (`.catch` on undefined during hydration). The default view
-  // now flows through the SAME awaited instant branch as deep links below,
-  // which is known-good. The rest of the cold-start batch (batch signing,
-  // payload diet, warmup, region pin) is unaffected. Streaming can be
-  // reattempted later with a `use()`-based handoff instead of an effect.
+  // FIRST-ROWS-FIRST STREAMING (React 19 use()) — DEFAULT VIEW ONLY.
+  // Instead of awaiting the full dataset pipeline before anything paints,
+  // the default view server-renders immediately from the small cached
+  // 30-row payload (the loadInventoryList branch below) and ships the
+  // FULL instant dataset as an UNAWAITED promise (buildInstantAdoptedPayload,
+  // attached to the final render). React streams that promise over the
+  // same RSC response; the client table reads it with React.use() in an
+  // invisible <InstantDatasetAdopter> and flips into instant mode (~<1s
+  // later) with zero visual change — the 30 cached rows ARE page 1 of the
+  // default derivation by the loader parity contract, and the table
+  // instance is preserved (search box / selection survive). The promise
+  // NEVER rejects: every failure resolves null → the table stays in
+  // server mode (today's behavior). This replaces the reverted
+  // effect+`.catch` handoff that crashed hydration (recurring bug
+  // pattern #15).
+  //
+  // Deep links (any data-affecting param → !isDefaultView) keep the
+  // AWAITED instant branch below so their SSR HTML reflects the exact URL
+  // state; only the default view streams.
   const isDefaultView = isDefaultInventoryView(params, 'items');
 
-  if (useSharedCaches && itemType === 'product') {
+  if (useSharedCaches && itemType === 'product' && !isDefaultView) {
     // Data acquisition only in here — the JSX renders after the
     // try/catch (react-hooks/error-boundaries: a thrown render wouldn't
     // be caught here anyway). Any failure → instantData stays null →
@@ -413,9 +465,10 @@ async function InventoryTableSection({
   // prewarm cron keeps warm. isDefaultInventoryView is mandatory — any
   // data-affecting param takes the live path unchanged. The warehouse-
   // filter cookie changes the data, so it's part of the cache key. A
-  // loader failure falls through to the live path. Since rank 4 this IS
-  // the default view's first paint (server mode + streamed
-  // instantPromise) instead of a rarely-hit fallback.
+  // loader failure falls through to the live path. This IS the default
+  // view's first paint now: it renders in server mode over these 30 rows
+  // and STREAMS the full instant dataset behind it (instantPromise on the
+  // final render), instead of blocking on the awaited dataset branch above.
   if (isDefaultView && useSharedCaches) {
     try {
       const payload = await loadInventoryList(
@@ -642,6 +695,24 @@ async function InventoryTableSection({
   });
   if (emptyState) return emptyState;
 
+  // FIRST-ROWS-FIRST STREAMING: on the DEFAULT manager+ Items view, ship
+  // the full instant dataset as an UNAWAITED promise alongside the 30-row
+  // server-mode render above. React streams it over the same RSC
+  // response; the client table reads it with React.use() and flips into
+  // instant mode without blocking this first paint. Created AFTER the
+  // empty-state return so an empty org never spins up the loader.
+  // Everyone else — staff/viewer (no shared caches), non-product/deep
+  // links (took the awaited `instant` branch or need the live path) —
+  // gets undefined and stays byte-identical to today. undefined is passed
+  // explicitly so the prop is inert.
+  const instantPromise =
+    isDefaultView && useSharedCaches && itemType === 'product'
+      ? buildInstantAdoptedPayload(
+          sessionCtx.organizationId,
+          warehouseFilter ?? ALL_WAREHOUSES_KEY,
+        )
+      : undefined;
+
   return (
     <InventoryTable
       items={placementRows}
@@ -662,6 +733,7 @@ async function InventoryTableSection({
       savedViewScope="inventory"
       activeWarehouseId={warehouseFilter}
       currentUserId={sessionCtx.userId}
+      instantPromise={instantPromise}
     />
   );
 }
