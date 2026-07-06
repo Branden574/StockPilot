@@ -1,9 +1,6 @@
-import { createHash } from 'node:crypto';
-
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
-import { createAdminClient } from '@/lib/supabase/admin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,24 +17,32 @@ const TOKEN_RE = /^[0-9a-f]{64}$/i;
  * `/r/confirm?id=<uuid>&t=<hex>` — landing page for the click-to-
  * confirm link emailed to every public order requester.
  *
- * Why a server-rendered page rather than a JSON endpoint:
- *   * The recipient already has the URL in their inbox — let them
- *     click it directly from any device and see a friendly result.
- *   * No client-side state to worry about; the whole flow is one
- *     GET → RPC → render.
- *   * The token is consumed by the RPC even on bot prefetches
- *     (Outlook scanning, link-warmer crawlers). That's a deliberate
- *     tradeoff: the alternative — wait for an explicit "Confirm"
- *     button click — would let attackers DoS the confirmation window
- *     for victims behind aggressive link scanners. One-click confirm
- *     is the standard pattern for transactional emails.
+ * GET must NOT consume the token. Corporate/school email security
+ * scanners prefetch links within seconds of delivery (observed live
+ * 2026-07-02 on the password-recovery flow: a one-time link consumed by
+ * a GET 28s after send, before the human ever clicked). If this render
+ * called the confirm RPC, a scanner would "confirm" the request with no
+ * human involved — voiding the email-ownership signal the whole
+ * pending_confirmation flow exists to capture (the manager queue only
+ * sees rows the requester provably confirmed; see migration 0108 and
+ * api/v1/public/order-requests). So:
+ *   - GET renders a click-through page carrying the token in a hidden
+ *     form. Scanners follow GET/HEAD but don't submit forms.
+ *   - Only the form's POST (`/r/confirm/submit`) calls the
+ *     `confirm_public_order_request` RPC that consumes the token.
+ * Same pattern as /auth/confirm, which had the identical problem.
+ * `force-dynamic` keeps the response out of any shared cache (no-store)
+ * since the page body carries the one-time token; metadata sets noindex.
  *
- * Render states:
- *   - success → row promoted to pending_approval; show a small
- *     "Confirmed!" panel.
- *   - already_confirmed / expired / invalid → ambiguous UI on
- *     purpose; we don't tell the user which check failed.
- *   - malformed query → same generic invalid page.
+ * Render states (all side-effect-free GETs):
+ *   - id + t valid    → click-through "Confirm" panel.
+ *   - ?done=<uuid>    → post-POST success panel (row promoted to
+ *     pending_approval). Cosmetic — the real state lives in the DB.
+ *   - ?e=1            → post-POST failure panel. Ambiguous on purpose;
+ *     invalid / expired / already-used all render the same copy, so a
+ *     second POST of a consumed token lands on "already used", not an
+ *     error page, and we never tell a probing caller which check failed.
+ *   - malformed query → same generic invalid panel.
  */
 export default async function ConfirmOrderRequestPage({
   searchParams,
@@ -45,6 +50,14 @@ export default async function ConfirmOrderRequestPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const sp = await searchParams;
+  const done = firstParam(sp.done);
+  if (done && UUID_RE.test(done)) {
+    return <ConfirmedPanel id={done} />;
+  }
+  if (firstParam(sp.e) !== null) {
+    return <InvalidPanel />;
+  }
+
   const id = firstParam(sp.id);
   const token = firstParam(sp.t);
 
@@ -52,20 +65,37 @@ export default async function ConfirmOrderRequestPage({
     return <InvalidPanel />;
   }
 
-  // Hash before the RPC so the plaintext only ever lives in the URL
-  // (which the recipient already has).
-  const tokenHash = createHash('sha256').update(token).digest('hex');
+  return (
+    <div className="mx-auto max-w-md py-6">
+      <header className="text-center">
+        <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.12em]">
+          StockPilot
+        </p>
+        <h1 className="font-display mt-1 text-[26px] font-medium leading-tight tracking-[-0.025em]">
+          Confirm your order request
+        </h1>
+        <p className="text-muted-foreground mt-3 text-sm">
+          This link works once. Press the button below and we&apos;ll send
+          your request to the team for review.
+        </p>
+      </header>
+      <div className="bg-card border-border mt-6 rounded-xl border p-4 text-sm">
+        <p className="text-muted-foreground text-xs">Request ID</p>
+        <p className="font-mono break-all">{id}</p>
+      </div>
+      {/* Plain HTML form POST — zero JS, works in every mail-client
+          browser, and (unlike a server action) survives a deploy between
+          the email GET and the human's click. */}
+      <form method="post" action="/r/confirm/submit" className="mt-6 text-center">
+        <input type="hidden" name="id" value={id} />
+        <input type="hidden" name="t" value={token} />
+        <Button type="submit">Confirm order request</Button>
+      </form>
+    </div>
+  );
+}
 
-  const admin = createAdminClient();
-  const { data, error } = await admin.rpc('confirm_public_order_request', {
-    p_id: id,
-    p_token_hash: tokenHash,
-  });
-
-  if (error || !data) {
-    return <InvalidPanel />;
-  }
-
+function ConfirmedPanel({ id }: { id: string }) {
   return (
     <div className="mx-auto max-w-md py-6">
       <header className="text-center">
@@ -77,7 +107,7 @@ export default async function ConfirmOrderRequestPage({
         </h1>
         <p className="text-muted-foreground mt-3 text-sm">
           Thanks — your order request has been sent to the team for review.
-          You'll get another email when a manager approves or declines it.
+          You&apos;ll get another email when a manager approves or declines it.
         </p>
       </header>
       <div className="bg-card border-border mt-6 rounded-xl border p-4 text-sm">
@@ -101,7 +131,7 @@ function InvalidPanel() {
           StockPilot
         </p>
         <h1 className="font-display mt-1 text-[26px] font-medium leading-tight tracking-[-0.025em]">
-          We couldn't confirm this request
+          We couldn&apos;t confirm this request
         </h1>
         <p className="text-muted-foreground mt-3 text-sm">
           This link is either invalid, expired, or already used. If you still

@@ -1,6 +1,10 @@
 import 'server-only';
 
 import { sendEmail } from './resend';
+import {
+  buildPublicUnsubscribeUrl,
+  normalizeUnsubscribeEmail,
+} from './unsubscribe';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import type { OrderRequestRow } from '@/server/services/order-requests';
@@ -253,13 +257,57 @@ function buildTrackUrl(
     : base;
 }
 
-function buildUnsubscribeUrl(appUrl: string, recipientEmail: string): string {
-  // Unsigned for now — the real Gmail/Yahoo compliance work would mint
-  // a 90-day HMAC token here and validate it on the destination route.
-  // Today we route to the per-event preferences page; the dashboard
-  // gate forwards anonymous visitors to login, which is acceptable
-  // until the public preferences surface is built.
-  return `${appUrl}/dashboard/settings/notifications?email=${encodeURIComponent(recipientEmail)}`;
+/**
+ * Where the footer "Manage notifications" link and the List-Unsubscribe
+ * header point.
+ *
+ * Signed-in requesters keep the in-app preferences page — they can log
+ * in, and their per-event prefs (migration 0113) are the source of
+ * truth there.
+ *
+ * Public-link requesters are ANONYMOUS: the dashboard page dead-ends
+ * them on /signin, which broke the unsubscribe promise (and the
+ * Gmail/Yahoo bulk-sender requirement). They get the PUBLIC
+ * /unsubscribe route instead, signed with an HMAC of the address so
+ * the link can't be forged to unsubscribe someone else — and that
+ * signed URL supports the RFC 8058 one-click POST (`oneClick`). Falls
+ * back to the in-app URL only when UNSUBSCRIBE_SECRET isn't configured
+ * (the signer fails closed; see lib/email/unsubscribe.ts).
+ */
+function buildUnsubscribeUrl(
+  row: OrderRequestRow,
+  appUrl: string,
+  recipientEmail: string,
+): { url: string; oneClick: boolean } {
+  const inApp = `${appUrl}/dashboard/settings/notifications?email=${encodeURIComponent(recipientEmail)}`;
+  if (row.requester_user_id) {
+    return { url: inApp, oneClick: false };
+  }
+  const publicUrl = buildPublicUnsubscribeUrl(appUrl, recipientEmail);
+  return publicUrl ? { url: publicUrl, oneClick: true } : { url: inApp, oneClick: false };
+}
+
+/**
+ * True when the address opted out via the public /unsubscribe page
+ * (migration 0222). Fail-OPEN on infra errors — same posture as
+ * OrderRequestsService.wantsEmail: silently dropping an order-status
+ * email on a DB blip is worse than sending one the recipient opted out
+ * of, and dev environments without a service-role key still send their
+ * dry-run emails.
+ */
+async function isPublicEmailUnsubscribed(email: string): Promise<boolean> {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from('public_email_unsubscribes')
+      .select('email')
+      .eq('email', normalizeUnsubscribeEmail(email))
+      .maybeSingle();
+    if (error) return false;
+    return data != null;
+  } catch {
+    return false;
+  }
 }
 
 // ─── Inline brand mark (rendered in modern clients; Outlook hides) ──
@@ -518,6 +566,20 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
     );
   }
 
+  // Public-recipient suppression list (migration 0222). Anonymous
+  // requesters have no notification_preferences row, so /unsubscribe
+  // clicks land in public_email_unsubscribes — honor them here, the
+  // single choke point every order-request email flows through.
+  // `confirm_request` is exempt on purpose: it's the double-opt-in
+  // consent email the requester just triggered by submitting the form,
+  // and suppressing it would silently brick their request ("check your
+  // email" … nothing ever arrives); nothing further can be sent unless
+  // they DO confirm. Signed-in requesters are governed by their in-app
+  // prefs instead (OrderRequestsService.wantsEmail).
+  if (!request.requester_user_id && kind !== 'confirm_request') {
+    if (await isPublicEmailUnsubscribed(recipientEmail)) return;
+  }
+
   const orderId = `WO-${request.id.slice(0, 8).toUpperCase()}`;
   const summary = await fetchSummary(request);
 
@@ -525,7 +587,7 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
     kind === 'confirm_request' && confirmationToken
       ? `${appUrl}/r/confirm?id=${request.id}&t=${encodeURIComponent(confirmationToken)}`
       : buildTrackUrl(request, appUrl, recipientEmail, publicRequestToken ?? null);
-  const unsubscribeUrl = buildUnsubscribeUrl(appUrl, recipientEmail);
+  const unsubscribe = buildUnsubscribeUrl(request, appUrl, recipientEmail);
 
   const reasonText =
     (kind === 'denied' || kind === 'cancelled') && request.denied_reason
@@ -544,7 +606,7 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
     recipientName,
     summary,
     trackUrl,
-    unsubscribeUrl,
+    unsubscribeUrl: unsubscribe.url,
     reasonText,
     confirmExpiryNote,
   };
@@ -553,7 +615,24 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
   const text = renderText(args);
   const subject = SUBJECT_BY_KIND[kind](orderId);
 
-  await sendEmail({ to: recipientEmail, subject, html, text });
+  // RFC 2369/8058 unsubscribe headers. For public recipients the signed
+  // /unsubscribe URL accepts the provider's one-click POST directly, so
+  // advertise `List-Unsubscribe-Post`. The in-app (signed-in) link is a
+  // page behind login that ignores POSTs — advertising one-click there
+  // would make Gmail POST into the void and report success, so those
+  // recipients get the plain header only.
+  await sendEmail({
+    to: recipientEmail,
+    subject,
+    html,
+    text,
+    headers: unsubscribe.oneClick
+      ? {
+          'List-Unsubscribe': `<${unsubscribe.url}>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        }
+      : { 'List-Unsubscribe': `<${unsubscribe.url}>` },
+  });
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────

@@ -73,6 +73,14 @@ const serverSchema = z.object({
   // /api/admin/backfill-item-thumbs and is accepted as an alternate
   // bearer on /api/cron/prewarm-orders-catalog.
   BACKFILL_ADMIN_SECRET: optionalSecret.transform((s) => s.trim()),
+  // HMAC key for the PUBLIC unsubscribe links in order-request emails
+  // (`/unsubscribe?e=<email>&t=<hmac>` — anonymous requesters can't
+  // reach the login-gated notification prefs). Any long random string.
+  // Optional but FAIL-CLOSED when unset: minting is skipped (emails
+  // fall back to the in-app settings link) and token verification
+  // always rejects, so nobody can unsubscribe arbitrary addresses
+  // against an unkeyed HMAC. See lib/email/unsubscribe.ts.
+  UNSUBSCRIBE_SECRET: optionalSecret.transform((s) => s.trim()),
 
   GEMINI_API_KEY: optionalSecret.transform((s) => s.trim()),
   // Model override. Different Google AI Studio keys get different free-
