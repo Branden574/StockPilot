@@ -26,7 +26,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { PurchaseOrdersService } from '@/server/services/purchase-orders';
+import {
+  PurchaseOrdersService,
+  type PoListStats,
+  type PoPageRow,
+} from '@/server/services/purchase-orders';
 import { SuppliersService } from '@/server/services/suppliers';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { formatCurrency, formatDateShort } from '@/lib/utils';
@@ -58,34 +62,23 @@ const TAB_STATUSES: Record<Exclude<PoTab, 'all'>, string[]> = {
   cancelled: ['cancelled'],
 };
 
-// "Open" = committed but not yet fully received and not cancelled.
-const OPEN_STATUSES = new Set(['draft', 'expected_inbound', 'ordered', 'partially_received']);
-// "On the water" = placed/approved and en route (open minus drafts).
-const INBOUND_STATUSES = new Set(['ordered', 'expected_inbound', 'partially_received']);
-const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
-const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * Rows per page. The table is paginated SERVER-SIDE (searchParams-driven,
+ * same pattern as the inventory page's ?page=N): the old version dumped
+ * every org PO into this RSC and filtered/rendered them all in memory,
+ * which at tens of thousands of POs meant dozens of serial DB round trips
+ * plus an unbounded HTML table per view.
+ */
+const PAGE_SIZE = 30;
 
 function isPoTab(value: string | undefined): value is PoTab {
   return TAB_ORDER.includes(value as PoTab);
 }
 
-type PoRow = {
-  id: string;
-  po_number: string;
-  status: string;
-  supplier_id: string | null;
-  expected_at: string | null;
-  ordered_at: string | null;
-  received_at: string | null;
-  total: number;
-  created_at: string;
-  line_count: number;
-};
-
 export default async function PurchaseOrdersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; q?: string }>;
+  searchParams: Promise<{ status?: string; q?: string; page?: string }>;
 }) {
   const moduleAccess = await checkModuleAccess('purchase_orders');
   if (!moduleAccess.enabled) {
@@ -95,6 +88,7 @@ export default async function PurchaseOrdersPage({
   const params = await searchParams;
   const tab: PoTab = isPoTab(params.status) ? params.status : 'all';
   const q = (params.q ?? '').trim();
+  const page = Math.max(1, Number(params.page) || 1);
 
   // Approval-threshold panel (owner/admin only). Read fails SOFT to "panel
   // shows 0" — the enforcement read in the service is the fail-closed one.
@@ -119,7 +113,25 @@ export default async function PurchaseOrdersPage({
   // Fail CLOSED: a read error must NEVER crash the whole page (recurring bug
   // pattern #1 — a thrown RSC read trips the dashboard error boundary). Degrade
   // to an inline retry banner so the header + tabs still work.
-  let pos: PoRow[] = [];
+  //
+  // The stats (header + cards) come from ONE aggregate RPC over the FULL
+  // warehouse-scoped list (tab/search never change them — parity with the
+  // old JS roll-up), and the table is ONE server-side page of the filtered
+  // set (purchase_orders_stats / purchase_orders_page, migration 0227) —
+  // the org's whole PO table never crosses the wire again.
+  let stats: PoListStats = {
+    totalCount: 0,
+    totalValue: 0,
+    openCount: 0,
+    committedValue: 0,
+    openSupplierCount: 0,
+    inboundCount: 0,
+    nextEtaPoNumber: null,
+    nextEtaExpectedAt: null,
+    avgLeadDays: null,
+  };
+  let visible: PoPageRow[] = [];
+  let totalFiltered = 0;
   let supplierMap = new Map<string, string>();
   let loadFailed = false;
   let activeWarehouse: string | null = null;
@@ -130,11 +142,20 @@ export default async function PurchaseOrdersPage({
       getActiveWarehouseFilter(),
     ]);
     activeWarehouse = warehouseFilter ?? null;
-    const [rawPos, suppliers] = await Promise.all([
-      poSvc.list({ warehouseId: warehouseFilter ?? undefined }),
+    const [rawStats, poPage, suppliers] = await Promise.all([
+      poSvc.listStats({ warehouseId: warehouseFilter ?? undefined }),
+      poSvc.listPage({
+        warehouseId: warehouseFilter ?? undefined,
+        statuses: tab === 'all' ? null : TAB_STATUSES[tab],
+        q,
+        page,
+        perPage: PAGE_SIZE,
+      }),
       supplierSvc.list(),
     ]);
-    pos = rawPos as unknown as PoRow[];
+    stats = rawStats;
+    visible = poPage.rows;
+    totalFiltered = poPage.total;
     supplierMap = new Map(suppliers.map((s) => [s.id as string, s.name as string]));
   } catch (error) {
     console.error('[dashboard/purchase-orders] failed to load POs', {
@@ -147,53 +168,19 @@ export default async function PurchaseOrdersPage({
 
   const supplierName = (id: string | null) => (id ? (supplierMap.get(id) ?? '—') : '—');
 
-  // ── Aggregates (computed from the FULL list so tab/search don't change them) ──
-  const totalValueAll = pos.reduce((sum, p) => sum + Number(p.total ?? 0), 0);
-  const openPos = pos.filter((p) => OPEN_STATUSES.has(p.status));
-  const openCount = openPos.length;
-  const committedValue = openPos.reduce((sum, p) => sum + Number(p.total ?? 0), 0);
-  const openSupplierCount = new Set(
-    openPos.map((p) => p.supplier_id).filter((s): s is string => Boolean(s)),
-  ).size;
+  const avgLead = stats.avgLeadDays != null ? Math.round(stats.avgLeadDays) : null;
 
-  const inbound = pos.filter((p) => INBOUND_STATUSES.has(p.status));
-  const onWaterCount = inbound.length;
-  const nextEta = inbound
-    .filter((p) => p.expected_at)
-    .sort(
-      (a, b) => new Date(a.expected_at as string).getTime() - new Date(b.expected_at as string).getTime(),
-    )[0];
-
-  const now = Date.now();
-  const leadDays = pos
-    .filter(
-      (p) =>
-        p.status === 'received' &&
-        p.received_at &&
-        now - new Date(p.received_at).getTime() <= NINETY_DAYS_MS,
-    )
-    .map((p) => {
-      // `ordered_at` is null for imported POs — fall back to `created_at` so the
-      // lead-time stat isn't biased toward only manually-placed POs.
-      const start = new Date((p.ordered_at ?? p.created_at) as string).getTime();
-      const end = new Date(p.received_at as string).getTime();
-      return (end - start) / DAY_MS;
-    })
-    .filter((d) => Number.isFinite(d) && d >= 0);
-  const avgLead =
-    leadDays.length > 0
-      ? Math.round(leadDays.reduce((a, b) => a + b, 0) / leadDays.length)
-      : null;
-
-  // ── Table rows (filter by tab + search, in-memory) ──
-  const ql = q.toLowerCase();
-  const visible = pos.filter((p) => {
-    const inTab = tab === 'all' || TAB_STATUSES[tab].includes(p.status);
-    if (!inTab) return false;
-    if (!ql) return true;
-    const name = supplierName(p.supplier_id).toLowerCase();
-    return p.po_number.toLowerCase().includes(ql) || name.includes(ql);
-  });
+  // ── Pagination footer state ──
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE));
+  const startRow = totalFiltered === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const endRow = Math.min(page * PAGE_SIZE, totalFiltered);
+  const pageHref = (p: number) => {
+    const sp = new URLSearchParams();
+    sp.set('status', tab);
+    if (q) sp.set('q', q);
+    if (p > 1) sp.set('page', String(p));
+    return `/dashboard/purchase-orders?${sp.toString()}`;
+  };
 
   const exportHref =
     `/api/purchase-orders/export.csv?status=${tab}` +
@@ -210,7 +197,8 @@ export default async function PurchaseOrdersPage({
           </p>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight">Purchase orders</h1>
           <p className="text-muted-foreground mt-1 text-sm tabular-nums">
-            {pos.length} {pos.length === 1 ? 'PO' : 'POs'} · {formatCurrency(totalValueAll)} total value
+            {stats.totalCount} {stats.totalCount === 1 ? 'PO' : 'POs'} ·{' '}
+            {formatCurrency(stats.totalValue)} total value
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -230,23 +218,23 @@ export default async function PurchaseOrdersPage({
       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Open POs"
-          value={openCount}
-          foot={`across ${openSupplierCount} ${openSupplierCount === 1 ? 'supplier' : 'suppliers'}`}
+          value={stats.openCount}
+          foot={`across ${stats.openSupplierCount} ${stats.openSupplierCount === 1 ? 'supplier' : 'suppliers'}`}
           icon={ClipboardList}
         />
         <StatCard
           label="Committed value"
-          value={formatCurrency(committedValue)}
+          value={formatCurrency(stats.committedValue)}
           foot="USD"
           icon={DollarSign}
         />
         <StatCard
           label="On the water"
-          value={onWaterCount}
+          value={stats.inboundCount}
           foot={
-            nextEta
-              ? `${nextEta.po_number} · ETA ${formatDateShort(nextEta.expected_at)}`
-              : onWaterCount > 0
+            stats.nextEtaPoNumber
+              ? `${stats.nextEtaPoNumber} · ETA ${formatDateShort(stats.nextEtaExpectedAt)}`
+              : stats.inboundCount > 0
                 ? 'No ETA scheduled'
                 : 'Nothing inbound'
           }
@@ -300,7 +288,7 @@ export default async function PurchaseOrdersPage({
               <Link href="/dashboard/purchase-orders">Try again</Link>
             </Button>
           </div>
-        ) : pos.length === 0 ? (
+        ) : stats.totalCount === 0 ? (
           <EmptyState
             icon={ClipboardList}
             title="No purchase orders yet"
@@ -310,11 +298,19 @@ export default async function PurchaseOrdersPage({
         ) : visible.length === 0 ? (
           <EmptyState
             icon={ClipboardList}
-            title={q ? `No POs match “${q}”` : `Nothing in ${TAB_LABELS[tab].toLowerCase()}`}
+            title={
+              totalFiltered > 0
+                ? 'Nothing on this page'
+                : q
+                  ? `No POs match “${q}”`
+                  : `Nothing in ${TAB_LABELS[tab].toLowerCase()}`
+            }
             description={
-              q
-                ? 'Try a different PO number or supplier, or clear the search.'
-                : 'Switch tabs above to see purchase orders in other stages.'
+              totalFiltered > 0
+                ? 'This page is past the end of the list — jump back with the pagination below.'
+                : q
+                  ? 'Try a different PO number or supplier, or clear the search.'
+                  : 'Switch tabs above to see purchase orders in other stages.'
             }
           />
         ) : (
@@ -379,6 +375,63 @@ export default async function PurchaseOrdersPage({
                 })}
               </TableBody>
             </Table>
+          </div>
+        )}
+
+        {/* Server-side pagination (searchParams-driven, like the inventory
+            page). Hidden on single-page lists for zero visual change — but
+            ALWAYS shown when the URL is past page 1, so the past-end empty
+            state's "jump back with the pagination below" copy always has the
+            controls it points at (a filtered total ≤ PAGE_SIZE used to hide
+            them, stranding the user on a stale ?page= link). */}
+        {!loadFailed && (totalFiltered > PAGE_SIZE || page > 1) && (
+          <div className="text-muted-foreground mt-3 flex items-center justify-between gap-3 text-[12px]">
+            {/* A stale deep link (?page= past the end) has an empty window —
+                skip the row range but keep Prev/Next so the user can get back. */}
+            <span className="tabular-nums">
+              {visible.length > 0 ? (
+                <>
+                  Showing <span className="text-foreground font-medium">{startRow}</span>–
+                  <span className="text-foreground font-medium">{endRow}</span> of{' '}
+                  <span className="text-foreground font-medium">{totalFiltered}</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-foreground font-medium">{totalFiltered}</span> match
+                  {totalFiltered === 1 ? '' : 'es'} on earlier pages
+                </>
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              {page <= 1 ? (
+                <Button variant="outline" size="sm" disabled>
+                  ← Prev
+                </Button>
+              ) : (
+                <Button asChild variant="outline" size="sm">
+                  {/* Clamp: from a past-end page, "Prev" jumps straight to
+                      the last REAL page instead of walking back one empty
+                      window at a time. */}
+                  <Link href={pageHref(Math.min(page - 1, totalPages))} prefetch={false}>
+                    ← Prev
+                  </Link>
+                </Button>
+              )}
+              <span className="tabular-nums">
+                Page {Math.min(page, totalPages)} of {totalPages}
+              </span>
+              {page >= totalPages ? (
+                <Button variant="outline" size="sm" disabled>
+                  Next →
+                </Button>
+              ) : (
+                <Button asChild variant="outline" size="sm">
+                  <Link href={pageHref(page + 1)} prefetch={false}>
+                    Next →
+                  </Link>
+                </Button>
+              )}
+            </div>
           </div>
         )}
       </div>

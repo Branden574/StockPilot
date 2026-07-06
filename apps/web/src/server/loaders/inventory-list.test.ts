@@ -663,24 +663,61 @@ describe('loadInventoryValueOnHand', () => {
     vi.clearAllMocks();
   });
 
-  it('sums qty × cost over the skinny mirror with the same coercion formula list() uses', async () => {
-    vi.mocked(fetchAllRows).mockResolvedValueOnce([
-      { quantity_on_hand: 2, unit_cost: 3, reorder_point: 0 },
-      { quantity_on_hand: 4, unit_cost: 1.5, reorder_point: 9 },
-      // null/garbage coerce to 0 — identical to the live reduce.
-      { quantity_on_hand: null, unit_cost: 10, reorder_point: 0 },
-    ] as never);
-    createAdminClientMock.mockReturnValue(makeAdmin({}));
+  it('delegates to ONE inventory_value_on_hand RPC (mig 0227) — org + item_type from the cache key, NO row paging (was 50+ serial pages at 50k SKUs)', async () => {
+    const admin = makeAdmin({}, { inventory_value_on_hand: { data: 42, error: null } });
+    createAdminClientMock.mockReturnValue(admin);
 
-    await expect(loadInventoryValueOnHand('org-1', 'all', 'items')).resolves.toBe(12);
+    await expect(loadInventoryValueOnHand('org-1', 'all', 'items')).resolves.toBe(42);
+
+    expect(admin.rpc).toHaveBeenCalledTimes(1);
+    expect(admin.rpc).toHaveBeenCalledWith('inventory_value_on_hand', {
+      p_organization_id: 'org-1',
+      p_item_type: 'product',
+      p_warehouse_id: null,
+    });
+    // The old JS-sum path paged rows through fetchAllRows — the RPC
+    // replaces the transfer entirely.
+    expect(fetchAllRows).not.toHaveBeenCalled();
   });
 
-  it('throws (never caches) when the sum pagination fails', async () => {
-    vi.mocked(fetchAllRows).mockRejectedValueOnce(new Error('sum page failed'));
-    createAdminClientMock.mockReturnValue(makeAdmin({}));
+  it('books view + warehouse cache key map to p_item_type=book / p_warehouse_id (same predicate axes the JS mirror had)', async () => {
+    const admin = makeAdmin({}, { inventory_value_on_hand: { data: 0, error: null } });
+    createAdminClientMock.mockReturnValue(admin);
+
+    await expect(loadInventoryValueOnHand('org-1', 'wh-7', 'books')).resolves.toBe(0);
+
+    expect(admin.rpc).toHaveBeenCalledWith('inventory_value_on_hand', {
+      p_organization_id: 'org-1',
+      p_item_type: 'book',
+      p_warehouse_id: 'wh-7',
+    });
+  });
+
+  it('coerces a numeric-string result (PostgREST may serialize numerics as strings)', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({}, { inventory_value_on_hand: { data: '12.5', error: null } }),
+    );
+
+    await expect(loadInventoryValueOnHand('org-1', 'all', 'items')).resolves.toBe(12.5);
+  });
+
+  it('throws (never caches) when the RPC fails', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({}, { inventory_value_on_hand: { data: null, error: { message: 'rpc boom' } } }),
+    );
 
     await expect(loadInventoryValueOnHand('org-1', 'all', 'items')).rejects.toThrow(
-      'sum page failed',
+      'inventory-list value rpc failed: rpc boom',
+    );
+  });
+
+  it('throws on a null/non-numeric RPC result instead of caching a bogus 0 (Number(null) is 0 — never cache a null)', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({}, { inventory_value_on_hand: { data: null, error: null } }),
+    );
+
+    await expect(loadInventoryValueOnHand('org-1', 'all', 'items')).rejects.toThrow(
+      /non-numeric result/,
     );
   });
 });
@@ -1019,7 +1056,7 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
     expect(signedUrlsMock).not.toHaveBeenCalled();
   });
 
-  it('narrows the org-wide second wave to the dataset ids (foreign holdings/images never inflate the payload)', async () => {
+  it('prunes any over-returned second-wave rows to the dataset ids (defense-in-depth behind the .in scoping)', async () => {
     fetchAllRowsInvokesBuildPage();
     const { admin } = makeRecordingAdmin({
       inventory_items: { data: [baseItem], count: 1, error: null },
@@ -1044,6 +1081,44 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
 
     expect(Object.keys(payload!.placement)).toEqual(['i1']);
     expect(payload!.items[0]!.image_storage_path).toBe('p/own.jpg');
+  });
+
+  it('id-scopes the second wave with CHUNKED .in(item_id) calls (≤100 ids each — URL-length-safe) instead of org-wide fetches (rank 7: 50k-SKU orgs paid 50+ serial pages per table to serve ≤2000 items)', async () => {
+    fetchAllRowsInvokesBuildPage();
+    const manyItems = Array.from({ length: 205 }, (_, i) => ({
+      ...baseItem,
+      id: `i${String(i).padStart(3, '0')}`,
+      sku: `SKU-${i}`,
+    }));
+    const { admin, buildersByTable } = makeRecordingAdmin({
+      inventory_items: { data: manyItems, count: 205, error: null },
+      item_stock_levels: { data: [], error: null },
+      item_images: { data: [], error: null },
+    });
+    createAdminClientMock.mockReturnValue(admin);
+
+    const payload = await loadInventoryDataset('org-1', 'all', 'items');
+    expect(payload!.items).toHaveLength(205);
+
+    // 205 ids → 3 chunks (100/100/5) per secondary table, EVERY chunk
+    // id-scoped via .in AND still org-scoped (the admin client bypasses
+    // RLS — the explicit org filter is the security contract).
+    for (const table of ['item_stock_levels', 'item_images'] as const) {
+      const builders = buildersByTable[table]!;
+      expect(builders, `${table} must fan out one query per id chunk`).toHaveLength(3);
+      const inCalls = builders.map(
+        (b) => (b.in as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string[]],
+      );
+      expect(inCalls.map(([col]) => col)).toEqual(['item_id', 'item_id', 'item_id']);
+      expect(inCalls.map(([, ids]) => ids.length)).toEqual([100, 100, 5]);
+      expect(inCalls[0]![1][0]).toBe('i000');
+      expect(inCalls[2]![1][4]).toBe('i204');
+      for (const b of builders) {
+        expect((b.eq as ReturnType<typeof vi.fn>).mock.calls).toEqual(
+          expect.arrayContaining([['organization_id', 'org-1']]),
+        );
+      }
+    }
   });
 
   it('over-cap view → resolves null WITHOUT fetching rows, and the cached fn THROWS (so "too large" — like null — is never cached)', async () => {

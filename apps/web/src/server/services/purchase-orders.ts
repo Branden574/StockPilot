@@ -59,6 +59,52 @@ export const receivePoSchema = z.object({
 });
 export type ReceivePoInput = z.infer<typeof receivePoSchema>;
 
+/** Aggregates for the PO index header + stat cards (purchase_orders_stats). */
+export interface PoListStats {
+  totalCount: number;
+  totalValue: number;
+  openCount: number;
+  committedValue: number;
+  openSupplierCount: number;
+  inboundCount: number;
+  nextEtaPoNumber: string | null;
+  nextEtaExpectedAt: string | null;
+  /** Fractional days — the page rounds for display (Math.round parity). */
+  avgLeadDays: number | null;
+}
+
+const EMPTY_PO_LIST_STATS: PoListStats = {
+  totalCount: 0,
+  totalValue: 0,
+  openCount: 0,
+  committedValue: 0,
+  openSupplierCount: 0,
+  inboundCount: 0,
+  nextEtaPoNumber: null,
+  nextEtaExpectedAt: null,
+  avgLeadDays: null,
+};
+
+/** One purchase_orders_page RPC row (filtered_count repeats per row). */
+interface PoPageRpcRow {
+  id: string;
+  po_number: string;
+  status: string;
+  supplier_id: string | null;
+  destination_location_id: string | null;
+  expected_at: string | null;
+  ordered_at: string | null;
+  received_at: string | null;
+  total: number;
+  created_at: string;
+  updated_at: string;
+  line_count: number;
+  filtered_count: number;
+}
+
+/** One PO index table row — the RPC row minus the window count. */
+export type PoPageRow = Omit<PoPageRpcRow, 'filtered_count'>;
+
 export class PurchaseOrdersService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -165,6 +211,146 @@ export class PurchaseOrdersService {
         : 0;
       return { ...row, line_count };
     });
+  }
+
+  /**
+   * Maps the caller's warehouse situation onto the `p_warehouse_ids`
+   * parameter the 0227 list RPCs take — EXACTLY the branch structure
+   * list() applies via its `destination:locations` embed:
+   *   • restricted user with zero readable warehouses → empty result,
+   *     no query (list() returns [] the same way);
+   *   • restricted user → their readableIds (the active warehouse
+   *     view-filter is IGNORED for them, same as list());
+   *   • all-access + view-filter → that single warehouse;
+   *   • all-access, no filter → null (org-wide, left-join semantics).
+   * The ids only ever NARROW: purchase_orders' RLS floor is org
+   * membership (mig 0140), so no id list can widen what the caller's
+   * own client could already read.
+   */
+  private async warehouseScope(params: {
+    warehouseId?: string;
+  }): Promise<{ empty: boolean; ids: string[] | null }> {
+    const access = await getWarehouseAccess(this.ctx);
+    if (!access.hasAllAccess && access.readableIds.length === 0) {
+      return { empty: true, ids: null };
+    }
+    if (!access.hasAllAccess) return { empty: false, ids: access.readableIds };
+    if (params.warehouseId) return { empty: false, ids: [params.warehouseId] };
+    return { empty: false, ids: null };
+  }
+
+  /**
+   * Header + stat-card aggregates for the PO index — ONE set-based RPC
+   * (purchase_orders_stats, migration 0227) over the warehouse-scoped
+   * full list, replacing the page's JS roll-up over a fetchAllRows dump
+   * of every org PO. Tab/search never affect these figures (parity with
+   * the page, which computed them from the unfiltered list). SECURITY:
+   * the RPC is SECURITY INVOKER and runs on the USER client, so
+   * purchase_orders RLS (org membership) binds inside it — a cross-org
+   * org id aggregates zero rows.
+   *
+   * `avgLeadDays` is returned UNROUNDED (may be fractional); the page
+   * keeps its own Math.round so the displayed math is unchanged.
+   */
+  async listStats(params: { warehouseId?: string } = {}): Promise<PoListStats> {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
+    const scope = await this.warehouseScope(params);
+    if (scope.empty) return EMPTY_PO_LIST_STATS;
+
+    const { data, error } = await this.ctx.supabase.rpc('purchase_orders_stats', {
+      p_organization_id: this.ctx.organizationId,
+      p_warehouse_ids: scope.ids,
+    });
+    if (error) throw new ServiceError('internal_error', error.message);
+    const row = (Array.isArray(data) ? data[0] : data) as
+      | {
+          total_count: number | string | null;
+          total_value: number | string | null;
+          open_count: number | string | null;
+          committed_value: number | string | null;
+          open_supplier_count: number | string | null;
+          inbound_count: number | string | null;
+          next_eta_po_number: string | null;
+          next_eta_expected_at: string | null;
+          avg_lead_days: number | string | null;
+        }
+      | null
+      | undefined;
+    return {
+      totalCount: Number(row?.total_count ?? 0),
+      totalValue: Number(row?.total_value ?? 0),
+      openCount: Number(row?.open_count ?? 0),
+      committedValue: Number(row?.committed_value ?? 0),
+      openSupplierCount: Number(row?.open_supplier_count ?? 0),
+      inboundCount: Number(row?.inbound_count ?? 0),
+      nextEtaPoNumber: row?.next_eta_po_number ?? null,
+      nextEtaExpectedAt: row?.next_eta_expected_at ?? null,
+      avgLeadDays: row?.avg_lead_days == null ? null : Number(row.avg_lead_days),
+    };
+  }
+
+  /**
+   * ONE server-side page of the PO index table (purchase_orders_page,
+   * migration 0227): tab statuses + q (po_number OR the rendered
+   * supplier label, with %/_/\ treated literally like the old JS
+   * .includes) + the same warehouse scoping and created_at DESC / id ASC
+   * ordering list() had, but only `perPage` rows leave the database —
+   * the page no longer dumps and renders every org PO. `total` is the
+   * FILTERED set size (never clamped — it's a window count in SQL).
+   *
+   * When a stale deep link lands past the last page, the empty window
+   * carries no window-count row, so a one-row probe at offset 0 recovers
+   * the true total (rare path; keeps "Showing X–Y of N" honest instead
+   * of misreporting "no matches").
+   */
+  async listPage(params: {
+    warehouseId?: string;
+    statuses?: readonly string[] | null;
+    q?: string;
+    page: number;
+    perPage: number;
+  }): Promise<{ rows: PoPageRow[]; total: number }> {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
+    const scope = await this.warehouseScope(params);
+    if (scope.empty) return { rows: [], total: 0 };
+
+    const perPage = Math.max(1, Math.floor(params.perPage));
+    const page = Math.max(1, Math.floor(params.page));
+    const q = (params.q ?? '').trim();
+    const rpcArgs = {
+      p_organization_id: this.ctx.organizationId,
+      p_warehouse_ids: scope.ids,
+      p_statuses: params.statuses && params.statuses.length > 0 ? [...params.statuses] : null,
+      p_q: q || null,
+    };
+
+    const { data, error } = await this.ctx.supabase.rpc('purchase_orders_page', {
+      ...rpcArgs,
+      p_limit: perPage,
+      p_offset: (page - 1) * perPage,
+    });
+    if (error) throw new ServiceError('internal_error', error.message);
+    const raw = (data ?? []) as PoPageRpcRow[];
+
+    let total = raw.length > 0 ? Number(raw[0]!.filtered_count ?? 0) : 0;
+    if (raw.length === 0 && page > 1) {
+      const probe = await this.ctx.supabase.rpc('purchase_orders_page', {
+        ...rpcArgs,
+        p_limit: 1,
+        p_offset: 0,
+      });
+      if (probe.error) throw new ServiceError('internal_error', probe.error.message);
+      const probeRows = (probe.data ?? []) as PoPageRpcRow[];
+      total = probeRows.length > 0 ? Number(probeRows[0]!.filtered_count ?? 0) : 0;
+    }
+
+    return {
+      rows: raw.map(({ filtered_count: _filtered, ...row }) => ({
+        ...row,
+        line_count: Number(row.line_count ?? 0),
+      })),
+      total,
+    };
   }
 
   async get(id: string) {

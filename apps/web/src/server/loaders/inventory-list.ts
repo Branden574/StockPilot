@@ -726,45 +726,53 @@ async function loadInventoryDatasetUncached(
   );
   if (rows.length > INSTANT_MODE_MAX_ROWS) throw new Error(DATASET_TOO_LARGE);
 
-  // Second wave: holdings + images. ORG-WIDE + in-memory narrowing, not
-  // `.in('item_id', ids)` — 2000 uuids in a PostgREST query string blows
-  // the URL length limit. Both are org-scoped, paginated, and pruned to
-  // the dataset's ids before assembly so foreign rows (other item types,
-  // rentals, other warehouses) never inflate the cached payload.
-  const ids = new Set(rows.map((r) => r.id));
+  // Second wave: holdings + images, ID-SCOPED via chunked `.in('item_id',
+  // …)` (scale-audit rank 7). The old org-wide fetch + in-memory pruning
+  // read EVERY org holding/image row to serve ≤2000 items — at 50k SKUs
+  // that is 50+ sequential 1000-row pages per table for a bounded
+  // dataset. All 2000 uuids in ONE query string would blow the URL
+  // length limit, so the ids go out in ID_CHUNK_SIZE batches (parallel,
+  // each batch itself paginated past the 1000-row cap — a batch's items
+  // can carry many holdings/images rows). An item's rows are confined to
+  // its own chunk, so the per-item first-row-wins image pick in
+  // assembleInventoryRows is unaffected by chunk merge order. The
+  // ids-Set prune stays as defense-in-depth (it also keeps the loader's
+  // behavior byte-identical if a chunk query ever over-returns).
+  const idList = rows.map((r) => r.id);
+  const ids = new Set(idList);
   const [levelsAll, imagesAll] = await Promise.all([
-    fetchAllRows<HoldingLevelRow>(
-      (from, to) =>
-        admin
-          .from('item_stock_levels')
-          .select('item_id, location_id, quantity, locations!inner(name, kind)')
-          .eq('organization_id', organizationId)
-          .gt('quantity', 0)
-          .order('id', { ascending: true })
-          // The to-one `locations` embed types as an array in generated
-          // PostgREST types but is a single object at runtime — same
-          // cast convention as the loaders above and placements().
-          .range(from, to) as unknown as PromiseLike<{
-          data: HoldingLevelRow[] | null;
-          error: { message: string } | null;
-        }>,
+    fetchRowsForItemIdChunks<HoldingLevelRow>(idList, (chunk) => (from, to) =>
+      admin
+        .from('item_stock_levels')
+        .select('item_id, location_id, quantity, locations!inner(name, kind)')
+        .eq('organization_id', organizationId)
+        .in('item_id', chunk)
+        .gt('quantity', 0)
+        .order('id', { ascending: true })
+        // The to-one `locations` embed types as an array in generated
+        // PostgREST types but is a single object at runtime — same
+        // cast convention as the loaders above and placements().
+        .range(from, to) as unknown as PromiseLike<{
+        data: HoldingLevelRow[] | null;
+        error: { message: string } | null;
+      }>,
     ),
-    fetchAllRows<PrimaryImageRow>(
-      (from, to) =>
-        admin
-          .from('item_images')
-          .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
-          .eq('organization_id', organizationId)
-          // Same pick order as the paged loader (primary first, then
-          // sort_order) + the id tiebreak fetchAllRows needs for a total
-          // order across pages.
-          .order('is_primary', { ascending: false })
-          .order('sort_order', { ascending: true })
-          .order('id', { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{
-          data: PrimaryImageRow[] | null;
-          error: { message: string } | null;
-        }>,
+    fetchRowsForItemIdChunks<PrimaryImageRow>(idList, (chunk) => (from, to) =>
+      admin
+        .from('item_images')
+        .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
+        .eq('organization_id', organizationId)
+        .in('item_id', chunk)
+        // Same pick order as the paged loader (primary first, then
+        // sort_order) + the id tiebreak fetchAllRows needs for a total
+        // order across pages.
+        .order('is_primary', { ascending: false })
+        .order('sort_order', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{
+        data: PrimaryImageRow[] | null;
+        error: { message: string } | null;
+      }>,
     ),
   ]);
 
@@ -773,6 +781,42 @@ async function loadInventoryDatasetUncached(
     levelsAll.filter((l) => ids.has(l.item_id)),
     imagesAll.filter((img) => ids.has(img.item_id)),
   );
+}
+
+/**
+ * Uuids per `.in('item_id', …)` call. 100 uuids ≈ 3.7KB of query string —
+ * comfortably under every proxy/URL limit in the chain (PostgREST/Kong
+ * reject around 8–16KB), while keeping the fan-out for a full 2000-row
+ * dataset to ≤20 parallel calls per table (vs 50+ SEQUENTIAL org-wide
+ * pages at 50k SKUs before).
+ */
+const ID_CHUNK_SIZE = 100;
+
+/**
+ * Chunked-id fetch for the dataset's second wave: splits `itemIds` into
+ * ID_CHUNK_SIZE batches, runs one fetchAllRows per batch IN PARALLEL
+ * (each batch is still paginated internally so >1000 rows for a batch's
+ * items can't be silently clamped), and merges. fetchAllRows THROWS on
+ * any page error, so a failed chunk fails the whole dataset pass —
+ * throw-don't-cache is preserved. Empty `itemIds` → no queries at all.
+ */
+async function fetchRowsForItemIdChunks<Row>(
+  itemIds: string[],
+  buildChunkPage: (
+    chunk: string[],
+  ) => (
+    from: number,
+    to: number,
+  ) => PromiseLike<{ data: Row[] | null; error: { message: string } | null }>,
+): Promise<Row[]> {
+  const chunks: string[][] = [];
+  for (let i = 0; i < itemIds.length; i += ID_CHUNK_SIZE) {
+    chunks.push(itemIds.slice(i, i + ID_CHUNK_SIZE));
+  }
+  const results = await Promise.all(
+    chunks.map((chunk) => fetchAllRows<Row>(buildChunkPage(chunk))),
+  );
+  return results.flat();
 }
 
 /* ---- filter-independent sub-loaders ------------------------------------ */
@@ -897,30 +941,36 @@ async function loadInventoryValueOnHandUncached(
   const itemType = view === 'books' ? 'book' : 'product';
   const warehouseId = warehouseKey === ALL_WAREHOUSES_KEY ? null : warehouseKey;
 
-  // Skinny mirror of the default-view filter — paginated past
-  // PostgREST's 1000-row cap like the service. fetchAllRows THROWS on
-  // any page error, so a failed pass is never cached.
-  const sumRows = await fetchAllRows<{
-    quantity_on_hand: number;
-    unit_cost: number;
-    reorder_point: number;
-  }>((from, to) => {
-    let q = admin
-      .from('inventory_items')
-      .select('quantity_on_hand, unit_cost, reorder_point')
-      .eq('organization_id', organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      .eq('item_type', itemType)
-      .eq('is_rental', false);
-    if (warehouseId) q = q.eq('warehouse_id', warehouseId);
-    return q.order('id', { ascending: true }).range(from, to);
+  // ONE SQL aggregate round trip (scale-audit rank 6, migration 0227)
+  // instead of paging every matching item row through sequential
+  // 1000-row PostgREST pages and reducing qty × unit_cost in JS (50+
+  // serial round trips per cache fill at 50k SKUs). The RPC reproduces
+  // the skinny default-view mirror EXACTLY: org + deleted_at IS NULL +
+  // status='active' + item_type by view + is_rental=false + optional
+  // warehouse — asserted by the 0227 pgTAP behavioral test. (The 0179
+  // valuation views and get_dashboard_summary were checked and rejected:
+  // neither carries the item_type split, and the latter also lacks
+  // is_rental.) SECURITY: execute is revoked from anon/authenticated;
+  // only this service-role client may call it, and the ORG SCOPE comes
+  // from the loader's own cache key — never from user input.
+  const { data, error } = await admin.rpc('inventory_value_on_hand', {
+    p_organization_id: organizationId,
+    p_item_type: itemType,
+    p_warehouse_id: warehouseId,
   });
+  // THROW-DON'T-CACHE: an RPC error must skip the unstable_cache write.
+  if (error) {
+    throw new Error(`inventory-list value rpc failed: ${error.message}`);
+  }
 
-  return sumRows.reduce(
-    (acc, r) => acc + (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0),
-    0,
-  );
+  // numeric may serialize as a number or a numeric string — coerce, and
+  // treat null/non-numeric as an error rather than caching a bogus 0
+  // (Number(null) is 0 — recurring bug pattern: never cache a null).
+  const value = data == null ? Number.NaN : Number(data);
+  if (!Number.isFinite(value)) {
+    throw new Error(`inventory-list value rpc returned a non-numeric result: ${String(data)}`);
+  }
+  return value;
 }
 
 /**
