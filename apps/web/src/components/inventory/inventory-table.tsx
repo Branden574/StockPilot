@@ -957,6 +957,19 @@ export function InventoryTable({
                             // thumb column — Vercel Image Optimizer
                             // downscales it on first hit and caches.
                             src={item.image_thumb_url ?? item.image_url}
+                            // Thumbs are ALREADY ~200px WebPs — putting
+                            // them through /_next/image adds no bytes
+                            // saved, but the optimizer cache is
+                            // PER-DEPLOYMENT: the first viewer after
+                            // every deploy paid ~30 cold transforms
+                            // (~750ms each, concurrency-capped) and the
+                            // page "loaded" for 8-15s (owner-reported
+                            // 2026-07-06). Serve pre-sized thumbs
+                            // straight from storage; only legacy
+                            // master-URL rows still go through the
+                            // optimizer, which genuinely downscales
+                            // them.
+                            unoptimized={!!item.image_thumb_url}
                             alt=""
                             width={56}
                             height={56}
@@ -1356,14 +1369,17 @@ function Checkbox({ checked, onChange }: { checked: boolean; onChange: (c: boole
       aria-checked={checked}
       onClick={() => onChange(!checked)}
       className={cn(
-        'inline-grid h-3.5 w-3.5 place-items-center rounded-[3px] border bg-card transition-colors',
+        'inline-grid h-4 w-4 place-items-center rounded-[4px] border bg-card transition-colors',
         checked ? 'border-foreground bg-foreground' : 'border-[var(--ed-line-strong)]',
       )}
     >
       {checked && (
         <span
           aria-hidden
-          className="h-[7px] w-[4px] -translate-y-px rotate-[-45deg] border-b-[1.5px] border-l-[1.5px] border-background"
+          // CSS-drawn ✓: bottom+RIGHT borders rotated +45°. bottom+LEFT at
+          // -45° renders the MIRROR of a checkmark (owner-reported
+          // "backwards checkmark", hard to read at 14px).
+          className="h-[9px] w-[5px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background"
         />
       )}
     </button>
