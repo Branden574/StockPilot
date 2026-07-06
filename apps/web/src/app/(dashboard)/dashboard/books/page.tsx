@@ -15,13 +15,18 @@ import { BooksInventoryTable } from '@/components/books/books-inventory-table';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
-import { can, isManagerOrAbove } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import {
   ALL_WAREHOUSES_KEY,
+  canUseSharedInventoryCaches,
+  deriveInventoryTrends,
   isDefaultInventoryView,
   loadInventoryList,
+  loadInventoryLookups,
+  loadInventoryTrendBuckets,
   resolveInventoryListImages,
   type InventoryListItemRow,
+  type InventoryListLookups,
 } from '@/server/loaders/inventory-list';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
@@ -211,16 +216,17 @@ async function BooksTableSection({
 
   let data: SectionData | null = null;
 
+  // ONE role-class gate for every org-shared cache read on this page —
+  // the full default-view payload below AND the filtered views' lookup/
+  // trend reuse further down. Staff/viewer are user-scoped and NEVER
+  // read a shared cache.
+  const useSharedCaches = canUseSharedInventoryCaches(sessionCtx);
+
   // COLD-CLICK FAST PATH — same contract as the Items page: only the
-  // exact default view, only manager-and-above (staff/viewer results
-  // are user-scoped), only with items:read, keyed by the warehouse-
-  // filter cookie. Any loader failure falls through to the live path.
-  // (The 'books' module gate already ran in the page shell above.)
-  if (
-    isDefaultInventoryView(params, 'books') &&
-    isManagerOrAbove(sessionCtx.role) &&
-    can(sessionCtx, 'items:read')
-  ) {
+  // exact default view, keyed by the warehouse-filter cookie. Any
+  // loader failure falls through to the live path. (The 'books' module
+  // gate already ran in the page shell above.)
+  if (isDefaultInventoryView(params, 'books') && useSharedCaches) {
     try {
       const payload = await loadInventoryList(
         sessionCtx.organizationId,
@@ -247,13 +253,15 @@ async function BooksTableSection({
   }
 
   if (!data) {
-    const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, chartersSvc, imagesSvc] = await Promise.all([
+    // LIVE (filtered) branch — same hybrid as the Items page: rows +
+    // covers always live; for manager+ with items:read the lookup
+    // tables and org-wide trend buckets come from the org-shared
+    // caches. valueOnHand stays live (list()'s footer sum mirrors the
+    // active filters, computed in parallel with the rows query).
+    // Staff/viewer run everything live through their RLS-scoped
+    // clients, exactly as before.
+    const [inventorySvc, imagesSvc] = await Promise.all([
       InventoryService.forCurrentUser(),
-      CategoriesService.forCurrentUser(),
-      LocationsService.forCurrentUser(),
-      SuppliersService.forCurrentUser(),
-      TagsService.forCurrentUser(),
-      ChartersService.forCurrentUser(),
       ItemImagesService.forCurrentUser(),
     ]);
 
@@ -263,7 +271,38 @@ async function BooksTableSection({
     const charterIds = parseIdList(params.charter);
     const rack = typeof params.rack === 'string' ? params.rack : undefined;
 
-    const [inventory, categories, locations, suppliers, tags, charters] = await Promise.all([
+    // Live lookups: the path staff/viewer ALWAYS take (identical
+    // queries + mapping to the pre-split code), and the fallback for
+    // manager+ when a shared-cache read fails.
+    const fetchLiveLookups = async (): Promise<InventoryListLookups> => {
+      const [categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, chartersSvc] = await Promise.all([
+        CategoriesService.forCurrentUser(),
+        LocationsService.forCurrentUser(),
+        SuppliersService.forCurrentUser(),
+        TagsService.forCurrentUser(),
+        ChartersService.forCurrentUser(),
+      ]);
+      const [categories, locations, suppliers, tags, charters] = await Promise.all([
+        categoriesSvc.list(),
+        locationsSvc.list({ sitesOnly: true }),
+        suppliersSvc.list(),
+        tagsSvc.list(),
+        chartersSvc.list(),
+      ]);
+      return {
+        categories: categories.map((c) => ({
+          id: c.id as string,
+          name: c.name as string,
+          color: (c.color as string | null) ?? null,
+        })),
+        locations: locations.map((l) => ({ id: l.id as string, name: l.name as string })),
+        suppliers: suppliers.map((s) => ({ id: s.id as string, name: s.name as string })),
+        tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
+        charters: charters.map((c) => ({ id: c.id, name: c.name, code: c.code ?? null })),
+      };
+    };
+
+    const [inventory, lookups, trendBuckets] = await Promise.all([
       inventorySvc.list({
         q: params.q,
         status: lifecycleStatus,
@@ -279,22 +318,35 @@ async function BooksTableSection({
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
       }),
-      categoriesSvc.list(),
-      locationsSvc.list({ sitesOnly: true }),
-      suppliersSvc.list(),
-      tagsSvc.list(),
-      chartersSvc.list(),
+      useSharedCaches
+        ? loadInventoryLookups(sessionCtx.organizationId).catch((err: unknown) => {
+            console.warn('[books page] cached lookups unavailable, using live path:', err);
+            return fetchLiveLookups();
+          })
+        : fetchLiveLookups(),
+      useSharedCaches
+        ? loadInventoryTrendBuckets(sessionCtx.organizationId).catch((err: unknown) => {
+            console.warn('[books page] cached trend buckets unavailable, using live path:', err);
+            return null;
+          })
+        : Promise.resolve(null),
     ]);
 
     // Trends + primary images are independent — run in parallel.
-    // trends: 14-day sparkline series.
+    // trends: 14-day sparkline series — pure CPU when the shared
+    //   buckets are warm (deriveInventoryTrends, same math as
+    //   getItemTrends); otherwise 1 round trip, exactly as before.
     // imagesById: signed URLs (master + 200px thumb when available) +
     //   inline LQIP base64. Pre-0122 rows render the master with no
     //   blur placeholder via the fallbacks below.
+    const trendInputs = inventory.items.map((i) => ({
+      id: i.id,
+      quantityOnHand: i.quantity_on_hand,
+    }));
     const [trends, imagesById] = await Promise.all([
-      getItemTrends(
-        inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
-      ),
+      trendBuckets
+        ? Promise.resolve(deriveInventoryTrends(trendInputs, trendBuckets))
+        : getItemTrends(trendInputs),
       imagesSvc.primaryImagesWithThumbsForItems(inventory.items.map((i) => i.id)),
     ]);
     const itemsWithImages = inventory.items.map((i) => {
@@ -317,15 +369,7 @@ async function BooksTableSection({
       items: itemsWithImages,
       total: inventory.total,
       valueOnHand: inventory.valueOnHand,
-      categories: categories.map((c) => ({
-        id: c.id as string,
-        name: c.name as string,
-        color: (c.color as string | null) ?? null,
-      })),
-      locations: locations.map((l) => ({ id: l.id as string, name: l.name as string })),
-      suppliers: suppliers.map((s) => ({ id: s.id as string, name: s.name as string })),
-      tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
-      charters: charters.map((c) => ({ id: c.id, name: c.name, code: c.code ?? null })),
+      ...lookups,
       trends,
     };
   }

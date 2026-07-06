@@ -11,13 +11,18 @@ import { InventoryTable } from '@/components/inventory/inventory-table';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
-import { can, isManagerOrAbove } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
 import {
   ALL_WAREHOUSES_KEY,
+  canUseSharedInventoryCaches,
+  deriveInventoryTrends,
   isDefaultInventoryView,
   loadInventoryList,
+  loadInventoryLookups,
+  loadInventoryTrendBuckets,
   resolveInventoryListImages,
   type InventoryListItemRow,
+  type InventoryListLookups,
   type InventoryPlacementLine,
 } from '@/server/loaders/inventory-list';
 import { CategoriesService } from '@/server/services/categories';
@@ -245,23 +250,21 @@ async function InventoryTableSection({
 
   let data: SectionData | null = null;
 
+  // ONE role-class gate for every org-shared cache read on this page —
+  // the full default-view payload below AND the filtered views' lookup/
+  // trend reuse further down. Staff/viewer are user-scoped (warehouse
+  // assignments / category restrictions) and NEVER read a shared cache;
+  // can(items:read) keeps a permission revocation from outliving the
+  // cache the way raw RLS rows would not.
+  const useSharedCaches = canUseSharedInventoryCaches(sessionCtx);
+
   // COLD-CLICK FAST PATH: the exact default view (page 1, default sort,
   // no search/filters) is served from an org-keyed 60s cache that the
-  // prewarm cron keeps warm. Gates, all mandatory:
-  //   • isDefaultInventoryView — any data-affecting param takes the
-  //     live path unchanged.
-  //   • isManagerOrAbove — staff/viewer results are user-scoped
-  //     (warehouse assignments / category restrictions) and must never
-  //     be served from, or into, an org-shared cache.
-  //   • can(items:read) — the cache must not out-live a permission
-  //     revocation the way raw RLS rows would not.
-  // The warehouse-filter cookie changes the data, so it's part of the
-  // cache key. A loader failure falls through to the live path.
-  if (
-    isDefaultInventoryView(params, 'items') &&
-    isManagerOrAbove(sessionCtx.role) &&
-    can(sessionCtx, 'items:read')
-  ) {
+  // prewarm cron keeps warm. isDefaultInventoryView is mandatory — any
+  // data-affecting param takes the live path unchanged. The warehouse-
+  // filter cookie changes the data, so it's part of the cache key. A
+  // loader failure falls through to the live path.
+  if (isDefaultInventoryView(params, 'items') && useSharedCaches) {
     try {
       const payload = await loadInventoryList(
         sessionCtx.organizationId,
@@ -289,13 +292,18 @@ async function InventoryTableSection({
   }
 
   if (!data) {
-    const [inventorySvc, categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, chartersSvc, imagesSvc] = await Promise.all([
+    // LIVE (filtered) branch. Only rows + placement + images actually
+    // vary with the filters, so for manager+ with items:read (the SAME
+    // gate as the cached default view) the filter-independent pieces —
+    // the five lookup tables and the org-wide trend buckets — are read
+    // from the org-shared caches instead of re-queried live. valueOnHand
+    // deliberately stays live: list()'s footer sum mirrors the active
+    // filters (and runs in parallel with the rows query — no serial
+    // cost). Staff/viewer run EVERYTHING live through their RLS-scoped
+    // clients, exactly as before — useSharedCaches is false for them,
+    // so no cached branch below is reachable.
+    const [inventorySvc, imagesSvc] = await Promise.all([
       InventoryService.forCurrentUser(),
-      CategoriesService.forCurrentUser(),
-      LocationsService.forCurrentUser(),
-      SuppliersService.forCurrentUser(),
-      TagsService.forCurrentUser(),
-      ChartersService.forCurrentUser(),
       ItemImagesService.forCurrentUser(),
     ]);
 
@@ -305,7 +313,38 @@ async function InventoryTableSection({
     const charterIds = parseIdList(params.charter);
     const rack = typeof params.rack === 'string' ? params.rack : undefined;
 
-    const [inventory, categories, locations, suppliers, tags, charters] = await Promise.all([
+    // Live lookups: the path staff/viewer ALWAYS take (identical
+    // queries + mapping to the pre-split code), and the fallback for
+    // manager+ when a shared-cache read fails.
+    const fetchLiveLookups = async (): Promise<InventoryListLookups> => {
+      const [categoriesSvc, locationsSvc, suppliersSvc, tagsSvc, chartersSvc] = await Promise.all([
+        CategoriesService.forCurrentUser(),
+        LocationsService.forCurrentUser(),
+        SuppliersService.forCurrentUser(),
+        TagsService.forCurrentUser(),
+        ChartersService.forCurrentUser(),
+      ]);
+      const [categories, locations, suppliers, tags, charters] = await Promise.all([
+        tagged('categoriesSvc.list', categoriesSvc.list()),
+        tagged('locationsSvc.list', locationsSvc.list({ sitesOnly: true })),
+        tagged('suppliersSvc.list', suppliersSvc.list()),
+        tagged('tagsSvc.list', tagsSvc.list()),
+        tagged('chartersSvc.list', chartersSvc.list()),
+      ]);
+      return {
+        categories: categories.map((c) => ({
+          id: c.id as string,
+          name: c.name as string,
+          color: (c.color as string | null) ?? null,
+        })),
+        locations: locations.map((l) => ({ id: l.id as string, name: l.name as string })),
+        suppliers: suppliers.map((s) => ({ id: s.id as string, name: s.name as string })),
+        tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
+        charters: charters.map((c) => ({ id: c.id, name: c.name, code: c.code ?? null })),
+      };
+    };
+
+    const [inventory, lookups, trendBuckets] = await Promise.all([
       tagged(
         'inventorySvc.list',
         inventorySvc.list({
@@ -324,28 +363,41 @@ async function InventoryTableSection({
           offset: (page - 1) * PAGE_SIZE,
         }),
       ),
-      tagged('categoriesSvc.list', categoriesSvc.list()),
-      tagged('locationsSvc.list', locationsSvc.list({ sitesOnly: true })),
-      tagged('suppliersSvc.list', suppliersSvc.list()),
-      tagged('tagsSvc.list', tagsSvc.list()),
-      tagged('chartersSvc.list', chartersSvc.list()),
+      useSharedCaches
+        ? loadInventoryLookups(sessionCtx.organizationId).catch((err: unknown) => {
+            console.warn('[inventory page] cached lookups unavailable, using live path:', err);
+            return fetchLiveLookups();
+          })
+        : fetchLiveLookups(),
+      useSharedCaches
+        ? loadInventoryTrendBuckets(sessionCtx.organizationId).catch((err: unknown) => {
+            console.warn(
+              '[inventory page] cached trend buckets unavailable, using live path:',
+              err,
+            );
+            return null;
+          })
+        : Promise.resolve(null),
     ]);
 
     // Per-row trends + primary images both depend on the resolved item
     // list, but they're independent of each other — run them in parallel.
-    // Previously sequential, which doubled the second-wave latency.
-    //   trends    → 14-day sparkline data (1 round trip via stock_movements)
+    //   trends    → 14-day sparkline data. With warm shared buckets this
+    //               is pure CPU (deriveInventoryTrends — the same math
+    //               getItemTrends runs); otherwise 1 round trip via
+    //               stock_movements, exactly as before.
     //   imagesById → primary photo signed URL per item (1 select + 1 batch
     //                createSignedUrls; falls back to custom_fields.thumbnail_url
     //                stashed by the bulk-ISBN importer for legacy books).
     const itemIdList = inventory.items.map((i) => i.id);
+    const trendInputs = inventory.items.map((i) => ({
+      id: i.id,
+      quantityOnHand: i.quantity_on_hand,
+    }));
     const [trends, imagesById, placementMap] = await Promise.all([
-      tagged(
-        'getItemTrends',
-        getItemTrends(
-          inventory.items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
-        ),
-      ),
+      trendBuckets
+        ? Promise.resolve(deriveInventoryTrends(trendInputs, trendBuckets))
+        : tagged('getItemTrends', getItemTrends(trendInputs)),
       tagged(
         'imagesSvc.primaryImagesWithThumbsForItems',
         // Richer shape than primaryImagesForItems — also returns the
@@ -380,15 +432,7 @@ async function InventoryTableSection({
       items: itemsWithImages,
       total: inventory.total,
       valueOnHand: inventory.valueOnHand,
-      categories: categories.map((c) => ({
-        id: c.id as string,
-        name: c.name as string,
-        color: (c.color as string | null) ?? null,
-      })),
-      locations: locations.map((l) => ({ id: l.id as string, name: l.name as string })),
-      suppliers: suppliers.map((s) => ({ id: s.id as string, name: s.name as string })),
-      tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
-      charters: charters.map((c) => ({ id: c.id, name: c.name, code: c.code ?? null })),
+      ...lookups,
       trends,
       placementMap,
     };

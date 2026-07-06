@@ -42,15 +42,51 @@ import 'server-only';
 //     browser caches and re-paying the Vercel image-optimizer
 //     re-encode per thumbnail. URLs are resolved per request AFTER
 //     the cached payload is read — see resolveInventoryListImages.
+//
+// SUB-LOADER SPLIT (FILTERED-view reuse): the payload is computed by
+// FOUR sibling top-level unstable_cache loaders sharing the same tag +
+// TTL + security contract, composed OUTSIDE any cached fn (an
+// unstable_cache nested inside another is a footgun: Next bypasses the
+// nested READ but still writes the recompute back — recurring bug
+// pattern #13):
+//   • rows+placement   (org, warehouseKey, view)  'inventory-list-v3'
+//   • lookup tables    (org)                      'inventory-lookups-v1'
+//   • valueOnHand      (org, warehouseKey, view)  'inventory-value-v1'
+//   • trend buckets    (org)                      'inventory-trend-buckets-v1'
+// The default view (loadInventoryList) consumes all four. FILTERED
+// views can't reuse rows/placement (they vary with searchParams) but —
+// behind the SAME manager+ && items:read gate, see
+// canUseSharedInventoryCaches — reuse the lookup tables and the
+// org-wide trend buckets, so a filter navigation only pays for
+// rows + placement + image resolution.
+//   • Trend buckets are ORG-WIDE (every item's 14-day movement
+//     aggregates); the per-row sparkline series are derived per request
+//     from whatever rows the current filter surfaced, with the same
+//     shared math getItemTrends uses (lib/item-trends.ts) — so any
+//     filtered row set gets series identical to the live path's.
+//   • valueOnHand is NOT reused on filtered views: InventoryService.
+//     list()'s footer sum mirrors the active filters (q/cat/loc/charter/
+//     stock/status/type), so the filtered figure must come from the live
+//     rows call (which computes it in parallel — zero serial cost). The
+//     cached figure serves only the default view, whose filters it
+//     mirrors exactly.
 
 import { revalidateTag, unstable_cache } from 'next/cache';
+
+import { can, isManagerOrAbove, type Permission, type Role } from '@stockpilot/core';
 
 import { isSiteLocation } from '@/lib/locations/groups';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { withContext, type ServiceContext } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
+import {
+  bucketTrendMovements,
+  deriveItemTrend,
+  TREND_WINDOW_DAYS,
+  type ItemTrend,
+  type ItemTrendBuckets,
+} from '@/server/services/lib/item-trends';
 import { fetchAllRows } from '@/server/services/lib/paginate';
-import { getItemTrends } from '@/server/services/movements';
 
 export type InventoryListView = 'items' | 'books';
 
@@ -112,6 +148,29 @@ export async function revalidateInventoryListForCurrentOrg(): Promise<void> {
   } catch (err) {
     console.warn('[inventory-list] revalidate skipped:', err);
   }
+}
+
+/* ---- shared-cache eligibility gate ------------------------------------ */
+
+/**
+ * THE gate for every org-shared inventory cache read (default-view
+ * payload on both pages AND the filtered views' lookup/trend reuse).
+ * Centralized so the pages can't drift apart:
+ *   • isManagerOrAbove — staff/viewer results are user-scoped
+ *     (warehouse assignments / viewer category restrictions) and must
+ *     never be served from, or into, an org-shared cache. They take
+ *     the fully-live RLS-scoped path.
+ *   • can(items:read) — honors configurable-permission revocations
+ *     (a manager with items:read revoked must not read cached rows the
+ *     way raw RLS rows would already be denied).
+ * Takes the page's requireOrgContext() result (role + effective
+ * permission set).
+ */
+export function canUseSharedInventoryCaches(ctx: {
+  readonly role: Role;
+  readonly permissions?: ReadonlySet<Permission>;
+}): boolean {
+  return isManagerOrAbove(ctx.role) && can(ctx, 'items:read');
 }
 
 /* ---- default-view detection ------------------------------------------ */
@@ -242,40 +301,93 @@ export interface InventoryPlacementLine {
   quantity: number;
 }
 
-export interface InventoryListPayload {
-  items: InventoryListCachedRow[];
-  total: number;
-  valueOnHand: number;
+/**
+ * The five filter-independent lookup tables the list pages' toolbars
+ * need. Shapes match what the pages' live branch maps the services'
+ * rows into — the cached and live filtered views must stay
+ * shape-identical (asserted in inventory-list.test.ts).
+ */
+export interface InventoryListLookups {
   categories: Array<{ id: string; name: string; color: string | null }>;
   locations: Array<{ id: string; name: string }>;
   suppliers: Array<{ id: string; name: string }>;
   tags: Array<{ id: string; name: string; color: string | null }>;
   charters: Array<{ id: string; name: string; code: string | null }>;
-  /** Serialized getItemTrends output (Maps don't survive the data cache). */
-  trends: Record<string, { qtySeries: number[]; moveSeries: number[] }>;
+}
+
+export interface InventoryListPayload extends InventoryListLookups {
+  items: InventoryListCachedRow[];
+  total: number;
+  valueOnHand: number;
+  /** Serialized trend series (Maps don't survive the data cache). */
+  trends: Record<string, ItemTrend>;
   /** Serialized placementBreakdown — one line per non-empty holding. */
   placement: Record<string, InventoryPlacementLine[]>;
 }
 
-/* ---- loader ------------------------------------------------------------ */
+/** The filter-dependent slice cached per (org, warehouseKey, view). */
+interface InventoryListRowsPayload {
+  items: InventoryListCachedRow[];
+  total: number;
+  placement: Record<string, InventoryPlacementLine[]>;
+}
+
+/* ---- loader (composition) ---------------------------------------------- */
 
 /**
- * Cached default-view list payload. Key = (organizationId,
- * warehouseKey, view); tag = inventoryListTag(organizationId) so every
- * write path can invalidate all of an org's variants at once. The
- * unstable_cache wrapper is created per call because tags must carry
- * the org id — the implicit key (fn source + explicit keyParts + args)
- * is identical across calls, so entries are shared normally.
+ * Cached default-view list payload, composed from the four sibling
+ * cached sub-loaders IN PARALLEL and OUTSIDE any cached fn (never nest
+ * unstable_cache — pattern #13). Rows/value key = (organizationId,
+ * warehouseKey, view); lookups/buckets key = (organizationId). All four
+ * share tag = inventoryListTag(organizationId) so every write path
+ * invalidates an org's variants at once. Each unstable_cache wrapper is
+ * created per call because tags must carry the org id — the implicit
+ * key (fn source + explicit keyParts + args) is identical across calls,
+ * so entries are shared normally.
+ *
+ * Trend series are derived per request from the cached org-wide buckets
+ * + the cached rows' quantities (same shared math as getItemTrends), so
+ * the sparkline endpoint always equals the row's on-hand column.
  */
 export async function loadInventoryList(
   organizationId: string,
   warehouseKey: string,
   view: InventoryListView,
 ): Promise<InventoryListPayload> {
-  // v2: rows carry image storage PATHS instead of signed URLs (URL
-  // resolution moved outside the cache) — bumped so stale v1
-  // URL-carrying entries can't be read as the new shape for a TTL.
-  const cached = unstable_cache(loadInventoryListUncached, ['inventory-list-v2'], {
+  const [rows, lookups, valueOnHand, buckets] = await Promise.all([
+    loadInventoryRows(organizationId, warehouseKey, view),
+    loadInventoryLookups(organizationId),
+    loadInventoryValueOnHand(organizationId, warehouseKey, view),
+    loadInventoryTrendBuckets(organizationId),
+  ]);
+
+  const trends: InventoryListPayload['trends'] = {};
+  for (const r of rows.items) {
+    trends[r.id] = deriveItemTrend(Number(r.quantity_on_hand), buckets[r.id]);
+  }
+
+  return {
+    items: rows.items,
+    total: rows.total,
+    valueOnHand,
+    ...lookups,
+    trends,
+    placement: rows.placement,
+  };
+}
+
+/** Cached rows + placement for the exact default view. */
+async function loadInventoryRows(
+  organizationId: string,
+  warehouseKey: string,
+  view: InventoryListView,
+): Promise<InventoryListRowsPayload> {
+  // v3: the cached fn now computes ONLY rows+placement — lookups, the
+  // value sum, and trends moved to their own sibling caches so filtered
+  // views can reuse them. (v2 bundled everything; bumped so a stale v2
+  // entry can't be read as the slimmer shape for a TTL. One-time cold
+  // recompute per org — the */30 prewarm cron covers hot orgs.)
+  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v3'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
@@ -283,10 +395,9 @@ export async function loadInventoryList(
 }
 
 /**
- * Read-only synthetic context so the loader can reuse getItemTrends
- * (inside the cache) and resolveInventoryListImages can reuse the
- * 25-day per-path signed-URL cache in ItemImagesService (outside the
- * cache, per request) without re-deriving either. Same construction as
+ * Read-only synthetic context so resolveInventoryListImages can reuse
+ * the 25-day per-path signed-URL cache in ItemImagesService (outside
+ * the cache, per request) without re-deriving it. Same construction as
  * the cron routes' system contexts. NEVER pass this to a write method —
  * it carries the service role client.
  */
@@ -307,11 +418,11 @@ function adminReadContext(organizationId: string): ServiceContext {
 const ITEM_SELECT_COLUMNS =
   'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, custom_fields, created_at, updated_at, created_by, updated_by';
 
-async function loadInventoryListUncached(
+async function loadInventoryRowsUncached(
   organizationId: string,
   warehouseKey: string,
   view: InventoryListView,
-): Promise<InventoryListPayload> {
+): Promise<InventoryListRowsPayload> {
   const admin = createAdminClient();
   const itemType = view === 'books' ? 'book' : 'product';
   const warehouseId = warehouseKey === ALL_WAREHOUSES_KEY ? null : warehouseKey;
@@ -332,65 +443,10 @@ async function loadInventoryListUncached(
     .range(0, DEFAULT_VIEW_PAGE_SIZE - 1);
   if (warehouseId) mainQuery = mainQuery.eq('warehouse_id', warehouseId);
 
-  // Skinny mirror of the same filter for the org-wide "$N on hand"
-  // footer — paginated past PostgREST's 1000-row cap like the service.
-  const buildSumPage = (from: number, to: number) => {
-    let q = admin
-      .from('inventory_items')
-      .select('quantity_on_hand, unit_cost, reorder_point')
-      .eq('organization_id', organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      .eq('item_type', itemType)
-      .eq('is_rental', false);
-    if (warehouseId) q = q.eq('warehouse_id', warehouseId);
-    return q.order('id', { ascending: true }).range(from, to);
-  };
-
-  const [mainRes, sumRows, categoriesRes, locationsRes, suppliers, tagsRes, chartersRes] =
-    await Promise.all([
-      mainQuery,
-      fetchAllRows<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }>(
-        (from, to) => buildSumPage(from, to),
-      ),
-      admin
-        .from('categories')
-        .select('id, name, color')
-        .eq('organization_id', organizationId)
-        .is('deleted_at', null)
-        .order('name', { ascending: true }),
-      admin
-        .from('locations')
-        .select('id, name, type, kind')
-        .eq('organization_id', organizationId)
-        .is('deleted_at', null)
-        .order('name', { ascending: true }),
-      loadSuppliersIfEnabled(admin, organizationId),
-      admin
-        .from('tags')
-        .select('id, name, color')
-        .eq('organization_id', organizationId)
-        .order('name', { ascending: true }),
-      admin
-        .from('charters')
-        .select('id, name, code')
-        .eq('organization_id', organizationId)
-        .eq('status', 'active')
-        .order('name', { ascending: true }),
-    ]);
+  const mainRes = await mainQuery;
 
   // Throw on ANY read error so a failed pass is never cached.
   if (mainRes.error) throw new Error(`inventory-list items query failed: ${mainRes.error.message}`);
-  if (categoriesRes.error) {
-    throw new Error(`inventory-list categories query failed: ${categoriesRes.error.message}`);
-  }
-  if (locationsRes.error) {
-    throw new Error(`inventory-list locations query failed: ${locationsRes.error.message}`);
-  }
-  if (tagsRes.error) throw new Error(`inventory-list tags query failed: ${tagsRes.error.message}`);
-  if (chartersRes.error) {
-    throw new Error(`inventory-list charters query failed: ${chartersRes.error.message}`);
-  }
 
   type RawRow = Omit<
     InventoryListCachedRow,
@@ -404,17 +460,14 @@ async function loadInventoryListUncached(
   >;
   const rows = (mainRes.data ?? []) as unknown as RawRow[];
   const total = mainRes.count ?? 0;
-  const valueOnHand = sumRows.reduce(
-    (acc, r) => acc + (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0),
-    0,
-  );
 
   const ids = rows.map((r) => r.id);
-  const ctx = adminReadContext(organizationId);
 
-  // Second wave: holdings (placement), 14-day trends, primary images —
-  // independent of each other, all keyed on the page's item ids.
-  const [levelsRes, trendsMap, imageRowsRes] = await Promise.all([
+  // Second wave: holdings (placement) + primary images — independent of
+  // each other, both keyed on the page's item ids. (Trends are NOT
+  // fetched here anymore — they derive per request from the org-wide
+  // bucket cache, see loadInventoryTrendBuckets.)
+  const [levelsRes, imageRowsRes] = await Promise.all([
     ids.length > 0
       ? admin
           .from('item_stock_levels')
@@ -423,10 +476,6 @@ async function loadInventoryListUncached(
           .in('item_id', ids)
           .gt('quantity', 0)
       : Promise.resolve({ data: [], error: null }),
-    getItemTrends(
-      rows.map((r) => ({ id: r.id, quantityOnHand: Number(r.quantity_on_hand) })),
-      { ctx },
-    ),
     ids.length > 0
       ? admin
           .from('item_images')
@@ -524,13 +573,80 @@ async function loadInventoryListUncached(
     };
   });
 
-  const trends: InventoryListPayload['trends'] = {};
-  for (const [id, t] of trendsMap) trends[id] = t;
+  return { items, total, placement };
+}
+
+/* ---- filter-independent sub-loaders ------------------------------------ */
+
+/**
+ * Cached lookup tables (categories / site locations / suppliers / tags /
+ * charters) — the toolbar filter sources on both list pages. Key =
+ * (organizationId): for manager-and-above these are org-uniform (the
+ * only role class allowed near this cache — see
+ * canUseSharedInventoryCaches). Queries mirror the pages' live-branch
+ * services exactly:
+ *   categories → CategoriesService.list()            (not deleted, name ASC)
+ *   locations  → LocationsService.list({sitesOnly})   (not deleted, name ASC,
+ *                isSiteLocation filter — same shared predicate)
+ *   suppliers  → SuppliersService.list() behind the module gate
+ *                (module off → [] fail-closed, see loadSuppliersIfEnabled)
+ *   tags       → TagsService.list()                   (name ASC)
+ *   charters   → ChartersService.list()               (status=active, name ASC)
+ */
+export async function loadInventoryLookups(
+  organizationId: string,
+): Promise<InventoryListLookups> {
+  const cached = unstable_cache(loadInventoryLookupsUncached, ['inventory-lookups-v1'], {
+    revalidate: LIST_TTL_SEC,
+    tags: [inventoryListTag(organizationId)],
+  });
+  return cached(organizationId);
+}
+
+async function loadInventoryLookupsUncached(
+  organizationId: string,
+): Promise<InventoryListLookups> {
+  const admin = createAdminClient();
+  const [categoriesRes, locationsRes, suppliers, tagsRes, chartersRes] = await Promise.all([
+    admin
+      .from('categories')
+      .select('id, name, color')
+      .eq('organization_id', organizationId)
+      .is('deleted_at', null)
+      .order('name', { ascending: true }),
+    admin
+      .from('locations')
+      .select('id, name, type, kind')
+      .eq('organization_id', organizationId)
+      .is('deleted_at', null)
+      .order('name', { ascending: true }),
+    loadSuppliersIfEnabled(admin, organizationId),
+    admin
+      .from('tags')
+      .select('id, name, color')
+      .eq('organization_id', organizationId)
+      .order('name', { ascending: true }),
+    admin
+      .from('charters')
+      .select('id, name, code')
+      .eq('organization_id', organizationId)
+      .eq('status', 'active')
+      .order('name', { ascending: true }),
+  ]);
+
+  // Throw on ANY read error so a failed pass is never cached.
+  if (categoriesRes.error) {
+    throw new Error(`inventory-list categories query failed: ${categoriesRes.error.message}`);
+  }
+  if (locationsRes.error) {
+    throw new Error(`inventory-list locations query failed: ${locationsRes.error.message}`);
+  }
+  if (tagsRes.error) throw new Error(`inventory-list tags query failed: ${tagsRes.error.message}`);
+  if (chartersRes.error) {
+    throw new Error(`inventory-list charters query failed: ${chartersRes.error.message}`);
+  }
 
   return {
-    items,
-    total,
-    valueOnHand,
     categories: (categoriesRes.data ?? []).map((c) => ({
       id: c.id as string,
       name: c.name as string,
@@ -550,9 +666,132 @@ async function loadInventoryListUncached(
       name: c.name as string,
       code: (c.code as string | null) ?? null,
     })),
-    trends,
-    placement,
   };
+}
+
+/**
+ * Cached "$N on hand" footer figure for the DEFAULT view only. Key =
+ * (organizationId, warehouseKey, view) — the skinny sum mirrors the
+ * default-view filters (active, non-rental, item_type by view, optional
+ * warehouse). NOT served on filtered views: the live list()'s footer
+ * sum mirrors the active filters, so substituting this figure there
+ * would pair an unfiltered dollar total with a filtered SKU count.
+ */
+export async function loadInventoryValueOnHand(
+  organizationId: string,
+  warehouseKey: string,
+  view: InventoryListView,
+): Promise<number> {
+  const cached = unstable_cache(loadInventoryValueOnHandUncached, ['inventory-value-v1'], {
+    revalidate: LIST_TTL_SEC,
+    tags: [inventoryListTag(organizationId)],
+  });
+  return cached(organizationId, warehouseKey, view);
+}
+
+async function loadInventoryValueOnHandUncached(
+  organizationId: string,
+  warehouseKey: string,
+  view: InventoryListView,
+): Promise<number> {
+  const admin = createAdminClient();
+  const itemType = view === 'books' ? 'book' : 'product';
+  const warehouseId = warehouseKey === ALL_WAREHOUSES_KEY ? null : warehouseKey;
+
+  // Skinny mirror of the default-view filter — paginated past
+  // PostgREST's 1000-row cap like the service. fetchAllRows THROWS on
+  // any page error, so a failed pass is never cached.
+  const sumRows = await fetchAllRows<{
+    quantity_on_hand: number;
+    unit_cost: number;
+    reorder_point: number;
+  }>((from, to) => {
+    let q = admin
+      .from('inventory_items')
+      .select('quantity_on_hand, unit_cost, reorder_point')
+      .eq('organization_id', organizationId)
+      .is('deleted_at', null)
+      .eq('status', 'active')
+      .eq('item_type', itemType)
+      .eq('is_rental', false);
+    if (warehouseId) q = q.eq('warehouse_id', warehouseId);
+    return q.order('id', { ascending: true }).range(from, to);
+  });
+
+  return sumRows.reduce(
+    (acc, r) => acc + (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0),
+    0,
+  );
+}
+
+/**
+ * Cached ORG-WIDE 14-day movement buckets — the expensive half of the
+ * per-row trend sparklines. Key = (organizationId) only: buckets are
+ * per-item aggregates, so any view/warehouse/filter combination reads
+ * just the ids it surfaced (deriveInventoryTrends). No warehouse or
+ * item_type narrowing so a single cache entry serves Items, Books, and
+ * every filtered variant.
+ *
+ * The bucket window is anchored at cache-fill time; entries live ≤60s
+ * and are invalidated by every stock-writing path via the shared tag,
+ * so the anchor drifts at most one TTL from request time — the same
+ * staleness class the fully-cached default view has always had.
+ */
+export async function loadInventoryTrendBuckets(
+  organizationId: string,
+): Promise<ItemTrendBuckets> {
+  const cached = unstable_cache(loadInventoryTrendBucketsUncached, ['inventory-trend-buckets-v1'], {
+    revalidate: LIST_TTL_SEC,
+    tags: [inventoryListTag(organizationId)],
+  });
+  return cached(organizationId);
+}
+
+async function loadInventoryTrendBucketsUncached(
+  organizationId: string,
+): Promise<ItemTrendBuckets> {
+  const admin = createAdminClient();
+  const startMs = Date.now() - TREND_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+  // Same projection/window/cap as getItemTrends, minus its `.in(item_id,
+  // …)` narrowing — org-wide so the buckets cover any filtered row set.
+  // fetchAllRows THROWS on any page error → a failed pass is never
+  // cached.
+  const rows = await fetchAllRows<{
+    item_id: string;
+    quantity_change: number;
+    created_at: string;
+  }>(
+    (from, to) =>
+      admin
+        .from('stock_movements')
+        .select('item_id, quantity_change, created_at')
+        .eq('organization_id', organizationId)
+        .gte('created_at', new Date(startMs).toISOString())
+        .order('id', { ascending: true })
+        .range(from, to),
+    { cap: 100_000 },
+  );
+
+  return bucketTrendMovements(rows, startMs);
+}
+
+/**
+ * Per-request trend derivation for a LIVE (filtered) row set from the
+ * cached org-wide buckets. Pure CPU — no round trip. Returns the same
+ * Map shape as getItemTrends and, for identical underlying movements,
+ * the same series (both run the shared lib/item-trends math; asserted
+ * by the parity test in inventory-list.test.ts).
+ */
+export function deriveInventoryTrends(
+  items: Array<{ id: string; quantityOnHand: number }>,
+  buckets: ItemTrendBuckets,
+): Map<string, ItemTrend> {
+  const result = new Map<string, ItemTrend>();
+  for (const it of items) {
+    result.set(it.id, deriveItemTrend(it.quantityOnHand, buckets[it.id]));
+  }
+  return result;
 }
 
 /* ---- per-request image-URL resolution -------------------------------- */
@@ -688,7 +927,10 @@ export interface InventoryListPrewarmResult {
  * Warms the (org, warehouseKey) Items + Books default-view caches a
  * real manager-class visitor would hit — called by the prewarm cron so
  * a robot pays every cold path instead of the first human after a
- * deploy. Errors are caught per view so one bad view doesn't fail the
+ * deploy. Because loadInventoryList is a composition of the four
+ * sub-loaders, each pass ALSO warms the shared lookup + trend-bucket +
+ * value caches the FILTERED views reuse — no cron/signature change
+ * needed. Errors are caught per view so one bad view doesn't fail the
  * whole cron run.
  */
 export async function prewarmInventoryList(
