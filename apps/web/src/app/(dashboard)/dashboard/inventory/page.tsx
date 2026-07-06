@@ -7,7 +7,10 @@ export const metadata: Metadata = { title: 'Inventory' };
 
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
-import { InventoryTable } from '@/components/inventory/inventory-table';
+import {
+  InventoryTable,
+  type InstantAdoptedPayload,
+} from '@/components/inventory/inventory-table';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
@@ -138,12 +141,19 @@ export default async function InventoryPage({
   // the toolbar synchronously; the heavy item list + trends + images stream
   // behind <Suspense> below. The heading inherits a per-org nav rename
   // (Settings → Navigation) off the request-cached org row — no extra fetch.
-  const [sessionCtx, inventorySvc, heading] = await Promise.all([
+  //
+  // The racks RPC is CHAINED INSIDE the Promise.all (not awaited after it):
+  // a separate sequential await put one full DB round trip between
+  // loading.tsx and the real toolbar — and therefore in front of the table
+  // skeleton — on EVERY hard load (cold-start plan rank 2). withContext is
+  // request-cached, so the chain adds no duplicate auth work.
+  const [sessionCtx, heading, racks] = await Promise.all([
     requireOrgContext(),
-    InventoryService.forCurrentUser(),
     effectiveNavLabel('/dashboard/inventory', 'Inventory'),
+    InventoryService.forCurrentUser().then((svc) =>
+      svc.listDistinctRacks({ scope: rackScope }),
+    ),
   ]);
-  const racks = await inventorySvc.listDistinctRacks({ scope: rackScope });
 
   // Gate the create / import buttons on `items:create`. Viewers (read-
   // only role) and stock-adjust-only roles should NOT see entry points
@@ -284,7 +294,60 @@ async function InventoryTableSection({
     lookups: InventoryListLookups;
     trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
   } | null = null;
-  if (useSharedCaches && itemType === 'product') {
+
+  // FIRST-ROWS-FIRST STREAMING (cold-start plan rank 4) — DEFAULT VIEW
+  // ONLY: instead of awaiting the full dataset pipeline before anything
+  // renders, the default view server-renders immediately from the small
+  // cached 30-row payload (the branch below) and ships the full instant
+  // dataset as this UNAWAITED promise, which React streams over the same
+  // RSC response when it resolves. The client table adopts it in an
+  // effect and flips into instant mode (~<1s later) with zero visual
+  // change — the 30 cached rows ARE page 1 of the default derivation by
+  // the loader parity contract. Deep links (any data-affecting param)
+  // keep the AWAITED instant branch below so their SSR HTML still
+  // reflects the exact URL state. Never rejects: every failure resolves
+  // null → the table stays in server mode (today's behavior).
+  const isDefaultView = isDefaultInventoryView(params, 'items');
+  let instantPromise: Promise<InstantAdoptedPayload | null> | undefined;
+  if (useSharedCaches && itemType === 'product' && isDefaultView) {
+    instantPromise = (async (): Promise<InstantAdoptedPayload | null> => {
+      try {
+        const [dataset, trendBuckets] = await Promise.all([
+          tagged(
+            'loadInventoryDataset (streamed)',
+            loadInventoryDataset(
+              sessionCtx.organizationId,
+              warehouseFilter ?? ALL_WAREHOUSES_KEY,
+              'items',
+            ),
+          ),
+          loadInventoryTrendBuckets(sessionCtx.organizationId),
+        ]);
+        if (!dataset) return null;
+        // payloadDiet (rank 5): dataset rows ship thumb-only image URLs
+        // (no master, no lqip) — the table fetches masters on demand.
+        const items = await resolveInventoryListImages(
+          sessionCtx.organizationId,
+          dataset.items,
+          { payloadDiet: true },
+        );
+        return {
+          items,
+          placement: dataset.placement,
+          trends: deriveInventoryTrends(
+            items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+            trendBuckets,
+          ),
+          view: 'items' as const,
+        };
+      } catch (err) {
+        console.warn('[inventory page] streamed instant dataset unavailable:', err);
+        return null;
+      }
+    })();
+  }
+
+  if (useSharedCaches && itemType === 'product' && !isDefaultView) {
     // Data acquisition only in here — the JSX renders after the
     // try/catch (react-hooks/error-boundaries: a thrown render wouldn't
     // be caught here anyway). Any failure → instantData stays null →
@@ -306,7 +369,12 @@ async function InventoryTableSection({
         // Paths → signed URLs per request, through the same shared
         // 25-day per-path cache as every other list surface (never
         // inside the loader's cache — see the loader's header note).
-        const items = await resolveInventoryListImages(sessionCtx.organizationId, dataset.items);
+        // payloadDiet (rank 5): thumb-only rows, master on demand —
+        // identical to the streamed default-view payload so realtime
+        // refreshes never flip the row shape.
+        const items = await resolveInventoryListImages(sessionCtx.organizationId, dataset.items, {
+          payloadDiet: true,
+        });
         instantData = {
           items,
           placement: dataset.placement,
@@ -379,8 +447,10 @@ async function InventoryTableSection({
   // prewarm cron keeps warm. isDefaultInventoryView is mandatory — any
   // data-affecting param takes the live path unchanged. The warehouse-
   // filter cookie changes the data, so it's part of the cache key. A
-  // loader failure falls through to the live path.
-  if (isDefaultInventoryView(params, 'items') && useSharedCaches) {
+  // loader failure falls through to the live path. Since rank 4 this IS
+  // the default view's first paint (server mode + streamed
+  // instantPromise) instead of a rarely-hit fallback.
+  if (isDefaultView && useSharedCaches) {
     try {
       const payload = await loadInventoryList(
         sessionCtx.organizationId,
@@ -626,6 +696,10 @@ async function InventoryTableSection({
       savedViewScope="inventory"
       activeWarehouseId={warehouseFilter}
       currentUserId={sessionCtx.userId}
+      // Rank 4: the streamed full dataset (default view, manager+ only —
+      // undefined for staff/viewer and non-default URLs, keeping their
+      // props byte-identical to before).
+      instantPromise={instantPromise}
     />
   );
 }

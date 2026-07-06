@@ -4,6 +4,7 @@ import { cache } from 'react';
 
 import { createClient } from '@/lib/supabase/server';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import { isManagerOrAbove, isWarehouseScoped, type Role } from '@stockpilot/core';
 
 /**
@@ -46,13 +47,12 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
   const supabase = await createClient();
 
   if (isManagerOrAbove(c.role as Role)) {
-    const { data } = await supabase
-      .from('warehouses')
-      .select('id')
-      .eq('organization_id', c.organizationId)
-      .neq('status', 'archived')
-      .order('name', { ascending: true });
-    const readableIds = (data ?? []).map((r) => r.id as string);
+    // Rank 8 (query hygiene): shares the dashboard layout's request-cached
+    // `warehouses` fetch instead of issuing a second, narrower (`id` only)
+    // copy of the same query in the same render. Identical filters + order
+    // (org, status<>archived, name ASC) through the same RLS-scoped client.
+    const warehouses = await getWarehousesForRequest(c.organizationId);
+    const readableIds = warehouses.map((w) => w.id);
     return {
       readableIds,
       writableIds: readableIds,

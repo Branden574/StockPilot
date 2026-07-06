@@ -31,11 +31,25 @@ export interface OrgContext extends ServerSession {
   permissions?: Set<Permission>;
 }
 
+/**
+ * One accepted org membership of the current user, shaped for the org
+ * switcher. Derived from loadSessionAndContext's single membership
+ * query (cold-start plan rank 8) — the dashboard layout used to issue
+ * a THIRD organization_members query per render just to get logo_url.
+ */
+export interface SessionMembership {
+  organizationId: string;
+  role: Role;
+  name: string;
+  logoUrl: string | null;
+}
+
 interface LoadedContext {
   session: ServerSession | null;
   orgRole: Role | null;
   orgId: string | null;
   orgName: string | null;
+  memberships: SessionMembership[];
 }
 
 function pickOrgName(
@@ -58,7 +72,9 @@ function pickOrgName(
 const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
   const h = await headers();
   const userId = h.get(SESSION_HEADER_USER_ID);
-  if (!userId) return { session: null, orgRole: null, orgId: null, orgName: null };
+  if (!userId) {
+    return { session: null, orgRole: null, orgId: null, orgName: null, memberships: [] };
+  }
 
   const email = h.get(SESSION_HEADER_USER_EMAIL) ?? '';
   const supabase = await createClient();
@@ -78,7 +94,12 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
       .maybeSingle(),
     supabase
       .from('organization_members')
-      .select('organization_id, role, organizations:organization_id (name)')
+      // id + logo_url ride along (rank 8) so the dashboard layout's org
+      // switcher derives from THIS query instead of issuing its own
+      // organization_members query per render. Widened columns only —
+      // filters/limits are unchanged, so the membership-selection (and
+      // therefore permission-floor) semantics are identical.
+      .select('organization_id, role, organizations:organization_id (id, name, logo_url)')
       .eq('user_id', userId)
       .not('accepted_at', 'is', null),
   ]);
@@ -109,10 +130,11 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
         defaultOrganizationId: null,
       };
 
+  type MemberOrg = { id: string; name: string; logo_url: string | null };
   const memberRows = (membersRes.data ?? []) as Array<{
     organization_id: string;
     role: Role;
-    organizations: { name: string } | { name: string }[] | null;
+    organizations: MemberOrg | MemberOrg[] | null;
   }>;
 
   // Same selection semantics as the old two-query shape: prefer the
@@ -125,12 +147,39 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
     memberRows[0] ??
     null;
 
+  // Org-switcher shape, derived from the SAME rows (rank 8). Rows whose
+  // to-one embed came back empty are dropped — identical to the layout's
+  // old `if (!org) return null` mapping.
+  const memberships: SessionMembership[] = memberRows
+    .map((m) => {
+      const org = Array.isArray(m.organizations) ? m.organizations[0] : m.organizations;
+      if (!org) return null;
+      return {
+        organizationId: m.organization_id,
+        role: m.role,
+        name: org.name,
+        logoUrl: org.logo_url ?? null,
+      };
+    })
+    .filter((m): m is SessionMembership => m !== null);
+
   return {
     session,
     orgRole: memberRow?.role ?? null,
     orgId: memberRow?.organization_id ?? null,
     orgName: memberRow ? pickOrgName(memberRow.organizations) : null,
+    memberships,
   };
+});
+
+/**
+ * The current user's accepted memberships (org switcher data), shared
+ * with every other consumer of loadSessionAndContext in the render —
+ * zero additional round trips. Empty array when signed out.
+ */
+export const getSessionMemberships = cache(async (): Promise<SessionMembership[]> => {
+  const { memberships } = await loadSessionAndContext();
+  return memberships;
 });
 
 export const getServerSession = cache(async (): Promise<ServerSession | null> => {

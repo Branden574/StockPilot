@@ -160,6 +160,26 @@ export interface InstantInventoryDataset {
   view: 'items' | 'books';
 }
 
+/**
+ * FIRST-ROWS-FIRST STREAMING (cold-start plan rank 4): what the page's
+ * UNAWAITED dataset promise resolves to. The default view server-renders
+ * immediately from the small 30-row cached payload (server mode), while
+ * this full dataset streams behind it over the same RSC response; the
+ * table adopts it in an effect and flips into instant mode — same
+ * components, same data, only the delivery order changed. `null` =
+ * dataset unavailable (over-cap org or loader failure) → the table stays
+ * in server mode, byte-identical to today.
+ */
+export interface InstantAdoptedPayload {
+  items: InstantDatasetItem[];
+  placement?: Record<string, InstantPlacementLine[]>;
+  /** Full-dataset 14-day series — replaces the 30-row `trends` prop the
+   *  moment instant mode takes over, so every locally-derived page has
+   *  its sparklines ready. */
+  trends?: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
+  view: 'items' | 'books';
+}
+
 export interface InventoryTableProps {
   items: Item[];
   lookups: Lookups;
@@ -252,6 +272,14 @@ export interface InventoryTableProps {
       over-cap orgs, every other caller) → server mode, byte-identical
       to today. */
   instant?: InstantInventoryDataset;
+  /** First-rows-first streaming (rank 4) — see InstantAdoptedPayload.
+      Only the manager+ DEFAULT view passes this; deep links pass the
+      awaited `instant` prop instead. While it's pending the table runs
+      in server mode over the initial 30 rows, EXCEPT that keystrokes
+      never route to the server-filter path — they buffer in local state
+      (with the synchronous local match as interim feedback) and apply
+      through the instant pipeline the moment the dataset lands. */
+  instantPromise?: Promise<InstantAdoptedPayload | null>;
 }
 
 interface SavedViewSummary {
@@ -336,6 +364,29 @@ function deriveStatus(qty: number, reorder: number): 'ok' | 'warn' | 'crit' {
 const EMPTY_SERIES: number[] = [];
 
 /**
+ * On-demand master-image URL for payload-diet rows (rank 5): instant-mode
+ * dataset rows ship only the ~200px thumb; the 2048px master (hover
+ * preview + lightbox only) is fetched here on hover intent from the
+ * org-scoped, session-authed route. Module-level promise cache so
+ * re-hovers and re-renders never re-fetch; failures are NOT cached (a
+ * later hover retries).
+ */
+const masterUrlPromises = new Map<string, Promise<string | null>>();
+function loadMasterImageUrl(itemId: string): Promise<string | null> {
+  const existing = masterUrlPromises.get(itemId);
+  if (existing) return existing;
+  const p = fetch(`/api/items/${itemId}/image-master`)
+    .then((res) => (res.ok ? (res.json() as Promise<{ url: string | null }>) : { url: null }))
+    .then((data) => data.url ?? null)
+    .catch(() => null);
+  masterUrlPromises.set(itemId, p);
+  void p.then((url) => {
+    if (url === null) masterUrlPromises.delete(itemId);
+  });
+  return p;
+}
+
+/**
  * Instant-mode <Link>/<a> click interception: plain left clicks become a
  * shallow history update (no server round trip — the rows derive
  * locally); modified clicks (cmd/ctrl/shift/alt, middle button) are left
@@ -396,8 +447,48 @@ export function InventoryTable({
   currentUserId = null,
   reservedByItem,
   instant,
+  instantPromise,
 }: InventoryTableProps) {
-  const instantMode = instant != null;
+  // ── Streamed-dataset adoption (rank 4) ──────────────────────────────
+  // The default view mounts in server mode with the 30-row payload while
+  // the full dataset streams behind as `instantPromise`. When it
+  // resolves, the table flips into instant mode with zero visual change
+  // for the current URL state (the 30 cached rows ARE page 1 of the
+  // default derivation, by the loader parity contract). `null` resolution
+  // (over-cap org / loader failure) drops back to plain server mode.
+  const [adopted, setAdopted] = React.useState<InstantAdoptedPayload | null>(null);
+  const [awaitingInstant, setAwaitingInstant] = React.useState<boolean>(
+    instant == null && instantPromise != null,
+  );
+  React.useEffect(() => {
+    if (!instantPromise) return;
+    let cancelled = false;
+    instantPromise
+      .then((payload) => {
+        if (cancelled) return;
+        setAdopted(payload);
+        setAwaitingInstant(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAdopted(null);
+        setAwaitingInstant(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [instantPromise]);
+
+  // The dataset the derivation actually runs over: the awaited prop
+  // (deep links) wins; otherwise the adopted streamed payload.
+  const effectiveInstant: InstantInventoryDataset | null = React.useMemo(() => {
+    if (instant) return instant;
+    if (adopted) {
+      return { items: adopted.items, placement: adopted.placement, view: adopted.view };
+    }
+    return null;
+  }, [instant, adopted]);
+  const instantMode = effectiveInstant != null;
   // Sparkline mode preference. localStorage-backed so it sticks across
   // reloads + tabs but doesn't pollute URLs (it's a personal preference,
   // not a query filter). MUST initialize to the server-safe default
@@ -536,19 +627,24 @@ export function InventoryTable({
   }, [instantMode, params, q, filters.visible]);
 
   const instantView = React.useMemo(() => {
-    if (!instant || !instantState) return null;
-    return deriveInstantView(instant.items, instantState, instant.view, pageSize);
-  }, [instant, instantState, pageSize]);
+    if (!effectiveInstant || !instantState) return null;
+    return deriveInstantView(
+      effectiveInstant.items,
+      instantState,
+      effectiveInstant.view,
+      pageSize,
+    );
+  }, [effectiveInstant, instantState, pageSize]);
 
   // Items view: expand the page's items into one row per holding line —
   // the client twin of the page's server-mode placementRows flatMap.
   // Books view (no placement passed): the page items render as-is.
   const instantRows: Item[] | null = React.useMemo(() => {
-    if (!instant || !instantView) return null;
-    return instant.placement
-      ? expandInstantPlacementRows(instantView.pageItems, instant.placement)
+    if (!effectiveInstant || !instantView) return null;
+    return effectiveInstant.placement
+      ? expandInstantPlacementRows(instantView.pageItems, effectiveInstant.placement)
       : instantView.pageItems;
-  }, [instant, instantView]);
+  }, [effectiveInstant, instantView]);
 
   const view = paramsToView(params.get('stock'));
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
@@ -657,7 +753,13 @@ export function InventoryTable({
   // dedicated effect below keeps the URL in sync via shallow
   // replaceState instead.
   React.useEffect(() => {
-    if (instantMode) return;
+    // HARD CONTRACT (rank 4): while the streamed dataset is pending,
+    // keystrokes must NOT route to the server-filter path — they buffer
+    // in local state (localMatches gives interim feedback) and apply
+    // through the instant pipeline when the dataset lands. If the
+    // dataset resolves null instead, this effect re-runs (awaitingInstant
+    // flipped) and the buffered q takes today's server-search path.
+    if (instantMode || awaitingInstant) return;
     const needle = q.trim();
     if (!needle) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
@@ -736,7 +838,7 @@ export function InventoryTable({
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, instantMode]);
+  }, [q, instantMode, awaitingInstant]);
 
   // INSTANT-MODE URL SYNC for the search box: mirror server mode's URL
   // shape (?q=needle, ?page dropped on any q change) with a debounced
@@ -813,13 +915,16 @@ export function InventoryTable({
   // the memo'd <Sparkline> skip its SVG-path recompute for all 50 rows. This
   // is the fix for the click-lag: a single checkbox toggle no longer rebuilds
   // every visible sparkline.
+  // Adopted streamed payload carries FULL-dataset trends (the 30-row
+  // `trends` prop only covers the initial page); prefer them once present.
+  const effectiveTrends = adopted?.trends ?? trends;
   const seriesByItem = React.useMemo(() => {
     const m = new Map<string, number[]>();
     for (const it of displayed) {
-      m.set(it.id, seriesForRow(it.id, it.quantity_on_hand, sparkMode, trends));
+      m.set(it.id, seriesForRow(it.id, it.quantity_on_hand, sparkMode, effectiveTrends));
     }
     return m;
-  }, [displayed, sparkMode, trends]);
+  }, [displayed, sparkMode, effectiveTrends]);
 
   // Idle-prewarm the Vercel-optimized hover-preview URLs for every
   // visible row. Runs via requestIdleCallback so it never competes
@@ -845,6 +950,12 @@ export function InventoryTable({
             key={v}
             href={hrefForView(v)}
             scroll={false}
+            // No viewport prefetch: these hrefs embed the CURRENT q/filters,
+            // so every keystroke re-prefetched 3-4 full RSC renders of the
+            // low/out/archived variants (observed live) — pure server waste,
+            // doubly so in instant mode where the click never hits the
+            // server at all. Hover still warms in server mode.
+            prefetch={false}
             // Instant mode: the stock filter derives locally, so the chip
             // becomes a shallow push (same URL, zero server work).
             onClick={
@@ -1039,7 +1150,7 @@ export function InventoryTable({
           onClear={() => setSelected(new Set())}
           // Instant mode holds the FULL dataset, so cross-page selections
           // resolve against it; server mode keeps today's page-row scan.
-          hasArchivedSelection={(instant?.items ?? items).some(
+          hasArchivedSelection={(effectiveInstant?.items ?? items).some(
             (i) => selected.has(i.id) && i.status === 'archived',
           )}
           onCycleCount={() => {
@@ -1049,7 +1160,7 @@ export function InventoryTable({
             // re-validates by id.
             const itemType = basePath.includes('/books') ? 'book' : 'product';
             const byId = new Map<string, Item>();
-            for (const r of instant?.items ?? items) byId.set(r.id, r);
+            for (const r of effectiveInstant?.items ?? items) byId.set(r.id, r);
             for (const r of serverHits ?? []) byId.set(r.id, r);
             const picks = [...selected].map((id) => {
               const r = byId.get(id);
@@ -1165,6 +1276,10 @@ export function InventoryTable({
               // Stable per (displayed, sparkMode, trends) — see seriesByItem above.
               const series = seriesByItem.get(item.id) ?? EMPTY_SERIES;
               const isSelected = selected.has(item.id);
+              // Payload-diet rows (rank 5) carry only the thumb URL; the
+              // cell renders whichever is present (thumb preferred, exactly
+              // as before) and the hover preview lazy-loads the master.
+              const rowThumbSrc = item.image_thumb_url ?? item.image_url;
 
               return (
                 <tr
@@ -1181,6 +1296,13 @@ export function InventoryTable({
                     <div className="flex items-center gap-2.5">
                       <ImageHoverPreview
                         src={item.image_url ?? null}
+                        // Diet rows: master on demand (org-scoped route,
+                        // same 25-day-stable URL the row used to carry).
+                        srcLoader={
+                          !item.image_url && item.image_thumb_url
+                            ? () => loadMasterImageUrl(item.id)
+                            : undefined
+                        }
                         alt={item.name}
                         title={item.name}
                         subtitle={item.sku}
@@ -1194,7 +1316,7 @@ export function InventoryTable({
                         }
                         className="shrink-0"
                       >
-                        {item.image_url ? (
+                        {rowThumbSrc ? (
                           <Image
                             // Prefer the pre-resized ~200px thumb
                             // (item_images.thumb_path, populated by
@@ -1202,7 +1324,8 @@ export function InventoryTable({
                             // master URL for rows that pre-date the
                             // thumb column — Vercel Image Optimizer
                             // downscales it on first hit and caches.
-                            src={item.image_thumb_url ?? item.image_url}
+                            // Diet rows carry ONLY the thumb (rank 5).
+                            src={rowThumbSrc}
                             // Thumbs are ALREADY ~200px WebPs — putting
                             // them through /_next/image adds no bytes
                             // saved, but the optimizer cache is

@@ -1011,14 +1011,28 @@ export function deriveInventoryTrends(
  * for a TTL, the next request simply resolves again.
  *
  * Output rows are shape-identical to the live branch's merged rows.
+ *
+ * PAYLOAD DIET (`opts.payloadDiet` — cold-start plan rank 5, instant-mode
+ * dataset only): rows that HAVE a pre-resized thumb ship ONLY the thumb
+ * URL — the 2048px master URL (used solely by hover-preview/lightbox) and
+ * the lqip base64 are dropped, roughly halving both the Flight payload
+ * and this function's sign fan-out. The client fetches the master on
+ * demand from the org-scoped /api/items/[id]/image-master route (same
+ * 25-day per-path cache → same stable URL). Rows WITHOUT a thumb keep
+ * their master/cfThumb inline — it's their only image. The default-view
+ * 30-row payload and every server-mode path stay full-fidelity.
  */
 export async function resolveInventoryListImages(
   organizationId: string,
   rows: InventoryListCachedRow[],
+  opts: { payloadDiet?: boolean } = {},
 ): Promise<InventoryListItemRow[]> {
+  const diet = opts.payloadDiet === true;
   const paths = new Set<string>();
   for (const r of rows) {
-    if (r.image_storage_path) paths.add(r.image_storage_path);
+    // Diet: don't even request a master sign for thumb-carrying rows —
+    // this is where the rank-3 batch's fan-out halves.
+    if (r.image_storage_path && !(diet && r.image_thumb_path)) paths.add(r.image_storage_path);
     if (r.image_thumb_path) paths.add(r.image_thumb_path);
   }
   const urlByPath =
@@ -1033,6 +1047,18 @@ export async function resolveInventoryListImages(
       cf && typeof cf === 'object' && typeof (cf as { thumbnail_url?: unknown }).thumbnail_url === 'string'
         ? ((cf as { thumbnail_url: string }).thumbnail_url)
         : null;
+    if (diet && image_thumb_path) {
+      const thumbUrl = urlByPath.get(image_thumb_path) ?? null;
+      return {
+        ...rest,
+        // Master intentionally absent (fetched on demand); if the thumb
+        // failed to sign, degrade to the cfThumb fallback like the full
+        // path would for a failed master.
+        image_url: thumbUrl ? null : cfThumb,
+        image_thumb_url: thumbUrl,
+        image_lqip: null,
+      };
+    }
     const masterUrl = image_storage_path ? (urlByPath.get(image_storage_path) ?? null) : null;
     const thumbUrl = image_thumb_path ? (urlByPath.get(image_thumb_path) ?? null) : null;
     return {

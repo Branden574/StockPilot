@@ -437,6 +437,90 @@ describe('resolveInventoryListImages', () => {
   });
 });
 
+describe('resolveInventoryListImages payloadDiet (rank 5 — instant dataset only)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    createAdminClientMock.mockReturnValue({});
+  });
+
+  it('thumb-carrying rows ship ONLY the thumb: the master path is never even requested for signing, image_url and image_lqip are nulled', async () => {
+    signedUrlsMock.mockResolvedValue(new Map([['p/thumb.webp', 'https://signed/thumb']]));
+
+    const rows = await resolveInventoryListImages(
+      'org-1',
+      [
+        cachedRow({
+          image_storage_path: 'p/master.jpg',
+          image_thumb_path: 'p/thumb.webp',
+          image_lqip: 'blur',
+        }),
+      ],
+      { payloadDiet: true },
+    );
+
+    // Halved sign fan-out: only the thumb path went to the signer.
+    expect(signedUrlsMock).toHaveBeenCalledWith(['p/thumb.webp']);
+    expect(rows[0]!.image_url).toBeNull();
+    expect(rows[0]!.image_thumb_url).toBe('https://signed/thumb');
+    expect(rows[0]!.image_lqip).toBeNull();
+  });
+
+  it('thumbless rows keep their master inline — it is their only image', async () => {
+    signedUrlsMock.mockResolvedValue(new Map([['p/master.jpg', 'https://signed/master']]));
+
+    const rows = await resolveInventoryListImages(
+      'org-1',
+      [cachedRow({ image_storage_path: 'p/master.jpg' })],
+      { payloadDiet: true },
+    );
+
+    expect(signedUrlsMock).toHaveBeenCalledWith(['p/master.jpg']);
+    expect(rows[0]!.image_url).toBe('https://signed/master');
+    expect(rows[0]!.image_thumb_url).toBeNull();
+  });
+
+  it('a failed thumb sign degrades to the cfThumb fallback instead of throwing', async () => {
+    signedUrlsMock.mockResolvedValue(new Map());
+
+    const rows = await resolveInventoryListImages(
+      'org-1',
+      [
+        cachedRow({
+          custom_fields: { thumbnail_url: 'https://cdn/books/cover.jpg' },
+          image_storage_path: 'p/master.jpg',
+          image_thumb_path: 'p/thumb.webp',
+        }),
+      ],
+      { payloadDiet: true },
+    );
+
+    expect(rows[0]!.image_url).toBe('https://cdn/books/cover.jpg');
+    expect(rows[0]!.image_thumb_url).toBeNull();
+  });
+
+  it('default (no opts) stays full-fidelity — the 30-row payload and every server-mode path are unchanged', async () => {
+    signedUrlsMock.mockResolvedValue(
+      new Map([
+        ['p/master.jpg', 'https://signed/master'],
+        ['p/thumb.webp', 'https://signed/thumb'],
+      ]),
+    );
+
+    const rows = await resolveInventoryListImages('org-1', [
+      cachedRow({
+        image_storage_path: 'p/master.jpg',
+        image_thumb_path: 'p/thumb.webp',
+        image_lqip: 'blur',
+      }),
+    ]);
+
+    expect(signedUrlsMock).toHaveBeenCalledWith(['p/master.jpg', 'p/thumb.webp']);
+    expect(rows[0]!.image_url).toBe('https://signed/master');
+    expect(rows[0]!.image_thumb_url).toBe('https://signed/thumb');
+    expect(rows[0]!.image_lqip).toBe('blur');
+  });
+});
+
 /* ---- shared-cache gate --------------------------------------------------- */
 
 describe('canUseSharedInventoryCaches (the org-shared cache gate)', () => {

@@ -128,9 +128,19 @@ export function prewarmPreviewImages(srcs: Array<string | null | undefined>): vo
 }
 
 export interface ImageHoverPreviewProps {
-  /** Full-resolution image URL. When null/undefined, no preview is shown
-   *  — the trigger renders without any hover behavior attached. */
+  /** Full-resolution image URL. When null/undefined AND no `srcLoader`
+   *  is given, no preview is shown — the trigger renders without any
+   *  hover behavior attached. */
   src: string | null | undefined;
+  /**
+   * On-demand source resolver (cold-start plan rank 5): list rows on a
+   * payload diet don't carry the master URL inline. On first hover
+   * intent the loader is invoked ONCE; when it resolves, the preview
+   * preloads + opens exactly as if `src` had been present (the ~220ms
+   * open delay usually covers the round trip). Resolving null keeps the
+   * trigger preview-less. Ignored when `src` is provided.
+   */
+  srcLoader?: () => Promise<string | null>;
   /** Required alt text for the floating preview's <img>. */
   alt: string;
   /** Optional title shown in the preview footer. */
@@ -147,6 +157,7 @@ export interface ImageHoverPreviewProps {
 
 export function ImageHoverPreview({
   src,
+  srcLoader,
   alt,
   title,
   subtitle,
@@ -156,6 +167,11 @@ export function ImageHoverPreview({
 }: ImageHoverPreviewProps) {
   const [mounted, setMounted] = React.useState(false);
   const [open, setOpen] = React.useState(false);
+  /** Result of `srcLoader` once it resolves (diet rows only). */
+  const [loadedSrc, setLoadedSrc] = React.useState<string | null>(null);
+  const loaderFiredRef = React.useRef(false);
+  const hoveringRef = React.useRef(false);
+  const effectiveSrc = src ?? loadedSrc;
   const [coords, setCoords] = React.useState<{
     top: number;
     left: number;
@@ -202,14 +218,34 @@ export function ImageHoverPreview({
   }, []);
 
   function scheduleOpen() {
-    if (!src || isCoarsePointer.current) return;
+    if (isCoarsePointer.current) return;
+    hoveringRef.current = true;
+    if (!effectiveSrc) {
+      // Diet row: resolve the master on first hover intent. The effect
+      // below re-enters the open flow when the URL lands (if the pointer
+      // is still over the trigger).
+      if (srcLoader && !loaderFiredRef.current) {
+        loaderFiredRef.current = true;
+        void srcLoader()
+          .then((url) => {
+            if (url) setLoadedSrc(url);
+            // null → stay preview-less; allow a later retry on re-hover
+            // so a transient fetch failure isn't sticky for the session.
+            else loaderFiredRef.current = false;
+          })
+          .catch(() => {
+            loaderFiredRef.current = false;
+          });
+      }
+      return;
+    }
     // Fire the preload IMMEDIATELY on mouseenter, well before the
     // 220ms open delay elapses. CRITICAL: preload the EXACT URL
     // next/image will request (/_next/image?...&w=1200&q=75), not the
     // bare Supabase signed URL. Otherwise we'd warm the wrong cache
     // entry and the popover render would still wait on Vercel.
     // Promoted to high priority because the user is signaling intent.
-    fireImagePreload(nextImageOptimizedUrl(src), 'high');
+    fireImagePreload(nextImageOptimizedUrl(effectiveSrc), 'high');
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current);
       closeTimerRef.current = null;
@@ -223,6 +259,7 @@ export function ImageHoverPreview({
   }
 
   function scheduleClose() {
+    hoveringRef.current = false;
     if (openTimerRef.current) {
       clearTimeout(openTimerRef.current);
       openTimerRef.current = null;
@@ -234,6 +271,20 @@ export function ImageHoverPreview({
       setCoords(null);
     }, CLOSE_DELAY_MS);
   }
+
+  // When the on-demand master lands while the pointer is still over the
+  // trigger, resume the normal open flow (preload + delayed open) as if
+  // src had been present all along.
+  React.useEffect(() => {
+    if (!loadedSrc || !hoveringRef.current || open || openTimerRef.current) return;
+    fireImagePreload(nextImageOptimizedUrl(loadedSrc), 'high');
+    openTimerRef.current = setTimeout(() => {
+      openTimerRef.current = null;
+      compute();
+      setOpen(true);
+    }, OPEN_DELAY_MS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedSrc]);
 
   // Track scroll/resize while open so the preview tracks the trigger
   // if the table scrolls. Listening only while open keeps the cost off
@@ -262,14 +313,14 @@ export function ImageHoverPreview({
     </span>
   );
 
-  // No image OR not mounted on the client yet: just render the trigger
-  // pass-through.
-  if (!src || !mounted) return trigger;
+  // No image (and no way to load one) OR not mounted on the client yet:
+  // just render the trigger pass-through.
+  if ((!effectiveSrc && !srcLoader) || !mounted) return trigger;
 
   return (
     <>
       {trigger}
-      {open && coords
+      {open && coords && effectiveSrc
         ? createPortal(
             <div
               role="tooltip"
@@ -283,7 +334,7 @@ export function ImageHoverPreview({
             >
               <div className="border-border bg-background overflow-hidden rounded-lg border shadow-2xl">
                 <NextImage
-                  src={src}
+                  src={effectiveSrc}
                   alt={alt}
                   width={PREVIEW_OPTIMIZED_WIDTH}
                   height={PREVIEW_OPTIMIZED_WIDTH}

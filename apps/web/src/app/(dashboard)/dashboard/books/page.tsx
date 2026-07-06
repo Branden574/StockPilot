@@ -126,12 +126,17 @@ export default async function BooksPage({
   // rack list feeds the toolbar dropdown. The heavy book list + trends + covers
   // stream behind <Suspense> below. The heading inherits a per-org nav rename
   // (Settings → Navigation) off the request-cached org row — no extra fetch.
-  const [sessionCtx, inventorySvc, heading] = await Promise.all([
+  // The racks RPC is CHAINED INSIDE the Promise.all (not awaited after it)
+  // so the toolbar chrome never waits an extra sequential DB round trip —
+  // same fix as the Items page (cold-start plan rank 2). withContext is
+  // request-cached, so the chain adds no duplicate auth work.
+  const [sessionCtx, heading, racks] = await Promise.all([
     requireOrgContext(),
-    InventoryService.forCurrentUser(),
     effectiveNavLabel('/dashboard/books', 'Books'),
+    InventoryService.forCurrentUser().then((svc) =>
+      svc.listDistinctRacks({ scope: 'books' }),
+    ),
   ]);
-  const racks = await inventorySvc.listDistinctRacks({ scope: 'books' });
 
   const canCreate = can(sessionCtx, 'items:create');
   return (

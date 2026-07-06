@@ -9,7 +9,7 @@ import { SIDEBAR_HIDDEN_COOKIE, parseSidebarHidden } from '@/components/dashboar
 import { ImpersonationBanner } from '@/components/platform/impersonation-banner';
 import { currentUserIsPlatformAdminFromRequestHeader } from '@/lib/auth/platform-admin';
 import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
-import { requireOrgContext } from '@/lib/auth/session';
+import { getSessionMemberships, requireOrgContext } from '@/lib/auth/session';
 import {
   getMfaFactorsForRequest,
   getModulesForRequest,
@@ -72,7 +72,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     activeWarehouseId,
     orgRow,
     mfaFactors,
-    membershipsRes,
+    sessionMemberships,
     unreadRes,
     warehousesList,
     enabledModuleSet,
@@ -81,11 +81,12 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     getActiveWarehouseFilter(),
     getOrgRowForRequest(ctx.organizationId),
     getMfaFactorsForRequest(),
-    supabase
-      .from('organization_members')
-      .select('role, organizations:organization_id (id, name, logo_url)')
-      .eq('user_id', ctx.userId)
-      .not('accepted_at', 'is', null),
+    // Rank 8 (query hygiene): derived from loadSessionAndContext's single
+    // membership query (requireOrgContext above already resolved it in this
+    // render) instead of a THIRD organization_members round trip. Same
+    // filters (accepted only), same rows, now with logo_url widened into
+    // the shared select.
+    getSessionMemberships(),
     supabase
       .from('notifications')
       .select('id', { count: 'exact', head: true })
@@ -113,24 +114,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // resolveApiEnabledModules).
   const enabledModules = Array.from(enabledModuleSet);
 
-  const memberships = (membershipsRes.data ?? [])
-    .map((row) => {
-      const r = row as {
-        role: string;
-        organizations: { id: string; name: string; logo_url: string | null }
-          | { id: string; name: string; logo_url: string | null }[]
-          | null;
-      };
-      const org = Array.isArray(r.organizations) ? r.organizations[0] : r.organizations;
-      if (!org) return null;
-      return {
-        id: org.id,
-        name: org.name,
-        logoUrl: org.logo_url ?? null,
-        role: r.role,
-      };
-    })
-    .filter((m): m is { id: string; name: string; logoUrl: string | null; role: string } => Boolean(m))
+  const memberships = sessionMemberships
+    .map((m) => ({ id: m.organizationId, name: m.name, logoUrl: m.logoUrl, role: m.role as string }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   // ── MFA enforcement ────────────────────────────────────────────────

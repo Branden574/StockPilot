@@ -92,7 +92,11 @@ vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
     selector({ add: vi.fn() }),
 }));
 
-import { InventoryTable, type InstantDatasetItem } from './inventory-table';
+import {
+  InventoryTable,
+  type InstantAdoptedPayload,
+  type InstantDatasetItem,
+} from './inventory-table';
 
 function item(over: Partial<InstantDatasetItem> & { id: string; name: string }): InstantDatasetItem {
   return {
@@ -303,5 +307,125 @@ describe('InventoryTable instant mode', () => {
     expect(screen.getByText('2-C')).toBeInTheDocument();
     // Footer counts ITEMS, not expanded lines.
     expect(screen.getByText(/1 SKUs/)).toBeInTheDocument();
+  });
+});
+
+// FIRST-ROWS-FIRST STREAMING (cold-start plan rank 4): the default view
+// mounts in server mode with the 30-row payload while the full dataset
+// streams behind as `instantPromise`. HARD CONTRACT under test:
+//   (a) rows are visible before the dataset settles,
+//   (b) keystrokes during the gap NEVER route to the server-filter path
+//       (no /api/items/search fetch, no router navigation) — they buffer
+//       locally,
+//   (c) the moment the dataset lands, the buffered search applies through
+//       the instant pipeline and yields the identical complete answer,
+//   (d) a null resolution (over-cap org / loader failure) drops back to
+//       plain server mode, including re-enabling the server search for
+//       any buffered keystrokes.
+describe('InventoryTable streamed instant adoption (rank 4)', () => {
+  const fetchSpy = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  function renderStreaming(promise: Promise<InstantAdoptedPayload | null>) {
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const pageRows = [
+      item({ id: 'a', name: 'Alpha Widget' }),
+      item({ id: 'b', name: 'Beta Gadget' }),
+    ];
+    return render(
+      <InventoryTable
+        items={pageRows}
+        lookups={EMPTY_LOOKUPS}
+        total={2}
+        pageSize={30}
+        instantPromise={promise}
+      />,
+    );
+  }
+
+  it('renders the server rows immediately, buffers keystrokes off the server-search path, then applies them via the instant pipeline when the dataset lands', async () => {
+    const user = userEvent.setup();
+    let resolvePayload!: (p: InstantAdoptedPayload | null) => void;
+    const promise = new Promise<InstantAdoptedPayload | null>((resolve) => {
+      resolvePayload = resolve;
+    });
+    renderStreaming(promise);
+
+    // (a) first-paint rows visible while the dataset is still pending.
+    expect(screen.getByRole('link', { name: 'Alpha Widget' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Beta Gadget' })).toBeInTheDocument();
+
+    // (b) type during the gap: local narrowing only — give the 150ms
+    // server-search debounce ample time to prove it never fires.
+    await user.type(screen.getByRole('textbox', { name: /search items/i }), 'beta');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(routerMock.replace).not.toHaveBeenCalled();
+    expect(routerMock.push).not.toHaveBeenCalled();
+    expect(screen.getByRole('link', { name: 'Beta Gadget' })).toBeInTheDocument();
+    expect(screen.queryByText('Alpha Widget')).not.toBeInTheDocument();
+
+    // (c) dataset lands (includes an OFF-PAGE row the 30-row payload
+    // never had) → the buffered q now derives over the FULL dataset with
+    // complete instant-mode totals, still zero server traffic.
+    resolvePayload({
+      items: [
+        item({ id: 'a', name: 'Alpha Widget' }),
+        item({ id: 'b', name: 'Beta Gadget' }),
+        item({ id: 'c', name: 'Beta Offpage' }),
+      ],
+      view: 'items',
+    });
+    expect(await screen.findByRole('link', { name: 'Beta Offpage' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Beta Gadget' })).toBeInTheDocument();
+    expect(screen.getByText(/2 SKUs/)).toBeInTheDocument();
+    expect(screen.queryByText(/searching…/)).not.toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('adopts the streamed dataset with no URL state: the visible rows stay identical (30-row payload IS page 1 of the derivation)', async () => {
+    renderStreaming(
+      Promise.resolve({
+        items: [
+          item({ id: 'a', name: 'Alpha Widget' }),
+          item({ id: 'b', name: 'Beta Gadget' }),
+        ],
+        view: 'items',
+      } satisfies InstantAdoptedPayload),
+    );
+
+    // Post-adoption footer flips to the complete instant totals.
+    expect(await screen.findByText(/2 SKUs/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Alpha Widget' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Beta Gadget' })).toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('null resolution (over-cap org / loader failure) drops back to plain server mode and re-enables the server search for buffered keystrokes', async () => {
+    const user = userEvent.setup();
+    let resolvePayload!: (p: InstantAdoptedPayload | null) => void;
+    const promise = new Promise<InstantAdoptedPayload | null>((resolve) => {
+      resolvePayload = resolve;
+    });
+    renderStreaming(promise);
+
+    await user.type(screen.getByRole('textbox', { name: /search items/i }), 'beta');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    resolvePayload(null);
+    // Server mode resumes: the buffered q now takes today's
+    // /api/items/search path.
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled();
+    });
+    const calledUrl = String(fetchSpy.mock.calls[0]![0]);
+    expect(calledUrl).toContain('/api/items/search');
+    expect(calledUrl).toContain('q=beta');
   });
 });

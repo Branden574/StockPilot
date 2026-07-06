@@ -30,12 +30,110 @@ import { assertPermission, ServiceError, withContext, type ServiceContext } from
 const SIGNED_URL_TTL_SEC = 30 * 24 * 60 * 60;
 const SIGNED_URL_CACHE_SEC = 25 * 24 * 60 * 60;
 
+/* ---- batch-sign plumbing (cold-start plan rank 3, 2026-07-06) ----------
+ *
+ * `signedUrls` used to resolve a whole list page as N independent
+ * per-path cache reads, each of which — on a cache miss — issued its own
+ * `createSignedUrl` HTTP call. For the instant-mode dataset that meant up
+ * to ~500 sequential-ish storage calls after any deploy that rotated this
+ * chunk (the exact per-path fan-out the orders storefront already ripped
+ * out — see the FIX 6 note below). The fix has three cooperating layers,
+ * chosen so SAME PATH → SAME URL stability for the ~25-day window is
+ * preserved (the loader-header warning about URL rotation is law):
+ *
+ *   1. The per-path `unstable_cache` entries remain THE source of URL
+ *      stability — nothing about their key axes (one explicit string +
+ *      the path arg) or 25-day TTL changes.
+ *   2. On a batch resolve, ONE `createSignedUrls` call covering every
+ *      not-in-memo path is started (not awaited) and primed into
+ *      `pendingBatchSigns`. The per-path cached fns are then read in
+ *      parallel: HITS return their existing stable URL without ever
+ *      touching the batch; MISSES consume the batch result inside the
+ *      wrapped fn — so a fully-cold page pays ONE storage round trip
+ *      instead of hundreds, and the batch-minted URL becomes the stable
+ *      cached value. A path the batch failed to sign falls back to the
+ *      original single `createSignedUrl`, keeping per-path resilience.
+ *   3. A bounded in-process memo short-circuits the per-path Data Cache
+ *      GET storm on warm instances (hundreds of network GETs per render
+ *      otherwise). It only ever stores values that came out of the
+ *      per-path cache, so it can't introduce URL rotation — worst case it
+ *      serves a URL for MEMO_TTL_MS after a tag-invalidation that the
+ *      Data Cache would have already dropped, which for signed image URLs
+ *      (30-day validity, path-immutable content) is harmless.
+ *
+ * Concurrency note: two overlapping requests may prime overlapping paths
+ * with different batch promises; whichever wrapped-fn write lands in the
+ * Data Cache becomes the stable URL — the same last-write-wins behavior
+ * two concurrent single-sign misses have always had.
+ */
+const pendingBatchSigns = new Map<string, Promise<Map<string, string>>>();
+
+/** In-process memo of per-path SUCCESSES (never nulls — pattern #6). */
+const signedUrlMemo = new Map<string, { url: string; expiresAtMs: number }>();
+const MEMO_TTL_MS = 60 * 60 * 1000; // 1h — tiny vs the 25-day cache window
+const MEMO_MAX_ENTRIES = 20_000;
+
+function memoGet(path: string): { url: string } | null {
+  const hit = signedUrlMemo.get(path);
+  if (!hit) return null;
+  if (hit.expiresAtMs < Date.now()) {
+    signedUrlMemo.delete(path);
+    return null;
+  }
+  return hit;
+}
+
+function memoSet(path: string, url: string): void {
+  if (signedUrlMemo.size >= MEMO_MAX_ENTRIES) {
+    // Crude but sufficient eviction at this scale: drop the oldest
+    // insertion-order entries (Map preserves insertion order).
+    let toDrop = Math.ceil(MEMO_MAX_ENTRIES / 10);
+    for (const key of signedUrlMemo.keys()) {
+      signedUrlMemo.delete(key);
+      if (--toDrop <= 0) break;
+    }
+  }
+  signedUrlMemo.set(path, { url, expiresAtMs: Date.now() + MEMO_TTL_MS });
+}
+
+/** ONE createSignedUrls covering `paths`. Never throws — per-path
+ *  failures (and a whole-call failure) just leave paths out of the map,
+ *  and the per-path signer falls back to its single-sign path. */
+async function batchSignPaths(paths: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin.storage
+      .from('item-images')
+      .createSignedUrls(paths, SIGNED_URL_TTL_SEC);
+    if (error || !data) return out;
+    for (const entry of data) {
+      if (entry.signedUrl && !entry.error && entry.path) {
+        out.set(entry.path, entry.signedUrl);
+      }
+    }
+  } catch {
+    // fall through — misses single-sign individually
+  }
+  return out;
+}
+
 // THROWS on failure (no try/catch here) so `unstable_cache` does NOT persist a
 // null for the 25-day TTL — a transient signing/quota error self-heals on the
 // next call instead of poisoning the entry until a version bump. The public
 // wrapper below catches → null so callers are unchanged.
 const signItemImageMaster = unstable_cache(
   async (storagePath: string): Promise<string> => {
+    // Batch-primed path (rank 3): a surrounding signedUrls() call already
+    // started ONE createSignedUrls covering this path — consume it instead
+    // of issuing an individual storage call. Only runs on a cache MISS
+    // (hits never enter this fn), so cached URLs stay byte-stable.
+    const primed = pendingBatchSigns.get(storagePath);
+    if (primed) {
+      const url = (await primed).get(storagePath);
+      if (url) return url;
+      // batch didn't cover it (partial failure) → single-sign below
+    }
     const admin = createAdminClient();
     const { data, error } = await admin.storage
       .from('item-images')
@@ -45,9 +143,11 @@ const signItemImageMaster = unstable_cache(
     }
     return data.signedUrl;
   },
-  // v3 (2026-06-02): bumped to evict 25-day-poisoned null entries AND the fn now
-  // throws-instead-of-caching-null so transient failures stop sticking.
-  ['item-image-signed-url-v3'],
+  // v4 (2026-07-06): batch-primed signer (rank 3). The source change would
+  // have rotated the implicit key anyway; the explicit bump keeps the
+  // versioning honest. One-time cold refill per path — now paid as ONE
+  // batched call per page instead of a per-path storm.
+  ['item-image-signed-url-v4'],
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
 );
 async function getCachedItemImageSignedUrl(storagePath: string): Promise<string | null> {
@@ -142,21 +242,49 @@ export class ItemImagesService {
 
   async signedUrls(paths: string[]): Promise<Map<string, string>> {
     if (paths.length === 0) return new Map();
-    // Each path is looked up through Vercel's data cache (25-day TTL).
-    // Same path → same URL across requests for ~25 days, which is what
-    // lets the downstream Vercel image optimizer cache hit instead of
-    // re-encoding every page refresh. Parallel resolution keeps the
-    // first-request fan-out cheap (one createSignedUrl per uncached
-    // path) and amortizes the cost across the deployment lifetime.
-    const entries = await Promise.all(
-      paths.map(async (path) => {
-        const url = await getCachedItemImageSignedUrl(path);
-        return url ? ([path, url] as const) : null;
-      }),
-    );
+    // Three-layer resolve (rank 3 — see the batch-sign plumbing header):
+    //   1. in-process memo (zero network) for warm instances,
+    //   2. per-path Data Cache entries (25-day TTL — THE URL-stability
+    //      source: same path → same URL, which is what keeps browser +
+    //      Vercel image-optimizer caches hitting),
+    //   3. cache misses consume ONE batched createSignedUrls started in
+    //      parallel with layer 2, instead of a per-path storage-call storm.
     const map = new Map<string, string>();
-    for (const entry of entries) {
-      if (entry) map.set(entry[0], entry[1]);
+    const unmemoized: string[] = [];
+    for (const path of paths) {
+      const memo = memoGet(path);
+      if (memo) map.set(path, memo.url);
+      else unmemoized.push(path);
+    }
+    if (unmemoized.length === 0) return map;
+
+    // Start the batch WITHOUT awaiting so it overlaps the per-path cache
+    // reads; only misses (inside the wrapped fn) ever await it. Total
+    // latency ≈ max(dataCacheReads, batchSign) instead of their sum.
+    const batchPromise = batchSignPaths(unmemoized);
+    for (const path of unmemoized) pendingBatchSigns.set(path, batchPromise);
+    try {
+      const entries = await Promise.all(
+        unmemoized.map(async (path) => {
+          const url = await getCachedItemImageSignedUrl(path);
+          return [path, url] as const;
+        }),
+      );
+      for (const [path, url] of entries) {
+        // Memoize SUCCESSES only (recurring bug pattern #6: never cache a
+        // null) — a transient sign failure retries on the next request
+        // instead of sticking for MEMO_TTL_MS.
+        if (url) {
+          memoSet(path, url);
+          map.set(path, url);
+        }
+      }
+    } finally {
+      // Only clear our own primes — an overlapping request may have
+      // re-primed some of these paths with its own batch.
+      for (const path of unmemoized) {
+        if (pendingBatchSigns.get(path) === batchPromise) pendingBatchSigns.delete(path);
+      }
     }
     return map;
   }

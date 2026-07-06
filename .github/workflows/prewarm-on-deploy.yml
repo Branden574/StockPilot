@@ -1,0 +1,70 @@
+# Post-deploy prewarm (cold-start plan rank 1, 2026-07-06).
+#
+# WHY: every production deploy rotates the unstable_cache keys for the five
+# inventory loaders (and can rotate the orders-catalog + item-image caches via
+# chunk concatenation), so for up to 30 minutes — until the */30 cron runs —
+# the FIRST human on /dashboard/inventory, /dashboard/books, or
+# /dashboard/orders/new pays the full cold loader wave (~1.5-2.5s). This job
+# makes a robot pay it instead, ~30-90s after the deploy goes READY.
+#
+# HOW: the Vercel GitHub integration creates GitHub Deployment objects and
+# posts `deployment_status` events. On state=success for the Production
+# environment we curl the existing secret-gated prewarm route (the route's own
+# comment says it is intended for exactly this trigger). The route is
+# idempotent — warming an already-warm cache is a cheap no-op — so the 3x
+# retry is safe.
+#
+# SETUP (owner action, one-time): add repo secret BACKFILL_ADMIN_SECRET with
+# the same value as the Vercel env var of the same name. Without it the job
+# fails fast with a clear message instead of silently curling unauthenticated.
+#
+# WATCH-FOR: Vercel Bot Protection has 429'd non-browser clients before (the
+# mobile RN incident). If this job starts failing with 429s, the pending
+# "/api firewall bypass" owner task covers it; the retries paper over
+# transient cases meanwhile.
+name: Prewarm caches on production deploy
+
+on:
+  deployment_status:
+
+permissions: {}
+
+jobs:
+  prewarm:
+    # The Vercel integration names the prod environment "Production".
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment_status.environment == 'Production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Prewarm inventory + orders caches
+        env:
+          BACKFILL_ADMIN_SECRET: ${{ secrets.BACKFILL_ADMIN_SECRET }}
+          # Canonical prod domain on purpose — NOT the per-deployment
+          # *.vercel.app URL (deployment URLs can sit behind Deployment
+          # Protection, and the prod domain is what users actually hit, so
+          # it warms the caches the first human will read).
+          PREWARM_URL: https://stockpilotusa.com/api/cron/prewarm-orders-catalog
+        run: |
+          set -u
+          if [ -z "${BACKFILL_ADMIN_SECRET}" ]; then
+            echo "::error::BACKFILL_ADMIN_SECRET repo secret is not set — add it (same value as the Vercel env var)."
+            exit 1
+          fi
+          # 3x retry with backoff: a deploy is also when instances are
+          # coldest, so the first attempt can hit a slow boot or a transient
+          # 429/5xx. --max-time stays under the route's maxDuration=60.
+          for attempt in 1 2 3; do
+            echo "Prewarm attempt ${attempt}..."
+            if curl -fsS --max-time 90 \
+              -H "Authorization: Bearer ${BACKFILL_ADMIN_SECRET}" \
+              "${PREWARM_URL}"; then
+              echo ""
+              echo "Prewarm OK on attempt ${attempt}."
+              exit 0
+            fi
+            sleep $((attempt * 20))
+          done
+          echo "::error::Prewarm failed after 3 attempts."
+          exit 1
