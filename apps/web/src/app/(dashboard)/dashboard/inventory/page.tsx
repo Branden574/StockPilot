@@ -7,10 +7,7 @@ export const metadata: Metadata = { title: 'Inventory' };
 
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
-import {
-  InventoryTable,
-  type InstantAdoptedPayload,
-} from '@/components/inventory/inventory-table';
+import { InventoryTable } from '@/components/inventory/inventory-table';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
@@ -307,47 +304,16 @@ async function InventoryTableSection({
   // keep the AWAITED instant branch below so their SSR HTML still
   // reflects the exact URL state. Never rejects: every failure resolves
   // null → the table stays in server mode (today's behavior).
+  // NOTE (2026-07-06): rank-4 "first-rows-first streaming" was reverted —
+  // passing the unawaited dataset promise to the client table crashed the
+  // page render (`.catch` on undefined during hydration). The default view
+  // now flows through the SAME awaited instant branch as deep links below,
+  // which is known-good. The rest of the cold-start batch (batch signing,
+  // payload diet, warmup, region pin) is unaffected. Streaming can be
+  // reattempted later with a `use()`-based handoff instead of an effect.
   const isDefaultView = isDefaultInventoryView(params, 'items');
-  let instantPromise: Promise<InstantAdoptedPayload | null> | undefined;
-  if (useSharedCaches && itemType === 'product' && isDefaultView) {
-    instantPromise = (async (): Promise<InstantAdoptedPayload | null> => {
-      try {
-        const [dataset, trendBuckets] = await Promise.all([
-          tagged(
-            'loadInventoryDataset (streamed)',
-            loadInventoryDataset(
-              sessionCtx.organizationId,
-              warehouseFilter ?? ALL_WAREHOUSES_KEY,
-              'items',
-            ),
-          ),
-          loadInventoryTrendBuckets(sessionCtx.organizationId),
-        ]);
-        if (!dataset) return null;
-        // payloadDiet (rank 5): dataset rows ship thumb-only image URLs
-        // (no master, no lqip) — the table fetches masters on demand.
-        const items = await resolveInventoryListImages(
-          sessionCtx.organizationId,
-          dataset.items,
-          { payloadDiet: true },
-        );
-        return {
-          items,
-          placement: dataset.placement,
-          trends: deriveInventoryTrends(
-            items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
-            trendBuckets,
-          ),
-          view: 'items' as const,
-        };
-      } catch (err) {
-        console.warn('[inventory page] streamed instant dataset unavailable:', err);
-        return null;
-      }
-    })();
-  }
 
-  if (useSharedCaches && itemType === 'product' && !isDefaultView) {
+  if (useSharedCaches && itemType === 'product') {
     // Data acquisition only in here — the JSX renders after the
     // try/catch (react-hooks/error-boundaries: a thrown render wouldn't
     // be caught here anyway). Any failure → instantData stays null →
@@ -696,10 +662,6 @@ async function InventoryTableSection({
       savedViewScope="inventory"
       activeWarehouseId={warehouseFilter}
       currentUserId={sessionCtx.userId}
-      // Rank 4: the streamed full dataset (default view, manager+ only —
-      // undefined for staff/viewer and non-default URLs, keeping their
-      // props byte-identical to before).
-      instantPromise={instantPromise}
     />
   );
 }
