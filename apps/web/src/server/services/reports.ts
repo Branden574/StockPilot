@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createAdminClient } from '@/lib/supabase/admin';
+
 import { ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRows } from './lib/paginate';
 
@@ -188,20 +190,34 @@ export class ReportsService {
 
   /**
    * Inventory valuation: per-item cost basis, plus rollups by warehouse
-   * and category. All non-deleted, active items count.
+   * and category. All non-deleted, active, non-rental items count.
+   *
+   * TOTALS (totalValue / totalUnits / itemCount / byWarehouse / byCategory)
+   * come from the SQL rollup views via inventoryValuationSummary() — the
+   * SAME trusted source the dashboard uses. They GROUP BY in Postgres, so
+   * they can NEVER truncate. (Was: summed a 10k-CAPPED item rowset in JS,
+   * which silently UNDER-REPORTED a >10k-SKU org's total inventory value.)
+   *
+   * The per-item DETAIL rows (for the table + CSV/PDF) still stream, but now
+   * with NO hard cap — fetchAllRows pages the COMPLETE set. The display needs
+   * every row, and the totals above are authoritative regardless of how many
+   * rows there are.
    */
   async inventoryValuation(): Promise<ValuationReport> {
-    // PostgREST hard-caps every response at `[api] max_rows` (1000), so a
-    // single `.limit(10_000)` silently truncates any org with >1000 items —
-    // corrupting the totals/rollups. Page through the full set instead.
+    // Totals + rollups from the vw_inventory_valuation_* views (migration
+    // 0179). Filter parity: non-deleted, active, non-rental — identical to
+    // the detail-row stream below.
+    const summary = await this.inventoryValuationSummary();
+
+    // PostgREST hard-caps every response at `[api] max_rows` (1000). Page
+    // through the FULL set (no cap) so the detail table/exports list every
+    // item — the totals no longer depend on this rowset.
     type ValuationItemRow = {
       id: string;
       sku: string;
       name: string;
       quantity_on_hand: number;
       unit_cost: number;
-      warehouse_id: string | null;
-      category_id: string | null;
       warehouse: { name: string } | { name: string }[] | null;
       category: { name: string } | { name: string }[] | null;
     };
@@ -210,7 +226,7 @@ export class ReportsService {
         this.ctx.supabase
           .from('inventory_items')
           .select(
-            `id, sku, name, quantity_on_hand, unit_cost, warehouse_id, category_id,
+            `id, sku, name, quantity_on_hand, unit_cost,
          warehouse:warehouses!warehouse_id (name),
          category:categories!category_id (name)`,
           )
@@ -225,96 +241,37 @@ export class ReportsService {
           // quantity_on_hand below.
           .order('id', { ascending: true })
           .range(from, to),
-      { cap: 10_000 },
+      // NO cap — stream every item row for the detail list.
+      {},
     );
 
-    // Hold each raw row alongside the warehouse_id / category_id needed to
-    // bucket by id (not name). Two warehouses with the same name —
-    // e.g. "Main" in two regions — must NOT collapse into one row.
-    type Enriched = ValuationRow & { warehouseId: string | null; categoryId: string | null };
-    const enriched: Enriched[] = data
+    const rows: ValuationRow[] = data
       // Preserve the original quantity_on_hand-descending row order.
       .sort((a, b) => (Number(b.quantity_on_hand) || 0) - (Number(a.quantity_on_hand) || 0))
-      .map((r) => {
-      const rec = r as unknown as {
-        id: string;
-        sku: string;
-        name: string;
-        quantity_on_hand: number;
-        unit_cost: number;
-        warehouse_id: string | null;
-        category_id: string | null;
-        warehouse: { name: string } | { name: string }[] | null;
-        category: { name: string } | { name: string }[] | null;
-      };
-      const wh = Array.isArray(rec.warehouse) ? rec.warehouse[0] : rec.warehouse;
-      const cat = Array.isArray(rec.category) ? rec.category[0] : rec.category;
-      const qty = Number(rec.quantity_on_hand) || 0;
-      const cost = Number(rec.unit_cost) || 0;
-      return {
-        itemId: rec.id,
-        sku: rec.sku,
-        name: rec.name,
-        warehouseId: rec.warehouse_id ?? null,
-        warehouseName: wh?.name ?? null,
-        categoryId: rec.category_id ?? null,
-        categoryName: cat?.name ?? null,
-        quantityOnHand: qty,
-        unitCost: cost,
-        value: qty * cost,
-      };
-    });
-
-    const rows: ValuationRow[] = enriched.map(
-      ({ warehouseId: _w, categoryId: _c, ...rest }) => rest,
-    );
-
-    // Key buckets by id ('__none' for null) so same-named warehouses /
-    // categories stay distinct. Preserve both id and name on the bucket
-    // so consumers can deep-link.
-    const byWh = new Map<
-      string,
-      { warehouseId: string | null; warehouseName: string; value: number; units: number }
-    >();
-    const byCat = new Map<
-      string,
-      { categoryId: string | null; categoryName: string; value: number; units: number }
-    >();
-    let totalValue = 0;
-    let totalUnits = 0;
-    for (const r of enriched) {
-      totalValue += r.value;
-      totalUnits += r.quantityOnHand;
-      const whKey = r.warehouseId ?? '__none';
-      const whEntry = byWh.get(whKey) ?? {
-        warehouseId: r.warehouseId,
-        warehouseName: r.warehouseName ?? 'Unassigned',
-        value: 0,
-        units: 0,
-      };
-      whEntry.value += r.value;
-      whEntry.units += r.quantityOnHand;
-      byWh.set(whKey, whEntry);
-
-      const catKey = r.categoryId ?? '__none';
-      const catEntry = byCat.get(catKey) ?? {
-        categoryId: r.categoryId,
-        categoryName: r.categoryName ?? 'Uncategorized',
-        value: 0,
-        units: 0,
-      };
-      catEntry.value += r.value;
-      catEntry.units += r.quantityOnHand;
-      byCat.set(catKey, catEntry);
-    }
+      .map((rec) => {
+        const wh = Array.isArray(rec.warehouse) ? rec.warehouse[0] : rec.warehouse;
+        const cat = Array.isArray(rec.category) ? rec.category[0] : rec.category;
+        const qty = Number(rec.quantity_on_hand) || 0;
+        const cost = Number(rec.unit_cost) || 0;
+        return {
+          itemId: rec.id,
+          sku: rec.sku,
+          name: rec.name,
+          warehouseName: wh?.name ?? null,
+          categoryName: cat?.name ?? null,
+          quantityOnHand: qty,
+          unitCost: cost,
+          value: qty * cost,
+        };
+      });
 
     return {
       rows,
-      totalValue,
-      totalUnits,
-      itemCount: rows.length,
-      byWarehouse: [...byWh.values()].sort((a, b) => b.value - a.value),
-      byCategory: [...byCat.values()].sort((a, b) => b.value - a.value),
+      totalValue: summary.totalValue,
+      totalUnits: summary.totalUnits,
+      itemCount: summary.itemCount,
+      byWarehouse: summary.byWarehouse,
+      byCategory: summary.byCategory,
     };
   }
 
@@ -393,85 +350,76 @@ export class ReportsService {
    */
   async movementSummary(days = 30): Promise<MovementSummary> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-    // 50k row cap. A high-volume org with millions of movements in a
-    // 90-day window would otherwise pull the whole result set into
-    // Node memory and aggregate in JS. The cap is now the TRUE bound on
-    // rows considered — without paging, PostgREST's max_rows = 1000 would
-    // silently truncate the aggregate. Order is irrelevant here (pure
-    // type/per-item sums + JS top-N), so we page by id.
-    type MovementRow = {
-      id: string;
-      item_id: string;
-      movement_type: string;
-      quantity_change: number;
-      created_at: string;
-      item: { id: string; sku: string; name: string } | { id: string; sku: string; name: string }[] | null;
-    };
-    const data = await fetchAllRows<MovementRow>(
-      (from, to) =>
-        this.ctx.supabase
-          .from('stock_movements')
-          .select(
-            `id, item_id, movement_type, quantity_change, created_at,
-         item:inventory_items!item_id (id, sku, name)`,
-          )
-          .eq('organization_id', this.ctx.organizationId)
-          .gte('created_at', since)
-          .order('id', { ascending: true })
-          .range(from, to),
-      { cap: 50_000 },
-    );
+    // The by-type rollup and the top-mover ranking are computed DB-side by
+    // migration 0225's service-role RPCs. (Was: paged up to a 50k-row cap
+    // and aggregated in JS — past the cap the byType counts / totalMovements
+    // silently truncated, since the raw movements were an id-ordered SUBSET.)
+    // The raw movements are never displayed (only byType + top-N), so nothing
+    // streams here. `since` is passed as the exact instant the JS computed so
+    // the window boundary is identical to the old path.
+    const admin = createAdminClient();
+    const orgId = this.ctx.organizationId;
+    const [byTypeRes, topRes] = await Promise.all([
+      admin.rpc('report_movement_type_summary', {
+        p_organization_id: orgId,
+        p_since: since,
+      }),
+      admin.rpc('report_top_movers', {
+        p_organization_id: orgId,
+        p_since: since,
+        p_limit: 50,
+      }),
+    ]);
+    if (byTypeRes.error) throw new ServiceError('internal_error', byTypeRes.error.message);
+    if (topRes.error) throw new ServiceError('internal_error', topRes.error.message);
 
-    const byType = new Map<string, { count: number; totalQty: number }>();
-    const perItem = new Map<
-      string,
-      { sku: string; name: string; totalIn: number; totalOut: number; movementCount: number }
-    >();
-
-    for (const r of data) {
-      const t = r.movement_type;
-      const change = Number(r.quantity_change) || 0;
-      const typeEntry = byType.get(t) ?? { count: 0, totalQty: 0 };
-      typeEntry.count++;
-      typeEntry.totalQty += Math.abs(change);
-      byType.set(t, typeEntry);
-
-      const item = Array.isArray(r.item) ? r.item[0] : r.item;
-      if (!item) continue;
-      const key = item.id;
-      const entry = perItem.get(key) ?? {
-        sku: item.sku,
-        name: item.name,
-        totalIn: 0,
-        totalOut: 0,
-        movementCount: 0,
-      };
-      entry.movementCount++;
-      if (change >= 0) entry.totalIn += change;
-      else entry.totalOut += -change;
-      perItem.set(key, entry);
-    }
-
-    const topMovers: MovementSummaryRow[] = [...perItem.entries()]
-      .map(([itemId, v]) => ({
-        itemId,
-        sku: v.sku,
-        name: v.name,
-        totalIn: v.totalIn,
-        totalOut: v.totalOut,
-        netChange: v.totalIn - v.totalOut,
-        movementCount: v.movementCount,
+    const byType = (
+      (byTypeRes.data ?? []) as Array<{
+        movement_type: string;
+        movement_count: number;
+        total_qty: number;
+      }>
+    )
+      .map((r) => ({
+        movementType: r.movement_type,
+        count: Number(r.movement_count) || 0,
+        totalQty: Number(r.total_qty) || 0,
       }))
-      .sort((a, b) => b.totalIn + b.totalOut - (a.totalIn + a.totalOut))
-      .slice(0, 50);
+      .sort((a, b) => b.count - a.count);
+
+    // totalMovements = every movement in the window = the sum of the by-type
+    // counts (movement_type is NOT NULL, so every row lands in exactly one
+    // bucket — same identity the old `data.length` relied on).
+    const totalMovements = byType.reduce((s, t) => s + t.count, 0);
+
+    const topMovers: MovementSummaryRow[] = (
+      (topRes.data ?? []) as Array<{
+        item_id: string;
+        sku: string;
+        name: string;
+        total_in: number;
+        total_out: number;
+        movement_count: number;
+      }>
+    ).map((r) => {
+      const totalIn = Number(r.total_in) || 0;
+      const totalOut = Number(r.total_out) || 0;
+      return {
+        itemId: r.item_id,
+        sku: r.sku,
+        name: r.name,
+        totalIn,
+        totalOut,
+        netChange: totalIn - totalOut,
+        movementCount: Number(r.movement_count) || 0,
+      };
+    });
 
     return {
       rangeDays: days,
-      byType: [...byType.entries()]
-        .map(([movementType, v]) => ({ movementType, count: v.count, totalQty: v.totalQty }))
-        .sort((a, b) => b.count - a.count),
+      byType,
       topMovers,
-      totalMovements: data.length,
+      totalMovements,
     };
   }
 
@@ -558,10 +506,26 @@ export class ReportsService {
    */
   async shrinkage(days = 30): Promise<ShrinkageReport> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-    // 50k cap — see movementSummary() for the rationale. Page the full set
-    // (PostgREST max_rows = 1000 would otherwise silently truncate) ordered
-    // by id; the rows are re-sorted by created_at desc below to preserve the
-    // original newest-first display order.
+
+    // Totals (units + cost) computed DB-side by migration 0225's service-role
+    // RPC so they can NEVER truncate. (Was: summed over a 50k-capped rowset —
+    // past the cap totalUnits/totalCost silently understated the loss.)
+    const admin = createAdminClient();
+    const totalsRes = await admin.rpc('report_shrinkage_totals', {
+      p_organization_id: this.ctx.organizationId,
+      p_since: since,
+    });
+    if (totalsRes.error) throw new ServiceError('internal_error', totalsRes.error.message);
+    const totalsRow = (
+      (totalsRes.data ?? []) as Array<{ total_units: number; total_cost: number }>
+    )[0];
+    const totalUnits = Number(totalsRow?.total_units) || 0;
+    const totalCost = Number(totalsRow?.total_cost) || 0;
+
+    // Per-event DETAIL rows for the table/exports. Stream the COMPLETE set
+    // (no cap) ordered by id; re-sorted by created_at desc below to preserve
+    // the original newest-first display order. Identical predicate to the
+    // totals RPC, so the streamed rows sum to exactly the totals above.
     type ShrinkageMoveRow = {
       id: string;
       item_id: string;
@@ -588,12 +552,11 @@ export class ReportsService {
           .gte('created_at', since)
           .order('id', { ascending: true })
           .range(from, to),
-      { cap: 50_000 },
+      // NO cap — stream every shrinkage event for the detail list.
+      {},
     );
 
     const rows: ShrinkageRow[] = [];
-    let totalUnits = 0;
-    let totalCost = 0;
     for (const r of data) {
       const item = Array.isArray(r.item) ? r.item[0] : r.item;
       if (!item) continue;
@@ -601,8 +564,6 @@ export class ReportsService {
       const unitCost = Number(item.unit_cost) || 0;
       const lostUnits = Math.abs(change);
       const cost = lostUnits * unitCost;
-      totalUnits += lostUnits;
-      totalCost += cost;
       rows.push({
         movementId: r.id,
         createdAt: r.created_at,
@@ -1084,30 +1045,19 @@ export class ReportsService {
       warehouse: { name: string } | { name: string }[] | null;
       category: { name: string } | { name: string }[] | null;
     };
-    type MoveRow = {
-      id: string;
-      item_id: string;
-      quantity_change: number;
-      movement_type: string;
-      created_at: string;
-    };
 
-    // PostgREST caps responses at 1000 rows; page both sets (pure aggregation
-    // + JS sort by valueOut afterward, so fetch order is irrelevant — page by
-    // id). The caps stay as the TRUE memory bound, not a silent 1000.
-    const [movementRows, itemRows] = await Promise.all([
-      fetchAllRows<MoveRow>(
-        (from, to) =>
-          this.ctx.supabase
-            .from('stock_movements')
-            .select('id, item_id, quantity_change, movement_type, created_at')
-            .eq('organization_id', this.ctx.organizationId)
-            .gte('created_at', since)
-            .lt('quantity_change', 0) // out-movements only (negative)
-            .order('id', { ascending: true })
-            .range(from, to),
-        { cap: 100_000 },
-      ),
+    // Out-movement aggregate (units-out + last-out per item) computed DB-side
+    // by migration 0225's service-role RPC so it can NEVER truncate. (Was: a
+    // 100k-capped raw movement fetch summed in JS — past the cap unitsOut and
+    // thus valueOut / totalValueOut and the ABC classification were silently
+    // wrong.) The item list still streams (it IS the display) but now with NO
+    // cap. `since` is the exact instant the JS computed.
+    const admin = createAdminClient();
+    const [outRes, itemRows] = await Promise.all([
+      admin.rpc('report_item_out_movements', {
+        p_organization_id: this.ctx.organizationId,
+        p_since: since,
+      }),
       fetchAllRows<ItemRow>(
         (from, to) =>
           this.ctx.supabase
@@ -1124,20 +1074,22 @@ export class ReportsService {
             .or('is_bundle.is.null,is_bundle.eq.false')
             .order('id', { ascending: true })
             .range(from, to),
-        { cap: 50_000 },
+        // NO cap — stream every item for the classification + display.
+        {},
       ),
     ]);
+    if (outRes.error) throw new ServiceError('internal_error', outRes.error.message);
 
-    // Aggregate units-out and last-out per item.
+    // Per-item units-out and last-out from the aggregate.
     const unitsOutById = new Map<string, number>();
     const lastOutById = new Map<string, string>();
-    for (const m of movementRows) {
-      const prev = unitsOutById.get(m.item_id) ?? 0;
-      unitsOutById.set(m.item_id, prev + Math.abs(Number(m.quantity_change) || 0));
-      const prevDate = lastOutById.get(m.item_id);
-      if (!prevDate || m.created_at > prevDate) {
-        lastOutById.set(m.item_id, m.created_at);
-      }
+    for (const m of (outRes.data ?? []) as Array<{
+      item_id: string;
+      units_out: number;
+      last_out_at: string | null;
+    }>) {
+      unitsOutById.set(m.item_id, Number(m.units_out) || 0);
+      if (m.last_out_at) lastOutById.set(m.item_id, m.last_out_at);
     }
 
     const rawRows = itemRows.map((r) => {
@@ -1214,9 +1166,9 @@ export class ReportsService {
       category: { name: string } | { name: string }[] | null;
     };
 
-    // First pass: every item with on-hand > 0 in the org. PostgREST caps
-    // responses at 1000 rows, so page the full set — otherwise an org with
-    // >1000 stocked items only ever sees the first 1000.
+    // First pass: every item with on-hand > 0 in the org. Stream the FULL set
+    // (no cap) — this IS the display, and an org with >1000 (or >50k) stocked
+    // items must not silently see only a prefix.
     const itemList = await fetchAllRows<ItemRow>(
       (from, to) =>
         this.ctx.supabase
@@ -1234,36 +1186,27 @@ export class ReportsService {
           .or('is_bundle.is.null,is_bundle.eq.false')
           .order('id', { ascending: true })
           .range(from, to),
-      { cap: 50_000 },
+      // NO cap — stream every stocked item.
+      {},
     );
-    const itemIds = itemList.map((i) => i.id);
 
     // Items that had ANY out-movement in the window — these are NOT dead.
-    // Only `.has()` is read below, so the stored timestamp is incidental;
-    // the order('created_at') was decorative. The cap previously truncated
-    // which movements were seen (silently 1000), wrongly flagging active
-    // items as dead. Paging the full window makes the dedup correct.
+    // Computed DB-side by migration 0225's service-role RPC (shared with
+    // velocityClass) so the dedup set can NEVER truncate. (Was: a per-item-
+    // batch fetch under a 100k cap, which silently missed out-movements and
+    // wrongly flagged active items as dead.) The RPC returns the ORG-WIDE
+    // out-movement item set — a superset of the per-item-batch query, whose
+    // intersection with `itemList` below is identical. `since` is the exact
+    // instant the JS computed.
+    const admin = createAdminClient();
+    const outRes = await admin.rpc('report_item_out_movements', {
+      p_organization_id: this.ctx.organizationId,
+      p_since: since,
+    });
+    if (outRes.error) throw new ServiceError('internal_error', outRes.error.message);
     const recentOut = new Set<string>();
-    if (itemIds.length > 0) {
-      // Batch the itemIds (URL length) and page each batch.
-      const ITEM_ID_BATCH = 200;
-      for (let i = 0; i < itemIds.length; i += ITEM_ID_BATCH) {
-        const batch = itemIds.slice(i, i + ITEM_ID_BATCH);
-        const moves = await fetchAllRows<{ id: string; item_id: string }>(
-          (from, to) =>
-            this.ctx.supabase
-              .from('stock_movements')
-              .select('id, item_id, created_at')
-              .eq('organization_id', this.ctx.organizationId)
-              .in('item_id', batch)
-              .gte('created_at', since)
-              .lt('quantity_change', 0)
-              .order('id', { ascending: true })
-              .range(from, to),
-          { cap: 100_000 },
-        );
-        for (const m of moves) recentOut.add(m.item_id);
-      }
+    for (const m of (outRes.data ?? []) as Array<{ item_id: string }>) {
+      recentOut.add(m.item_id);
     }
 
     const now = Date.now();
@@ -1315,141 +1258,62 @@ export class ReportsService {
   async bundleActivity(days = 90): Promise<BundleActivityReport> {
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-    type DistRow = {
-      id: string;
-      bundle_id: string;
-      warehouse_id: string;
-      quantity: number;
-      distributed_at: string;
-      shortage_recorded: boolean;
-      bundle: { name: string; sku: string | null } | { name: string; sku: string | null }[] | null;
-      warehouse: { name: string } | { name: string }[] | null;
-    };
+    // Both halves of the report — the per-bundle distribution rollup (runs,
+    // kits out, last run, top warehouse) and the component-cost rollup — are
+    // computed DB-side by migration 0225's service-role RPCs so the totals
+    // (totalRuns / totalKits / totalValueOut) can NEVER truncate. (Was: paged
+    // distributions under a 10k cap and component-draw movements under a 50k
+    // cap, summed in JS — past those caps every total silently understated.)
+    // The report body is a per-bundle rollup (bounded by bundle count), so
+    // nothing streams. `since` is the exact instant the JS computed.
+    const admin = createAdminClient();
+    const orgId = this.ctx.organizationId;
+    const [actRes, valRes] = await Promise.all([
+      admin.rpc('report_bundle_activity', {
+        p_organization_id: orgId,
+        p_since: since,
+      }),
+      admin.rpc('report_bundle_component_value', {
+        p_organization_id: orgId,
+        p_since: since,
+      }),
+    ]);
+    if (actRes.error) throw new ServiceError('internal_error', actRes.error.message);
+    if (valRes.error) throw new ServiceError('internal_error', valRes.error.message);
 
-    // PostgREST caps responses at 1000 rows; page the full set. The report
-    // aggregates by bundle and re-sorts by kitsOut, and lastRunAt is a max
-    // comparison — so fetch order is irrelevant; page by id.
-    const distList = await fetchAllRows<DistRow>(
-      (from, to) =>
-        this.ctx.supabase
-          .from('bundle_distributions')
-          .select(
-            `id, bundle_id, warehouse_id, quantity, distributed_at,
-         shortage_recorded,
-         bundle:bundles!bundle_id (name, sku),
-         warehouse:warehouses!warehouse_id (name)`,
-          )
-          .eq('organization_id', this.ctx.organizationId)
-          .gte('distributed_at', since)
-          .order('id', { ascending: true })
-          .range(from, to),
-      { cap: 10_000 },
-    );
-    const distIds = distList.map((d) => d.id);
-
-    // Pull every component-draw movement linked to these distributions
-    // so we can show the cost side of the ledger.
-    const valueByDist = new Map<string, number>();
-    if (distIds.length > 0) {
-      type MoveRow = {
-        id: string;
-        reference_id: string;
-        quantity_change: number;
-        item_id: string;
-        item: { unit_cost: number } | { unit_cost: number }[] | null;
-      };
-      // Likewise capped at 1000 by PostgREST — page the full window so the
-      // component-cost rollup sums every draw, not just the first 1000.
-      const moves = await fetchAllRows<MoveRow>(
-        (from, to) =>
-          this.ctx.supabase
-            .from('stock_movements')
-            .select(
-              `id, reference_id, quantity_change, item_id,
-           item:inventory_items!item_id (unit_cost)`,
-            )
-            .eq('organization_id', this.ctx.organizationId)
-            .eq('reference_type', 'bundle')
-            .eq('movement_type', 'bundle_distribution')
-            .gte('created_at', since)
-            .lt('quantity_change', 0)
-            .order('id', { ascending: true })
-            .range(from, to),
-        { cap: 50_000 },
-      );
-      for (const m of moves) {
-        const itemField = Array.isArray(m.item) ? m.item[0] : m.item;
-        const cost = Number(itemField?.unit_cost ?? 0);
-        const value = Math.abs(Number(m.quantity_change) || 0) * cost;
-        // Reference IDs on bundle_distribution movements are the bundle id,
-        // not the distribution id. We aggregate by bundle below instead.
-        // (Kept for completeness; bundle aggregation is the canonical view.)
-        valueByDist.set(
-          m.reference_id,
-          (valueByDist.get(m.reference_id) ?? 0) + value,
-        );
-      }
+    // Component cost keyed by bundle id (RPC groups movements by reference_id,
+    // which is the bundle id for bundle_distribution draws).
+    const valueByBundle = new Map<string, number>();
+    for (const r of (valRes.data ?? []) as Array<{
+      bundle_id: string | null;
+      component_value_out: number;
+    }>) {
+      if (r.bundle_id) valueByBundle.set(r.bundle_id, Number(r.component_value_out) || 0);
     }
 
-    const byBundle = new Map<
-      string,
-      {
-        bundleId: string;
-        bundleName: string;
-        bundleSku: string | null;
+    const rows: BundleActivityRow[] = (
+      (actRes.data ?? []) as Array<{
+        bundle_id: string;
+        bundle_name: string | null;
+        bundle_sku: string | null;
         runs: number;
-        kitsOut: number;
-        componentValueOut: number;
-        warehouseRuns: Map<string, { name: string; runs: number }>;
-        lastRunAt: string | null;
-      }
-    >();
-
-    for (const d of distList) {
-      const bundleField = Array.isArray(d.bundle) ? d.bundle[0] : d.bundle;
-      const whField = Array.isArray(d.warehouse) ? d.warehouse[0] : d.warehouse;
-      const bid = d.bundle_id;
-      const acc = byBundle.get(bid) ?? {
-        bundleId: bid,
-        bundleName: bundleField?.name ?? 'Unknown bundle',
-        bundleSku: bundleField?.sku ?? null,
-        runs: 0,
-        kitsOut: 0,
-        componentValueOut: valueByDist.get(bid) ?? 0,
-        warehouseRuns: new Map<string, { name: string; runs: number }>(),
-        lastRunAt: null as string | null,
-      };
-      acc.runs += 1;
-      acc.kitsOut += Number(d.quantity) || 0;
-      const whAcc = acc.warehouseRuns.get(d.warehouse_id) ?? {
-        name: whField?.name ?? '—',
-        runs: 0,
-      };
-      whAcc.runs += 1;
-      acc.warehouseRuns.set(d.warehouse_id, whAcc);
-      if (!acc.lastRunAt || d.distributed_at > acc.lastRunAt) {
-        acc.lastRunAt = d.distributed_at;
-      }
-      byBundle.set(bid, acc);
-    }
-
-    const rows: BundleActivityRow[] = Array.from(byBundle.values())
-      .map((b) => {
-        let topWh: { name: string; runs: number } | null = null;
-        for (const v of b.warehouseRuns.values()) {
-          if (!topWh || v.runs > topWh.runs) topWh = v;
-        }
-        return {
-          bundleId: b.bundleId,
-          bundleName: b.bundleName,
-          bundleSku: b.bundleSku,
-          runs: b.runs,
-          kitsOut: b.kitsOut,
-          componentValueOut: b.componentValueOut,
-          topWarehouseName: topWh?.name ?? null,
-          lastRunAt: b.lastRunAt,
-        } satisfies BundleActivityRow;
-      })
+        kits_out: number;
+        last_run_at: string | null;
+        top_warehouse_name: string | null;
+      }>
+    )
+      .map(
+        (b): BundleActivityRow => ({
+          bundleId: b.bundle_id,
+          bundleName: b.bundle_name ?? 'Unknown bundle',
+          bundleSku: b.bundle_sku ?? null,
+          runs: Number(b.runs) || 0,
+          kitsOut: Number(b.kits_out) || 0,
+          componentValueOut: valueByBundle.get(b.bundle_id) ?? 0,
+          topWarehouseName: b.top_warehouse_name ?? null,
+          lastRunAt: b.last_run_at ?? null,
+        }),
+      )
       .sort((a, b) => b.kitsOut - a.kitsOut);
 
     return {
