@@ -35,8 +35,11 @@ interface ItemComboboxProps {
  * search input, and filters the alphabetized item list as the user types.
  *
  * Items are pre-sorted alphabetically by name; cmdk's built-in fuzzy match
- * handles search against `sku name detail`. Designed to drop into table
- * rows where 100s of items would otherwise blow out a plain <select>.
+ * handles search against `sku name` ONLY — `detail` is display-only
+ * metadata and deliberately excluded from the search haystack (typing a
+ * number must match SKUs/names, never incidental metadata like an on-hand
+ * count). Designed to drop into table rows where 100s of items would
+ * otherwise blow out a plain <select>.
  */
 export function ItemCombobox({
   items,
@@ -121,7 +124,7 @@ export function ItemCombobox({
             )}
             {sorted.map((i) => {
               const isActive = i.id === value;
-              const haystack = `${i.sku} ${i.name} ${i.detail ?? ''}`;
+              const haystack = `${i.sku} ${i.name}`;
               return (
                 <Command.Item
                   key={i.id}

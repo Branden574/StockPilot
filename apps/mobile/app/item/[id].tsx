@@ -35,6 +35,7 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
+import { movementAmount, movementReasonLabel } from '@/lib/movement-display';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -73,6 +74,10 @@ interface MovementRow {
   quantity_change: number;
   previous_quantity: number;
   new_quantity: number;
+  /** Physical qty moved by a net-zero transfer (mig 0231). quantity_change is
+      ALWAYS 0 for transfers (ledger sums to on-hand) — render THIS for them.
+      null on pre-0231 rows and non-transfer movements. */
+  moved_quantity: number | null;
   reason: string | null;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
@@ -248,7 +253,7 @@ export default function ItemDetail() {
       .from('stock_movements')
       .select(
         `id, movement_type, quantity_change, previous_quantity, new_quantity,
-         reason, created_at,
+         moved_quantity, reason, created_at,
          actor:user_profiles!user_id (full_name, email)`,
       )
       .eq('organization_id', orgId)
@@ -265,6 +270,7 @@ export default function ItemDetail() {
           quantity_change: Number(r.quantity_change) || 0,
           previous_quantity: Number(r.previous_quantity) || 0,
           new_quantity: Number(r.new_quantity) || 0,
+          moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
           reason: (r.reason as string | null) ?? null,
           created_at: r.created_at as string,
           actor: Array.isArray(actor) ? actor[0] ?? null : actor,
@@ -802,6 +808,13 @@ function MetaRow({ label, value }: { label: string; value: string }) {
 function MovementCard({ movement }: { movement: MovementRow }) {
   const { c } = useTheme();
   const isAdd = movement.quantity_change > 0;
+  // Display mapping lives in src/lib/movement-display.ts (unit-tested):
+  //  - transfers show moved_quantity (net-zero delta is always 0); pre-0231
+  //    rows have none → no number, never "0",
+  //  - pre-0231 receipt rows' internal 'receipt_line' reason → 'PO receipt'
+  //    (new rows already carry 'PO {number}').
+  const amount = movementAmount(movement);
+  const reasonLabel = movementReasonLabel(movement.reason);
   const Icon = isAdd ? Plus : movement.quantity_change < 0 ? Minus : RotateCcw;
   const pipColor = isAdd ? ACCENT.mint : movement.quantity_change < 0 ? ACCENT.crit : ACCENT.warn;
   const verb = TYPE_LABEL[movement.movement_type] ?? movement.movement_type;
@@ -838,22 +851,31 @@ function MovementCard({ movement }: { movement: MovementRow }) {
         <View style={{ flex: 1, minWidth: 0 }}>
           <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
             {verb}
-            {movement.reason ? ` · ${movement.reason}` : ''}
+            {reasonLabel ? ` · ${reasonLabel}` : ''}
           </Body>
           <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
             {actor} · {new Date(movement.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
           </Mono>
         </View>
         <View style={{ alignItems: 'flex-end' }}>
-          <Mono
-            size={15}
-            tracking={-0.012}
-            color={isAdd ? ACCENT.mintInk : movement.quantity_change < 0 ? ACCENT.crit : c.ink}
-            style={{ fontFamily: FONT.display }}
-          >
-            {isAdd ? '+' : ''}
-            {movement.quantity_change}
-          </Mono>
+          {amount.kind !== 'none' && (
+            <Mono
+              size={15}
+              tracking={-0.012}
+              color={
+                amount.kind === 'moved'
+                  ? c.ink
+                  : amount.sign > 0
+                    ? ACCENT.mintInk
+                    : amount.sign < 0
+                      ? ACCENT.crit
+                      : c.ink
+              }
+              style={{ fontFamily: FONT.display }}
+            >
+              {amount.text}
+            </Mono>
+          )}
           <Mono size={9.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
             {movement.previous_quantity} → {movement.new_quantity}
           </Mono>

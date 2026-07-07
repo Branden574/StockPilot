@@ -2,6 +2,11 @@ import 'server-only';
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 
+import {
+  collectReceiptLineIds,
+  receiptLineSummary,
+  resolveReceiptPoNumbers,
+} from './activity';
 import { ServiceError, withContext, type ServiceContext } from './context';
 import {
   bucketTrendMovements,
@@ -23,8 +28,14 @@ export interface MovementWithItem {
   quantity_change: number;
   previous_quantity: number;
   new_quantity: number;
+  /** Physical qty moved by a net-zero transfer (mig 0231). quantity_change is
+      always 0 for transfers; render THIS for them. null on pre-0231 rows and
+      non-transfer movements. */
+  moved_quantity: number | null;
   from_location_id: string | null;
   to_location_id: string | null;
+  /** Display reason. Pre-0231 receipt rows' internal 'receipt_line' label is
+      already mapped to 'PO {number}' (or 'PO receipt') by list(). */
   reason: string | null;
   notes: string | null;
   created_at: string;
@@ -83,7 +94,7 @@ export class MovementsService {
       .select(
         `
         id, movement_type, quantity_change, previous_quantity, new_quantity,
-        from_location_id, to_location_id, reason, notes, created_at,
+        moved_quantity, from_location_id, to_location_id, reason, notes, created_at,
         item_id, user_id,
         ${itemEmbed},
         actor:user_profiles!user_id (id, full_name, email)
@@ -111,10 +122,31 @@ export class MovementsService {
     const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
 
+    // Pre-0231 receipt rows carry the internal reason 'receipt_line' with the
+    // receipt id in notes — resolve them to 'PO {number}' in ONE extra batched
+    // query (display mapping only; notes keeps the receipt id for consumers
+    // like stagedWorklist). New rows already carry 'PO {n}' in reason.
+    const poNumberByReceipt = await resolveReceiptPoNumbers(
+      this.ctx,
+      collectReceiptLineIds(
+        (data ?? []).map((row) => {
+          const r = row as Record<string, unknown>;
+          return {
+            reason: (r.reason as string | null) ?? null,
+            notes: (r.notes as string | null) ?? null,
+          };
+        }),
+      ),
+    );
+
     // PostgREST returns the related row as an array when the relation is
     // ambiguous; flatten to a single object.
     return (data ?? []).map((row) => {
       const r = row as Record<string, unknown>;
+      const reason =
+        r.reason === 'receipt_line'
+          ? receiptLineSummary((r.notes as string | null) ?? null, poNumberByReceipt)
+          : ((r.reason as string | null) ?? null);
       const itemField = r.item as
         | { id: string; name: string; sku: string }
         | { id: string; name: string; sku: string }[]
@@ -134,7 +166,7 @@ export class MovementsService {
             email: actorRaw.email ?? null,
           }
         : null;
-      return { ...r, item, actor } as MovementWithItem;
+      return { ...r, reason, item, actor } as MovementWithItem;
     });
   }
 }

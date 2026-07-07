@@ -162,6 +162,11 @@ export function RecentActivityWidget({
               {recentMovements.map((m, i) => {
                 const item = m.item;
                 const change = Number(m.quantity_change);
+                // Transfers are net-zero (quantity_change always 0); show the
+                // physical qty moved (moved_quantity, mig 0231) neutrally.
+                // Pre-0231 transfer rows have none → no number, never "0".
+                const isTransfer = m.movement_type === 'transfer';
+                const moved = m.moved_quantity == null ? null : Number(m.moved_quantity);
                 return (
                   <li
                     key={m.id}
@@ -206,13 +211,19 @@ export function RecentActivityWidget({
                     <div
                       className={cn(
                         'font-mono text-[13px] font-medium tabular-nums',
-                        change > 0
+                        !isTransfer && change > 0
                           ? 'text-[hsl(var(--accent-foreground))]'
                           : 'text-[var(--ed-ink-3)]',
                       )}
                     >
-                      {change > 0 ? '+' : ''}
-                      {formatNumber(change)}
+                      {isTransfer ? (
+                        moved != null ? formatNumber(moved) : ''
+                      ) : (
+                        <>
+                          {change > 0 ? '+' : ''}
+                          {formatNumber(change)}
+                        </>
+                      )}
                     </div>
                   </li>
                 );

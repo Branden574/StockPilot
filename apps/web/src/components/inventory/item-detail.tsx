@@ -209,6 +209,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // ActivityService feed is exactly the stock_movements rows.
   const movementEvents = activity.filter((e) => e.kind === 'movement');
 
+  // Location id → name map for the activity feed's transfer route line
+  // ("A → B"). Free: the full location list is already fetched above for
+  // the transfer dialog's destination dropdown.
+  const locationNames = Object.fromEntries(
+    locations.map((l) => [l.id as string, l.name as string]),
+  );
+
   // Permission gates for the sticky-header action row. Viewers see the
   // detail page (read-only) but no Edit / Adjust / Transfer buttons.
   // Server-layer assertPermission still throws if a request somehow
@@ -217,6 +224,10 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   const canDuplicateItem = can(ctx, 'items:create');
   const canAdjustStock = can(ctx, 'stock:adjust');
   const canTransferStock = can(ctx, 'stock:transfer');
+  // Gates the transfer dialog's inline "New location…" destination — the
+  // server re-asserts 'locations:manage' (+ the locations plan limit) inside
+  // LocationsService.create, so this only hides the UI affordance.
+  const canManageLocations = can(ctx, 'locations:manage');
 
   // ── Market price panel (Phase 6) ───────────────────────────────────
   // Fully gated + isolated: only loads/renders when the optional
@@ -330,6 +341,8 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     warehouse_id: (l.warehouse_id as string | null) ?? null,
                   }))}
                   holdings={holdings}
+                  itemType={(item.item_type as string | null) ?? null}
+                  canManageLocations={canManageLocations}
                 />
               )}
             </div>
@@ -671,7 +684,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ActivityFeed events={movementEvents} />
+              <ActivityFeed events={movementEvents} locationNames={locationNames} />
             </CardContent>
           </Card>
         </div>
@@ -690,7 +703,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ActivityFeed events={activity} />
+              <ActivityFeed events={activity} locationNames={locationNames} />
             </CardContent>
           </Card>
 

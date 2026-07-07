@@ -34,6 +34,9 @@ export interface RecentMovement {
   id: string;
   movement_type: string;
   quantity_change: number | string;
+  /** Physical qty moved by a net-zero transfer (mig 0231); null on pre-0231
+      rows and non-transfer movements. */
+  moved_quantity: number | string | null;
   created_at: string;
   reason: string | null;
   item: { name?: string | null } | null;

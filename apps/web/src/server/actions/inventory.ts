@@ -13,12 +13,10 @@ import {
   createItemSchema,
   err,
   ok,
-  transferStockSchema,
   updateItemSchema,
   type ActionResult,
   type AdjustStockInput,
   type CreateItemInput,
-  type TransferStockInput,
   type UpdateItemInput,
 } from '@stockpilot/core';
 
@@ -229,24 +227,10 @@ export async function adjustStockAction(input: AdjustStockInput): Promise<Action
   }
 }
 
-export async function transferStockAction(input: TransferStockInput): Promise<ActionResult<void>> {
-  const parsed = transferStockSchema.safeParse(input);
-  if (!parsed.success) {
-    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
-  }
-  try {
-    const svc = await InventoryService.forCurrentUser();
-    await svc.transferStock(parsed.data);
-    revalidatePath('/dashboard/inventory');
-    await revalidateInventoryListForCurrentOrg();
-    return ok(undefined);
-  } catch (e) {
-    return toResult(e);
-  }
-}
-
 // ---------------------------------------------------------------------------
-// placeStockAction — move staged qty onto an existing or inline-created location
+// Shared inline-destination shape — used by transferStockAction (Transfer
+// dialog) and placeStockAction (Staging put-away). Either an existing
+// location id, or the fields needed to create a rack/crate on the fly.
 // ---------------------------------------------------------------------------
 
 const newRackSchema = z.object({
@@ -258,18 +242,10 @@ const newRackSchema = z.object({
   parentId: z.string().uuid().optional(),
 });
 
-const placeStockSchema = z.object({
-  itemId: z.string().uuid(),
-  fromLocationId: z.string().uuid(),
-  quantity: z.number().positive(),
-  notes: z.string().max(2000).optional(),
-  destination: z.union([
-    z.object({ existingLocationId: z.string().uuid() }),
-    z.object({ newRack: newRackSchema }),
-  ]),
-});
-
-export type PlaceStockInput = z.infer<typeof placeStockSchema>;
+const destinationSchema = z.union([
+  z.object({ existingLocationId: z.string().uuid() }),
+  z.object({ newRack: newRackSchema }),
+]);
 
 /** Derive a human-readable name for an inline-created rack or crate. */
 function deriveLocationName(n: z.infer<typeof newRackSchema>): string {
@@ -278,6 +254,130 @@ function deriveLocationName(n: z.infer<typeof newRackSchema>): string {
   }
   return n.rackRow ? `${n.rackNumber}-${n.rackRow}` : n.rackNumber;
 }
+
+/**
+ * Verify a warehouse id belongs to the caller's org before creating a
+ * location under it. TENANT-ISOLATION GUARD: prevents seeding a location
+ * (and then moving stock) under another org's warehouse — same class as the
+ * Phase 2a 0199 RLS finding. Returns true when the warehouse is in-org.
+ */
+async function warehouseInOrg(
+  ctx: Awaited<ReturnType<typeof withContext>>,
+  warehouseId: string,
+): Promise<boolean> {
+  const { data: wh } = await ctx.supabase
+    .from('warehouses')
+    .select('id')
+    .eq('id', warehouseId)
+    .eq('organization_id', ctx.organizationId)
+    .maybeSingle();
+  return !!wh;
+}
+
+// ---------------------------------------------------------------------------
+// transferStockAction — move placed stock between locations; destination may
+// be an existing location OR a rack/crate created inline (same union as
+// placeStockAction). Creating a location goes through LocationsService.create,
+// which asserts 'locations:manage' + the 'locations' plan limit; the transfer
+// itself stays gated on 'stock:transfer' inside InventoryService.transferStock.
+// ---------------------------------------------------------------------------
+
+const transferStockActionSchema = z
+  .object({
+    itemId: z.string().uuid(),
+    fromLocationId: z.string().uuid(),
+    quantity: z.coerce.number().positive(),
+    notes: z.string().max(2000).optional(),
+    destination: destinationSchema,
+  })
+  .refine(
+    (v) =>
+      !('existingLocationId' in v.destination) ||
+      v.destination.existingLocationId !== v.fromLocationId,
+    { message: 'Source and destination must differ', path: ['destination'] },
+  );
+
+export type TransferStockActionInput = z.infer<typeof transferStockActionSchema>;
+
+export async function transferStockAction(
+  input: TransferStockActionInput,
+): Promise<ActionResult<{ toLocationId: string }>> {
+  const parsed = transferStockActionSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  }
+  const data = parsed.data;
+  try {
+    // Resolve the org context ONCE and reuse it for the warehouse
+    // org-verification + both services (withContext is request-cached).
+    const ctx = await withContext();
+    let toLocationId: string;
+
+    if ('existingLocationId' in data.destination) {
+      // Existing destination: transfer_stock (mig 0201) org-verifies BOTH
+      // location ids against the item's org inside the RPC, so no extra
+      // app-level lookup is needed here (unchanged from the pre-union path).
+      toLocationId = data.destination.existingLocationId;
+    } else {
+      const n = data.destination.newRack;
+      if (!(await warehouseInOrg(ctx, n.warehouseId))) {
+        return err('validation_error', 'Warehouse not found in your organization.');
+      }
+      // Asserts 'locations:manage' + assertPlanLimit('locations') internally.
+      const locationsSvc = new LocationsService(ctx);
+      const created = await locationsSvc.create({
+        name: deriveLocationName(n),
+        type: n.crateColor ? 'bin' : 'shelf',
+        kind: n.crateColor ? 'crate' : 'rack',
+        warehouseId: n.warehouseId,
+        rackNumber: n.rackNumber,
+        rackRow: n.rackRow ?? null,
+        crateColor: n.crateColor ?? null,
+        crateNumber: n.crateNumber ?? null,
+        parentId: n.parentId ?? null,
+      });
+      toLocationId = created.id;
+    }
+
+    const svc = new InventoryService(ctx);
+    await svc.transferStock({
+      itemId: data.itemId,
+      fromLocationId: data.fromLocationId,
+      toLocationId,
+      quantity: data.quantity,
+      notes: data.notes,
+    });
+    revalidatePath('/dashboard/inventory');
+    await revalidateInventoryListForCurrentOrg();
+    revalidatePath(`/dashboard/inventory/${data.itemId}`);
+    return ok({ toLocationId });
+  } catch (e) {
+    // Same insufficient_stock → friendly-message mapping as placeStockAction
+    // (raw RPC text lives on internalDetail post-S13 sanitization).
+    if (
+      e instanceof ServiceError &&
+      e.code === 'internal_error' &&
+      (e.internalDetail ?? '').toLowerCase().includes('insufficient_stock')
+    ) {
+      return err('validation_error', "Can't transfer more than is available.");
+    }
+    return toResult(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// placeStockAction — move staged qty onto an existing or inline-created location
+// ---------------------------------------------------------------------------
+
+const placeStockSchema = z.object({
+  itemId: z.string().uuid(),
+  fromLocationId: z.string().uuid(),
+  quantity: z.number().positive(),
+  notes: z.string().max(2000).optional(),
+  destination: destinationSchema,
+});
+
+export type PlaceStockInput = z.infer<typeof placeStockSchema>;
 
 export async function placeStockAction(
   input: PlaceStockInput,
@@ -323,13 +423,7 @@ export async function placeStockAction(
       // TENANT-ISOLATION GUARD: verify the warehouse belongs to the caller's
       // org BEFORE creating a location under it — prevents seeding a location
       // (and then placing stock) under another org's warehouse.
-      const { data: wh } = await ctx.supabase
-        .from('warehouses')
-        .select('id')
-        .eq('id', n.warehouseId)
-        .eq('organization_id', ctx.organizationId)
-        .maybeSingle();
-      if (!wh) {
+      if (!(await warehouseInOrg(ctx, n.warehouseId))) {
         return err('validation_error', 'Warehouse not found in your organization.');
       }
       const locationsSvc = new LocationsService(ctx);

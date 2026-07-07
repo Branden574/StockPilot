@@ -28,6 +28,10 @@ import { Textarea } from '@/components/ui/textarea';
 import { transferStockAction } from '@/server/actions/inventory';
 import { transferableHoldings } from '@/lib/placements';
 
+/** Sentinel Select value for the inline "create a new location" branch —
+ *  mirrors PlaceFromStagingDialog's NEW_RACK_SENTINEL. */
+const NEW_LOCATION_SENTINEL = '__new__';
+
 interface LocationOption {
   id: string;
   name: string;
@@ -50,6 +54,11 @@ interface StockTransferDialogProps {
   currentLocationId: string | null;
   locations: LocationOption[];
   holdings: HoldingOption[];
+  /** Drives the book-only crate fields on the inline new-location form. */
+  itemType?: string | null;
+  /** Show the "New location…" destination only when the user can actually
+   *  create locations (server still asserts 'locations:manage' + plan limit). */
+  canManageLocations?: boolean;
   trigger?: React.ReactNode;
 }
 
@@ -59,6 +68,8 @@ export function StockTransferDialog({
   currentQuantity,
   locations,
   holdings,
+  itemType,
+  canManageLocations = false,
   trigger,
 }: StockTransferDialogProps) {
   const router = useRouter();
@@ -71,11 +82,25 @@ export function StockTransferDialog({
   const [toLocation, setToLocation] = React.useState<string>('');
   const [quantity, setQuantity] = React.useState('1');
   const [notes, setNotes] = React.useState('');
+
+  // Inline new-rack/crate fields (same shape as PlaceFromStagingDialog).
+  const [rackNumber, setRackNumber] = React.useState('');
+  const [rackRow, setRackRow] = React.useState('');
+  const [crateColor, setCrateColor] = React.useState('');
+  const [crateNumber, setCrateNumber] = React.useState('');
+
   const [submitting, setSubmitting] = React.useState(false);
 
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
-    if (open) setFromLocation(sourceHoldings[0]?.locationId ?? '');
+    if (!open) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- reset on open/close */
+    setFromLocation(sourceHoldings[0]?.locationId ?? '');
+    setToLocation('');
+    setRackNumber('');
+    setRackRow('');
+    setCrateColor('');
+    setCrateNumber('');
+    /* eslint-enable react-hooks/set-state-in-effect */
     // sourceHoldings is derived from holdings prop, which is stable
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -85,6 +110,14 @@ export function StockTransferDialog({
   // Max transferable = the selected source holding's qty (not total on-hand)
   const selectedHolding = sourceHoldings.find((h) => h.locationId === fromLocation);
   const maxTransferable = selectedHolding?.quantity ?? 0;
+
+  // A new location is created inside the SOURCE holding's warehouse — without
+  // a known warehouse there's nowhere to create it, so the option hides.
+  const sourceWarehouseId = selectedHolding?.warehouseId ?? null;
+  const canCreateHere = canManageLocations && !!sourceWarehouseId;
+
+  const isNew = toLocation === NEW_LOCATION_SENTINEL;
+  const isBook = itemType === 'book';
 
   // Destination: all locations except the chosen source and system kinds
   const destinationLocations = locations.filter(
@@ -96,7 +129,8 @@ export function StockTransferDialog({
 
   const fromLoc = locations.find((l) => l.id === fromLocation);
   const toLoc = locations.find((l) => l.id === toLocation);
-  const crossWarehouse = !!fromLoc && !!toLoc && fromLoc.warehouse_id !== toLoc.warehouse_id;
+  const crossWarehouse =
+    !isNew && !!fromLoc && !!toLoc && fromLoc.warehouse_id !== toLoc.warehouse_id;
 
   const hasNoSources = sourceHoldings.length === 0;
 
@@ -105,7 +139,7 @@ export function StockTransferDialog({
       toast.error('Pick both a source and a destination location.');
       return;
     }
-    if (fromLocation === toLocation) {
+    if (!isNew && fromLocation === toLocation) {
       toast.error('Source and destination must be different locations.');
       return;
     }
@@ -117,13 +151,37 @@ export function StockTransferDialog({
       toast.error("Can't transfer more than what's in the source location.");
       return;
     }
+
+    let destination: Parameters<typeof transferStockAction>[0]['destination'];
+    if (isNew) {
+      if (!sourceWarehouseId) {
+        toast.error('Pick a source location inside a warehouse first.');
+        return;
+      }
+      if (!rackNumber.trim()) {
+        toast.error('Enter a rack number.');
+        return;
+      }
+      destination = {
+        newRack: {
+          warehouseId: sourceWarehouseId,
+          rackNumber: rackNumber.trim(),
+          ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
+          ...(isBook && crateColor.trim() ? { crateColor: crateColor.trim() } : {}),
+          ...(isBook && crateNumber.trim() ? { crateNumber: crateNumber.trim() } : {}),
+        },
+      };
+    } else {
+      destination = { existingLocationId: toLocation };
+    }
+
     setSubmitting(true);
     const res = await transferStockAction({
       itemId,
       fromLocationId: fromLocation,
-      toLocationId: toLocation,
       quantity: qtyNum,
       notes: notes || undefined,
+      destination,
     });
     setSubmitting(false);
     if (!res.ok) {
@@ -166,7 +224,16 @@ export function StockTransferDialog({
           <div className="space-y-3">
             <div className="space-y-1.5">
               <Label>From location</Label>
-              <Select value={fromLocation} onValueChange={setFromLocation}>
+              <Select
+                value={fromLocation}
+                onValueChange={(v) => {
+                  setFromLocation(v);
+                  // The inline-create branch is pinned to the SOURCE's
+                  // warehouse; a new source may not have one, so drop the
+                  // sentinel selection rather than creating somewhere stale.
+                  if (toLocation === NEW_LOCATION_SENTINEL) setToLocation('');
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Select source" />
                 </SelectTrigger>
@@ -192,6 +259,9 @@ export function StockTransferDialog({
                       {l.name}
                     </SelectItem>
                   ))}
+                  {canCreateHere && (
+                    <SelectItem value={NEW_LOCATION_SENTINEL}>+ New location…</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
               {crossWarehouse && (
@@ -201,6 +271,55 @@ export function StockTransferDialog({
                 </p>
               )}
             </div>
+
+            {/* Inline new rack/crate inputs — same fields the Staging place
+                dialog uses; the location is created in the source holding's
+                warehouse, then the normal transfer runs against it. */}
+            {isNew && (
+              <div className="space-y-3 rounded-md border p-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label>
+                      Rack number <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      placeholder="e.g. A1"
+                      value={rackNumber}
+                      onChange={(e) => setRackNumber(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Row (optional)</Label>
+                    <Input
+                      placeholder="e.g. Row 3"
+                      value={rackRow}
+                      onChange={(e) => setRackRow(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {isBook && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label>Crate color (optional)</Label>
+                      <Input
+                        placeholder="e.g. Blue"
+                        value={crateColor}
+                        onChange={(e) => setCrateColor(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Crate number (optional)</Label>
+                      <Input
+                        placeholder="e.g. 42"
+                        value={crateNumber}
+                        onChange={(e) => setCrateNumber(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <Label>Quantity</Label>
@@ -230,7 +349,10 @@ export function StockTransferDialog({
           <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={submitting || hasNoSources}>
+          <Button
+            onClick={submit}
+            disabled={submitting || hasNoSources || (isNew && !rackNumber.trim())}
+          >
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Transfer stock'}
           </Button>
         </DialogFooter>

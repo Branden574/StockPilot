@@ -181,6 +181,117 @@ describe('MovementsService.list', () => {
     expect(rows[0]!.actor).toBeNull();
     expect(rows[0]!.item).toBeNull();
   });
+
+  // ── Issues 3 + 4 (mig 0231): moved_quantity passthrough + receipt_line map ──
+
+  it('passes moved_quantity through for transfer rows (and null on old rows)', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'tx-new',
+            movement_type: 'transfer',
+            quantity_change: 0,
+            moved_quantity: 250,
+            reason: null,
+            notes: null,
+            item: null,
+            actor: null,
+          },
+          {
+            id: 'tx-old',
+            movement_type: 'transfer',
+            quantity_change: 0,
+            moved_quantity: null,
+            reason: null,
+            notes: null,
+            item: null,
+            actor: null,
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const rows = await svc.list();
+    expect(rows[0]!.moved_quantity).toBe(250);
+    expect(rows[1]!.moved_quantity).toBeNull();
+    // No receipt_line rows → the receipts resolver query never fires.
+    expect(stub.fromCalls).not.toContain('receipts');
+  });
+
+  it("maps OLD receipt rows' reason 'receipt_line' to 'PO {number}' via one batched receipts query", async () => {
+    const receiptId = '11111111-2222-3333-4444-555555555555';
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'r-old',
+            movement_type: 'receive_po',
+            quantity_change: 5,
+            moved_quantity: null,
+            reason: 'receipt_line',
+            notes: receiptId,
+            item: null,
+            actor: null,
+          },
+          {
+            id: 'r-new',
+            movement_type: 'receive_po',
+            quantity_change: 3,
+            moved_quantity: null,
+            reason: 'PO PO-88',
+            notes: receiptId,
+            item: null,
+            actor: null,
+          },
+        ],
+        error: null,
+      },
+      'receipts.select': {
+        data: [{ id: receiptId, purchase_orders: { po_number: 'PO-2026-014' } }],
+        error: null,
+      },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const rows = await svc.list();
+    // Old row: display reason resolved from the receipt id in notes.
+    expect(rows[0]!.reason).toBe('PO PO-2026-014');
+    // notes keeps the raw receipt id — consumers (stagedWorklist) rely on it.
+    expect(rows[0]!.notes).toBe(receiptId);
+    // New row (0231+) passes through untouched.
+    expect(rows[1]!.reason).toBe('PO PO-88');
+    // Exactly one extra batched query.
+    expect(stub.fromCalls.filter((t) => t === 'receipts')).toHaveLength(1);
+  });
+
+  it("falls back to 'PO receipt' when the old row's receipt id cannot be resolved", async () => {
+    const receiptId = '11111111-2222-3333-4444-555555555555';
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'r-orphan',
+            movement_type: 'receive_po',
+            quantity_change: 5,
+            moved_quantity: null,
+            reason: 'receipt_line',
+            notes: receiptId,
+            item: null,
+            actor: null,
+          },
+        ],
+        error: null,
+      },
+      'receipts.select': { data: [], error: null },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const rows = await svc.list();
+    expect(rows[0]!.reason).toBe('PO receipt');
+  });
 });
 
 describe('getDashboardSummary', () => {

@@ -498,10 +498,6 @@ export function PoImportDetail({
                             id: i.id,
                             sku: i.sku,
                             name: i.name,
-                            detail:
-                              i.quantityOnHand != null
-                                ? `${i.quantityOnHand} on hand`
-                                : null,
                           }))}
                           value={effectiveItemId ?? null}
                           onChange={(id) => setLineItem(l.id, id)}

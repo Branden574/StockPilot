@@ -18,6 +18,12 @@ import type { ActivityEvent } from '@/server/services/activity';
 
 interface ActivityFeedProps {
   events: ActivityEvent[];
+  /**
+   * Optional location id → display name map. When provided, transfer events
+   * render their route ("A → B") in the meta line. item-detail already holds
+   * the org's full location list for the transfer dialog, so the map is free.
+   */
+  locationNames?: Record<string, string>;
 }
 
 interface VisualSpec {
@@ -35,7 +41,9 @@ function specFor(e: ActivityEvent): VisualSpec {
     if (e.type === 'cycle_count') {
       return { Icon: ClipboardCheck, label: 'Cycle count posted', tone: 'neutral' };
     }
-    if (e.type === 'receipt' || delta > 0) {
+    // NB: the receipt writer (post_receipt_v2 → adjust_stock) records
+    // movement_type='receive_po' — 'receipt' was a dead branch.
+    if (e.type === 'receive_po' || delta > 0) {
       return { Icon: PackagePlus, label: 'Stock received', tone: 'pos' };
     }
     if (delta < 0) {
@@ -60,7 +68,7 @@ function specFor(e: ActivityEvent): VisualSpec {
   }
 }
 
-export function ActivityFeed({ events }: ActivityFeedProps) {
+export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
   if (events.length === 0) {
     return (
       <div className="text-muted-foreground py-10 text-center text-sm">
@@ -74,6 +82,16 @@ export function ActivityFeed({ events }: ActivityFeedProps) {
       {events.map((e, i) => {
         const spec = specFor(e);
         const isLast = i === events.length - 1;
+        // Transfers are net-zero on hand (delta is ALWAYS 0 — the ledger
+        // must sum to quantity_on_hand), so the ±delta slot is meaningless
+        // for them. Show the physical qty moved instead (moved_quantity,
+        // mig 0231); pre-0231 rows have none → show no number, never "0".
+        const isTransfer = e.kind === 'movement' && e.type === 'transfer';
+        const fromName =
+          isTransfer && e.fromLocationId ? locationNames?.[e.fromLocationId] : undefined;
+        const toName =
+          isTransfer && e.toLocationId ? locationNames?.[e.toLocationId] : undefined;
+        const route = fromName && toName ? `${fromName} → ${toName}` : null;
         return (
           <li key={e.id} className="relative flex gap-3 pl-2 pr-1">
             {!isLast && (
@@ -97,17 +115,25 @@ export function ActivityFeed({ events }: ActivityFeedProps) {
             <div className="flex-1 border-b border-border/60 pb-3 pt-1.5 last:border-b-0">
               <div className="flex flex-wrap items-baseline gap-x-2">
                 <span className="text-sm font-medium">{spec.label}</span>
-                {e.delta !== null && (
-                  <span
-                    className={cn(
-                      'font-mono text-xs tabular-nums',
-                      e.delta > 0 && 'text-success',
-                      e.delta < 0 && 'text-destructive',
-                    )}
-                  >
-                    {e.delta > 0 ? '+' : ''}
-                    {formatNumber(e.delta)}
-                  </span>
+                {isTransfer ? (
+                  e.movedQuantity !== null && (
+                    <span className="font-mono text-xs tabular-nums">
+                      {formatNumber(e.movedQuantity)}
+                    </span>
+                  )
+                ) : (
+                  e.delta !== null && (
+                    <span
+                      className={cn(
+                        'font-mono text-xs tabular-nums',
+                        e.delta > 0 && 'text-success',
+                        e.delta < 0 && 'text-destructive',
+                      )}
+                    >
+                      {e.delta > 0 ? '+' : ''}
+                      {formatNumber(e.delta)}
+                    </span>
+                  )
                 )}
                 {e.quantityAfter !== null && (
                   <span className="text-muted-foreground text-[11px]">
@@ -119,6 +145,12 @@ export function ActivityFeed({ events }: ActivityFeedProps) {
                 <span>{e.actor}</span>
                 <span className="mx-1.5">·</span>
                 <span>{formatRelative(e.createdAt)}</span>
+                {route && (
+                  <>
+                    <span className="mx-1.5">·</span>
+                    <span>{route}</span>
+                  </>
+                )}
                 {e.summary && (
                   <>
                     <span className="mx-1.5">·</span>

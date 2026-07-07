@@ -104,6 +104,12 @@ export default async function MovementsPage({
               {visible.map((m) => {
                 const itemName = m.item?.name;
                 const change = Number(m.quantity_change);
+                // Transfers are net-zero (quantity_change is ALWAYS 0 — the
+                // ledger sums to on-hand); show the physical qty moved
+                // (moved_quantity, mig 0231) neutrally instead. Pre-0231
+                // transfer rows have none → em dash, never a misleading 0.
+                const isTransfer = m.movement_type === 'transfer';
+                const moved = m.moved_quantity == null ? null : Number(m.moved_quantity);
                 const actorLabel =
                   m.actor?.fullName ?? m.actor?.email ?? (m.user_id ? 'Unknown' : 'System');
                 return (
@@ -118,11 +124,27 @@ export default async function MovementsPage({
                     <TableCell
                       className={
                         'text-right font-mono tabular-nums ' +
-                        (change > 0 ? 'text-success' : change < 0 ? 'text-destructive' : '')
+                        (isTransfer
+                          ? ''
+                          : change > 0
+                            ? 'text-success'
+                            : change < 0
+                              ? 'text-destructive'
+                              : '')
                       }
                     >
-                      {change > 0 ? '+' : ''}
-                      {formatNumber(change)}
+                      {isTransfer ? (
+                        moved != null ? (
+                          formatNumber(moved)
+                        ) : (
+                          '—'
+                        )
+                      ) : (
+                        <>
+                          {change > 0 ? '+' : ''}
+                          {formatNumber(change)}
+                        </>
+                      )}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatNumber(Number(m.new_quantity))}
