@@ -6,6 +6,13 @@ import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, View } 
 import { isManagerOrAbove, type Role } from '@stockpilot/core';
 
 import { useAuth } from '@/lib/auth-context';
+import {
+  PdfTooLargeError,
+  assemblePdf,
+  routeScannedPages,
+  scanDocumentPages,
+  scanFileName,
+} from '@/lib/document-scanner';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { resizeForUpload } from '@/lib/image-resize';
 import { supabase } from '@/lib/supabase';
@@ -45,8 +52,9 @@ function mimeForExt(ext: string): string {
  * upload to the private po-attachments bucket, then insert the metadata row
  * (RLS gates both on purchase_orders:manage). Mirrors the web PO attachments.
  *
- * Three sources: camera, photo library (both resized), and the Files app
- * (PDFs / images via expo-document-picker, uploaded raw). 15 MB cap, matching
+ * Four sources: camera, photo library (both resized), the Files app
+ * (PDFs / images via expo-document-picker, uploaded raw), and the native
+ * document scanner (1 page → image, 2+ pages → one PDF). 15 MB cap, matching
  * the bucket.
  */
 export function PoAttachments({ poId }: { poId: string }) {
@@ -112,45 +120,61 @@ export function PoAttachments({ poId }: { poId: string }) {
     void load();
   }, [load]);
 
-  async function uploadAsset(asset: ImagePicker.ImagePickerAsset) {
+  /**
+   * Core upload shared by every attach source (camera, library, Files app,
+   * document scanner): storage object first, then the po_attachments row.
+   * Rolls the orphaned object back if the metadata insert is rejected (e.g.
+   * RLS — the user lacks purchase_orders:manage). NOTE the repo gotcha: the
+   * bytes MUST come from fetch(uri).arrayBuffer() — blob() uploads 0 bytes.
+   * Callers own the busy state.
+   */
+  async function uploadToPo(file: {
+    uri: string;
+    ext: string;
+    fileName: string;
+    contentType?: string;
+    sizeBytes?: number;
+  }) {
     if (!orgId || !user) {
       Alert.alert('Not ready', 'Try again in a moment.');
       return;
     }
+    const rand = Math.random().toString(36).slice(2, 14);
+    const path = `${orgId}/${poId}/${rand}.${file.ext}`;
+    const arrayBuffer = await (await fetch(file.uri)).arrayBuffer();
+    const contentType = file.contentType ?? mimeForExt(file.ext);
+    const { error: upErr } = await supabase.storage
+      .from(BUCKET)
+      .upload(path, arrayBuffer, { contentType });
+    if (upErr) {
+      Alert.alert('Upload failed', upErr.message);
+      return;
+    }
+    const { error: rowErr } = await supabase.from('po_attachments').insert({
+      organization_id: orgId,
+      purchase_order_id: poId,
+      storage_path: path,
+      file_name: file.fileName,
+      content_type: contentType,
+      size_bytes: file.sizeBytes ?? arrayBuffer.byteLength,
+      uploaded_by: user.id,
+    });
+    if (rowErr) {
+      await supabase.storage.from(BUCKET).remove([path]);
+      Alert.alert('Could not attach', rowErr.message);
+      return;
+    }
+    await load();
+  }
+
+  async function uploadAsset(asset: ImagePicker.ImagePickerAsset) {
     setBusy(true);
     try {
       const resized = await resizeForUpload(asset.uri);
-      const rand = Math.random().toString(36).slice(2, 14);
-      const path = `${orgId}/${poId}/${rand}.${resized.ext}`;
-      const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
-      const contentType = mimeForExt(resized.ext);
-      const { error: upErr } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, arrayBuffer, { contentType });
-      if (upErr) {
-        Alert.alert('Upload failed', upErr.message);
-        return;
-      }
       const fileName =
         (asset.fileName && asset.fileName.trim()) ||
         `slip-${new Date().toISOString().slice(0, 10)}.${resized.ext}`;
-      const { error: rowErr } = await supabase.from('po_attachments').insert({
-        organization_id: orgId,
-        purchase_order_id: poId,
-        storage_path: path,
-        file_name: fileName,
-        content_type: contentType,
-        size_bytes: arrayBuffer.byteLength,
-        uploaded_by: user.id,
-      });
-      if (rowErr) {
-        // Roll back the orphaned object if the metadata insert was rejected
-        // (e.g. RLS — the user lacks purchase_orders:manage).
-        await supabase.storage.from(BUCKET).remove([path]);
-        Alert.alert('Could not attach', rowErr.message);
-        return;
-      }
-      await load();
+      await uploadToPo({ uri: resized.uri, ext: resized.ext, fileName });
     } finally {
       setBusy(false);
     }
@@ -195,10 +219,6 @@ export function PoAttachments({ poId }: { poId: string }) {
     });
     if (res.canceled || !res.assets?.[0]) return;
     const asset = res.assets[0];
-    if (!orgId || !user) {
-      Alert.alert('Not ready', 'Try again in a moment.');
-      return;
-    }
     if (typeof asset.size === 'number' && asset.size > MAX_BYTES) {
       Alert.alert('File too large', 'Files must be 15 MB or smaller.');
       return;
@@ -207,32 +227,66 @@ export function PoAttachments({ poId }: { poId: string }) {
     try {
       const name = (asset.name && asset.name.trim()) || 'file';
       const ext = (name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const rand = Math.random().toString(36).slice(2, 14);
-      const path = `${orgId}/${poId}/${rand}.${ext}`;
-      const arrayBuffer = await (await fetch(asset.uri)).arrayBuffer();
-      const contentType = asset.mimeType || mimeForExt(ext);
-      const { error: upErr } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, arrayBuffer, { contentType });
-      if (upErr) {
-        Alert.alert('Upload failed', upErr.message);
-        return;
-      }
-      const { error: rowErr } = await supabase.from('po_attachments').insert({
-        organization_id: orgId,
-        purchase_order_id: poId,
-        storage_path: path,
-        file_name: name,
-        content_type: contentType,
-        size_bytes: asset.size ?? arrayBuffer.byteLength,
-        uploaded_by: user.id,
+      await uploadToPo({
+        uri: asset.uri,
+        ext,
+        fileName: name,
+        contentType: asset.mimeType || mimeForExt(ext),
+        sizeBytes: asset.size ?? undefined,
       });
-      if (rowErr) {
-        await supabase.storage.from(BUCKET).remove([path]);
-        Alert.alert('Could not attach', rowErr.message);
-        return;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Native document scanner (iOS VisionKit / Android ML Kit — edge detection,
+   * perspective crop, multi-page). One page uploads exactly like Take Photo
+   * (resized image); two-plus pages become a single fit-to-page PDF. The
+   * scanner module is lazy-loaded inside scanDocumentPages, so an old binary
+   * without it gets a friendly alert instead of a crash.
+   */
+  async function scanDocument() {
+    const scan = await scanDocumentPages();
+    if (scan.status === 'unavailable') {
+      Alert.alert(
+        'Scanner unavailable',
+        'Document scanning is not supported by this version of the app. Update from the App Store and try again.',
+      );
+      return;
+    }
+    if (scan.status === 'cancelled') return;
+    const plan = routeScannedPages(scan.pages);
+    if (!plan) return;
+    setBusy(true);
+    try {
+      if (plan.kind === 'image') {
+        const resized = await resizeForUpload(plan.uri);
+        await uploadToPo({
+          uri: resized.uri,
+          ext: resized.ext,
+          fileName: scanFileName(resized.ext),
+        });
+      } else {
+        const pdf = await assemblePdf(plan.uris);
+        await uploadToPo({
+          uri: pdf.uri,
+          ext: 'pdf',
+          fileName: scanFileName('pdf'),
+          contentType: 'application/pdf',
+          // bytes can be 0 if sizing failed — fall back to the buffer length.
+          sizeBytes: pdf.bytes || undefined,
+        });
       }
-      await load();
+    } catch (e) {
+      if (e instanceof PdfTooLargeError) {
+        Alert.alert(
+          'Scan too large',
+          'Even compressed, this scan is over the 15 MB attachment limit. Scan fewer pages per attachment and try again.',
+        );
+      } else {
+        Alert.alert('Scan failed', 'Could not process the scanned document. Please try again.');
+      }
     } finally {
       setBusy(false);
     }
@@ -280,6 +334,20 @@ export function PoAttachments({ poId }: { poId: string }) {
           </Pressable>
         )}
       </View>
+
+      {canManage && (
+        <Pressable
+          onPress={() => void scanDocument()}
+          disabled={busy}
+          style={({ pressed }) => [
+            styles.scanBtn,
+            pressed && { opacity: 0.7 },
+            busy && { opacity: 0.5 },
+          ]}
+        >
+          <Text style={styles.scanBtnText}>📄 Scan Document</Text>
+        </Pressable>
+      )}
 
       {loading ? (
         <ActivityIndicator color={theme.primary} style={{ marginTop: space.sm }} />
@@ -347,6 +415,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   addBtnText: { color: theme.bg, fontWeight: '700', fontSize: 13 },
+  scanBtn: {
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: radius.sm,
+    paddingVertical: 8,
+    alignItems: 'center',
+    marginTop: space.sm,
+  },
+  scanBtnText: { color: theme.text, fontWeight: '700', fontSize: 13 },
   muted: { color: theme.textMuted, fontSize: 13, marginTop: space.sm },
   errorText: { color: '#c0392b', fontSize: 13, marginTop: space.sm },
   fileRow: {

@@ -4,14 +4,18 @@ const config: ExpoConfig = {
   name: 'StockPilot',
   slug: 'stockpilot',
   scheme: 'stockpilot',
-  // 1.0.2 is LIVE on the App Store (iPhone, build 44, pre-supportsTablet).
-  // The first UNIVERSAL (iPhone+iPad+Mac) build ships as 1.0.3 — but BUMP THE
-  // VERSION TO '1.0.3' ONLY AT BUILD TIME. Keeping it 1.0.2 here keeps main
-  // OTA-safe: `eas update --channel production` targets runtime 1.0.2 and so
-  // reaches the LIVE users. (Bump deferred: the EAS free-plan monthly iOS build
-  // quota was exhausted; resets ~2026-07-01.)
-  // (1.0.2 added expo-document-picker; 1.0.1 added @sentry/react-native.)
-  version: '1.0.2',
+  // ⚠️ THIS BUMP IS LOAD-BEARING — do not lower it to "re-reach" old runtimes.
+  // 1.1.0 adds react-native-document-scanner-plugin (a NATIVE TurboModule; its
+  // JS entry calls TurboModuleRegistry.getEnforcing at import time) + expo-print
+  // for the PO "Scan Document" flow. runtimeVersion.policy is 'appVersion', so
+  // keeping the old version here would let `pnpm release:ota` push this JS onto
+  // existing 1.0.x binaries that DON'T contain the native module — crashing them
+  // on import. With 1.1.0, OTA updates from this tree only ever land on builds
+  // that actually ship the scanner. OTA hotfixes for LIVE 1.0.x users must be
+  // published from a commit before this bump.
+  // History: 1.0.3 = first universal (iPhone+iPad+Mac) build, LIVE on the App
+  // Store; 1.0.2 added expo-document-picker; 1.0.1 added @sentry/react-native.
+  version: '1.1.0',
   orientation: 'portrait',
   userInterfaceStyle: 'automatic',
   newArchEnabled: true,
@@ -42,7 +46,7 @@ const config: ExpoConfig = {
     // docs/runbooks/mobile-ota.md.
     buildNumber: '1',
     infoPlist: {
-      NSCameraUsageDescription: 'StockPilot uses the camera to scan barcodes and QR codes.',
+      NSCameraUsageDescription: 'StockPilot uses the camera to scan barcodes, QR codes, and documents.',
       NSPhotoLibraryUsageDescription: 'StockPilot uses your photo library to attach images to inventory items.',
       // Shown by iOS when the app first invokes LocalAuthentication
       // (Face ID specifically). Required — the app will crash on first
@@ -85,6 +89,16 @@ const config: ExpoConfig = {
       'expo-image-picker',
       {
         photosPermission: 'Allow StockPilot to access your photos for attaching to inventory items.',
+      },
+    ],
+    // Native document scanner (iOS VisionKit / Android ML Kit) used by the PO
+    // "Scan Document" attachment flow. Its config plugin writes
+    // NSCameraUsageDescription — keep this string identical to the
+    // ios.infoPlist one above so neither side silently wins.
+    [
+      'react-native-document-scanner-plugin',
+      {
+        cameraPermission: 'StockPilot uses the camera to scan barcodes, QR codes, and documents.',
       },
     ],
     'expo-secure-store',
