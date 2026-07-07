@@ -2,12 +2,19 @@ import {
   ArrowLeftRight,
   BarChart3,
   Book,
+  BookOpen,
   Box,
   ClipboardCheck,
+  ClipboardList,
   Layers,
+  MapPin,
+  PackageOpen,
   ScanLine,
   ShoppingCart,
+  Tag,
+  Tags,
   Truck,
+  Upload,
   type LucideIcon,
 } from 'lucide-react-native';
 
@@ -34,4 +41,14 @@ export const TAB_ICONS: Record<TabSlotId, LucideIcon> = {
   'orders-tab': ShoppingCart,
   'movements-tab': ArrowLeftRight,
   'reports-tab': BarChart3,
+  // Drawer-parity candidates: same icons the drawer renders for these
+  // destinations (mobile_drawer placements in MODULE_REGISTRY → NAV_ICONS).
+  'categories-tab': Tag,
+  'tags-tab': Tags,
+  'rentals-tab': PackageOpen,
+  'purchase-orders-tab': ClipboardList,
+  'po-imports-tab': Upload,
+  'locations-tab': MapPin,
+  'suppliers-tab': Truck,
+  'procedures-tab': BookOpen,
 };

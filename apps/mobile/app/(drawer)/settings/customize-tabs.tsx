@@ -16,6 +16,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Text,
   UIManager,
   View,
 } from 'react-native';
@@ -42,6 +43,11 @@ import {
   useStoredTabSlots,
 } from '@/lib/tab-config-store';
 import { HOME_TAB_ICON, TAB_ICONS } from '@/lib/tab-icons';
+import {
+  PREVIEW_MIN_FONT_SCALE,
+  previewLabelStyleForCount,
+  type TabLabelMetrics,
+} from '@/lib/tab-label';
 import { FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
@@ -114,6 +120,12 @@ export default function CustomizeTabsScreen() {
         (cand) => allowed.has(cand.id) && !slots.includes(cand.id),
       ),
     [allowed, slots],
+  );
+  // Same density tier the real bar will use for this config (Home + gated
+  // chosen slots), scaled for the miniature preview.
+  const previewMetrics = previewLabelStyleForCount(
+    1 + previewSlots.length,
+    Platform.OS === 'android' ? 'android' : 'ios',
   );
 
   // Reduce-motion: one-shot probe, same pattern as scanner-tip.tsx — skip
@@ -196,15 +208,22 @@ export default function CustomizeTabsScreen() {
       >
         {/* Live preview of the REAL bar — Home pinned, then the chosen slots
             in order with gating applied (a currently-unavailable choice is
-            absent here but stays editable in the list below). */}
+            absent here but stays editable in the list below). Label sizing
+            mirrors the real bar's density tiers (previewLabelStyleForCount). */}
         <Card padding={0} style={{ marginTop: 14 }}>
           <View style={styles.preview}>
-            <PreviewTab icon={HOME_TAB_ICON} label="Home" active />
+            <PreviewTab
+              icon={HOME_TAB_ICON}
+              label="Home"
+              metrics={previewMetrics}
+              active
+            />
             {previewSlots.map((id) => (
               <PreviewTab
                 key={id}
                 icon={TAB_ICONS[id]}
                 label={tabCandidate(id).title}
+                metrics={previewMetrics}
               />
             ))}
           </View>
@@ -343,20 +362,33 @@ function SlotIcon({ id, color }: { id: TabSlotId; color: string }) {
 function PreviewTab({
   icon: Icon,
   label,
+  metrics,
   active = false,
 }: {
   icon: LucideIcon;
   label: string;
+  metrics: TabLabelMetrics;
   active?: boolean;
 }) {
   const { c } = useTheme();
   const tint = active ? c.ink : c.ink4;
+  // Raw Text, not <Mono>: the bar's letterSpacing is ABSOLUTE pt while
+  // Mono's `tracking` prop is an em ratio — feeding 0.6 into Mono produced
+  // 9 × 0.6 = 5.4pt of tracking, the "O r d e r s" bug this replaces. One
+  // line always; adjustsFontSizeToFit only as a last resort (the preview's
+  // slots are a touch narrower than the real bar's inside the Card).
   return (
     <View style={styles.previewTab}>
       <Icon size={20} color={tint} strokeWidth={active ? 1.7 : 1.4} />
-      <Mono size={9} tracking={0.6} color={tint} style={{ marginTop: 5 }}>
+      <Text
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={PREVIEW_MIN_FONT_SCALE}
+        allowFontScaling={false}
+        style={[styles.previewLabel, { color: tint }, metrics]}
+      >
         {label}
-      </Mono>
+      </Text>
     </View>
   );
 }
@@ -434,6 +466,13 @@ const styles = StyleSheet.create({
   previewTab: {
     flex: 1,
     alignItems: 'center',
+  },
+  previewLabel: {
+    fontFamily: Platform.OS === 'android' ? FONT.display : FONT.mono,
+    textAlign: 'center',
+    alignSelf: 'stretch',
+    marginTop: 5,
+    paddingHorizontal: 2,
   },
   row: {
     flexDirection: 'row',

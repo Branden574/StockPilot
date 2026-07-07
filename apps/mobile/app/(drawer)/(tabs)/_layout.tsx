@@ -2,7 +2,7 @@ import { BlurView } from 'expo-blur';
 import { Tabs, useRouter, useSegments } from 'expo-router';
 import { type LucideIcon } from 'lucide-react-native';
 import * as React from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/lib/auth-context';
 import { useEnabledModules } from '@/lib/enabled-modules';
@@ -17,6 +17,7 @@ import {
 } from '@/lib/tab-config';
 import { useStoredTabSlots } from '@/lib/tab-config-store';
 import { HOME_TAB_ICON, TAB_ICONS } from '@/lib/tab-icons';
+import { tabLabelStyleForCount } from '@/lib/tab-label';
 import { FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
@@ -74,6 +75,12 @@ export default function TabsLayout() {
     () => TAB_SLOT_IDS.filter((id) => !visibleSlots.includes(id)),
     [visibleSlots],
   );
+  // Home + chosen slots = everything the bar actually shows; the label size
+  // tier depends on that density (hidden href:null tabs take no width).
+  const labelMetrics = tabLabelStyleForCount(
+    1 + visibleSlots.length,
+    Platform.OS === 'android' ? 'android' : 'ios',
+  );
 
   // Active-tab gating guard: if the focused tab is one the user CHOSE and its
   // module/permission gate turns off (org disables a module, admin revokes a
@@ -121,11 +128,23 @@ export default function TabsLayout() {
         tabBarActiveTintColor: c.ink,
         tabBarInactiveTintColor: c.ink4,
         tabBarShowLabel: true,
-        tabBarLabelStyle: {
-          fontFamily: Platform.OS === 'android' ? FONT.display : FONT.mono,
-          fontSize: Platform.OS === 'android' ? 11 : 10,
-          letterSpacing: Platform.OS === 'android' ? -0.06 : 0.6,
-        },
+        // Custom label renderer instead of tabBarLabelStyle: labels must be
+        // ONE line, never wrap or mid-word break, and never scale with
+        // Dynamic Type (allowFontScaling false — standard for tab bars; the
+        // screens themselves still honor accessibility sizes). fontSize +
+        // letterSpacing step DOWN as the bar fills (tabLabelStyleForCount,
+        // pure + unit-tested): counts 1–4 keep the original styling, 5–6
+        // tighten so the longest label fits a 375/6 = 62.5pt SE slot.
+        tabBarLabel: ({ color, children }) => (
+          <Text
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            allowFontScaling={false}
+            style={[styles.label, { color }, labelMetrics]}
+          >
+            {children}
+          </Text>
+        ),
         tabBarItemStyle: {
           paddingTop: 6,
         },
@@ -193,5 +212,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     backgroundColor: 'transparent',
     elevation: 0,
+  },
+  label: {
+    fontFamily: Platform.OS === 'android' ? FONT.display : FONT.mono,
+    textAlign: 'center',
   },
 });

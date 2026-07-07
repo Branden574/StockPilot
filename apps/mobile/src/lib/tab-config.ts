@@ -21,7 +21,9 @@ import {
  *     old static layout applied (module enablement only, never permissions),
  *     so the default bar cannot change out from under an existing user.
  *   • 'drawer' — tabs that are new to the bar (Cycle Counts, Orders,
- *     Movements, Reports) reuse the drawer's own gating engine
+ *     Movements, Reports, and the drawer-parity batch: Categories, Tags,
+ *     Rentals, Purchase orders, PO imports, Locations, Suppliers,
+ *     Procedures) reuse the drawer's own gating engine
  *     (resolveSurface: module on + role + effective permission), so adding a
  *     tab can never widen access beyond what the drawer already shows.
  *
@@ -41,6 +43,14 @@ export const TAB_SLOT_IDS = [
   'orders-tab',
   'movements-tab',
   'reports-tab',
+  'categories-tab',
+  'tags-tab',
+  'rentals-tab',
+  'purchase-orders-tab',
+  'po-imports-tab',
+  'locations-tab',
+  'suppliers-tab',
+  'procedures-tab',
 ] as const;
 
 export type TabSlotId = (typeof TAB_SLOT_IDS)[number];
@@ -104,6 +114,54 @@ export const TAB_CANDIDATES: readonly TabCandidate[] = [
     title: 'Reports',
     settingsLabel: 'Reports',
     gate: { kind: 'drawer', href: '/reports' },
+  },
+  // ── Full drawer parity: every remaining list surface is choosable. Each
+  //    gate is the drawer's OWN placement (module + role + effective
+  //    permission via resolveSurface), so the tab shows iff the drawer link
+  //    does. Titles are the short bar labels; the customize list always
+  //    shows the full settingsLabel.
+  {
+    id: 'categories-tab',
+    title: 'Categs',
+    settingsLabel: 'Categories',
+    gate: { kind: 'drawer', href: '/categories' },
+  },
+  { id: 'tags-tab', title: 'Tags', settingsLabel: 'Tags', gate: { kind: 'drawer', href: '/tags' } },
+  {
+    id: 'rentals-tab',
+    title: 'Rentals',
+    settingsLabel: 'Rentals',
+    gate: { kind: 'drawer', href: '/rentals' },
+  },
+  {
+    id: 'purchase-orders-tab',
+    title: 'PO List',
+    settingsLabel: 'Purchase orders',
+    gate: { kind: 'drawer', href: '/purchase-orders' },
+  },
+  {
+    id: 'po-imports-tab',
+    title: 'Imports',
+    settingsLabel: 'PO imports',
+    gate: { kind: 'drawer', href: '/po-imports' },
+  },
+  {
+    id: 'locations-tab',
+    title: 'Places',
+    settingsLabel: 'Locations',
+    gate: { kind: 'drawer', href: '/locations' },
+  },
+  {
+    id: 'suppliers-tab',
+    title: 'Vendors',
+    settingsLabel: 'Suppliers',
+    gate: { kind: 'drawer', href: '/suppliers' },
+  },
+  {
+    id: 'procedures-tab',
+    title: 'SOPs',
+    settingsLabel: 'Procedures',
+    gate: { kind: 'drawer', href: '/procedures' },
   },
 ];
 

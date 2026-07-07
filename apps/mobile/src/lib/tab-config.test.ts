@@ -333,3 +333,110 @@ describe('allowedTabIds — gating parity', () => {
     expect(allowed.has('cycle-counts')).toBe(true); // staff: stock:adjust
   });
 });
+
+describe('drawer-parity catalog expansion (Categories/Tags/Rentals/POs/Imports/Locations/Suppliers/Procedures)', () => {
+  const owner = { role: 'owner' as const };
+
+  it('every drawer-gated candidate points at its EXACT mobile-drawer href — gate parity is structural, not incidental', () => {
+    const expected: Record<string, string> = {
+      'cycle-counts': '/cycle-counts',
+      'orders-tab': '/orders',
+      'movements-tab': '/movements',
+      'reports-tab': '/reports',
+      'categories-tab': '/categories',
+      'tags-tab': '/tags',
+      'rentals-tab': '/rentals',
+      'purchase-orders-tab': '/purchase-orders',
+      'po-imports-tab': '/po-imports',
+      'locations-tab': '/locations',
+      'suppliers-tab': '/suppliers',
+      'procedures-tab': '/procedures',
+    };
+    const actual = Object.fromEntries(
+      TAB_CANDIDATES.filter((c) => c.gate.kind === 'drawer').map((c) => [
+        c.id,
+        (c.gate as { kind: 'drawer'; href: string }).href,
+      ]),
+    );
+    expect(actual).toEqual(expected);
+  });
+
+  it('the expansion does NOT touch the default bar or the 5-slot cap', () => {
+    expect(DEFAULT_TAB_SLOTS).toEqual(['inventory', 'books', 'receive', 'scan']);
+    expect(MAX_TAB_SLOTS).toBe(5);
+  });
+
+  it('bar titles stay short (≤7 chars) so every label fits a 6-tab SE slot; full names live in settingsLabel', () => {
+    for (const cand of TAB_CANDIDATES) {
+      expect(cand.title.length, `title "${cand.title}" (${cand.id})`).toBeLessThanOrEqual(7);
+      expect(cand.settingsLabel.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('module gates mirror the drawer: disabling an optional module hides its tab; core modules cannot be module-hidden', () => {
+    const allowed = allowedTabIds({
+      enabledModules: modulesWithout(
+        'rentals',
+        'procedures',
+        'purchase_orders',
+        'po_imports',
+        'suppliers',
+        // Deliberately ALSO "remove" core-tier module ids — resolveSurface
+        // treats core modules as always-on, so this must be a no-op for the
+        // tabs exactly as it is for the drawer links.
+        'categories',
+        'locations',
+        'inventory',
+      ),
+      ...owner,
+    });
+    expect(allowed.has('rentals-tab')).toBe(false);
+    expect(allowed.has('procedures-tab')).toBe(false);
+    expect(allowed.has('purchase-orders-tab')).toBe(false);
+    expect(allowed.has('po-imports-tab')).toBe(false);
+    expect(allowed.has('suppliers-tab')).toBe(false);
+    // Categories / Tags(inventory) / Locations ride CORE modules — the
+    // drawer only ever permission-gates them, so the tabs stay allowed here.
+    expect(allowed.has('categories-tab')).toBe(true);
+    expect(allowed.has('tags-tab')).toBe(true);
+    expect(allowed.has('locations-tab')).toBe(true);
+  });
+
+  it('permission gates mirror the drawer exactly — including the POs read/manage split', () => {
+    const allowed = allowedTabIds({
+      enabledModules: ALL_MODULES,
+      role: 'owner',
+      permissions: new Set<Permission>(['purchase_orders:read']),
+    });
+    expect(allowed.has('purchase-orders-tab')).toBe(true); // needs purchase_orders:read
+    expect(allowed.has('po-imports-tab')).toBe(false); // needs purchase_orders:manage
+    expect(allowed.has('categories-tab')).toBe(false); // needs categories:read
+    expect(allowed.has('tags-tab')).toBe(false); // needs items:update
+    expect(allowed.has('rentals-tab')).toBe(false); // needs rentals:create
+    expect(allowed.has('locations-tab')).toBe(false); // needs locations:read
+    expect(allowed.has('suppliers-tab')).toBe(false); // needs suppliers:read
+    expect(allowed.has('procedures-tab')).toBe(false); // needs items:update
+  });
+
+  it('items:update lights up exactly the drawer surfaces it gates (Tags + Procedures)', () => {
+    const allowed = allowedTabIds({
+      enabledModules: ALL_MODULES,
+      role: 'owner',
+      permissions: new Set<Permission>(['items:update']),
+    });
+    expect(allowed.has('tags-tab')).toBe(true);
+    expect(allowed.has('procedures-tab')).toBe(true);
+    expect(allowed.has('suppliers-tab')).toBe(false);
+    expect(allowed.has('locations-tab')).toBe(false);
+  });
+
+  it('resolveTabConfig respects the new gates end-to-end (chosen ∩ allowed)', () => {
+    const stored: TabSlotId[] = ['suppliers-tab', 'locations-tab', 'inventory'];
+    const allowed = allowedTabIds({
+      enabledModules: ALL_MODULES,
+      role: 'owner',
+      permissions: new Set<Permission>(['locations:read', 'items:read']),
+    });
+    expect(resolveTabConfig(stored, allowed)).toEqual(['locations-tab', 'inventory']);
+  });
+});
