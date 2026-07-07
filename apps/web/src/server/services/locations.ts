@@ -2,7 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import { isSiteLocation } from '@/lib/locations/groups';
+import { isSiteLocation, isSystemLocation } from '@/lib/locations/groups';
 
 import { audit } from './audit';
 import { assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
@@ -114,6 +114,21 @@ export class LocationsService {
 
   async archive(id: string) {
     assertPermission(this.ctx, 'locations:manage');
+    // Staging/Unplaced are auto-created per warehouse and receiving routes
+    // stock through them — archiving one breaks put-away until it silently
+    // re-creates (and strands whatever was sitting in it). Refuse loudly.
+    const { data: existing } = await this.ctx.supabase
+      .from('locations')
+      .select('id, kind')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (existing && isSystemLocation({ type: null, kind: (existing as { kind: string | null }).kind })) {
+      throw new ServiceError(
+        'validation_error',
+        "Staging and Unplaced are managed automatically per warehouse and can't be archived.",
+      );
+    }
     const { data: row, error } = await this.ctx.supabase
       .from('locations')
       .update({ deleted_at: new Date().toISOString(), deleted_by: this.ctx.userId })

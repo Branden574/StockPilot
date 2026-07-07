@@ -5,7 +5,7 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
-import { locationGroup, type LocationGroup } from '@/lib/locations/groups';
+import { isSystemLocation, locationGroup, type LocationGroup } from '@/lib/locations/groups';
 import { cn } from '@/lib/utils';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -51,6 +51,8 @@ interface LocationRow {
   type: string | null;
   kind: string | null;
   notes: string | null;
+  /** Owning warehouse's display name (null for unlinked/legacy rows). */
+  warehouseName: string | null;
 }
 
 const TAB_ORDER: LocationGroup[] = ['site', 'rack-shelf', 'system'];
@@ -226,6 +228,7 @@ export function LocationsManager({
                   <TableRow>
                     <TableHead>Name</TableHead>
                     <TableHead>Type</TableHead>
+                    <TableHead>Warehouse</TableHead>
                     <TableHead>Notes</TableHead>
                     <TableHead className="w-32 text-right">Actions</TableHead>
                   </TableRow>
@@ -236,6 +239,9 @@ export function LocationsManager({
                       <TableCell className="font-medium">{row.name}</TableCell>
                       <TableCell className="text-xs uppercase tracking-wider text-muted-foreground">
                         {row.type ?? '—'}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {row.warehouseName ?? '—'}
                       </TableCell>
                       <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
                         {row.notes ?? '—'}
@@ -249,6 +255,14 @@ export function LocationsManager({
                           >
                             <RotateCcw className="h-3.5 w-3.5" /> Restore
                           </Button>
+                        ) : isSystemLocation(row) ? (
+                          // Staging/Unplaced are created + owned by the
+                          // receiving flow; editing or archiving one breaks
+                          // put-away. The service refuses too — this just
+                          // keeps the footgun out of the UI.
+                          <span className="self-center text-xs uppercase tracking-wider text-muted-foreground">
+                            Auto-managed
+                          </span>
                         ) : (
                           <>
                             <Button variant="outline" size="sm" onClick={() => openEdit(row)}>
