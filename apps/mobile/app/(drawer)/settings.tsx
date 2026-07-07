@@ -1,4 +1,6 @@
+import Constants from 'expo-constants';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import * as Updates from 'expo-updates';
 import {
   ArrowLeft,
   Bell,
@@ -38,6 +40,20 @@ import { useProfile } from '@/lib/use-profile';
 import { useRole } from '@/lib/use-role';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+
+/**
+ * Live version footer — was a hardcoded string that went stale (shipped
+ * reading "v3.0.4 · build 2026.05.27" while the store build was 1.1.0).
+ * `expoConfig.version` travels with the RUNNING bundle (embedded or OTA), and
+ * `Updates.createdAt` is the publish time of the running OTA (null when on
+ * the binary's embedded bundle). expo-application isn't in the binary, so the
+ * native build number is intentionally not shown — never import it here via
+ * OTA.
+ */
+const APP_VERSION = Constants.expoConfig?.version ?? '1.1.0';
+const OTA_DATE = Updates.createdAt
+  ? new Date(Updates.createdAt).toISOString().slice(0, 10)
+  : null;
 
 /**
  * Settings — moved from a bottom tab into the drawer per design. Organised
@@ -383,12 +399,12 @@ export default function Settings() {
           <SettingRow
             icon={Sparkles}
             title="What's new"
-            detail="v3.0.4"
+            detail={`v${APP_VERSION}`}
             chevron
             onPress={() =>
               Alert.alert(
                 'What’s new',
-                'v3.0.4 — Warm-paper editorial redesign, full web nav parity (Books, Movements, Orders, Rentals, Reports, etc.), Face ID unlock, live notifications, profile photo sync from web.',
+                `v${APP_VERSION} — Document scanner for PO attachments, customizable bottom tab bar (Settings → Customize tabs), transfer and receiving history now show real quantities and PO numbers, plus speed improvements.`,
               )
             }
           />
@@ -412,7 +428,7 @@ export default function Settings() {
             </Body>
           </Pressable>
           <Mono size={10} tracking={0.1} color={c.ink4}>
-            v3.0.4 · build 2026.05.27
+            {OTA_DATE ? `v${APP_VERSION} · updated ${OTA_DATE}` : `v${APP_VERSION}`}
           </Mono>
         </View>
       </ScrollView>
