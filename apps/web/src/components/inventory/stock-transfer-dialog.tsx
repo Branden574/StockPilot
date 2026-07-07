@@ -90,6 +90,10 @@ export function StockTransferDialog({
   const [crateNumber, setCrateNumber] = React.useState('');
 
   const [submitting, setSubmitting] = React.useState(false);
+  // Server failures render inline (persistent) as well as via toast — a toast
+  // alone auto-dismisses in seconds and sits outside the modal, so a rejected
+  // submit can read as "nothing happened" (bit us live with plan_limit_exceeded).
+  const [serverError, setServerError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
@@ -100,6 +104,7 @@ export function StockTransferDialog({
     setRackRow('');
     setCrateColor('');
     setCrateNumber('');
+    setServerError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
     // sourceHoldings is derived from holdings prop, which is stable
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -176,6 +181,7 @@ export function StockTransferDialog({
     }
 
     setSubmitting(true);
+    setServerError(null);
     const res = await transferStockAction({
       itemId,
       fromLocationId: fromLocation,
@@ -185,6 +191,7 @@ export function StockTransferDialog({
     });
     setSubmitting(false);
     if (!res.ok) {
+      setServerError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -343,6 +350,12 @@ export function StockTransferDialog({
               />
             </div>
           </div>
+        )}
+
+        {serverError && (
+          <p role="alert" className="text-sm text-destructive">
+            {serverError}
+          </p>
         )}
 
         <DialogFooter>

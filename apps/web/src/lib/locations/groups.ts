@@ -23,18 +23,25 @@ export interface LocationLike {
   kind: string | null;
 }
 
-const SYSTEM_KINDS = new Set(['staging', 'unplaced']);
+// Exported as plain lists so SQL-side mirrors (the sites-only plan-limit count
+// in assertPlanLimit) build their filters from the same values as the
+// classifiers below — one source of truth for "what is a site".
+export const SYSTEM_KINDS = ['staging', 'unplaced'] as const;
 // `area` is a warehouse subdivision — a placement, not a top-level site.
-const PLACEMENT_KINDS = new Set(['rack', 'crate', 'area']);
-const PLACEMENT_TYPES = new Set(['shelf', 'bin']);
+export const PLACEMENT_KINDS = ['rack', 'crate', 'area'] as const;
+export const PLACEMENT_TYPES = ['shelf', 'bin'] as const;
+
+const SYSTEM_KIND_SET = new Set<string>(SYSTEM_KINDS);
+const PLACEMENT_KIND_SET = new Set<string>(PLACEMENT_KINDS);
+const PLACEMENT_TYPE_SET = new Set<string>(PLACEMENT_TYPES);
 
 export function isSystemLocation(loc: LocationLike): boolean {
-  return SYSTEM_KINDS.has(loc.kind ?? '');
+  return SYSTEM_KIND_SET.has(loc.kind ?? '');
 }
 
 export function isRackShelfLocation(loc: LocationLike): boolean {
   if (isSystemLocation(loc)) return false;
-  return PLACEMENT_KINDS.has(loc.kind ?? '') || PLACEMENT_TYPES.has(loc.type ?? '');
+  return PLACEMENT_KIND_SET.has(loc.kind ?? '') || PLACEMENT_TYPE_SET.has(loc.type ?? '');
 }
 
 /**

@@ -67,7 +67,12 @@ export class LocationsService {
 
   async create(input: CreateLocationInput) {
     assertPermission(this.ctx, 'locations:manage');
-    await assertPlanLimit(this.ctx, 'locations');
+    // The plan entitlement counts SITES only (see assertPlanLimit): creating a
+    // rack/crate/area (or shelf/bin-typed) placement neither consumes the
+    // limit nor gets blocked by an org already at its site cap.
+    if (isSiteLocation({ type: input.type ?? null, kind: input.kind ?? null })) {
+      await assertPlanLimit(this.ctx, 'locations');
+    }
     const { data, error } = await this.ctx.supabase
       .from('locations')
       .insert({

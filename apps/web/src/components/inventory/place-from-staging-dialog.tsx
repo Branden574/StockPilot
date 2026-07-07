@@ -77,6 +77,10 @@ export function PlaceFromStagingDialog({
   const [crateNumber, setCrateNumber] = React.useState('');
 
   const [submitting, setSubmitting] = React.useState(false);
+  // Server failures render inline (persistent) as well as via toast — same
+  // rationale as StockTransferDialog: a toast alone auto-dismisses outside
+  // the modal and a rejected submit can read as "nothing happened".
+  const [serverError, setServerError] = React.useState<string | null>(null);
 
   const isBook = itemType === 'book';
   const isNew = destId === NEW_RACK_SENTINEL;
@@ -92,6 +96,7 @@ export function PlaceFromStagingDialog({
     setRackRow('');
     setCrateColor('');
     setCrateNumber('');
+    setServerError(null);
     /* eslint-enable react-hooks/set-state-in-effect */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -135,6 +140,7 @@ export function PlaceFromStagingDialog({
     }
 
     setSubmitting(true);
+    setServerError(null);
     const res = await placeStockAction({
       itemId,
       fromLocationId: sourceLocationId,
@@ -145,6 +151,7 @@ export function PlaceFromStagingDialog({
     setSubmitting(false);
 
     if (!res.ok) {
+      setServerError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -283,6 +290,12 @@ export function PlaceFromStagingDialog({
             />
           </div>
         </div>
+
+        {serverError && (
+          <p role="alert" className="text-sm text-destructive">
+            {serverError}
+          </p>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>

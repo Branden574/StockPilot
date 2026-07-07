@@ -3,6 +3,7 @@ import 'server-only';
 import { cache } from 'react';
 
 import { requireOrgContext } from '@/lib/auth/session';
+import { PLACEMENT_KINDS, PLACEMENT_TYPES, SYSTEM_KINDS } from '@/lib/locations/groups';
 import {
   getMfaFactorsForRequest,
   getModulesForRequest,
@@ -321,6 +322,17 @@ export async function assertPlanLimit(
 
   if (resource === 'items' || resource === 'locations') {
     query = query.is('deleted_at', null);
+  }
+  if (resource === 'locations') {
+    // The locations entitlement governs SITES — what pickers offer and the
+    // Locations page's "Sites" tab shows. Racks/shelves/crates/areas and the
+    // auto-created staging/unplaced buckets must not consume it (every
+    // warehouse spawns 2 system rows; put-away creates racks freely). SQL
+    // mirror of isSiteLocation() — the two .or() groups AND together, and
+    // each keeps NULL rows (NOT IN drops NULLs on its own).
+    query = query
+      .or(`kind.is.null,kind.not.in.(${[...SYSTEM_KINDS, ...PLACEMENT_KINDS].join(',')})`)
+      .or(`type.is.null,type.not.in.(${PLACEMENT_TYPES.join(',')})`);
   }
   if (resource === 'members') {
     query = query.not('accepted_at', 'is', null);
