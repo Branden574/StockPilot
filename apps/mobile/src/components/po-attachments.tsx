@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Text, View } 
 
 import { isManagerOrAbove, type Role } from '@stockpilot/core';
 
+import { ScannerTip } from '@/components/scanner-tip';
 import { useAuth } from '@/lib/auth-context';
 import {
   PdfTooLargeError,
@@ -13,6 +14,7 @@ import {
   scanDocumentPages,
   scanFileName,
 } from '@/lib/document-scanner';
+import { hasSeenScanTip, markScanTipSeen } from '@/lib/scanner-tip-flag';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { resizeForUpload } from '@/lib/image-resize';
 import { supabase } from '@/lib/supabase';
@@ -74,6 +76,10 @@ export function PoAttachments({ poId }: { poId: string }) {
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [tipVisible, setTipVisible] = React.useState(false);
+  // Resolver for the pending scan tap while the one-time tip is up. Resolving
+  // true lets that SAME tap continue into the scanner (no second tap needed).
+  const tipResolveRef = React.useRef<((proceed: boolean) => void) | null>(null);
 
   const load = React.useCallback(async () => {
     // The PO's own org (RLS-scoped) — used for the storage path + the insert.
@@ -240,6 +246,35 @@ export function PoAttachments({ poId }: { poId: string }) {
   }
 
   /**
+   * One-time scanner tip gate. Resolves true immediately once the tip has
+   * been seen (zero friction on every later tap). On the very first tap it
+   * shows the animated tip modal and resolves when the user acts on it:
+   * true from the primary button (continue into the scanner), false from
+   * Android hardware back (dismiss without scanning). Both paths mark the
+   * tip seen fire-and-forget — a persistence failure never blocks scanning
+   * (scanner-tip-flag.ts degrades to once-per-session in memory).
+   */
+  function maybeShowScannerTip(): Promise<boolean> {
+    // A tap is already parked on the tip — don't stack a second resolver
+    // (two `true`s would launch the scanner twice).
+    if (tipResolveRef.current) return Promise.resolve(false);
+    return hasSeenScanTip().then((seen) => {
+      if (seen) return true;
+      return new Promise<boolean>((resolve) => {
+        tipResolveRef.current = resolve;
+        setTipVisible(true);
+      });
+    });
+  }
+
+  function closeScannerTip(proceed: boolean) {
+    setTipVisible(false);
+    void markScanTipSeen(); // fire-and-forget — never awaited on the scan path
+    tipResolveRef.current?.(proceed);
+    tipResolveRef.current = null;
+  }
+
+  /**
    * Native document scanner (iOS VisionKit / Android ML Kit — edge detection,
    * perspective crop, multi-page). One page uploads exactly like Take Photo
    * (resized image); two-plus pages become a single fit-to-page PDF. The
@@ -247,6 +282,9 @@ export function PoAttachments({ poId }: { poId: string }) {
    * without it gets a friendly alert instead of a crash.
    */
   async function scanDocument() {
+    // First scan ever: show the auto-capture/Manual-shutter tip, then flow
+    // this same tap straight into the scanner when the user taps "Got it".
+    if (!(await maybeShowScannerTip())) return;
     const scan = await scanDocumentPages();
     if (scan.status === 'unavailable') {
       Alert.alert(
@@ -391,6 +429,12 @@ export function PoAttachments({ poId }: { poId: string }) {
           </View>
         ))
       )}
+
+      <ScannerTip
+        visible={tipVisible}
+        onContinue={() => closeScannerTip(true)}
+        onRequestClose={() => closeScannerTip(false)}
+      />
     </View>
   );
 }
