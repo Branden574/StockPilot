@@ -10,7 +10,9 @@ import {
 } from './movements';
 
 /**
- * PARITY SUITE for migrations 0224 + 0228.
+ * PARITY SUITE for migrations 0224 + 0228 — since migration 0230 this pins the
+ * RECONSTRUCTED functions (dashboard_history_series_reconstructed /
+ * dashboard_movement_metrics_reconstructed).
  *
  * The dashboard value/low-out/item-count history and the 30-day movement
  * metrics moved from an in-Node reverse-walk / per-row JS count into two
@@ -33,10 +35,22 @@ import {
  *   • The production mappers (mapHistorySeries / mapMovementMetrics) then turn
  *     the simulated RPC rows back into the shapes the widgets consume.
  *
+ * MIGRATION 0230 (snapshot rollups): the public RPCs now read closed days from
+ * precomputed snapshot tables (OBSERVED UTC-day closes) and compute only TODAY
+ * live; the 0228/0224 bodies pinned here live on VERBATIM as
+ * dashboard_history_series_reconstructed / dashboard_movement_metrics_
+ * reconstructed — they are (a) what the nightly refresh derives snapshots
+ * from and (b) the RPCs' fallback for warehouse-scoped calls and windows with
+ * missing snapshot days. So this suite still guards live prod math; NOTHING
+ * here may be weakened. The snapshot read path itself (hit / gap-fallback /
+ * warehouse-fallback / today-live) is asserted by
+ * supabase/tests/0230_dashboard_snapshot_rollups.test.sql.
+ *
  * If the RPC math ever drifts from the reverse-walk, `mapX(simulateX(...))` will
  * stop deep-equalling `referenceX(...)`. The actual SQL is separately hand-
  * verified by supabase/tests/0224_dashboard_history_series.test.sql and
- * supabase/tests/0228_dashboard_history_event_based.test.sql.
+ * supabase/tests/0228_dashboard_history_event_based.test.sql (which run
+ * against the reconstructed bodies via the 0230 fallback path).
  *
  * All fixtures use integer quantities/costs so numeric(SQL) and float64(JS)
  * arithmetic are bit-identical — no tolerance needed.

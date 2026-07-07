@@ -219,9 +219,10 @@ export interface ThirtyDayMetrics {
   byType: Array<{ type: string; count: number; share: number }>;
 }
 
-/** One row of dashboard_movement_metrics (migration 0224): a per
- *  (day-bucket, movement_type) count. move_count is bigint → may arrive as a
- *  number or a numeric string, so mapMovementMetrics coerces with Number(). */
+/** One row of dashboard_movement_metrics (migration 0224; snapshot-backed
+ *  since 0230): a per (day-bucket, movement_type) count. move_count is bigint
+ *  → may arrive as a number or a numeric string, so mapMovementMetrics
+ *  coerces with Number(). */
 export interface MovementMetricRow {
   day_index: number;
   movement_type: string;
@@ -262,12 +263,24 @@ export function mapMovementMetrics(rows: MovementMetricRow[]): ThirtyDayMetrics 
  *
  * SCALE FIX (migration 0224): was `fetchAllRows` paging up to 100 000
  * stock_movements into Node just to COUNT them per-day/per-type in JS
- * (silently truncating past the 100k cap). Now a single set-based RPC returns
- * only the per (day, type) counts — bounded by 30 × distinct-movement-types
- * rows regardless of movement volume. dashboard_movement_metrics is SECURITY
- * INVOKER and called via the USER client (ctx.supabase), so RLS on
- * inventory_items keeps the exact per-warehouse/category scope the old
- * inner-join had.
+ * (silently truncating past the 100k cap). 0224 moved the count into a
+ * set-based RPC, which still scanned the whole 30-day movement window per
+ * render (~791ms at 1.2M movements).
+ *
+ * SNAPSHOT ROLLUPS (migration 0230): dashboard_movement_metrics now reads
+ * closed days from org_daily_movement_stats (per (org, UTC day, type) counts
+ * written by the nightly refresh) and counts only TODAY's slice live.
+ * Semantics upgraded deliberately: day buckets are OBSERVED UTC calendar
+ * days, and a closed day's counts include every movement that happened that
+ * day — they are no longer retroactively dropped when the item is later
+ * soft-deleted (observed history does not rewrite; movement rows were always
+ * org-readable under RLS anyway). Row shape is unchanged (sparse
+ * (day_index, type, count) rows), so mapMovementMetrics is untouched.
+ * Fallbacks: warehouseId set, or any closed day missing from the caller's
+ * RLS view of org_daily_stats (the completeness sentinel; manager+-readable
+ * only, so restricted staff/viewer callers always fall back) → the 0224 body
+ * runs verbatim as dashboard_movement_metrics_reconstructed, caller-scoped.
+ * SECURITY INVOKER, called via the USER client (ctx.supabase).
  */
 export async function getThirtyDayMetrics(
   options: { warehouseId?: string | null; ctx?: ServiceContext } = {},
@@ -285,32 +298,35 @@ export async function getThirtyDayMetrics(
 export interface DashboardHistory {
   /** Number of days the series spans (length of each series array). */
   rangeDays: number;
-  /** Daily active SKU count, length `rangeDays`, oldest → newest. Derived
-      from inventory_items.created_at. The last index matches summary.itemCount. */
+  /** Daily active SKU count, length `rangeDays`, oldest → newest. Since
+      migration 0230: closed days are OBSERVED counts snapshotted at each UTC
+      day close (org_daily_stats); today is counted live. The last index
+      matches summary.itemCount. */
   itemCountSeries: number[];
-  /** Daily approximate inventory value, length `rangeDays`, oldest → newest.
-      Computed by walking the window of stock_movements backward from today's
-      value using each item's current unit_cost. Approximate because
-      cost may have changed historically; cheap enough for a dashboard
-      tile. The last index matches summary.inventoryValue. */
+  /** Daily inventory value (cost basis), length `rangeDays`, oldest → newest.
+      Since migration 0230: closed days are OBSERVED values snapshotted at
+      each UTC day close — they no longer drift when unit_cost is edited or an
+      item is deleted after the fact; today is computed live. The last index
+      matches summary.inventoryValue. */
   inventoryValueSeries: number[];
   /** Daily count of items where qty <= reorder_point (and reorder_point > 0),
-      length `rangeDays`, oldest → newest. Reverse-walks movements to
-      reconstruct historical quantities. The last index matches
-      summary.lowStockCount + summary.outOfStockCount. */
+      length `rangeDays`, oldest → newest. Since migration 0230: observed at
+      each UTC day close (snapshot); today is computed live. The last index
+      matches summary.lowStockCount + summary.outOfStockCount. */
   lowOutSeries: number[];
 }
 
-/** Supported history windows. 365d is intentionally NOT offered: the
- *  reverse-walk pulls every movement in the window into Node memory, which
- *  is fine at 30/90d but becomes expensive (and increasingly inaccurate as
- *  unit_cost drift compounds) over a year. A finance-grade yearly series
- *  needs a daily snapshot table — deferred to a later phase. */
+/** Supported history windows. 365d is intentionally NOT offered yet: the
+ *  snapshot table behind the RPC (org_daily_stats, migration 0230) was
+ *  backfilled 120 days deep via the event-based reconstruction, so a
+ *  365-day window would silently take the slow reconstructed-fallback path
+ *  (and decay in accuracy) until a full year of nightly observations
+ *  accumulates. Revisit once snapshot depth allows it. */
 export type HistoryRangeDays = 30 | 90;
 
-/** One row of dashboard_history_series (migration 0224). inventory_value is
- *  numeric → may arrive as a number or a numeric string, so mapHistorySeries
- *  coerces with Number(). */
+/** One row of dashboard_history_series (migration 0224; snapshot-backed since
+ *  0230). inventory_value is numeric → may arrive as a number or a numeric
+ *  string, so mapHistorySeries coerces with Number(). */
 export interface HistorySeriesRow {
   day_index: number;
   item_count: number;
@@ -346,26 +362,35 @@ export function mapHistorySeries(rows: HistorySeriesRow[], rangeDays: number): D
  * SCALE FIX (migration 0224): this was THE #1 scale-blocking bug. The dashboard
  * called this TWICE per login (30d + 90d), each time paging EVERY active item
  * AND the whole stock_movements window into Node via uncapped fetchAllRows,
- * then running an O(rangeDays × items) JS reverse-walk. At ~1M+ movements that
- * meant 1000+ sequential PostgREST round trips + 100+MB of JS objects per
- * render → Vercel timeout / Node OOM.
+ * then running an O(rangeDays × items) JS reverse-walk. 0224/0228 moved that
+ * into a set-based RPC, but the RPC still re-derived the whole window from raw
+ * stock_movements per render (~4s at 50k items / 1.2M movements).
  *
- * Now a single set-based RPC (dashboard_history_series) returns only the
- * ~rangeDays daily rows the chart renders. The RPC reproduces the reverse-walk
- * math EXACTLY (asserted by the vitest parity suite + 0224 pgTAP): valueToday
- * minus the reverse-cumulative per-day value delta, per-item qty reconstruction
- * for the low/out count, and the created_at forward sweep for item count.
+ * SNAPSHOT ROLLUPS (migration 0230): dashboard_history_series now reads closed
+ * days from org_daily_stats — one tiny precomputed row per (org, UTC day),
+ * written by a nightly pg_cron refresh at 00:10 UTC — and computes only the
+ * TODAY row live. Semantics upgraded deliberately: closed days are OBSERVED
+ * UTC-calendar-day closes (a real snapshot at each midnight that never
+ * rewrites), not rolling now()-anchored 24h buckets reconstructed backward
+ * from current state. Return shape and row counts are unchanged (one row per
+ * day_index 0..N-1), so this mapper is untouched.
  *
- * SECURITY: dashboard_history_series is SECURITY INVOKER and is called via the
- * USER client (ctx.supabase), so RLS on inventory_items enforces the SAME
- * per-warehouse/category scope the old inline item query relied on — a
- * warehouse-restricted user still sees only their warehouses' numbers.
+ * Fallbacks (inside the RPC): warehouseId set → snapshots are org-wide, so
+ * the old fully-scoped math runs via dashboard_history_series_reconstructed
+ * (the 0228 body, kept verbatim); any closed day missing from snapshots
+ * (new org, missed cron) → same reconstructed path for the whole window.
+ * Only on those fallback (and gap-healed) days do the old approximation
+ * notes still apply: deleted items' history is lost and unit_cost/
+ * reorder_point are treated as constant at today's value.
  *
- * Approximation notes (unchanged from the JS version — the RPC mirrors them):
- * - Items deleted since the window opened are excluded (only items still
- *   active today are known); their historical contribution is lost.
- * - unit_cost and reorder_point are treated as constant at today's value.
- * For a finance-grade history we'd snapshot daily into a separate table.
+ * SECURITY: dashboard_history_series stays SECURITY INVOKER and is called via
+ * the USER client (ctx.supabase). Snapshot rows are org-wide aggregates
+ * readable by MANAGER+ members only (RLS via rls_manager_org_ids) — for them
+ * the whole series is org-wide, closed days and today alike. Warehouse/
+ * category-restricted members (staff/viewer) see zero snapshot rows, so the
+ * RPC's completeness sentinel routes their whole window through the
+ * reconstructed path — fully caller-RLS-scoped, identical to pre-0230. The
+ * warehouse-filtered view runs that reconstructed path for everyone.
  */
 export async function getDashboardHistory(
   options: {

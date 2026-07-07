@@ -257,6 +257,9 @@ describe('getThirtyDayMetrics', () => {
   // (per day-bucket + movement_type counts) and rolls the rows up in JS. These
   // tests drive that mapping via a stubbed RPC. The bucket-vs-individual-count
   // equivalence to the pre-0224 JS path is proven in dashboard-metrics-parity.
+  // Since 0230 the RPC serves closed days from snapshot rollups (observed UTC
+  // days) and counts only today live — same call signature, same row shape,
+  // so the wiring asserted here is unchanged.
   it('rolls RPC (day,type) counts into dailyCounts + byType sorted desc with share', async () => {
     const stub = makeSupabaseStub({
       'rpc:dashboard_movement_metrics': {
@@ -351,6 +354,9 @@ describe('getDashboardHistory', () => {
   // row per day: item_count, inventory_value, low_out_count) and maps rows into
   // the three oldest→newest series arrays. Parity with the old reverse-walk is
   // proven in dashboard-history-parity; these tests cover the wiring + mapping.
+  // Since 0230 the RPC serves closed days from snapshot rollups (observed UTC
+  // day closes) and computes only today live — same call signature, same
+  // one-row-per-day_index shape, so the wiring asserted here is unchanged.
   it('maps RPC rows into the three series and calls with default 30-day window', async () => {
     const rows = [
       { day_index: 0, item_count: 4, inventory_value: 100, low_out_count: 1 },
