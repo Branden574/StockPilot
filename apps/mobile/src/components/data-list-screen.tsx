@@ -1,3 +1,4 @@
+import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { ArrowLeft, Menu, type LucideIcon } from 'lucide-react-native';
 import * as React from 'react';
@@ -56,6 +57,11 @@ export function DataListScreen<T>({
   const { c } = useTheme();
   const navigation = useNavigation();
   const router = useRouter();
+  // Some screens (Orders, Movements) are ALSO reachable as customizable
+  // bottom tabs. Inside the tabs navigator the translucent bar overlays the
+  // list, so pad the scroll content past it; in the drawer this context is
+  // undefined → 0 → byte-for-byte the old padding.
+  const tabBarInset = React.useContext(BottomTabBarHeightContext) ?? 0;
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   // Drawer-to-drawer pushes don't reliably build a back-stack in
   // expo-router (drawer screens share a navigator state that doesn't
@@ -103,7 +109,10 @@ export function DataListScreen<T>({
         <FlatList
           data={data}
           keyExtractor={keyExtractor}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[
+            styles.list,
+            tabBarInset > 0 && { paddingBottom: 24 + tabBarInset },
+          ]}
           ItemSeparatorComponent={ItemSeparator}
           refreshControl={
             onRefresh ? (

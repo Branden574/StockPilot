@@ -6,6 +6,7 @@ import {
   FileText,
   Fingerprint,
   HelpCircle,
+  LayoutGrid,
   Lock,
   LogOut,
   Menu,
@@ -45,7 +46,7 @@ import { useTheme } from '@/lib/use-theme';
  * NOT a full-width red CTA.
  */
 export default function Settings() {
-  const { user, signOut, biometricEnabled, enableBiometric, disableBiometric } = useAuth();
+  const { signOut, biometricEnabled, enableBiometric, disableBiometric } = useAuth();
   const profile = useProfile();
   const { c } = useTheme();
   const router = useRouter();
@@ -282,6 +283,14 @@ export default function Settings() {
         </Section>
 
         <Section label="APP">
+          <SettingRow
+            icon={LayoutGrid}
+            title="Customize tab bar"
+            detail="Home + up to 5"
+            chevron
+            onPress={() => router.push('/settings/customize-tabs' as never)}
+          />
+          <Hair inset={70} />
           <SettingRow
             icon={Moon}
             title="Theme"

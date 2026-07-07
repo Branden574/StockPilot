@@ -2,7 +2,6 @@ import { Drawer } from 'expo-router/drawer';
 import * as React from 'react';
 
 import { DrawerContent } from '@/components/drawer-content';
-import { palette } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -57,6 +56,10 @@ export default function DrawerLayout() {
       <Drawer.Screen
         name="settings/integrations"
         options={{ drawerLabel: 'Integrations', drawerItemStyle: { display: 'none' } }}
+      />
+      <Drawer.Screen
+        name="settings/customize-tabs"
+        options={{ drawerLabel: 'Customize tab bar', drawerItemStyle: { display: 'none' } }}
       />
       <Drawer.Screen
         name="admin/index"

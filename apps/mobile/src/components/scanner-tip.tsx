@@ -26,7 +26,7 @@ const THUMB_H = PILL_H - 2 * PILL_BORDER - 2 * PILL_PAD; // 26
 /**
  * One-time animated tip shown before the very first document scan: the
  * native scanner auto-captures instantly, and the Auto→Manual shutter
- * toggle in its top corner is easy to miss. Centerpiece is a looping demo
+ * toggle (the Ⓐ "Shutter" button in the bottom controls on current iOS) is easy to miss. Centerpiece is a looping demo
  * of that toggle — a thumb sliding from "Auto" to "Manual" with a label
  * emphasis crossfade (~2.2s cycle with holds at each end).
  *
@@ -197,8 +197,8 @@ export function ScannerTip({
           </View>
 
           <Text style={styles.caption}>
-            Tap <Text style={styles.captionStrong}>Auto</Text> in the scanner’s top corner to
-            switch — then you press the shutter yourself.
+            Tap the <Text style={styles.captionStrong}>Shutter</Text> button (the Ⓐ icon at the
+            bottom) to switch to Manual — then you press the big button yourself.
           </Text>
           <Text style={styles.secondary}>
             You can also retake any page or drag its corners before saving.
