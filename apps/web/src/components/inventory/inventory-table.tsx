@@ -502,7 +502,12 @@ export function InventoryTable({
   // org / loader failure) keeps plain server mode. The promise is
   // consumed by use(), NEVER a `.then().catch()` effect — that was the
   // reverted crash (recurring bug pattern #15).
-  const [adopted, setAdopted] = React.useState<InstantAdoptedPayload | null>(null);
+  // `undefined` = the streamed payload hasn't resolved yet; `null` = it
+  // resolved to "no dataset" (over-cap org / loader failure) — server
+  // mode is final. The distinction drives `instantPending` below.
+  const [adopted, setAdopted] = React.useState<InstantAdoptedPayload | null | undefined>(
+    undefined,
+  );
   const handleAdopt = React.useCallback((payload: InstantAdoptedPayload | null) => {
     setAdopted(payload);
   }, []);
@@ -517,6 +522,14 @@ export function InventoryTable({
     return null;
   }, [instant, adopted]);
   const instantMode = effectiveInstant != null;
+  // TRUE only during the streamed default view's adoption gap: a promise
+  // was handed over, no awaited `instant` prop, and the adopter hasn't
+  // resolved. Under-cap orgs flip to instant mode moments later, so any
+  // server-mode RSC prefetch fired in this gap (e.g. the Pagination
+  // adjacent-page warm) would fetch payloads nothing ever consumes —
+  // Pagination suspends its prefetch while this is true. Over-cap orgs
+  // resolve `null`, the flag drops, and server-mode prefetch proceeds.
+  const instantPending = instantPromise != null && instant == null && adopted === undefined;
   // Sparkline mode preference. localStorage-backed so it sticks across
   // reloads + tabs but doesn't pollute URLs (it's a personal preference,
   // not a query filter). MUST initialize to the server-safe default
@@ -1239,6 +1252,7 @@ export function InventoryTable({
             total={effectiveTotal}
             buildHref={hrefForPage}
             onNavigate={instantMode ? shallowPush : undefined}
+            pendingInstant={instantPending}
           />
         </div>
       )}
@@ -1677,6 +1691,7 @@ export function InventoryTable({
             total={effectiveTotal}
             buildHref={hrefForPage}
             onNavigate={instantMode ? shallowPush : undefined}
+            pendingInstant={instantPending}
           />
         ) : (
           <span />
@@ -1699,6 +1714,7 @@ export function Pagination({
   total,
   buildHref,
   onNavigate,
+  pendingInstant = false,
 }: {
   page: number;
   pageSize: number;
@@ -1709,6 +1725,13 @@ export function Pagination({
    *  server round trip). Modified clicks and copied hrefs keep working
    *  as real deep links. Absent → plain <Link> navigation, unchanged. */
   onNavigate?: (href: string) => void;
+  /** TRUE while a streamed instant dataset is still resolving (the
+   *  under-cap default view's adoption gap): the table is momentarily
+   *  in server mode but is about to flip to instant, so the adjacent-
+   *  page RSC prefetch below is suspended — it would fetch a ?page=2
+   *  payload nothing ever consumes. Drops to false when the promise
+   *  resolves null (over-cap org), re-enabling server-mode prefetch. */
+  pendingInstant?: boolean;
 }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(Math.max(1, page), totalPages);
@@ -1720,6 +1743,21 @@ export function Pagination({
     ? (href: string) => (e: React.MouseEvent<HTMLAnchorElement>) =>
         interceptShallowNav(e, href, onNavigate)
     : () => undefined;
+  // SETTLED SERVER mode (no onNavigate, no pending instant payload)
+  // only: full-RSC prefetch of the two ADJACENT pages so a Prev/Next
+  // click swaps in already-fetched data instead of paying a ~1-2s
+  // server round trip (>2000-item orgs have no instant dataset — every
+  // page turn is a real navigation). Deliberately INTENT-SCOPED,
+  // next + prev only — never the numbered popover herd (sidebar
+  // lesson: idle-herd prefetching regressed the app; two visible,
+  // high-probability targets is the whole budget). Instant mode keeps
+  // prefetch={false}: pagination there is a shallow history push that
+  // never talks to the server, so a prefetch would fetch RSC payloads
+  // nothing will ever consume — and while an instant upgrade is still
+  // PENDING (`pendingInstant`, the streamed default view's adoption
+  // gap) the same waste applies, so prefetch waits until the promise
+  // settles (resuming only if it resolves null → server mode is final).
+  const adjacentPrefetch = !onNavigate && !pendingInstant;
   return (
     <div className="text-muted-foreground flex items-center gap-3 text-[12px]">
       <span>
@@ -1736,7 +1774,7 @@ export function Pagination({
           ) : (
             <Link
               href={buildHref(safePage - 1)}
-              prefetch={false}
+              prefetch={adjacentPrefetch}
               onClick={linkClick(buildHref(safePage - 1))}
             >
               ← Prev
@@ -1769,6 +1807,10 @@ export function Pagination({
                 >
                   <Link
                     href={buildHref(n)}
+                    // NEVER prefetch the numbered herd — only the two
+                    // adjacent links above/below warm (intent-scoped;
+                    // N full RSC prefetches on popover-open would be
+                    // the sidebar idle-herd regression all over again).
                     prefetch={false}
                     onClick={linkClick(buildHref(n))}
                     aria-current={n === safePage ? 'page' : undefined}
@@ -1788,7 +1830,7 @@ export function Pagination({
           ) : (
             <Link
               href={buildHref(safePage + 1)}
-              prefetch={false}
+              prefetch={adjacentPrefetch}
               onClick={linkClick(buildHref(safePage + 1))}
             >
               Next →

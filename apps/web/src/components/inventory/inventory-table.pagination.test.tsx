@@ -10,9 +10,11 @@ vi.mock('next/link', () => ({
   default: ({
     href,
     children,
-    // Strip Next-Link-only props so they don't reach the DOM <a> and
-    // trigger React's "unknown DOM prop" console warning during tests.
-    prefetch: _prefetch,
+    // Next-Link-only props must not reach the DOM <a> (React "unknown
+    // DOM prop" warning) — but `prefetch` IS behavior under test
+    // (adjacent-page full prefetch in server mode), so surface it as a
+    // data attribute the assertions can read.
+    prefetch,
     scroll: _scroll,
     replace: _replace,
     ...rest
@@ -23,7 +25,11 @@ vi.mock('next/link', () => ({
     scroll?: boolean;
     replace?: boolean;
   }) => (
-    <a href={typeof href === 'string' ? href : '#'} {...rest}>
+    <a
+      href={typeof href === 'string' ? href : '#'}
+      data-prefetch={prefetch === undefined ? 'default' : String(prefetch)}
+      {...rest}
+    >
       {children}
     </a>
   ),
@@ -74,5 +80,102 @@ describe('Pagination jump-to-page popover', () => {
     await user.click(screen.getByRole('button', { name: /jump to page/i }));
     const activeLink = await screen.findByRole('link', { current: 'page' });
     expect(activeLink).toHaveTextContent('2');
+  });
+});
+
+describe('Pagination adjacent-page prefetch', () => {
+  it('settled SERVER mode (no onNavigate, no pending instant): Prev and Next fully prefetch — the two adjacent pages only', async () => {
+    const user = userEvent.setup();
+    render(
+      // No onNavigate and pendingInstant explicitly false = the settled
+      // server-mode fixture: an over-cap org whose instant promise has
+      // already resolved null (or no instant pipeline at all).
+      <Pagination
+        page={2}
+        pageSize={50}
+        total={210}
+        buildHref={(p) => `/dashboard/inventory?page=${p}`}
+        pendingInstant={false}
+      />,
+    );
+    // Adjacent links: full RSC prefetch so the page-turn click swaps in
+    // already-fetched data instead of a server round trip.
+    expect(screen.getByRole('link', { name: /prev/i })).toHaveAttribute(
+      'data-prefetch',
+      'true',
+    );
+    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute(
+      'data-prefetch',
+      'true',
+    );
+    // The numbered popover grid must NEVER join in (no link herd —
+    // intent-scoped warming only).
+    await user.click(screen.getByRole('button', { name: /jump to page/i }));
+    const numbered = await screen.findAllByRole('link', { name: /^[0-9]+$/ });
+    expect(numbered.length).toBeGreaterThan(2);
+    for (const link of numbered) {
+      expect(link).toHaveAttribute('data-prefetch', 'false');
+    }
+  });
+
+  it('PENDING instant upgrade (server mode, streamed dataset unresolved): adjacent prefetch is suspended — the ?page=2 payload would never be consumed', () => {
+    render(
+      // Server mode (no onNavigate) but the under-cap default view's
+      // instant dataset is still streaming in: the table flips to
+      // instant moments later, so warming adjacent RSC pages now is
+      // pure waste.
+      <Pagination
+        page={2}
+        pageSize={50}
+        total={210}
+        buildHref={(p) => `/dashboard/inventory?page=${p}`}
+        pendingInstant
+      />,
+    );
+    expect(screen.getByRole('link', { name: /prev/i })).toHaveAttribute(
+      'data-prefetch',
+      'false',
+    );
+    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute(
+      'data-prefetch',
+      'false',
+    );
+  });
+
+  it('INSTANT mode (onNavigate set): no prefetch anywhere — pagination is a shallow push, not a navigation', () => {
+    render(
+      <Pagination
+        page={2}
+        pageSize={50}
+        total={210}
+        buildHref={(p) => `/dashboard/inventory?page=${p}`}
+        onNavigate={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('link', { name: /prev/i })).toHaveAttribute(
+      'data-prefetch',
+      'false',
+    );
+    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute(
+      'data-prefetch',
+      'false',
+    );
+  });
+
+  it('does not render a prefetching link for a disabled edge (page 1 has no Prev anchor)', () => {
+    render(
+      <Pagination
+        page={1}
+        pageSize={50}
+        total={210}
+        buildHref={(p) => `/dashboard/inventory?page=${p}`}
+      />,
+    );
+    // Prev is a disabled <span>, not a link — nothing to prefetch.
+    expect(screen.queryByRole('link', { name: /prev/i })).toBeNull();
+    expect(screen.getByRole('link', { name: /next/i })).toHaveAttribute(
+      'data-prefetch',
+      'true',
+    );
   });
 });

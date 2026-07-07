@@ -19,11 +19,16 @@
  *     Next's cache handlers may not be wired outside request scope;
  *     the HTTP self-call keeps the warm on the well-tested, secret-
  *     gated route (same path the cron and deploy hook use).
- *   • Redundant fires are cheap: unstable_cache reads hit the SHARED
- *     Vercel Data Cache, so an instance warming an already-warm org is
- *     mostly cache hits. If org count grows past ~15, add a
- *     "warmed-at" Data Cache sentinel before widening the hot-org list
- *     (see the scale notes in the plan).
+ *   • ALWAYS pass `?scope=hot`. The prewarm route is TIERED: the boot
+ *     self-warm requests only the known-hot tier (the two known-hot
+ *     orgs' orders-catalog pairs + their Items/Books variants), while
+ *     the every-30-min Vercel cron and the post-deploy GH Action send
+ *     no param and run the full capped all-active-orgs sweep. A deploy
+ *     cold-starts K instances at once — K concurrent FULL sweeps
+ *     (~50 orgs × ~1s of duplicated cold Supabase loads each) would be
+ *     a thundering herd duplicating work the singleton callers already
+ *     do; K hot-tier fires stay cheap because unstable_cache reads hit
+ *     the SHARED Vercel Data Cache (mostly cache hits after the first).
  *
  * No user context, no cookies, no auth semantics — this only GETs our
  * own prewarm route with the operator secret, exactly like the cron.
@@ -44,7 +49,7 @@ export async function register(): Promise<void> {
   // socket from outliving the instance's useful window; errors are
   // swallowed — a failed self-warm just means the first click pays the
   // usual cold path, never a crashed boot.
-  void fetch(`https://${host}/api/cron/prewarm-orders-catalog`, {
+  void fetch(`https://${host}/api/cron/prewarm-orders-catalog?scope=hot`, {
     headers: { authorization: `Bearer ${secret}` },
     signal: AbortSignal.timeout(55_000),
   }).catch(() => {});
