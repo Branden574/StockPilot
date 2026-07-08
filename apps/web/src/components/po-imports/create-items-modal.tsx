@@ -96,9 +96,13 @@ export function CreateItemsModal({
     setDecisions(seedDecisions);
     setDuplicates({});
 
-    // Scan for duplicate candidates per line. Default decision flips to
-    // 'use_existing' on a barcode-confidence match — barcode is the
-    // manufacturer's part number, so a hit is essentially the same SKU.
+    // Scan for duplicate candidates per line. Matching is ADVISORY ONLY:
+    // a barcode/name hit surfaces the yellow "possible duplicate" notice
+    // below, but the per-line decision stays 'create' unless the user
+    // explicitly clicks a candidate. We never auto-flip to 'use_existing'
+    // — the chosen charter is the source of truth, and every order should
+    // default to creating its own instance under that charter rather than
+    // silently merging into whatever org happened to buy the part first.
     setScanning(true);
     findDuplicatesForPoLinesAction({
       poImportId,
@@ -111,16 +115,6 @@ export function CreateItemsModal({
           return;
         }
         setDuplicates(r.data.matches);
-        setDecisions((prev) => {
-          const next = { ...prev };
-          for (const [lineId, list] of Object.entries(r.data.matches)) {
-            const barcodeHit = list.find((c) => c.matchType === 'barcode');
-            if (barcodeHit) {
-              next[lineId] = { mode: 'use_existing', itemId: barcodeHit.id };
-            }
-          }
-          return next;
-        });
       })
       .finally(() => setScanning(false));
   }, [open, lines, poImportId]);
@@ -208,10 +202,12 @@ export function CreateItemsModal({
           </DialogTitle>
           <p className="text-muted-foreground text-xs">
             Names are pre-filled from the PO description with the trailing part
-            number stripped (it's already saved in the barcode field). When a
+            number stripped (it's already saved in the barcode field). Every
+            row creates a new item under the chosen charter by default. If a
             row matches an existing inventory item by barcode or name, you'll
-            see a yellow notice — pick "Use existing" to avoid duplicates, or
-            "Create anyway" if it's actually a different SKU.
+            see a yellow notice — a match is only a suggestion, so click "Use
+            existing" to explicitly link to it instead, or leave "Create
+            anyway" selected if it's actually a different SKU.
             {scanning && ' (scanning for matches…)'}
           </p>
         </DialogHeader>

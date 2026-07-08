@@ -142,8 +142,11 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
     expect(createArg.itemType).toBe('book');
   });
 
-  it('book import: links a line to an existing book by ISBN (adds to its count, no duplicate)', async () => {
-    // Line carries an ISBN-13; an existing book → link, do not create.
+  it('book import: an ISBN match to an existing book is a SUGGESTION only — still creates a new book (matching is advisory, never auto-links)', async () => {
+    // Line carries an ISBN-13 matching an existing book. Matching is advisory
+    // only (see the charter-per-instance test suite) — this creates a NEW
+    // book and records the existing one as suggested_item_id instead of
+    // linking to it.
     const stub = installStub({
       lines: [baseLine({ vendor_item_number: ISBN13 })],
       inventoryItems: [{ id: 'existing-book-1', custom_fields: {} }],
@@ -159,17 +162,19 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.data.created).toBe(0);
-      expect(result.data.linked).toBe(1);
+      expect(result.data.created).toBe(1);
+      expect(result.data.linked).toBe(0);
     }
-    // No new item created — the PO line points at the existing book so receiving
-    // tops up its count.
-    expect(mockCreate).not.toHaveBeenCalled();
+    // A NEW book is created — the ISBN match never auto-links.
+    expect(mockCreate).toHaveBeenCalledTimes(1);
     const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
-    expect(updatePayload?.item_id).toBe('existing-book-1');
-    // Must NOT be flagged item_created — it's a pre-existing book.
-    expect(updatePayload?.item_created).toBe(false);
-    // The book lookup was org-scoped and filtered to books, matching on barcode.
+    expect(updatePayload?.item_id).toBe('new-item-1');
+    expect(updatePayload?.item_id).not.toBe('existing-book-1');
+    // Flagged item_created — WE created this item.
+    expect(updatePayload?.item_created).toBe(true);
+    // The existing book is recorded only as a suggestion for a human to review.
+    expect(updatePayload?.suggested_item_id).toBe('existing-book-1');
+    // The book lookup still ran org-scoped and filtered to books, matching on barcode.
     const lookupArgs = (stub.chainArgsAll.get('inventory_items.select') ?? []).flat(Infinity);
     expect(lookupArgs).toContain('organization_id');
     expect(lookupArgs).toContain('item_type');
@@ -205,8 +210,10 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
     void stub;
   });
 
-  it('links a book line to an existing same-ISBN book regardless of rack', async () => {
-    // existing book with barcode = ISBN, on a rack; import line has the same ISBN, no rack
+  it('a same-ISBN book match is suggested regardless of rack — still creates a new book (advisory, never auto-linked)', async () => {
+    // existing book with barcode = ISBN, on a rack; import line has the same ISBN, no rack.
+    // Rack differences must not block the suggestion from being recorded, but
+    // matching is advisory only, so this still creates a new book.
     const stub = installStub({
       lines: [baseLine({ vendor_item_number: ISBN13 })],
       inventoryItems: [
@@ -224,14 +231,15 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      // linked, not created
-      expect(res.data.linked).toBe(1);
-      expect(res.data.created).toBe(0);
+      // created, not linked — the ISBN match is advisory only
+      expect(res.data.created).toBe(1);
+      expect(res.data.linked).toBe(0);
     }
-    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockCreate).toHaveBeenCalledTimes(1);
     const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
-    expect(updatePayload?.item_id).toBe('book-1');
-    expect(updatePayload?.item_created).toBe(false);
+    expect(updatePayload?.item_id).not.toBe('book-1');
+    expect(updatePayload?.item_created).toBe(true);
+    expect(updatePayload?.suggested_item_id).toBe('book-1');
   });
 
   it('product import does NOT ISBN-match even if a vendor number looks like an ISBN', async () => {
@@ -339,8 +347,8 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
   });
 });
 
-describe('createItemsFromPoLinesAction — product barcode auto-link', () => {
-  it('links a product line to an existing item whose barcode matches a vendor number (no duplicate created)', async () => {
+describe('createItemsFromPoLinesAction — product barcode match (advisory suggestion, never auto-links)', () => {
+  it('a product line whose barcode matches an existing item creates a NEW item; the match is only a suggestion', async () => {
     const stub = installStub({
       lines: [baseLine({ vendor_item_number: 'V1' })],
       inventoryItems: [{ id: 'existing-prod-1' }],
@@ -356,18 +364,18 @@ describe('createItemsFromPoLinesAction — product barcode auto-link', () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.data.linked).toBe(1);
-      expect(result.data.created).toBe(0);
+      expect(result.data.created).toBe(1);
+      expect(result.data.linked).toBe(0);
     }
-    // No new item — the line points at the pre-existing product so receiving
-    // tops up its count.
-    expect(mockCreate).not.toHaveBeenCalled();
+    // A NEW item is created — a barcode match never auto-links.
+    expect(mockCreate).toHaveBeenCalledTimes(1);
     const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
-    expect(updatePayload?.item_id).toBe('existing-prod-1');
+    expect(updatePayload?.item_id).not.toBe('existing-prod-1');
     expect(updatePayload?.match_status).toBe('mapped');
-    // Must NOT be flagged item_created — a later cancel must never archive a
-    // pre-existing item (same semantics as the book ISBN auto-link).
-    expect(updatePayload?.item_created).toBe(false);
+    // Flagged item_created — WE created this item.
+    expect(updatePayload?.item_created).toBe(true);
+    // The existing item is recorded only as a suggestion, never auto-linked.
+    expect(updatePayload?.suggested_item_id).toBe('existing-prod-1');
     // The lookup was org-scoped, matched on barcode, and excluded deleted rows.
     const lookupArgs = (stub.chainArgsAll.get('inventory_items.select') ?? []).flat(Infinity);
     expect(lookupArgs).toContain('organization_id');
@@ -376,7 +384,7 @@ describe('createItemsFromPoLinesAction — product barcode auto-link', () => {
     expect(lookupArgs).toContain('deleted_at');
   });
 
-  it('matches on ANY of the vendor numbers (vendor_product_number / auxiliary_number too)', async () => {
+  it('matches on ANY of the vendor numbers (vendor_product_number / auxiliary_number too) — still only a suggestion', async () => {
     const stub = installStub({
       lines: [baseLine({ vendor_item_number: null, vendor_product_number: 'VP-9', auxiliary_number: 'AUX-3' })],
       inventoryItems: [{ id: 'existing-prod-2' }],
@@ -390,13 +398,14 @@ describe('createItemsFromPoLinesAction — product barcode auto-link', () => {
     });
 
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data.linked).toBe(1);
-    expect(mockCreate).not.toHaveBeenCalled();
+    if (result.ok) expect(result.data.created).toBe(1);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
     const lookupArgs = (stub.chainArgsAll.get('inventory_items.select') ?? []).flat(Infinity);
     expect(lookupArgs).toContain('VP-9');
     expect(lookupArgs).toContain('AUX-3');
     const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
-    expect(updatePayload?.item_id).toBe('existing-prod-2');
+    expect(updatePayload?.item_id).not.toBe('existing-prod-2');
+    expect(updatePayload?.suggested_item_id).toBe('existing-prod-2');
   });
 
   it('creates as before when the line has NO vendor numbers (no lookup issued)', async () => {
