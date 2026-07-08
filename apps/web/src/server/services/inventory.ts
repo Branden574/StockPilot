@@ -1867,6 +1867,19 @@ export class InventoryService {
     // On-hand is per-row and is NEVER touched here — no adjust_stock call.
     let propagatedToSku: string | null = null;
     if (originalSku && originalSku.trim().length > 0 && Object.keys(sharedUpdates).length > 0) {
+      // KNOWN LIMITATION: the target row was already updated (and committed)
+      // in the prior statement above, in a SEPARATE statement from this
+      // sibling fan-out — there is no shared transaction wrapping the two.
+      // If this edit is a `sku` re-key and the NEW sku collides with an
+      // existing row at one sibling's (org, sku, bin_location), this UPDATE
+      // fails with 23505 below and the group is left SPLIT: the target row
+      // now sits on the new sku while its siblings are still on the old one.
+      // This is surfaced to the caller as the `conflict` error (not silent,
+      // not cross-tenant — organization_id stays scoped throughout — and
+      // on-hand quantities / stock ledger are untouched), but it is a real
+      // data-shape limitation until this fan-out is done. A fully-atomic
+      // group re-key would require moving target+siblings into one
+      // transactional RPC (tracked follow-up, not yet built).
       const { error: sibErr } = await this.ctx.supabase
         .from('inventory_items')
         .update({ ...sharedUpdates, updated_by: this.ctx.userId })

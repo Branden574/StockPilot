@@ -39,6 +39,7 @@ type UpdateCall = {
   scope: 'target' | 'siblings';
   payload: Record<string, unknown>;
   filterSku?: string;
+  filterOrg?: string;
 };
 
 /**
@@ -94,6 +95,7 @@ function harness(opts: { targetSku: string }) {
       let payload: Record<string, unknown> = {};
       let hasNeqId = false;
       let filterSku: string | undefined;
+      let filterOrg: string | undefined;
 
       const p: Record<string, unknown> = {};
       p.select = () => p;
@@ -104,6 +106,12 @@ function harness(opts: { targetSku: string }) {
       };
       p.eq = (col: string, val: unknown) => {
         if (col === 'sku') filterSku = val as string;
+        // Captured so propagation tests can assert the sibling UPDATE stays
+        // org-scoped — the crown-jewel guard against cross-tenant
+        // corruption. Without recording this, deleting the
+        // `.eq('organization_id', …)` in inventory.ts would silently pass
+        // every test here.
+        if (col === 'organization_id') filterOrg = val as string;
         return p;
       };
       p.neq = (col: string) => {
@@ -117,7 +125,7 @@ function harness(opts: { targetSku: string }) {
 
       const resolve = () => {
         if (isUpdate) {
-          updates.push({ scope: hasNeqId ? 'siblings' : 'target', payload, filterSku });
+          updates.push({ scope: hasNeqId ? 'siblings' : 'target', payload, filterSku, filterOrg });
           const resultData = hasNeqId ? [] : { ...TARGET, ...payload };
           return { data: resultData, error: null };
         }
@@ -152,6 +160,10 @@ describe('InventoryService.update — shared-field propagation by SKU', () => {
     expect(sibling).toBeDefined();
     expect(sibling!.payload.unit_cost).toBe(469.95);
     expect(sibling!.payload).not.toHaveProperty('charter_id');
+    // Crown-jewel invariant: the sibling fan-out UPDATE is org-scoped, so it
+    // can never touch another tenant's rows even if two orgs somehow shared
+    // a SKU string.
+    expect(sibling!.filterOrg).toBe('org-1');
 
     const target = updates.find((u) => u.scope === 'target');
     expect(target!.payload.unit_cost).toBe(469.95);
@@ -172,6 +184,8 @@ describe('InventoryService.update — shared-field propagation by SKU', () => {
     expect(sibling).toBeDefined();
     expect(sibling!.filterSku).toBe('SP-X');
     expect(sibling!.payload.sku).toBe('SP-Y');
+    // Crown-jewel invariant: the re-key fan-out is still org-scoped.
+    expect(sibling!.filterOrg).toBe('org-1');
 
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({ extra: expect.objectContaining({ propagated_to_sku: 'SP-Y' }) }),
