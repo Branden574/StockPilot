@@ -31,6 +31,7 @@ import {
   parseDetailTab,
   type DetailTabId,
 } from '@/components/inventory/item-detail-tabs-shared';
+import { ItemSerialsPanel } from '@/components/inventory/item-serials-panel';
 import { MarketPricePanel } from '@/components/inventory/market-price-panel';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
@@ -46,6 +47,8 @@ import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { PriceTrackingService } from '@/server/services/price-tracking';
 import { ReportsService } from '@/server/services/reports';
+import { SerialsService } from '@/server/services/serials';
+import { WarehousesService } from '@/server/services/warehouses';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
@@ -117,7 +120,8 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // fan out alongside.
   const categoryIdForFetch = (item.category_id as string | null) ?? null;
   const supplierIdForFetch = (item.supplier_id as string | null) ?? null;
-  const [categoryRow, supplierRow, locations, holdings, activity, imageRows, costHistory, customFieldDefs] =
+  const serialsSvc = new SerialsService(ctx);
+  const [categoryRow, supplierRow, locations, holdings, activity, imageRows, costHistory, customFieldDefs, serialsPage] =
     await Promise.all([
       categoryIdForFetch
         ? ctx.supabase
@@ -150,6 +154,9 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
       // Org's ACTIVE item custom field definitions — used to render the
       // defined extra fields with their human labels (not raw jsonb keys).
       customFieldsSvc.listDefinitions('item'),
+      // First page of registered serials (+ total). Fail-closed read: an
+      // empty page on error, so the panel degrades instead of the page.
+      serialsSvc.list(id, { page: 1 }),
     ]);
 
   // Resolve the org's defined custom fields against this item's stored
@@ -228,6 +235,20 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // server re-asserts 'locations:manage' (+ the locations plan limit) inside
   // LocationsService.create, so this only hides the UI affordance.
   const canManageLocations = can(ctx, 'locations:manage');
+
+  // ── Serial numbers panel ───────────────────────────────────────────
+  // Shown for serial-tracked items, or any item that already has registry
+  // rows (e.g. serials were captured before tracking was switched off).
+  // Warehouse names (for the Add dialog's destination select) load only
+  // when the panel renders AND the user can edit — a dropdown-weight
+  // query, skipped entirely on non-serial items.
+  const showSerialsPanel =
+    ((item as { tracking_type?: string | null }).tracking_type ?? 'none') === 'serial' ||
+    serialsPage.total > 0;
+  const serialWarehouses =
+    showSerialsPanel && canEditItem
+      ? await new WarehousesService(ctx).listNames().catch(() => [])
+      : [];
 
   // ── Market price panel (Phase 6) ───────────────────────────────────
   // Fully gated + isolated: only loads/renders when the optional
@@ -377,6 +398,18 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     itemStatus={item.status as 'active' | 'archived' | 'discontinued'}
                   />
                   <PlacementsBreakdown placements={holdings} />
+                  {(() => {
+                    // Staged + Unplaced = on-hand that hasn't been put away
+                    // yet (derivePlacement fields assigned by svc.get above).
+                    const awaitingPutAway =
+                      Number((item as { staged_quantity?: number }).staged_quantity ?? 0) +
+                      Number((item as { unplaced_quantity?: number }).unplaced_quantity ?? 0);
+                    return awaitingPutAway > 0 ? (
+                      <p className="text-muted-foreground w-full text-xs">
+                        {formatNumber(awaitingPutAway)} awaiting put-away
+                      </p>
+                    ) : null;
+                  })()}
                 </DetailRow>
                 {/* Rentals reservation surface — only the rentals item detail
                     page passes `reservedQuantity`. Checking out a rental
@@ -619,6 +652,20 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                 <CostTrendIsland series={costHistory.series} />
               </CardContent>
             </Card>
+          )}
+
+          {/* Serial numbers — manual registry management. Rendered for
+              serial-tracked items or items that already have registry rows;
+              first page + total are server-loaded, the panel paginates and
+              mutates via server actions. */}
+          {showSerialsPanel && (
+            <ItemSerialsPanel
+              itemId={id}
+              canEditItems={canEditItem}
+              warehouses={serialWarehouses}
+              initialRows={serialsPage.rows}
+              initialTotal={serialsPage.total}
+            />
           )}
 
           <Card className="mt-8">

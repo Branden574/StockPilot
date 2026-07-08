@@ -70,6 +70,12 @@ export type AuditEvent =
   | 'lot.received'
   | 'serial.received'
   | 'serial.duplicate_rejected'
+  // Manual serial-number management (item detail → Serials panel). Distinct
+  // from the receiving-time 'serial.received' so PO-captured vs hand-entered
+  // registry rows stay separable in the audit trail.
+  | 'item.serials.added'
+  | 'item.serial.updated'
+  | 'item.serial.deleted'
   | 'cycle_count.started'
   | 'cycle_count.canceled'
   | 'cycle_count.posted'

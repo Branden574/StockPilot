@@ -36,12 +36,28 @@ import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
 import { movementAmount, movementReasonLabel } from '@/lib/movement-display';
+import {
+  SERIAL_STATUSES,
+  SERIAL_STATUS_LABELS,
+  type SerialStatus,
+  canDeleteSerial,
+  duplicateSerialFromDbError,
+  formatSerialDate,
+  isSerialStatus,
+  serialSourceLabel,
+  serialStatusColor,
+  validateSerialInput,
+} from '@/lib/serials';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
+import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
 
 interface Item {
   id: string;
+  organization_id: string;
+  warehouse_id: string | null;
+  tracking_type: string;
   name: string;
   sku: string;
   barcode: string | null;
@@ -112,6 +128,7 @@ export default function ItemDetail() {
   const router = useRouter();
   const { c } = useTheme();
   const { orgId } = useOrg();
+  const { role } = useRole();
   const [item, setItem] = React.useState<Item | null>(null);
   const [movements, setMovements] = React.useState<MovementRow[]>([]);
   const [movementsLoading, setMovementsLoading] = React.useState(true);
@@ -119,16 +136,21 @@ export default function ItemDetail() {
   const [tab, setTab] = React.useState<TabId>('overview');
   const [adjustOpen, setAdjustOpen] = React.useState(false);
   const [photoBusy, setPhotoBusy] = React.useState(false);
+  const [serialCount, setSerialCount] = React.useState(0);
+  // Staff+ may manage serials — mirrors the serial_registry write RLS
+  // (has_org_role(org,'staff') + warehouse-in-org, mig 0203). Cosmetic
+  // gate only; RLS independently enforces on every write.
+  const canWriteSerials = role !== null && role !== 'viewer';
 
   const load = React.useCallback(async () => {
     if (!id) return;
     const { data } = await supabase
       .from('inventory_items')
       .select(
-        `id, name, sku, barcode, description, quantity_on_hand,
+        `id, organization_id, name, sku, barcode, description, quantity_on_hand,
          reorder_point, reorder_quantity, unit_cost, retail_price,
          unit_of_measure, status, category_id, item_type, bin_location,
-         warehouse_id, charter_id, custom_fields,
+         warehouse_id, charter_id, custom_fields, tracking_type,
          category:categories!category_id (name),
          supplier:suppliers!supplier_id (name),
          primary_location:locations!primary_location_id (name)`,
@@ -190,14 +212,23 @@ export default function ItemDetail() {
     let charterName: string | null = null;
     const whId = r.warehouse_id as string | null | undefined;
     const charterId = r.charter_id as string | null | undefined;
-    const [whResp, chResp] = await Promise.all([
+    // Serial count rides the same round trip — a cheap head-only count so
+    // the Serials card can show for items that hold registry rows even
+    // when tracking_type isn't 'serial' (e.g. tracking switched off later).
+    const [whResp, chResp, serialResp] = await Promise.all([
       whId
         ? supabase.from('warehouses').select('name').eq('id', whId).maybeSingle()
         : Promise.resolve(null),
       charterId
         ? supabase.from('charters').select('name').eq('id', charterId).maybeSingle()
         : Promise.resolve(null),
+      supabase
+        .from('serial_registry')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', r.organization_id as string)
+        .eq('item_id', r.id as string),
     ]);
+    setSerialCount(serialResp.count ?? 0);
     warehouseName = (whResp?.data?.name as string | undefined) ?? null;
     charterName = charterId
       ? ((chResp?.data?.name as string | undefined) ?? null)
@@ -219,6 +250,9 @@ export default function ItemDetail() {
 
     setItem({
       id: r.id as string,
+      organization_id: r.organization_id as string,
+      warehouse_id: (r.warehouse_id as string | null) ?? null,
+      tracking_type: (r.tracking_type as string | null) ?? 'none',
       name: r.name as string,
       sku: r.sku as string,
       barcode: (r.barcode as string | null) ?? null,
@@ -646,6 +680,19 @@ export default function ItemDetail() {
               );
             })()}
 
+            {/* Serials — shown for serial-tracked items OR any item that
+                already holds registry rows (tracking may have been
+                switched off after receipts stamped serials). */}
+            {item.tracking_type === 'serial' || serialCount > 0 ? (
+              <SerialsCard
+                itemId={item.id}
+                organizationId={item.organization_id}
+                defaultWarehouseId={item.warehouse_id}
+                canWrite={canWriteSerials}
+                onCountChange={setSerialCount}
+              />
+            ) : null}
+
             {item.description ? (
               <Card padding={16}>
                 <Eyebrow>DESCRIPTION</Eyebrow>
@@ -1054,6 +1101,745 @@ function AdjustModal({
             </View>
           </View>
         </Pressable>
+        </Pressable>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+// ─── Serials ────────────────────────────────────────────────────────
+
+interface SerialRow {
+  id: string;
+  serial_number: string;
+  current_status: SerialStatus;
+  receipt_line_id: string | null;
+  created_at: string;
+}
+
+const SERIALS_PAGE_SIZE = 25;
+
+/**
+ * Serial registry card — paginated list (25/page, Load more), tap a row
+ * to change status, long-press a manually-added row to delete it.
+ * Receipt-captured rows (receipt_line_id set) are never deletable from
+ * mobile; they keep the PO audit trail — change status instead.
+ *
+ * Errors surface INLINE in the card (persistent crit-red Text), per the
+ * project's modal-error rule; Alert only supplements confirmations.
+ */
+function SerialsCard({
+  itemId,
+  organizationId,
+  defaultWarehouseId,
+  canWrite,
+  onCountChange,
+}: {
+  itemId: string;
+  organizationId: string;
+  defaultWarehouseId: string | null;
+  canWrite: boolean;
+  onCountChange: (count: number) => void;
+}) {
+  const { c } = useTheme();
+  const [rows, setRows] = React.useState<SerialRow[]>([]);
+  const [total, setTotal] = React.useState(0);
+  const [loading, setLoading] = React.useState(true);
+  const [loadingMore, setLoadingMore] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [mutatingId, setMutatingId] = React.useState<string | null>(null);
+  const [statusTarget, setStatusTarget] = React.useState<SerialRow | null>(null);
+  const [addOpen, setAddOpen] = React.useState(false);
+
+  const fetchPage = React.useCallback(
+    async (offset: number): Promise<{ rows: SerialRow[]; count: number } | null> => {
+      const { data, count, error: qErr } = await supabase
+        .from('serial_registry')
+        .select('id, serial_number, current_status, receipt_line_id, created_at', {
+          count: 'exact',
+        })
+        .eq('organization_id', organizationId)
+        .eq('item_id', itemId)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .range(offset, offset + SERIALS_PAGE_SIZE - 1);
+      if (qErr) {
+        setError(qErr.message);
+        return null;
+      }
+      const mapped: SerialRow[] = (data ?? []).map((row) => {
+        const r = row as Record<string, unknown>;
+        return {
+          id: r.id as string,
+          serial_number: r.serial_number as string,
+          current_status: isSerialStatus(r.current_status) ? r.current_status : 'available',
+          receipt_line_id: (r.receipt_line_id as string | null) ?? null,
+          created_at: r.created_at as string,
+        };
+      });
+      return { rows: mapped, count: count ?? 0 };
+    },
+    [itemId, organizationId],
+  );
+
+  const reload = React.useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    const res = await fetchPage(0);
+    if (res) {
+      setRows(res.rows);
+      setTotal(res.count);
+      onCountChange(res.count);
+    }
+    setLoading(false);
+  }, [fetchPage, onCountChange]);
+
+  React.useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function loadMore() {
+    if (loadingMore || loading) return;
+    setLoadingMore(true);
+    const res = await fetchPage(rows.length);
+    if (res) {
+      setRows((prev) => {
+        // Dedupe by id — concurrent inserts can shift offset pages.
+        const known = new Set(prev.map((r) => r.id));
+        return [...prev, ...res.rows.filter((r) => !known.has(r.id))];
+      });
+      setTotal(res.count);
+      onCountChange(res.count);
+    }
+    setLoadingMore(false);
+  }
+
+  async function changeStatus(row: SerialRow, next: SerialStatus) {
+    if (next === row.current_status) return;
+    setMutatingId(row.id);
+    setError(null);
+    // .update().eq() is fail-open on 0 rows — .select().maybeSingle()
+    // proves a row actually changed (recurring bug pattern).
+    const { data, error: uErr } = await supabase
+      .from('serial_registry')
+      .update({ current_status: next, updated_at: new Date().toISOString() })
+      .eq('id', row.id)
+      .eq('organization_id', organizationId)
+      .select('id')
+      .maybeSingle();
+    setMutatingId(null);
+    if (uErr) {
+      setError(`Could not update ${row.serial_number}: ${uErr.message}`);
+      return;
+    }
+    if (!data) {
+      setError(
+        `Could not update ${row.serial_number} — it may have been removed or you may not have access.`,
+      );
+      return;
+    }
+    setRows((prev) =>
+      prev.map((r) => (r.id === row.id ? { ...r, current_status: next } : r)),
+    );
+  }
+
+  function confirmDelete(row: SerialRow) {
+    if (!canDeleteSerial(row.receipt_line_id)) {
+      setError('From PO receipt — change status instead.');
+      return;
+    }
+    setError(null);
+    Alert.alert('Delete serial?', `${row.serial_number} will be removed from the registry.`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () =>
+          void (async () => {
+            setMutatingId(row.id);
+            const { data, error: dErr } = await supabase
+              .from('serial_registry')
+              .delete()
+              .eq('id', row.id)
+              .eq('organization_id', organizationId)
+              .is('receipt_line_id', null)
+              .select('id')
+              .maybeSingle();
+            setMutatingId(null);
+            if (dErr) {
+              setError(`Could not delete ${row.serial_number}: ${dErr.message}`);
+              return;
+            }
+            if (!data) {
+              setError(
+                `Could not delete ${row.serial_number} — it may be receipt-linked or already removed.`,
+              );
+              return;
+            }
+            setRows((prev) => prev.filter((r) => r.id !== row.id));
+            setTotal((t) => {
+              const nextTotal = Math.max(0, t - 1);
+              onCountChange(nextTotal);
+              return nextTotal;
+            });
+          })(),
+      },
+    ]);
+  }
+
+  const remaining = Math.max(0, total - rows.length);
+
+  return (
+    <>
+      <Card padding={0}>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingHorizontal: 16,
+            paddingTop: 14,
+            paddingBottom: 10,
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
+            <Eyebrow>SERIALS</Eyebrow>
+            <Mono size={11} tracking={0.04} color={c.ink4}>
+              {total}
+            </Mono>
+          </View>
+          {canWrite ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onPress={() => setAddOpen(true)}
+              leading={<Plus size={13} color={c.ink} strokeWidth={1.6} />}
+            >
+              Add serials
+            </Button>
+          ) : null}
+        </View>
+
+        {error ? (
+          <Body
+            size={12.5}
+            color={ACCENT.crit}
+            style={{ paddingHorizontal: 16, paddingBottom: 10 }}
+          >
+            {error}
+          </Body>
+        ) : null}
+
+        {loading ? (
+          <ActivityIndicator color={c.ink} style={{ paddingVertical: 24 }} />
+        ) : rows.length === 0 ? (
+          error ? null : (
+            <Body muted size={13} style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+              No serials recorded yet.
+              {canWrite ? ' Use “Add serials” to register units manually.' : ''}
+            </Body>
+          )
+        ) : (
+          <>
+            {rows.map((row) => (
+              <React.Fragment key={row.id}>
+                <Hair inset={16} />
+                <Pressable
+                  onPress={canWrite && !mutatingId ? () => setStatusTarget(row) : undefined}
+                  onLongPress={canWrite && !mutatingId ? () => confirmDelete(row) : undefined}
+                  disabled={!canWrite}
+                  accessibilityRole={canWrite ? 'button' : undefined}
+                  accessibilityLabel={`Serial ${row.serial_number}, ${SERIAL_STATUS_LABELS[row.current_status]}`}
+                  style={({ pressed }) => ({
+                    opacity: mutatingId === row.id ? 0.4 : pressed && canWrite ? 0.7 : 1,
+                  })}
+                >
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 12,
+                      paddingHorizontal: 16,
+                      paddingVertical: 12,
+                    }}
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Mono size={12.5} tracking={-0.012} numberOfLines={1}>
+                        {row.serial_number}
+                      </Mono>
+                      <Mono size={9.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+                        {serialSourceLabel(row.receipt_line_id)} ·{' '}
+                        {formatSerialDate(row.created_at)}
+                      </Mono>
+                    </View>
+                    <SerialStatusPill status={row.current_status} />
+                  </View>
+                </Pressable>
+              </React.Fragment>
+            ))}
+
+            {remaining > 0 ? (
+              <>
+                <Hair inset={16} />
+                <Pressable
+                  onPress={() => void loadMore()}
+                  disabled={loadingMore}
+                  style={({ pressed }) => ({
+                    alignItems: 'center',
+                    paddingVertical: 13,
+                    opacity: loadingMore ? 0.5 : pressed ? 0.7 : 1,
+                  })}
+                >
+                  {loadingMore ? (
+                    <ActivityIndicator color={c.ink} size="small" />
+                  ) : (
+                    <Mono size={11} tracking={0.12} upper color={c.ink}>
+                      Load more ({remaining} remaining)
+                    </Mono>
+                  )}
+                </Pressable>
+              </>
+            ) : null}
+
+            {canWrite ? (
+              <>
+                <Hair inset={16} />
+                <Mono
+                  size={9.5}
+                  tracking={0.04}
+                  color={c.ink5}
+                  style={{ paddingHorizontal: 16, paddingVertical: 10 }}
+                >
+                  Tap a serial to change status · long-press to delete manual entries
+                </Mono>
+              </>
+            ) : null}
+          </>
+        )}
+      </Card>
+
+      <SerialStatusSheet
+        row={statusTarget}
+        onClose={() => setStatusTarget(null)}
+        onSelect={(next) => {
+          const target = statusTarget;
+          setStatusTarget(null);
+          if (target) void changeStatus(target, next);
+        }}
+      />
+
+      <AddSerialsModal
+        visible={addOpen}
+        itemId={itemId}
+        organizationId={organizationId}
+        defaultWarehouseId={defaultWarehouseId}
+        onClose={() => setAddOpen(false)}
+        onAdded={() => {
+          setAddOpen(false);
+          void reload();
+        }}
+      />
+    </>
+  );
+}
+
+/** Colored status pill — tones from serialStatusColor (theme tokens). */
+function SerialStatusPill({ status }: { status: SerialStatus }) {
+  const { mode } = useTheme();
+  const tone = serialStatusColor(status, mode);
+  return (
+    <View
+      style={{
+        height: 22,
+        paddingHorizontal: 9,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: tone.border,
+        backgroundColor: tone.bg,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        alignSelf: 'flex-start',
+      }}
+    >
+      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: tone.fg }} />
+      <Mono size={10.5} tracking={0.04} upper color={tone.fg}>
+        {SERIAL_STATUS_LABELS[status]}
+      </Mono>
+    </View>
+  );
+}
+
+/**
+ * Bottom-sheet status picker — same sheet scaffolding as AdjustModal.
+ * (Alert.alert caps at 3 buttons on Android, so the 6-status pick needs
+ * a real sheet.)
+ */
+function SerialStatusSheet({
+  row,
+  onClose,
+  onSelect,
+}: {
+  row: SerialRow | null;
+  onClose: () => void;
+  onSelect: (status: SerialStatus) => void;
+}) {
+  const { c, mode } = useTheme();
+  return (
+    <Modal
+      visible={!!row}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <Pressable
+        onPress={onClose}
+        style={{
+          flex: 1,
+          justifyContent: 'flex-end',
+          backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
+        }}
+      >
+        <Pressable
+          onPress={() => undefined}
+          style={[
+            {
+              backgroundColor: c.card,
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              paddingTop: 12,
+              paddingBottom: 36,
+              paddingHorizontal: 22,
+            },
+            SHADOW.sheet,
+          ]}
+        >
+          <View style={{ alignItems: 'center', marginBottom: 18 }}>
+            <View
+              style={{
+                width: 36,
+                height: 5,
+                borderRadius: 100,
+                backgroundColor:
+                  mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
+              }}
+            />
+          </View>
+          <Eyebrow>SET STATUS</Eyebrow>
+          <Mono size={14} tracking={-0.012} style={{ marginTop: 8 }} numberOfLines={1}>
+            {row?.serial_number ?? ''}
+          </Mono>
+
+          <View
+            style={{
+              marginTop: 16,
+              borderWidth: 1,
+              borderColor: c.hair,
+              borderRadius: 10,
+              overflow: 'hidden',
+            }}
+          >
+            {SERIAL_STATUSES.map((s, i) => {
+              const tone = serialStatusColor(s, mode);
+              const current = row?.current_status === s;
+              return (
+                <React.Fragment key={s}>
+                  {i > 0 ? <Hair /> : null}
+                  <Pressable
+                    onPress={() => onSelect(s)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Set status ${SERIAL_STATUS_LABELS[s]}`}
+                    style={({ pressed }) => ({
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 10,
+                      paddingHorizontal: 14,
+                      paddingVertical: 13,
+                      backgroundColor: pressed ? c.paper2 : 'transparent',
+                    })}
+                  >
+                    <View
+                      style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: tone.fg }}
+                    />
+                    <Body size={15} style={{ flex: 1 }}>
+                      {SERIAL_STATUS_LABELS[s]}
+                    </Body>
+                    {current ? (
+                      <Mono size={9.5} tracking={0.12} upper color={c.ink4}>
+                        Current
+                      </Mono>
+                    ) : null}
+                  </Pressable>
+                </React.Fragment>
+              );
+            })}
+          </View>
+
+          <Button block variant="ghost" onPress={onClose} style={{ marginTop: 12 }}>
+            Cancel
+          </Button>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+/**
+ * Add-serials sheet — multiline "one per line" input + active-warehouse
+ * picker. Inserts rows as manual ('available', receipt_line_id null).
+ * All errors (validation, duplicate 23505, RLS) render INLINE and
+ * persist until the next attempt.
+ */
+function AddSerialsModal({
+  visible,
+  itemId,
+  organizationId,
+  defaultWarehouseId,
+  onClose,
+  onAdded,
+}: {
+  visible: boolean;
+  itemId: string;
+  organizationId: string;
+  defaultWarehouseId: string | null;
+  onClose: () => void;
+  onAdded: (added: number) => void;
+}) {
+  const { c, mode } = useTheme();
+  const [text, setText] = React.useState('');
+  const [warehouses, setWarehouses] = React.useState<{ id: string; name: string }[] | null>(
+    null,
+  );
+  const [warehouseId, setWarehouseId] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!visible) return;
+    setText('');
+    setError(null);
+    setBusy(false);
+    let cancelled = false;
+    void (async () => {
+      const { data, error: whErr } = await supabase
+        .from('warehouses')
+        .select('id, name')
+        .eq('organization_id', organizationId)
+        .eq('status', 'active')
+        .order('name');
+      if (cancelled) return;
+      if (whErr) {
+        setWarehouses([]);
+        setError(`Could not load warehouses: ${whErr.message}`);
+        return;
+      }
+      const list = (data ?? []) as { id: string; name: string }[];
+      setWarehouses(list);
+      setWarehouseId((prev) => {
+        if (prev && list.some((w) => w.id === prev)) return prev;
+        if (defaultWarehouseId && list.some((w) => w.id === defaultWarehouseId)) {
+          return defaultWarehouseId;
+        }
+        return list[0]?.id ?? null;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, organizationId, defaultWarehouseId]);
+
+  const parsed = React.useMemo(() => validateSerialInput(text), [text]);
+  const canSubmit =
+    !busy && parsed.serials.length > 0 && parsed.errors.length === 0 && !!warehouseId;
+
+  async function submit() {
+    if (!canSubmit || !warehouseId) return;
+    setBusy(true);
+    setError(null);
+    const { error: insErr } = await supabase.from('serial_registry').insert(
+      parsed.serials.map((serial_number) => ({
+        organization_id: organizationId,
+        item_id: itemId,
+        serial_number,
+        warehouse_id: warehouseId,
+        current_status: 'available',
+        receipt_line_id: null,
+      })),
+    );
+    setBusy(false);
+    if (insErr) {
+      if (insErr.code === '23505') {
+        const dup = duplicateSerialFromDbError(insErr.details ?? insErr.message);
+        setError(
+          dup
+            ? `Serial ${dup} already exists for this item. Remove it and try again.`
+            : 'One of these serials already exists for this item.',
+        );
+      } else {
+        setError(insErr.message);
+      }
+      return;
+    }
+    onAdded(parsed.serials.length);
+  }
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1 }}
+      >
+        <Pressable
+          onPress={onClose}
+          style={{
+            flex: 1,
+            justifyContent: 'flex-end',
+            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
+          }}
+        >
+          <Pressable
+            onPress={() => undefined}
+            style={[
+              {
+                backgroundColor: c.card,
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                paddingTop: 12,
+                paddingBottom: 36,
+                paddingHorizontal: 22,
+              },
+              SHADOW.sheet,
+            ]}
+          >
+            <View style={{ alignItems: 'center', marginBottom: 18 }}>
+              <View
+                style={{
+                  width: 36,
+                  height: 5,
+                  borderRadius: 100,
+                  backgroundColor:
+                    mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
+                }}
+              />
+            </View>
+            <Eyebrow>ADD SERIALS</Eyebrow>
+
+            <View style={{ marginTop: 16, gap: 14 }}>
+              <View style={{ gap: 6 }}>
+                <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                  SERIAL NUMBERS (ONE PER LINE)
+                </Mono>
+                <TextInput
+                  value={text}
+                  onChangeText={setText}
+                  placeholder={'SN-0001\nSN-0002'}
+                  placeholderTextColor={c.ink5}
+                  multiline
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  style={{
+                    fontFamily: FONT.mono,
+                    fontSize: 13,
+                    minHeight: 110,
+                    maxHeight: 180,
+                    paddingHorizontal: 14,
+                    paddingTop: 12,
+                    paddingBottom: 12,
+                    borderWidth: 1,
+                    borderColor: c.hair,
+                    borderRadius: 8,
+                    color: c.ink,
+                    backgroundColor: c.paper2,
+                    textAlignVertical: 'top',
+                  }}
+                />
+                {parsed.serials.length > 0 && parsed.errors.length === 0 ? (
+                  <Mono size={10} tracking={0.04} color={c.ink4}>
+                    {parsed.serials.length}{' '}
+                    {parsed.serials.length === 1 ? 'serial' : 'serials'} ready
+                  </Mono>
+                ) : null}
+                {parsed.errors.map((e) => (
+                  <Body key={e} size={12.5} color={ACCENT.crit}>
+                    {e}
+                  </Body>
+                ))}
+              </View>
+
+              <View style={{ gap: 6 }}>
+                <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                  WAREHOUSE
+                </Mono>
+                {warehouses === null ? (
+                  <ActivityIndicator color={c.ink} style={{ alignSelf: 'flex-start' }} />
+                ) : warehouses.length === 0 ? (
+                  <Body size={12.5} color={ACCENT.crit}>
+                    No active warehouses — create one before adding serials.
+                  </Body>
+                ) : (
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {warehouses.map((w) => {
+                      const selected = w.id === warehouseId;
+                      return (
+                        <Pressable
+                          key={w.id}
+                          onPress={() => setWarehouseId(w.id)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Warehouse ${w.name}`}
+                          style={({ pressed }) => ({
+                            paddingHorizontal: 12,
+                            height: 34,
+                            borderRadius: 8,
+                            borderWidth: 1,
+                            borderColor: selected ? c.ink : c.hair,
+                            backgroundColor: selected ? c.ink : c.card,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            opacity: pressed ? 0.85 : 1,
+                          })}
+                        >
+                          <Mono
+                            size={11.5}
+                            tracking={-0.012}
+                            color={selected ? c.paper : c.ink}
+                            style={{ fontFamily: FONT.display }}
+                          >
+                            {w.name}
+                          </Mono>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+
+              {error ? (
+                <Body size={12.5} color={ACCENT.crit}>
+                  {error}
+                </Body>
+              ) : null}
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+              <View style={{ flex: 1 }}>
+                <Button block variant="ghost" onPress={onClose}>
+                  Cancel
+                </Button>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Button block onPress={() => void submit()} disabled={!canSubmit}>
+                  {busy ? 'Adding…' : 'Add serials'}
+                </Button>
+              </View>
+            </View>
+          </Pressable>
         </Pressable>
       </KeyboardAvoidingView>
     </Modal>
