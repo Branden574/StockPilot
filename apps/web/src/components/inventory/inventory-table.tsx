@@ -1602,30 +1602,37 @@ export function InventoryTable({
                       const unplaced = item.unplaced_quantity ?? 0;
                       const placed = item.placed_quantity ?? item.quantity_on_hand;
                       const shown = stockView === 'total' ? item.quantity_on_hand : placed;
-                      // Build the sub-line: in 'total' view lead with the placed
-                      // count, then any not-yet-placed buckets; in 'placed' view
-                      // show each bucket as a "+N" addend.
-                      const parts =
-                        stockView === 'total'
-                          ? [
-                              // Omit "0 placed" — for a fully-unplaced item it
-                              // reads as if the item is unavailable. The main
-                              // number already shows the on-hand total.
-                              placed > 0 ? `${formatNumber(placed)} placed` : null,
-                              staged > 0 ? `${formatNumber(staged)} staged` : null,
-                              unplaced > 0 ? `${formatNumber(unplaced)} unplaced` : null,
-                            ]
-                          : [
-                              staged > 0 ? `+${formatNumber(staged)} staged` : null,
-                              unplaced > 0 ? `+${formatNumber(unplaced)} unplaced` : null,
-                            ];
-                      const subLine = parts.filter(Boolean).join(' · ');
+                      // Received/unassigned stock reads as ONE amber phrase —
+                      // "awaiting put-away" (staged + unplaced) — per owner
+                      // direction 2026-07-08: on-hand accounting is unchanged,
+                      // but not-yet-put-away stock must be unmistakable. The
+                      // staged/unplaced operational split still lives on the
+                      // Staging page.
+                      const awaiting = staged + unplaced;
                       return (
                         <>
                           {formatNumber(shown)}
-                          {(staged > 0 || unplaced > 0) && (
-                            <div className="mt-0.5 text-[10.5px] font-normal leading-tight text-[var(--ed-ink-4)]">
-                              {subLine}
+                          {awaiting > 0 && (
+                            <div className="mt-0.5 text-[10.5px] font-normal leading-tight">
+                              {stockView === 'total' ? (
+                                <>
+                                  {/* Omit "0 placed" — for a fully-unplaced
+                                      item it reads as if the item is
+                                      unavailable. */}
+                                  {placed > 0 && (
+                                    <span className="text-[var(--ed-ink-4)]">
+                                      {formatNumber(placed)} placed ·{' '}
+                                    </span>
+                                  )}
+                                  <span className="text-warning">
+                                    {formatNumber(awaiting)} awaiting put-away
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="text-warning">
+                                  +{formatNumber(awaiting)} awaiting put-away
+                                </span>
+                              )}
                             </div>
                           )}
                         </>
