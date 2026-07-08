@@ -54,6 +54,26 @@ function getEnv(): string {
 }
 
 /**
+ * Next.js implements redirect()/notFound() by THROWING marker errors whose
+ * `digest` names the intent (e.g. "NEXT_REDIRECT;push;/signin;307;"). They
+ * are control flow, not failures — a catch block that funnels everything
+ * into reportError would page the alerts channel every time a signed-out
+ * session hits a guarded route (exactly the 2026-07-07 "audit.write_failed"
+ * / "inventory.export" false alarms). Callers that can should
+ * `unstable_rethrow(e)` before reporting; this filter is the backstop.
+ */
+export function isNextControlFlowError(err: unknown): boolean {
+  const digest = (err as { digest?: unknown } | null)?.digest;
+  return (
+    typeof digest === 'string' &&
+    (digest.startsWith('NEXT_REDIRECT') ||
+      digest === 'NEXT_NOT_FOUND' ||
+      digest.startsWith('NEXT_HTTP_ERROR_FALLBACK') ||
+      digest.startsWith('BAILOUT_TO_CLIENT_SIDE_RENDERING'))
+  );
+}
+
+/**
  * Reports an error. Always console.errors; additionally posts to the
  * webhook if configured. Best-effort — never throws to the caller.
  */
@@ -61,6 +81,13 @@ export async function reportError(
   err: unknown,
   context: ErrorContext,
 ): Promise<void> {
+  if (isNextControlFlowError(err)) {
+    // One quiet line for traceability; no console.error, no webhook.
+    console.info(
+      `[error-reporter] skipped control-flow ${(err as { digest?: string }).digest} at ${context.tag}`,
+    );
+    return;
+  }
   const error = err instanceof Error ? err : new Error(String(err));
   const payload: ReportPayload = {
     ts: new Date().toISOString(),

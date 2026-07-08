@@ -1,3 +1,4 @@
+import { unstable_rethrow } from 'next/navigation';
 import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
@@ -105,6 +106,10 @@ export async function GET(request: Request) {
       },
     });
   } catch (e) {
+    // redirect()/notFound() throw marker errors — hand them back to Next
+    // so a signed-out session gets its 307 to /signin instead of a JSON
+    // 500 (and no false alert).
+    unstable_rethrow(e);
     // ServiceError carries user-facing strings the service author
     // controls — those are fine to surface. Anything else gets
     // funneled into the error reporter; the client only sees a
