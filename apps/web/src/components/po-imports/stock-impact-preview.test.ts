@@ -111,4 +111,46 @@ describe('buildPreview', () => {
     expect(summary.totalUnits).toBe(6);
     expect(summary.totalCost).toBe(60);
   });
+
+  // Matching is advisory-only (Tasks 2/3): a line can carry a
+  // suggested_item_id while still unresolved (item_id null, no override).
+  // The default is CREATE-NEW until a human explicitly accepts the
+  // suggestion, so the projection must never borrow the suggested item's
+  // real stock — it projects a brand-new instance starting at 0.
+  it('an unaccepted suggested line projects from 0 (new item), not the suggested item\'s current qty', () => {
+    const lines = [
+      line('1', {
+        qty_ordered_original: 10,
+        suggested_item_id: 'item-a',
+      } as Partial<PoImportLineRow>),
+    ];
+    const { rows, summary } = buildPreview(lines, {}, [ITEM_A]); // ITEM_A has 5 on hand
+    expect(rows[0]!.status).toBe('unmapped');
+    expect(rows[0]!.itemId).toBeNull();
+    expect(rows[0]!.currentQty).toBe(0);
+    expect(rows[0]!.projectedQty).toBe(10);
+    // Never the suggested item's real numbers (5 → 15).
+    expect(rows[0]!.currentQty).not.toBe(5);
+    expect(rows[0]!.projectedQty).not.toBe(15);
+    // Still counts as unmapped for the approve gate — nothing links until
+    // the user explicitly accepts the suggestion.
+    expect(summary.unmappedCount).toBe(1);
+    expect(summary.mappedCount).toBe(0);
+  });
+
+  it('accepting a suggestion (override sets itemId) projects against the real existing item, not 0', () => {
+    const lines = [
+      line('1', {
+        qty_ordered_original: 10,
+        suggested_item_id: 'item-a',
+      } as Partial<PoImportLineRow>),
+    ];
+    const overrides: Record<string, PreviewLineOverride> = {
+      '1': { itemId: 'item-a' },
+    };
+    const { rows } = buildPreview(lines, overrides, [ITEM_A]);
+    expect(rows[0]!.status).toBe('mapped');
+    expect(rows[0]!.currentQty).toBe(5);
+    expect(rows[0]!.projectedQty).toBe(15);
+  });
 });

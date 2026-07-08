@@ -104,6 +104,15 @@ export function buildPreview(
       };
     }
     if (!effectiveItemId) {
+      // Matching is ADVISORY only (Tasks 2/3): a line can carry a
+      // suggested_item_id (barcode/ISBN/vendor-mapping hit) while still
+      // being unresolved — the default is CREATE-NEW until a human
+      // explicitly accepts the suggestion (which sets item_id/override and
+      // takes the 'mapped' branch above instead). So this projection must
+      // NEVER look up the suggested item's real stock (e.g. "500 → 510") —
+      // it projects against a brand-new instance starting at 0, same as any
+      // other not-yet-created item.
+      const willCreateNew = Boolean(l.suggested_item_id);
       return {
         lineId: l.id,
         lineNumber: l.line_number,
@@ -113,8 +122,8 @@ export function buildPreview(
         itemId: null,
         itemSku: null,
         itemName: null,
-        currentQty: null,
-        projectedQty: null,
+        currentQty: willCreateNew ? 0 : null,
+        projectedQty: willCreateNew ? qty : null,
         status: 'unmapped',
       };
     }
@@ -221,6 +230,13 @@ export function StockImpactPreview({ lines, overrides, items }: StockImpactPrevi
             {unmapped.map((r) => (
               <li key={r.lineId}>
                 Line {r.lineNumber}: {r.description} ({formatNumber(r.qty)} units)
+                {r.projectedQty != null && (
+                  <span className="opacity-80">
+                    {' '}
+                    — will create a new item ({formatNumber(r.currentQty ?? 0)} →{' '}
+                    {formatNumber(r.projectedQty)})
+                  </span>
+                )}
               </li>
             ))}
           </ul>

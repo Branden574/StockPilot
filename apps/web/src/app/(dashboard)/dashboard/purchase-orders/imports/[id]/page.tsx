@@ -43,6 +43,21 @@ export default async function PoImportDetailPage({
     (header as { parsed_json?: { expectedDate?: string } | null }).parsed_json?.expectedDate?.trim() ?? '';
   const defaultExpectedAt = /^\d{4}-\d{2}-\d{2}$/.test(rawExpected) ? rawExpected : null;
 
+  // A line's suggested_item_id (barcode/ISBN/vendor-mapping match — Tasks
+  // 2/3) is write-only advisory data until we resolve it to something a
+  // human can read. Build the label from the `items` lookup we already load
+  // for the match combobox — no extra query. (The suggested item's charter
+  // isn't in `listForMatching`'s intentionally lean column set, so it's
+  // left out of the label rather than adding a query for it.)
+  const itemsById = new Map(items.map((i) => [i.id, i]));
+  const linesWithSuggestions = lines.map((l) => {
+    const suggested = l.suggested_item_id ? itemsById.get(l.suggested_item_id) : undefined;
+    return {
+      ...l,
+      suggestionLabel: suggested ? `${suggested.name} · ${suggested.sku}` : null,
+    };
+  });
+
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -58,7 +73,7 @@ export default async function PoImportDetailPage({
       </div>
       <PoImportDetail
         header={header}
-        lines={lines}
+        lines={linesWithSuggestions}
         suppliers={suppliers.map((s) => ({
           id: s.id as string,
           name: s.name as string,

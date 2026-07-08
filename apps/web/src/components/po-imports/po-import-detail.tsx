@@ -52,9 +52,17 @@ import type { PoImportLineRow, PoImportRow } from '@/server/services/po-imports'
 // preview only needs the PreviewItem fields and ignores the extra key.
 type Item = PreviewItem & { createdAt: string };
 
+// suggested_item_id (Tasks 2/3) is advisory-only and ALREADY on
+// PoImportLineRow; suggestionLabel is a UI-only human-readable string
+// page.tsx resolves from the items lookup it already loads. Optional so
+// existing callers/tests that pass plain PoImportLineRow[] keep compiling.
+export type LineWithSuggestion = PoImportLineRow & {
+  suggestionLabel?: string | null;
+};
+
 interface Props {
   header: PoImportRow;
-  lines: PoImportLineRow[];
+  lines: LineWithSuggestion[];
   suppliers: Array<{ id: string; name: string }>;
   warehouses: Array<{ id: string; name: string }>;
   charters: Array<{ id: string; name: string }>;
@@ -113,7 +121,7 @@ export function PoImportDetail({
     }
   }, [warehouseId, locationId, warehouseLocations]);
   const [overrides, setOverrides] = React.useState<
-    Record<string, { itemId?: string | null; skip?: boolean }>
+    Record<string, { itemId?: string | null; skip?: boolean; mode?: 'use_existing' }>
   >({});
   const [busy, setBusy] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
@@ -153,6 +161,18 @@ export function PoImportDetail({
   }
   function setLineSkip(lineId: string, skip: boolean) {
     setOverrides((m) => ({ ...m, [lineId]: { ...(m[lineId] ?? {}), skip } }));
+  }
+  // Matching is ADVISORY ONLY (Tasks 2/3): a line with a suggested_item_id
+  // still defaults to create-new until a human explicitly accepts it. This
+  // is the accept action — it links the line to the suggested item (same
+  // effect as picking it in the combobox) AND stamps mode: 'use_existing'
+  // so the decision reads the same as an explicit manual link, never an
+  // auto-selected default.
+  function acceptSuggestion(lineId: string, suggestedItemId: string) {
+    setOverrides((m) => ({
+      ...m,
+      [lineId]: { ...(m[lineId] ?? {}), itemId: suggestedItemId, mode: 'use_existing' },
+    }));
   }
 
   async function reparse() {
@@ -560,6 +580,11 @@ export function PoImportDetail({
                 o.itemId !== undefined ? o.itemId : l.item_id;
               const isUnmappedInventory =
                 l.line_type === 'inventory' && o.skip !== true && !effectiveItemId;
+              // Advisory chip (Tasks 2/3): a match was found (barcode/ISBN/
+              // vendor mapping) but never auto-linked. Only surface it while
+              // the line is still unresolved — the default stays create-new
+              // until the user explicitly accepts it below.
+              const hasSuggestion = isUnmappedInventory && Boolean(l.suggested_item_id);
               // Extraction-confidence highlight (only meaningful for
               // source_type='scan'; deterministic-parsed CSV/PDF rows
               // have null confidence and render in the default tone).
@@ -607,29 +632,56 @@ export function PoImportDetail({
                   </TableCell>
                   <TableCell>
                     {l.line_type === 'inventory' ? (
-                      <div className="flex min-w-[220px] items-center gap-1.5">
-                        <ItemCombobox
-                          items={comboOptionsFor(effectiveItemId ?? null)}
-                          value={effectiveItemId ?? null}
-                          onChange={(id) => setLineItem(l.id, id)}
-                          className="min-w-[200px]"
-                        />
-                        {isUnmappedInventory && (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-8 shrink-0 px-2 text-[11px]"
-                            onClick={() => openCreateItems([l.id])}
-                            disabled={busy || !vendorId}
-                            title={
-                              !vendorId
-                                ? 'Pick a vendor first'
-                                : 'Create a new internal item from this line'
-                            }
-                          >
-                            <Plus className="h-3 w-3" /> Create
-                          </Button>
+                      <div className="flex min-w-[220px] flex-col gap-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <ItemCombobox
+                            items={comboOptionsFor(effectiveItemId ?? null)}
+                            value={effectiveItemId ?? null}
+                            onChange={(id) => setLineItem(l.id, id)}
+                            className="min-w-[200px]"
+                          />
+                          {isUnmappedInventory && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 shrink-0 px-2 text-[11px]"
+                              onClick={() => openCreateItems([l.id])}
+                              disabled={busy || !vendorId}
+                              title={
+                                !vendorId
+                                  ? 'Pick a vendor first'
+                                  : 'Create a new internal item from this line'
+                              }
+                            >
+                              <Plus className="h-3 w-3" /> Create
+                            </Button>
+                          )}
+                        </div>
+                        {hasSuggestion && (
+                          // Advisory only — never pre-selects the combobox above
+                          // (value stays derived from item_id/override, never
+                          // suggested_item_id). Default stays create-new; this
+                          // is the ONLY way a suggestion becomes a link.
+                          <div className="border-border bg-muted/40 flex flex-wrap items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]">
+                            <Sparkles className="text-muted-foreground h-3 w-3 shrink-0" />
+                            <span>
+                              Possible match:{' '}
+                              <strong className="font-medium">
+                                {l.suggestionLabel ?? 'an existing item'}
+                              </strong>{' '}
+                              — Use it?
+                            </span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-6 shrink-0 px-2 text-[10.5px]"
+                              onClick={() => acceptSuggestion(l.id, l.suggested_item_id!)}
+                            >
+                              Use existing
+                            </Button>
+                          </div>
                         )}
                       </div>
                     ) : (
