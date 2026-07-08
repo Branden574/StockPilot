@@ -1,13 +1,69 @@
 /* ==================================================================
    StockPilot Storefront — "Place an Order" redesign.
    Every rule is scoped under .sp-storefront so nothing leaks into the
-   rest of the app. Values are copied verbatim from the design handoff
-   (design_handoff_storefront_order_page/design/storefront.css +
-   styles.css dark tokens) — do not "improve" them.
+   rest of the app. Rule bodies are from the design handoff
+   (design_handoff_storefront_order_page/design/storefront.css) and
+   reference only the --sf-* tokens below.
+
+   THEMING (owner request 2026-07-08): the handoff shipped dark-only
+   tokens, so the page ignored light mode. The default token set below
+   is the LIGHT palette (mirrors the app's --ed-* light theme in
+   globals.css); `.dark .sp-storefront` restores the handoff's dark
+   values verbatim. Keep the two blocks in 1:1 key parity.
    ================================================================== */
 
 .sp-storefront {
-  /* ---- design tokens (dark theme, the shipped default) ---- */
+  /* ---- design tokens (light theme — mirrors --ed-* light) ---- */
+  --sf-bg: #fafaf7;
+  --sf-bg-elev: #ffffff;
+  --sf-bg-sunk: #f4f3ee;
+  --sf-ink: #0e0f0d;
+  --sf-ink-2: #2a2c28;
+  --sf-ink-3: #5a5d56;
+  --sf-ink-4: #8b8e85;
+  --sf-ink-5: #b8baad;
+  --sf-line: #e7e5dd;
+  --sf-line-2: #edece5;
+  --sf-line-strong: #d4d2c8;
+  --sf-accent: oklch(0.74 0.12 165);
+  --sf-on-accent: oklch(0.24 0.05 165);
+  --sf-warn: oklch(0.72 0.13 75);
+  --sf-warn-text: oklch(0.52 0.11 75);
+  --sf-crit: oklch(0.55 0.17 25);
+  --sf-crit-text: oklch(0.5 0.16 25);
+  --sf-crit-wash: oklch(0.94 0.03 25);
+
+  --sf-shadow-1: 0 1px 0 rgba(14, 15, 13, 0.05);
+  --sf-shadow-2: 0 4px 12px -4px rgba(14, 15, 13, 0.12);
+  --sf-shadow-pop:
+    0 24px 48px -16px rgba(14, 15, 13, 0.2), 0 8px 16px -8px rgba(14, 15, 13, 0.06);
+
+  /* App shell topbar is 56px tall and lives OUTSIDE the scrolling
+     <main>, so sticky offsets inside the page are relative to the
+     scrollport top (0), while viewport-height math still subtracts it. */
+  --sf-topbar-h: 56px;
+
+  --sf-font-display: var(--font-display, 'Inter Tight', 'Inter', sans-serif);
+  --sf-font-body: var(--font-sans, 'Inter', system-ui, sans-serif);
+  --sf-font-mono: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  --sf-font-serif: var(--font-serif, 'Instrument Serif', 'Times New Roman', serif);
+
+  /* ---- base surface + typography ---- */
+  background: var(--sf-bg);
+  color: var(--sf-ink);
+  font-family: var(--sf-font-body);
+  font-size: 13.5px;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'ss01', 'cv11', 'tnum';
+  min-height: calc(100dvh - var(--sf-topbar-h));
+}
+
+/* Dark theme — the design handoff's original token values, verbatim
+   (styles.css dark tokens). Applies when next-themes sets .dark on
+   <html>. Key set must mirror the light block above exactly. */
+.dark .sp-storefront {
   --sf-bg: #0c0d0a;
   --sf-bg-elev: #131410;
   --sf-bg-sunk: #08090a;
@@ -31,27 +87,6 @@
   --sf-shadow-2: 0 4px 12px -4px rgba(0, 0, 0, 0.5);
   --sf-shadow-pop:
     0 24px 48px -16px rgba(0, 0, 0, 0.7), 0 8px 16px -8px rgba(0, 0, 0, 0.08);
-
-  /* App shell topbar is 56px tall and lives OUTSIDE the scrolling
-     <main>, so sticky offsets inside the page are relative to the
-     scrollport top (0), while viewport-height math still subtracts it. */
-  --sf-topbar-h: 56px;
-
-  --sf-font-display: var(--font-display, 'Inter Tight', 'Inter', sans-serif);
-  --sf-font-body: var(--font-sans, 'Inter', system-ui, sans-serif);
-  --sf-font-mono: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  --sf-font-serif: var(--font-serif, 'Instrument Serif', 'Times New Roman', serif);
-
-  /* ---- base surface + typography ---- */
-  background: var(--sf-bg);
-  color: var(--sf-ink);
-  font-family: var(--sf-font-body);
-  font-size: 13.5px;
-  line-height: 1.5;
-  letter-spacing: -0.005em;
-  -webkit-font-smoothing: antialiased;
-  font-feature-settings: 'ss01', 'cv11', 'tnum';
-  min-height: calc(100dvh - var(--sf-topbar-h));
 }
 
 /* Neutralize app-level button/input resets inside the storefront so
@@ -159,7 +194,7 @@
 .sp-storefront .sf-flow-step[data-state='active'] .fdot {
   border-color: var(--sf-accent);
   background: var(--sf-accent);
-  color: oklch(0.2 0.04 165);
+  color: var(--sf-on-accent);
   box-shadow: 0 0 0 4px color-mix(in oklab, var(--sf-accent) 18%, transparent);
 }
 .sp-storefront .sf-flow-step[data-state='active'] .flabel {
@@ -299,7 +334,7 @@
 }
 .sp-storefront .sf-seg button[data-active='true'] {
   background: var(--sf-accent);
-  color: oklch(0.2 0.05 165);
+  color: var(--sf-on-accent);
   font-weight: 600;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
@@ -568,7 +603,7 @@
   padding: 0 4px;
   border-radius: 999px;
   background: var(--sf-accent);
-  color: oklch(0.2 0.05 165);
+  color: var(--sf-on-accent);
   display: grid;
   place-items: center;
 }
@@ -932,17 +967,17 @@
   box-shadow: 0 0 6px color-mix(in oklab, var(--sf-accent) 70%, transparent);
 }
 .sp-storefront .sf-avail.low {
-  color: oklch(0.85 0.13 75);
+  color: var(--sf-warn-text);
 }
 .sp-storefront .sf-avail.low .d {
-  background: oklch(0.78 0.13 75);
-  box-shadow: 0 0 6px oklch(0.78 0.13 75 / 0.6);
+  background: var(--sf-warn);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--sf-warn) 60%, transparent);
 }
 .sp-storefront .sf-avail.out {
-  color: oklch(0.72 0.14 25);
+  color: var(--sf-crit-text);
 }
 .sp-storefront .sf-avail.out .d {
-  background: oklch(0.62 0.16 25);
+  background: var(--sf-crit);
   box-shadow: none;
 }
 
@@ -1344,16 +1379,16 @@
   background: var(--sf-accent);
 }
 .sp-storefront .sf-row .avl.low {
-  color: oklch(0.85 0.13 75);
+  color: var(--sf-warn-text);
 }
 .sp-storefront .sf-row .avl.low .d {
-  background: oklch(0.78 0.13 75);
+  background: var(--sf-warn);
 }
 .sp-storefront .sf-row .avl.out {
-  color: oklch(0.72 0.14 25);
+  color: var(--sf-crit-text);
 }
 .sp-storefront .sf-row .avl.out .d {
-  background: oklch(0.62 0.16 25);
+  background: var(--sf-crit);
 }
 @media (max-width: 1100px) {
   .sp-storefront .sf-row {
@@ -1442,7 +1477,7 @@
   padding: 0 6px;
   border-radius: 999px;
   background: var(--sf-accent);
-  color: oklch(0.2 0.05 165);
+  color: var(--sf-on-accent);
   display: grid;
   place-items: center;
 }
@@ -1649,9 +1684,9 @@
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  color: oklch(0.85 0.13 75);
-  background: color-mix(in oklab, oklch(0.78 0.13 75) 10%, transparent);
-  border: 1px solid color-mix(in oklab, oklch(0.78 0.13 75) 30%, transparent);
+  color: var(--sf-warn-text);
+  background: color-mix(in oklab, var(--sf-warn) 10%, transparent);
+  border: 1px solid color-mix(in oklab, var(--sf-warn) 30%, transparent);
   border-radius: 7px;
   padding: 5px 9px;
   margin-top: 2px;
@@ -1753,7 +1788,7 @@
   gap: 8px;
   border-radius: 11px;
   background: var(--sf-accent);
-  color: oklch(0.2 0.05 165);
+  color: var(--sf-on-accent);
   font-size: 13.5px;
   font-weight: 650;
   letter-spacing: -0.005em;
@@ -2093,7 +2128,7 @@
   padding: 0 18px;
   border-radius: 9px;
   background: var(--sf-accent);
-  color: oklch(0.2 0.05 165);
+  color: var(--sf-on-accent);
   font-size: 12.5px;
   font-weight: 650;
   display: inline-flex;
@@ -2220,7 +2255,7 @@
   padding: 0 20px;
   border-radius: 999px;
   background: var(--sf-accent);
-  color: oklch(0.2 0.05 165);
+  color: var(--sf-on-accent);
   font-size: 13px;
   font-weight: 650;
   align-items: center;
