@@ -37,6 +37,9 @@ const baseDetail = {
   },
   warehouseName: 'DC4',
   requesterDisplay: 'Doua Vang',
+  // Resolved requester fields the templates now read (see get()).
+  requesterName: 'Doua Vang',
+  requesterEmail: 'branden.walker@cvsouth.org',
   reservations: [],
   lines: [
     {
@@ -96,6 +99,27 @@ describe('renderPickSlipPdf', () => {
 
   it('renders even when there are no item images', async () => {
     const buf = await renderPickSlipPdf(baseDetail);
+    expect(buf.byteLength).toBeGreaterThan(2000);
+  }, 30000);
+
+  it('renders an internal self-submit order (raw requester_name NULL, resolved name present)', async () => {
+    // The MAJORITY flow: the buyer placed their own order, so the raw
+    // requester_name column is NULL and the name lives on requesterName
+    // (resolved from user_profiles in get()). The template must render
+    // from the resolved field, not the NULL column.
+    const selfSubmit = {
+      ...baseDetail,
+      request: {
+        ...baseDetail.request,
+        requester_user_id: 'user-9',
+        requester_name: null,
+        requester_email: null,
+      },
+      requesterName: 'Jane Doe',
+      requesterEmail: 'jane@cvsouth.org',
+    };
+    const buf = await renderPickSlipPdf(selfSubmit);
+    expect(buf).toBeInstanceOf(Buffer);
     expect(buf.byteLength).toBeGreaterThan(2000);
   }, 30000);
 

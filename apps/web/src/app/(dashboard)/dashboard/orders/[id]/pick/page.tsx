@@ -58,7 +58,7 @@ export default async function DigitalPickPage({
         <h1 className="font-display text-2xl">Pick slip</h1>
         <p className="text-muted-foreground mt-1 text-sm">
           Order #{id.slice(0, 8).toUpperCase()} ·{' '}
-          {detail.request.requester_name ?? detail.request.requester_email ?? '—'}
+          {detail.requesterName ?? detail.requesterEmail ?? '—'}
         </p>
       </header>
       <div className="mt-6">

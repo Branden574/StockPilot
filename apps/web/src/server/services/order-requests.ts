@@ -191,6 +191,19 @@ export interface OrderRequestDetail {
   reservations: ActiveReservation[];
   warehouseName: string | null;
   requesterDisplay: string;
+  /**
+   * Resolved requester name — the free-text `requester_name` (set for
+   * on-behalf-of + public-link orders) when present, else the joined
+   * user_profiles.full_name for the `requester_user_id` (internal
+   * self-submit orders, where `requester_name` is NULL). Null only when
+   * neither source has a value. Unlike `requesterDisplay` this carries
+   * NO " · org_label" suffix, so it's safe to render in a name cell.
+   * Mirrors the same fallback the list() path uses.
+   */
+  requesterName: string | null;
+  /** Resolved requester email — `requester_email` else the joined
+   *  user_profiles.email. Same fallback shape as `requesterName`. */
+  requesterEmail: string | null;
 }
 
 export interface CreateOrderRequestInput {
@@ -660,8 +673,33 @@ export class OrderRequestsService {
     const { data: wh } = whRes;
 
     const h = header as OrderRequestRow;
+
+    // Resolve the requester identity ONCE from user_profiles (only for
+    // internal self-submit orders, which carry a `requester_user_id` and
+    // NULL name/email columns). On-behalf-of + public-link orders instead
+    // carry the free-text name/email and no `requester_user_id`.
+    const profile = h.requester_user_id
+      ? await this.lookupUserProfile(h.requester_user_id)
+      : null;
+
+    // Resolved name/email safe for a name cell — SAME fallback the list()
+    // path uses: free-text column wins, else the joined profile, else null.
+    // `||` (not `??`) so an empty-string column also falls through.
+    const requesterName =
+      ((h.requester_name as string | null) ?? null) ||
+      (profile?.fullName?.trim() || null);
+    const requesterEmail =
+      ((h.requester_email as string | null) ?? null) ||
+      (profile?.email?.trim() || null);
+
+    // requesterDisplay is the on-screen label WITH the " · org_label"
+    // suffix for external requesters — unchanged behavior, just now
+    // derived from the single profile lookup above.
+    const profileDisplay = profile
+      ? profile.fullName?.trim() || profile.email?.trim() || null
+      : null;
     const requesterDisplay = h.requester_user_id
-      ? (await this.lookupUserDisplay(h.requester_user_id)) ?? '(team member)'
+      ? profileDisplay ?? '(team member)'
       : `${h.requester_name ?? 'External requester'}${h.requester_org_label ? ' · ' + h.requester_org_label : ''}`;
 
     return {
@@ -670,17 +708,24 @@ export class OrderRequestsService {
       reservations: (rs ?? []) as ActiveReservation[],
       warehouseName: (wh?.name as string | null) ?? null,
       requesterDisplay,
+      requesterName,
+      requesterEmail,
     };
   }
 
-  private async lookupUserDisplay(userId: string): Promise<string | null> {
+  private async lookupUserProfile(
+    userId: string,
+  ): Promise<{ fullName: string | null; email: string | null } | null> {
     const { data } = await this.ctx.supabase
       .from('user_profiles')
       .select('full_name, email')
       .eq('id', userId)
       .maybeSingle();
     if (!data) return null;
-    return (data.full_name as string | null) || (data.email as string | null) || null;
+    return {
+      fullName: (data.full_name as string | null) ?? null,
+      email: (data.email as string | null) ?? null,
+    };
   }
 
   // ── Write — requester actions ───────────────────────────────────

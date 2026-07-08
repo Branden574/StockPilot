@@ -626,8 +626,12 @@ export async function renderPickSlipPdf(
         minute: '2-digit',
       })
     : '—';
-  const requesterName = request.requester_name ?? '—';
-  const requesterEmail = request.requester_email ?? '';
+  // Use the resolved requester identity from the detail (falls back to the
+  // joined user_profiles for internal self-submit orders, where the raw
+  // `request.requester_name` column is NULL). Only show "—" / "" when even
+  // the resolved value is absent.
+  const requesterName = detail.requesterName ?? '—';
+  const requesterEmail = detail.requesterEmail ?? '';
   const fulfillmentLabel = request.fulfillment_type === 'pickup' ? 'Pickup' : 'Delivery';
   const destination = request.requester_org_label ?? warehouseName ?? '—';
 

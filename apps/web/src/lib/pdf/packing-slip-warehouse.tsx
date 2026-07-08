@@ -49,7 +49,9 @@ export async function renderWarehousePackingSlipPdf(
   const { request, lines } = detail;
   const isPickup = request.fulfillment_type === 'pickup';
   const orderCode = formatOrderCode(request.id);
-  const shipToName = request.requester_name ?? null;
+  // Resolved requester name (falls back to the joined user_profiles for
+  // internal self-submit orders where request.requester_name is NULL).
+  const shipToName = detail.requesterName ?? null;
 
   const stream = await renderToStream(
     <Document>
@@ -72,7 +74,7 @@ export async function renderWarehousePackingSlipPdf(
           shipToName={
             charterName && !isPickup ? charterName : shipToName ?? '—'
           }
-          shipToEmail={request.requester_email}
+          shipToEmail={detail.requesterEmail}
           shipToPhone={request.requester_phone}
           attention={
             charterName && !isPickup && shipToName
