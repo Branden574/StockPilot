@@ -114,7 +114,8 @@ export async function approvePoImportAction(input: {
   poImportId: string;
   warehouseId: string;
   vendorId: string;
-  locationId?: string | null;
+  /** Required — approval must name the exact location the PO receives against. */
+  locationId: string;
   charterId?: string | null;
   expectedAt?: string | null;
   lineOverrides?: Array<{

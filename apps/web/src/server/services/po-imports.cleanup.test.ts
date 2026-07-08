@@ -123,9 +123,12 @@ describe('PoImportsService.cancel — cleanup of auto-created items (Fix #2)', (
 
 describe('PoImportsService.approve — stamps created items + destination (Fix #2/#3)', () => {
   /** Build an approve() stub. po_import_lines.select is called twice (get() lines,
-   *  then the item_created stamping query) so it uses a counter. */
-  function makeApproveStub(opts: { chosenLocation?: string | null } = {}) {
+   *  then the item_created stamping query) so it uses a counter. Pass
+   *  locationRow: null to simulate a chosen location that is NOT in the
+   *  org/warehouse (the lookup misses). */
+  function makeApproveStub(opts: { locationRow?: { id: string } | null } = {}) {
     let lineSelectCall = 0;
+    const locationRow = 'locationRow' in opts ? opts.locationRow : { id: 'loc-chosen' };
     return makeSupabaseStub({
       'po_imports.select': {
         data: { id: IMPORT_ID, organization_id: 'org-test', status: 'parsed', warehouse_id: WH_UUID },
@@ -152,8 +155,8 @@ describe('PoImportsService.approve — stamps created items + destination (Fix #
           : { data: [{ item_id: 'item-A' }], error: null }; // item_created line
       },
       'rpc:next_po_number': { data: 'PO-100', error: null },
-      // resolveDestinationLocation: preferred-location lookup returns the chosen id.
-      'locations.select': { data: { id: opts.chosenLocation ?? 'loc-chosen' }, error: null },
+      // resolveDestinationLocation: the preferred-location verification lookup.
+      'locations.select': { data: locationRow ?? null, error: null },
       'purchase_orders.insert': { data: { id: 'new-po' }, error: null },
       'purchase_order_items.insert': { data: null, error: null },
       'inventory_items.update': { data: null, error: null },
@@ -203,12 +206,75 @@ describe('PoImportsService.approve — stamps created items + destination (Fix #
       poImportId: IMPORT_ID,
       vendorId: 'vendor-1',
       warehouseId: WH_UUID,
+      locationId: 'loc-chosen',
       expectedAt: '2026-07-15T00:00:00.000Z',
       lineOverrides: [],
     } as never);
 
     const poInsert = stub.chainArgs.get('purchase_orders.insert')?.[0]?.[0] as Record<string, unknown>;
     expect(poInsert?.expected_at).toBe('2026-07-15T00:00:00.000Z');
+  });
+
+  // Owner directive 2026-07-08: the destination location is REQUIRED and the
+  // old fallback (pick any location in the warehouse, else AUTO-CREATE one)
+  // is gone — an absent/foreign location throws, never silently substitutes.
+  it('rejects approve with NO location — no PO created, no location looked up or auto-created', async () => {
+    const stub = makeApproveStub();
+    const svc = new PoImportsService(makeServiceContext(stub.client) as never);
+
+    const thrown = await svc
+      .approve({
+        poImportId: IMPORT_ID,
+        vendorId: 'vendor-1',
+        warehouseId: WH_UUID,
+        lineOverrides: [],
+      } as never)
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('validation_error');
+    expect((thrown as ServiceError).message).toBe(
+      'Pick a destination location for this warehouse.',
+    );
+    // Nothing was created: no PO, and crucially no synthetic location.
+    expect(stub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('locations.insert')).toBeUndefined();
+    // The old any-location-in-warehouse fallback never even queried locations.
+    expect(stub.chainsAll.get('locations.select')).toBeUndefined();
+  });
+
+  it('rejects a location that is not in this org/warehouse — and never falls back or auto-creates', async () => {
+    // The verification lookup misses (cross-warehouse / cross-org / deleted id).
+    const stub = makeApproveStub({ locationRow: null });
+    const svc = new PoImportsService(makeServiceContext(stub.client) as never);
+
+    const thrown = await svc
+      .approve({
+        poImportId: IMPORT_ID,
+        vendorId: 'vendor-1',
+        warehouseId: WH_UUID,
+        locationId: 'loc-foreign',
+        lineOverrides: [],
+      } as never)
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('validation_error');
+    expect((thrown as ServiceError).message).toBe(
+      'Pick a destination location for this warehouse.',
+    );
+    // The lookup was scoped to org + warehouse + not-deleted…
+    const locArgs = (stub.chainArgsAll.get('locations.select') ?? []).flat(Infinity);
+    expect(locArgs).toContain('organization_id');
+    expect(locArgs).toContain('warehouse_id');
+    expect(locArgs).toContain(WH_UUID);
+    expect(locArgs).toContain('loc-foreign');
+    expect(locArgs).toContain('deleted_at');
+    // …and on a miss nothing was created: no PO, no synthetic location, and
+    // the removed auto-create branch's warehouse-name lookup never ran.
+    expect(stub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('locations.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('warehouses.select')).toBeUndefined();
   });
 
   it('rejects approving an import that is not in a reviewable status', async () => {

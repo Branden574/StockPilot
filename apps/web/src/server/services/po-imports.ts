@@ -585,10 +585,9 @@ export class PoImportsService {
       0,
     );
 
-    // Receiving posts against a destination location. Prefer the location the
-    // user chose at import; otherwise find any existing location in the
-    // warehouse, creating one named after the warehouse if none exists so the
-    // receive button shows up immediately on the new PO.
+    // Receiving posts against a destination location. The user MUST have
+    // chosen one at import review — there is deliberately no fallback (the
+    // old auto-pick/auto-create path silently spawned junk locations).
     const destinationLocationId = await this.resolveDestinationLocation(
       input.warehouseId,
       input.locationId ?? null,
@@ -692,19 +691,18 @@ export class PoImportsService {
   }
 
   /**
-   * Returns a usable destination_location_id for the given warehouse.
-   * Tries to find an existing location belonging to that warehouse;
-   * if none, creates one named after the warehouse so receiving works
-   * out of the box on imported POs.
+   * Validates the caller's chosen destination location and returns its id.
+   * The location must exist, belong to this org AND the given warehouse, and
+   * not be deleted. There is deliberately NO fallback: a missing or foreign
+   * id throws instead of silently receiving into an auto-picked — or, worse,
+   * auto-created — location. Approval requires an explicit location choice.
    */
   private async resolveDestinationLocation(
     warehouseId: string,
     preferredLocationId: string | null = null,
-  ): Promise<string | null> {
-    // Honour an explicitly-chosen location, but only if it really belongs to
-    // this org + warehouse (defends against a stale/spoofed id).
+  ): Promise<string> {
     if (preferredLocationId) {
-      const { data: chosen } = await this.ctx.supabase
+      const { data: chosen, error } = await this.ctx.supabase
         .from('locations')
         .select('id')
         .eq('organization_id', this.ctx.organizationId)
@@ -712,40 +710,13 @@ export class PoImportsService {
         .eq('warehouse_id', warehouseId)
         .is('deleted_at', null)
         .maybeSingle();
+      if (error) throw new ServiceError('internal_error', error.message);
       if (chosen?.id) return chosen.id as string;
     }
-    const { data: existing, error: findErr } = await this.ctx.supabase
-      .from('locations')
-      .select('id')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('warehouse_id', warehouseId)
-      .is('deleted_at', null)
-      .limit(1)
-      .maybeSingle();
-    if (findErr) throw new ServiceError('internal_error', findErr.message);
-    if (existing?.id) return existing.id as string;
-
-    const { data: warehouse, error: whErr } = await this.ctx.supabase
-      .from('warehouses')
-      .select('name')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', warehouseId)
-      .maybeSingle();
-    if (whErr) throw new ServiceError('internal_error', whErr.message);
-    if (!warehouse) return null;
-
-    const { data: created, error: insErr } = await this.ctx.supabase
-      .from('locations')
-      .insert({
-        organization_id: this.ctx.organizationId,
-        warehouse_id: warehouseId,
-        name: warehouse.name as string,
-        type: 'warehouse',
-      })
-      .select('id')
-      .single();
-    if (insErr) throw new ServiceError('internal_error', insErr.message);
-    return created.id as string;
+    throw new ServiceError(
+      'validation_error',
+      'Pick a destination location for this warehouse.',
+    );
   }
 
   async cancel(id: string): Promise<void> {

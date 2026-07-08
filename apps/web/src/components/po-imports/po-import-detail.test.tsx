@@ -1,6 +1,13 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+
+// Radix Select needs pointer-capture APIs happy-dom doesn't implement.
+beforeAll(() => {
+  Element.prototype.hasPointerCapture ??= () => false;
+  Element.prototype.setPointerCapture ??= () => {};
+  Element.prototype.releasePointerCapture ??= () => {};
+});
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -70,18 +77,51 @@ const DEFAULT_ITEMS: DetailItems = [
   { id: 'i2', sku: 'RW-02', name: 'Red Widget', quantityOnHand: 7, createdAt: '2024-02-01T00:00:00Z' },
 ];
 
-function renderDetail(opts: { items?: DetailItems; lines?: PoImportLineRow[] } = {}) {
+function renderDetail(
+  opts: {
+    items?: DetailItems;
+    lines?: PoImportLineRow[];
+    header?: PoImportRow;
+    locations?: Array<{ id: string; name: string; warehouseId: string }>;
+  } = {},
+) {
   return render(
     <PoImportDetail
-      header={HEADER}
+      header={opts.header ?? HEADER}
       lines={opts.lines ?? [LINE]}
       suppliers={[{ id: 'sup-1', name: 'Acme' }]}
       warehouses={[{ id: 'wh-1', name: 'Main' }]}
       charters={[]}
-      locations={[]}
+      locations={opts.locations ?? []}
       items={opts.items ?? DEFAULT_ITEMS}
     />,
   );
+}
+
+/** Finds a Radix Select trigger by its rendered text (value or placeholder).
+ *  role="combobox" is NOT a name-from-content role, so getByRole({ name })
+ *  can't target these triggers. */
+function getSelectTrigger(text: RegExp): HTMLElement {
+  const trigger = screen
+    .getAllByRole('combobox')
+    .find((el) => text.test(el.textContent ?? ''));
+  if (!trigger) throw new Error(`No select trigger showing ${String(text)}`);
+  return trigger;
+}
+
+function querySelectTrigger(text: RegExp): HTMLElement | undefined {
+  return screen.queryAllByRole('combobox').find((el) => text.test(el.textContent ?? ''));
+}
+
+/** Opens a Radix Select by its trigger text and picks an option. */
+async function pickFromSelect(
+  user: ReturnType<typeof userEvent.setup>,
+  triggerText: RegExp,
+  optionName: string | RegExp,
+) {
+  await user.click(getSelectTrigger(triggerText));
+  const listbox = await screen.findByRole('listbox');
+  await user.click(within(listbox).getByRole('option', { name: optionName }));
 }
 
 describe('PoImportDetail item-match dropdown (issue 1: only name + SKU)', () => {
@@ -170,5 +210,100 @@ describe('PoImportDetail item-match dropdown (duplicate-SKU rows)', () => {
     const listbox = await screen.findByRole('listbox');
     expect(within(listbox).getByText('Into Algebra 1 (rack copy)')).toBeInTheDocument();
     expect(within(listbox).getByText('Into Algebra 1')).toBeInTheDocument();
+  });
+});
+
+// Owner directives 2026-07-08: warehouse selection is an explicit REQUIRED act
+// (never seeded from the header), and the 'Warehouse default' pseudo-location
+// is gone — a real destination location is required, with an inline notice +
+// hard block when the warehouse has no sites.
+describe('PoImportDetail approve guards (explicit warehouse + required location)', () => {
+  const LOC = { id: 'loc-1', name: 'Dock A', warehouseId: 'wh-1' };
+  const MAPPED_LINE = { ...LINE, item_id: 'i1' } as PoImportLineRow;
+
+  it('starts with NO warehouse selected even when the header carries a warehouse_id', () => {
+    renderDetail({ header: { ...HEADER, warehouse_id: 'wh-1' } as PoImportRow });
+
+    // The trigger still shows the placeholder — the header id never seeds state.
+    const trigger = getSelectTrigger(/pick warehouse/i);
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).not.toHaveTextContent('Main');
+  });
+
+  it('approve attempt without vendor/warehouse renders persistent inline alerts and never opens the dialog', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+
+    await user.click(screen.getByRole('button', { name: /review & approve/i }));
+
+    const alertText = screen
+      .getAllByRole('alert')
+      .map((a) => a.textContent)
+      .join(' ');
+    expect(alertText).toMatch(/pick a vendor before approving/i);
+    expect(alertText).toMatch(/pick a destination warehouse before approving/i);
+    expect(screen.queryByText(/approve this import\?/i)).not.toBeInTheDocument();
+  });
+
+  it("never renders the removed 'Warehouse default' option — not even inside the location dropdown", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail({
+      header: { ...HEADER, vendor_id: 'sup-1' } as PoImportRow,
+      locations: [LOC],
+    });
+
+    expect(screen.queryByText(/warehouse default/i)).not.toBeInTheDocument();
+
+    await pickFromSelect(user, /pick warehouse/i, 'Main');
+    await user.click(getSelectTrigger(/pick a location/i));
+    const listbox = await screen.findByRole('listbox');
+    expect(within(listbox).queryByText(/warehouse default/i)).not.toBeInTheDocument();
+    expect(within(listbox).getByRole('option', { name: 'Dock A' })).toBeInTheDocument();
+  });
+
+  it('approve without a location (while the warehouse has sites) shows an inline alert; picking one clears it and unblocks', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail({
+      header: { ...HEADER, vendor_id: 'sup-1' } as PoImportRow,
+      locations: [LOC],
+      lines: [MAPPED_LINE],
+    });
+
+    await pickFromSelect(user, /pick warehouse/i, 'Main');
+    await user.click(screen.getByRole('button', { name: /review & approve/i }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /pick a destination location before approving/i,
+    );
+    expect(screen.queryByText(/approve this import\?/i)).not.toBeInTheDocument();
+
+    // Picking a location clears the inline error…
+    await pickFromSelect(user, /pick a location/i, 'Dock A');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    // …and approve now reaches the confirm dialog.
+    await user.click(screen.getByRole('button', { name: /review & approve/i }));
+    expect(await screen.findByText(/approve this import\?/i)).toBeInTheDocument();
+  });
+
+  it('a warehouse with ZERO sites shows the guidance notice in the location slot and blocks approve', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail({
+      header: { ...HEADER, vendor_id: 'sup-1' } as PoImportRow,
+      locations: [], // nothing linked to wh-1
+      lines: [MAPPED_LINE],
+    });
+
+    await pickFromSelect(user, /pick warehouse/i, 'Main');
+
+    // The location Select is replaced by the guidance notice — no silent fallback.
+    expect(
+      screen.getByText(/no sites are linked to this warehouse yet — add one under locations first/i),
+    ).toBeInTheDocument();
+    expect(querySelectTrigger(/pick a location/i)).toBeUndefined();
+
+    await user.click(screen.getByRole('button', { name: /review & approve/i }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/no sites to receive into/i);
+    expect(screen.queryByText(/approve this import\?/i)).not.toBeInTheDocument();
   });
 });

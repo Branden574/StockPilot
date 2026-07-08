@@ -88,11 +88,13 @@ export const approvePoImportSchema = z.object({
   warehouseId: z.string().uuid(),
   vendorId: z.string().uuid(),
   /**
-   * Optional specific destination location within the warehouse. When set, the
-   * created PO receives against it; otherwise a location in the warehouse is
-   * auto-resolved.
+   * REQUIRED destination location within the warehouse the created PO
+   * receives against. The server never auto-picks or auto-creates a
+   * location — a missing/foreign id is rejected, not silently substituted.
    */
-  locationId: z.string().uuid().nullable().optional(),
+  locationId: z
+    .string({ required_error: 'Pick a destination location for this warehouse.' })
+    .uuid('Pick a destination location for this warehouse.'),
   /**
    * Optional bill-to charter for the created PO (rendered on the PO PDF's
    * "Bill to" block). Distinct from the item-ownership charter chosen when

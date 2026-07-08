@@ -76,11 +76,22 @@ export function PoImportDetail({
 }: Props) {
   const router = useRouter();
   const [vendorId, setVendorId] = React.useState<string>(header.vendor_id ?? '');
-  const [warehouseId, setWarehouseId] = React.useState<string>(
-    header.warehouse_id ?? '',
-  );
-  // Optional charter the imported items belong to (stock ownership), and an
-  // optional specific destination location within the chosen warehouse.
+  // Owner directive: choosing the destination warehouse must be an EXPLICIT
+  // act — never seeded from header.warehouse_id. (The old seed was also a
+  // stale-id hazard: options only list ACTIVE warehouses, so a stale id
+  // rendered as an empty placeholder while state silently held it.)
+  const [warehouseId, setWarehouseId] = React.useState<string>('');
+  // Inline field errors shown when "Review & approve" is attempted with a
+  // missing selection (repo pattern #20: inline alert, toast is supplemental).
+  // Each error clears as soon as the field is picked.
+  const [approveErrors, setApproveErrors] = React.useState<{
+    vendor?: string;
+    warehouse?: string;
+    location?: string;
+  }>({});
+  // Optional charter the imported items belong to (stock ownership), and the
+  // REQUIRED destination location within the chosen warehouse (approve is
+  // blocked until one is picked — the server no longer auto-resolves one).
   const [charterId, setCharterId] = React.useState<string>('');
   const [locationId, setLocationId] = React.useState<string>('');
   // Optional bill-to charter for the created PO — distinct from the item
@@ -178,10 +189,25 @@ export function PoImportDetail({
   }
 
   function openConfirm() {
-    if (!vendorId || !warehouseId) {
-      toast.error('Pick a vendor and a warehouse before approving.');
+    // Inline field validation (pattern #20). The location is REQUIRED: when
+    // the chosen warehouse has sites, one must be picked; when it has none,
+    // approve stays blocked until a site is added — no silent fallback.
+    const errors: typeof approveErrors = {};
+    if (!vendorId) errors.vendor = 'Pick a vendor before approving.';
+    if (!warehouseId) {
+      errors.warehouse = 'Pick a destination warehouse before approving.';
+    } else if (warehouseLocations.length === 0) {
+      errors.location =
+        'This warehouse has no sites to receive into — add one under Locations before approving.';
+    } else if (!locationId) {
+      errors.location = 'Pick a destination location before approving.';
+    }
+    if (errors.vendor || errors.warehouse || errors.location) {
+      setApproveErrors(errors);
+      toast.error('Fix the highlighted fields before approving.');
       return;
     }
+    setApproveErrors({});
     if (preview.summary.unmappedCount > 0) {
       toast.error(
         `${preview.summary.unmappedCount} line(s) have no internal item — map or skip each one before approving.`,
@@ -197,7 +223,8 @@ export function PoImportDetail({
       poImportId: header.id,
       warehouseId,
       vendorId,
-      locationId: locationId || null,
+      // Guaranteed non-empty: openConfirm blocks approve without a location.
+      locationId,
       charterId: billToCharterId || null,
       expectedAt: expectedAt ? new Date(expectedAt).toISOString() : null,
       lineOverrides: Object.entries(overrides).map(([lineId, o]) => ({
@@ -303,7 +330,13 @@ export function PoImportDetail({
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <label className="text-muted-foreground text-xs">Vendor</label>
-            <Select value={vendorId} onValueChange={setVendorId}>
+            <Select
+              value={vendorId}
+              onValueChange={(v) => {
+                setVendorId(v);
+                setApproveErrors((e) => ({ ...e, vendor: undefined }));
+              }}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Pick vendor" />
               </SelectTrigger>
@@ -315,12 +348,29 @@ export function PoImportDetail({
                 ))}
               </SelectContent>
             </Select>
+            {approveErrors.vendor && (
+              <p role="alert" className="text-destructive mt-1 text-xs">
+                {approveErrors.vendor}
+              </p>
+            )}
           </div>
           <div>
             <label className="text-muted-foreground text-xs">
               Destination warehouse
             </label>
-            <Select value={warehouseId} onValueChange={setWarehouseId}>
+            <Select
+              value={warehouseId}
+              onValueChange={(v) => {
+                setWarehouseId(v);
+                // The location list changes with the warehouse — clear its
+                // error too; a stale message would point at the old list.
+                setApproveErrors((e) => ({
+                  ...e,
+                  warehouse: undefined,
+                  location: undefined,
+                }));
+              }}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="Pick warehouse" />
               </SelectTrigger>
@@ -332,6 +382,11 @@ export function PoImportDetail({
                 ))}
               </SelectContent>
             </Select>
+            {approveErrors.warehouse && (
+              <p role="alert" className="text-destructive mt-1 text-xs">
+                {approveErrors.warehouse}
+              </p>
+            )}
           </div>
           <div>
             <label className="text-muted-foreground text-xs">Charter for items (optional)</label>
@@ -387,26 +442,43 @@ export function PoImportDetail({
             </Select>
           </div>
           <div>
-            <label className="text-muted-foreground text-xs">Location (optional)</label>
-            <Select
-              value={locationId || '__none'}
-              onValueChange={(v) => setLocationId(v === '__none' ? '' : v)}
-              disabled={!warehouseId}
-            >
-              <SelectTrigger>
-                <SelectValue
-                  placeholder={warehouseId ? 'Warehouse default' : 'Pick a warehouse first'}
-                />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none">Warehouse default</SelectItem>
-                {warehouseLocations.map((l) => (
-                  <SelectItem key={l.id} value={l.id}>
-                    {l.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <label className="text-muted-foreground text-xs">Destination location</label>
+            {warehouseId && warehouseLocations.length === 0 ? (
+              // No silent fallback: the old "Warehouse default" option let the
+              // server auto-create a synthetic location. Surface the gap and
+              // block approve until a real site exists.
+              <p className="border-warning/40 bg-warning/5 text-foreground rounded-md border px-3 py-2 text-xs">
+                No sites are linked to this warehouse yet — add one under
+                Locations first
+              </p>
+            ) : (
+              <Select
+                value={locationId}
+                onValueChange={(v) => {
+                  setLocationId(v);
+                  setApproveErrors((e) => ({ ...e, location: undefined }));
+                }}
+                disabled={!warehouseId}
+              >
+                <SelectTrigger>
+                  <SelectValue
+                    placeholder={warehouseId ? 'Pick a location' : 'Pick a warehouse first'}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {warehouseLocations.map((l) => (
+                    <SelectItem key={l.id} value={l.id}>
+                      {l.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {approveErrors.location && (
+              <p role="alert" className="text-destructive mt-1 text-xs">
+                {approveErrors.location}
+              </p>
+            )}
           </div>
           <div>
             <label className="text-muted-foreground text-xs">Expected delivery (optional)</label>
