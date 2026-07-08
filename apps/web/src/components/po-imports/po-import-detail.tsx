@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2, Plus, Sparkles } from 'lucide-react';
+import { Download, Loader2, Plus, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -285,6 +285,18 @@ export function PoImportDetail({
           <span className="text-destructive">{header.parse_error}</span>
         )}
         <div className="ml-auto flex gap-2">
+          {/* Recordkeeping export: downloads EVERY line (inventory + tax /
+              freight / service / fee / discount) plus the header money totals
+              for manual/paper audit. Distinct read path from PO creation. */}
+          <Button asChild variant="outline" size="sm">
+            <a
+              href={`/api/po-imports/${header.id}/export.csv`}
+              download
+              aria-label="Download this PO import as CSV"
+            >
+              <Download className="h-3.5 w-3.5" /> Export CSV
+            </a>
+          </Button>
           <Button variant="outline" size="sm" onClick={reparse} disabled={busy}>
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Re-parse'}
           </Button>
