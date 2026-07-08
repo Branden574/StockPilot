@@ -22,6 +22,7 @@ import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 import {
   groupPlacementsBySku,
+  rollupStatus,
   type PlacementRow as SkuInputRow,
   type SkuGroup,
 } from '@/lib/inventory/group-by-sku';
@@ -1098,13 +1099,12 @@ export function InventoryTable({
       sku: it.sku,
       name: it.name,
       charterId: it.charter_id,
-      charterName: it.charter_id ? lookups.charters?.get(it.charter_id)?.name ?? null : null,
       placementLabel: it.placement_label ?? null,
       lineQuantity: it.line_quantity ?? it.quantity_on_hand,
       __item: it,
     }));
     return groupPlacementsBySku(rows);
-  }, [displayed, showBookFields, lookups]);
+  }, [displayed, showBookFields]);
 
   const renderItems = React.useMemo<RenderEntry[]>(() => {
     let idx = 0;
@@ -2097,13 +2097,15 @@ function SkuGroupHeaderRow({
   currentListUrl: string;
   rowIdx: number;
 }) {
-  // Rollup fields come from the FIRST placement (first-seen order — see
-  // group-by-sku.ts). In the common case (one item split across racks/
+  // Most rollup fields come from the FIRST placement (first-seen order —
+  // see group-by-sku.ts). In the common case (one item split across racks/
   // charters) every placement shares the same name/category/image, so
   // this is exact; in the rarer case of genuinely distinct item rows
   // sharing a SKU it's a reasonable representative, and the charter
   // column below falls back to "Multiple" rather than showing a wrong
-  // single charter.
+  // single charter. Status is the ONE exception: it's per-placement and
+  // can legitimately differ, so it's rolled up conservatively below
+  // instead of taken from `first` (see `rolledUpStatus`).
   const first = items[0]!;
   const status = deriveStatus(group.total, first.reorder_point);
   const par = Math.max(first.reorder_point * 4, group.total * 1.5, 10);
@@ -2114,6 +2116,12 @@ function SkuGroupHeaderRow({
     : null;
   const distinctCharterIds = new Set(items.map((it) => it.charter_id ?? ''));
   const rowThumbSrc = first.image_thumb_url ?? first.image_url;
+  // `status` is a PER-PLACEMENT field — placements of one SKU can
+  // legitimately differ (e.g. one discontinued at a site while others stay
+  // active). Never take just the first placement's status here: that can
+  // mask a discontinued/archived placement behind a healthy badge for the
+  // whole group. Roll up conservatively instead (see group-by-sku.ts).
+  const rolledUpStatus = rollupStatus(items.map((it) => it.status));
 
   return (
     <tr className="border-b border-border bg-muted/30 transition-colors last:border-0">
@@ -2252,7 +2260,7 @@ function SkuGroupHeaderRow({
         <StockStatusBadge
           quantity={group.total}
           reorderPoint={first.reorder_point}
-          itemStatus={first.status}
+          itemStatus={rolledUpStatus}
         />
       </td>
       <td className="px-3 text-right text-[11.5px] text-[var(--ed-ink-4)]">—</td>

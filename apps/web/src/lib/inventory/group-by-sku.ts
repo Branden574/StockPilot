@@ -3,7 +3,6 @@ export interface PlacementRow {
   sku: string;
   name: string;
   charterId: string | null;
-  charterName: string | null;
   placementLabel: string | null;
   lineQuantity: number;
   [k: string]: unknown;
@@ -36,4 +35,30 @@ export function groupPlacementsBySku(rows: PlacementRow[]): SkuGroup[] {
     g.placements.push(r);
   }
   return order.map((k) => byKey.get(k)!);
+}
+
+const STATUS_SEVERITY: Record<'active' | 'archived' | 'discontinued', number> = {
+  active: 0,
+  archived: 1,
+  discontinued: 2,
+};
+
+/**
+ * Conservative status rollup for a SKU group-header row. `status` is a
+ * PER-PLACEMENT field — placements of one SKU can legitimately differ
+ * (e.g. one placement discontinued at a site while others stay active).
+ * Picking an arbitrary placement's status (e.g. the first) can mask a
+ * discontinued/archived placement behind a healthy badge for the whole
+ * group, so this always returns the least-healthy status present:
+ * discontinued > archived > active. When every placement agrees, that
+ * shared status is returned unchanged.
+ */
+export function rollupStatus(
+  statuses: ReadonlyArray<'active' | 'archived' | 'discontinued'>,
+): 'active' | 'archived' | 'discontinued' {
+  let worst: 'active' | 'archived' | 'discontinued' = 'active';
+  for (const s of statuses) {
+    if (STATUS_SEVERITY[s] > STATUS_SEVERITY[worst]) worst = s;
+  }
+  return worst;
 }

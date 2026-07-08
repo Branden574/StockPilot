@@ -416,6 +416,40 @@ describe('InventoryTable instant mode', () => {
     expect(screen.getByText('CVW-Manchester · 1-A')).toBeInTheDocument();
     expect(screen.getByText('CVSII-Madera · 2-A')).toBeInTheDocument();
   });
+
+  // `status` is a PER-PLACEMENT field — genuinely distinct inventory_items
+  // rows sharing one SKU can have different statuses (e.g. discontinued at
+  // one site, active at another). The group-header Status badge must never
+  // read as a plain healthy "In stock" when part of the group is
+  // discontinued/archived — it must roll up conservatively instead of
+  // reading only the first placement (see rollupStatus in group-by-sku.ts).
+  it('group header status never shows a plain healthy badge when a placement is discontinued', () => {
+    // status=all: the default view filters to active-only, which would
+    // hide the discontinued placement entirely rather than exercise the
+    // rollup — mirrors the existing "?status=archived deep link" test.
+    getSearchParams('status=all');
+    window.history.replaceState(null, '', '/dashboard/inventory?status=all');
+    const rows = [
+      item({ id: 'a', name: 'Mixed Status Widget', sku: 'SKU-MIXED', status: 'active', quantity_on_hand: 100 }),
+      item({ id: 'b', name: 'Mixed Status Widget', sku: 'SKU-MIXED', status: 'discontinued', quantity_on_hand: 50 }),
+    ];
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={2}
+        pageSize={30}
+        instant={{ items: rows, view: 'items' }}
+      />,
+    );
+
+    // Collapsed by default: ONE grouped header row for the shared SKU.
+    expect(screen.getAllByRole('link', { name: 'Mixed Status Widget' })).toHaveLength(1);
+    // The header must surface the discontinued placement, not a healthy
+    // "In stock" badge that hides it.
+    expect(screen.getByText('Discontinued')).toBeInTheDocument();
+    expect(screen.queryByText('In stock')).not.toBeInTheDocument();
+  });
 });
 
 // FIRST-ROWS-FIRST STREAMING (React 19 use() handoff): the default view
