@@ -291,21 +291,13 @@ export async function createItemsFromPoLinesAction(input: {
       }
 
       let resolvedItemId: string;
-      // Set when a book line auto-links to an existing book by ISBN — that book
-      // is pre-existing (not import-created), so it must NOT be flagged
-      // item_created (else a later cancel would archive a real book).
-      let linkedExistingByIsbn = false;
-      // Product twin of the flag above: set when a product line auto-links to
-      // an existing item by exact barcode match on one of its vendor numbers.
-      // Same downstream semantics — the item is pre-existing, so it must NOT
-      // be flagged item_created (cancel-cleanup must never archive it).
-      let linkedExistingByBarcode = false;
 
-      // Book ISBN auto-match: for a book import, pull the ISBN off the line
+      // Book ISBN match: for a book import, pull the ISBN off the line
       // (vendor numbers or the description) and look for an existing book whose
-      // barcode is that ISBN (in either ISBN-10/13 form). A hit means we link
-      // the PO line to that book so RECEIVING adds to its on-hand count instead
-      // of creating a duplicate (e.g. 10 on hand + 20 received = 30).
+      // barcode is that ISBN (in either ISBN-10/13 form). This is ADVISORY
+      // ONLY — a hit is recorded as suggested_item_id below for a human to
+      // review; it never auto-links the line (matching must never override
+      // the charter the user chose for this import).
       let bookIsbn: string | null = null;
       let isbnMatchItemId: string | null = null;
       if (parsed.data.itemType === 'book') {
@@ -342,14 +334,16 @@ export async function createItemsFromPoLinesAction(input: {
         }
       }
 
-      // Product barcode auto-match: the same courtesy the ISBN block gives
-      // books. When the user didn't explicitly decide (mode === 'create') and
-      // the line carries vendor numbers, look for an existing item whose
-      // barcode EXACTLY matches one of them — vendor_item_number is stored as
-      // `barcode` when we create from a PO, so a re-ordered product links to
-      // the item it created last time instead of spawning a duplicate. NAME
-      // matches deliberately do NOT auto-link (false-positive risk) — those
-      // only surface as suggestions via findDuplicatesForPoLinesAction.
+      // Product barcode match: the same courtesy the ISBN block gives books.
+      // When the user didn't explicitly decide (mode === 'create') and the
+      // line carries vendor numbers, look for an existing item whose barcode
+      // EXACTLY matches one of them — vendor_item_number is stored as
+      // `barcode` when we create from a PO. ADVISORY ONLY (see decision
+      // block below): a hit is recorded as suggested_item_id, never
+      // auto-linked, so a re-ordered product still gets its own instance
+      // under the chosen charter. NAME matches also never auto-link (same
+      // false-positive risk) — those only surface via
+      // findDuplicatesForPoLinesAction.
       let barcodeMatchItemId: string | null = null;
       if (parsed.data.itemType !== 'book' && decision.mode === 'create') {
         const vendorNumbers = [
@@ -398,20 +392,13 @@ export async function createItemsFromPoLinesAction(input: {
         }
         resolvedItemId = existing.id as string;
         linked++;
-      } else if (isbnMatchItemId) {
-        // Book matched an existing book by ISBN — link so receiving tops up its
-        // count instead of creating a duplicate. Not import-created.
-        resolvedItemId = isbnMatchItemId;
-        linked++;
-        linkedExistingByIsbn = true;
-      } else if (barcodeMatchItemId) {
-        // Product matched an existing item by exact barcode — link so receiving
-        // tops up its count instead of creating a duplicate. Not import-created.
-        resolvedItemId = barcodeMatchItemId;
-        linked++;
-        linkedExistingByBarcode = true;
       } else {
-        // mode === 'create'
+        // DEFAULT: create a new instance under the CHOSEN charter. A
+        // barcode/ISBN hit does NOT link here — matching is advisory only
+        // (owner decision: a KVA import must never land on an existing CVW
+        // item just because a barcode/ISBN happens to match). The match is
+        // recorded as a suggestion on the line below instead, for a human
+        // to review later; it never changes what gets created here.
         // Prefer the user-edited name from the modal; otherwise auto-clean
         // by stripping the trailing "(SOMETHING)" part of the PO description
         // since the manufacturer's part number already lives in `barcode`.
@@ -448,21 +435,25 @@ export async function createItemsFromPoLinesAction(input: {
         created++;
         resolvedItemId = item.id as string;
       }
+      // Barcode/ISBN match is advisory only — surfaced for a human to review,
+      // never used to change what the line resolved to above.
+      const suggestedItemId = barcodeMatchItemId ?? isbnMatchItemId ?? null;
 
-      // Map the line (whether newly created or linked to existing). Record
-      // whether WE created the item (vs linking an existing one) so a later
-      // cancel can clean up only the items the import spawned.
+      // Map the line (whether newly created or linked to an explicitly-chosen
+      // existing item). Record whether WE created the item (vs linking an
+      // existing one) so a later cancel can clean up only the items the
+      // import spawned.
       const { error: updErr } = await supabase
         .from('po_import_lines')
         .update({
           item_id: resolvedItemId,
+          suggested_item_id: suggestedItemId,
           match_status: 'mapped',
           exception_reason: null,
-          // Only flag item_created when WE actually created a new item — an
-          // ISBN or barcode auto-link reuses a pre-existing item, which
-          // cancel-cleanup must never archive.
-          item_created:
-            decision.mode === 'create' && !linkedExistingByIsbn && !linkedExistingByBarcode,
+          // Only flag item_created when WE actually created a new item —
+          // use_existing links to a pre-existing item, which cancel-cleanup
+          // must never archive.
+          item_created: decision.mode !== 'use_existing',
         })
         .eq('id', l.id as string);
       if (updErr) throw new ServiceError('internal_error', updErr.message);
