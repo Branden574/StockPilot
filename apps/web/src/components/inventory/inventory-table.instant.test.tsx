@@ -289,7 +289,12 @@ describe('InventoryTable instant mode', () => {
     );
   });
 
-  it('expands placement rows per page when the Items dataset ships holdings (one line per rack)', () => {
+  it('expands placement rows per page when the Items dataset ships holdings (one line per rack)', async () => {
+    // CHANGED (Model B / SKU grouping): a SKU with >1 placement now
+    // collapses into ONE header row by default — the one-row-per-rack
+    // layout only reappears after expanding the group. Was: asserted 2
+    // rendered rows with no interaction.
+    const user = userEvent.setup();
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
     const rows = [item({ id: 'a', name: 'Split Item', quantity_on_hand: 500 })];
@@ -312,15 +317,25 @@ describe('InventoryTable instant mode', () => {
       />,
     );
 
-    // One item → two rendered rows, one per rack, with per-line labels.
-    expect(screen.getAllByRole('link', { name: 'Split Item' })).toHaveLength(2);
+    // Collapsed by default: ONE grouped row, headline = the summed total.
+    expect(screen.getAllByRole('link', { name: 'Split Item' })).toHaveLength(1);
+    expect(screen.getByText('500')).toBeInTheDocument();
+    expect(screen.queryByText('1-A')).not.toBeInTheDocument();
+
+    // Expand → one item, two rendered placement rows, one per rack, with
+    // per-line labels (the header's own row/link stays visible too).
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+    expect(screen.getAllByRole('link', { name: 'Split Item' })).toHaveLength(3);
     expect(screen.getByText('1-A')).toBeInTheDocument();
     expect(screen.getByText('2-C')).toBeInTheDocument();
     // Footer counts ITEMS, not expanded lines.
     expect(screen.getByText(/1 SKUs/)).toBeInTheDocument();
   });
 
-  it('marks staging/unplaced split rows AMBER with an "awaiting put-away" line', () => {
+  it('marks staging/unplaced split rows AMBER with an "awaiting put-away" line', async () => {
+    // CHANGED (Model B / SKU grouping): expand the collapsed SKU group
+    // first — these assertions used to hold with no interaction.
+    const user = userEvent.setup();
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
     const rows = [item({ id: 'b', name: 'Awaiting Item', quantity_on_hand: 8 })];
@@ -344,6 +359,8 @@ describe('InventoryTable instant mode', () => {
       />,
     );
 
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+
     // The two not-put-away buckets each surface an "awaiting put-away" line;
     // the placed rack row does not.
     expect(screen.getAllByText('awaiting put-away')).toHaveLength(2);
@@ -356,6 +373,48 @@ describe('InventoryTable instant mode', () => {
     expect(staging.className).toContain('text-warning');
     expect(unplaced.className).toContain('text-warning');
     expect(placed.className).not.toContain('text-warning');
+  });
+
+  // Model B: same-SKU placements collapse into ONE grouped row with the
+  // summed on-hand total, expandable via a chevron. Adapted from the SDD
+  // brief's test skeleton to this file's harness (item()/renderInstant/
+  // the `placement` map for split rows).
+  it('groups placements of one SKU into a single row showing the summed total, expandable', async () => {
+    const user = userEvent.setup();
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const rows = [
+      item({ id: 'g', name: 'Acer Chromebook', sku: 'SP-G69UU-05H', quantity_on_hand: 281 }),
+    ];
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={1}
+        pageSize={30}
+        instant={{
+          items: rows,
+          view: 'items',
+          placement: {
+            g: [
+              { locationId: 'L1', label: 'CVW-Manchester · 1-A', kind: 'rack', quantity: 75 },
+              { locationId: 'L2', label: 'CVLYII-Visalia · 1-C', kind: 'rack', quantity: 100 },
+              { locationId: 'L3', label: 'CVSII-Madera · 2-A', kind: 'rack', quantity: 106 },
+            ],
+          },
+        }}
+      />,
+    );
+
+    // ONE SKU row, headline total 281 (not three separate rows by default).
+    expect(screen.getByText('281')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Acer Chromebook' })).toHaveLength(1);
+    expect(screen.queryByText('CVW-Manchester · 1-A')).not.toBeInTheDocument();
+
+    // Expand → placements visible.
+    await user.click(screen.getByRole('button', { name: /expand|show placements|SP-G69UU-05H/i }));
+    expect(screen.getByText('CVW-Manchester · 1-A')).toBeInTheDocument();
+    expect(screen.getByText('CVSII-Madera · 2-A')).toBeInTheDocument();
   });
 });
 
@@ -515,11 +574,17 @@ describe('InventoryTable per-rack-row selection', () => {
   }
 
   it('checking one rack row marks ONLY that row — not the same item’s other rack row', async () => {
+    // CHANGED (Model B / SKU grouping): the two rack rows now sit behind
+    // a collapsed SKU-group header — expand it first to reach their
+    // checkboxes (the header itself is never selectable, so the total
+    // checkbox count is unchanged: select-all + the 2 rack checkboxes).
     const user = userEvent.setup();
     renderTwoRacks();
 
-    // Two split rows for the one SKU.
-    expect(screen.getAllByRole('link', { name: 'Acer Chromebook 511' })).toHaveLength(2);
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+
+    // Header's own row link + two split rows for the one SKU.
+    expect(screen.getAllByRole('link', { name: 'Acer Chromebook 511' })).toHaveLength(3);
 
     // Checkboxes: [0] = header select-all, [1] = rack 1-C, [2] = rack 2-C.
     const boxes = screen.getAllByRole('checkbox');
@@ -537,8 +602,12 @@ describe('InventoryTable per-rack-row selection', () => {
   });
 
   it('selecting BOTH racks of ONE item resolves to a single distinct item id — archive/label/export affect 1 item, counter reads 1', async () => {
+    // CHANGED (Model B / SKU grouping): expand the collapsed SKU group
+    // first to reach the two rack checkboxes.
     const user = userEvent.setup();
     renderTwoRacks();
+
+    await user.click(screen.getByRole('button', { name: /expand/i }));
 
     const [, rack1C, rack2C] = screen.getAllByRole('checkbox');
 
