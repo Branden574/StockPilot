@@ -730,6 +730,74 @@ export class InventoryService {
   }
 
   /**
+   * Lean, UNCAPPED listing for match pickers (PO-import line matching).
+   *
+   * list() serves paged tables — its limit tops out at 1000 (PostgREST
+   * max_rows) and the imports page's `list({ limit: 500 })` call silently
+   * truncated the match dropdown for >500-item orgs (recurring pattern #3:
+   * disclose or paginate every silent cap). This variant selects only the
+   * columns the matcher needs and paginates to exhaustion via fetchAllRows.
+   *
+   * Read posture mirrors the list() defaults the imports page relied on:
+   * org-scoped, non-deleted, active, non-rental, warehouse-scoped for
+   * non-all-access roles, viewer category restriction — but ALL item types
+   * (a PO can restock books and products alike).
+   */
+  async listForMatching(): Promise<
+    Array<{
+      id: string;
+      sku: string;
+      name: string;
+      quantity_on_hand: number;
+      created_at: string;
+    }>
+  > {
+    const access = await getWarehouseAccess(this.ctx);
+    // Same fail-closed early return as list(): a warehouse-scoped user with
+    // no assignments sees nothing.
+    if (!access.hasAllAccess && access.readableIds.length === 0) return [];
+
+    // Category visibility for restricted viewers — belt-and-suspenders on
+    // top of RLS, mirroring list() (including its fall-through on error).
+    let accessibleCats: Set<string> | null = null;
+    if (this.ctx.role === 'viewer') {
+      try {
+        accessibleCats = await new UserCategoriesService(this.ctx)
+          .getAccessibleCategoryIds(this.ctx.userId);
+        if (accessibleCats !== null && accessibleCats.size === 0) return [];
+      } catch {
+        // Defense in depth: the DB RLS policy still enforces visibility.
+      }
+    }
+
+    // Build per page so each `.range()` applies to a fresh query; stable
+    // `.order('id')` keeps every row on exactly one page across the loop
+    // (fetchAllRows' documented contract).
+    return fetchAllRows<{
+      id: string;
+      sku: string;
+      name: string;
+      quantity_on_hand: number;
+      created_at: string;
+    }>((from, to) => {
+      let query = this.ctx.supabase
+        .from('inventory_items')
+        .select('id, sku, name, quantity_on_hand, created_at')
+        .eq('organization_id', this.ctx.organizationId)
+        .is('deleted_at', null)
+        .eq('status', 'active')
+        .eq('is_rental', false);
+      if (!access.hasAllAccess) {
+        query = query.in('warehouse_id', access.readableIds);
+      }
+      if (accessibleCats !== null) {
+        query = query.in('category_id', [...accessibleCats]);
+      }
+      return query.order('id', { ascending: true }).range(from, to);
+    });
+  }
+
+  /**
    * Distinct rack labels for the rack-filter dropdown. Reads JSONB
    * custom_fields directly (per-scope key set):
    *   - 'items' → {rack_number}{-rack_row?} from non-book items

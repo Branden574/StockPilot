@@ -29,7 +29,9 @@ export default async function PoImportDetailPage({
   const [suppliers, warehouses, items, charters, locations] = await Promise.all([
     (await SuppliersService.forCurrentUser()).list(),
     (await WarehousesService.forCurrentUser()).listNames(),
-    (await InventoryService.forCurrentUser()).list({ limit: 500, itemType: 'all' }),
+    // Uncapped lean listing — list({ limit: 500 }) silently truncated the
+    // match dropdown for >500-item orgs.
+    (await InventoryService.forCurrentUser()).listForMatching(),
     (await ChartersService.forCurrentUser()).list(),
     (await LocationsService.forCurrentUser()).list({ sitesOnly: true }),
   ]);
@@ -66,11 +68,13 @@ export default async function PoImportDetailPage({
         locations={(locations as Array<{ id: string; name: string; warehouse_id: string | null }>)
           .filter((l) => l.warehouse_id)
           .map((l) => ({ id: l.id, name: l.name, warehouseId: l.warehouse_id as string }))}
-        items={items.items.map((i) => ({
+        items={items.map((i) => ({
           id: i.id,
           sku: i.sku,
           name: i.name,
           quantityOnHand: Number(i.quantity_on_hand) || 0,
+          // createdAt drives the dropdown's SKU-dedupe (oldest row wins).
+          createdAt: i.created_at,
         }))}
         defaultExpectedAt={defaultExpectedAt}
       />

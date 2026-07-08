@@ -44,9 +44,13 @@ import {
   type PreviewItem,
 } from '@/components/po-imports/stock-impact-preview';
 
+import { dedupeItemsBySku } from '@/lib/po-imports/dedupe-items';
+
 import type { PoImportLineRow, PoImportRow } from '@/server/services/po-imports';
 
-type Item = PreviewItem;
+// createdAt drives the match dropdown's SKU-dedupe (oldest row wins); the
+// preview only needs the PreviewItem fields and ignores the extra key.
+type Item = PreviewItem & { createdAt: string };
 
 interface Props {
   header: PoImportRow;
@@ -105,6 +109,33 @@ export function PoImportDetail({
   const [cancelOpen, setCancelOpen] = React.useState(false);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [createLines, setCreateLines] = React.useState<PoImportLineRow[]>([]);
+
+  // The org's data model allows the same SKU across multiple rows (per-rack
+  // row model / "duplicate to rack"), which made the match dropdown list
+  // "Into Algebra 1 (SP-…)" once per rack. Collapse the OPTIONS to one per
+  // SKU — targeting the OLDEST row — for the combobox ONLY. Every id-based
+  // lookup (stock preview, pre-matched lines) still uses the FULL `items`.
+  const dedupedOptions = React.useMemo(
+    () => dedupeItemsBySku(items).map((i) => ({ id: i.id, sku: i.sku, name: i.name })),
+    [items],
+  );
+  const dedupedOptionIds = React.useMemo(
+    () => new Set(dedupedOptions.map((o) => o.id)),
+    [dedupedOptions],
+  );
+  const itemsById = React.useMemo(
+    () => new Map(items.map((i) => [i.id, i])),
+    [items],
+  );
+  // ItemCombobox resolves its trigger label from its OWN items prop — a line
+  // already matched to a NON-oldest duplicate row must have that row appended
+  // to the options, or the trigger would fall back to the placeholder.
+  function comboOptionsFor(selectedId: string | null) {
+    if (!selectedId || dedupedOptionIds.has(selectedId)) return dedupedOptions;
+    const selected = itemsById.get(selectedId);
+    if (!selected) return dedupedOptions;
+    return [...dedupedOptions, { id: selected.id, sku: selected.sku, name: selected.name }];
+  }
 
   function setLineItem(lineId: string, itemId: string | null) {
     setOverrides((m) => ({ ...m, [lineId]: { ...(m[lineId] ?? {}), itemId } }));
@@ -494,11 +525,7 @@ export function PoImportDetail({
                     {l.line_type === 'inventory' ? (
                       <div className="flex min-w-[220px] items-center gap-1.5">
                         <ItemCombobox
-                          items={items.map((i) => ({
-                            id: i.id,
-                            sku: i.sku,
-                            name: i.name,
-                          }))}
+                          items={comboOptionsFor(effectiveItemId ?? null)}
                           value={effectiveItemId ?? null}
                           onChange={(id) => setLineItem(l.id, id)}
                           className="min-w-[200px]"

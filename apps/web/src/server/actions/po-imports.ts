@@ -294,6 +294,11 @@ export async function createItemsFromPoLinesAction(input: {
       // is pre-existing (not import-created), so it must NOT be flagged
       // item_created (else a later cancel would archive a real book).
       let linkedExistingByIsbn = false;
+      // Product twin of the flag above: set when a product line auto-links to
+      // an existing item by exact barcode match on one of its vendor numbers.
+      // Same downstream semantics — the item is pre-existing, so it must NOT
+      // be flagged item_created (cancel-cleanup must never archive it).
+      let linkedExistingByBarcode = false;
 
       // Book ISBN auto-match: for a book import, pull the ISBN off the line
       // (vendor numbers or the description) and look for an existing book whose
@@ -336,6 +341,41 @@ export async function createItemsFromPoLinesAction(input: {
         }
       }
 
+      // Product barcode auto-match: the same courtesy the ISBN block gives
+      // books. When the user didn't explicitly decide (mode === 'create') and
+      // the line carries vendor numbers, look for an existing item whose
+      // barcode EXACTLY matches one of them — vendor_item_number is stored as
+      // `barcode` when we create from a PO, so a re-ordered product links to
+      // the item it created last time instead of spawning a duplicate. NAME
+      // matches deliberately do NOT auto-link (false-positive risk) — those
+      // only surface as suggestions via findDuplicatesForPoLinesAction.
+      let barcodeMatchItemId: string | null = null;
+      if (parsed.data.itemType !== 'book' && decision.mode === 'create') {
+        const vendorNumbers = [
+          vendorItemNumber,
+          vendorProductNumber,
+          auxiliaryNumber,
+        ].filter((v): v is string => typeof v === 'string' && v.length > 0);
+        if (vendorNumbers.length > 0) {
+          const { data: byBarcode, error: barcodeErr } = await supabase
+            .from('inventory_items')
+            .select('id')
+            .eq('organization_id', ctx.organizationId)
+            .in('barcode', vendorNumbers)
+            .is('deleted_at', null)
+            .limit(1);
+          if (barcodeErr) {
+            // Fail-closed: fall through to create a new item. Log so a transient
+            // DB error doesn't silently spawn duplicate items with no trace.
+            console.error(
+              'po-imports: barcode candidate lookup failed; creating new item instead of linking',
+              { error: barcodeErr.message },
+            );
+          }
+          barcodeMatchItemId = (byBarcode?.[0]?.id as string | undefined) ?? null;
+        }
+      }
+
       if (decision.mode === 'use_existing') {
         if (!decision.itemId) {
           return err(
@@ -363,6 +403,12 @@ export async function createItemsFromPoLinesAction(input: {
         resolvedItemId = isbnMatchItemId;
         linked++;
         linkedExistingByIsbn = true;
+      } else if (barcodeMatchItemId) {
+        // Product matched an existing item by exact barcode — link so receiving
+        // tops up its count instead of creating a duplicate. Not import-created.
+        resolvedItemId = barcodeMatchItemId;
+        linked++;
+        linkedExistingByBarcode = true;
       } else {
         // mode === 'create'
         // Prefer the user-edited name from the modal; otherwise auto-clean
@@ -412,9 +458,10 @@ export async function createItemsFromPoLinesAction(input: {
           match_status: 'mapped',
           exception_reason: null,
           // Only flag item_created when WE actually created a new item — an
-          // ISBN auto-link reuses a pre-existing book, which cancel-cleanup
-          // must never archive.
-          item_created: decision.mode === 'create' && !linkedExistingByIsbn,
+          // ISBN or barcode auto-link reuses a pre-existing item, which
+          // cancel-cleanup must never archive.
+          item_created:
+            decision.mode === 'create' && !linkedExistingByIsbn && !linkedExistingByBarcode,
         })
         .eq('id', l.id as string);
       if (updErr) throw new ServiceError('internal_error', updErr.message);
