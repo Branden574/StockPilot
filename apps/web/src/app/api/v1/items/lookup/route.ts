@@ -6,10 +6,45 @@ import { reportError } from '@/lib/error-reporter';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+export interface ItemLookupMatch {
+  id: string;
+  sku: string;
+  name: string;
+  barcode: string | null;
+  charterId: string | null;
+  charterName: string | null;
+  placementLabel: string | null;
+  quantityOnHand: number;
+}
+
+type LookupRow = {
+  id: string;
+  sku: string;
+  name: string;
+  barcode: string | null;
+  quantity_on_hand: number | null;
+  charter_id: string | null;
+  bin_location: string | null;
+  charter: { name: string | null } | { name: string | null }[] | null;
+};
+
+/** PostgREST embeds a to-one relation as an object (or an array of one). */
+function embedCharterName(value: LookupRow['charter']): string | null {
+  const v = Array.isArray(value) ? value[0] : value;
+  return v?.name ?? null;
+}
+
 /**
- * Mobile scanner uses this to resolve a scanned code to an inventory_item.
- * Tries barcode + sku in one OR. Returns 404 when nothing matches so the
- * client can branch into the "not in inventory yet → add via ISBN" flow.
+ * Mobile scanner uses this to resolve a scanned code to inventory_items.
+ * Tries barcode + sku in one OR. Under Model B the same SKU can legitimately
+ * exist as MULTIPLE placement rows (one per charter/rack), so this returns
+ * every match rather than an arbitrary single() row — the caller (or a user
+ * picker) decides which placement to act on. An EXACT barcode match is
+ * unambiguous (a barcode identifies one physical unit/label) and wins over
+ * any sku-only matches in the same result set.
+ *
+ * Returns 404 when nothing matches so the client can branch into the "not
+ * in inventory yet → add via ISBN" flow.
  *
  * Query: ?code=<barcode_or_sku>
  */
@@ -28,15 +63,12 @@ export async function GET(req: NextRequest) {
   const { data, error } = await ctx.supabase
     .from('inventory_items')
     .select(
-      `id, sku, name, barcode, quantity_on_hand, unit_cost, retail_price,
-       reorder_point, warehouse_id, primary_location_id, item_type,
-       category_id, supplier_id`,
+      `id, sku, name, barcode, quantity_on_hand, charter_id, bin_location,
+       charter:charters!charter_id(name)`,
     )
     .eq('organization_id', ctx.organizationId)
     .is('deleted_at', null)
-    .or(`barcode.eq.${safe},sku.eq.${safe}`)
-    .limit(1)
-    .maybeSingle();
+    .or(`barcode.eq.${safe},sku.eq.${safe}`);
 
   if (error) {
     void reportError(new Error(error.message), {
@@ -45,22 +77,25 @@ export async function GET(req: NextRequest) {
     });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
-  if (!data) {
+
+  const rows = (data ?? []) as LookupRow[];
+  const barcodeMatches = rows.filter((r) => r.barcode === safe);
+  const finalRows = barcodeMatches.length > 0 ? barcodeMatches : rows;
+
+  if (finalRows.length === 0) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
   }
-  return NextResponse.json({
-    id: data.id,
-    sku: data.sku,
-    name: data.name,
-    barcode: data.barcode,
-    quantityOnHand: Number(data.quantity_on_hand) || 0,
-    unitCost: Number(data.unit_cost) || 0,
-    retailPrice: Number(data.retail_price) || 0,
-    reorderPoint: Number(data.reorder_point) || 0,
-    warehouseId: data.warehouse_id,
-    locationId: data.primary_location_id,
-    itemType: data.item_type,
-    categoryId: data.category_id,
-    supplierId: data.supplier_id,
-  });
+
+  const matches: ItemLookupMatch[] = finalRows.map((row) => ({
+    id: row.id,
+    sku: row.sku,
+    name: row.name,
+    barcode: row.barcode,
+    charterId: row.charter_id,
+    charterName: embedCharterName(row.charter),
+    placementLabel: (row.bin_location ?? '').trim() || null,
+    quantityOnHand: Number(row.quantity_on_hand) || 0,
+  }));
+
+  return NextResponse.json({ matches });
 }
