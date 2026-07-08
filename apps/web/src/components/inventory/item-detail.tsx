@@ -404,8 +404,12 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     const awaitingPutAway =
                       Number((item as { staged_quantity?: number }).staged_quantity ?? 0) +
                       Number((item as { unplaced_quantity?: number }).unplaced_quantity ?? 0);
+                    // Amber, matching the Items list — received stock that
+                    // hasn't been put away must be unmistakable (owner
+                    // decision 2026-07-08). The operational staged-vs-unplaced
+                    // split lives on the Staging page.
                     return awaitingPutAway > 0 ? (
-                      <p className="text-muted-foreground w-full text-xs">
+                      <p className="text-warning w-full text-xs font-medium">
                         {formatNumber(awaitingPutAway)} awaiting put-away
                       </p>
                     ) : null;
