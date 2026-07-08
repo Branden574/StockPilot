@@ -25,7 +25,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
-import { resolveScanMatches } from '@/lib/scan-resolve';
+import { resolveScanMatches, sanitizeScanCode } from '@/lib/scan-resolve';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { radius, space, theme } from '@/lib/theme';
@@ -222,6 +222,10 @@ export default function Scan() {
    */
   async function loadItemByValue(value: string): Promise<FoundItem | null | 'ambiguous'> {
     if (!orgId) return null;
+    // Strip characters that would break the `.or(...)` filter string (a
+    // stray `,`/`()`/`%` in a scanned barcode would otherwise be parsed as
+    // extra filter clauses) — mirrors the web lookup route's sanitization.
+    const safe = sanitizeScanCode(value);
     const { data: rows } = await supabase
       .from('inventory_items')
       .select(
@@ -229,7 +233,7 @@ export default function Scan() {
          charter:charters!charter_id (name)`,
       )
       .eq('organization_id', orgId)
-      .or(`barcode.eq.${value},sku.eq.${value}`)
+      .or(`barcode.eq.${safe},sku.eq.${safe}`)
       .is('deleted_at', null);
 
     const candidates: ScanCandidate[] = ((rows ?? []) as Record<string, unknown>[]).map((r) => {
@@ -246,7 +250,7 @@ export default function Scan() {
       };
     });
 
-    const resolution = resolveScanMatches(candidates, value);
+    const resolution = resolveScanMatches(candidates, safe);
     if (resolution.kind === 'not_found') return null;
     if (resolution.kind === 'multiple') {
       setPlacementChoices(resolution.matches);

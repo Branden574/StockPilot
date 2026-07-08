@@ -15,6 +15,18 @@
  * (apps/web/src/app/api/v1/items/lookup/route.ts).
  */
 
+/**
+ * Strips characters that would break a PostgREST `.or(...)` filter string
+ * (`%`, `,`, `(`, `)`) out of a scanned value before it's interpolated into
+ * one. Mirrors the same sanitization in the shared web lookup route
+ * (apps/web/src/app/api/v1/items/lookup/route.ts) — an unescaped `,` or `()`
+ * in a barcode/SKU would otherwise be parsed as extra filter clauses instead
+ * of literal characters to match.
+ */
+export function sanitizeScanCode(code: string): string {
+  return code.replace(/[%,()]/g, '');
+}
+
 export interface ScanMatchLike {
   id: string;
   barcode: string | null;

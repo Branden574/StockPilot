@@ -30,20 +30,6 @@ export const RETENTION = 30;
 /** Max items captured per snapshot; over this `capped` is set + disclosed. */
 export const SNAPSHOT_ITEM_CAP = 50_000;
 
-/**
- * Snapshot payload format version. Bump whenever `SnapshotItem`'s shape
- * changes in a way that would corrupt a restore if the OLD shape were
- * reconciled with the NEW logic. v2 adds `charterId` (Model B: the same
- * (sku, bin_location) pair can legitimately exist under two different
- * charters — see 0008_warehouse_charters). A v1 snapshot has no charterId
- * on its items; matching it against today's charter-aware itemKey would
- * silently fail to match every live row (empty charter segment vs. the
- * row's real charter_id) and re-create everything as duplicates instead of
- * reconciling in place. `restoreSnapshot` refuses any snapshot whose
- * `version` doesn't match this constant rather than risk that.
- */
-export const SNAPSHOT_FORMAT_VERSION = 2;
-
 export type RestorePointKind = 'manual' | 'auto' | 'pre_restore';
 
 export interface SnapshotItem {
@@ -66,29 +52,15 @@ export interface SnapshotItem {
   categoryName: string | null;
   supplierName: string | null;
   locationName: string | null;
-  /**
-   * Charter this placement row belonged to (null = generic/any-charter
-   * stock). Model B allows the SAME (sku, bin_location) pair to exist
-   * under two different charters as two distinct rows — without this,
-   * itemKey() would collapse them onto one reconcile key.
-   */
-  charterId: string | null;
 }
 
-/**
- * Stable reconcile key matching the (sku, bin_location) uniqueness index,
- * charter-qualified. Model B allows two rows to share (sku, bin_location)
- * and differ only by charter_id (see 0008_warehouse_charters) — without the
- * charter segment, two distinct placements collapse onto one map entry and
- * a restore silently merges/drops one of them (only the last-registered
- * active row for that (sku, bin) ever gets reconciled).
- */
-export function itemKey(sku: string, bin: string | null, charterId: string | null): string {
-  return `${sku}␟${(bin ?? '').trim()}␟${charterId ?? ''}`;
+/** Stable reconcile key matching the (sku, bin_location) uniqueness index. */
+function itemKey(sku: string, bin: string | null): string {
+  return `${sku}␟${(bin ?? '').trim()}`;
 }
 
 export interface RestoreSnapshot {
-  version: number;
+  version: 1;
   capturedAt: string;
   items: SnapshotItem[];
 }
@@ -155,7 +127,6 @@ export async function createSnapshot(
     item_type: string | null;
     warehouse_id: string | null;
     bin_location: string | null;
-    charter_id: string | null;
     category: unknown;
     supplier: unknown;
     location: unknown;
@@ -166,7 +137,7 @@ export async function createSnapshot(
       ctx.supabase
         .from('inventory_items')
         .select(
-          'sku, name, barcode, description, unit_cost, retail_price, quantity_on_hand, reorder_point, reorder_quantity, unit_of_measure, status, item_type, warehouse_id, bin_location, charter_id, category:category_id(name), supplier:supplier_id(name), location:primary_location_id(name)',
+          'sku, name, barcode, description, unit_cost, retail_price, quantity_on_hand, reorder_point, reorder_quantity, unit_of_measure, status, item_type, warehouse_id, bin_location, category:category_id(name), supplier:supplier_id(name), location:primary_location_id(name)',
         )
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
@@ -196,11 +167,10 @@ export async function createSnapshot(
       categoryName: embed(r.category),
       supplierName: embed(r.supplier),
       locationName: embed(r.location),
-      charterId: r.charter_id ?? null,
     }));
 
   const snapshot: RestoreSnapshot = {
-    version: SNAPSHOT_FORMAT_VERSION,
+    version: 1,
     capturedAt: new Date().toISOString(),
     items,
   };
@@ -301,17 +271,7 @@ export async function restoreSnapshot(
   if (rowErr) throw new ServiceError('internal_error', rowErr.message);
   if (!row) throw new ServiceError('not_found', 'Restore point not found.');
   const snapshot = (row as { snapshot: RestoreSnapshot }).snapshot;
-  // Refuse to reconcile a stale-format snapshot — see SNAPSHOT_FORMAT_VERSION.
-  // A v1 snapshot's items have no charterId, so matching them against the
-  // now-charter-aware itemKey would silently miss every live row and
-  // re-create the whole org's inventory as duplicates instead of erroring.
-  if (!snapshot || snapshot.version !== SNAPSHOT_FORMAT_VERSION) {
-    throw new ServiceError(
-      'validation_error',
-      'This restore point was captured in an older format and can no longer be safely restored. It remains visible for reference; take a new restore point going forward.',
-    );
-  }
-  const items = Array.isArray(snapshot.items) ? snapshot.items : [];
+  const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
 
   // Auto-snapshot current state FIRST so this restore is itself undoable.
   const pre = await createSnapshot(ctx, { kind: 'pre_restore', label: 'Before restore' });
@@ -325,21 +285,18 @@ export async function restoreSnapshot(
   const fallbackWarehouseId =
     (await getWarehouseAccess(ctx)).primaryWarehouseId ?? null;
 
-  // Current ACTIVE items keyed by (sku, bin_location, charter_id) —
-  // matching the live uniqueness index (0126) plus the charter dimension
-  // Model B adds (0008). A product at two racks — or the same rack under
-  // two charters — is two distinct keys.
+  // Current ACTIVE items keyed by (sku, bin_location) — matching the live
+  // uniqueness index (0126). A product at two racks = two distinct keys.
   const activeRows = await fetchAllRows<{
     id: string;
     sku: string | null;
     bin_location: string | null;
     quantity_on_hand: number | null;
     status: string | null;
-    charter_id: string | null;
   }>((from, to) =>
     ctx.supabase
       .from('inventory_items')
-      .select('id, sku, bin_location, quantity_on_hand, status, charter_id')
+      .select('id, sku, bin_location, quantity_on_hand, status')
       .eq('organization_id', ctx.organizationId)
       .is('deleted_at', null)
       .order('id', { ascending: true })
@@ -350,7 +307,7 @@ export async function restoreSnapshot(
   for (const r of activeRows) {
     const sku = (r.sku ?? '').trim();
     if (!sku) continue;
-    const k = itemKey(sku, r.bin_location, r.charter_id ?? null);
+    const k = itemKey(sku, r.bin_location);
     activeKeys.add(k);
     byKey.set(k, { id: r.id, qty: Number(r.quantity_on_hand ?? 0) });
   }
@@ -365,7 +322,7 @@ export async function restoreSnapshot(
   for (const it of items) {
     const sku = (it.sku ?? '').trim();
     if (!sku) continue;
-    const key = itemKey(sku, it.binLocation, it.charterId ?? null);
+    const key = itemKey(sku, it.binLocation);
     snapshotKeys.add(key);
     const categoryId = it.categoryName ? (categoryMap.get(it.categoryName.toLowerCase()) ?? null) : null;
     const supplierId = it.supplierName ? (supplierMap.get(it.supplierName.toLowerCase()) ?? null) : null;
@@ -409,17 +366,14 @@ export async function restoreSnapshot(
         }
         updated++;
       } else {
-        // Missing (never existed or was deleted) → re-create, preserving the
-        // bin AND charter so it doesn't collide with the (sku, bin) uniqueness
-        // index and stays associated with the same charter it was placed
-        // under (Model B: charter is per-row, not inferred).
+        // Missing (never existed or was deleted) → re-create, preserving the bin
+        // so it doesn't collide with the (sku, bin) uniqueness index.
         await svc.create({
           name: it.name,
           sku,
           barcode: it.barcode,
           description: it.description,
           binLocation: it.binLocation,
-          charterId: it.charterId ?? null,
           categoryId,
           supplierId,
           primaryLocationId,
