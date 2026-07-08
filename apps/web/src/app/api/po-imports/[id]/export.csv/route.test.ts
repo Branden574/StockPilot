@@ -78,6 +78,7 @@ function line(overrides: Partial<PoImportLineRow>): PoImportLineRow {
     auxiliary_number: null,
     coa_code: null,
     item_id: null,
+    suggested_item_id: null,
     match_status: 'non_inventory',
     match_confidence: null,
     extraction_confidence: null,

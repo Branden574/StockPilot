@@ -65,6 +65,10 @@ export interface PoImportLineRow {
   auxiliary_number: string | null;
   coa_code: string | null;
   item_id: string | null;
+  /** Advisory "possible existing match" (barcode/ISBN/vendor mapping).
+      Informational only — never auto-linked; the user must explicitly
+      accept it (decision use_existing) to set item_id. */
+  suggested_item_id: string | null;
   match_status: PoImportMatchStatus;
   match_confidence: number | null;
   /** OCR/extraction confidence (0-1). Populated for source_type='scan';
@@ -319,7 +323,7 @@ export class PoImportsService {
 
     const linesPayload = extracted.lines.map((l) => {
       const isInventory = l.lineType === 'inventory';
-      let item_id: string | null = null;
+      let suggested_item_id: string | null = null;
       let match_status: PoImportMatchStatus = isInventory ? 'needs_review' : 'non_inventory';
       let exception_reason: string | null = isInventory
         ? 'No mapping for vendor item number'
@@ -332,8 +336,11 @@ export class PoImportsService {
           auxiliaryNumber: null,
         });
         if (m) {
-          item_id = m.itemId;
-          match_status = 'mapped';
+          // Advisory only — a vendor-number match is a SUGGESTION, never an
+          // auto-link. item_id stays null until the user explicitly accepts
+          // it (decision use_existing) in the review UI.
+          suggested_item_id = m.itemId;
+          match_status = 'suggested';
           exception_reason = null;
         }
       }
@@ -348,7 +355,8 @@ export class PoImportsService {
         unit_cost: l.unitPrice,
         line_total: l.lineTotal,
         vendor_item_number: l.vendorSku || null,
-        item_id,
+        item_id: null,
+        suggested_item_id,
         match_status,
         match_confidence: null,
         extraction_confidence: l.confidence,
@@ -452,7 +460,7 @@ export class PoImportsService {
 
     const linesPayload = canonical.lines.map((l) => {
       const isInventory = l.lineType === 'inventory';
-      let item_id: string | null = null;
+      let suggested_item_id: string | null = null;
       let match_status: PoImportMatchStatus = isInventory ? 'needs_review' : 'non_inventory';
       let exception_reason: string | null = isInventory
         ? 'No mapping for vendor item number'
@@ -465,8 +473,11 @@ export class PoImportsService {
           auxiliaryNumber: l.auxiliaryNumber,
         });
         if (m) {
-          item_id = m.itemId;
-          match_status = 'mapped';
+          // Advisory only — a vendor-number match is a SUGGESTION, never an
+          // auto-link. item_id stays null until the user explicitly accepts
+          // it (decision use_existing) in the review UI.
+          suggested_item_id = m.itemId;
+          match_status = 'suggested';
           exception_reason = null;
         }
       }
@@ -484,7 +495,8 @@ export class PoImportsService {
         vendor_product_number: l.vendorProductNumber,
         auxiliary_number: l.auxiliaryNumber,
         coa_code: l.coaCode,
-        item_id,
+        item_id: null,
+        suggested_item_id,
         match_status,
         exception_reason,
         parsed_json: l,
