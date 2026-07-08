@@ -364,6 +364,38 @@ function deriveStatus(qty: number, reorder: number): 'ok' | 'warn' | 'crit' {
   return 'ok';
 }
 
+/**
+ * Split-row selection → item-level action ids.
+ *
+ * The Items list splits one `inventory_items` row into one TABLE row per
+ * holding location, keyed by `rowKey = `${item.id}:${locationId}``. Row
+ * SELECTION keys on that rowKey (so checking one rack row does NOT visually
+ * check the item's OTHER rack rows). But every bulk action is item-level —
+ * archive / labels / export / draft-PO / cycle-count all take item ids — so
+ * at the action boundary we collapse the selected rowKeys back to DISTINCT
+ * item ids here.
+ *
+ * The item id is everything before the FIRST ':'. Item ids are UUIDs, which
+ * never contain ':', so splitting on the first ':' is unambiguous; a rowKey
+ * with no ':' (a zero-holding row, whose rowKey falls back to the bare
+ * `item.id`) passes straight through. Order-stable, deduped — so selecting
+ * both racks of ONE item yields a single item id, and archiving it affects
+ * that one item exactly once.
+ */
+export function rowKeysToItemIds(keys: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const key of keys) {
+    const colon = key.indexOf(':');
+    const itemId = colon === -1 ? key : key.slice(0, colon);
+    if (!seen.has(itemId)) {
+      seen.add(itemId);
+      out.push(itemId);
+    }
+  }
+  return out;
+}
+
 /** Stable empty series for the (shouldn't-happen) miss in the seriesByItem
  *  map — a module-level constant so its identity never changes, keeping the
  *  memo'd <Sparkline> from re-rendering on a fallback. */
@@ -918,8 +950,11 @@ export function InventoryTable({
   // size-equality header test below desynced permanently on live orgs
   // whose realtime refreshes reorder rows under the selection. In
   // instant mode the "visible page" is the locally-derived one.
+  // Select-all keys on rowKey (unique per rack row) — same identity the row
+  // checkboxes and the `selected` Set use — so the header toggles exactly the
+  // rows on screen without co-selecting an item's other rack rows.
   const pageIds = React.useMemo(
-    () => (instantRows ?? items).map((i) => i.id),
+    () => (instantRows ?? items).map((i) => i.rowKey ?? i.id),
     [instantRows, items],
   );
   const allVisibleSelected = isPageFullySelected(selected, pageIds);
@@ -935,6 +970,16 @@ export function InventoryTable({
       return next;
     });
   }
+
+  // `selected` holds rowKeys (unique per rack row) so the checkboxes are
+  // per-row. But EVERY bulk action is item-level, so collapse the selection
+  // to DISTINCT item ids for the action boundary + the "N selected" counter.
+  // Passing these to BulkActions makes the counter (selectedIds.length) read
+  // the DISTINCT-ITEM count — the true scope of what archive/labels/export/
+  // draft-PO/cycle-count will affect. Selecting BOTH racks of one item is
+  // therefore "1 selected", one action, no double-processing.
+  const selectedItemIds = React.useMemo(() => rowKeysToItemIds(selected), [selected]);
+  const selectedItemIdSet = React.useMemo(() => new Set(selectedItemIds), [selectedItemIds]);
 
   // Prefer the server-computed org-wide value (covers ALL pages of
   // the current filter set). Falls back to a page-only sum for any
@@ -1204,7 +1249,10 @@ export function InventoryTable({
         )}
       >
         <BulkActions
-          selectedIds={[...selected]}
+          // DISTINCT item ids (not rowKeys) — actions are item-level and the
+          // counter is selectedIds.length, so both stay correct even when two
+          // rack rows of the same item are checked.
+          selectedIds={selectedItemIds}
           categories={categories}
           suppliers={suppliers}
           locations={locations}
@@ -1212,8 +1260,9 @@ export function InventoryTable({
           onClear={() => setSelected(new Set())}
           // Instant mode holds the FULL dataset, so cross-page selections
           // resolve against it; server mode keeps today's page-row scan.
+          // Match on the deduped item-id set (selection now keys on rowKey).
           hasArchivedSelection={(effectiveInstant?.items ?? items).some(
-            (i) => selected.has(i.id) && i.status === 'archived',
+            (i) => selectedItemIdSet.has(i.id) && i.status === 'archived',
           )}
           onCycleCount={() => {
             // Books tab and Items tab share this table; infer the pick
@@ -1224,7 +1273,9 @@ export function InventoryTable({
             const byId = new Map<string, Item>();
             for (const r of effectiveInstant?.items ?? items) byId.set(r.id, r);
             for (const r of serverHits ?? []) byId.set(r.id, r);
-            const picks = [...selected].map((id) => {
+            // Distinct item ids — one cycle-count pick per item, never one
+            // per rack row.
+            const picks = selectedItemIds.map((id) => {
               const r = byId.get(id);
               return { id, sku: r?.sku ?? '', name: r?.name ?? 'Item', itemType };
             });
@@ -1266,8 +1317,10 @@ export function InventoryTable({
           // old pointer-events-none silently swallowed every row-checkbox
           // click for the full filter round-trip (seconds at org scale),
           // which is exactly the owner's "click 3-4 times" report. Rows stay
-          // interactive: selection is keyed by item id, so clicks landing
-          // during the transition still select the right items.
+          // interactive: selection is keyed by rowKey — stable per holding,
+          // same transition-stability property the old item-id key had — so
+          // clicks landing during the transition still select the right row
+          // (and bulk actions still resolve to the right distinct items).
           isFilterPending && 'opacity-60',
         )}
       >
@@ -1338,7 +1391,13 @@ export function InventoryTable({
               const par = Math.max(item.reorder_point * 4, item.quantity_on_hand * 1.5, 10);
               // Stable per (displayed, sparkMode, trends) — see seriesByItem above.
               const series = seriesByItem.get(item.id) ?? EMPTY_SERIES;
-              const isSelected = selected.has(item.id);
+              // Key selection on rowKey (unique per rack row) — NOT item.id,
+              // which is identical across an item's rack rows and made
+              // checking one rack visually check them all (owner's "both
+              // Chromebook rows checked but bar says 1 selected"). Bulk
+              // actions still collapse back to distinct item ids (see
+              // selectedItemIds).
+              const isSelected = selected.has(item.rowKey ?? item.id);
               // Payload-diet rows (rank 5) carry only the thumb URL; the
               // cell renders whichever is present (thumb preferred, exactly
               // as before) and the hover preview lazy-loads the master.
@@ -1353,7 +1412,10 @@ export function InventoryTable({
                   )}
                 >
                   <td className="px-3">
-                    <Checkbox checked={isSelected} onChange={() => toggleOne(item.id)} />
+                    <Checkbox
+                      checked={isSelected}
+                      onChange={() => toggleOne(item.rowKey ?? item.id)}
+                    />
                   </td>
                   <td className="py-2.5 pr-3">
                     <div className="flex items-center gap-2.5">

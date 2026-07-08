@@ -78,8 +78,18 @@ vi.mock('@/lib/download-export', () => ({
   downloadInventoryExport: vi.fn(),
 }));
 
+// Capture the props the table hands to BulkActions so the selection tests
+// can assert the DISTINCT item-id set (and thus the "N selected" counter,
+// which is selectedIds.length) the actions actually run against.
+const { bulkActionsSpy } = vi.hoisted(() => ({
+  bulkActionsSpy: { selectedIds: [] as string[] },
+}));
+
 vi.mock('@/components/inventory/bulk-actions', () => ({
-  BulkActions: () => <div data-testid="bulk-actions" />,
+  BulkActions: (props: { selectedIds: string[] }) => {
+    bulkActionsSpy.selectedIds = props.selectedIds;
+    return <div data-testid="bulk-actions" data-count={props.selectedIds.length} />;
+  },
 }));
 
 vi.mock('@/components/ui/image-hover-preview', () => ({
@@ -94,6 +104,7 @@ vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
 
 import {
   InventoryTable,
+  rowKeysToItemIds,
   type InstantAdoptedPayload,
   type InstantDatasetItem,
 } from './inventory-table';
@@ -458,5 +469,108 @@ describe('InventoryTable streamed instant adoption (use() handoff)', () => {
     const calledUrl = String(fetchSpy.mock.calls[0]![0]);
     expect(calledUrl).toContain('/api/items/search');
     expect(calledUrl).toContain('q=beta');
+  });
+});
+
+// PER-RACK-ROW SELECTION. The Items list splits one item into one table row
+// per holding location (rowKey = `${item.id}:${locationId}`). Selection keys
+// on rowKey so checking ONE rack row doesn't visually check the item's OTHER
+// rack rows (owner's "both Acer Chromebook rows checked, bar says 1
+// selected"). But every bulk action is item-level, so the selected rowKeys
+// collapse back to DISTINCT item ids at the BulkActions boundary — and the
+// "N selected" counter (selectedIds.length) reflects that distinct-item
+// count, matching the true scope of the action.
+describe('InventoryTable per-rack-row selection', () => {
+  const fetchSpy = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    bulkActionsSpy.selectedIds = [];
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  // One item ('a') sitting in two racks (1-C @ L1, 2-C @ L2) → two split rows.
+  function renderTwoRacks() {
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const rows = [item({ id: 'a', name: 'Acer Chromebook 511', quantity_on_hand: 20 })];
+    return render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={1}
+        pageSize={30}
+        instant={{
+          items: rows,
+          view: 'items',
+          placement: {
+            a: [
+              { locationId: 'L1', label: '1-C', kind: 'rack', quantity: 10 },
+              { locationId: 'L2', label: '2-C', kind: 'rack', quantity: 10 },
+            ],
+          },
+        }}
+      />,
+    );
+  }
+
+  it('checking one rack row marks ONLY that row — not the same item’s other rack row', async () => {
+    const user = userEvent.setup();
+    renderTwoRacks();
+
+    // Two split rows for the one SKU.
+    expect(screen.getAllByRole('link', { name: 'Acer Chromebook 511' })).toHaveLength(2);
+
+    // Checkboxes: [0] = header select-all, [1] = rack 1-C, [2] = rack 2-C.
+    const boxes = screen.getAllByRole('checkbox');
+    expect(boxes).toHaveLength(3);
+    const [, rack1C, rack2C] = boxes;
+
+    // Click rack 1-C only.
+    await user.click(rack1C!);
+
+    // ONLY 1-C reads checked; 2-C (same item.id, different rowKey) stays
+    // unchecked. This is the bug fix: before, both rack rows co-checked
+    // because selection keyed on item.id.
+    expect(rack1C).toHaveAttribute('aria-checked', 'true');
+    expect(rack2C).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('selecting BOTH racks of ONE item resolves to a single distinct item id — archive/label/export affect 1 item, counter reads 1', async () => {
+    const user = userEvent.setup();
+    renderTwoRacks();
+
+    const [, rack1C, rack2C] = screen.getAllByRole('checkbox');
+
+    await user.click(rack1C!);
+    await user.click(rack2C!);
+
+    // Both rack rows are visually checked…
+    expect(rack1C).toHaveAttribute('aria-checked', 'true');
+    expect(rack2C).toHaveAttribute('aria-checked', 'true');
+
+    // …yet the item-level action id set (what archive/labels/export/PO/
+    // cycle-count run against) and the "N selected" counter are ONE item.
+    expect(bulkActionsSpy.selectedIds).toEqual(['a']);
+    expect(screen.getByTestId('bulk-actions')).toHaveAttribute('data-count', '1');
+  });
+});
+
+describe('rowKeysToItemIds', () => {
+  it('strips the :locationId suffix and dedupes to distinct item ids (order-stable)', () => {
+    expect(rowKeysToItemIds(['id1:locA', 'id1:locB', 'id2:locC'])).toEqual(['id1', 'id2']);
+  });
+
+  it('passes bare item-id keys (no colon — a zero-holding row) straight through', () => {
+    expect(rowKeysToItemIds(['id1', 'id2'])).toEqual(['id1', 'id2']);
+  });
+
+  it('handles a mix of split and bare keys, preserving first-seen order', () => {
+    expect(rowKeysToItemIds(['id2:locA', 'id1', 'id2:locB', 'id1'])).toEqual(['id2', 'id1']);
+  });
+
+  it('splits on the FIRST colon only (UUID item ids never contain a colon)', () => {
+    const uuid = '71b27a4a-7948-4638-bc3f-535974713bd2';
+    expect(rowKeysToItemIds([`${uuid}:loc-1`, `${uuid}:loc-2`])).toEqual([uuid]);
   });
 });
