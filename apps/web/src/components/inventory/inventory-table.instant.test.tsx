@@ -308,6 +308,44 @@ describe('InventoryTable instant mode', () => {
     // Footer counts ITEMS, not expanded lines.
     expect(screen.getByText(/1 SKUs/)).toBeInTheDocument();
   });
+
+  it('marks staging/unplaced split rows AMBER with an "awaiting put-away" line', () => {
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const rows = [item({ id: 'b', name: 'Awaiting Item', quantity_on_hand: 8 })];
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={1}
+        pageSize={30}
+        instant={{
+          items: rows,
+          view: 'items',
+          placement: {
+            b: [
+              { locationId: 'R1', label: 'A1', kind: 'rack', quantity: 5 },
+              { locationId: 'S1', label: 'Staging', kind: 'staging', quantity: 2 },
+              { locationId: 'U1', label: 'Unplaced', kind: 'unplaced', quantity: 1 },
+            ],
+          },
+        }}
+      />,
+    );
+
+    // The two not-put-away buckets each surface an "awaiting put-away" line;
+    // the placed rack row does not.
+    expect(screen.getAllByText('awaiting put-away')).toHaveLength(2);
+
+    // The staging/unplaced RACK-column labels render in the amber warning
+    // token; the placed rack label does not.
+    const staging = screen.getByText('Staging');
+    const unplaced = screen.getByText('Unplaced');
+    const placed = screen.getByText('A1');
+    expect(staging.className).toContain('text-warning');
+    expect(unplaced.className).toContain('text-warning');
+    expect(placed.className).not.toContain('text-warning');
+  });
 });
 
 // FIRST-ROWS-FIRST STREAMING (React 19 use() handoff): the default view

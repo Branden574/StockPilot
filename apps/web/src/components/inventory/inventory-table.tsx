@@ -1504,10 +1504,24 @@ export function InventoryTable({
                       {(() => {
                         // Split "one line per rack" row: show THIS row's location
                         // label (rack/crate name, or "Staging"/"Unplaced"). null
-                        // = no holding → em dash.
+                        // = no holding → em dash. Staging/unplaced buckets read
+                        // AMBER — this row's stock is awaiting put-away (owner
+                        // decision 2026-07-08, consistent with the item detail
+                        // card and the qty sub-line below).
                         if (item.placement_label !== undefined) {
+                          const awaiting =
+                            item.placement_kind === 'staging' ||
+                            item.placement_kind === 'unplaced';
                           return item.placement_label ? (
-                            <span className="font-mono tabular-nums">{item.placement_label}</span>
+                            <span
+                              className={
+                                awaiting
+                                  ? 'text-warning font-mono tabular-nums'
+                                  : 'font-mono tabular-nums'
+                              }
+                            >
+                              {item.placement_label}
+                            </span>
                           ) : (
                             <span className="text-[var(--ed-ink-4)]">—</span>
                           );
@@ -1591,10 +1605,24 @@ export function InventoryTable({
                   <td className="px-3 text-right font-mono tabular-nums">
                     {(() => {
                       // Split "one line per rack" row: ON HAND is THIS rack's
-                      // quantity (no placed/staged sub-line, no toggle — the row
-                      // already represents a single bucket).
+                      // quantity. If the bucket is staging/unplaced, add the
+                      // amber "awaiting put-away" line so a split row reads the
+                      // same as the item detail card (owner decision
+                      // 2026-07-08). Placed rack rows show just the number.
                       if (item.line_quantity !== undefined) {
-                        return formatNumber(item.line_quantity);
+                        const awaiting =
+                          item.placement_kind === 'staging' ||
+                          item.placement_kind === 'unplaced';
+                        return (
+                          <>
+                            {formatNumber(item.line_quantity)}
+                            {awaiting && (
+                              <div className="text-warning mt-0.5 text-[10.5px] font-normal leading-tight">
+                                awaiting put-away
+                              </div>
+                            )}
+                          </>
+                        );
                       }
                       // Defensive defaults so rows without the new fields (older
                       // callers, non-service code paths) render exactly as before.
