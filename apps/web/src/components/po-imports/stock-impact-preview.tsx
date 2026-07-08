@@ -31,6 +31,16 @@ interface StockImpactPreviewProps {
   lines: PoImportLineRow[];
   overrides: Record<string, PreviewLineOverride>;
   items: PreviewItem[];
+  /**
+   * Model B: multiple `items` rows can share one SKU (one row per
+   * charter/rack "placement" — see lib/inventory/group-by-sku.ts). Sum of
+   * quantityOnHand over EVERY row sharing a SKU, keyed by sku — computed by
+   * the page from the SAME full items list it already loads (no extra DB
+   * query). Optional: omitting it just falls back to the matched
+   * placement's own qty (single-placement SKUs render identically either
+   * way).
+   */
+  skuTotalBySku?: Map<string, number>;
 }
 
 export interface PreviewSummary {
@@ -53,6 +63,15 @@ interface PreviewRow {
   itemName: string | null;
   currentQty: number | null;
   projectedQty: number | null;
+  /**
+   * SKU aggregate (Model B): the sku's on-hand total summed across EVERY
+   * placement sharing it, before/after this preview's deltas. Null when
+   * there's no known target SKU yet (skipped / non-inventory / a
+   * not-yet-linked create-new line with no accepted suggestion) — mirrors
+   * currentQty/projectedQty's null-ness for those statuses.
+   */
+  skuTotalCurrentQty: number | null;
+  skuTotalProjectedQty: number | null;
   status: 'mapped' | 'unmapped' | 'skipped' | 'non-inventory';
 }
 
@@ -60,9 +79,11 @@ export function buildPreview(
   lines: PoImportLineRow[],
   overrides: Record<string, PreviewLineOverride>,
   items: PreviewItem[],
+  skuTotalBySku: Map<string, number> = new Map(),
 ): { rows: PreviewRow[]; summary: PreviewSummary } {
   const itemsById = new Map(items.map((i) => [i.id, i]));
   const aggregateDelta = new Map<string, number>(); // itemId → cumulative qty delta
+  const skuAggregateDelta = new Map<string, number>(); // sku → cumulative qty delta across ALL its placements
 
   // First pass: compute per-line status + qty delta, accumulate per-item delta
   // so a line that adds 10 to item X stacks correctly on the projected qty
@@ -85,6 +106,8 @@ export function buildPreview(
         itemName: null,
         currentQty: null,
         projectedQty: null,
+        skuTotalCurrentQty: null,
+        skuTotalProjectedQty: null,
         status: 'skipped',
       };
     }
@@ -100,6 +123,8 @@ export function buildPreview(
         itemName: null,
         currentQty: null,
         projectedQty: null,
+        skuTotalCurrentQty: null,
+        skuTotalProjectedQty: null,
         status: 'non-inventory',
       };
     }
@@ -113,6 +138,12 @@ export function buildPreview(
       // it projects against a brand-new instance starting at 0, same as any
       // other not-yet-created item.
       const willCreateNew = Boolean(l.suggested_item_id);
+      // The SKU total mirrors currentQty/projectedQty here for the same
+      // reason: there is no `sku` field on a PO import line, only an
+      // advisory suggested_item_id, and an unaccepted suggestion must NEVER
+      // borrow the suggested item's real numbers (including its SKU's real
+      // total). A brand-new item's SKU has no other placements yet, so 0 is
+      // the only number this projection can honestly show.
       return {
         lineId: l.id,
         lineNumber: l.line_number,
@@ -124,11 +155,17 @@ export function buildPreview(
         itemName: null,
         currentQty: willCreateNew ? 0 : null,
         projectedQty: willCreateNew ? qty : null,
+        skuTotalCurrentQty: willCreateNew ? 0 : null,
+        skuTotalProjectedQty: willCreateNew ? qty : null,
         status: 'unmapped',
       };
     }
     const item = itemsById.get(effectiveItemId);
     aggregateDelta.set(effectiveItemId, (aggregateDelta.get(effectiveItemId) ?? 0) + qty);
+    const itemSku = item?.sku ?? null;
+    if (itemSku) {
+      skuAggregateDelta.set(itemSku, (skuAggregateDelta.get(itemSku) ?? 0) + qty);
+    }
     return {
       lineId: l.id,
       lineNumber: l.line_number,
@@ -136,20 +173,38 @@ export function buildPreview(
       qty,
       cost,
       itemId: effectiveItemId,
-      itemSku: item?.sku ?? null,
+      itemSku,
       itemName: item?.name ?? null,
       currentQty: item?.quantityOnHand ?? 0,
       projectedQty: null, // filled in second pass
+      skuTotalCurrentQty: null, // filled in second pass
+      skuTotalProjectedQty: null, // filled in second pass
       status: 'mapped',
     };
   });
 
   // Second pass: for mapped rows, projectedQty = currentQty + total delta on
   // that item (so two lines hitting the same SKU show the same projection).
+  // skuTotalCurrentQty/skuTotalProjectedQty are the Model B aggregate: the
+  // SKU's full on-hand total (summed across every placement sharing it, per
+  // skuTotalBySku from the page) plus every line's delta against ANY
+  // placement of that SKU (skuAggregateDelta) — so two lines landing on two
+  // different placements of the same SKU both report the same combined
+  // total, distinct from their own placement's individual math above.
   const rows = interim.map((r) => {
     if (r.status !== 'mapped' || !r.itemId) return r;
     const totalDelta = aggregateDelta.get(r.itemId) ?? 0;
-    return { ...r, projectedQty: (r.currentQty ?? 0) + totalDelta };
+    const projectedQty = (r.currentQty ?? 0) + totalDelta;
+    const skuBaseline = r.itemSku
+      ? (skuTotalBySku.get(r.itemSku) ?? (r.currentQty ?? 0))
+      : (r.currentQty ?? 0);
+    const skuDelta = r.itemSku ? (skuAggregateDelta.get(r.itemSku) ?? 0) : totalDelta;
+    return {
+      ...r,
+      projectedQty,
+      skuTotalCurrentQty: skuBaseline,
+      skuTotalProjectedQty: skuBaseline + skuDelta,
+    };
   });
 
   // Totals include unmapped inventory lines too — they're still part of
@@ -172,10 +227,15 @@ export function buildPreview(
   return { rows, summary };
 }
 
-export function StockImpactPreview({ lines, overrides, items }: StockImpactPreviewProps) {
+export function StockImpactPreview({
+  lines,
+  overrides,
+  items,
+  skuTotalBySku,
+}: StockImpactPreviewProps) {
   const { rows, summary } = React.useMemo(
-    () => buildPreview(lines, overrides, items),
-    [lines, overrides, items],
+    () => buildPreview(lines, overrides, items, skuTotalBySku),
+    [lines, overrides, items, skuTotalBySku],
   );
 
   const mapped = rows.filter((r) => r.status === 'mapped');
@@ -233,8 +293,15 @@ export function StockImpactPreview({ lines, overrides, items }: StockImpactPrevi
                 {r.projectedQty != null && (
                   <span className="opacity-80">
                     {' '}
-                    — will create a new item ({formatNumber(r.currentQty ?? 0)} →{' '}
-                    {formatNumber(r.projectedQty)})
+                    — will create a new item; new placement{' '}
+                    {formatNumber(r.currentQty ?? 0)} → {formatNumber(r.projectedQty)}
+                    {r.skuTotalCurrentQty != null && r.skuTotalProjectedQty != null && (
+                      <>
+                        {' '}
+                        (SKU total {formatNumber(r.skuTotalCurrentQty)} →{' '}
+                        {formatNumber(r.skuTotalProjectedQty)})
+                      </>
+                    )}
                   </span>
                 )}
               </li>
@@ -250,16 +317,29 @@ export function StockImpactPreview({ lines, overrides, items }: StockImpactPrevi
               <TableHead className="w-12">#</TableHead>
               <TableHead>Internal item</TableHead>
               <TableHead>From PO</TableHead>
-              <TableHead className="text-right">Current</TableHead>
+              <TableHead
+                className="text-right"
+                title="Sum of on-hand across every placement (rack/charter) sharing this SKU — not just the row below"
+              >
+                SKU total
+              </TableHead>
+              <TableHead className="text-right" title="This specific placement's own on-hand">
+                Placement current
+              </TableHead>
               <TableHead className="text-right">Δ</TableHead>
-              <TableHead className="text-right">After receipt</TableHead>
+              <TableHead
+                className="text-right"
+                title="This specific placement's on-hand after receipt"
+              >
+                Placement after
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {mapped.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={6}
+                  colSpan={7}
                   className="text-muted-foreground py-8 text-center text-xs"
                 >
                   No inventory lines mapped yet. Pick an internal item for each
@@ -278,6 +358,16 @@ export function StockImpactPreview({ lines, overrides, items }: StockImpactPrevi
                 </TableCell>
                 <TableCell className="text-muted-foreground max-w-[260px] truncate text-xs">
                   {r.description}
+                </TableCell>
+                <TableCell className="text-right font-semibold tabular-nums">
+                  {r.skuTotalCurrentQty != null && r.skuTotalProjectedQty != null ? (
+                    <>
+                      {formatNumber(r.skuTotalCurrentQty)} →{' '}
+                      {formatNumber(r.skuTotalProjectedQty)}
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground font-normal">—</span>
+                  )}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {formatNumber(r.currentQty ?? 0)}
