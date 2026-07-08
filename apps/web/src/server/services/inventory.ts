@@ -1803,7 +1803,22 @@ export class InventoryService {
       .select('*')
       .single();
 
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) {
+      // Duplicate SKU at the same location trips the partial unique index
+      // inventory_items_org_sku_bin_unique (organization_id, sku,
+      // bin_location) WHERE deleted_at IS NULL. Surface it as a clear,
+      // actionable message — matching create()'s handling — instead of the
+      // opaque "internal error" the raw rethrow produced (the reason a
+      // pasted/copied SKU appeared to fail for no visible reason while an
+      // auto-generated SKU saved fine).
+      if (error.code === '23505') {
+        throw new ServiceError(
+          'conflict',
+          'Another item at this location already uses that SKU. SKUs must be unique per location — change the SKU, or move this item to a different rack/location.',
+        );
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
 
     // Drop the cosmetic `updated_by` from the changed-keys list so the
     // audit row reflects what the caller actually edited.
