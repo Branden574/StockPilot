@@ -627,6 +627,15 @@ export default function ItemDetail() {
               >
                 Adjust with reason
               </Button>
+              {/* Task 4 (Model B / SKU grouping clarity): quantity is a
+                  PER-PLACEMENT field — adjusting it here only changes
+                  on-hand at this item's specific rack/charter, never other
+                  placements sharing the same SKU. Copy/UX only, no logic
+                  change. */}
+              <Body muted size={11} style={{ marginTop: 10, textAlign: 'center' }}>
+                This placement only — on-hand adjustments here apply just to this
+                rack/charter, not other placements of this SKU.
+              </Body>
             </Card>
 
             {/* Meta card */}
@@ -643,6 +652,14 @@ export default function ItemDetail() {
                 </>
               ) : null}
             </Card>
+            {/* Task 4: name, SKU, cost, price, category, etc. are SHARED
+                across every placement of this SKU (see InventoryService.update,
+                Task 3) — none of them are editable in-app, so this just tells
+                the user what "Edit on web" (below) will affect. */}
+            <Body muted size={11} style={{ textAlign: 'center' }}>
+              Shared across all placements of this SKU — name, SKU, cost, price,
+              and category update everywhere this item lives when edited on web.
+            </Body>
 
             {/* Location block — only render when at least one field is
                 populated. Mirrors what the web detail page shows under
@@ -669,14 +686,22 @@ export default function ItemDetail() {
               }
               if (rows.length === 0) return null;
               return (
-                <Card padding={0}>
-                  {rows.map((row, i) => (
-                    <React.Fragment key={row.label}>
-                      {i > 0 ? <Hair inset={20} /> : null}
-                      <MetaRow label={row.label} value={row.value} />
-                    </React.Fragment>
-                  ))}
-                </Card>
+                <>
+                  <Card padding={0}>
+                    {rows.map((row, i) => (
+                      <React.Fragment key={row.label}>
+                        {i > 0 ? <Hair inset={20} /> : null}
+                        <MetaRow label={row.label} value={row.value} />
+                      </React.Fragment>
+                    ))}
+                  </Card>
+                  {/* Task 4: warehouse/charter/location/rack are PER-PLACEMENT —
+                      they describe just this row, not the whole SKU. */}
+                  <Body muted size={11} style={{ textAlign: 'center' }}>
+                    This placement only — describes just this rack/charter, not
+                    other placements of this SKU.
+                  </Body>
+                </>
               );
             })()}
 
