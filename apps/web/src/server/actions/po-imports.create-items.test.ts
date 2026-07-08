@@ -93,7 +93,9 @@ beforeEach(() => {
 
 describe('createItemsFromPoLinesAction — charter + location + item_created (Fix #3 / #2)', () => {
   it('verifies the charter, tags the created item with it + the chosen location, and flags item_created', async () => {
-    const stub = installStub({});
+    // No existing item shares the line's vendor number as barcode — otherwise
+    // the product barcode auto-link would (correctly) link instead of create.
+    const stub = installStub({ inventoryItems: [] });
 
     const result = await createItemsFromPoLinesAction({
       poImportId: PO_IMPORT_ID,
@@ -234,7 +236,12 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
 
   it('product import does NOT ISBN-match even if a vendor number looks like an ISBN', async () => {
     // itemType defaults to product → the book ISBN lookup is skipped entirely.
-    installStub({ lines: [baseLine({ vendor_item_number: ISBN13 })] });
+    // The product barcode lookup DOES run, but matches nothing here — and it
+    // must use the RAW vendor number only, never expanded ISBN variants.
+    const stub = installStub({
+      lines: [baseLine({ vendor_item_number: ISBN13 })],
+      inventoryItems: [],
+    });
 
     const result = await createItemsFromPoLinesAction({
       poImportId: PO_IMPORT_ID,
@@ -248,10 +255,18 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
     if (result.ok) expect(result.data.created).toBe(1); // created, not linked
     const createArg = (mockCreate.mock.calls[0] as unknown as [Record<string, unknown>])[0];
     expect(createArg.itemType).toBe('product');
+    // The barcode lookup used the vendor number verbatim: no ISBN-10 variant
+    // expansion, no book item_type filter.
+    const lookupArgs = (stub.chainArgsAll.get('inventory_items.select') ?? []).flat(Infinity);
+    expect(lookupArgs).toContain(ISBN13);
+    expect(lookupArgs).not.toContain('0306406152');
+    expect(lookupArgs).not.toContain('item_type');
   });
 
   it('drops a charter that does not belong to the org (tenant isolation) — never tags items with it', async () => {
-    installStub({ charterRow: null }); // verification finds no matching charter in this org
+    // charter verification finds no matching charter in this org; no barcode
+    // match either, so the line falls through to create.
+    installStub({ charterRow: null, inventoryItems: [] });
 
     const result = await createItemsFromPoLinesAction({
       poImportId: PO_IMPORT_ID,
@@ -321,5 +336,173 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
     expect(mockCreate).not.toHaveBeenCalled();
     const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
     expect(updatePayload?.item_created).toBe(false);
+  });
+});
+
+describe('createItemsFromPoLinesAction — product barcode auto-link', () => {
+  it('links a product line to an existing item whose barcode matches a vendor number (no duplicate created)', async () => {
+    const stub = installStub({
+      lines: [baseLine({ vendor_item_number: 'V1' })],
+      inventoryItems: [{ id: 'existing-prod-1' }],
+    });
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      // no decision → mode 'create'; no itemType → 'product'
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.linked).toBe(1);
+      expect(result.data.created).toBe(0);
+    }
+    // No new item — the line points at the pre-existing product so receiving
+    // tops up its count.
+    expect(mockCreate).not.toHaveBeenCalled();
+    const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(updatePayload?.item_id).toBe('existing-prod-1');
+    expect(updatePayload?.match_status).toBe('mapped');
+    // Must NOT be flagged item_created — a later cancel must never archive a
+    // pre-existing item (same semantics as the book ISBN auto-link).
+    expect(updatePayload?.item_created).toBe(false);
+    // The lookup was org-scoped, matched on barcode, and excluded deleted rows.
+    const lookupArgs = (stub.chainArgsAll.get('inventory_items.select') ?? []).flat(Infinity);
+    expect(lookupArgs).toContain('organization_id');
+    expect(lookupArgs).toContain('barcode');
+    expect(lookupArgs).toContain('V1');
+    expect(lookupArgs).toContain('deleted_at');
+  });
+
+  it('matches on ANY of the vendor numbers (vendor_product_number / auxiliary_number too)', async () => {
+    const stub = installStub({
+      lines: [baseLine({ vendor_item_number: null, vendor_product_number: 'VP-9', auxiliary_number: 'AUX-3' })],
+      inventoryItems: [{ id: 'existing-prod-2' }],
+    });
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.linked).toBe(1);
+    expect(mockCreate).not.toHaveBeenCalled();
+    const lookupArgs = (stub.chainArgsAll.get('inventory_items.select') ?? []).flat(Infinity);
+    expect(lookupArgs).toContain('VP-9');
+    expect(lookupArgs).toContain('AUX-3');
+    const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(updatePayload?.item_id).toBe('existing-prod-2');
+  });
+
+  it('creates as before when the line has NO vendor numbers (no lookup issued)', async () => {
+    const stub = installStub({
+      lines: [baseLine({ vendor_item_number: null, vendor_product_number: null, auxiliary_number: null })],
+      inventoryItems: [{ id: 'existing-prod-1' }], // would match if (wrongly) queried
+    });
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.created).toBe(1);
+      expect(result.data.linked).toBe(0);
+    }
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    // No inventory_items lookup ran at all — nothing to match against.
+    expect(stub.chainsAll.get('inventory_items.select')).toBeUndefined();
+    const updatePayload = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(updatePayload?.item_created).toBe(true);
+  });
+
+  it('an explicit use_existing decision wins even when a different barcode candidate exists', async () => {
+    // The barcode lookup is gated on mode==='create' — an explicit decision
+    // must never be overridden by the auto-match.
+    const stub = installStub({
+      lines: [baseLine({ vendor_item_number: 'V1' })],
+      inventoryItems: [{ id: 'chosen-item-1' }],
+    });
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      decisions: { [LINE_ID]: { mode: 'use_existing', itemId: '77777777-7777-7777-7777-777777777777' } },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.linked).toBe(1);
+    expect(mockCreate).not.toHaveBeenCalled();
+    // Exactly ONE inventory_items query ran — the use_existing org check, not
+    // the barcode auto-match (its chain ends in maybeSingle, not limit).
+    const allChains = stub.chainsAll.get('inventory_items.select') ?? [];
+    expect(allChains).toHaveLength(1);
+    expect(allChains[0]).not.toContain('limit');
+  });
+
+  it('an explicit skip decision wins even when a barcode candidate exists', async () => {
+    const stub = installStub({
+      lines: [baseLine({ vendor_item_number: 'V1' })],
+      inventoryItems: [{ id: 'existing-prod-1' }],
+    });
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      decisions: { [LINE_ID]: { mode: 'skip' } },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.skipped).toBe(1);
+      expect(result.data.linked).toBe(0);
+    }
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(stub.chainsAll.get('inventory_items.select')).toBeUndefined();
+    expect(stub.chainsAll.get('po_import_lines.update')).toBeUndefined();
+  });
+
+  it('falls through to CREATE (and logs) when the barcode lookup errors — creating is the designed fallback', async () => {
+    // Same wiring as installStub, but the inventory_items lookup itself fails.
+    mockSupabaseRef.client = makeSupabaseStub({
+      'po_imports.select': { data: { id: PO_IMPORT_ID }, error: null },
+      'charters.select': { data: { id: CHARTER_ID }, error: null },
+      'locations.select': { data: { id: 'loc-1' }, error: null },
+      'po_import_lines.select': { data: [baseLine({ vendor_item_number: 'V1' })], error: null },
+      'po_import_lines.update': { data: null, error: null },
+      'inventory_items.select': { data: null, error: { message: 'transient lookup failure' } },
+    }).client;
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.created).toBe(1);
+      expect(result.data.linked).toBe(0);
+    }
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('barcode candidate lookup failed'),
+      expect.objectContaining({ error: 'transient lookup failure' }),
+    );
+    errSpy.mockRestore();
   });
 });
