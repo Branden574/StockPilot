@@ -238,6 +238,40 @@ export async function completePickingAction(
   }
 }
 
+const backorderExitSchema = z.object({ id: z.string().uuid() });
+
+export async function resumeFulfillmentAction(
+  input: z.input<typeof backorderExitSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = backorderExitSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.resumeFulfillment(parsed.data.id);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+export async function closePartialAction(
+  input: z.input<typeof backorderExitSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = backorderExitSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.closePartial(parsed.data.id);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 const internalNotesSchema = z.object({
   id: z.string().uuid(),
   notes: z.string().max(2000).nullable(),

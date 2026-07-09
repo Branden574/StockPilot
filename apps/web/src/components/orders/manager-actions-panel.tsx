@@ -9,8 +9,10 @@ import {
   Hand,
   Loader2,
   PackageCheck,
+  PackageX,
   PenLine,
   Printer,
+  RotateCcw,
   Save,
   ScanLine,
   Truck,
@@ -43,12 +45,14 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   approveOrderRequestAction,
   claimPickingAction,
+  closePartialAction,
   completePickingAction,
   denyOrderRequestAction,
   generatePackingSlipsAction,
   generatePickSlipAction,
   markInTransitAction,
   releasePickingAction,
+  resumeFulfillmentAction,
   setOrderInternalNotesAction,
   stageOrderAction,
 } from '@/server/actions/order-requests';
@@ -107,6 +111,8 @@ type BusyKey =
   | 'stage-pickup'
   | 'stage-delivery'
   | 'mark-in-transit'
+  | 'resume-fulfillment'
+  | 'close-partial'
   | 'notes'
   | null;
 
@@ -194,6 +200,7 @@ export function ManagerActionsPanel({
   // also captures focus so screen readers announce the action.
   const [denyOpen, setDenyOpen] = React.useState(false);
   const [denyReason, setDenyReason] = React.useState('');
+  const [closePartialOpen, setClosePartialOpen] = React.useState(false);
 
   async function approve() {
     setBusy('approve');
@@ -319,6 +326,31 @@ export function ManagerActionsPanel({
       return;
     }
     toast.success('Order is on the way.');
+    router.refresh();
+  }
+
+  async function resumeFulfillment() {
+    setBusy('resume-fulfillment');
+    const res = await resumeFulfillmentAction({ id: orderId });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Fulfillment resumed — a new pick slip is ready for the remaining items.');
+    router.refresh();
+  }
+
+  async function closePartial() {
+    setBusy('close-partial');
+    const res = await closePartialAction({ id: orderId });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    setClosePartialOpen(false);
+    toast.success('Order closed as delivered-partial.');
     router.refresh();
   }
 
@@ -631,6 +663,31 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
+          {status === 'backordered' && canApprove && (
+            <>
+              <Button
+                variant="gradient"
+                onClick={resumeFulfillment}
+                disabled={busy !== null}
+              >
+                {busy === 'resume-fulfillment' ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-3.5 w-3.5" />
+                )}
+                Resume fulfillment
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setClosePartialOpen(true)}
+                disabled={busy !== null}
+              >
+                <PackageX className="h-3.5 w-3.5" />
+                Close as delivered-partial
+              </Button>
+            </>
+          )}
+
           {(status === 'completed' || status === 'denied' || status === 'cancelled') && (
             <div className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
               <CheckCircle2 className="h-3.5 w-3.5" />
@@ -719,6 +776,41 @@ export function ManagerActionsPanel({
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : null}
               Deny request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Close-as-delivered-partial confirm */}
+      <Dialog
+        open={closePartialOpen}
+        onOpenChange={(v) => {
+          if (busy === 'close-partial') return;
+          setClosePartialOpen(v);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Close as delivered-partial?</DialogTitle>
+            <DialogDescription>
+              This ends the order and keeps the record of what was already
+              delivered. The remaining backordered units will NOT be fulfilled.
+              You can&apos;t reopen the order afterward.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setClosePartialOpen(false)}
+              disabled={busy === 'close-partial'}
+            >
+              Cancel
+            </Button>
+            <Button variant="gradient" onClick={closePartial} disabled={busy === 'close-partial'}>
+              {busy === 'close-partial' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Close order
             </Button>
           </DialogFooter>
         </DialogContent>

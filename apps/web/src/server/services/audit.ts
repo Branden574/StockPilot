@@ -107,6 +107,8 @@ export type AuditEvent =
   | 'order.staged_for_delivery'
   | 'order.delivery_assigned'
   | 'order.in_transit'
+  | 'order.fulfillment_resumed'
+  | 'order.closed_partial'
   | 'order.signature_collected'
   | 'order.completed'
   | 'pdf.exported'

@@ -143,6 +143,14 @@ export default async function OrderDetailPage({
     (s, l) => s + (Number(l.quantity_requested) || 0),
     0,
   );
+  // Fulfilled = units PROVIDED to the customer (shipped at hand-over); owed =
+  // the still-unfulfilled remainder. Drives the backorder progress line + the
+  // per-line Owed column.
+  const totalFulfilled = lines.reduce(
+    (s, l) => s + (Number(l.quantity_fulfilled) || 0),
+    0,
+  );
+  const totalOwed = Math.max(0, totalQty - totalFulfilled);
   const reservedTotal = reservations.reduce(
     (s, r) => s + (Number(r.quantity) || 0),
     0,
@@ -351,51 +359,86 @@ export default async function OrderDetailPage({
                 Total qty {formatNumber(totalQty)}
               </p>
             </div>
+            {totalOwed > 0 && (
+              <div className="border-b border-border bg-amber-50 px-4 py-2.5 text-xs dark:bg-amber-950/30">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-amber-800 dark:text-amber-300">
+                    {request.status === 'backordered'
+                      ? 'Backordered — awaiting stock'
+                      : 'Partially fulfilled'}
+                  </span>
+                  <span className="tabular-nums text-amber-800 dark:text-amber-300">
+                    {formatNumber(totalFulfilled)} of {formatNumber(totalQty)} provided ·{' '}
+                    {formatNumber(totalOwed)} owed
+                  </span>
+                </div>
+                <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-amber-200 dark:bg-amber-900">
+                  <div
+                    className="h-full rounded-full bg-amber-500"
+                    style={{
+                      width: `${totalQty > 0 ? Math.round((totalFulfilled / totalQty) * 100) : 0}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Item</TableHead>
                   <TableHead className="text-right">Requested</TableHead>
                   <TableHead className="text-right">Fulfilled</TableHead>
+                  <TableHead className="text-right">Owed</TableHead>
                   <TableHead className="text-right">On hand</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {lines.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-muted-foreground py-6 text-center text-sm">
+                    <TableCell colSpan={5} className="text-muted-foreground py-6 text-center text-sm">
                       No lines on this request.
                     </TableCell>
                   </TableRow>
                 )}
-                {lines.map((l) => (
-                  <TableRow key={l.id}>
-                    <TableCell>
-                      {l.item ? (
-                        <Link
-                          href={`/dashboard/inventory/${l.item.id}`}
-                          className="hover:underline"
-                        >
-                          <div className="font-medium">{l.item.name}</div>
-                          <div className="text-muted-foreground font-mono text-[11px]">
-                            {l.item.sku}
-                          </div>
-                        </Link>
-                      ) : (
-                        <span className="text-muted-foreground italic">Deleted item</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatNumber(l.quantity_requested)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {formatNumber(l.quantity_fulfilled)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {l.item ? formatNumber(l.item.quantity_on_hand) : '—'}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {lines.map((l) => {
+                  const owed = Math.max(
+                    0,
+                    (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
+                  );
+                  return (
+                    <TableRow key={l.id}>
+                      <TableCell>
+                        {l.item ? (
+                          <Link
+                            href={`/dashboard/inventory/${l.item.id}`}
+                            className="hover:underline"
+                          >
+                            <div className="font-medium">{l.item.name}</div>
+                            <div className="text-muted-foreground font-mono text-[11px]">
+                              {l.item.sku}
+                            </div>
+                          </Link>
+                        ) : (
+                          <span className="text-muted-foreground italic">Deleted item</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatNumber(l.quantity_requested)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {formatNumber(l.quantity_fulfilled)}
+                      </TableCell>
+                      <TableCell
+                        className={`text-right tabular-nums ${owed > 0 ? 'font-medium text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}
+                      >
+                        {formatNumber(owed)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {l.item ? formatNumber(l.item.quantity_on_hand) : '—'}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </section>

@@ -30,6 +30,7 @@ export type OrderRequestStatus =
   | 'staged_for_pickup'
   | 'staged_for_delivery'
   | 'in_transit'
+  | 'backordered'
   | 'completed'
   | 'denied'
   | 'cancelled';
@@ -1112,6 +1113,70 @@ export class OrderRequestsService {
     const row = data as OrderRequestRow;
     await audit(
       { event: 'order.picking_complete', entityType: 'order_request', entityId: id },
+      this.ctx,
+    );
+    void broadcastOrderChanged(this.ctx.organizationId, id);
+    return row;
+  }
+
+  /**
+   * Resume fulfillment of a backordered order — reserve newly-available stock
+   * up to each line's owed and re-open the pick + signature cycle (→
+   * pick_slip_generated). Manager+ only; the RPC enforces backordered-only and
+   * refuses when nothing is fulfillable yet.
+   */
+  async resumeFulfillment(id: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
+    assertPermission(this.ctx, 'orders:approve');
+    await this.requireWarehouseAccess(id, 'write');
+    const { data, error } = await this.ctx.supabase.rpc('resume_fulfillment', { p_id: id });
+    if (error) {
+      const msg = error.message ?? '';
+      if (msg.includes('order_request_not_found'))
+        throw new ServiceError('not_found', 'Order not found.');
+      if (msg.includes('no_fulfillable_stock'))
+        throw new ServiceError(
+          'validation_error',
+          'No stock is available yet to fulfill the backordered items. Top up the short items first.',
+        );
+      if (msg.includes('forbidden'))
+        throw new ServiceError('forbidden', 'Only a manager can resume fulfillment.');
+      if (msg.includes('invalid_status_transition'))
+        throw new ServiceError('validation_error', 'Only a backordered order can be resumed.');
+      throw new ServiceError('internal_error', 'Could not resume fulfillment.');
+    }
+    const row = data as OrderRequestRow;
+    await audit(
+      { event: 'order.fulfillment_resumed', entityType: 'order_request', entityId: id },
+      this.ctx,
+    );
+    void broadcastOrderChanged(this.ctx.organizationId, id);
+    return row;
+  }
+
+  /**
+   * Close a backordered order as delivered-partial (→ completed). Keeps
+   * quantity_fulfilled as the record of what was provided and releases the hold
+   * on the un-shipped remainder; no stock moves. Manager+ only.
+   */
+  async closePartial(id: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
+    assertPermission(this.ctx, 'orders:approve');
+    await this.requireWarehouseAccess(id, 'write');
+    const { data, error } = await this.ctx.supabase.rpc('close_partial', { p_id: id });
+    if (error) {
+      const msg = error.message ?? '';
+      if (msg.includes('order_request_not_found'))
+        throw new ServiceError('not_found', 'Order not found.');
+      if (msg.includes('forbidden'))
+        throw new ServiceError('forbidden', 'Only a manager can close a backordered order.');
+      if (msg.includes('invalid_status_transition'))
+        throw new ServiceError('validation_error', 'Only a backordered order can be closed as delivered-partial.');
+      throw new ServiceError('internal_error', 'Could not close the order.');
+    }
+    const row = data as OrderRequestRow;
+    await audit(
+      { event: 'order.closed_partial', entityType: 'order_request', entityId: id },
       this.ctx,
     );
     void broadcastOrderChanged(this.ctx.organizationId, id);

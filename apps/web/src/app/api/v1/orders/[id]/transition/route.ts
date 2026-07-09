@@ -33,6 +33,8 @@ const bodySchema = z.object({
     'stage',
     'assign_delivery',
     'mark_in_transit',
+    'resume_fulfillment',
+    'close_partial',
     'cancel',
   ]),
   reason: z.string().max(500).optional(),
@@ -129,13 +131,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       case 'mark_in_transit':
         order = await svc.markInTransit(id);
         break;
+      case 'resume_fulfillment':
+        order = await svc.resumeFulfillment(id);
+        break;
+      case 'close_partial':
+        order = await svc.closePartial(id);
+        break;
       case 'cancel':
         order = await svc.cancel(id, a.reason?.trim() || null);
         break;
     }
     // complete_picking decrements stock and cancel restocks picked stock —
     // both change the cached Items/Books default views. The other actions
-    // are status-only; one cheap tag revalidate covers the set.
+    // (including resume/close_partial, which only move reservations) are
+    // status-only; one cheap tag revalidate covers the set.
     if (a.action === 'complete_picking' || a.action === 'cancel') {
       revalidateInventoryList(ctx.organizationId);
     }
