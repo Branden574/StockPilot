@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 
 import { DigitalPick } from '@/components/orders/digital-pick';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import { isManagerOrAbove } from '@stockpilot/core';
@@ -35,9 +36,18 @@ export default async function DigitalPickPage({
   // non-picker doesn't stare at editable inputs that will just error. Mirrors
   // the shared state machine's picking-phase gate.
   const assignedPickerId = detail.request.assigned_picker_id;
+  // Pick permission (manager+ or the claimant) is necessary but NOT sufficient:
+  // the picker must also have WRITE access to the order's warehouse, or the
+  // pick-quantity writes would just error. Gating here keeps an out-of-scope
+  // viewer from staring at editable inputs. Mirrors the shared state machine's
+  // viewerCanPick gate on the order-detail panel.
+  const wa = await getWarehouseAccess(ctx);
+  const hasWhWrite =
+    wa.hasAllAccess || wa.writableIds.includes(detail.request.warehouse_id);
   const canPick =
-    isManagerOrAbove(ctx.role) ||
-    (assignedPickerId !== null && assignedPickerId === ctx.userId);
+    (isManagerOrAbove(ctx.role) ||
+      (assignedPickerId !== null && assignedPickerId === ctx.userId)) &&
+    hasWhWrite;
   let assignedPickerName: string | null = null;
   if (!canPick && assignedPickerId) {
     const supabase = await createClient();

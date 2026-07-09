@@ -36,12 +36,14 @@ import {
 } from '@/lib/orders-api';
 import {
   availableOrderActions,
+  can,
   derivePickingStatus,
   type FulfillmentType,
   type OrderStatus,
   type Role,
 } from '@stockpilot/core';
 import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { supabase } from '@/lib/supabase';
 import { useWorkspace } from '@/lib/use-workspace';
 import { FONT } from '@/lib/theme';
@@ -152,6 +154,17 @@ export default function OrderDetail() {
 
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
+
+  // Effective permission set (org role/user overrides applied; static role
+  // defaults while loading). Feeds `viewerCanPick` below.
+  const permissions = useEffectivePermissions();
+  // Whether THIS viewer can pick — manager+ OR holds items:update. Mobile can't
+  // see warehouse assignments (the backend + assign_picking enforce warehouse),
+  // so this at least keeps a `viewer` role from being offered Claim/Pick. `can`
+  // falls back to the static role default when `permissions` hasn't loaded, so a
+  // staffer sees pick affordances immediately and a viewer never does.
+  const viewerCanPick =
+    isManager || (role !== null && can({ role: role as Role, permissions }, 'items:update'));
 
 
   const loadAttachments = React.useCallback(async () => {
@@ -384,6 +397,7 @@ export default function OrderDetail() {
           viewerUserId: user?.id ?? '',
           assignedPickerId: order.assignedPickerId,
           assignedDeliveryUserId: order.assignedDeliveryUserId,
+          viewerCanPick,
         })
       : [];
   const canClaimPick = pickActions.includes('claim_picking');

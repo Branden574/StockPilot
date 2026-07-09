@@ -110,10 +110,14 @@ export function DigitalPick({
       <div className="border-border bg-card rounded-xl border p-6 text-center">
         <Lock className="text-muted-foreground mx-auto h-6 w-6" />
         <p className="mt-3 text-sm font-medium">
-          This order is being picked by {assignedPickerName ?? 'someone'}.
+          {assignedPickerName
+            ? `This order is being picked by ${assignedPickerName}.`
+            : 'This order needs to be claimed before you can pick it.'}
         </p>
         <p className="text-muted-foreground mt-1 text-sm">
-          Claim it or ask a manager to reassign.
+          {assignedPickerName
+            ? 'Ask a manager to reassign it if you need to take over.'
+            : 'Go back to the order and tap “Claim picking” to start.'}
         </p>
         <div className="mt-4">
           <Button variant="outline" asChild>

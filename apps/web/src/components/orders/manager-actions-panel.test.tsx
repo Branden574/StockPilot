@@ -58,6 +58,7 @@ function baseProps(overrides: Partial<PanelProps> = {}): PanelProps {
     assignedPickerId: null,
     assignedPickerName: null,
     pickers: [],
+    viewerCanPick: true,
     ...overrides,
   };
 }

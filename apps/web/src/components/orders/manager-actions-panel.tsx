@@ -88,6 +88,12 @@ interface Props {
   /** Candidate pickers for the AssignPickerDialog (manager+ only; empty
    *  otherwise). Same active-members shape as `drivers`. */
   pickers: DriverOption[];
+  /** Whether THIS viewer can actually pick this order — i.e. holds the pick
+   *  permission (manager+ or items:update) AND has write access to the order's
+   *  warehouse. The server computes it and the shared state machine reads it so
+   *  the picking phase offers only view/print (never Claim/Pick/Complete/
+   *  Release) to a viewer the backend would reject. */
+  viewerCanPick: boolean;
 }
 
 type BusyKey =
@@ -128,6 +134,7 @@ export function ManagerActionsPanel({
   assignedPickerId,
   assignedPickerName,
   pickers,
+  viewerCanPick,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
@@ -142,6 +149,7 @@ export function ManagerActionsPanel({
     viewerUserId,
     assignedPickerId,
     assignedDeliveryUserId,
+    viewerCanPick,
   });
   const isPickingPhase =
     status === 'pick_slip_generated' || status === 'picking_in_progress';

@@ -21,8 +21,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { can, isManagerOrAbove } from '@stockpilot/core';
+import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import {
@@ -107,6 +108,21 @@ export default async function OrderDetailPage({
   const isPickingStatus =
     request.status === 'pick_slip_generated' ||
     request.status === 'picking_in_progress';
+
+  // Picking claim/lock — whether THIS viewer can actually pick THIS order:
+  // they hold the pick permission (manager+ or items:update) AND have write
+  // access to the order's warehouse. Feeds the shared state machine so the
+  // panel never advertises a Claim/Pick/Complete/Release the backend (which
+  // checks both) would reject. Only the picking phase reads it, so the extra
+  // warehouse-access query is paid there only (it's cheap + request-cached).
+  let viewerCanPick = true;
+  if (isPickingStatus) {
+    const wa = await getWarehouseAccess(ctx);
+    const hasWhWrite =
+      wa.hasAllAccess || wa.writableIds.includes(request.warehouse_id);
+    viewerCanPick =
+      (isManagerOrAbove(ctx.role) || can(ctx, 'items:update')) && hasWhWrite;
+  }
   const showActionsPanel =
     request.status !== 'pending_confirmation' &&
     (canApprove ||
@@ -178,29 +194,50 @@ export default async function OrderDetailPage({
   if (isPickingStatus) {
     const supabase = await createClient();
     if (canApprove) {
-      const { data: members } = await supabase
-        .from('organization_members')
-        .select('user_id, user:user_profiles!user_id (id, full_name, email)')
-        .eq('organization_id', ctx.organizationId)
-        .not('accepted_at', 'is', null);
+      // Only offer pickers who can actually pick at THIS warehouse: managers+
+      // (all-warehouse access) OR members explicitly assigned to
+      // request.warehouse_id. Without this filter AssignPickerDialog could
+      // propose an assignee the backend's assign_picking (which checks
+      // warehouse write) would then reject — an authorize-then-reject UI.
+      const [membersRes, assignmentsRes] = await Promise.all([
+        supabase
+          .from('organization_members')
+          .select('user_id, role, user:user_profiles!user_id (id, full_name, email)')
+          .eq('organization_id', ctx.organizationId)
+          .not('accepted_at', 'is', null),
+        supabase
+          .from('user_warehouse_assignments')
+          .select('user_id')
+          .eq('organization_id', ctx.organizationId)
+          .eq('warehouse_id', request.warehouse_id),
+      ]);
+      const assignedUserIds = new Set(
+        ((assignmentsRes.data ?? []) as { user_id: string }[]).map((a) => a.user_id),
+      );
       type MemberRow = {
         user_id: string;
+        role: Role;
         user:
           | { id: string; full_name: string | null; email: string }
           | { id: string; full_name: string | null; email: string }[]
           | null;
       };
-      pickers = ((members ?? []) as MemberRow[])
-        .flatMap((m) => {
-          const u = Array.isArray(m.user) ? m.user[0] : m.user;
-          if (!u || typeof u.email !== 'string') return [];
-          return [{ userId: u.id, fullName: u.full_name ?? null, email: u.email }];
-        })
+      // Resolve the full member list first so the assigned-picker chip name
+      // stays correct even if that picker no longer qualifies for the roster
+      // (e.g. their warehouse assignment was later removed).
+      const rawMembers = ((membersRes.data ?? []) as MemberRow[]).flatMap((m) => {
+        const u = Array.isArray(m.user) ? m.user[0] : m.user;
+        if (!u || typeof u.email !== 'string') return [];
+        return [{ userId: u.id, role: m.role, fullName: u.full_name ?? null, email: u.email }];
+      });
+      pickers = rawMembers
+        .filter((m) => isManagerOrAbove(m.role) || assignedUserIds.has(m.userId))
+        .map((m) => ({ userId: m.userId, fullName: m.fullName, email: m.email }))
         .sort((a, b) =>
           (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
         );
       if (request.assigned_picker_id) {
-        const match = pickers.find((p) => p.userId === request.assigned_picker_id);
+        const match = rawMembers.find((m) => m.userId === request.assigned_picker_id);
         assignedPickerName = match ? (match.fullName ?? match.email) : null;
       }
     } else if (request.assigned_picker_id) {
@@ -409,6 +446,7 @@ export default async function OrderDetailPage({
               assignedPickerId={request.assigned_picker_id}
               assignedPickerName={assignedPickerName}
               pickers={pickers}
+              viewerCanPick={viewerCanPick}
             />
           )}
 
