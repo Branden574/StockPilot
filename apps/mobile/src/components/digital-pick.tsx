@@ -26,10 +26,19 @@ import { useTheme } from '@/lib/use-theme';
 export function DigitalPick({
   orderId,
   onCompleted,
+  canPick = true,
 }: {
   orderId: string;
   /** Called after a successful complete so the parent screen can reload. */
   onCompleted: () => void;
+  /**
+   * Whether the viewer may actually pick this order. The parent screen decides
+   * this from the picking claim/lock rules (assigned picker or a manager). When
+   * false we render a muted notice instead of the pick inputs — defense-in-depth
+   * so the workspace can never be shown to a non-claimant even if mis-rendered
+   * (the server also rejects the write).
+   */
+  canPick?: boolean;
 }) {
   const { c } = useTheme();
   const [lines, setLines] = React.useState<OrderDetailLine[] | null>(null);
@@ -108,6 +117,22 @@ export function DigitalPick({
     }
   }
 
+  if (!canPick) {
+    // Locked to another picker — show a muted notice, never the pick inputs.
+    return (
+      <View
+        style={{
+          borderWidth: 1,
+          borderColor: c.hair,
+          borderRadius: 12,
+          padding: 14,
+          backgroundColor: c.card,
+        }}
+      >
+        <Mono size={11.5} color={c.ink4}>Being picked by another picker.</Mono>
+      </View>
+    );
+  }
   if (error) {
     return (
       <View style={{ gap: 8 }}>

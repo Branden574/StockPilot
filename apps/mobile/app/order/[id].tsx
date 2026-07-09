@@ -27,11 +27,20 @@ import { useAuth } from '@/lib/auth-context';
 import { resizeForUpload } from '@/lib/image-resize';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import {
+  claimPicking,
   listOrderDrivers,
+  releasePicking,
   transitionOrder,
   type OrderAction,
   type OrderDriver,
 } from '@/lib/orders-api';
+import {
+  availableOrderActions,
+  derivePickingStatus,
+  type FulfillmentType,
+  type OrderStatus,
+  type Role,
+} from '@stockpilot/core';
 import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
 import { supabase } from '@/lib/supabase';
 import { useWorkspace } from '@/lib/use-workspace';
@@ -91,6 +100,10 @@ interface OrderHeader {
   signedAt: string | null;
   createdAt: string | null;
   assignedDeliveryUserId: string | null;
+  /** The locked-in picker (null when unclaimed). Drives the picker chip. */
+  assignedPickerId: string | null;
+  /** Resolved display name of the assigned picker, when readable. */
+  pickerName: string | null;
   fulfillmentType: string | null;
   signatureToken: string | null;
 }
@@ -183,11 +196,15 @@ export default function OrderDetail() {
         // `requester:user_profiles!requester_user_id` resolves the team-member
         // name that internal orders DON'T denormalize onto the row (else they
         // showed "Unknown requester"). RLS lets org members read each other.
+        // `picker:user_profiles!assigned_picker_id` resolves the claimant's name
+        // for the picker chip (assigned_picker_id FK → user_profiles.id, mig
+        // 0109). RLS lets org members read each other, same as the requester join.
         `id, status, requester_name, requester_email, requester_user_id, requester_org_label,
          signed_by_name, signed_at, created_at,
-         assigned_delivery_user_id, fulfillment_type, signature_token,
+         assigned_delivery_user_id, assigned_picker_id, fulfillment_type, signature_token,
          warehouse:warehouses!warehouse_id (name),
-         requester:user_profiles!requester_user_id (full_name, email)`,
+         requester:user_profiles!requester_user_id (full_name, email),
+         picker:user_profiles!assigned_picker_id (full_name, email)`,
       )
       .eq('organization_id', orgId)
       .eq('id', id)
@@ -196,6 +213,11 @@ export default function OrderDetail() {
       const r = data as Record<string, unknown>;
       const wh = r.warehouse as { name: string | null } | { name: string | null }[] | null;
       const whObj = Array.isArray(wh) ? wh[0] : wh;
+      const pk = r.picker as
+        | { full_name: string | null; email: string | null }
+        | { full_name: string | null; email: string | null }[]
+        | null;
+      const pkObj = Array.isArray(pk) ? pk[0] : pk;
       setOrder({
         id: r.id as string,
         status: r.status as string,
@@ -214,6 +236,8 @@ export default function OrderDetail() {
         signedAt: (r.signed_at as string | null) ?? null,
         createdAt: (r.created_at as string | null) ?? null,
         assignedDeliveryUserId: (r.assigned_delivery_user_id as string | null) ?? null,
+        assignedPickerId: (r.assigned_picker_id as string | null) ?? null,
+        pickerName: pkObj?.full_name?.trim() || pkObj?.email?.trim() || null,
         fulfillmentType: (r.fulfillment_type as string | null) ?? null,
         signatureToken: (r.signature_token as string | null) ?? null,
       });
@@ -269,19 +293,25 @@ export default function OrderDetail() {
     setRefreshing(false);
   }
 
-  // Advance the order through the pipeline, then reload. The server enforces
-  // module + permission + status; we just surface its message on failure.
-  async function act(body: OrderAction, busyKey: string) {
-    if (!id) return;
+  // Run any order mutation under a shared busy key, then reload. The server
+  // enforces module + permission + status (and 409 on a claim race); we just
+  // surface its message on failure.
+  async function runAction(busyKey: string, fn: () => Promise<void>) {
     setActing(busyKey);
     try {
-      await transitionOrder(id, body);
+      await fn();
       await load();
     } catch (e) {
       Alert.alert('Could not update order', e instanceof Error ? e.message : 'Please try again.');
     } finally {
       setActing(null);
     }
+  }
+
+  // Advance the order through the pipeline, then reload.
+  async function act(body: OrderAction, busyKey: string) {
+    if (!id) return;
+    await runAction(busyKey, () => transitionOrder(id, body));
   }
 
   async function submitDeny() {
@@ -319,18 +349,54 @@ export default function OrderDetail() {
   // empty section at, e.g., a terminal status).
   const ft = order?.fulfillmentType;
   const st = order?.status;
+  // NOTE: the picking phase (pick_slip_generated / picking_in_progress) is
+  // intentionally NOT here — it has its own PICKING section below that renders
+  // for staff pickers too, not just managers.
   const hasPipelineActions =
     isManager &&
     !!st &&
     (st === 'pending_approval' ||
       st === 'approved' ||
-      st === 'pick_slip_generated' ||
-      st === 'picking_in_progress' ||
       st === 'picking_complete' ||
       (st === 'packing_slip_generated' && (ft === 'pickup' || ft === 'delivery')) ||
       st === 'staged_for_delivery' ||
       st === 'staged_for_pickup' ||
       st === 'in_transit');
+
+  // Picking claim/lock (owner decisions, enforced server-side). This section is
+  // visible to ANY role in the picking phase — a staff picker must claim before
+  // picking; the picker or a manager may release; a manager may pick directly.
+  // Which buttons show is decided by the shared @stockpilot/core state machine
+  // (the same source of truth the web order page reads); the server re-checks.
+  const pickingStatus =
+    order && st ? derivePickingStatus(st as OrderStatus, order.assignedPickerId) : null;
+  const isPickingPhase =
+    pickingStatus === 'unassigned' ||
+    pickingStatus === 'assigned' ||
+    pickingStatus === 'in_progress';
+  const pickActions =
+    isPickingPhase && order && role
+      ? availableOrderActions({
+          status: st as OrderStatus,
+          fulfillmentType: (ft as FulfillmentType | null) ?? 'pickup',
+          hasAssignedDelivery: order.assignedDeliveryUserId !== null,
+          viewerRole: role as Role,
+          viewerUserId: user?.id ?? '',
+          assignedPickerId: order.assignedPickerId,
+          assignedDeliveryUserId: order.assignedDeliveryUserId,
+        })
+      : [];
+  const canClaimPick = pickActions.includes('claim_picking');
+  const canDigitalPick = pickActions.includes('open_digital_pick');
+  const canReleasePick = pickActions.includes('release_picking');
+  const pickerLabel =
+    !order || order.assignedPickerId === null
+      ? 'Unassigned'
+      : order.assignedPickerId === user?.id
+        ? 'Being picked by you'
+        : order.pickerName
+          ? `Being picked by ${order.pickerName}`
+          : 'Being picked by another picker';
 
   const actionBtn = (
     label: string,
@@ -557,6 +623,72 @@ export default function OrderDetail() {
             </Mono>
           </View>
 
+          {isPickingPhase && order ? (
+            <View style={{ gap: 10 }}>
+              <Eyebrow>PICKING</Eyebrow>
+              {/* Picker chip: unassigned, you, a named picker, or an anonymous
+                  other (when only the id is readable). */}
+              <View
+                style={{
+                  alignSelf: 'flex-start',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 7,
+                  borderWidth: 1,
+                  borderColor: c.hair,
+                  borderRadius: 999,
+                  paddingHorizontal: 12,
+                  paddingVertical: 6,
+                  backgroundColor: c.card,
+                }}
+              >
+                <View
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: 4,
+                    backgroundColor: order.assignedPickerId ? '#16a34a' : c.ink4,
+                  }}
+                />
+                <Mono size={11} color={c.ink}>{pickerLabel}</Mono>
+              </View>
+
+              {/* Unclaimed + viewer is staff → claim before picking. */}
+              {canClaimPick
+                ? actionBtn('Claim picking', 'claim', () =>
+                    void runAction('claim', () => claimPicking(id!)),
+                  )
+                : null}
+
+              {/* Assigned picker or a manager → the pick workspace. A non-manager
+                  who is NOT the claimant sees a note instead (never the inputs). */}
+              {canDigitalPick ? (
+                <DigitalPick orderId={id!} canPick onCompleted={() => void load()} />
+              ) : !canClaimPick &&
+                order.assignedPickerId !== null &&
+                order.assignedPickerId !== user?.id ? (
+                <Mono size={11.5} color={c.ink4}>
+                  This order is being picked by someone else.
+                </Mono>
+              ) : null}
+
+              {/* Self-release by the picker, or a manager override/reassign
+                  affordance (release, then re-claim / pick directly). */}
+              {canReleasePick
+                ? actionBtn(
+                    'Release',
+                    'release',
+                    () => void runAction('release', () => releasePicking(id!)),
+                    'default',
+                  )
+                : null}
+
+              <Mono size={10.5} color={c.ink4}>
+                Same actions as the web dashboard — changes sync instantly.
+              </Mono>
+            </View>
+          ) : null}
+
           {hasPipelineActions ? (
             <View style={{ gap: 8 }}>
               <Eyebrow>MANAGER ACTIONS</Eyebrow>
@@ -569,15 +701,6 @@ export default function OrderDetail() {
               {order.status === 'approved'
                 ? actionBtn('Generate pick slip', 'gps', () =>
                     void act({ action: 'generate_pick_slip' }, 'gps'),
-                  )
-                : null}
-              {order.status === 'pick_slip_generated' || order.status === 'picking_in_progress'
-                ? // Native line-by-line digital picking (parity with the web
-                  // DigitalPick workspace) — enter the actual qty picked per
-                  // line, or "Fill all as requested", then Complete. Replaces
-                  // the old bulk-only "mark all complete" button.
-                  (
-                    <DigitalPick orderId={id!} onCompleted={() => void load()} />
                   )
                 : null}
               {order.status === 'picking_complete'
