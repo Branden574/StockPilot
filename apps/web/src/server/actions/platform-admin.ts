@@ -280,12 +280,21 @@ async function ensureUniqueSlug(
 // Org-deletion passphrase + passphrase-gated hard delete
 // ─────────────────────────────────────────────────────────────────────────────
 
-const setPassphraseSchema = z.object({ passphrase: z.string().min(8).max(200) });
+const setPassphraseSchema = z.object({
+  passphrase: z.string().min(12).max(200),
+  /** Required to ROTATE an existing passphrase (ignored on the first-ever set). */
+  currentPassphrase: z.string().max(200).optional(),
+});
 
 /**
  * Set/rotate the platform org-deletion passphrase. A SECOND factor beyond the
  * platform-admin allowlist + AAL2: no org can be hard-deleted without it. Stored
  * as a scrypt hash — never retrievable. Gated by a fresh MFA step-up.
+ *
+ * CRITICAL: rotating an existing passphrase REQUIRES the current one. Without
+ * that, a compromised platform-admin session could simply overwrite the
+ * passphrase with a known value and then delete — defeating the whole point of
+ * the second factor. The first-ever set (bootstrap, no passphrase yet) is open.
  */
 export async function setOrgDeletionPassphraseAction(
   input: z.input<typeof setPassphraseSchema>,
@@ -300,13 +309,34 @@ export async function setOrgDeletionPassphraseAction(
   }
   const parsed = setPassphraseSchema.safeParse(input);
   if (!parsed.success) {
-    return err('validation_error', 'Passphrase must be at least 8 characters.');
+    return err('validation_error', 'Passphrase must be at least 12 characters.');
   }
   let admin;
   try {
     admin = createAdminClient();
   } catch {
     return err('internal_error', 'Server is missing SUPABASE_SERVICE_ROLE_KEY.');
+  }
+  // If a passphrase already exists, the caller must prove they know it before
+  // rotating it — a stolen session cannot silently swap it out.
+  const { data: existing } = await admin
+    .from('platform_settings')
+    .select('org_deletion_passphrase_hash, org_deletion_passphrase_salt')
+    .eq('id', true)
+    .maybeSingle();
+  const cur = existing as
+    | { org_deletion_passphrase_hash: string | null; org_deletion_passphrase_salt: string | null }
+    | null;
+  if (cur?.org_deletion_passphrase_hash && cur?.org_deletion_passphrase_salt) {
+    if (
+      !verifyPassphrase(
+        parsed.data.currentPassphrase ?? '',
+        cur.org_deletion_passphrase_hash,
+        cur.org_deletion_passphrase_salt,
+      )
+    ) {
+      return err('forbidden', 'Enter the current deletion passphrase to change it.');
+    }
   }
   const { hash, salt } = hashPassphrase(parsed.data.passphrase);
   const { error } = await admin.from('platform_settings').upsert({
@@ -353,8 +383,9 @@ export async function removeOrgAction(
   const parsed = removeOrgSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', 'Invalid input.');
 
-  // Brute-force guard on the passphrase — 5 attempts/min per admin.
-  const rl = await checkRateLimit(`org-delete:${gate.session.userId}`, 5, 60_000);
+  // Brute-force guard on the passphrase — 5 attempts/min per admin. FAIL CLOSED:
+  // on this irreversible action a rate-limiter error must block, not wave through.
+  const rl = await checkRateLimit(`org-delete:${gate.session.userId}`, 5, 60_000, 'closed');
   if (!rl.allowed) {
     return err('rate_limited', 'Too many attempts — wait a minute and try again.');
   }
@@ -409,6 +440,9 @@ export async function removeOrgAction(
       .select('user_id')
       .eq('organization_id', parsed.data.orgId);
     for (const m of (members ?? []) as Array<{ user_id: string }>) {
+      // NEVER delete the acting admin's own account, even if they happen to be
+      // the sole member of a throwaway org.
+      if (m.user_id === gate.session.userId) continue;
       const { count } = await admin
         .from('organization_members')
         .select('organization_id', { count: 'exact', head: true })
@@ -423,10 +457,18 @@ export async function removeOrgAction(
   if (delErr) return err('internal_error', 'Could not delete the organization.');
 
   // 5. Delete the now-orphaned accounts (best-effort; failure doesn't undo the
-  //    org delete, which already succeeded).
+  //    org delete, which already succeeded). RE-VERIFY zero memberships right
+  //    before each delete: the org cascade has already removed this org's
+  //    membership rows, so any remaining row means the user was added to another
+  //    org after our pre-delete snapshot — close that TOCTOU race and skip them.
   let deletedUsers = 0;
   for (const uid of orphanUserIds) {
     try {
+      const { count } = await admin
+        .from('organization_members')
+        .select('organization_id', { count: 'exact', head: true })
+        .eq('user_id', uid);
+      if ((count ?? 0) > 0) continue; // gained another org in the meantime — keep
       await admin.auth.admin.deleteUser(uid);
       deletedUsers += 1;
     } catch (e) {
