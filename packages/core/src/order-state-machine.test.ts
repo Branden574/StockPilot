@@ -293,4 +293,97 @@ describe('availableOrderActions', () => {
       expect(derivePickingStatus('completed', 'u-1')).toBe('completed');
     });
   });
+
+  describe('backorder (partial fulfillment)', () => {
+    const base = {
+      fulfillmentType: 'delivery' as const,
+      hasAssignedDelivery: false,
+      viewerUserId: 'u-1',
+      assignedPickerId: null,
+      assignedDeliveryUserId: null,
+    };
+
+    it('adds the hand-over fork to backordered from staged_for_pickup + in_transit', () => {
+      expect(ALLOWED_TRANSITIONS.staged_for_pickup).toContain('backordered');
+      expect(ALLOWED_TRANSITIONS.in_transit).toContain('backordered');
+    });
+
+    it('backordered is non-terminal with exactly the three spec exits', () => {
+      expect(ALLOWED_TRANSITIONS.backordered).toEqual([
+        'pick_slip_generated',
+        'completed',
+        'cancelled',
+      ]);
+    });
+
+    it('offers approve_partial at pending_approval ONLY when short on stock', () => {
+      const short = availableOrderActions({
+        ...base,
+        status: 'pending_approval',
+        viewerRole: 'manager',
+        isShortStock: true,
+      });
+      expect(short).toContain('approve');
+      expect(short).toContain('approve_partial');
+      const enough = availableOrderActions({
+        ...base,
+        status: 'pending_approval',
+        viewerRole: 'manager',
+      });
+      expect(enough).not.toContain('approve_partial');
+    });
+
+    it('backordered: manager gets resume (only with stock) + close_partial + cancel', () => {
+      const withStock = availableOrderActions({
+        ...base,
+        status: 'backordered',
+        viewerRole: 'manager',
+        hasFulfillableStock: true,
+      });
+      expect(withStock).toContain('resume_fulfillment');
+      expect(withStock).toContain('close_partial');
+      expect(withStock).toContain('cancel');
+
+      const noStock = availableOrderActions({
+        ...base,
+        status: 'backordered',
+        viewerRole: 'manager',
+        hasFulfillableStock: false,
+      });
+      expect(noStock).not.toContain('resume_fulfillment');
+      expect(noStock).toContain('close_partial');
+    });
+
+    it('backordered: a non-manager sees only view actions', () => {
+      const staff = availableOrderActions({
+        ...base,
+        status: 'backordered',
+        viewerRole: 'staff',
+        hasFulfillableStock: true,
+      });
+      expect(staff).not.toContain('resume_fulfillment');
+      expect(staff).not.toContain('close_partial');
+      expect(staff).not.toContain('cancel');
+      expect(staff).toContain('view_signature');
+    });
+
+    it('assertTransition allows the fork in and the resume out', () => {
+      expect(() =>
+        assertTransition('in_transit', 'backordered', {
+          fulfillmentType: 'delivery',
+          hasAssignedDelivery: true,
+        }),
+      ).not.toThrow();
+      expect(() =>
+        assertTransition('backordered', 'pick_slip_generated', {
+          fulfillmentType: 'delivery',
+          hasAssignedDelivery: false,
+        }),
+      ).not.toThrow();
+    });
+
+    it('derivePickingStatus treats backordered as completed picking', () => {
+      expect(derivePickingStatus('backordered', 'u-1')).toBe('completed');
+    });
+  });
 });

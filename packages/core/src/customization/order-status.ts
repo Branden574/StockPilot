@@ -37,6 +37,7 @@ export const ORDER_STATUS_KEYS = [
   'staged_for_pickup',
   'staged_for_delivery',
   'in_transit',
+  'backordered',
   'completed',
   'denied',
   'cancelled',
@@ -119,9 +120,10 @@ export const ORDER_STATUS_META: ResolvedOrderStatusMeta = {
   staged_for_pickup: { label: 'Staged (pickup)', color: 'secondary', sortOrder: 7 },
   staged_for_delivery: { label: 'Ready', color: 'secondary', sortOrder: 8 },
   in_transit: { label: 'In transit', color: 'secondary', sortOrder: 9 },
-  completed: { label: 'Delivered', color: 'success', sortOrder: 10 },
-  denied: { label: 'Denied', color: 'destructive', sortOrder: 11 },
-  cancelled: { label: 'Cancelled', color: 'outline', sortOrder: 12 },
+  backordered: { label: 'Backordered', color: 'warning', sortOrder: 10 },
+  completed: { label: 'Delivered', color: 'success', sortOrder: 11 },
+  denied: { label: 'Denied', color: 'destructive', sortOrder: 12 },
+  cancelled: { label: 'Cancelled', color: 'outline', sortOrder: 13 },
 };
 
 /** Max label length the resolver accepts before falling back to the default. */

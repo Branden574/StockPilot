@@ -19,6 +19,12 @@ export type OrderStatus =
   | 'staged_for_pickup'
   | 'staged_for_delivery'
   | 'in_transit'
+  // Non-terminal "rest" state for partial fulfillment / backorder: the order
+  // shipped everything it could but still owes units. Reached at hand-over when
+  // owed > 0 (instead of `completed`); exits via resume (fulfill the rest),
+  // close-partial (done, keep what shipped), or cancel. See the
+  // 2026-07-09 partial-fulfillment spec.
+  | 'backordered'
   | 'completed'
   | 'denied'
   | 'cancelled';
@@ -38,9 +44,14 @@ export const ALLOWED_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = 
   picking_in_progress: ['picking_complete', 'cancelled'],
   picking_complete: ['packing_slip_generated', 'cancelled'],
   packing_slip_generated: ['staged_for_pickup', 'staged_for_delivery', 'cancelled'],
-  staged_for_pickup: ['completed', 'cancelled'],
+  // Hand-over (signature) forks on owed qty: → completed if fully fulfilled,
+  // → backordered if units are still owed.
+  staged_for_pickup: ['completed', 'backordered', 'cancelled'],
   staged_for_delivery: ['in_transit', 'cancelled'],
-  in_transit: ['completed', 'cancelled'],
+  in_transit: ['completed', 'backordered', 'cancelled'],
+  // Backorder exits: resume (regenerate a pick slip for the remaining qty),
+  // close-partial (end at completed, keep what shipped), or cancel.
+  backordered: ['pick_slip_generated', 'completed', 'cancelled'],
   denied: [],
   cancelled: [],
   completed: [],
@@ -139,6 +150,13 @@ export function assertTransition(
 
 export type OrderAction =
   | 'approve'
+  // Approve an order that's SHORT on stock: reserve what's available now and
+  // backorder the rest (partial-fulfillment entry point at approval).
+  | 'approve_partial'
+  // From `backordered`: fulfill the remaining owed qty (regenerates a pick slip).
+  | 'resume_fulfillment'
+  // From `backordered`: end the order keeping what shipped ("delivered N of M").
+  | 'close_partial'
   | 'deny'
   | 'cancel'
   | 'generate_pick_slip'
@@ -179,6 +197,19 @@ export interface AvailableActionsInput {
    * keep their prior behavior. Picking callers MUST pass it.
    */
   viewerCanPick?: boolean;
+  /**
+   * Whether the order is SHORT on stock (requested > available). Drives the
+   * `approve_partial` action at `pending_approval` — offered only when a full
+   * approve would fail. The caller computes it (the state machine has no stock
+   * knowledge). Optional; defaults to false (no partial-approve offered).
+   */
+  isShortStock?: boolean;
+  /**
+   * Whether there is fulfillable stock for at least one still-owed line. Drives
+   * `resume_fulfillment` at `backordered` — offered only when there's something
+   * to pick. Optional; defaults to false (resume hidden until restocked).
+   */
+  hasFulfillableStock?: boolean;
 }
 
 const MANAGER_OR_ABOVE: Role[] = ['owner', 'admin', 'manager'];
@@ -202,6 +233,10 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
       break;
     case 'pending_approval':
       actions.push('approve', 'deny');
+      // Short on stock → also offer "Approve partial" (ship what's available,
+      // backorder the rest). Full "approve" stays and still enforces the
+      // must-have-stock rule server-side.
+      if (input.isShortStock) actions.push('approve_partial');
       if (isManagerOrAbove) actions.push('cancel');
       break;
     case 'approved':
@@ -261,6 +296,16 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
       actions.push('collect_signature');
       if (isManagerOrAbove) actions.push('cancel');
       break;
+    case 'backordered':
+      // Rest state after a partial hand-over. Manager+ can resume (only when
+      // there's stock to pick), close it out keeping what shipped, or cancel.
+      if (isManagerOrAbove) {
+        if (input.hasFulfillableStock) actions.push('resume_fulfillment');
+        actions.push('close_partial', 'cancel');
+      }
+      // Anyone with order access can review what already shipped.
+      actions.push('view_signature', 'view_final_packing_slip');
+      break;
     case 'completed':
       actions.push('view_signature', 'view_final_packing_slip');
       break;
@@ -295,6 +340,7 @@ export function derivePickingStatus(
     case 'staged_for_pickup':
     case 'staged_for_delivery':
     case 'in_transit':
+    case 'backordered':
     case 'completed':
       return 'completed';
     default:

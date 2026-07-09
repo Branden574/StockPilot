@@ -12,9 +12,10 @@ import {
 } from './order-status';
 
 describe('canonical constants', () => {
-  it('exposes the 13 canonical status keys', () => {
-    expect(ORDER_STATUS_KEYS).toHaveLength(13);
+  it('exposes the 14 canonical status keys', () => {
+    expect(ORDER_STATUS_KEYS).toHaveLength(14);
     expect(ORDER_STATUS_KEYS).toContain('pending_confirmation');
+    expect(ORDER_STATUS_KEYS).toContain('backordered');
     expect(ORDER_STATUS_KEYS).toContain('cancelled');
   });
 
