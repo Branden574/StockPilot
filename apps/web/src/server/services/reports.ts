@@ -202,8 +202,26 @@ export class ReportsService {
    * with NO hard cap — fetchAllRows pages the COMPLETE set. The display needs
    * every row, and the totals above are authoritative regardless of how many
    * rows there are.
+   *
+   * OPTIONAL `charterId` (Model B, task 8): the owner's decision is that
+   * inventory VALUE stays WHOLE (per-org) by default — this param is purely
+   * additive. A placement in the "grouped, non-destructive" Model B IS an
+   * `inventory_items` row (see docs/superpowers/specs/2026-07-08-model-b-
+   * one-item-per-sku-holdings-design.md §8b) — charter stays a column on
+   * that row, so "by charter" means `.eq('charter_id', charterId)` on the
+   * same table, nothing moves to holdings/RLS. When `opts.charterId` is
+   * omitted/null, this method is BYTE-FOR-BYTE the pre-existing whole-org
+   * path below (doesn't even query `charters`). When supplied, it is
+   * validated against the caller's org first — a foreign or nonexistent
+   * charterId returns an EMPTY report (zero totals), never an error and
+   * never another org's numbers (see inventoryValuationByCharter()).
    */
-  async inventoryValuation(): Promise<ValuationReport> {
+  async inventoryValuation(opts?: { charterId?: string | null }): Promise<ValuationReport> {
+    const charterId = opts?.charterId?.trim() || null;
+    if (charterId) {
+      return this.inventoryValuationByCharter(charterId);
+    }
+
     // Totals + rollups from the vw_inventory_valuation_* views (migration
     // 0179). Filter parity: non-deleted, active, non-rental — identical to
     // the detail-row stream below.
@@ -272,6 +290,135 @@ export class ReportsService {
       itemCount: summary.itemCount,
       byWarehouse: summary.byWarehouse,
       byCategory: summary.byCategory,
+    };
+  }
+
+  /**
+   * Charter-scoped valuation (Model B, task 8) — value/units summed ONLY
+   * over `inventory_items` rows with `charter_id = charterId`. Reporting-only:
+   * does not touch the default whole-org path, no on-hand write, no schema
+   * change (charter is already a column on `inventory_items`).
+   *
+   * Two-step, fail-closed:
+   *   1. Confirm `charterId` belongs to the CALLER'S org
+   *      (`charters.organization_id = ctx.organizationId`). A row that
+   *      belongs to a different org resolves to `null` exactly like a
+   *      nonexistent id — the two cases are indistinguishable on purpose,
+   *      so a caller can never use this to probe whether a charter id exists
+   *      in someone else's org.
+   *   2. Stream every matching item (same predicate as the whole-org path —
+   *      non-deleted, active, non-rental — plus `charter_id = charterId`,
+   *      NO cap) and aggregate totals/byWarehouse/byCategory in JS. This
+   *      mirrors vw_inventory_valuation_by_warehouse/_by_category's GROUP BY
+   *      exactly (sum qty×cost, sum qty, count(*), grouped by warehouse/
+   *      category id+name) — just pre-filtered to one charter instead of the
+   *      whole org, so a per-charter dataset can't hit the truncation
+   *      failure mode 0179/0227 fixed for whole-org sums.
+   */
+  private async inventoryValuationByCharter(charterId: string): Promise<ValuationReport> {
+    const { data: charterRow, error: charterErr } = await this.ctx.supabase
+      .from('charters')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', charterId)
+      .maybeSingle();
+    if (charterErr) throw new ServiceError('internal_error', charterErr.message);
+    if (!charterRow) {
+      // Foreign or nonexistent charterId: empty report, not an error — the
+      // caller learns nothing about whether the id exists elsewhere.
+      return { rows: [], totalValue: 0, totalUnits: 0, itemCount: 0, byWarehouse: [], byCategory: [] };
+    }
+
+    type ValuationItemRow = {
+      id: string;
+      sku: string;
+      name: string;
+      quantity_on_hand: number;
+      unit_cost: number;
+      warehouse_id: string | null;
+      category_id: string | null;
+      warehouse: { name: string } | { name: string }[] | null;
+      category: { name: string } | { name: string }[] | null;
+    };
+    const data = await fetchAllRows<ValuationItemRow>(
+      (from, to) =>
+        this.ctx.supabase
+          .from('inventory_items')
+          .select(
+            `id, sku, name, quantity_on_hand, unit_cost, warehouse_id, category_id,
+         warehouse:warehouses!warehouse_id (name),
+         category:categories!category_id (name)`,
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .is('deleted_at', null)
+          .eq('status', 'active')
+          .eq('is_rental', false)
+          .eq('charter_id', charterId)
+          .order('id', { ascending: true })
+          .range(from, to),
+      // NO cap — same untruncated guarantee as the whole-org detail stream.
+      {},
+    );
+
+    const byWarehouse = new Map<
+      string,
+      { warehouseId: string | null; warehouseName: string; value: number; units: number }
+    >();
+    const byCategory = new Map<
+      string,
+      { categoryId: string | null; categoryName: string; value: number; units: number }
+    >();
+
+    const rows: ValuationRow[] = data
+      .sort((a, b) => (Number(b.quantity_on_hand) || 0) - (Number(a.quantity_on_hand) || 0))
+      .map((rec) => {
+        const wh = Array.isArray(rec.warehouse) ? rec.warehouse[0] : rec.warehouse;
+        const cat = Array.isArray(rec.category) ? rec.category[0] : rec.category;
+        const qty = Number(rec.quantity_on_hand) || 0;
+        const cost = Number(rec.unit_cost) || 0;
+        const value = qty * cost;
+
+        const whKey = rec.warehouse_id ?? '__none';
+        const whEntry = byWarehouse.get(whKey) ?? {
+          warehouseId: rec.warehouse_id ?? null,
+          warehouseName: wh?.name ?? 'Unassigned',
+          value: 0,
+          units: 0,
+        };
+        whEntry.value += value;
+        whEntry.units += qty;
+        byWarehouse.set(whKey, whEntry);
+
+        const catKey = rec.category_id ?? '__none';
+        const catEntry = byCategory.get(catKey) ?? {
+          categoryId: rec.category_id ?? null,
+          categoryName: cat?.name ?? 'Uncategorized',
+          value: 0,
+          units: 0,
+        };
+        catEntry.value += value;
+        catEntry.units += qty;
+        byCategory.set(catKey, catEntry);
+
+        return {
+          itemId: rec.id,
+          sku: rec.sku,
+          name: rec.name,
+          warehouseName: wh?.name ?? null,
+          categoryName: cat?.name ?? null,
+          quantityOnHand: qty,
+          unitCost: cost,
+          value,
+        };
+      });
+
+    return {
+      rows,
+      totalValue: rows.reduce((s, r) => s + r.value, 0),
+      totalUnits: rows.reduce((s, r) => s + r.quantityOnHand, 0),
+      itemCount: rows.length,
+      byWarehouse: [...byWarehouse.values()].sort((a, b) => b.value - a.value),
+      byCategory: [...byCategory.values()].sort((a, b) => b.value - a.value),
     };
   }
 

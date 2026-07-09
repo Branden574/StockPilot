@@ -2,6 +2,7 @@ import { Suspense } from 'react';
 import { Download } from 'lucide-react';
 import Link from 'next/link';
 
+import { CharterFilterSelect } from '@/components/reports/charter-filter-select';
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { ReportBodySkeleton } from '@/components/reports/report-body-skeleton';
 import { Button } from '@/components/ui/button';
@@ -14,10 +15,34 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { ChartersService } from '@/server/services/charters';
 import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 
-export default function InventoryValuationPage() {
+export default function InventoryValuationPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ charterId?: string }>;
+}) {
+  const charterIdPromise = searchParams.then((p) => p.charterId?.trim() || null);
+
+  return <ValuationShell charterIdPromise={charterIdPromise} />;
+}
+
+async function ValuationShell({
+  charterIdPromise,
+}: {
+  charterIdPromise: Promise<string | null>;
+}) {
+  const charterId = await charterIdPromise;
+  const chartersSvc = await ChartersService.forCurrentUser();
+  const charters = await chartersSvc.list();
+
+  const suffix = charterId ? `?charterId=${encodeURIComponent(charterId)}` : '';
+  const csvHref = `/api/reports/inventory-valuation/csv${suffix}`;
+  const pdfHref = `/api/reports/inventory-valuation/pdf${suffix}`;
+  const activeCharter = charterId ? charters.find((c) => c.id === charterId) : undefined;
+
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -32,29 +57,44 @@ export default function InventoryValuationPage() {
             <h1 className="text-2xl font-semibold tracking-tight">Inventory valuation</h1>
             <p className="text-muted-foreground mt-1 text-sm">
               Cost basis snapshot. Value = qty on hand × unit cost.
+              {/* activeCharter only resolves against the ACTIVE-charter list
+                  (ChartersService.list() default) — an archived charter's
+                  name won't show here even though inventoryValuation() does
+                  NOT filter by status, so we only ever ADD a positive note
+                  and never claim "not found" (that would be wrong for an
+                  archived-but-valid charter). */}
+              {activeCharter && (
+                <>
+                  {' '}
+                  · Filtered to charter <span className="font-medium">{activeCharter.name}</span>
+                </>
+              )}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {charters.length > 0 && (
+              <CharterFilterSelect charters={charters} current={charterId} />
+            )}
             <Button asChild variant="outline">
-              <a href="/api/reports/inventory-valuation/csv">
+              <a href={csvHref}>
                 <Download className="h-4 w-4" /> CSV
               </a>
             </Button>
-            <PdfDownloadDropdown baseUrl="/api/reports/inventory-valuation/pdf" />
+            <PdfDownloadDropdown baseUrl={pdfHref} />
           </div>
         </div>
       </div>
 
-      <Suspense fallback={<ReportBodySkeleton />}>
-        <InventoryValuationBody />
+      <Suspense fallback={<ReportBodySkeleton />} key={charterId ?? 'all'}>
+        <InventoryValuationBody charterId={charterId} />
       </Suspense>
     </div>
   );
 }
 
-async function InventoryValuationBody() {
+async function InventoryValuationBody({ charterId }: { charterId: string | null }) {
   const svc = await ReportsService.forCurrentUser();
-  const data = await svc.inventoryValuation();
+  const data = await svc.inventoryValuation({ charterId });
 
   return (
     <>
