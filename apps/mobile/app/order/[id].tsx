@@ -108,6 +108,10 @@ interface OrderHeader {
   pickerName: string | null;
   fulfillmentType: string | null;
   signatureToken: string | null;
+  /** Line roll-ups for the backorder progress card. requested = ordered,
+   *  fulfilled = provided to the customer (shipped at hand-over). */
+  totalRequested: number;
+  totalFulfilled: number;
 }
 
 interface Attachment {
@@ -222,6 +226,21 @@ export default function OrderDetail() {
       .eq('organization_id', orgId)
       .eq('id', id)
       .maybeSingle();
+    // Line roll-ups for the backorder progress card (owed = requested −
+    // fulfilled). Kept as a light sum query — the screen doesn't render a
+    // per-line table.
+    const { data: lineRows } = await supabase
+      .from('order_request_lines')
+      .select('quantity_requested, quantity_fulfilled')
+      .eq('order_request_id', id);
+    const totalRequested = (lineRows ?? []).reduce(
+      (s, l) => s + (Number((l as { quantity_requested: number | null }).quantity_requested) || 0),
+      0,
+    );
+    const totalFulfilled = (lineRows ?? []).reduce(
+      (s, l) => s + (Number((l as { quantity_fulfilled: number | null }).quantity_fulfilled) || 0),
+      0,
+    );
     if (data) {
       const r = data as Record<string, unknown>;
       const wh = r.warehouse as { name: string | null } | { name: string | null }[] | null;
@@ -253,6 +272,8 @@ export default function OrderDetail() {
         pickerName: pkObj?.full_name?.trim() || pkObj?.email?.trim() || null,
         fulfillmentType: (r.fulfillment_type as string | null) ?? null,
         signatureToken: (r.signature_token as string | null) ?? null,
+        totalRequested,
+        totalFulfilled,
       });
     }
     await loadAttachments();
@@ -374,7 +395,14 @@ export default function OrderDetail() {
       (st === 'packing_slip_generated' && (ft === 'pickup' || ft === 'delivery')) ||
       st === 'staged_for_delivery' ||
       st === 'staged_for_pickup' ||
-      st === 'in_transit');
+      st === 'in_transit' ||
+      st === 'backordered');
+
+  // Fulfilled = units PROVIDED to the customer (shipped at hand-over); owed =
+  // the still-unfulfilled remainder. Drives the backorder progress card.
+  const totalRequested = order?.totalRequested ?? 0;
+  const totalFulfilled = order?.totalFulfilled ?? 0;
+  const totalOwed = Math.max(0, totalRequested - totalFulfilled);
 
   // Picking claim/lock (owner decisions, enforced server-side). This section is
   // visible to ANY role in the picking phase — a staff picker must claim before
@@ -637,6 +665,37 @@ export default function OrderDetail() {
             </Mono>
           </View>
 
+          {totalOwed > 0 ? (
+            <Card padding={14}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Body size={13} color="#b45309">
+                  {order.status === 'backordered' ? 'Backordered — awaiting stock' : 'Partially fulfilled'}
+                </Body>
+                <Mono size={11} color="#b45309">
+                  {totalFulfilled} / {totalRequested} · {totalOwed} owed
+                </Mono>
+              </View>
+              <View
+                style={{
+                  marginTop: 10,
+                  height: 6,
+                  borderRadius: 999,
+                  backgroundColor: c.hair,
+                  overflow: 'hidden',
+                }}
+              >
+                <View
+                  style={{
+                    height: '100%',
+                    borderRadius: 999,
+                    backgroundColor: '#f59e0b',
+                    width: `${totalRequested > 0 ? Math.round((totalFulfilled / totalRequested) * 100) : 0}%`,
+                  }}
+                />
+              </View>
+            </Card>
+          ) : null}
+
           {isPickingPhase && order ? (
             <View style={{ gap: 10 }}>
               <Eyebrow>PICKING</Eyebrow>
@@ -748,6 +807,48 @@ export default function OrderDetail() {
               {order.status === 'staged_for_pickup' || order.status === 'in_transit'
                 ? actionBtn('Collect signature', 'sig', collectSignature)
                 : null}
+              {order.status === 'backordered' ? (
+                <>
+                  {actionBtn('Resume fulfillment', 'resume', () =>
+                    void act({ action: 'resume_fulfillment' }, 'resume'),
+                  )}
+                  {actionBtn(
+                    'Close as delivered-partial',
+                    'closepartial',
+                    () =>
+                      Alert.alert(
+                        'Close as delivered-partial?',
+                        'This ends the order and keeps the record of what was delivered. The remaining backordered units will NOT be fulfilled.',
+                        [
+                          { text: 'Keep open', style: 'cancel' },
+                          {
+                            text: 'Close order',
+                            onPress: () => void act({ action: 'close_partial' }, 'closepartial'),
+                          },
+                        ],
+                      ),
+                    'default',
+                  )}
+                  {actionBtn(
+                    'Cancel order',
+                    'cancelorder',
+                    () =>
+                      Alert.alert(
+                        'Cancel this order?',
+                        'The order is voided. Already-delivered items are NOT restocked; the hold on the remaining items is released.',
+                        [
+                          { text: 'Keep order', style: 'cancel' },
+                          {
+                            text: 'Cancel order',
+                            style: 'destructive',
+                            onPress: () => void act({ action: 'cancel' }, 'cancelorder'),
+                          },
+                        ],
+                      ),
+                    'danger',
+                  )}
+                </>
+              ) : null}
               <Mono size={10.5} color={c.ink4}>
                 Same actions as the web dashboard — changes sync instantly.
               </Mono>

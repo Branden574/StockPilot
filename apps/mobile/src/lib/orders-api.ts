@@ -31,6 +31,10 @@ export type OrderAction =
   | { action: 'stage'; target: 'staged_for_pickup' | 'staged_for_delivery' }
   | { action: 'assign_delivery'; deliveryUserId: string }
   | { action: 'mark_in_transit' }
+  // Backorder exits from `backordered` (manager+): resume the still-owed
+  // remainder, or close as delivered-partial keeping what shipped.
+  | { action: 'resume_fulfillment' }
+  | { action: 'close_partial' }
   | { action: 'cancel'; reason?: string };
 
 /** Advance an order. Throws (with the server's message) on a non-2xx. */
