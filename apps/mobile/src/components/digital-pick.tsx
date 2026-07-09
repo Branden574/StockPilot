@@ -117,6 +117,35 @@ export function DigitalPick({
     }
   }
 
+  // Short-completion guard: if completing now leaves units owed, the order
+  // forks to backordered — confirm before that happens silently.
+  function onCompleteClick() {
+    if (!lines) return;
+    const shipsNow = lines.reduce((s, l) => s + clampFor(l, qty[l.id] ?? '0'), 0);
+    const backorderQty = lines.reduce((s, l) => {
+      const owedBefore = Math.max(
+        0,
+        (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
+      );
+      return s + Math.max(0, owedBefore - clampFor(l, qty[l.id] ?? '0'));
+    }, 0);
+    if (backorderQty > 0) {
+      Alert.alert(
+        'Ship short and backorder the rest?',
+        `This ships ${shipsNow} now and backorders ${backorderQty}. The order stays open as "Backordered" so you can fulfill the remainder once stock is available.`,
+        [
+          { text: 'Keep picking', style: 'cancel' },
+          {
+            text: `Ship ${shipsNow} & backorder ${backorderQty}`,
+            onPress: () => void complete(),
+          },
+        ],
+      );
+      return;
+    }
+    void complete();
+  }
+
   if (!canPick) {
     // Locked to another picker — show a muted notice, never the pick inputs.
     return (
@@ -236,7 +265,7 @@ export function DigitalPick({
       })}
 
       <Pressable
-        onPress={() => void complete()}
+        onPress={onCompleteClick}
         disabled={!anyPicked || completing}
         style={{
           borderRadius: 12,

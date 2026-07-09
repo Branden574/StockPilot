@@ -10,6 +10,14 @@ import { FefoLotHint } from '@/components/orders/fefo-lot-hint';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   completePickingAction,
   recordPickedLineAction,
 } from '@/server/actions/order-requests';
@@ -101,6 +109,27 @@ export function DigitalPick({
 
   const allLinesPicked = initialLines.every((l) => (picked[l.id] ?? 0) > 0);
   const anyLinePicked = initialLines.some((l) => (picked[l.id] ?? 0) > 0);
+
+  // Short-completion guard: how much this batch ships vs how much stays owed
+  // after it. If anything is still owed, completing forks the order to
+  // backordered — confirm before doing that silently.
+  const shipsNow = initialLines.reduce((s, l) => s + (picked[l.id] ?? 0), 0);
+  const backorderQty = initialLines.reduce((s, l) => {
+    const owedBefore = Math.max(
+      0,
+      Number(l.quantity_requested) - Number(l.quantity_fulfilled ?? 0),
+    );
+    return s + Math.max(0, owedBefore - (picked[l.id] ?? 0));
+  }, 0);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+
+  function onCompleteClick() {
+    if (backorderQty > 0) {
+      setConfirmOpen(true);
+      return;
+    }
+    void complete();
+  }
 
   // Locked to another picker (or unclaimed and the viewer isn't a manager).
   // The server rejects the write either way; this just avoids showing
@@ -198,7 +227,7 @@ export function DigitalPick({
 
       <div className="flex justify-end pt-2">
         <Button
-          onClick={complete}
+          onClick={onCompleteClick}
           disabled={completing || !anyLinePicked}
           variant="gradient"
           size="lg"
@@ -210,6 +239,47 @@ export function DigitalPick({
           )}
         </Button>
       </div>
+
+      {/* Short-completion confirm — completing now backorders the shortfall. */}
+      <Dialog
+        open={confirmOpen}
+        onOpenChange={(v) => {
+          if (completing) return;
+          setConfirmOpen(v);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Ship short and backorder the rest?</DialogTitle>
+            <DialogDescription>
+              This ships {shipsNow} {shipsNow === 1 ? 'unit' : 'units'} now and
+              backorders {backorderQty} {backorderQty === 1 ? 'unit' : 'units'}.
+              The order stays open as “Backordered” so you can fulfill the
+              remainder once stock is available.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmOpen(false)}
+              disabled={completing}
+            >
+              Keep picking
+            </Button>
+            <Button
+              variant="gradient"
+              onClick={() => {
+                setConfirmOpen(false);
+                void complete();
+              }}
+              disabled={completing}
+            >
+              {completing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Ship {shipsNow} &amp; backorder {backorderQty}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
