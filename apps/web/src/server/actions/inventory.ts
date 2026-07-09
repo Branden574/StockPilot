@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { deriveLocationName } from '@/lib/locations/rack-name';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
@@ -41,7 +42,9 @@ function isUuidOrNull(v: unknown): boolean {
   return v === null || (typeof v === 'string' && UUID_REGEX.test(v));
 }
 
-export async function createItemAction(input: CreateItemInput): Promise<ActionResult<{ id: string }>> {
+export async function createItemAction(
+  input: CreateItemInput,
+): Promise<ActionResult<{ id: string }>> {
   const parsed = createItemSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -246,14 +249,6 @@ const destinationSchema = z.union([
   z.object({ existingLocationId: z.string().uuid() }),
   z.object({ newRack: newRackSchema }),
 ]);
-
-/** Derive a human-readable name for an inline-created rack or crate. */
-function deriveLocationName(n: z.infer<typeof newRackSchema>): string {
-  if (n.crateColor) {
-    return `${n.crateColor} #${n.crateNumber ?? n.rackNumber}`;
-  }
-  return n.rackRow ? `${n.rackNumber}-${n.rackRow}` : n.rackNumber;
-}
 
 /**
  * Verify a warehouse id belongs to the caller's org before creating a

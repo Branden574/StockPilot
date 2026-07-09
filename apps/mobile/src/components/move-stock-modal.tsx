@@ -31,6 +31,57 @@ interface Destination {
   kind: string | null;
 }
 
+/** Sentinel `toId` value for the inline "create a new rack" branch. */
+const NEW_RACK = '__new__';
+
+/** Colors this file reads off the theme palette — a subset of `useTheme().c`. */
+type FieldColors = { ink: string; ink4: string; ink5: string; hair: string; paper2: string };
+
+/**
+ * A labeled text input for the inline "+ New rack" form. Defined at MODULE level
+ * (not inside MoveStockModal) so its component identity is stable across
+ * renders — a component re-created every render would remount its TextInput and
+ * drop focus after each keystroke.
+ */
+function RackField({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  c,
+}: {
+  label: string;
+  value: string;
+  onChangeText: (t: string) => void;
+  placeholder: string;
+  c: FieldColors;
+}) {
+  return (
+    <View style={{ gap: 6 }}>
+      <Mono size={10} tracking={0.12} upper color={c.ink4}>
+        {label}
+      </Mono>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={c.ink5}
+        style={{
+          fontFamily: FONT.displayRegular,
+          fontSize: 15,
+          height: 46,
+          paddingHorizontal: 12,
+          borderWidth: 1,
+          borderColor: c.hair,
+          borderRadius: 8,
+          color: c.ink,
+          backgroundColor: c.paper2,
+        }}
+      />
+    </View>
+  );
+}
+
 /**
  * Native "Move stock" — parity for the web StockTransferDialog + Staging
  * put-away. Reads the item's holdings and candidate racks/crates straight from
@@ -40,20 +91,27 @@ interface Destination {
  *
  * One modal covers both flows — the source list includes placed racks AND the
  * staging/unplaced buckets, so picking a staging source is a put-away and
- * picking a rack source is a transfer.
+ * picking a rack source is a transfer. The destination is either an existing
+ * rack/crate OR one created inline via "+ New rack…" (gated on
+ * canCreateLocation; the server asserts 'locations:manage' and creates it in the
+ * source location's warehouse).
  */
 export function MoveStockModal({
   visible,
   itemId,
   itemName,
+  itemType,
   organizationId,
+  canCreateLocation,
   onClose,
   onMoved,
 }: {
   visible: boolean;
   itemId: string;
   itemName: string;
+  itemType: string | null;
   organizationId: string;
+  canCreateLocation: boolean;
   onClose: () => void;
   onMoved: () => void;
 }) {
@@ -67,6 +125,11 @@ export function MoveStockModal({
   const [notes, setNotes] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // Inline "+ New rack" fields — only used when toId === NEW_RACK.
+  const [rackNumber, setRackNumber] = React.useState('');
+  const [rackRow, setRackRow] = React.useState('');
+  const [crateColor, setCrateColor] = React.useState('');
+  const [crateNumber, setCrateNumber] = React.useState('');
 
   React.useEffect(() => {
     if (!visible) return;
@@ -76,6 +139,10 @@ export function MoveStockModal({
     setQty('1');
     setNotes('');
     setToId('');
+    setRackNumber('');
+    setRackRow('');
+    setCrateColor('');
+    setCrateNumber('');
     void (async () => {
       // Source holdings: every location this item has stock in (placed racks +
       // staging/unplaced). location_id → qty, with the location's name + kind.
@@ -136,9 +203,15 @@ export function MoveStockModal({
   const isPutAway = selected?.kind === 'staging' || selected?.kind === 'unplaced';
   const qtyNum = parseInt(qty, 10);
   const qtyValid = !Number.isNaN(qtyNum) && qtyNum > 0 && qtyNum <= maxQty;
-  const canSubmit = !!fromId && !!toId && qtyValid && !submitting;
 
-  // Destinations exclude the chosen source rack (can't move to itself).
+  const isBook = itemType === 'book';
+  const isNewRack = toId === NEW_RACK;
+  // A destination is chosen when an existing rack is picked, or "+ New rack" is
+  // selected AND a rack number has been typed.
+  const destChosen = isNewRack ? rackNumber.trim().length > 0 : !!toId;
+  const canSubmit = !!fromId && destChosen && qtyValid && !submitting;
+
+  // Existing destinations exclude the chosen source rack (can't move to itself).
   const destChoices = destinations.filter((d) => d.id !== fromId);
 
   function holdingLabel(h: Holding): string {
@@ -152,11 +225,21 @@ export function MoveStockModal({
     setSubmitting(true);
     setError(null);
     try {
+      const destination = isNewRack
+        ? {
+            newRack: {
+              rackNumber: rackNumber.trim(),
+              ...(rackRow.trim() ? { rackRow: rackRow.trim() } : {}),
+              ...(isBook && crateColor.trim() ? { crateColor: crateColor.trim() } : {}),
+              ...(isBook && crateNumber.trim() ? { crateNumber: crateNumber.trim() } : {}),
+            },
+          }
+        : { toLocationId: toId };
       await transferStock(itemId, {
         fromLocationId: fromId,
-        toLocationId: toId,
         quantity: qtyNum,
         notes: notes.trim() || undefined,
+        ...destination,
       });
       onMoved();
       onClose();
@@ -257,9 +340,10 @@ export function MoveStockModal({
               <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
                 This item has no stock in any location yet — receive or add stock first.
               </Mono>
-            ) : destChoices.length === 0 ? (
+            ) : destChoices.length === 0 && !canCreateLocation ? (
               <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
-                No racks or crates to move into. Create one on the web first, then transfer here.
+                No racks or crates to move into, and you don&apos;t have permission to create one.
+                Ask an admin, or create a rack on the web.
               </Mono>
             ) : (
               <ScrollView
@@ -300,7 +384,60 @@ export function MoveStockModal({
                         onPress={() => setToId(d.id)}
                       />
                     ))}
+                    {canCreateLocation ? (
+                      <Chip
+                        label="+ New rack…"
+                        active={isNewRack}
+                        onPress={() => setToId(NEW_RACK)}
+                      />
+                    ) : null}
                   </View>
+
+                  {isNewRack ? (
+                    <View
+                      style={{
+                        gap: 10,
+                        marginTop: 6,
+                        borderWidth: 1,
+                        borderColor: c.hair,
+                        borderRadius: 10,
+                        padding: 12,
+                      }}
+                    >
+                      <RackField
+                        label="RACK NUMBER *"
+                        value={rackNumber}
+                        onChangeText={setRackNumber}
+                        placeholder="e.g. A1"
+                        c={c}
+                      />
+                      <RackField
+                        label="ROW (OPTIONAL)"
+                        value={rackRow}
+                        onChangeText={setRackRow}
+                        placeholder="e.g. Row 3"
+                        c={c}
+                      />
+                      {isBook ? (
+                        <>
+                          <RackField
+                            label="CRATE COLOR (OPTIONAL)"
+                            value={crateColor}
+                            onChangeText={setCrateColor}
+                            placeholder="e.g. Blue"
+                            c={c}
+                          />
+                          <RackField
+                            label="CRATE NUMBER (OPTIONAL)"
+                            value={crateNumber}
+                            onChangeText={setCrateNumber}
+                            placeholder="e.g. 42"
+                            c={c}
+                          />
+                        </>
+                      ) : null}
+                    </View>
+                  ) : null}
                 </View>
 
                 <View style={{ gap: 6, marginBottom: 16 }}>

@@ -154,6 +154,10 @@ export default function ItemDetail() {
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canTransfer =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'stock:transfer'));
+  // Gates the inline "+ New rack" option in the move sheet; the transfer route
+  // asserts 'locations:manage' independently when it creates the rack.
+  const canCreateLocation =
+    isManager || (role !== null && can({ role: role as Role, permissions }, 'locations:manage'));
 
   const load = React.useCallback(async () => {
     if (!id) return;
@@ -806,7 +810,9 @@ export default function ItemDetail() {
         visible={moveOpen}
         itemId={item.id}
         itemName={item.name}
+        itemType={item.item_type}
         organizationId={item.organization_id}
+        canCreateLocation={canCreateLocation}
         onClose={() => setMoveOpen(false)}
         onMoved={() => {
           void load();

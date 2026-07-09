@@ -15,12 +15,26 @@ import { api } from './api';
  * pick:
  *   • transfer  — source is a placed rack/crate,
  *   • put-away  — source is a staging/unplaced bucket.
+ *
+ * The destination is EITHER an existing location (`toLocationId`) OR a rack/crate
+ * created inline (`newRack`) — exactly one. The new rack is created server-side
+ * in the source location's warehouse (asserts 'locations:manage').
  */
+export interface NewRack {
+  rackNumber: string;
+  rackRow?: string;
+  crateColor?: string;
+  crateNumber?: string;
+}
+
 export interface TransferStockBody {
   fromLocationId: string;
-  toLocationId: string;
   quantity: number;
   notes?: string;
+  /** Existing destination. Provide this OR `newRack`, not both. */
+  toLocationId?: string;
+  /** Create-and-move destination. Provide this OR `toLocationId`, not both. */
+  newRack?: NewRack;
 }
 
 /** Move stock. Throws a clean Error (the server's friendly message) on a

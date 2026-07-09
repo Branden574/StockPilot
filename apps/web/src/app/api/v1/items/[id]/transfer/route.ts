@@ -2,11 +2,13 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { deriveLocationName } from '@/lib/locations/rack-name';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
+import { LocationsService } from '@/server/services/locations';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,14 +17,21 @@ export const dynamic = 'force-dynamic';
  * Mobile "Move stock" — the REST parity for the web StockTransferDialog and the
  * Staging put-away flow (both web-only, driven by server actions). It moves a
  * quantity of one item from a SOURCE holding (a rack/crate, or a staging/
- * unplaced bucket for put-away) into a DESTINATION rack/crate.
+ * unplaced bucket for put-away) into a DESTINATION rack/crate — either an
+ * EXISTING one (`toLocationId`) or one CREATED inline (`newRack`), mirroring the
+ * web dialog's "+ New location…" branch.
  *
  * Why a REST route and not a direct RPC from the app: the transfer_stock RPC
  * only checks the staff-role floor. The 'stock:transfer' PERMISSION is asserted
  * in InventoryService.transferStock — so mobile MUST go through the service, or
  * a member without stock:transfer could move stock by calling the RPC directly.
  *
- * Body: { fromLocationId, toLocationId, quantity, notes? }
+ * Body: { fromLocationId, quantity, notes?, (toLocationId | newRack) }
+ *   - toLocationId: an existing rack/crate in your org.
+ *   - newRack: { rackNumber, rackRow?, crateColor?, crateNumber? } — created via
+ *     LocationsService.create (asserts 'locations:manage'; racks/crates don't
+ *     count against the sites plan limit) in the SOURCE location's warehouse,
+ *     which is derived server-side (never trusted from the client).
  *
  * Defense in depth (three independent org-scoping layers, none sufficient to
  * bypass alone): (1) transfer_stock reads the item under the CALLER's RLS, so a
@@ -30,18 +39,33 @@ export const dynamic = 'force-dynamic';
  * locations belong to the item's org (assert_location_in_org, mig 0201/0231);
  * (3) this route additionally pins the destination to THIS session's org
  * (ctx.organizationId) and rejects the staging/unplaced system buckets — which
- * also gives a clean 400 instead of a generic RPC 500. Inline rack CREATION is
- * web-only for now; mobile picks an existing destination.
+ * also gives a clean 400 instead of a generic RPC 500. A newly created rack is
+ * born in-org (LocationsService.create scopes to ctx.organizationId), and its
+ * warehouse is taken from the source location's own warehouse, so it can't be
+ * seeded under a foreign org.
  */
+const newRackSchema = z.object({
+  rackNumber: z.string().min(1).max(64),
+  rackRow: z.string().max(64).optional(),
+  crateColor: z.string().max(64).optional(),
+  crateNumber: z.string().max(64).optional(),
+});
+
 const bodySchema = z
   .object({
     fromLocationId: z.string().uuid(),
-    toLocationId: z.string().uuid(),
     // `.finite()` rejects "Infinity"/"NaN" that coerce would otherwise pass.
     quantity: z.coerce.number().positive().finite(),
     notes: z.string().max(2000).optional(),
+    // Exactly one destination: an existing location OR an inline-created rack.
+    toLocationId: z.string().uuid().optional(),
+    newRack: newRackSchema.optional(),
   })
-  .refine((v) => v.fromLocationId !== v.toLocationId, {
+  .refine((v) => (v.toLocationId ? 1 : 0) + (v.newRack ? 1 : 0) === 1, {
+    message: 'Provide exactly one destination — an existing location or a new rack.',
+    path: ['toLocationId'],
+  })
+  .refine((v) => !v.toLocationId || v.toLocationId !== v.fromLocationId, {
     message: 'Source and destination must be different locations.',
     path: ['toLocationId'],
   });
@@ -88,32 +112,72 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // in depth).
     assertPermission(ctx, 'stock:transfer');
 
-    // TENANT-ISOLATION GUARD: pin the destination to THIS session's org and
-    // reject the staging/unplaced system buckets. transfer_stock already asserts
-    // both locations belong to the item's org (assert_location_in_org, 0201/0231);
-    // this additionally ties the destination to ctx.organizationId (matters for a
-    // dual-org member) and yields a clean 400 rather than a generic RPC 500.
-    const { data: dest } = await ctx.supabase
-      .from('locations')
-      .select('id, kind')
-      .eq('id', body.toLocationId)
-      .eq('organization_id', ctx.organizationId)
-      .is('deleted_at', null)
-      .maybeSingle();
-    if (!dest) {
-      return NextResponse.json(
-        {
-          error: 'validation_error',
-          message: 'Destination location not found in your organization.',
-        },
-        { status: 400 },
-      );
-    }
-    if (dest.kind === 'staging' || dest.kind === 'unplaced') {
-      return NextResponse.json(
-        { error: 'validation_error', message: 'Pick a rack or crate as the destination.' },
-        { status: 400 },
-      );
+    // Resolve the destination location id from either an existing location or an
+    // inline-created rack/crate.
+    let toLocationId: string;
+    if (body.newRack) {
+      // Derive the new rack's warehouse from the SOURCE location (org-scoped) —
+      // never trust a client-supplied warehouseId. Also confirms fromLocationId
+      // is a real, in-org location before we create anything.
+      const { data: src } = await ctx.supabase
+        .from('locations')
+        .select('warehouse_id')
+        .eq('id', body.fromLocationId)
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (!src?.warehouse_id) {
+        return NextResponse.json(
+          {
+            error: 'validation_error',
+            message: 'Source location not found in your organization, or has no warehouse.',
+          },
+          { status: 400 },
+        );
+      }
+      const n = body.newRack;
+      // LocationsService.create asserts 'locations:manage' and scopes the insert
+      // to ctx.organizationId (racks/crates don't consume the sites plan limit).
+      const created = await new LocationsService(ctx).create({
+        name: deriveLocationName(n),
+        type: n.crateColor ? 'bin' : 'shelf',
+        kind: n.crateColor ? 'crate' : 'rack',
+        warehouseId: src.warehouse_id,
+        rackNumber: n.rackNumber,
+        rackRow: n.rackRow ?? null,
+        crateColor: n.crateColor ?? null,
+        crateNumber: n.crateNumber ?? null,
+      });
+      toLocationId = created.id as string;
+    } else {
+      // TENANT-ISOLATION GUARD: pin the destination to THIS session's org and
+      // reject the staging/unplaced system buckets. transfer_stock already asserts
+      // both locations belong to the item's org (assert_location_in_org, 0201/0231);
+      // this additionally ties the destination to ctx.organizationId (matters for a
+      // dual-org member) and yields a clean 400 rather than a generic RPC 500.
+      const { data: dest } = await ctx.supabase
+        .from('locations')
+        .select('id, kind')
+        .eq('id', body.toLocationId!)
+        .eq('organization_id', ctx.organizationId)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (!dest) {
+        return NextResponse.json(
+          {
+            error: 'validation_error',
+            message: 'Destination location not found in your organization.',
+          },
+          { status: 400 },
+        );
+      }
+      if (dest.kind === 'staging' || dest.kind === 'unplaced') {
+        return NextResponse.json(
+          { error: 'validation_error', message: 'Pick a rack or crate as the destination.' },
+          { status: 400 },
+        );
+      }
+      toLocationId = dest.id;
     }
 
     // Re-asserts 'stock:transfer' internally, then calls transfer_stock.
@@ -121,7 +185,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     await svc.transferStock({
       itemId: id,
       fromLocationId: body.fromLocationId,
-      toLocationId: body.toLocationId,
+      toLocationId,
       quantity: body.quantity,
       notes: body.notes,
     });
@@ -130,7 +194,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // Items/Books views — refresh the org's list cache (on-hand total is
     // unchanged, but the per-rack breakdown is not).
     revalidateInventoryList(ctx.organizationId);
-    return NextResponse.json({ ok: true, toLocationId: body.toLocationId });
+    return NextResponse.json({ ok: true, toLocationId });
   } catch (e) {
     // transfer_stock raises `insufficient_stock` (P0001); the service wraps it as
     // ServiceError('internal_error', ...) with the raw text on internalDetail
