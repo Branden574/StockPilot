@@ -127,27 +127,40 @@ export async function POST(req: NextRequest) {
       responseSchema: {
         type: SchemaType.OBJECT,
         properties: {
+          // 'book' or 'product' — the client branches on this: books flow to
+          // the ISBN pipeline, products to the UPC/new-item pipeline.
+          kind: { type: SchemaType.STRING },
           title: { type: SchemaType.STRING },
           author: { type: SchemaType.STRING },
           isbn: { type: SchemaType.STRING },
           publisher: { type: SchemaType.STRING },
           edition: { type: SchemaType.STRING },
           language: { type: SchemaType.STRING },
+          // Product-side fields (omitted for books).
+          upc: { type: SchemaType.STRING },
+          brand: { type: SchemaType.STRING },
+          modelNumber: { type: SchemaType.STRING },
+          category: { type: SchemaType.STRING },
           confidence: { type: SchemaType.STRING },
           notes: { type: SchemaType.STRING },
         },
-        required: ['title', 'confidence'],
+        required: ['kind', 'title', 'confidence'],
       },
     },
   });
 
-  const prompt = `You are identifying the book or product in this image.
-Return only the requested JSON. If a field isn't clearly visible or
-inferable, omit it (do not guess). For ISBN, only fill it if you can
-read the actual digits on the cover or back — never derive it from
-the title. Confidence rubric:
-  - "high": title + author are unambiguous from the image
-  - "medium": title clear but author or edition uncertain
+  const prompt = `You are identifying the book or general product in this image.
+Return only the requested JSON. First set "kind": "book" if this is a
+book/publication, otherwise "product". If a field isn't clearly visible or
+inferable, omit it (do not guess).
+For books: fill title/author/publisher/edition/language; only fill isbn if you
+can read the actual digits on the cover or back — never derive it from the title.
+For products: title = the product's marketed name (e.g. 'DeWalt 20V Max Cordless
+Drill'); fill brand/modelNumber/category when visible; only fill upc if you can
+read the actual digits under a barcode — never invent one.
+Confidence rubric:
+  - "high": identity is unambiguous from the image
+  - "medium": name clear but maker/edition/model uncertain
   - "low": you're inferring from a partial or blurry view
 ${hint ? `\nUser hint: ${hint}` : ''}`;
 

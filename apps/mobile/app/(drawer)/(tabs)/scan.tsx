@@ -448,10 +448,15 @@ export default function Scan() {
       });
 
       const vision = await api<{
+        kind?: string;
         title?: string;
         author?: string;
         isbn?: string;
         publisher?: string;
+        upc?: string;
+        brand?: string;
+        modelNumber?: string;
+        category?: string;
         confidence?: string;
         notes?: string;
       }>('/api/v1/ai/identify-from-photo', {
@@ -461,6 +466,60 @@ export default function Scan() {
           mimeType: blob.type || `image/${ext}`,
         },
       });
+
+      // GENERAL PRODUCT (not a book): flow into the UPC/new-item pipeline
+      // instead of the book one. If Vision read a UPC off the packaging,
+      // re-chain through the authoritative upc-lookup first (enrichment +
+      // exists-in-inventory), exactly like the ISBN re-chain below; fall back
+      // to Vision's own fields so the user still gets a one-tap add card.
+      if (vision.kind === 'product') {
+        const visionUpc = (vision.upc ?? '').replace(/\D/g, '');
+        if (visionUpc.length >= 11 && visionUpc.length <= 14) {
+          try {
+            const res = await api<{
+              source: 'local' | 'upcitemdb' | 'ai-fallback';
+              existsInInventory: boolean;
+              itemId?: string;
+              enrichment: {
+                name: string;
+                description: string | null;
+                brand: string | null;
+                modelNumber: string | null;
+                imageUrl: string | null;
+              };
+            }>(`/api/v1/items/upc-lookup?upc=${encodeURIComponent(visionUpc)}`);
+            setAddItem({
+              upc: visionUpc,
+              source: res.source,
+              existingItem:
+                res.existsInInventory && res.itemId
+                  ? { id: res.itemId, name: res.enrichment.name }
+                  : null,
+              enrichment: res.enrichment,
+            });
+            return;
+          } catch {
+            /* ignore — fall back to Vision's own fields below */
+          }
+        }
+        setAddItem({
+          upc: visionUpc || 'unknown',
+          source: 'ai-fallback',
+          existingItem: null,
+          enrichment: vision.title
+            ? {
+                name: vision.brand && !vision.title.toLowerCase().includes(vision.brand.toLowerCase())
+                  ? `${vision.brand} ${vision.title}`
+                  : vision.title,
+                description: vision.notes ?? null,
+                brand: vision.brand ?? null,
+                modelNumber: vision.modelNumber ?? null,
+                imageUrl: asset.uri,
+              }
+            : null,
+        });
+        return;
+      }
 
       // If Vision pulled an ISBN, prefer the official lookup pipeline —
       // it's more reliable than Vision's title-only guess and surfaces
@@ -498,7 +557,7 @@ export default function Scan() {
           : null,
       });
     } catch (e) {
-      Alert.alert('Cover ID failed', e instanceof Error ? e.message : 'Unknown error');
+      Alert.alert('Photo ID failed', e instanceof Error ? e.message : 'Unknown error');
     } finally {
       setBusy(false);
     }
@@ -646,7 +705,7 @@ export default function Scan() {
               style={[styles.modeChip, mode === 'cover' && styles.modeChipOn]}
             >
               <Text style={[styles.modeLabel, mode === 'cover' && styles.modeLabelOn]}>
-                Cover ID
+                Photo ID
               </Text>
             </Pressable>
           </View>
