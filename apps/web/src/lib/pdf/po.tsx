@@ -352,40 +352,49 @@ export function PurchaseOrderPdf({
                  * become stock, so there is nothing to receive. Numbering
                  * continues after the inventory lines.
                  */}
-                {charges.map((c, ci) => (
-                  <View key={`charge-${ci}`} style={pdfStyles.tRow}>
-                    <Text style={[pdfStyles.tCell, pdfStyles.muted, { flex: PO_COLS.num }]}>
-                      {lines.length + ci + 1}
-                    </Text>
-                    <Text
-                      style={[pdfStyles.tCell, pdfStyles.tCellMono, pdfStyles.muted, { flex: PO_COLS.sku }]}
-                    >
-                      —
-                    </Text>
-                    <Text style={[pdfStyles.tCell, { flex: PO_COLS.name }]}>
-                      {truncate(c.label, DESCRIPTION_MAX)}
-                    </Text>
-                    <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>
-                      {c.quantity != null ? formatNumberForPdf(c.quantity) : '—'}
-                    </Text>
-                    <Text
-                      style={[pdfStyles.tCell, pdfStyles.tRight, pdfStyles.muted, { flex: PO_COLS.recv }]}
-                    >
-                      —
-                    </Text>
-                    <Text
-                      style={[pdfStyles.tCell, pdfStyles.tRight, pdfStyles.muted, { flex: PO_COLS.out }]}
-                    >
-                      —
-                    </Text>
-                    <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
-                      {c.unitCost != null ? formatCurrencyForPdf(c.unitCost) : '—'}
-                    </Text>
-                    <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.total }]}>
-                      {formatCurrencyForPdf(c.amount)}
-                    </Text>
-                  </View>
-                ))}
+                {charges.map((c, ci) => {
+                  // Only show "qty @ unit cost" when it actually foots to the
+                  // line amount (so a discount — qty 5 × $10 but a −$50 total —
+                  // renders as a flat −$50 instead of a row that doesn't add up).
+                  const foots =
+                    c.quantity != null &&
+                    c.unitCost != null &&
+                    Math.abs(c.quantity * c.unitCost - c.amount) < 0.005;
+                  return (
+                    <View key={`charge-${ci}`} style={pdfStyles.tRow}>
+                      <Text style={[pdfStyles.tCell, pdfStyles.muted, { flex: PO_COLS.num }]}>
+                        {lines.length + ci + 1}
+                      </Text>
+                      <Text
+                        style={[pdfStyles.tCell, pdfStyles.tCellMono, pdfStyles.muted, { flex: PO_COLS.sku }]}
+                      >
+                        —
+                      </Text>
+                      <Text style={[pdfStyles.tCell, { flex: PO_COLS.name }]}>
+                        {truncate(c.label, DESCRIPTION_MAX)}
+                      </Text>
+                      <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>
+                        {foots ? formatNumberForPdf(c.quantity as number) : '—'}
+                      </Text>
+                      <Text
+                        style={[pdfStyles.tCell, pdfStyles.tRight, pdfStyles.muted, { flex: PO_COLS.recv }]}
+                      >
+                        —
+                      </Text>
+                      <Text
+                        style={[pdfStyles.tCell, pdfStyles.tRight, pdfStyles.muted, { flex: PO_COLS.out }]}
+                      >
+                        —
+                      </Text>
+                      <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
+                        {foots ? formatCurrencyForPdf(c.unitCost as number) : '—'}
+                      </Text>
+                      <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.total }]}>
+                        {formatCurrencyForPdf(c.amount)}
+                      </Text>
+                    </View>
+                  );
+                })}
               </>
             )}
           </View>
@@ -406,8 +415,11 @@ export function PurchaseOrderPdf({
               </View>
             ) : null}
             {Math.abs(chargeResidual) >= 0.005 ? (
+              // Not an anonymous "Other": if the stored total doesn't equal
+              // subtotal + itemized charges, the number is unreconciled — name
+              // it so a reader never mistakes a data-drift gap for a real charge.
               <View style={pdfStyles.totalsRow}>
-                <Text style={pdfStyles.totalsLabel}>Other</Text>
+                <Text style={pdfStyles.totalsLabel}>Unreconciled difference</Text>
                 <Text style={pdfStyles.totalsValue}>{formatCurrencyForPdf(chargeResidual)}</Text>
               </View>
             ) : null}

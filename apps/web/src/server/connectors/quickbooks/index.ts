@@ -131,7 +131,7 @@ async function handlePurchaseOrderOrdered(
 
   const { data: po, error: poErr } = await admin
     .from('purchase_orders')
-    .select('id, supplier_id, total')
+    .select('id, supplier_id, subtotal, total')
     .eq('id', event.aggregateId)
     .eq('organization_id', conn.organizationId) // defense-in-depth: tenant-scope the rehydration
     .maybeSingle();
@@ -148,9 +148,16 @@ async function handlePurchaseOrderOrdered(
     : { data: null, error: null };
   if (supplierErr) throw new Error(`suppliers select: ${supplierErr.message}`);
 
+  // Book the GOODS amount (subtotal), not po.total. Since migration 0235 an
+  // imported PO's total also includes financial-only charges (tax/freight/
+  // service/fee) that are, by owner directive, a PO-document concern only — they
+  // never post to inventory and must not diverge the PO-commitment from the
+  // receipt-based Bill (built from received goods lines). subtotal is the goods
+  // total on every write path; fall back to total for any legacy PO whose
+  // subtotal was never populated.
+  const amount = Number(po.subtotal) || Number(po.total) || 0;
   // A $0 (or rounds-to-zero) PO has nothing to book — QBO rejects it 4xx, so ACK
   // rather than burn the retry budget (mirrors the Bill zero-amount short-circuit).
-  const amount = Number(po.total) || 0;
   if (round2(amount) <= 0) return { ok: true };
 
   const qboEnv: QboEnv = settings.env ?? env.QBO_ENV;

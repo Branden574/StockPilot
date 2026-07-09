@@ -203,6 +203,57 @@ describe('quickbooksConnector.handleOutboxEvent — zero-amount short-circuit', 
   });
 });
 
+describe('quickbooksConnector.handleOutboxEvent — PO commitment books GOODS, not charge-inclusive total', () => {
+  // Regression for migration 0235: an imported PO's total now includes
+  // financial-only charges (tax/freight/service/fee). The PO-commitment push
+  // must book the GOODS amount (subtotal) so it still reconciles with the
+  // goods-only receipt Bill — charges are a PO-document concern only.
+  const orderedEvent: OutboxEvent = {
+    ...event,
+    topic: 'purchase_order.ordered',
+    aggregateType: 'purchase_order',
+    aggregateId: 'po-1',
+  };
+
+  it('books subtotal ($46,995) for a PO whose total ($52,769.23) includes charges', async () => {
+    postSpy.mockResolvedValue({ PurchaseOrder: { Id: 'qbo-po-1' } });
+    const admin = makeAdmin({
+      tables: {
+        purchase_orders: {
+          data: { id: 'po-1', supplier_id: 'sup-1', subtotal: 46995, total: 52769.23 },
+          error: null,
+        },
+        suppliers: { data: { id: 'sup-1', name: 'Acme' }, error: null },
+      },
+    });
+    const res = await quickbooksConnector.handleOutboxEvent(
+      orderedEvent,
+      conn,
+      {} as any,
+      makeDeps({ admin }),
+    );
+    expect(res.ok).toBe(true);
+    expect(postSpy).toHaveBeenCalledTimes(1);
+    const [, body] = postSpy.mock.calls[0] as [string, { Line: Array<{ Amount: number }> }];
+    // GOODS, not the $52,769.23 charge-inclusive total.
+    expect(body.Line[0]?.Amount).toBe(46995);
+  });
+
+  it('falls back to total for a legacy PO whose subtotal was never populated', async () => {
+    postSpy.mockResolvedValue({ PurchaseOrder: { Id: 'qbo-po-2' } });
+    const admin = makeAdmin({
+      tables: {
+        // subtotal absent/0 (legacy) → book total so old POs are unchanged.
+        purchase_orders: { data: { id: 'po-1', supplier_id: 'sup-1', total: 1000 }, error: null },
+        suppliers: { data: { id: 'sup-1', name: 'Acme' }, error: null },
+      },
+    });
+    await quickbooksConnector.handleOutboxEvent(orderedEvent, conn, {} as any, makeDeps({ admin }));
+    const [, body] = postSpy.mock.calls[0] as [string, { Line: Array<{ Amount: number }> }];
+    expect(body.Line[0]?.Amount).toBe(1000);
+  });
+});
+
 describe('quickbooksConnector via runDrain (integration) — Step 6', () => {
   /**
    * Fake admin for the drainer: org_connections / connection_sync_log writes are

@@ -74,8 +74,13 @@ export function buildPoCharges(
         : 'other';
       const raw = l.line_total ?? 0;
       // A discount must reduce the total regardless of the parser's sign
-      // convention (some emit -50, some emit 50 with a 'discount' type).
-      const amount = chargeType === 'discount' ? -Math.abs(raw) : raw;
+      // convention (some emit -50, some emit 50 with a 'discount' type). For
+      // every OTHER type we keep the parser's sign as-is, so a negative line
+      // (a credit) is never flipped positive. Round to cents at the source so
+      // the PO total, the PDF roll-up, and the itemized rows all foot exactly
+      // (numeric(14,4) + percentage taxes can otherwise drift a cent).
+      const signed = chargeType === 'discount' ? -Math.abs(raw) : raw;
+      const amount = Math.round(signed * 100) / 100;
       const label = l.description && l.description.trim().length > 0 ? l.description : null;
       const quantity = l.qty_ordered_original ?? null;
       // Only carry unit_cost when there's a real multi-unit qty to show

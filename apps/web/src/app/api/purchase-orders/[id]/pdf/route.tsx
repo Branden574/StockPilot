@@ -89,6 +89,7 @@ export async function GET(
       const { data: chargeData } = await ctx.supabase
         .from('purchase_order_charges')
         .select('label, charge_type, quantity, unit_cost, amount, sort_order')
+        .eq('organization_id', ctx.organizationId) // defense-in-depth: match the PO header/line queries, don't lean on RLS alone
         .eq('purchase_order_id', id)
         .order('sort_order', { ascending: true });
       chargeRows = ((chargeData ?? []) as Array<Record<string, unknown>>).map((c) => ({
