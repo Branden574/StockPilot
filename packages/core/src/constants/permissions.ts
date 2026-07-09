@@ -45,6 +45,10 @@ export const PERMISSIONS = [
   'orders:request',
   'orders:approve',
   'orders:assign_delivery',
+  // B2B customers (b2b_portal module): manage customer accounts, portal user
+  // invites, price lists, and per-customer catalogs. Manager+ — the same
+  // people who approve the orders those customers place.
+  'customers:manage',
   // Schedule events: manager+ creates/edits/deletes calendar entries.
   // Viewers can still read the calendar (RLS allows org members) but
   // can't mutate it. Without this gate, a viewer could call the
@@ -112,6 +116,8 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'orders:request',
     'orders:approve',
     'orders:assign_delivery',
+    // Managers run the B2B relationships whose orders they approve.
+    'customers:manage',
     'schedule:manage',
     'rentals:create',
     'rentals:manage',
@@ -455,6 +461,13 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     group: 'Order requests',
     label: 'Assign deliveries',
     description: 'Assign a staged delivery to a driver. Manager+ only.',
+  },
+
+  'customers:manage': {
+    group: 'Customers',
+    label: 'Manage B2B customers',
+    description:
+      'Create customer accounts, invite portal users, and set their price lists and catalogs.',
   },
 
   'schedule:manage': {

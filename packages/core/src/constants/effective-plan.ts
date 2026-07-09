@@ -108,6 +108,14 @@ export function planAllowsRecurringPos(org: OrgBillingState, now: number = Date.
 }
 
 /**
+ * Whether the org's EFFECTIVE plan entitles it to the B2B customer portal
+ * (Business and above). Same effective-tier resolution as its siblings.
+ */
+export function planAllowsB2bPortal(org: OrgBillingState, now: number = Date.now()): boolean {
+  return PLANS[resolveEffectivePlan(org, now).tier].limits.b2bPortal;
+}
+
+/**
  * Whether the org's EFFECTIVE plan entitles it to inventory restore points
  * (Business and above). Resolves on the effective tier (Comped/override orgs
  * qualify).

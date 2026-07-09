@@ -102,7 +102,7 @@ describe('nav order is frozen to the original static nav', () => {
     expect(hrefs).toEqual([
       '/',
       '/inventory', '/books', '/categories', '/tags', '/movements', '/rentals', '/bundles',
-      '/orders', '/cycle-counts', '/procedures', '/receive', '/purchase-orders', '/po-imports',
+      '/orders', '/cycle-counts', '/procedures', '/receive', '/purchase-orders', '/recurring-pos', '/po-imports',
       '/locations', '/suppliers', '/reports',
       '/ai', '/schedule', '/notifications', '/team', '/settings',
       '/scan',

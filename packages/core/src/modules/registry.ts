@@ -29,7 +29,7 @@ export type ModuleId =
   | 'reports' | 'notifications' | 'team' | 'settings' | 'admin_tools' | 'charters' | 'scan'
   | 'books' | 'rentals' | 'bundles' | 'orders' | 'cycle_counts' | 'procedures'
   | 'purchase_orders' | 'receiving' | 'po_imports' | 'suppliers' | 'schedule' | 'ai' | 'public_requests'
-  | 'integrations' | 'shipping' | 'returns' | 'planning'
+  | 'integrations' | 'shipping' | 'returns' | 'planning' | 'b2b_portal'
   | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'api_access' | 'price_tracking' | 'live_tracking' | 'zendesk';
 
 export interface NavPlacement {
@@ -524,6 +524,31 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // would surface a dead nav link in the app).
     placements: [
       { surface: 'web_sidebar', section: 'inventory', label: 'Returns', href: '/dashboard/returns', iconName: 'Undo2', defaultSortOrder: 85, requires: 'returns:manage' },
+    ],
+  },
+
+  b2b_portal: {
+    id: 'b2b_portal',
+    tier: 'optional',
+    title: 'B2B customer portal',
+    // Portal checkout creates order_requests, so the orders pipeline must be on.
+    dependsOn: ['orders'],
+    permissions: ['customers:manage'],
+    surfaces: ['web', 'api'],
+    apiPrefixes: ['/api/portal'],
+    ownsTables: [
+      'customers',
+      'customer_users',
+      'price_lists',
+      'price_list_items',
+      'customer_catalog',
+    ],
+    // Off for every pack — explicit opt-in (Business+ plan gate applies on top).
+    defaultOnFor: [],
+    // Org-side management surface only; the customer-facing portal lives at
+    // /portal/* outside the dashboard shell. Web-only (P4 adds mobile).
+    placements: [
+      { surface: 'web_sidebar', section: 'workspace', label: 'Customers', href: '/dashboard/customers', iconName: 'Handshake', defaultSortOrder: 82, requires: 'customers:manage' },
     ],
   },
 

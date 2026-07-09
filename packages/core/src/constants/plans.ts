@@ -20,6 +20,8 @@ export interface PlanLimits {
   recurringPos: boolean;
   /** Inventory restore points (snapshots + safe-reconcile restore). Business and above. */
   restorePoints: boolean;
+  /** B2B customer portal (customers, price lists, portal ordering). Business+. */
+  b2bPortal: boolean;
 }
 
 export interface PlanDefinition {
@@ -67,6 +69,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       autoReorder: false,
       recurringPos: false,
       restorePoints: false,
+      b2bPortal: false,
     },
     features: ['Up to 10,000 items', '100 team members', '100 locations', 'Manual entry', 'Basic CSV export'],
   },
@@ -94,6 +97,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       autoReorder: true,
       recurringPos: true,
       restorePoints: false,
+      b2bPortal: false,
     },
     features: [
       'Up to 5,000 items',
@@ -129,6 +133,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       autoReorder: true,
       recurringPos: true,
       restorePoints: true,
+      b2bPortal: true,
     },
     features: [
       'Up to 50,000 items',
@@ -164,6 +169,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       autoReorder: true,
       recurringPos: true,
       restorePoints: true,
+      b2bPortal: true,
     },
     features: [
       'Unlimited everything',
