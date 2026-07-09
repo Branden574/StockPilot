@@ -106,6 +106,8 @@ describe('OrderRequestsService — multi-placement SKU fulfillment (Model B, ver
   it('recordPickedLine() forwards {p_line_id, p_qty} only — no item/SKU resolution in JS', async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-1' }, error: null },
+      // The line-belongs-to-order verification finds the line on this order.
+      'order_request_lines.select.maybeSingle': { data: { id: 'line-1' }, error: null },
       'rpc:partial_pick_line': {
         data: { id: 'line-1', quantity_picked: 5 },
         error: null,
@@ -119,6 +121,26 @@ describe('OrderRequestsService — multi-placement SKU fulfillment (Model B, ver
       name: 'partial_pick_line',
       args: { p_line_id: 'line-1', p_qty: 5 },
     });
+  });
+
+  it('SECURITY: recordPickedLine() rejects a lineId that is not on the gated order (no RPC call)', async () => {
+    // The caller passes an orderId they CAN write to, but a lineId that belongs
+    // to a DIFFERENT order (e.g. another warehouse's order in the same org).
+    // The line-belongs-to-order lookup returns nothing → not_found, and the
+    // partial_pick_line RPC (which only checks org role, not that the line is on
+    // this order) is NEVER reached.
+    const stub = makeSupabaseStub({
+      'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-1' }, error: null },
+      'order_request_lines.select.maybeSingle': { data: null, error: null },
+      'rpc:partial_pick_line': { data: { id: 'foreign-line' }, error: null },
+    });
+
+    const err = await svc(stub)
+      .recordPickedLine('order-1', 'foreign-line-from-another-order', 3)
+      .catch((e: unknown) => e);
+
+    expect((err as { code?: string }).code).toBe('not_found');
+    expect(stub.rpcCalls).toHaveLength(0); // the RPC must not run on a foreign line
   });
 
   it('completePicking() forwards {p_order_id} only — the SQL RPC owns the per-line decrement, not JS', async () => {

@@ -1040,13 +1040,25 @@ export class OrderRequestsService {
   async recordPickedLine(orderId: string, lineId: string, qty: number): Promise<void> {
     assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'items:update');
-    // C3: warehouse-scope gate. Without this, a staff user scoped to
-    // Warehouse A could pick lines on a Warehouse B order if they
-    // knew the lineId. The order id is the canonical entity we
-    // permission-check against; the RPC itself does an internal
-    // lookup so the lineId still has to belong to the order, but
-    // that's a defensive backstop rather than the primary gate.
+    // Warehouse-scope gate: the caller must be able to write to THIS order's
+    // warehouse. The order id is the canonical entity we permission-check.
     await this.requireWarehouseAccess(orderId, 'write');
+    // CRITICAL: the RPC picks by lineId and derives the order FROM the line,
+    // checking only an org-level staff role — it does NOT verify the line
+    // belongs to `orderId`. So without this check a warehouse-A picker could
+    // pass a lineId from another warehouse's order (same org) and tamper with
+    // its pick state, bypassing the warehouse gate above. Verify the line is on
+    // the gated order before touching it. ctx.supabase is RLS-scoped, so the
+    // line is also necessarily in the caller's org.
+    const { data: lineRow, error: lineErr } = await this.ctx.supabase
+      .from('order_request_lines')
+      .select('id')
+      .eq('id', lineId)
+      .eq('order_request_id', orderId)
+      .maybeSingle();
+    if (lineErr) throw new ServiceError('internal_error', 'Could not verify the pick line.');
+    if (!lineRow) throw new ServiceError('not_found', 'That line is not on this order.');
+
     const { error } = await this.ctx.supabase.rpc('partial_pick_line', {
       p_line_id: lineId,
       p_qty: qty,
@@ -1061,7 +1073,8 @@ export class OrderRequestsService {
         throw new ServiceError('forbidden', 'Not allowed to pick on this order.');
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'Order is not in a pickable status.');
-      throw new ServiceError('internal_error', msg);
+      // Don't leak the raw Postgres/RPC text to a Bearer caller.
+      throw new ServiceError('internal_error', 'Could not record the pick.');
     }
   }
 
