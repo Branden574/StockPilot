@@ -4,7 +4,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 import { env } from '@/lib/env';
 
-import { withContext } from './context';
+import { withContext, type ServiceContext } from './context';
 import { getDashboardActions, getLowStockItems } from './movements';
 import { OrderRequestsService } from './order-requests';
 import { PurchaseOrdersService } from './purchase-orders';
@@ -34,7 +34,15 @@ export interface InsightsResult {
 }
 
 export async function gatherInsights(): Promise<InsightsResult> {
-  const ctx = await withContext();
+  return gatherInsightsForCtx(await withContext());
+}
+
+/**
+ * Context-explicit variant so the daily-briefing cron can run the same
+ * gathering under a per-org system context (the page path above stays bound
+ * to the signed-in user's context).
+ */
+export async function gatherInsightsForCtx(ctx: ServiceContext): Promise<InsightsResult> {
   const [lowStock, actions, overdue, pending] = await Promise.all([
     getLowStockItems(8, { ctx }).catch(() => []),
     getDashboardActions({ ctx }).catch(() => ({ openPoCount: 0, openCycleCount: 0, pendingReceipts: 0 })),

@@ -12,6 +12,10 @@
       "schedule": "0 14 * * 1"
     },
     {
+      "path": "/api/cron/daily-briefing",
+      "schedule": "0 13 * * 1-5"
+    },
+    {
       "path": "/api/cron/drain-outbox",
       "schedule": "*/10 * * * *"
     },
