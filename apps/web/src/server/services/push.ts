@@ -130,8 +130,13 @@ export async function notifyUser(payload: PushPayload): Promise<number> {
         if (ticket.status === 'ok') {
           delivered += 1;
         } else if (ticket.details?.error === 'DeviceNotRegistered') {
-          // Stale token — remove so we don't keep re-trying.
-          void admin.from('push_tokens').delete().eq('id', t.id);
+          // Stale token — remove so we don't keep re-trying. The trailing
+          // .then() is REQUIRED: a supabase-js builder is lazy and never sends
+          // the request unless awaited or `.then`ed (`void builder` is a no-op).
+          void admin.from('push_tokens').delete().eq('id', t.id).then(
+            () => {},
+            () => {},
+          );
         } else {
           void reportError(new Error(ticket.message ?? 'push ticket failed'), {
             tag: 'push.ticket',

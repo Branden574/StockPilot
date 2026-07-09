@@ -120,8 +120,17 @@ export async function withApiKey(req: Request): Promise<ApiKeyResult> {
     };
   }
 
-  // Best-effort last-used stamp (fire-and-forget).
-  void admin.from('api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', row.id);
+  // Best-effort last-used stamp (fire-and-forget). The trailing .then() is
+  // REQUIRED: a supabase-js builder is lazy and never sends the request unless
+  // awaited or `.then`ed (`void builder` alone is a silent no-op).
+  void admin
+    .from('api_keys')
+    .update({ last_used_at: new Date().toISOString() })
+    .eq('id', row.id)
+    .then(
+      () => {},
+      () => {},
+    );
 
   return { ok: true, ctx: { organizationId: row.organization_id, keyId: row.id, scopes: row.scopes ?? [] } };
 }

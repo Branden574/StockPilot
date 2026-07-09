@@ -206,6 +206,23 @@ export async function POST(req: NextRequest) {
     /* non-fatal */
   }
 
+  // Requester email opt-out (notification_preferences.email_order_completed,
+  // 0113), computed ONCE and honored by BOTH the completion receipt and the
+  // backorder notices — a requester who muted order emails stays muted for the
+  // partial / backorder-shipped notices too. External requesters (no user row)
+  // can't opt out and always get transactional mail.
+  let requesterEmailOptedOut = false;
+  if (order.requester_user_id && order.requester_email) {
+    const { data: prefRow } = await admin
+      .from('notification_preferences')
+      .select('email_order_completed')
+      .eq('user_id', order.requester_user_id)
+      .maybeSingle();
+    requesterEmailOptedOut =
+      ((prefRow as { email_order_completed?: boolean } | null)?.email_order_completed ?? true) ===
+      false;
+  }
+
   // Returns Phase B (B4): ONLY a completed order is RETURNABLE. A backordered
   // hand-over must NOT mint a return token or email a return link. If the org
   // has the off-by-default `returns` module enabled, mint a per-order
@@ -248,7 +265,10 @@ export async function POST(req: NextRequest) {
   // `owed`. Tell the REQUESTER (in-app + email), fire a status_changed event,
   // and stop here — none of the completion side effects apply.
   if (isBackordered) {
-    void notifyRequesterBackordered({
+    // AWAIT — this is the ONLY customer comms for the fork, and a fire-and-forget
+    // promise can be dropped when the serverless function returns. It's internally
+    // best-effort (never throws), so awaiting is safe.
+    await notifyRequesterBackordered({
       organizationId: order.organization_id,
       orderId: order.id,
       requesterUserId: order.requester_user_id,
@@ -258,6 +278,7 @@ export async function POST(req: NextRequest) {
       provided: totalFulfilled,
       requested: totalRequested,
       owed,
+      emailOptedOut: requesterEmailOptedOut,
     });
     void dispatchEvent(order.organization_id, 'order.status_changed', {
       id: order.id,
@@ -271,37 +292,24 @@ export async function POST(req: NextRequest) {
     // A previously-backordered order whose remainder just shipped — tell the
     // requester their wait is over (in-app + email), on top of the receipt.
     if (priorFulfilled > 0) {
-      void notifyRequesterBackorderShipped({
+      // AWAIT — see the backordered branch; don't let the "your backorder
+      // shipped" notice get dropped on function return.
+      await notifyRequesterBackorderShipped({
         organizationId: order.organization_id,
         orderId: order.id,
         requesterUserId: order.requester_user_id,
         requesterEmail: order.requester_email,
         requesterName: order.requester_name,
         appUrl: env.NEXT_PUBLIC_APP_URL,
+        emailOptedOut: requesterEmailOptedOut,
       });
     }
     try {
-      // Respect notification_preferences.email_order_completed for the
-      // internal requester (column added in 0113). External public-link
-      // requesters and the physical signer always get the email —
-      // there's no profile row to opt out of, and the signer needs a
-      // transactional receipt of the signature they just submitted.
-      let requesterOptedOut = false;
-      if (order.requester_user_id && order.requester_email) {
-        const { data: prefRow } = await admin
-          .from('notification_preferences')
-          .select('email_order_completed')
-          .eq('user_id', order.requester_user_id)
-          .maybeSingle();
-        // Default true (matches table default) when the row is missing.
-        const wantsEmail =
-          (prefRow as { email_order_completed?: boolean } | null)
-            ?.email_order_completed ?? true;
-        requesterOptedOut = !wantsEmail;
-      }
-
+      // Completion receipt. Honors the requester's email_order_completed opt-out
+      // (computed once above); the physical signer always gets a transactional
+      // receipt of the signature they just submitted.
       const recipients = new Set<string>();
-      if (order.requester_email && !requesterOptedOut) {
+      if (order.requester_email && !requesterEmailOptedOut) {
         recipients.add(order.requester_email);
       }
       recipients.add(parsed.data.signerEmail);
@@ -387,6 +395,7 @@ async function notifyRequesterBackordered(args: {
   provided: number;
   requested: number;
   owed: number;
+  emailOptedOut: boolean;
 }): Promise<void> {
   const orderNo = args.orderId.slice(0, 8).toUpperCase();
   const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
@@ -409,7 +418,7 @@ async function notifyRequesterBackordered(args: {
         },
       });
     }
-    if (args.requesterEmail) {
+    if (args.requesterEmail && !args.emailOptedOut) {
       await sendBackorderEmail({
         to: args.requesterEmail,
         recipientName: args.requesterName,
@@ -435,6 +444,7 @@ async function notifyRequesterBackorderShipped(args: {
   requesterEmail: string | null;
   requesterName: string | null;
   appUrl: string;
+  emailOptedOut: boolean;
 }): Promise<void> {
   const orderNo = args.orderId.slice(0, 8).toUpperCase();
   const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
@@ -452,7 +462,7 @@ async function notifyRequesterBackorderShipped(args: {
         metadata: { orderId: args.orderId },
       });
     }
-    if (args.requesterEmail) {
+    if (args.requesterEmail && !args.emailOptedOut) {
       await sendBackorderEmail({
         to: args.requesterEmail,
         recipientName: args.requesterName,

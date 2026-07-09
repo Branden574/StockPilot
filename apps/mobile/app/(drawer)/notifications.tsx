@@ -93,6 +93,35 @@ export default function NotificationsScreen() {
     };
   }, [user, load]);
 
+  // Opening the inbox = you've SEEN them: mark every unread notification read
+  // once, so the home bell badge clears. The rows stay in the list (an
+  // actionable notification isn't "done" just because it was seen) — only the
+  // NEW styling + the unread count drop. Runs once per mount; guarded so the
+  // realtime reload below can't re-trigger it into a loop.
+  const clearedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (loading || clearedRef.current || !user || !activeOrgId) return;
+    const unreadIds = rows.filter((r) => !r.read_at).map((r) => r.id);
+    if (unreadIds.length === 0) return;
+    clearedRef.current = true;
+    const now = new Date().toISOString();
+    // MUST await/`.then` — a supabase-js builder is lazy and never sends the
+    // request otherwise (`void builder` is a no-op). Only clear the local rows
+    // once the DB write lands so the UI can't diverge from the count the bell
+    // re-reads; on failure, allow a retry on the next focus.
+    void (async () => {
+      const { error } = await supabase
+        .from('notifications')
+        .update({ read_at: now })
+        .in('id', unreadIds);
+      if (error) {
+        clearedRef.current = false;
+        return;
+      }
+      setRows((prev) => prev.map((r) => (r.read_at ? r : { ...r, read_at: now })));
+    })();
+  }, [loading, rows, user, activeOrgId]);
+
   async function refresh() {
     setRefreshing(true);
     await load();
