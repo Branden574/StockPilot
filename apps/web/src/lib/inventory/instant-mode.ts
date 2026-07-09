@@ -46,6 +46,8 @@
  * sub-millisecond filter/sort passes on commodity hardware — Linear-
  * class feel with headroom above the largest current org (~251 rows).
  */
+import { sizeRunStyleKey } from '@stockpilot/core';
+
 export const INSTANT_MODE_MAX_ROWS = 2000;
 
 /** Mirrors InventoryService.list()'s CHARTER_ID_RE (uuid allow-list). */
@@ -209,14 +211,20 @@ export function instantStateFromSearchParams(params: {
  * is here too.
  */
 export function buildInstantSearchTerm(q: string): string {
-  return q.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
+  return q
+    .trim()
+    .slice(0, 120)
+    .replace(/[,()%*]/g, ' ');
 }
 
 /** Case-fold + diacritic-fold (NFKD, strip combining marks). Applied to
  *  BOTH needle and haystack. Divergence #1 in the header: Postgres
  *  ILIKE only case-folds — the client is a superset on accented text. */
 export function normalizeInstantSearchText(s: string): string {
-  return s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return s
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
 }
 
 /**
@@ -325,7 +333,10 @@ export function filterInstantRows<T extends InstantModeRow>(
 
 /* ---- sort ---------------------------------------------------------------- */
 
-const SORT_SPEC: Record<InstantModeSort, { col: 'updated_at' | 'created_at' | 'name' | 'sku' | 'quantity_on_hand'; asc: boolean }> = {
+const SORT_SPEC: Record<
+  InstantModeSort,
+  { col: 'updated_at' | 'created_at' | 'name' | 'sku' | 'quantity_on_hand'; asc: boolean }
+> = {
   updated_desc: { col: 'updated_at', asc: false },
   updated_asc: { col: 'updated_at', asc: true },
   name_asc: { col: 'name', asc: true },
@@ -372,6 +383,64 @@ export function sortInstantRows<T extends InstantModeRow>(
 
 /* ---- pagination + footer -------------------------------------------------- */
 
+/** Plain fixed-size chunking (Books, and the non-grouped path). */
+function slicePages<T>(sorted: readonly T[], pageSize: number): T[][] {
+  const pages: T[][] = [];
+  for (let i = 0; i < sorted.length; i += pageSize) pages.push(sorted.slice(i, i + pageSize));
+  return pages;
+}
+
+/**
+ * RUN-AWARE pagination for the Items view. The list collapses a size run
+ * ("Pink Shirt - L / - XL / - 2XL") into one expandable row; if pagination
+ * sliced raw rows at a fixed 30, a run straddling the boundary would render as
+ * TWO separate groups on two pages (the reported bug). So: (1) build units —
+ * each run (2+ items sharing a base name) is ONE unit with its members
+ * clustered at the run's first-seen position; every other item is a singleton
+ * unit; (2) pack units into pages of ~pageSize, never splitting a unit. A page
+ * may run a few rows over pageSize to keep a run whole. Pure.
+ */
+export function runAwarePages<T extends { id: string; name: string }>(
+  sorted: readonly T[],
+  pageSize: number,
+): T[][] {
+  // Count run keys over the whole set so a lone sized item stays a singleton.
+  const counts = new Map<string, number>();
+  for (const r of sorted) {
+    const k = sizeRunStyleKey(r.name);
+    if (k) counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  // Build units, clustering run members at the run's first-seen position.
+  const units: T[][] = [];
+  const unitOf = new Map<string, number>();
+  for (const r of sorted) {
+    const k = sizeRunStyleKey(r.name);
+    if (k && (counts.get(k) ?? 0) >= 2) {
+      let idx = unitOf.get(k);
+      if (idx === undefined) {
+        idx = units.length;
+        unitOf.set(k, idx);
+        units.push([]);
+      }
+      units[idx]!.push(r);
+    } else {
+      units.push([r]);
+    }
+  }
+  // Pack units into pages without ever cutting a unit.
+  const pages: T[][] = [];
+  let cur: T[] = [];
+  for (const unit of units) {
+    if (cur.length > 0 && cur.length + unit.length > pageSize) {
+      pages.push(cur);
+      cur = [];
+    }
+    cur.push(...unit);
+  }
+  if (cur.length > 0) pages.push(cur);
+  return pages;
+}
+
 export interface InstantViewResult<T> {
   /** Filtered ITEM count (item-level — placement expansion happens after
    *  pagination, exactly like the server pages). Backs "Page X of Y" and
@@ -417,10 +486,16 @@ export function deriveInstantView<T extends InstantModeRow>(
     (acc, r) => acc + (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0),
     0,
   );
-  const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const page = Math.min(Math.max(1, state.page), pageCount);
   const sorted = sortInstantRows(filtered, state.sort);
-  const pageItems = sorted.slice((page - 1) * pageSize, page * pageSize);
+  // The Items view groups apparel size runs into one expandable row, so it
+  // paginates RUN-AWARE (a page never cuts a run — otherwise the same run would
+  // render as two separate groups on two pages). Books never group → plain
+  // fixed slices. This is client-only; an ACCEPTED divergence from the server's
+  // fixed row-slice pagination (documented in the parity block above).
+  const pages = view === 'items' ? runAwarePages(sorted, pageSize) : slicePages(sorted, pageSize);
+  const pageCount = Math.max(1, pages.length);
+  const page = Math.min(Math.max(1, state.page), pageCount);
+  const pageItems = pages[page - 1] ?? [];
   return { total, valueOnHand, page, pageCount, pageItems, filteredRows: filtered };
 }
 
@@ -434,9 +509,7 @@ export function deriveInstantView<T extends InstantModeRow>(
  * the same rows. Books never expand (the Books page passes no
  * placement).
  */
-export function expandInstantPlacementRows<
-  T extends { id: string; quantity_on_hand: number },
->(
+export function expandInstantPlacementRows<T extends { id: string; quantity_on_hand: number }>(
   items: readonly T[],
   placement: Readonly<Record<string, InstantPlacementLine[]>>,
 ): Array<
