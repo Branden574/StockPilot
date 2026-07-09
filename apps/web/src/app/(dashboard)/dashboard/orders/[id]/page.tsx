@@ -387,7 +387,7 @@ export default async function OrderDetailPage({
                 Total qty {formatNumber(totalQty)}
               </p>
             </div>
-            {totalOwed > 0 && (
+            {totalOwed > 0 && (totalFulfilled > 0 || request.status === 'backordered') && (
               <div className="border-b border-border bg-amber-50 px-4 py-2.5 text-xs dark:bg-amber-950/30">
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-amber-800 dark:text-amber-300">

@@ -697,7 +697,7 @@ export default function OrderDetail() {
             </Mono>
           </View>
 
-          {totalOwed > 0 ? (
+          {totalOwed > 0 && (totalFulfilled > 0 || order.status === 'backordered') ? (
             <Card padding={14}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Body size={13} color="#b45309">
