@@ -1872,8 +1872,9 @@ export class InventoryService {
       // in the prior statement above, in a SEPARATE statement from this
       // sibling fan-out — there is no shared transaction wrapping the two.
       // If this edit is a `sku` re-key and the NEW sku collides with an
-      // existing row at one sibling's (org, sku, bin_location), this UPDATE
-      // fails with 23505 below and the group is left SPLIT: the target row
+      // existing row at one sibling's (org, sku, charter_id, bin_location)
+      // (migration 0234), this UPDATE fails with 23505 below and the group is
+      // left SPLIT: the target row
       // now sits on the new sku while its siblings are still on the old one.
       // This is surfaced to the caller as the `conflict` error (not silent,
       // not cross-tenant — organization_id stays scoped throughout — and
@@ -1907,7 +1908,7 @@ export class InventoryService {
         if (sibErr.code === '23505') {
           throw new ServiceError(
             'conflict',
-            'Another item at a shared location already uses that SKU. Change the SKU or resolve the conflict first.',
+            'Another placement (same charter and rack) already uses that SKU. Change the SKU, or resolve the conflicting placement first.',
           );
         }
         throw new ServiceError('internal_error', sibErr.message);
