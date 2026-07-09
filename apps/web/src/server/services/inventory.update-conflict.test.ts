@@ -1,8 +1,10 @@
 // Regression: InventoryService.update must surface a duplicate-SKU collision
-// (partial unique index inventory_items_org_sku_bin_unique → Postgres 23505)
-// as a friendly `conflict` ServiceError, NOT the opaque `internal_error` the
-// raw rethrow produced. This is why a pasted/copied SKU appeared to fail for
-// no visible reason while an auto-generated (unique) SKU saved fine.
+// (partial unique index inventory_items_org_sku_charter_bin_unique → Postgres
+// 23505, migration 0234) as a friendly `conflict` ServiceError, NOT the opaque
+// `internal_error` the raw rethrow produced. This is why a pasted/copied SKU
+// appeared to fail for no visible reason while an auto-generated (unique) SKU
+// saved fine. Post-0234 the message must also make clear the SAME SKU is
+// allowed across different charters (only same charter + rack collides).
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./context', () => ({
@@ -106,6 +108,9 @@ describe('InventoryService.update — duplicate SKU handling', () => {
     const err = await svc.update('itm-1', { sku: 'COPIED-SKU' }).catch((e: unknown) => e);
     expect((err as { code: string }).code).toBe('conflict');
     expect((err as Error).message).toMatch(/already uses that SKU/i);
+    // Post-0234: the copy must tell the user the same SKU is fine across
+    // charters (so they don't think SKUs must be globally unique).
+    expect((err as Error).message).toMatch(/charter/i);
   });
 
   it('still surfaces a non-23505 DB error as internal_error', async () => {

@@ -2,8 +2,9 @@
  * SKU-dedupe for the PO-import match dropdown.
  *
  * This org's data model deliberately allows the same SKU across multiple
- * inventory_items rows (unique on org+sku+bin_location — the per-rack row
- * model behind "duplicate to rack"), so a naive one-option-per-row dropdown
+ * inventory_items rows (unique on org+sku+charter_id+bin_location as of mig
+ * 0234 — the per-charter/per-rack placement model), so a naive
+ * one-option-per-row dropdown
  * shows "Into Algebra 1 (SP-8N8LR-8ND)" once per rack. This helper collapses
  * those duplicates to ONE option per SKU, targeting the OLDEST row.
  *
