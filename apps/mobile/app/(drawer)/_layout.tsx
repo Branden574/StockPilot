@@ -42,6 +42,7 @@ export default function DrawerLayout() {
         options={{ drawerLabel: 'Purchase orders' }}
       />
       <Drawer.Screen name="po-imports" options={{ drawerLabel: 'PO imports' }} />
+      <Drawer.Screen name="recurring-pos" options={{ drawerLabel: 'Recurring POs' }} />
       <Drawer.Screen name="locations" options={{ drawerLabel: 'Locations' }} />
       <Drawer.Screen name="suppliers" options={{ drawerLabel: 'Suppliers' }} />
       <Drawer.Screen name="reports" options={{ drawerLabel: 'Reports' }} />

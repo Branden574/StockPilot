@@ -17,6 +17,7 @@ import {
   Network,
   Package,
   PackageOpen,
+  RefreshCw,
   ScanLine,
   ShoppingCart,
   Sparkles,
@@ -40,6 +41,7 @@ import { ZendeskLogo } from '@/components/zendesk-logo';
  */
 export const NAV_ICONS: Record<string, LucideIcon> = {
   Home,
+  RefreshCw,
   Box,
   BookOpen,
   Tag,
