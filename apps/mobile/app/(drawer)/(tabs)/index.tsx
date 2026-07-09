@@ -1,4 +1,4 @@
-import { useNavigation, useRouter } from 'expo-router';
+import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
 import {
   Barcode,
   Bell,
@@ -82,6 +82,28 @@ export default function Home() {
   const [orgName, setOrgName] = React.useState<string>('Your workspace');
   const [refreshing, setRefreshing] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
+  const [unread, setUnread] = React.useState(0);
+
+  // Unread-notification count for the header bell badge. A cheap head-count
+  // query (partial index notifications_user_unread_idx). Kept separate from the
+  // dashboard load so it can refresh on focus — the count drops when the user
+  // reads notifications and returns to this tab.
+  const refreshUnread = React.useCallback(async () => {
+    if (!user || !activeOrgId) return;
+    const { count } = await supabase
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', activeOrgId)
+      .eq('user_id', user.id)
+      .is('read_at', null);
+    setUnread(count ?? 0);
+  }, [user, activeOrgId]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      void refreshUnread();
+    }, [refreshUnread]),
+  );
 
   const load = React.useCallback(async () => {
     // Scope to the ACTIVE workspace org — NOT the first membership row. This
@@ -151,7 +173,7 @@ export default function Home() {
 
   async function onRefresh() {
     setRefreshing(true);
-    await load();
+    await Promise.all([load(), refreshUnread()]);
     setRefreshing(false);
   }
 
@@ -177,7 +199,7 @@ export default function Home() {
             <Avatar size={38} onPress={() => router.push('/settings')} />
           </View>
           <View style={{ flexDirection: 'row', gap: 8 }}>
-            <IconChip icon={Bell} onPress={() => router.push('/notifications')} />
+            <IconChip icon={Bell} badge={unread} onPress={() => router.push('/notifications')} />
             <IconChip icon={RefreshCcw} onPress={onRefresh} />
           </View>
         </View>

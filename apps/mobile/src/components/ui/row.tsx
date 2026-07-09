@@ -67,12 +67,16 @@ export function IconChip({
   icon: Icon,
   shape = 'square',
   onPress,
+  badge,
 }: {
   icon: LucideIcon;
   shape?: 'square' | 'circle';
   onPress?: () => void;
+  /** Optional unread count. Renders a red pill top-right when > 0. */
+  badge?: number;
 }) {
   const { c } = useTheme();
+  const showBadge = typeof badge === 'number' && badge > 0;
   return (
     <Pressable
       onPress={onPress}
@@ -87,6 +91,13 @@ export function IconChip({
       ]}
     >
       <Icon size={18} color={c.ink} strokeWidth={1.5} />
+      {showBadge ? (
+        <View style={[styles.badge, { borderColor: c.paper }]}>
+          <Text style={styles.badgeText} numberOfLines={1}>
+            {badge > 99 ? '99+' : String(badge)}
+          </Text>
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -122,5 +133,25 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  badge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    borderWidth: 1.5,
+    backgroundColor: '#e5484d',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '700',
+    fontFamily: FONT.mono,
   },
 });
