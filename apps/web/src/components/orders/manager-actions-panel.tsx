@@ -83,6 +83,9 @@ interface Props {
   /** Whether a strict approve would fall short of the requested qty. Drives the
    *  "Approve partial" affordance at pending_approval (server-computed). */
   isShortStock?: boolean;
+  /** Whether any still-owed line has stock available to pick (server-computed).
+   *  Gates "Resume fulfillment" at backordered — no stock, no resume. */
+  hasFulfillableStock?: boolean;
   /** Picking claim/lock context. The shared state machine
    *  (`availableOrderActions`) reads these to decide which of
    *  claim / reassign / release / pick / complete render for THIS
@@ -141,6 +144,7 @@ export function ManagerActionsPanel({
   drivers,
   canApprove,
   isShortStock,
+  hasFulfillableStock,
   viewerRole,
   viewerUserId,
   assignedPickerId,
@@ -698,18 +702,25 @@ export function ManagerActionsPanel({
 
           {status === 'backordered' && canApprove && (
             <>
-              <Button
-                variant="gradient"
-                onClick={resumeFulfillment}
-                disabled={busy !== null}
-              >
-                {busy === 'resume-fulfillment' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
+              {hasFulfillableStock ? (
+                <Button
+                  variant="gradient"
+                  onClick={resumeFulfillment}
+                  disabled={busy !== null}
+                >
+                  {busy === 'resume-fulfillment' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  )}
+                  Resume fulfillment
+                </Button>
+              ) : (
+                <span className="text-muted-foreground inline-flex items-center gap-1.5 text-xs">
                   <RotateCcw className="h-3.5 w-3.5" />
-                )}
-                Resume fulfillment
-              </Button>
+                  Resume unlocks when owed items are back in stock.
+                </span>
+              )}
               <Button
                 variant="outline"
                 onClick={() => setClosePartialOpen(true)}

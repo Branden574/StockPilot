@@ -114,6 +114,8 @@ interface OrderHeader {
   totalFulfilled: number;
   /** Whether a strict approve would fall short (drives "Approve partial"). */
   isShortStock: boolean;
+  /** Whether any still-owed line has available stock (gates "Resume fulfillment"). */
+  hasFulfillableStock: boolean;
 }
 
 interface Attachment {
@@ -243,10 +245,15 @@ export default function OrderDetail() {
     const totalRequested = rows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
     const totalFulfilled = rows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
 
-    // Whether a strict approve would fall short — drives the "Approve partial"
-    // offer. Only computed for an approvable order (rare) to keep load() light.
+    // Stock-awareness, mirroring the web page loader:
+    //  - pending_approval → isShortStock (drives "Approve partial"), judged on
+    //    PER-ITEM demand (duplicate-item lines are summed first).
+    //  - backordered → hasFulfillableStock (gates "Resume fulfillment").
+    // Only computed on those two statuses to keep load() light.
     let isShortStock = false;
-    if ((data as Record<string, unknown> | null)?.status === 'pending_approval' && rows.length > 0) {
+    let hasFulfillableStock = false;
+    const stStatus = (data as Record<string, unknown> | null)?.status;
+    if ((stStatus === 'pending_approval' || stStatus === 'backordered') && rows.length > 0) {
       const itemIds = [...new Set(rows.map((l) => l.item_id).filter((x): x is string => Boolean(x)))];
       if (itemIds.length > 0) {
         const [{ data: itemRows }, { data: resvRows }] = await Promise.all([
@@ -265,11 +272,22 @@ export default function OrderDetail() {
         for (const rv of (resvRows ?? []) as { item_id: string; quantity: number | null }[]) {
           reservedByItem.set(rv.item_id, (reservedByItem.get(rv.item_id) ?? 0) + (Number(rv.quantity) || 0));
         }
-        isShortStock = rows.some((l) => {
-          const onHand = onHandById.get(l.item_id ?? '') ?? 0;
-          const reserved = reservedByItem.get(l.item_id ?? '') ?? 0;
-          return (Number(l.quantity_requested) || 0) > Math.max(0, onHand - reserved);
-        });
+        const demandByItem = new Map<string, { requested: number; owed: number }>();
+        for (const l of rows) {
+          if (!l.item_id) continue;
+          const entry = demandByItem.get(l.item_id) ?? { requested: 0, owed: 0 };
+          entry.requested += Number(l.quantity_requested) || 0;
+          entry.owed += Math.max(
+            0,
+            (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
+          );
+          demandByItem.set(l.item_id, entry);
+        }
+        for (const [itemId, d] of demandByItem) {
+          const available = Math.max(0, (onHandById.get(itemId) ?? 0) - (reservedByItem.get(itemId) ?? 0));
+          if (stStatus === 'pending_approval' && d.requested > available) isShortStock = true;
+          if (stStatus === 'backordered' && d.owed > 0 && available > 0) hasFulfillableStock = true;
+        }
       }
     }
     if (data) {
@@ -306,6 +324,7 @@ export default function OrderDetail() {
         totalRequested,
         totalFulfilled,
         isShortStock,
+        hasFulfillableStock,
       });
     }
     await loadAttachments();
@@ -849,8 +868,14 @@ export default function OrderDetail() {
                 : null}
               {order.status === 'backordered' ? (
                 <>
-                  {actionBtn('Resume fulfillment', 'resume', () =>
-                    void act({ action: 'resume_fulfillment' }, 'resume'),
+                  {order.hasFulfillableStock ? (
+                    actionBtn('Resume fulfillment', 'resume', () =>
+                      void act({ action: 'resume_fulfillment' }, 'resume'),
+                    )
+                  ) : (
+                    <Body size={12} color={c.ink4}>
+                      Resume unlocks when owed items are back in stock.
+                    </Body>
                   )}
                   {actionBtn(
                     'Close as delivered-partial',

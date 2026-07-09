@@ -280,6 +280,27 @@ export async function POST(req: NextRequest) {
       owed,
       emailOptedOut: requesterEmailOptedOut,
     });
+    // The physical SIGNER gets a transactional receipt of what they just signed
+    // for — parity with the completed path, where the signer is always emailed.
+    // Deduped: if the signer IS the requester they already got the notice above.
+    if (
+      parsed.data.signerEmail.toLowerCase() !==
+      (order.requester_email ?? '').toLowerCase()
+    ) {
+      try {
+        await sendBackorderEmail({
+          to: parsed.data.signerEmail,
+          recipientName: parsed.data.signerName,
+          subject: `Order #${order.id.slice(0, 8).toUpperCase()}: partial delivery receipt`,
+          message:
+            `This confirms your signature for a partial delivery — ${totalFulfilled} of ` +
+            `${totalRequested} items were provided. The remaining ${owed} are backordered ` +
+            `and will ship separately.`,
+        });
+      } catch {
+        /* best-effort — receipt failure never fails the fulfillment */
+      }
+    }
     void dispatchEvent(order.organization_id, 'order.status_changed', {
       id: order.id,
       orderNumber: order.id.slice(0, 8).toUpperCase(),

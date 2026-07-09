@@ -130,15 +130,27 @@ export default async function OrderDetailPage({
       (isAssignedDriver &&
         ['staged_for_delivery', 'in_transit'].includes(request.status)));
 
-  // Whether a normal (strict) approve would fall short — drives the "Approve
-  // partial" offer next to "Approve". Only meaningful at pending_approval for a
-  // manager, so the extra reservations read is paid there only. available =
-  // on_hand − Σ(active reservations); this order holds none yet at this status.
+  // Stock-awareness for the two statuses whose actions depend on availability:
+  //  - pending_approval → isShortStock: would a strict approve fall short?
+  //    Drives the "Approve partial" offer. Lines are GROUPED per item first —
+  //    two lines of the same item must be judged against their combined demand,
+  //    or a duplicate-item order slips past the check line-by-line.
+  //  - backordered → hasFulfillableStock: does ANY still-owed item have stock
+  //    available to pick? Drives whether "Resume fulfillment" is offered.
+  // Both read available = on_hand − Σ(active reservations). Only computed for
+  // a manager on the relevant status, so the extra read is rare.
   let isShortStock = false;
-  if (request.status === 'pending_approval' && canApprove && lines.length > 0) {
-    const itemIds = lines
-      .map((l) => l.item?.id)
-      .filter((x): x is string => Boolean(x));
+  let hasFulfillableStock = false;
+  const needsStockCheck =
+    canApprove &&
+    (request.status === 'pending_approval' || request.status === 'backordered') &&
+    lines.length > 0;
+  if (needsStockCheck) {
+    const itemIds = [
+      ...new Set(
+        lines.map((l) => l.item?.id).filter((x): x is string => Boolean(x)),
+      ),
+    ];
     if (itemIds.length > 0) {
       const supabase = await createClient();
       const { data: resvRows } = await supabase
@@ -150,11 +162,32 @@ export default async function OrderDetailPage({
       for (const r of (resvRows ?? []) as { item_id: string; quantity: number }[]) {
         reservedByItem.set(r.item_id, (reservedByItem.get(r.item_id) ?? 0) + Number(r.quantity || 0));
       }
-      isShortStock = lines.some((l) => {
-        const onHand = Number(l.item?.quantity_on_hand ?? 0);
-        const reserved = reservedByItem.get(l.item?.id ?? '') ?? 0;
-        return Number(l.quantity_requested) > Math.max(0, onHand - reserved);
-      });
+      // Group demand per item: requested (approval check) and owed (resume check).
+      const demandByItem = new Map<string, { requested: number; owed: number; onHand: number }>();
+      for (const l of lines) {
+        const itemId = l.item?.id;
+        if (!itemId) continue;
+        const entry = demandByItem.get(itemId) ?? {
+          requested: 0,
+          owed: 0,
+          onHand: Number(l.item?.quantity_on_hand ?? 0),
+        };
+        entry.requested += Number(l.quantity_requested) || 0;
+        entry.owed += Math.max(
+          0,
+          (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
+        );
+        demandByItem.set(itemId, entry);
+      }
+      for (const [itemId, d] of demandByItem) {
+        const available = Math.max(0, d.onHand - (reservedByItem.get(itemId) ?? 0));
+        if (request.status === 'pending_approval' && d.requested > available) {
+          isShortStock = true;
+        }
+        if (request.status === 'backordered' && d.owed > 0 && available > 0) {
+          hasFulfillableStock = true;
+        }
+      }
     }
   }
 
@@ -503,6 +536,7 @@ export default async function OrderDetailPage({
             <ManagerActionsPanel
               canApprove={canApprove}
               isShortStock={isShortStock}
+              hasFulfillableStock={hasFulfillableStock}
               orderId={id}
               status={request.status}
               internalNotes={request.internal_notes}
