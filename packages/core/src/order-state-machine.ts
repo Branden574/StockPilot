@@ -142,7 +142,9 @@ export type OrderAction =
   | 'deny'
   | 'cancel'
   | 'generate_pick_slip'
+  | 'claim_picking'
   | 'reassign_picker'
+  | 'release_picking'
   | 'open_digital_pick'
   | 'print_pick_slip'
   | 'mark_picking_complete'
@@ -166,6 +168,17 @@ export interface AvailableActionsInput {
   viewerUserId: string;
   assignedPickerId: string | null;
   assignedDeliveryUserId: string | null;
+  /**
+   * Whether this viewer can actually perform pick mutations on THIS order —
+   * i.e. they hold the pick permission (items:update, or are manager+) AND have
+   * write access to the order's warehouse. The caller computes it (the state
+   * machine has no permission/warehouse knowledge). When false, the picking
+   * phase offers only view/print, never Claim/Pick/Complete/Release — so the UI
+   * never advertises an action the backend (which checks both) would reject.
+   * Optional + defaults to true so existing callers/tests that don't gate on it
+   * keep their prior behavior. Picking callers MUST pass it.
+   */
+  viewerCanPick?: boolean;
 }
 
 const MANAGER_OR_ABOVE: Role[] = ['owner', 'admin', 'manager'];
@@ -193,13 +206,36 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
       break;
     case 'approved':
       actions.push('generate_pick_slip');
-      if (isManagerOrAbove) actions.push('reassign_picker', 'cancel');
+      if (isManagerOrAbove) actions.push('cancel');
       break;
     case 'pick_slip_generated':
-    case 'picking_in_progress':
-      actions.push('open_digital_pick', 'print_pick_slip', 'mark_picking_complete');
-      if (isManagerOrAbove) actions.push('reassign_picker', 'cancel');
+    case 'picking_in_progress': {
+      // Picking claim/lock (owner decisions: admin = manager+; a non-admin MUST
+      // claim before picking; a picker may self-release).
+      const isUnassigned = input.assignedPickerId === null;
+      const isAssignedPicker =
+        input.assignedPickerId !== null && input.assignedPickerId === input.viewerUserId;
+      // Anyone with order access can view/print the pick slip.
+      actions.push('print_pick_slip');
+      // A viewer who can't actually pick this order (no pick permission, or no
+      // write access to its warehouse) gets view/print only — never a Claim/
+      // Pick/Complete/Release button the backend would reject. `viewerCanPick`
+      // defaults to true so non-picking callers are unaffected.
+      if (input.viewerCanPick === false) break;
+      if (isManagerOrAbove) {
+        // Full control: pick directly (override), assign/reassign, complete.
+        actions.push('open_digital_pick', 'mark_picking_complete', 'reassign_picker', 'cancel');
+        if (!isUnassigned) actions.push('release_picking');
+      } else if (isAssignedPicker) {
+        // The claimant: pick + complete + hand back their own claim.
+        actions.push('open_digital_pick', 'mark_picking_complete', 'release_picking');
+      } else if (isUnassigned) {
+        // Unclaimed: a staffer can claim it (claim-before-pick).
+        actions.push('claim_picking');
+      }
+      // else: assigned to someone else + non-admin → view/print only.
       break;
+    }
     case 'picking_complete':
       actions.push('generate_packing_slips');
       if (isManagerOrAbove) actions.push('cancel');
@@ -236,4 +272,32 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
   }
 
   return actions;
+}
+
+export type PickingStatus = 'unassigned' | 'assigned' | 'in_progress' | 'completed';
+
+/**
+ * Derived picking status for display. The source of truth is the order status +
+ * assigned_picker_id (NOT a stored column, to avoid drift). Null when the order
+ * has not yet reached the picking phase.
+ */
+export function derivePickingStatus(
+  status: OrderStatus,
+  assignedPickerId: string | null,
+): PickingStatus | null {
+  switch (status) {
+    case 'pick_slip_generated':
+      return assignedPickerId ? 'assigned' : 'unassigned';
+    case 'picking_in_progress':
+      return assignedPickerId ? 'in_progress' : 'unassigned';
+    case 'picking_complete':
+    case 'packing_slip_generated':
+    case 'staged_for_pickup':
+    case 'staged_for_delivery':
+    case 'in_transit':
+    case 'completed':
+      return 'completed';
+    default:
+      return null;
+  }
 }

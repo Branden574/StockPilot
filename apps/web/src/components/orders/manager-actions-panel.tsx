@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ClipboardCheck,
   ClipboardList,
+  Hand,
   Loader2,
   PackageCheck,
   PenLine,
@@ -13,6 +14,9 @@ import {
   Save,
   ScanLine,
   Truck,
+  Unlock,
+  User,
+  UserCog,
   X,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -24,6 +28,7 @@ import {
   AssignDeliveryDialog,
   type DriverOption,
 } from '@/components/orders/assign-delivery-dialog';
+import { AssignPickerDialog } from '@/components/orders/assign-picker-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -37,14 +42,17 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
   approveOrderRequestAction,
+  claimPickingAction,
   completePickingAction,
   denyOrderRequestAction,
   generatePackingSlipsAction,
   generatePickSlipAction,
   markInTransitAction,
+  releasePickingAction,
   setOrderInternalNotesAction,
   stageOrderAction,
 } from '@/server/actions/order-requests';
+import { availableOrderActions, derivePickingStatus, type Role } from '@stockpilot/core';
 
 import type { OrderRequestStatus } from '@/server/services/order-requests';
 
@@ -67,12 +75,33 @@ interface Props {
    *  who sees the panel ONLY for in-transit actions; they shouldn't
    *  see Approve / Deny / Reassign / Internal-Notes. */
   canApprove: boolean;
+  /** Picking claim/lock context. The shared state machine
+   *  (`availableOrderActions`) reads these to decide which of
+   *  claim / reassign / release / pick / complete render for THIS
+   *  viewer at the picking statuses. */
+  viewerRole: Role;
+  viewerUserId: string;
+  assignedPickerId: string | null;
+  /** Resolved display name for `assignedPickerId`, or null. Drives the
+   *  "Being picked by {name}" chip. */
+  assignedPickerName: string | null;
+  /** Candidate pickers for the AssignPickerDialog (manager+ only; empty
+   *  otherwise). Same active-members shape as `drivers`. */
+  pickers: DriverOption[];
+  /** Whether THIS viewer can actually pick this order — i.e. holds the pick
+   *  permission (manager+ or items:update) AND has write access to the order's
+   *  warehouse. The server computes it and the shared state machine reads it so
+   *  the picking phase offers only view/print (never Claim/Pick/Complete/
+   *  Release) to a viewer the backend would reject. */
+  viewerCanPick: boolean;
 }
 
 type BusyKey =
   | 'approve'
   | 'deny'
   | 'generate-pick-slip'
+  | 'claim-picking'
+  | 'release-picking'
   | 'complete-picking'
   | 'generate-packing-slips'
   | 'stage-pickup'
@@ -100,9 +129,31 @@ export function ManagerActionsPanel({
   signedAt,
   drivers,
   canApprove,
+  viewerRole,
+  viewerUserId,
+  assignedPickerId,
+  assignedPickerName,
+  pickers,
+  viewerCanPick,
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
+
+  // Single source of truth for which picking affordances THIS viewer gets.
+  // Never branch on status/role for picking here — read the shared machine.
+  const actions = availableOrderActions({
+    status,
+    fulfillmentType,
+    hasAssignedDelivery: assignedDeliveryUserId !== null,
+    viewerRole,
+    viewerUserId,
+    assignedPickerId,
+    assignedDeliveryUserId,
+    viewerCanPick,
+  });
+  const isPickingPhase =
+    status === 'pick_slip_generated' || status === 'picking_in_progress';
+  const pickingStatus = derivePickingStatus(status, assignedPickerId);
   const [sigOpen, setSigOpen] = React.useState(false);
   // Signature blob is fetched on first dialog-open, then cached for the mount.
   const [sigUrl, setSigUrl] = React.useState<string | null>(null);
@@ -184,6 +235,30 @@ export function ManagerActionsPanel({
       return;
     }
     toast.success('Pick slip generated.');
+    router.refresh();
+  }
+
+  async function claimPicking() {
+    setBusy('claim-picking');
+    const res = await claimPickingAction({ id: orderId });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('You claimed picking for this order.');
+    router.refresh();
+  }
+
+  async function releasePicking() {
+    setBusy('release-picking');
+    const res = await releasePickingAction({ id: orderId });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Picking released.');
     router.refresh();
   }
 
@@ -341,14 +416,40 @@ export function ManagerActionsPanel({
             </Button>
           )}
 
-          {(status === 'pick_slip_generated' || status === 'picking_in_progress') && (
+          {isPickingPhase && (
             <>
-              <Button variant="gradient" asChild disabled={busy !== null}>
-                <Link href={`/dashboard/orders/${orderId}/pick`}>
-                  <ScanLine className="h-3.5 w-3.5" />
-                  Open digital pick
-                </Link>
-              </Button>
+              {/* Picker lock chip — full-row so it sits above the buttons. */}
+              <span className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-[11.5px]">
+                <User className="h-3.5 w-3.5" />
+                {pickingStatus === 'unassigned'
+                  ? 'Unassigned'
+                  : `Being picked by ${assignedPickerName ?? 'someone'}`}
+              </span>
+
+              {actions.includes('claim_picking') && (
+                <Button
+                  variant="gradient"
+                  onClick={claimPicking}
+                  disabled={busy !== null}
+                >
+                  {busy === 'claim-picking' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Hand className="h-3.5 w-3.5" />
+                  )}
+                  Claim picking
+                </Button>
+              )}
+
+              {actions.includes('open_digital_pick') && (
+                <Button variant="gradient" asChild disabled={busy !== null}>
+                  <Link href={`/dashboard/orders/${orderId}/pick`}>
+                    <ScanLine className="h-3.5 w-3.5" />
+                    Open digital pick
+                  </Link>
+                </Button>
+              )}
+
               <Button
                 variant="outline"
                 onClick={printPickSlip}
@@ -357,18 +458,50 @@ export function ManagerActionsPanel({
                 <Printer className="h-3.5 w-3.5" />
                 Print pick slip
               </Button>
-              <Button
-                variant="outline"
-                onClick={completePicking}
-                disabled={busy !== null}
-              >
-                {busy === 'complete-picking' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <ClipboardCheck className="h-3.5 w-3.5" />
-                )}
-                Mark picking complete
-              </Button>
+
+              {actions.includes('mark_picking_complete') && (
+                <Button
+                  variant="outline"
+                  onClick={completePicking}
+                  disabled={busy !== null}
+                >
+                  {busy === 'complete-picking' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <ClipboardCheck className="h-3.5 w-3.5" />
+                  )}
+                  Mark picking complete
+                </Button>
+              )}
+
+              {actions.includes('reassign_picker') && (
+                <AssignPickerDialog
+                  orderId={orderId}
+                  pickers={pickers}
+                  currentPickerId={assignedPickerId}
+                  trigger={
+                    <Button variant="default" disabled={busy !== null}>
+                      <UserCog className="h-3.5 w-3.5" />
+                      {assignedPickerId ? 'Reassign picker' : 'Assign picker'}
+                    </Button>
+                  }
+                />
+              )}
+
+              {actions.includes('release_picking') && (
+                <Button
+                  variant="outline"
+                  onClick={releasePicking}
+                  disabled={busy !== null}
+                >
+                  {busy === 'release-picking' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Unlock className="h-3.5 w-3.5" />
+                  )}
+                  Release
+                </Button>
+              )}
             </>
           )}
 

@@ -20,6 +20,12 @@ export type OrderAction =
   | { action: 'approve'; internalNotes?: string }
   | { action: 'deny'; reason: string }
   | { action: 'generate_pick_slip' }
+  // Picking claim/lock (owner decisions, enforced server-side): a staffer must
+  // claim before picking; a manager may assign/reassign; the picker or a manager
+  // may release. The server returns 409 (already claimed) / 403 (forbidden).
+  | { action: 'claim_picking' }
+  | { action: 'assign_picking'; pickerUserId: string }
+  | { action: 'release_picking' }
   | { action: 'complete_picking' }
   | { action: 'generate_packing_slips' }
   | { action: 'stage'; target: 'staged_for_pickup' | 'staged_for_delivery' }
@@ -30,6 +36,26 @@ export type OrderAction =
 /** Advance an order. Throws (with the server's message) on a non-2xx. */
 export async function transitionOrder(orderId: string, body: OrderAction): Promise<void> {
   await api(`/api/v1/orders/${orderId}/transition`, { method: 'POST', body });
+}
+
+/**
+ * Picking claim/lock wrappers (native parity for the web ManagerActionsPanel).
+ * Each POSTs the matching transition action; the server self-gates role/status
+ * and throws the server message on conflict (409) or forbidden (403).
+ */
+/** Staff self-claim of an unassigned order in the picking phase. */
+export async function claimPicking(orderId: string): Promise<void> {
+  await transitionOrder(orderId, { action: 'claim_picking' });
+}
+
+/** Release the current claim (self-release by the picker, or a manager override). */
+export async function releasePicking(orderId: string): Promise<void> {
+  await transitionOrder(orderId, { action: 'release_picking' });
+}
+
+/** Manager assign/reassign of the picker to a specific org member. */
+export async function assignPicking(orderId: string, pickerUserId: string): Promise<void> {
+  await transitionOrder(orderId, { action: 'assign_picking', pickerUserId });
 }
 
 /** Candidate drivers for the assign-delivery step. Requires orders:assign_delivery. */
@@ -55,7 +81,15 @@ export interface OrderDetailLine {
 }
 
 export interface OrderDetail {
-  order: { id: string; status: string; [k: string]: unknown };
+  order: {
+    id: string;
+    status: string;
+    /** The locked-in picker (null when unclaimed). Drives the picker chip. */
+    assigned_picker_id: string | null;
+    /** When the current picker claimed/was assigned (added in mig 0237). */
+    picking_claimed_at?: string | null;
+    [k: string]: unknown;
+  };
   lines: OrderDetailLine[];
   warehouseName: string | null;
   requesterName: string | null;

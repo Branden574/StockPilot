@@ -28,6 +28,19 @@ export async function broadcastToChannel(
   }
 }
 
+/**
+ * Order-change ping so other open Orders screens (web + mobile) refetch — e.g.
+ * when a picker is claimed/assigned/released so the "Being picked by X" status
+ * updates live for everyone, not just the acting user. Best-effort; carries only
+ * the order id (no sensitive data). Subscribers listen on `orders:{org}`.
+ */
+export async function broadcastOrderChanged(
+  organizationId: string,
+  orderId: string,
+): Promise<void> {
+  await broadcastToChannel(`orders:${organizationId}`, 'changed', { orderId });
+}
+
 /** Permission-change ping (mig 0207+). See reference_realtime_permission_push_broadcast. */
 export async function broadcastPermissionsChanged(
   organizationId: string,

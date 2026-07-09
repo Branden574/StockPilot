@@ -21,8 +21,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { can, isManagerOrAbove } from '@stockpilot/core';
+import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import {
@@ -99,9 +100,33 @@ export default async function OrderDetailPage({
   const isAssignedDriver =
     request.assigned_delivery_user_id !== null &&
     request.assigned_delivery_user_id === ctx.userId;
+  // Picking phase — show the panel to ANY viewer with order access so a staff
+  // picker can claim an unclaimed order (claim-before-pick). The shared state
+  // machine narrows the actual buttons per role/assignment (unclaimed staff →
+  // claim only; the claimant → pick/complete/release; a bystander → print only;
+  // manager+ → pick/complete/reassign/release).
+  const isPickingStatus =
+    request.status === 'pick_slip_generated' ||
+    request.status === 'picking_in_progress';
+
+  // Picking claim/lock — whether THIS viewer can actually pick THIS order:
+  // they hold the pick permission (manager+ or items:update) AND have write
+  // access to the order's warehouse. Feeds the shared state machine so the
+  // panel never advertises a Claim/Pick/Complete/Release the backend (which
+  // checks both) would reject. Only the picking phase reads it, so the extra
+  // warehouse-access query is paid there only (it's cheap + request-cached).
+  let viewerCanPick = true;
+  if (isPickingStatus) {
+    const wa = await getWarehouseAccess(ctx);
+    const hasWhWrite =
+      wa.hasAllAccess || wa.writableIds.includes(request.warehouse_id);
+    viewerCanPick =
+      (isManagerOrAbove(ctx.role) || can(ctx, 'items:update')) && hasWhWrite;
+  }
   const showActionsPanel =
     request.status !== 'pending_confirmation' &&
     (canApprove ||
+      isPickingStatus ||
       (isAssignedDriver &&
         ['staged_for_delivery', 'in_transit'].includes(request.status)));
 
@@ -159,6 +184,76 @@ export default async function OrderDetailPage({
       .sort((a, b) =>
         (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
       );
+  }
+
+  // Picking claim/lock — candidate pickers for the AssignPickerDialog (manager+
+  // reassign only) plus the assigned picker's display name for the chip. Same
+  // active-members list as `drivers`; only paid on orders in the picking phase.
+  let pickers: DriverOption[] = [];
+  let assignedPickerName: string | null = null;
+  if (isPickingStatus) {
+    const supabase = await createClient();
+    if (canApprove) {
+      // Only offer pickers who can actually pick at THIS warehouse: managers+
+      // (all-warehouse access) OR members explicitly assigned to
+      // request.warehouse_id. Without this filter AssignPickerDialog could
+      // propose an assignee the backend's assign_picking (which checks
+      // warehouse write) would then reject — an authorize-then-reject UI.
+      const [membersRes, assignmentsRes] = await Promise.all([
+        supabase
+          .from('organization_members')
+          .select('user_id, role, user:user_profiles!user_id (id, full_name, email)')
+          .eq('organization_id', ctx.organizationId)
+          .not('accepted_at', 'is', null),
+        supabase
+          .from('user_warehouse_assignments')
+          .select('user_id')
+          .eq('organization_id', ctx.organizationId)
+          .eq('warehouse_id', request.warehouse_id),
+      ]);
+      const assignedUserIds = new Set(
+        ((assignmentsRes.data ?? []) as { user_id: string }[]).map((a) => a.user_id),
+      );
+      type MemberRow = {
+        user_id: string;
+        role: Role;
+        user:
+          | { id: string; full_name: string | null; email: string }
+          | { id: string; full_name: string | null; email: string }[]
+          | null;
+      };
+      // Resolve the full member list first so the assigned-picker chip name
+      // stays correct even if that picker no longer qualifies for the roster
+      // (e.g. their warehouse assignment was later removed).
+      const rawMembers = ((membersRes.data ?? []) as MemberRow[]).flatMap((m) => {
+        const u = Array.isArray(m.user) ? m.user[0] : m.user;
+        if (!u || typeof u.email !== 'string') return [];
+        return [{ userId: u.id, role: m.role, fullName: u.full_name ?? null, email: u.email }];
+      });
+      pickers = rawMembers
+        .filter((m) => isManagerOrAbove(m.role) || assignedUserIds.has(m.userId))
+        .map((m) => ({ userId: m.userId, fullName: m.fullName, email: m.email }))
+        .sort((a, b) =>
+          (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
+        );
+      if (request.assigned_picker_id) {
+        const match = rawMembers.find((m) => m.userId === request.assigned_picker_id);
+        assignedPickerName = match ? (match.fullName ?? match.email) : null;
+      }
+    } else if (request.assigned_picker_id) {
+      // Non-manager viewer (the assigned picker or a bystander) only needs the
+      // picker's name for the chip, not the full candidate roster.
+      const { data: pk } = await supabase
+        .from('user_profiles')
+        .select('full_name, email')
+        .eq('id', request.assigned_picker_id)
+        .maybeSingle();
+      assignedPickerName = pk
+        ? (pk.full_name as string | null)?.trim() ||
+          (pk.email as string | null) ||
+          null
+        : null;
+    }
   }
 
   // Carrier shipping (EasyPost). The Buy-label affordance only makes sense for
@@ -346,6 +441,12 @@ export default async function OrderDetailPage({
               signedByName={request.signed_by_name}
               signedAt={request.signed_at}
               drivers={drivers}
+              viewerRole={ctx.role}
+              viewerUserId={ctx.userId}
+              assignedPickerId={request.assigned_picker_id}
+              assignedPickerName={assignedPickerName}
+              pickers={pickers}
+              viewerCanPick={viewerCanPick}
             />
           )}
 

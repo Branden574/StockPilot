@@ -2,7 +2,11 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
 import { DigitalPick } from '@/components/orders/digital-pick';
+import { requireOrgContext } from '@/lib/auth/session';
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { createClient } from '@/lib/supabase/server';
+import { isManagerOrAbove } from '@stockpilot/core';
 import { LotsService } from '@/server/services/lots';
 import type { FefoSuggestion } from '@/server/services/lots';
 import { OrderRequestsService } from '@/server/services/order-requests';
@@ -15,6 +19,7 @@ export default async function DigitalPickPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const ctx = await requireOrgContext();
   const svc = await OrderRequestsService.forCurrentUser();
   const detail = await svc.get(id).catch(() => null);
   if (!detail) notFound();
@@ -24,6 +29,38 @@ export default async function DigitalPickPage({
     detail.request.status !== 'picking_in_progress'
   ) {
     redirect(`/dashboard/orders/${id}`);
+  }
+
+  // Picking claim/lock: the server RPCs already reject a write from anyone but
+  // the assigned picker or a manager+, but render a read-only notice here so a
+  // non-picker doesn't stare at editable inputs that will just error. Mirrors
+  // the shared state machine's picking-phase gate.
+  const assignedPickerId = detail.request.assigned_picker_id;
+  // Pick permission (manager+ or the claimant) is necessary but NOT sufficient:
+  // the picker must also have WRITE access to the order's warehouse, or the
+  // pick-quantity writes would just error. Gating here keeps an out-of-scope
+  // viewer from staring at editable inputs. Mirrors the shared state machine's
+  // viewerCanPick gate on the order-detail panel.
+  const wa = await getWarehouseAccess(ctx);
+  const hasWhWrite =
+    wa.hasAllAccess || wa.writableIds.includes(detail.request.warehouse_id);
+  const canPick =
+    (isManagerOrAbove(ctx.role) ||
+      (assignedPickerId !== null && assignedPickerId === ctx.userId)) &&
+    hasWhWrite;
+  let assignedPickerName: string | null = null;
+  if (!canPick && assignedPickerId) {
+    const supabase = await createClient();
+    const { data: pk } = await supabase
+      .from('user_profiles')
+      .select('full_name, email')
+      .eq('id', assignedPickerId)
+      .maybeSingle();
+    assignedPickerName = pk
+      ? (pk.full_name as string | null)?.trim() ||
+        (pk.email as string | null) ||
+        null
+      : null;
   }
 
   // Phase 5: advisory FEFO picking hint. Only build the per-item suggestion
@@ -65,6 +102,8 @@ export default async function DigitalPickPage({
         <DigitalPick
           orderId={id}
           initialLines={detail.lines}
+          canPick={canPick}
+          assignedPickerName={assignedPickerName}
           lotSerial={lotSerialEnabled ? { enabled: true, fefoByItemId } : undefined}
         />
       </div>
