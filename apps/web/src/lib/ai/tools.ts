@@ -1185,7 +1185,7 @@ const suggestReorderPointTool: ToolExecutor = {
   declaration: {
     name: 'suggestReorderPoint',
     description:
-      "READ-ONLY — recommends a reorder_point and reorder_quantity for an item based on its actual outbound velocity, lead time, and a safety buffer. Use when the user asks 'what should the reorder point be for X?' or 'is my reorder point too high/low?' Returns suggested values, current values for comparison, and a plain-English rationale. Does NOT apply the change; if the user wants to apply, separately call adjustStock or use the inventory edit form. Items with no outbound movement get a zero suggestion (the model should explain why).",
+      "READ-ONLY — recommends a reorder_point and reorder_quantity for an item based on its actual outbound velocity, lead time, and a safety buffer. Use when the user asks 'what should the reorder point be for X?' or 'is my reorder point too high/low?' Returns suggested values, current values for comparison, and a plain-English rationale. Does NOT apply the change — to apply it after the user confirms, call applyReorderPoint (NOT adjustStock, which changes quantity_on_hand). Items with no outbound movement get a zero suggestion (the model should explain why).",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {
@@ -1223,6 +1223,115 @@ const suggestReorderPointTool: ToolExecutor = {
       windowDays:
         typeof args.windowDays === 'number' ? args.windowDays : undefined,
     });
+  },
+};
+
+const applyReorderPointTool: ToolExecutor = {
+  declaration: {
+    name: 'applyReorderPoint',
+    description:
+      "WRITE TOOL — sets an item's reorder_point (and optionally reorder_quantity). The apply-side of suggestReorderPoint: call it only AFTER the user has seen the suggestion (or named explicit values) and confirmed. Requires items:update permission. Echo back item name + old → new values in your reply. This does NOT change quantity_on_hand — it changes when the item counts as low-stock and how much a restock PO orders.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        itemId: {
+          type: SchemaType.STRING,
+          description:
+            'UUID of the item. Resolve via searchInventory or getItemDetails first if you only have a name.',
+        },
+        reorderPoint: {
+          type: SchemaType.NUMBER,
+          description: 'New reorder point (units on hand at/below which the item is low-stock). Must be ≥ 0.',
+        },
+        reorderQuantity: {
+          type: SchemaType.NUMBER,
+          description: 'Optional new reorder quantity (units a restock PO orders). Must be ≥ 0 when provided.',
+        },
+      },
+      required: ['itemId', 'reorderPoint'],
+    },
+  },
+  async execute(args, ctx) {
+    const itemId = String(args.itemId ?? '').trim();
+    const reorderPoint = Number(args.reorderPoint);
+    if (!itemId) throw new Error('itemId is required');
+    if (!Number.isFinite(reorderPoint) || reorderPoint < 0) {
+      throw new Error('reorderPoint must be a number ≥ 0');
+    }
+    const patch: Record<string, number> = { reorder_point: reorderPoint };
+    if (args.reorderQuantity !== undefined && args.reorderQuantity !== null) {
+      const reorderQuantity = Number(args.reorderQuantity);
+      if (!Number.isFinite(reorderQuantity) || reorderQuantity < 0) {
+        throw new Error('reorderQuantity must be a number ≥ 0');
+      }
+      patch.reorder_quantity = reorderQuantity;
+    }
+    const svc = new InventoryService(ctx);
+    // Fetch first so the reply can show old → new (update() itself asserts
+    // items:update and audits).
+    const before = await svc.get(itemId);
+    const updated = await svc.update(itemId, patch as never);
+    return {
+      itemId,
+      name: (updated as { name?: string }).name ?? (before as { name?: string }).name ?? null,
+      previous: {
+        reorderPoint: (before as { reorder_point?: number }).reorder_point ?? null,
+        reorderQuantity: (before as { reorder_quantity?: number }).reorder_quantity ?? null,
+      },
+      applied: {
+        reorderPoint,
+        reorderQuantity: patch.reorder_quantity ?? null,
+      },
+    };
+  },
+};
+
+const suggestReorderPointsTool: ToolExecutor = {
+  declaration: {
+    name: 'suggestReorderPoints',
+    description:
+      "READ-ONLY — org-wide reorder-point review: velocity-based suggestions for EVERY active item, sorted by urgency (lowest days-of-cover first). Use for 'review my reorder points', 'which items need reordering soon', 'what should I restock'. Returns up to topN suggestions with current vs suggested values + days of cover. Requires the planning module + purchase_orders:manage. For a single named item use suggestReorderPoint instead; to apply one, applyReorderPoint; to draft the POs, draftPosFromForecast.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        warehouseId: {
+          type: SchemaType.STRING,
+          description: 'Optional warehouse UUID to scope the review.',
+        },
+        topN: {
+          type: SchemaType.NUMBER,
+          description: 'Max suggestions to return (default 20, cap 50). Most-urgent first.',
+        },
+      },
+      required: [],
+    },
+  },
+  async execute(args, ctx) {
+    const { PlanningService } = await import('@/server/services/planning');
+    const svc = new PlanningService(ctx);
+    const suggestions = await svc.getReorderSuggestions({
+      warehouseId: typeof args.warehouseId === 'string' && args.warehouseId ? args.warehouseId : undefined,
+    });
+    const topN = Math.min(Math.max(1, Number(args.topN) || 20), 50);
+    return { total: suggestions.length, returned: Math.min(topN, suggestions.length), suggestions: suggestions.slice(0, topN) };
+  },
+};
+
+const draftPosFromForecastTool: ToolExecutor = {
+  declaration: {
+    name: 'draftPosFromForecast',
+    description:
+      "WRITE TOOL — one call drafts purchase orders for EVERYTHING below its reorder point, using the velocity forecast's deficit math, grouped by supplier (items with no supplier are reported back, not silently dropped). Use for 'draft everything below par', 'create all my restock POs'. Confirmation flow: FIRST call suggestReorderPoints (or listLowStock) to show what would be ordered, then call this only AFTER the user explicitly confirms. Requires planning module + purchase_orders:manage. POs are created as DRAFTS — nothing is sent to suppliers. Echo each created PO and the unassigned-supplier bucket back to the user.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {},
+      required: [],
+    },
+  },
+  async execute(_args, ctx) {
+    const { PlanningService } = await import('@/server/services/planning');
+    const svc = new PlanningService(ctx);
+    return svc.autoGenerateDraftPOs();
   },
 };
 
@@ -2359,6 +2468,10 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   draftPos: draftPosTool,
   predictRunout: predictRunoutTool,
   suggestReorderPoint: suggestReorderPointTool,
+  // Agentic reorder loop: suggest (bulk) → apply → draft-all-below-par.
+  suggestReorderPoints: suggestReorderPointsTool,
+  applyReorderPoint: applyReorderPointTool,
+  draftPosFromForecast: draftPosFromForecastTool,
   identifyFromPhoto: identifyFromPhotoTool,
   listBundles: listBundlesTool,
   previewBundleDistribution: previewBundleDistributionTool,
