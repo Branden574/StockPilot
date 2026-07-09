@@ -7,6 +7,7 @@ import {
   getWarehouseAccess,
   ForbiddenError,
 } from '@/lib/auth/warehouse';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import type {
   AdjustStockInput,
@@ -1880,7 +1881,22 @@ export class InventoryService {
       // data-shape limitation until this fan-out is done. A fully-atomic
       // group re-key would require moving target+siblings into one
       // transactional RPC (tracked follow-up, not yet built).
-      const { error: sibErr } = await this.ctx.supabase
+      //
+      // Deliberately the SERVICE-ROLE admin client, not this.ctx.supabase:
+      // the RLS-scoped client is subject to inventory_items_update →
+      // user_can_access_inventory(warehouse_id, charter_id, 'write') (mig
+      // 0008), so a warehouse-scoped staff user editing a shared field would
+      // have this UPDATE silently RLS-filter out sibling placements sitting
+      // in warehouses/charters they can't write to. PostgREST reports a
+      // zero-row-matched UPDATE as success (no error), so that would leave
+      // the "shared" field SILENTLY DIVERGED across placements — exactly the
+      // invariant this fan-out exists to guarantee. Product-level fields are
+      // org-wide by design, so propagation must be all-or-nothing regardless
+      // of the editor's warehouse scope. The target row above stays on
+      // this.ctx.supabase (RLS-guarded) — only this sibling fan-out is
+      // privileged, and the explicit organization_id filter below is the
+      // mandatory tenant-isolation floor now that RLS is bypassed.
+      const { error: sibErr } = await createAdminClient()
         .from('inventory_items')
         .update({ ...sharedUpdates, updated_by: this.ctx.userId })
         .eq('organization_id', this.ctx.organizationId)

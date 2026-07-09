@@ -1092,6 +1092,29 @@ export function InventoryTable({
   // `__item` (PlacementRow's index signature allows it) so the exact
   // same per-row <tr> markup can be reused unchanged when a group
   // expands.
+  // Model B: full-dataset (not page-slice) per-SKU on-hand totals, keyed
+  // for the SKU-group headers below. A SKU's placements can be MULTIPLE
+  // DISTINCT inventory_items rows (one per charter), and the default
+  // last-updated sort can split them across pages — summing only the
+  // current page's rows (as groupPlacementsBySku does) would silently
+  // show a PARTIAL total for a group that straddles a page boundary.
+  // Instant mode has the complete filtered dataset client-side
+  // (instantView.filteredRows — every filter applied, every page), so
+  // this map always holds the TRUE total. `null` in server mode, where
+  // only the current page is available and there's no cheap way to get
+  // the full sum without a new query (see skuGroups below for the
+  // degraded-but-honest server-mode fallback).
+  const skuTotalsFull = React.useMemo(() => {
+    if (!instantView) return null;
+    const m = new Map<string, number>();
+    for (const r of instantView.filteredRows) {
+      const key = r.sku.trim();
+      if (!key) continue; // blank skus are never grouped — see group-by-sku.ts
+      m.set(key, (m.get(key) ?? 0) + (Number(r.quantity_on_hand) || 0));
+    }
+    return m;
+  }, [instantView]);
+
   const skuGroups = React.useMemo<SkuGroup[] | null>(() => {
     if (showBookFields) return null;
     const rows: SkuGroupInputRow[] = displayed.map((it) => ({
@@ -1103,8 +1126,26 @@ export function InventoryTable({
       lineQuantity: it.line_quantity ?? it.quantity_on_hand,
       __item: it,
     }));
-    return groupPlacementsBySku(rows);
-  }, [displayed, showBookFields]);
+    const groups = groupPlacementsBySku(rows);
+    if (!skuTotalsFull) {
+      // Server mode: no full-dataset sum available. A single page (every
+      // row for this view is already on screen) is still exact even
+      // here; a multi-placement group on a multi-page result COULD be
+      // missing rows sitting on another page, so it's flagged rather
+      // than silently shown as if it were complete (recurring bug
+      // pattern #18 — disclose silent caps, never hide them).
+      const singlePage = effectiveTotal <= pageSize;
+      if (singlePage) return groups;
+      return groups.map((g) => (g.placements.length > 1 ? { ...g, totalIsPartial: true } : g));
+    }
+    // Instant mode: replace the page-slice sum with the FULL filtered-set
+    // total for this SKU — always exact, never partial.
+    return groups.map((g) => {
+      const key = g.sku.trim();
+      const full = key ? skuTotalsFull.get(key) : undefined;
+      return full != null ? { ...g, total: full } : g;
+    });
+  }, [displayed, showBookFields, skuTotalsFull, effectiveTotal, pageSize]);
 
   const renderItems = React.useMemo<RenderEntry[]>(() => {
     let idx = 0;
@@ -2153,9 +2194,21 @@ function SkuGroupHeaderRow({
             meta={
               <span>
                 On hand{' '}
-                <span className="text-foreground font-medium tabular-nums">
+                <span
+                  className="text-foreground font-medium tabular-nums"
+                  title={
+                    group.totalIsPartial
+                      ? 'This total only counts placements on the current page — other pages may hold more of this SKU.'
+                      : undefined
+                  }
+                >
                   {formatNumber(group.total)}
                 </span>
+                {group.totalIsPartial && (
+                  <span aria-hidden className="ml-0.5 text-[var(--ed-ink-4)]">
+                    *
+                  </span>
+                )}
               </span>
             }
             className="shrink-0"
@@ -2247,8 +2300,20 @@ function SkuGroupHeaderRow({
       <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
         {items.length} location{items.length === 1 ? '' : 's'}
       </td>
-      <td className="px-3 text-right font-mono font-medium tabular-nums">
+      <td
+        className="px-3 text-right font-mono font-medium tabular-nums"
+        title={
+          group.totalIsPartial
+            ? 'This total only counts placements on the current page — other pages may hold more of this SKU.'
+            : undefined
+        }
+      >
         {formatNumber(group.total)}
+        {group.totalIsPartial && (
+          <span aria-hidden className="ml-0.5 text-[var(--ed-ink-4)]">
+            *
+          </span>
+        )}
       </td>
       <td className="px-3">
         <StockBar stock={group.total} par={par} status={status} />

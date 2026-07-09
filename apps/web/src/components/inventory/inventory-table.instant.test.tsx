@@ -450,6 +450,62 @@ describe('InventoryTable instant mode', () => {
     expect(screen.getByText('Discontinued')).toBeInTheDocument();
     expect(screen.queryByText('In stock')).not.toBeInTheDocument();
   });
+
+  // Model B whole-branch review finding 2: the group HEADER total must be
+  // the FULL cross-page sum, not a page-slice sum. A SKU's placements can
+  // be MULTIPLE DISTINCT inventory_items rows (one per charter), and the
+  // default last-updated sort can split those rows across a page boundary
+  // — three placements of one SKU with pageSize=2 land two-on-page-1,
+  // one-on-page-2. Instant mode has the complete filtered dataset
+  // client-side, so the header must sum ALL THREE (281), not just the
+  // two visible on the current page (175).
+  it('shows the FULL cross-page total for a SKU whose 3 placements straddle a page boundary', () => {
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const rows = [
+      item({
+        id: 'a',
+        name: 'Split Widget',
+        sku: 'SP-SPLIT',
+        quantity_on_hand: 75,
+        updated_at: '2026-01-03T00:00:00+00:00',
+      }),
+      item({
+        id: 'b',
+        name: 'Split Widget',
+        sku: 'SP-SPLIT',
+        quantity_on_hand: 100,
+        updated_at: '2026-01-02T00:00:00+00:00',
+      }),
+      item({
+        id: 'c',
+        name: 'Split Widget',
+        sku: 'SP-SPLIT',
+        quantity_on_hand: 106,
+        updated_at: '2026-01-01T00:00:00+00:00',
+      }),
+    ];
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={3}
+        pageSize={2}
+        instant={{ items: rows, view: 'items' }}
+      />,
+    );
+
+    // Default sort is updated_desc, so page 1 = [a, b] and page 2 = [c] —
+    // confirms the group genuinely straddles a page boundary here.
+    expect(screen.getAllByRole('button', { name: /jump to page/i })[0]).toHaveTextContent(
+      'Page 1 of 2',
+    );
+
+    // Header shows the FULL sum (75 + 100 + 106 = 281), never the
+    // page-1-only sum (75 + 100 = 175).
+    expect(screen.getByText('281')).toBeInTheDocument();
+    expect(screen.queryByText('175')).not.toBeInTheDocument();
+  });
 });
 
 // FIRST-ROWS-FIRST STREAMING (React 19 use() handoff): the default view

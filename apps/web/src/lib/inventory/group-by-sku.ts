@@ -12,6 +12,18 @@ export interface SkuGroup {
   name: string;
   total: number;
   placements: PlacementRow[];
+  /**
+   * True when `total` is only a PAGE-SLICE sum — the group's placements
+   * may not all be present in the rows this group was built from, so
+   * the real cross-page total for this SKU could be higher. Set by the
+   * caller (inventory-table.tsx), never by `groupPlacementsBySku` itself
+   * (which only ever sees the rows it's given and sums them exactly).
+   * Instant mode corrects `total` to the full filtered-set sum instead
+   * of setting this flag; server mode, which only has the current page,
+   * sets it on any multi-placement group when more than one page exists
+   * — see the `skuGroups` derivation in inventory-table.tsx.
+   */
+  totalIsPartial?: boolean;
 }
 
 /**

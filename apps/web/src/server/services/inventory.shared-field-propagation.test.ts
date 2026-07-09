@@ -8,6 +8,19 @@
 // custom_fields) must NEVER propagate. Editing the sku itself re-keys the
 // WHOLE group (all placements move to the new sku together), keyed on the
 // ORIGINAL sku captured before the patch is applied.
+//
+// The TARGET row update runs on the caller's RLS-scoped `ctx.supabase` — a
+// warehouse-scoped user must only be able to edit rows they can already
+// write to. The SIBLING fan-out, however, must run on the SERVICE-ROLE admin
+// client (`createAdminClient()`): if it ran on `ctx.supabase`, RLS
+// (inventory_items_update → user_can_access_inventory(warehouse_id,
+// charter_id, 'write'), migration 0008) would silently filter out sibling
+// placements sitting in warehouses/charters the editor can't write to — and
+// a zero-row-matched PostgREST UPDATE reports success, so the "shared" field
+// would SILENTLY DIVERGE across placements with no error. This file proves
+// (a) the sibling UPDATE goes through the admin client, not ctx.supabase,
+// and (b) it still carries the organization_id + sku filters (the
+// tenant-isolation floor now that RLS is bypassed) — both RED if reverted.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./context', () => ({
@@ -31,9 +44,11 @@ vi.mock('@/lib/auth/warehouse', () => ({
   ForbiddenError: class extends Error {},
 }));
 vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }));
 
 import { InventoryService } from './inventory';
 import { audit } from './audit';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 type UpdateCall = {
   scope: 'target' | 'siblings';
@@ -44,19 +59,21 @@ type UpdateCall = {
 
 /**
  * update() flow this harness models:
- *   1. this.get(id)                         → SELECT on inventory_items (+ a
+ *   1. this.get(id)                          → SELECT on inventory_items (+ a
  *      read of item_stock_levels, which we stub empty via the generic table
- *      branch below)
- *   2. target row UPDATE  .eq('id', id)      → tagged scope 'target'
+ *      branch below) — via ctx.supabase.
+ *   2. target row UPDATE  .eq('id', id)       → via ctx.supabase, tagged
+ *      scope 'target'.
  *   3. (conditionally) sibling row UPDATE
- *      .eq('sku', originalSku).neq('id', id) → tagged scope 'siblings',
- *      distinguished from the target update by the presence of .neq('id',…)
+ *      .eq('sku', originalSku).neq('id', id)  → via createAdminClient(),
+ *      NOT ctx.supabase, tagged scope 'siblings'.
  *
- * Each `.from('inventory_items')` call gets its own closure-scoped chain, so
- * the target and sibling updates (two separate `.from()` calls within one
- * `update()` invocation) are captured as independent entries in `updates`.
+ * `ctxUpdates` and `adminUpdates` are captured from two entirely separate
+ * stub clients, so a regression that routes the sibling fan-out back onto
+ * ctx.supabase shows up as an EMPTY adminUpdates (nothing was ever pushed to
+ * the admin stub's closure) rather than merely a differently-tagged entry.
  */
-function harness(opts: { targetSku: string }) {
+function harness(opts: { targetSku: string; siblingFails23505?: boolean }) {
   const TARGET_ID = 'row-a';
   const TARGET = {
     id: TARGET_ID,
@@ -74,7 +91,8 @@ function harness(opts: { targetSku: string }) {
     quantity_on_hand: 5,
   };
 
-  const updates: UpdateCall[] = [];
+  const ctxUpdates: UpdateCall[] = [];
+  const adminUpdates: UpdateCall[] = [];
 
   const emptyChain = () => {
     const p: Record<string, unknown> = {};
@@ -87,7 +105,12 @@ function harness(opts: { targetSku: string }) {
     return p;
   };
 
-  const supabase = {
+  // ctx.supabase — RLS-scoped. Only ever sees the `get()` SELECT and the
+  // TARGET row update in the current implementation. Still tags a would-be
+  // sibling update (.neq('id', …)) as scope 'siblings' so a regression that
+  // routes the fan-out back through ctx.supabase is visible in ctxUpdates
+  // instead of silently vanishing.
+  const ctxSupabase = {
     from: (table: string) => {
       if (table !== 'inventory_items') return emptyChain();
 
@@ -106,11 +129,6 @@ function harness(opts: { targetSku: string }) {
       };
       p.eq = (col: string, val: unknown) => {
         if (col === 'sku') filterSku = val as string;
-        // Captured so propagation tests can assert the sibling UPDATE stays
-        // org-scoped — the crown-jewel guard against cross-tenant
-        // corruption. Without recording this, deleting the
-        // `.eq('organization_id', …)` in inventory.ts would silently pass
-        // every test here.
         if (col === 'organization_id') filterOrg = val as string;
         return p;
       };
@@ -125,7 +143,7 @@ function harness(opts: { targetSku: string }) {
 
       const resolve = () => {
         if (isUpdate) {
-          updates.push({ scope: hasNeqId ? 'siblings' : 'target', payload, filterSku, filterOrg });
+          ctxUpdates.push({ scope: hasNeqId ? 'siblings' : 'target', payload, filterSku, filterOrg });
           const resultData = hasNeqId ? [] : { ...TARGET, ...payload };
           return { data: resultData, error: null };
         }
@@ -138,34 +156,83 @@ function harness(opts: { targetSku: string }) {
     },
   };
 
+  // createAdminClient() — service-role, bypasses RLS. Only ever sees the
+  // sibling fan-out UPDATE. No .select()/.single() is chained on it in the
+  // production code (the result is awaited directly off the query builder),
+  // so this stub only needs to be thenable.
+  const adminSupabase = {
+    from: (table: string) => {
+      if (table !== 'inventory_items') return emptyChain();
+
+      let payload: Record<string, unknown> = {};
+      let filterSku: string | undefined;
+      let filterOrg: string | undefined;
+
+      const p: Record<string, unknown> = {};
+      p.update = (data: Record<string, unknown>) => {
+        payload = data;
+        return p;
+      };
+      p.eq = (col: string, val: unknown) => {
+        if (col === 'sku') filterSku = val as string;
+        if (col === 'organization_id') filterOrg = val as string;
+        return p;
+      };
+      p.is = () => p;
+      p.neq = () => p;
+
+      const resolve = () => {
+        adminUpdates.push({ scope: 'siblings', payload, filterSku, filterOrg });
+        if (opts.siblingFails23505) {
+          return { data: null, error: { code: '23505', message: 'duplicate key value' } };
+        }
+        return { data: null, error: null };
+      };
+      (p as { then: unknown }).then = (res: (v: unknown) => unknown) => res(resolve());
+      return p;
+    },
+  };
+
+  vi.mocked(createAdminClient).mockReturnValue(adminSupabase as never);
+
   const ctx = {
     organizationId: 'org-1',
     userId: 'u-1',
     role: 'admin',
-    supabase,
+    supabase: ctxSupabase,
     enabledModules: new Set<string>(),
   } as never;
 
-  return { svc: new InventoryService(ctx), updates };
+  return { svc: new InventoryService(ctx), ctxUpdates, adminUpdates };
 }
 
 describe('InventoryService.update — shared-field propagation by SKU', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('propagates unit_cost to all same-sku siblings, but NOT charter', async () => {
-    const { svc, updates } = harness({ targetSku: 'SP-X' });
+  it('propagates unit_cost to all same-sku siblings via the admin client, but NOT charter', async () => {
+    const { svc, ctxUpdates, adminUpdates } = harness({ targetSku: 'SP-X' });
     await svc.update('row-a', { unitCost: 469.95, charterId: 'chr-1' });
-    // target row got both; siblings got ONLY unit_cost (shared), NOT charter (per-placement)
-    const sibling = updates.find((u) => u.scope === 'siblings');
+
+    // The sibling fan-out went through the ADMIN client, not ctx.supabase —
+    // if this regresses back onto ctx.supabase, adminUpdates stays empty.
+    const sibling = adminUpdates.find((u) => u.scope === 'siblings');
     expect(sibling).toBeDefined();
     expect(sibling!.payload.unit_cost).toBe(469.95);
     expect(sibling!.payload).not.toHaveProperty('charter_id');
-    // Crown-jewel invariant: the sibling fan-out UPDATE is org-scoped, so it
-    // can never touch another tenant's rows even if two orgs somehow shared
-    // a SKU string.
+    // Crown-jewel invariant: the sibling fan-out UPDATE is org- and
+    // sku-scoped, so it can never touch another tenant's rows (or an
+    // unrelated SKU's rows) even though it runs on the service-role client
+    // that bypasses RLS. RED if either .eq() is dropped.
     expect(sibling!.filterOrg).toBe('org-1');
+    expect(sibling!.filterSku).toBe('SP-X');
 
-    const target = updates.find((u) => u.scope === 'target');
+    // ctx.supabase never saw a sibling-shaped update (no double-write, and
+    // no accidental fallback to the RLS-scoped client for this call).
+    expect(ctxUpdates.some((u) => u.scope === 'siblings')).toBe(false);
+
+    // Target row update is unchanged: still on ctx.supabase.
+    const target = ctxUpdates.find((u) => u.scope === 'target');
+    expect(target).toBeDefined();
     expect(target!.payload.unit_cost).toBe(469.95);
     expect(target!.payload.charter_id).toBe('chr-1');
 
@@ -176,10 +243,10 @@ describe('InventoryService.update — shared-field propagation by SKU', () => {
     );
   });
 
-  it('editing sku re-keys the whole group (all placements move to the new sku)', async () => {
-    const { svc, updates } = harness({ targetSku: 'SP-X' });
+  it('editing sku re-keys the whole group via the admin client (all placements move to the new sku)', async () => {
+    const { svc, adminUpdates } = harness({ targetSku: 'SP-X' });
     await svc.update('row-a', { sku: 'SP-Y' });
-    const sibling = updates.find((u) => u.scope === 'siblings');
+    const sibling = adminUpdates.find((u) => u.scope === 'siblings');
     // siblings selected by the ORIGINAL sku, set to the NEW sku
     expect(sibling).toBeDefined();
     expect(sibling!.filterSku).toBe('SP-X');
@@ -193,10 +260,11 @@ describe('InventoryService.update — shared-field propagation by SKU', () => {
     );
   });
 
-  it('a per-placement-only edit (charter/qty) does NOT touch siblings', async () => {
-    const { svc, updates } = harness({ targetSku: 'SP-X' });
+  it('a per-placement-only edit (charter/qty) does NOT touch siblings on either client', async () => {
+    const { svc, ctxUpdates, adminUpdates } = harness({ targetSku: 'SP-X' });
     await svc.update('row-a', { charterId: 'chr-2' });
-    expect(updates.some((u) => u.scope === 'siblings')).toBe(false);
+    expect(adminUpdates.length).toBe(0);
+    expect(ctxUpdates.some((u) => u.scope === 'siblings')).toBe(false);
 
     // No propagated_to_sku on the audit extra when siblings weren't touched.
     expect(audit).toHaveBeenCalledWith(
@@ -208,74 +276,8 @@ describe('InventoryService.update — shared-field propagation by SKU', () => {
   });
 
   it('a sibling-update 23505 (re-keying into a colliding group) surfaces as a friendly conflict', async () => {
-    // Force the sibling update to fail with a unique-violation by making the
-    // stub's inventory_items chain reject when it sees the sibling's
-    // .neq('id', …) marker.
-    const supabase = {
-      from: (table: string) => {
-        if (table !== 'inventory_items') {
-          const p: Record<string, unknown> = {};
-          for (const m of ['select', 'update', 'eq', 'neq', 'is', 'in', 'order', 'limit']) p[m] = () => p;
-          p.single = async () => ({ data: null, error: null });
-          p.maybeSingle = async () => ({ data: null, error: null });
-          (p as { then: unknown }).then = (res: (v: unknown) => unknown) => res({ data: [], error: null });
-          return p;
-        }
-        let isUpdate = false;
-        let payload: Record<string, unknown> = {};
-        let hasNeqId = false;
-        const TARGET = {
-          id: 'row-a',
-          organization_id: 'org-1',
-          sku: 'SP-X',
-          barcode: null,
-          name: 'Chromebook',
-          warehouse_id: null,
-          bin_location: null,
-          charter_id: null,
-          custom_fields: {},
-          status: 'active',
-          item_type: 'product',
-          tracking_type: 'none',
-          quantity_on_hand: 5,
-        };
-        const p: Record<string, unknown> = {};
-        p.select = () => p;
-        p.update = (data: Record<string, unknown>) => {
-          isUpdate = true;
-          payload = data;
-          return p;
-        };
-        p.eq = () => p;
-        p.neq = (col: string) => {
-          if (col === 'id') hasNeqId = true;
-          return p;
-        };
-        p.is = () => p;
-        p.in = () => p;
-        const resolve = () => {
-          if (isUpdate && hasNeqId) {
-            return { data: null, error: { code: '23505', message: 'duplicate key value' } };
-          }
-          if (isUpdate) return { data: { ...TARGET, ...payload }, error: null };
-          return { data: TARGET, error: null };
-        };
-        p.single = async () => resolve();
-        p.maybeSingle = async () => resolve();
-        (p as { then: unknown }).then = (res: (v: unknown) => unknown) => res(resolve());
-        return p;
-      },
-    };
-    const ctx = {
-      organizationId: 'org-1',
-      userId: 'u-1',
-      role: 'admin',
-      supabase,
-      enabledModules: new Set<string>(),
-    } as never;
-    const err = await new InventoryService(ctx)
-      .update('row-a', { unitCost: 1 })
-      .catch((e: unknown) => e);
+    const { svc } = harness({ targetSku: 'SP-X', siblingFails23505: true });
+    const err = await svc.update('row-a', { unitCost: 1 }).catch((e: unknown) => e);
     expect((err as { code: string }).code).toBe('conflict');
     expect((err as Error).message).toMatch(/already uses that SKU/i);
   });
