@@ -1218,6 +1218,15 @@ export class OrderRequestsService {
       { event: 'order.closed_partial', entityType: 'order_request', entityId: id },
       this.ctx,
     );
+    // close_partial drives the order to the terminal 'completed' state, so
+    // downstream order.completed consumers (accounting export, webhooks) must
+    // see it too — otherwise the order shows open/backordered there forever.
+    // The sign-route completion fires this; the manager close path must match.
+    void dispatchEvent(this.ctx.organizationId, 'order.completed', {
+      id,
+      orderNumber: id.slice(0, 8).toUpperCase(),
+      closedPartial: true,
+    });
     void broadcastOrderChanged(this.ctx.organizationId, id);
     return row;
   }

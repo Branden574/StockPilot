@@ -37,6 +37,7 @@ type StatusTab =
   | 'packing'
   | 'staged'
   | 'in_transit'
+  | 'backordered'
   | 'completed'
   | 'denied_cancelled';
 
@@ -47,6 +48,7 @@ const TAB_LABELS: Record<StatusTab, string> = {
   packing: 'Packing',
   staged: 'Staged',
   in_transit: 'In transit',
+  backordered: 'Backordered',
   completed: 'Completed',
   denied_cancelled: 'Denied/Cancelled',
 };
@@ -62,12 +64,17 @@ const TAB_FILTERS: Record<StatusTab, OrderRequestStatus | OrderRequestStatus[]> 
     'staged_for_pickup',
     'staged_for_delivery',
     'in_transit',
+    // A backordered order is still LIVE — it's awaiting a manager to resume or
+    // close it. Include it in All active AND give it its own tab, or it would
+    // be reachable only by direct link / notification.
+    'backordered',
   ],
   needs_approval: 'pending_approval',
   picking: ['pick_slip_generated', 'picking_in_progress', 'picking_complete'],
   packing: 'packing_slip_generated',
   staged: ['staged_for_pickup', 'staged_for_delivery'],
   in_transit: 'in_transit',
+  backordered: 'backordered',
   completed: 'completed',
   denied_cancelled: ['denied', 'cancelled'],
 };
@@ -79,6 +86,7 @@ const TAB_ORDER: StatusTab[] = [
   'packing',
   'staged',
   'in_transit',
+  'backordered',
   'completed',
   'denied_cancelled',
 ];
