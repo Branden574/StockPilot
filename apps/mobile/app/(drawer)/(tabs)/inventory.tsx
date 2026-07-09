@@ -6,6 +6,7 @@ import {
   Box,
   Check,
   CheckCircle2,
+  ChevronRight,
   Circle,
   Layers,
   ListChecks,
@@ -28,6 +29,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+
+import { groupBySizeRun } from '@stockpilot/core';
 
 import {
   ActiveFilterPill,
@@ -71,10 +74,23 @@ interface Item {
 
 const PIPS = [ACCENT.pipOrange, ACCENT.pipAmber, ACCENT.pipTeal, undefined, undefined, undefined];
 
+/** One FlatList entry: a size-run group header, or a plain item row (either a
+ *  standalone item or a member of an expanded run). */
+type GroupedRow =
+  | {
+      kind: 'header';
+      key: string;
+      styleKey: string;
+      baseName: string;
+      total: number;
+      sizeCount: number;
+    }
+  | { kind: 'row'; key: string; item: Item };
+
 // Stable, module-scoped helpers so the FlatList doesn't see a new
 // keyExtractor / header element on every render — both are common
 // causes of full-list re-renders during scroll.
-const keyExtractor = (i: Item): string => i.id;
+const keyExtractor = (r: GroupedRow): string => r.key;
 const listHeader = <View style={{ height: 6 }} />;
 
 const PAGE_SIZE = 50;
@@ -95,7 +111,12 @@ export default function Inventory() {
   const [items, setItems] = React.useState<Item[]>([]);
   const [q, setQ] = React.useState('');
   const [page, setPage] = React.useState(1);
-  const listRef = React.useRef<FlatList<Item> | null>(null);
+  // Size-run grouping (apparel): collapse a run of same-base sized items on this
+  // page into one expandable header, keyed by the derived style base. Collapsed
+  // by default. (Grouping is per loaded page here — the web run-aware pagination
+  // is a heavier client-load refactor; PAGE_SIZE 50 keeps splits rare.)
+  const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(new Set());
+  const listRef = React.useRef<FlatList<GroupedRow> | null>(null);
   const [filter, setFilter] = React.useState<FilterState>(EMPTY_FILTER_STATE);
   const [sheetOpen, setSheetOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
@@ -157,7 +178,13 @@ export default function Inventory() {
   }, []);
 
   const load = React.useCallback(
-    async (orgIdParam: string, query: string, f: FilterState, warehouseScopeId: string | null, pageParam: number) => {
+    async (
+      orgIdParam: string,
+      query: string,
+      f: FilterState,
+      warehouseScopeId: string | null,
+      pageParam: number,
+    ) => {
       const sortMap: Record<typeof f.sort, { col: string; asc: boolean }> = {
         updated_desc: { col: 'updated_at', asc: false },
         name_asc: { col: 'name', asc: true },
@@ -213,9 +240,7 @@ export default function Inventory() {
         const words = query.trim().split(/\s+/).filter(Boolean);
         for (const word of words) {
           const term = word.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-          req = req.or(
-            `name.ilike."%${term}%",sku.ilike."%${term}%",barcode.ilike."%${term}%"`,
-          );
+          req = req.or(`name.ilike."%${term}%",sku.ilike."%${term}%",barcode.ilike."%${term}%"`);
         }
       }
 
@@ -241,9 +266,7 @@ export default function Inventory() {
         // silently dropping the filter.
         req = req.in(
           'id',
-          placedItemIds.length
-            ? placedItemIds
-            : ['00000000-0000-0000-0000-000000000000'],
+          placedItemIds.length ? placedItemIds : ['00000000-0000-0000-0000-000000000000'],
         );
       }
       if (f.charterIds.length > 0) {
@@ -269,7 +292,7 @@ export default function Inventory() {
       let rows = (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
         const cat = r.category as { name?: string } | { name?: string }[] | null;
-        const catName = Array.isArray(cat) ? cat[0]?.name ?? null : cat?.name ?? null;
+        const catName = Array.isArray(cat) ? (cat[0]?.name ?? null) : (cat?.name ?? null);
         return {
           id: r.id as string,
           name: r.name as string,
@@ -289,9 +312,7 @@ export default function Inventory() {
       if (isLow) {
         rows = rows.filter(
           (r) =>
-            r.reorder_point > 0
-            && r.quantity_on_hand <= r.reorder_point
-            && r.quantity_on_hand > 0,
+            r.reorder_point > 0 && r.quantity_on_hand <= r.reorder_point && r.quantity_on_hand > 0,
         );
       }
 
@@ -330,7 +351,7 @@ export default function Inventory() {
       // it's misleading — use the client-filtered length instead. For
       // every other query the server count is the authoritative total
       // used by the Paginator footer.
-      setTotal(isLow ? rows.length : count ?? rows.length);
+      setTotal(isLow ? rows.length : (count ?? rows.length));
       setLoading(false);
     },
     [],
@@ -405,18 +426,73 @@ export default function Inventory() {
     countSelection.toggle({ id: it.id, sku: it.sku, name: it.name, itemType: 'product' });
   }, []);
 
+  const toggleGroup = React.useCallback((styleKey: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(styleKey)) next.delete(styleKey);
+      else next.add(styleKey);
+      return next;
+    });
+  }, []);
+
+  // Group this page's items into size runs (2+ same-base sized items), then
+  // flatten to a FlatList render list — a header per run, its member rows only
+  // when expanded, and standalone items as plain rows.
+  const groupedRows = React.useMemo<GroupedRow[]>(() => {
+    const grouped = groupBySizeRun<Item>(items, (it) => ({
+      key: it.id,
+      name: it.name,
+      quantity: Number(it.quantity_on_hand) || 0,
+      groupable: true,
+    }));
+    const out: GroupedRow[] = [];
+    for (const g of grouped) {
+      if (g.kind === 'single') {
+        out.push({ kind: 'row', key: g.entry.id, item: g.entry });
+      } else {
+        out.push({
+          kind: 'header',
+          key: `g:${g.group.styleKey}`,
+          styleKey: g.group.styleKey,
+          baseName: g.group.baseName,
+          total: g.group.total,
+          sizeCount: g.group.sizeCount,
+        });
+        if (expandedGroups.has(g.group.styleKey)) {
+          for (const m of g.group.members) out.push({ kind: 'row', key: m.id, item: m });
+        }
+      }
+    }
+    return out;
+  }, [items, expandedGroups]);
+
   const renderItem = React.useCallback(
-    ({ item, index }: { item: Item; index: number }) => (
-      <ItemRow
-        item={item}
-        isLast={index === items.length - 1}
-        index={index}
-        onItemPress={onItemPress}
-        selectMode={selectMode}
-        onToggleSelect={onToggleSelect}
-      />
-    ),
-    [items.length, onItemPress, selectMode, onToggleSelect],
+    ({ item: row, index }: { item: GroupedRow; index: number }) => {
+      if (row.kind === 'header') {
+        return (
+          <GroupHeaderRow
+            baseName={row.baseName}
+            total={row.total}
+            sizeCount={row.sizeCount}
+            expanded={expandedGroups.has(row.styleKey)}
+            onToggle={() => toggleGroup(row.styleKey)}
+            index={index}
+            isLast={index === groupedRows.length - 1}
+          />
+        );
+      }
+      return (
+        <ItemRow
+          item={row.item}
+          isLast={index === groupedRows.length - 1}
+          index={index}
+          onItemPress={onItemPress}
+          selectMode={selectMode}
+          onToggleSelect={onToggleSelect}
+        />
+      );
+    },
+    [groupedRows.length, expandedGroups, toggleGroup, onItemPress, selectMode, onToggleSelect],
   );
 
   return (
@@ -449,12 +525,7 @@ export default function Inventory() {
         </View>
 
         <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }}>
-          <View
-            style={[
-              styles.searchBox,
-              { backgroundColor: c.card, borderColor: c.hair },
-            ]}
-          >
+          <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair }]}>
             <Search size={16} color={c.ink4} strokeWidth={1.4} />
             <TextInput
               value={q}
@@ -466,10 +537,7 @@ export default function Inventory() {
               autoFocus={false}
               returnKeyType="search"
               onSubmitEditing={() => Keyboard.dismiss()}
-              style={[
-                styles.searchInput,
-                { color: c.ink, fontFamily: FONT.displayRegular },
-              ]}
+              style={[styles.searchInput, { color: c.ink, fontFamily: FONT.displayRegular }]}
             />
             <FilterButton onPress={() => setSheetOpen(true)} count={filterCount} />
             <Pressable
@@ -496,7 +564,7 @@ export default function Inventory() {
       ) : (
         <FlatList
           ref={listRef}
-          data={items}
+          data={groupedRows}
           keyExtractor={keyExtractor}
           contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: tabBarHeight + 24 }}
           refreshControl={
@@ -512,12 +580,7 @@ export default function Inventory() {
           }
           ListHeaderComponent={listHeader}
           ListFooterComponent={
-            <Paginator
-              page={page}
-              total={total}
-              pageSize={PAGE_SIZE}
-              onPageChange={onPageChange}
-            />
+            <Paginator page={page} total={total} pageSize={PAGE_SIZE} onPageChange={onPageChange} />
           }
           renderItem={renderItem}
           keyboardShouldPersistTaps="handled"
@@ -558,6 +621,78 @@ function glyphFromItem(item: Item): LucideIcon {
   return Package;
 }
 
+/** Collapsible size-run header row — one per run of same-base sized items
+ *  (e.g. "L4L - Pink Shirt", 3 sizes). Tapping toggles the run's member rows. */
+const GroupHeaderRow = React.memo(function GroupHeaderRow({
+  baseName,
+  total,
+  sizeCount,
+  expanded,
+  onToggle,
+  index,
+  isLast,
+}: {
+  baseName: string;
+  total: number;
+  sizeCount: number;
+  expanded: boolean;
+  onToggle: () => void;
+  index: number;
+  isLast: boolean;
+}) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onToggle}
+      accessibilityRole="button"
+      accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${baseName}, ${sizeCount} sizes`}
+      style={({ pressed }) => ({
+        // Same continuous-card border model as ItemRow so headers sit flush in
+        // the list (a distinct paper2 fill + chevron mark them as a group).
+        backgroundColor: c.paper2,
+        borderTopWidth: index === 0 ? 1 : 0,
+        borderBottomWidth: 1,
+        borderLeftWidth: 1,
+        borderRightWidth: 1,
+        borderColor: c.hair,
+        borderTopLeftRadius: index === 0 ? 10 : 0,
+        borderTopRightRadius: index === 0 ? 10 : 0,
+        borderBottomLeftRadius: isLast ? 10 : 0,
+        borderBottomRightRadius: isLast ? 10 : 0,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        paddingVertical: 15,
+        paddingHorizontal: 14,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <ChevronRight
+        size={18}
+        color={c.ink4}
+        strokeWidth={2}
+        style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
+      />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Mono
+          color={c.ink}
+          size={15.5}
+          numberOfLines={1}
+          style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
+        >
+          {baseName}
+        </Mono>
+        <Mono size={11} color={c.ink4} tracking={0.04} style={{ marginTop: 4 }}>
+          {sizeCount} size{sizeCount === 1 ? '' : 's'}
+        </Mono>
+      </View>
+      <Mono size={17} color={c.ink} style={{ fontFamily: FONT.display }}>
+        {total}
+      </Mono>
+    </Pressable>
+  );
+});
+
 const ItemRow = React.memo(function ItemRow({
   item,
   isLast,
@@ -595,12 +730,15 @@ const ItemRow = React.memo(function ItemRow({
     >
       <Pressable
         onPress={() => (selectMode ? onToggleSelect(item) : onItemPress(item.id))}
-        style={({ pressed }) => [
-          rowStyles.row,
-          { opacity: pressed ? 0.7 : 1 },
-        ]}
+        style={({ pressed }) => [rowStyles.row, { opacity: pressed ? 0.7 : 1 }]}
       >
-        <Thumb size={56} icon={Icon} pip={pip} imageUrl={item.imageUrl ?? null} recyclingKey={item.id} />
+        <Thumb
+          size={56}
+          icon={Icon}
+          pip={pip}
+          imageUrl={item.imageUrl ?? null}
+          recyclingKey={item.id}
+        />
         <View style={{ flex: 1, minWidth: 0 }}>
           <Mono
             color={c.ink}
