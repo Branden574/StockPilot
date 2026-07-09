@@ -1,6 +1,7 @@
 'use client';
 
-import { Check, Loader2 } from 'lucide-react';
+import { Check, Loader2, Lock } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -18,10 +19,22 @@ import type { FefoSuggestion } from '@/server/services/lots';
 interface DigitalPickProps {
   orderId: string;
   initialLines: OrderRequestLineWithItem[];
+  /** Whether THIS viewer may edit the pick (the assigned picker or a
+   *  manager+). When false, the editable inputs are replaced with a
+   *  read-only lock notice — the server blocks the write regardless. */
+  canPick: boolean;
+  /** Display name of the current claimant, for the locked notice. */
+  assignedPickerName: string | null;
   lotSerial?: { enabled: boolean; fefoByItemId: Record<string, FefoSuggestion[]> };
 }
 
-export function DigitalPick({ orderId, initialLines, lotSerial }: DigitalPickProps) {
+export function DigitalPick({
+  orderId,
+  initialLines,
+  canPick,
+  assignedPickerName,
+  lotSerial,
+}: DigitalPickProps) {
   const router = useRouter();
   const [picked, setPicked] = React.useState<Record<string, number>>(() => {
     const out: Record<string, number> = {};
@@ -88,6 +101,28 @@ export function DigitalPick({ orderId, initialLines, lotSerial }: DigitalPickPro
 
   const allLinesPicked = initialLines.every((l) => (picked[l.id] ?? 0) > 0);
   const anyLinePicked = initialLines.some((l) => (picked[l.id] ?? 0) > 0);
+
+  // Locked to another picker (or unclaimed and the viewer isn't a manager).
+  // The server rejects the write either way; this just avoids showing
+  // editable inputs the viewer can't submit. Hooks above run unconditionally.
+  if (!canPick) {
+    return (
+      <div className="border-border bg-card rounded-xl border p-6 text-center">
+        <Lock className="text-muted-foreground mx-auto h-6 w-6" />
+        <p className="mt-3 text-sm font-medium">
+          This order is being picked by {assignedPickerName ?? 'someone'}.
+        </p>
+        <p className="text-muted-foreground mt-1 text-sm">
+          Claim it or ask a manager to reassign.
+        </p>
+        <div className="mt-4">
+          <Button variant="outline" asChild>
+            <Link href={`/dashboard/orders/${orderId}`}>Back to order</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">

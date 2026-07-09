@@ -3,6 +3,7 @@ import 'server-only';
 import { isManagerOrAbove } from '@stockpilot/core';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
@@ -1113,6 +1114,7 @@ export class OrderRequestsService {
       { event: 'order.picking_complete', entityType: 'order_request', entityId: id },
       this.ctx,
     );
+    void broadcastOrderChanged(this.ctx.organizationId, id);
     return row;
   }
 
@@ -1142,6 +1144,7 @@ export class OrderRequestsService {
       { event: 'order.picking_claimed', entityType: 'order_request', entityId: id },
       this.ctx,
     );
+    void broadcastOrderChanged(this.ctx.organizationId, id);
     return data as OrderRequestRow;
   }
 
@@ -1186,6 +1189,7 @@ export class OrderRequestsService {
     if (pickerUserId !== this.ctx.userId) {
       void this.notifyPickerAssignment(pickerUserId, id, row.requester_name);
     }
+    void broadcastOrderChanged(this.ctx.organizationId, id);
     return row;
   }
 
@@ -1213,6 +1217,7 @@ export class OrderRequestsService {
       { event: 'order.picking_released', entityType: 'order_request', entityId: id },
       this.ctx,
     );
+    void broadcastOrderChanged(this.ctx.organizationId, id);
     return data as OrderRequestRow;
   }
 

@@ -99,9 +99,18 @@ export default async function OrderDetailPage({
   const isAssignedDriver =
     request.assigned_delivery_user_id !== null &&
     request.assigned_delivery_user_id === ctx.userId;
+  // Picking phase — show the panel to ANY viewer with order access so a staff
+  // picker can claim an unclaimed order (claim-before-pick). The shared state
+  // machine narrows the actual buttons per role/assignment (unclaimed staff →
+  // claim only; the claimant → pick/complete/release; a bystander → print only;
+  // manager+ → pick/complete/reassign/release).
+  const isPickingStatus =
+    request.status === 'pick_slip_generated' ||
+    request.status === 'picking_in_progress';
   const showActionsPanel =
     request.status !== 'pending_confirmation' &&
     (canApprove ||
+      isPickingStatus ||
       (isAssignedDriver &&
         ['staged_for_delivery', 'in_transit'].includes(request.status)));
 
@@ -159,6 +168,55 @@ export default async function OrderDetailPage({
       .sort((a, b) =>
         (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
       );
+  }
+
+  // Picking claim/lock — candidate pickers for the AssignPickerDialog (manager+
+  // reassign only) plus the assigned picker's display name for the chip. Same
+  // active-members list as `drivers`; only paid on orders in the picking phase.
+  let pickers: DriverOption[] = [];
+  let assignedPickerName: string | null = null;
+  if (isPickingStatus) {
+    const supabase = await createClient();
+    if (canApprove) {
+      const { data: members } = await supabase
+        .from('organization_members')
+        .select('user_id, user:user_profiles!user_id (id, full_name, email)')
+        .eq('organization_id', ctx.organizationId)
+        .not('accepted_at', 'is', null);
+      type MemberRow = {
+        user_id: string;
+        user:
+          | { id: string; full_name: string | null; email: string }
+          | { id: string; full_name: string | null; email: string }[]
+          | null;
+      };
+      pickers = ((members ?? []) as MemberRow[])
+        .flatMap((m) => {
+          const u = Array.isArray(m.user) ? m.user[0] : m.user;
+          if (!u || typeof u.email !== 'string') return [];
+          return [{ userId: u.id, fullName: u.full_name ?? null, email: u.email }];
+        })
+        .sort((a, b) =>
+          (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
+        );
+      if (request.assigned_picker_id) {
+        const match = pickers.find((p) => p.userId === request.assigned_picker_id);
+        assignedPickerName = match ? (match.fullName ?? match.email) : null;
+      }
+    } else if (request.assigned_picker_id) {
+      // Non-manager viewer (the assigned picker or a bystander) only needs the
+      // picker's name for the chip, not the full candidate roster.
+      const { data: pk } = await supabase
+        .from('user_profiles')
+        .select('full_name, email')
+        .eq('id', request.assigned_picker_id)
+        .maybeSingle();
+      assignedPickerName = pk
+        ? (pk.full_name as string | null)?.trim() ||
+          (pk.email as string | null) ||
+          null
+        : null;
+    }
   }
 
   // Carrier shipping (EasyPost). The Buy-label affordance only makes sense for
@@ -346,6 +404,11 @@ export default async function OrderDetailPage({
               signedByName={request.signed_by_name}
               signedAt={request.signed_at}
               drivers={drivers}
+              viewerRole={ctx.role}
+              viewerUserId={ctx.userId}
+              assignedPickerId={request.assigned_picker_id}
+              assignedPickerName={assignedPickerName}
+              pickers={pickers}
             />
           )}
 

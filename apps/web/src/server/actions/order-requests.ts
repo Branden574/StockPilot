@@ -372,6 +372,64 @@ export async function assignDeliveryAction(
   }
 }
 
+// ── Picking claim / assign / release ────────────────────────────────────────
+const claimPickingSchema = z.object({ id: z.string().uuid() });
+
+export async function claimPickingAction(
+  input: z.input<typeof claimPickingSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = claimPickingSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.claimPicking(parsed.data.id);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const assignPickingSchema = z.object({ id: z.string().uuid(), pickerUserId: z.string().uuid() });
+
+export async function assignPickingAction(
+  input: z.input<typeof assignPickingSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = assignPickingSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.assignPicking(parsed.data.id, parsed.data.pickerUserId);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const releasePickingSchema = z.object({ id: z.string().uuid() });
+
+export async function releasePickingAction(
+  input: z.input<typeof releasePickingSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = releasePickingSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.releasePicking(parsed.data.id);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 const markInTransitSchema = z.object({ id: z.string().uuid() });
 
 export async function markInTransitAction(
