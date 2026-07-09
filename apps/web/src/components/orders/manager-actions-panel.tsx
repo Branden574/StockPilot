@@ -43,6 +43,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  approveOrderPartialAction,
   approveOrderRequestAction,
   claimPickingAction,
   closePartialAction,
@@ -79,6 +80,9 @@ interface Props {
    *  who sees the panel ONLY for in-transit actions; they shouldn't
    *  see Approve / Deny / Reassign / Internal-Notes. */
   canApprove: boolean;
+  /** Whether a strict approve would fall short of the requested qty. Drives the
+   *  "Approve partial" affordance at pending_approval (server-computed). */
+  isShortStock?: boolean;
   /** Picking claim/lock context. The shared state machine
    *  (`availableOrderActions`) reads these to decide which of
    *  claim / reassign / release / pick / complete render for THIS
@@ -102,6 +106,7 @@ interface Props {
 
 type BusyKey =
   | 'approve'
+  | 'approve-partial'
   | 'deny'
   | 'generate-pick-slip'
   | 'claim-picking'
@@ -135,6 +140,7 @@ export function ManagerActionsPanel({
   signedAt,
   drivers,
   canApprove,
+  isShortStock,
   viewerRole,
   viewerUserId,
   assignedPickerId,
@@ -156,6 +162,7 @@ export function ManagerActionsPanel({
     assignedPickerId,
     assignedDeliveryUserId,
     viewerCanPick,
+    isShortStock,
   });
   const isPickingPhase =
     status === 'pick_slip_generated' || status === 'picking_in_progress';
@@ -211,6 +218,18 @@ export function ManagerActionsPanel({
       return;
     }
     toast.success('Request approved. Stock reserved.');
+    router.refresh();
+  }
+
+  async function approvePartial() {
+    setBusy('approve-partial');
+    const res = await approveOrderPartialAction({ id: orderId });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success('Approved — available stock reserved, the rest will backorder.');
     router.refresh();
   }
 
@@ -422,6 +441,20 @@ export function ManagerActionsPanel({
                 )}
                 Approve
               </Button>
+              {actions.includes('approve_partial') && (
+                <Button
+                  variant="outline"
+                  onClick={approvePartial}
+                  disabled={busy !== null}
+                >
+                  {busy === 'approve-partial' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <PackageCheck className="h-3.5 w-3.5" />
+                  )}
+                  Approve partial
+                </Button>
+              )}
               <Button
                 variant="destructive"
                 onClick={() => setDenyOpen(true)}

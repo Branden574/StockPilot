@@ -23,6 +23,7 @@ export const dynamic = 'force-dynamic';
 const bodySchema = z.object({
   action: z.enum([
     'approve',
+    'approve_partial',
     'deny',
     'generate_pick_slip',
     'claim_picking',
@@ -76,6 +77,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     switch (a.action) {
       case 'approve':
         order = await svc.approve(id, a.internalNotes ?? null);
+        break;
+      case 'approve_partial':
+        order = await svc.approvePartial(id);
         break;
       case 'deny':
         if (!a.reason?.trim()) {

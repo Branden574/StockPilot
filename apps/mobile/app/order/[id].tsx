@@ -112,6 +112,8 @@ interface OrderHeader {
    *  fulfilled = provided to the customer (shipped at hand-over). */
   totalRequested: number;
   totalFulfilled: number;
+  /** Whether a strict approve would fall short (drives "Approve partial"). */
+  isShortStock: boolean;
 }
 
 interface Attachment {
@@ -231,16 +233,45 @@ export default function OrderDetail() {
     // per-line table.
     const { data: lineRows } = await supabase
       .from('order_request_lines')
-      .select('quantity_requested, quantity_fulfilled')
+      .select('item_id, quantity_requested, quantity_fulfilled')
       .eq('order_request_id', id);
-    const totalRequested = (lineRows ?? []).reduce(
-      (s, l) => s + (Number((l as { quantity_requested: number | null }).quantity_requested) || 0),
-      0,
-    );
-    const totalFulfilled = (lineRows ?? []).reduce(
-      (s, l) => s + (Number((l as { quantity_fulfilled: number | null }).quantity_fulfilled) || 0),
-      0,
-    );
+    const rows = (lineRows ?? []) as {
+      item_id: string | null;
+      quantity_requested: number | null;
+      quantity_fulfilled: number | null;
+    }[];
+    const totalRequested = rows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
+    const totalFulfilled = rows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
+
+    // Whether a strict approve would fall short — drives the "Approve partial"
+    // offer. Only computed for an approvable order (rare) to keep load() light.
+    let isShortStock = false;
+    if ((data as Record<string, unknown> | null)?.status === 'pending_approval' && rows.length > 0) {
+      const itemIds = [...new Set(rows.map((l) => l.item_id).filter((x): x is string => Boolean(x)))];
+      if (itemIds.length > 0) {
+        const [{ data: itemRows }, { data: resvRows }] = await Promise.all([
+          supabase.from('inventory_items').select('id, quantity_on_hand').in('id', itemIds),
+          supabase
+            .from('stock_reservations')
+            .select('item_id, quantity')
+            .in('item_id', itemIds)
+            .is('released_at', null),
+        ]);
+        const onHandById = new Map<string, number>();
+        for (const it of (itemRows ?? []) as { id: string; quantity_on_hand: number | null }[]) {
+          onHandById.set(it.id, Number(it.quantity_on_hand) || 0);
+        }
+        const reservedByItem = new Map<string, number>();
+        for (const rv of (resvRows ?? []) as { item_id: string; quantity: number | null }[]) {
+          reservedByItem.set(rv.item_id, (reservedByItem.get(rv.item_id) ?? 0) + (Number(rv.quantity) || 0));
+        }
+        isShortStock = rows.some((l) => {
+          const onHand = onHandById.get(l.item_id ?? '') ?? 0;
+          const reserved = reservedByItem.get(l.item_id ?? '') ?? 0;
+          return (Number(l.quantity_requested) || 0) > Math.max(0, onHand - reserved);
+        });
+      }
+    }
     if (data) {
       const r = data as Record<string, unknown>;
       const wh = r.warehouse as { name: string | null } | { name: string | null }[] | null;
@@ -274,6 +305,7 @@ export default function OrderDetail() {
         signatureToken: (r.signature_token as string | null) ?? null,
         totalRequested,
         totalFulfilled,
+        isShortStock,
       });
     }
     await loadAttachments();
@@ -768,6 +800,14 @@ export default function OrderDetail() {
               {order.status === 'pending_approval' ? (
                 <>
                   {actionBtn('Approve', 'approve', () => void act({ action: 'approve' }, 'approve'))}
+                  {order.isShortStock
+                    ? actionBtn(
+                        'Approve partial',
+                        'approve-partial',
+                        () => void act({ action: 'approve_partial' }, 'approve-partial'),
+                        'default',
+                      )
+                    : null}
                   {actionBtn('Deny', 'deny', () => setDenyOpen(true), 'danger')}
                 </>
               ) : null}

@@ -18,6 +18,9 @@ export interface OrderDriver {
 
 export type OrderAction =
   | { action: 'approve'; internalNotes?: string }
+  // Approve a knowingly-short order (manager+): reserve what's available, the
+  // rest backorders at hand-over.
+  | { action: 'approve_partial' }
   | { action: 'deny'; reason: string }
   | { action: 'generate_pick_slip' }
   // Picking claim/lock (owner decisions, enforced server-side): a staffer must

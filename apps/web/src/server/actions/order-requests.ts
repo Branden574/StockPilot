@@ -240,6 +240,23 @@ export async function completePickingAction(
 
 const backorderExitSchema = z.object({ id: z.string().uuid() });
 
+export async function approveOrderPartialAction(
+  input: z.input<typeof backorderExitSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = backorderExitSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.approvePartial(parsed.data.id);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    await revalidateInventoryListForCurrentOrg();
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 export async function resumeFulfillmentAction(
   input: z.input<typeof backorderExitSchema>,
 ): Promise<ActionResult<void>> {

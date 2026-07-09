@@ -130,6 +130,34 @@ export default async function OrderDetailPage({
       (isAssignedDriver &&
         ['staged_for_delivery', 'in_transit'].includes(request.status)));
 
+  // Whether a normal (strict) approve would fall short — drives the "Approve
+  // partial" offer next to "Approve". Only meaningful at pending_approval for a
+  // manager, so the extra reservations read is paid there only. available =
+  // on_hand − Σ(active reservations); this order holds none yet at this status.
+  let isShortStock = false;
+  if (request.status === 'pending_approval' && canApprove && lines.length > 0) {
+    const itemIds = lines
+      .map((l) => l.item?.id)
+      .filter((x): x is string => Boolean(x));
+    if (itemIds.length > 0) {
+      const supabase = await createClient();
+      const { data: resvRows } = await supabase
+        .from('stock_reservations')
+        .select('item_id, quantity')
+        .in('item_id', itemIds)
+        .is('released_at', null);
+      const reservedByItem = new Map<string, number>();
+      for (const r of (resvRows ?? []) as { item_id: string; quantity: number }[]) {
+        reservedByItem.set(r.item_id, (reservedByItem.get(r.item_id) ?? 0) + Number(r.quantity || 0));
+      }
+      isShortStock = lines.some((l) => {
+        const onHand = Number(l.item?.quantity_on_hand ?? 0);
+        const reserved = reservedByItem.get(l.item?.id ?? '') ?? 0;
+        return Number(l.quantity_requested) > Math.max(0, onHand - reserved);
+      });
+    }
+  }
+
   // Live tracking: the assigned driver can stream location only while in transit.
   const showLiveTrackingShare =
     isAssignedDriver &&
@@ -474,6 +502,7 @@ export default async function OrderDetailPage({
             // none of the manager-only controls.
             <ManagerActionsPanel
               canApprove={canApprove}
+              isShortStock={isShortStock}
               orderId={id}
               status={request.status}
               internalNotes={request.internal_notes}

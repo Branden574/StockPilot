@@ -1002,6 +1002,45 @@ export class OrderRequestsService {
     return row;
   }
 
+  /**
+   * Approve a knowingly-short order: reserve what's available now and let the
+   * unreservable remainder backorder at hand-over. The permissive sibling of
+   * approve() — the strict path still refuses short orders. Manager+ only.
+   */
+  async approvePartial(id: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
+    assertPermission(this.ctx, 'orders:approve');
+    await this.requireWarehouseAccess(id, 'write');
+    const { data, error } = await this.ctx.supabase.rpc('approve_partial', { p_id: id });
+    if (error) {
+      const msg = error.message ?? '';
+      if (msg.includes('order_request_not_found'))
+        throw new ServiceError('not_found', 'Order request not found');
+      if (msg.includes('forbidden'))
+        throw new ServiceError('forbidden', 'Only managers can approve requests');
+      if (msg.includes('invalid_status_transition'))
+        throw new ServiceError('validation_error', 'This request is no longer pending approval');
+      if (msg.includes('item_warehouse_mismatch'))
+        throw new ServiceError(
+          'validation_error',
+          'A line references an item from a different warehouse than the request.',
+        );
+      throw new ServiceError('internal_error', msg);
+    }
+    const row = data as OrderRequestRow;
+    await audit(
+      { event: 'order_request.approved', entityType: 'order_request', entityId: id },
+      this.ctx,
+    );
+    void this.notifyEmail(row, 'approved');
+    void dispatchEvent(this.ctx.organizationId, 'order.approved', {
+      id,
+      orderNumber: id.slice(0, 8).toUpperCase(),
+      approvedBy: this.ctx.userId,
+    });
+    return row;
+  }
+
   async generatePickSlip(id: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:approve');
