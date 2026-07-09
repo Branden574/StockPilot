@@ -317,6 +317,18 @@ export async function setOrgDeletionPassphraseAction(
   } catch {
     return err('internal_error', 'Server is missing SUPABASE_SERVICE_ROLE_KEY.');
   }
+  // Fail-closed brute-force guard: the currentPassphrase check below is a secret
+  // oracle, so throttle rotate attempts per-actor exactly like the delete path —
+  // otherwise a hijacked session could hammer guesses at the current passphrase.
+  const rlRotate = await checkRateLimit(
+    `org-passphrase-rotate:${gate.session.userId}`,
+    5,
+    60_000,
+    'closed',
+  );
+  if (!rlRotate.allowed) {
+    return err('rate_limited', 'Too many attempts — wait a minute and try again.');
+  }
   // If a passphrase already exists, the caller must prove they know it before
   // rotating it — a stolen session cannot silently swap it out.
   const { data: existing } = await admin
