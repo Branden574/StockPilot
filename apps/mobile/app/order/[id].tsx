@@ -863,9 +863,39 @@ export default function OrderDetail() {
                     void act({ action: 'mark_in_transit' }, 'transit'),
                   )
                 : null}
-              {order.status === 'staged_for_pickup' || order.status === 'in_transit'
-                ? actionBtn('Collect signature', 'sig', collectSignature)
-                : null}
+              {order.status === 'staged_for_pickup' || order.status === 'in_transit' ? (
+                <>
+                  {actionBtn('Collect signature', 'sig', collectSignature)}
+                  {actionBtn(
+                    'Physical signature',
+                    'physicalsig',
+                    () =>
+                      Alert.prompt(
+                        'Physical signature',
+                        "Customer signed on paper? Enter the signer's name — this completes the hand-over exactly like the digital sign page (backordering any still-owed items).",
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Record',
+                            onPress: (name?: string) => {
+                              const signer = (name ?? '').trim();
+                              if (!signer) {
+                                Alert.alert('Name required', 'Enter who signed the paper copy.');
+                                return;
+                              }
+                              void act(
+                                { action: 'confirm_physical_signature', signerName: signer },
+                                'physicalsig',
+                              );
+                            },
+                          },
+                        ],
+                        'plain-text',
+                      ),
+                    'default',
+                  )}
+                </>
+              ) : null}
               {order.status === 'backordered' ? (
                 <>
                   {order.hasFulfillableStock ? (

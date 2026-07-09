@@ -7,8 +7,12 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import {
+  notifyRequesterBackordered,
+  notifyRequesterBackorderShipped,
+  sendBackorderEmail,
+} from '@/server/lib/order-handover-notify';
 import { dispatchEvent } from '@/server/services/integration-events';
-import { createNotification } from '@/server/services/notifications';
 
 // Why a route handler instead of a Server Action: the public sign page
 // renders <SignatureCollector /> only while `signed_at IS NULL`. A
@@ -399,127 +403,6 @@ async function sendReturnLinkEmail(args: {
     text:
       `Hi ${firstName},\n\nYour order is complete. If you need to send anything back, ` +
       `start a return request here:\n${url}\n\nThe warehouse team will review it.`,
-  });
-}
-
-/**
- * Requester notification for a PARTIAL hand-over (order → backordered). In-app +
- * push for internal requesters, transactional email for anyone with an address.
- * Best-effort — swallows all errors so a notification failure never fails the
- * fulfillment. Backorder Phase 3.
- */
-async function notifyRequesterBackordered(args: {
-  organizationId: string;
-  orderId: string;
-  requesterUserId: string | null;
-  requesterEmail: string | null;
-  requesterName: string | null;
-  appUrl: string;
-  provided: number;
-  requested: number;
-  owed: number;
-  emailOptedOut: boolean;
-}): Promise<void> {
-  const orderNo = args.orderId.slice(0, 8).toUpperCase();
-  const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
-  const title = `Order #${orderNo}: partially fulfilled`;
-  const body = `${args.provided} of ${args.requested} provided — ${args.owed} backordered. We'll ship the rest when stock arrives.`;
-  try {
-    if (args.requesterUserId) {
-      await createNotification({
-        organizationId: args.organizationId,
-        userId: args.requesterUserId,
-        type: 'order_backordered',
-        title,
-        body,
-        link,
-        metadata: {
-          orderId: args.orderId,
-          provided: args.provided,
-          requested: args.requested,
-          owed: args.owed,
-        },
-      });
-    }
-    if (args.requesterEmail && !args.emailOptedOut) {
-      await sendBackorderEmail({
-        to: args.requesterEmail,
-        recipientName: args.requesterName,
-        subject: title,
-        message:
-          `${args.provided} of ${args.requested} items from your order have been fulfilled. ` +
-          `The remaining ${args.owed} are backordered and will ship as soon as they're back in stock.`,
-      });
-    }
-  } catch {
-    /* best-effort — never fail the fulfillment on a notification error */
-  }
-}
-
-/**
- * Requester notification when a previously-backordered order finally completes
- * (its remainder shipped). Backorder Phase 3. Best-effort.
- */
-async function notifyRequesterBackorderShipped(args: {
-  organizationId: string;
-  orderId: string;
-  requesterUserId: string | null;
-  requesterEmail: string | null;
-  requesterName: string | null;
-  appUrl: string;
-  emailOptedOut: boolean;
-}): Promise<void> {
-  const orderNo = args.orderId.slice(0, 8).toUpperCase();
-  const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
-  const title = `Order #${orderNo}: backordered items shipped`;
-  const body = 'The remaining items on your order have shipped — it is now fully fulfilled.';
-  try {
-    if (args.requesterUserId) {
-      await createNotification({
-        organizationId: args.organizationId,
-        userId: args.requesterUserId,
-        type: 'order_backorder_shipped',
-        title,
-        body,
-        link,
-        metadata: { orderId: args.orderId },
-      });
-    }
-    if (args.requesterEmail && !args.emailOptedOut) {
-      await sendBackorderEmail({
-        to: args.requesterEmail,
-        recipientName: args.requesterName,
-        subject: title,
-        message:
-          'Good news — the backordered items on your order have now shipped, ' +
-          'so your order is complete.',
-      });
-    }
-  } catch {
-    /* best-effort */
-  }
-}
-
-/** Bare transactional email for the two backorder notices (no template coupling). */
-async function sendBackorderEmail(args: {
-  to: string;
-  recipientName: string | null;
-  subject: string;
-  message: string;
-}): Promise<void> {
-  const firstName = args.recipientName?.split(' ')[0] ?? 'there';
-  const safeName = escapeHtml(firstName);
-  const safeMsg = escapeHtml(args.message);
-  await sendEmail({
-    to: args.to,
-    subject: args.subject,
-    html:
-      `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:480px;margin:0 auto;color:#111">` +
-      `<p>Hi ${safeName},</p>` +
-      `<p>${safeMsg}</p>` +
-      `<p style="color:#666;font-size:12px">You're receiving this because you placed an order with us.</p>` +
-      `</div>`,
-    text: `Hi ${firstName},\n\n${args.message}`,
   });
 }
 

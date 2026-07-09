@@ -5,6 +5,10 @@ import { isManagerOrAbove } from '@stockpilot/core';
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
 import { createAdminClient } from '@/lib/supabase/admin';
+import {
+  notifyRequesterBackordered,
+  notifyRequesterBackorderShipped,
+} from '@/server/lib/order-handover-notify';
 
 import { audit } from './audit';
 import { createNotification } from './notifications';
@@ -1227,6 +1231,148 @@ export class OrderRequestsService {
       orderNumber: id.slice(0, 8).toUpperCase(),
       closedPartial: true,
     });
+    void broadcastOrderChanged(this.ctx.organizationId, id);
+    return row;
+  }
+
+  /**
+   * Record a PHYSICAL (paper) signature at hand-over — the in-app sibling of
+   * the public sign page. The confirm_physical_signature RPC (0248) enforces
+   * authorization (manager+ OR the assigned delivery driver), the unsigned +
+   * hand-over-status guards, and runs the exact same partial-fulfillment fork
+   * as the digital path (owed > 0 → backordered, else completed). This method
+   * then fires the same requester notifications/events the sign route does,
+   * so the customer experience is identical however the pen met paper.
+   * NOTE: unlike the digital path, no self-service return link is minted —
+   * a paper hand-over is in person; returns can be started from the dashboard.
+   */
+  async confirmPhysicalSignature(id: string, signerName: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
+    // No blanket permission assert: the RPC's own gate admits the assigned
+    // delivery driver, who may legitimately lack orders:approve.
+    const trimmed = signerName.trim();
+    if (!trimmed) throw new ServiceError('validation_error', 'Signer name is required.');
+
+    // Prior-shipped total BEFORE the hand-over — >0 means this completion is a
+    // backorder remainder arriving, which gets its own requester notice.
+    const { data: priorLines } = await this.ctx.supabase
+      .from('order_request_lines')
+      .select('quantity_fulfilled')
+      .eq('order_request_id', id);
+    const priorFulfilled = ((priorLines ?? []) as { quantity_fulfilled: number | null }[]).reduce(
+      (s, l) => s + (Number(l.quantity_fulfilled) || 0),
+      0,
+    );
+
+    const { data, error } = await this.ctx.supabase.rpc('confirm_physical_signature', {
+      p_id: id,
+      p_signer_name: trimmed,
+    });
+    if (error) {
+      const msg = error.message ?? '';
+      if (msg.includes('order_request_not_found'))
+        throw new ServiceError('not_found', 'Order not found.');
+      if (msg.includes('forbidden'))
+        throw new ServiceError(
+          'forbidden',
+          'Only a manager or the assigned driver can record a physical signature.',
+        );
+      if (msg.includes('already_signed'))
+        throw new ServiceError('conflict', 'This order already has a signature.');
+      if (msg.includes('invalid_status_transition'))
+        throw new ServiceError(
+          'validation_error',
+          'A signature can only be recorded once the order is staged or in transit.',
+        );
+      if (msg.includes('signer_name_required'))
+        throw new ServiceError('validation_error', 'Signer name is required.');
+      throw new ServiceError('internal_error', 'Could not record the signature.');
+    }
+    const row = data as OrderRequestRow;
+
+    await audit(
+      {
+        event: 'order_request.status_changed',
+        entityType: 'order_request',
+        entityId: id,
+        extra: { signatureMethod: 'physical', signerName: trimmed, status: row.status },
+      },
+      this.ctx,
+    );
+
+    // Post-hand-over notifications — identical outcomes to the sign route.
+    try {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com';
+      // Requester opt-out read needs the service client: the caller's RLS
+      // can't see another user's notification_preferences row.
+      let emailOptedOut = false;
+      if (row.requester_user_id && row.requester_email) {
+        const admin = createAdminClient();
+        const { data: prefRow } = await admin
+          .from('notification_preferences')
+          .select('email_order_completed')
+          .eq('user_id', row.requester_user_id)
+          .maybeSingle();
+        emailOptedOut = !(
+          (prefRow as { email_order_completed?: boolean } | null)?.email_order_completed ?? true
+        );
+      }
+
+      const { data: aggLines } = await this.ctx.supabase
+        .from('order_request_lines')
+        .select('quantity_requested, quantity_fulfilled')
+        .eq('order_request_id', id);
+      const aggRows = (aggLines ?? []) as {
+        quantity_requested: number | null;
+        quantity_fulfilled: number | null;
+      }[];
+      const totalRequested = aggRows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
+      const totalFulfilled = aggRows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
+
+      if (row.status === 'backordered') {
+        await notifyRequesterBackordered({
+          organizationId: this.ctx.organizationId,
+          orderId: id,
+          requesterUserId: row.requester_user_id ?? null,
+          requesterEmail: row.requester_email ?? null,
+          requesterName: row.requester_name ?? null,
+          appUrl,
+          provided: totalFulfilled,
+          requested: totalRequested,
+          owed: Math.max(0, totalRequested - totalFulfilled),
+          emailOptedOut,
+        });
+        void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
+          id,
+          orderNumber: id.slice(0, 8).toUpperCase(),
+          status: 'backordered',
+        });
+      } else if (row.status === 'completed') {
+        if (priorFulfilled > 0) {
+          await notifyRequesterBackorderShipped({
+            organizationId: this.ctx.organizationId,
+            orderId: id,
+            requesterUserId: row.requester_user_id ?? null,
+            requesterEmail: row.requester_email ?? null,
+            requesterName: row.requester_name ?? null,
+            appUrl,
+            emailOptedOut,
+          });
+        }
+        // Completion receipt to the requester (notifyEmail honors prefs +
+        // public-link tokens itself).
+        void this.notifyEmail(row, 'completed');
+        void dispatchEvent(this.ctx.organizationId, 'order.completed', {
+          id,
+          orderNumber: id.slice(0, 8).toUpperCase(),
+          signerName: trimmed,
+          signatureMethod: 'physical',
+        });
+      }
+    } catch {
+      /* notifications are best-effort — the signature is recorded regardless */
+    }
+
     void broadcastOrderChanged(this.ctx.organizationId, id);
     return row;
   }

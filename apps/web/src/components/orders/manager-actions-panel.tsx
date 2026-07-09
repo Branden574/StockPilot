@@ -47,6 +47,7 @@ import {
   approveOrderRequestAction,
   claimPickingAction,
   closePartialAction,
+  confirmPhysicalSignatureAction,
   completePickingAction,
   denyOrderRequestAction,
   generatePackingSlipsAction,
@@ -121,6 +122,7 @@ type BusyKey =
   | 'mark-in-transit'
   | 'resume-fulfillment'
   | 'close-partial'
+  | 'physical-signature'
   | 'notes'
   | null;
 
@@ -210,6 +212,8 @@ export function ManagerActionsPanel({
   // can't be styled, and doesn't handle cancel cleanly. The dialog
   // also captures focus so screen readers announce the action.
   const [denyOpen, setDenyOpen] = React.useState(false);
+  const [physicalSigOpen, setPhysicalSigOpen] = React.useState(false);
+  const [physicalSignerName, setPhysicalSignerName] = React.useState('');
   const [denyReason, setDenyReason] = React.useState('');
   const [closePartialOpen, setClosePartialOpen] = React.useState(false);
 
@@ -374,6 +378,21 @@ export function ManagerActionsPanel({
     }
     setClosePartialOpen(false);
     toast.success('Order closed as delivered-partial.');
+    router.refresh();
+  }
+
+  async function confirmPhysicalSignature() {
+    const signer = physicalSignerName.trim();
+    if (!signer) return;
+    setBusy('physical-signature');
+    const res = await confirmPhysicalSignatureAction({ id: orderId, signerName: signer });
+    setBusy(null);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    setPhysicalSigOpen(false);
+    toast.success('Physical signature recorded — order hand-over complete.');
     router.refresh();
   }
 
@@ -690,14 +709,27 @@ export function ManagerActionsPanel({
           )}
 
           {(status === 'staged_for_pickup' || status === 'in_transit') && (
-            <Button
-              variant="gradient"
-              onClick={collectSignature}
-              disabled={busy !== null || !signatureToken}
-            >
-              <ClipboardCheck className="h-3.5 w-3.5" />
-              Collect signature
-            </Button>
+            <>
+              <Button
+                variant="gradient"
+                onClick={collectSignature}
+                disabled={busy !== null || !signatureToken}
+              >
+                <ClipboardCheck className="h-3.5 w-3.5" />
+                Collect signature
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setPhysicalSignerName('');
+                  setPhysicalSigOpen(true);
+                }}
+                disabled={busy !== null}
+              >
+                <PenLine className="h-3.5 w-3.5" />
+                Physical signature
+              </Button>
+            </>
           )}
 
           {status === 'backordered' && canApprove && (
@@ -820,6 +852,61 @@ export function ManagerActionsPanel({
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : null}
               Deny request
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Physical (paper) signature — record who signed, no image captured. */}
+      <Dialog
+        open={physicalSigOpen}
+        onOpenChange={(v) => {
+          if (busy === 'physical-signature') return;
+          setPhysicalSigOpen(v);
+          if (!v) setPhysicalSignerName('');
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Record a physical signature</DialogTitle>
+            <DialogDescription>
+              Use this when the customer signed on paper. It completes the
+              hand-over exactly like the digital sign page (including
+              backordering any still-owed items) and records the signature as
+              physical — no image is stored.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="physical-signer">Signer&apos;s name</Label>
+            <Textarea
+              id="physical-signer"
+              value={physicalSignerName}
+              onChange={(e) => setPhysicalSignerName(e.target.value)}
+              rows={1}
+              maxLength={120}
+              placeholder="Who signed the paper copy"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setPhysicalSigOpen(false)}
+              disabled={busy === 'physical-signature'}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="gradient"
+              onClick={confirmPhysicalSignature}
+              disabled={busy === 'physical-signature' || !physicalSignerName.trim()}
+            >
+              {busy === 'physical-signature' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <PenLine className="h-3.5 w-3.5" />
+              )}
+              Record signature
             </Button>
           </DialogFooter>
         </DialogContent>

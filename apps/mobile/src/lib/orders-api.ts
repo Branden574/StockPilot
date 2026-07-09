@@ -18,6 +18,9 @@ export interface OrderDriver {
 
 export type OrderAction =
   | { action: 'approve'; internalNotes?: string }
+  // Paper signature at hand-over (manager+ or assigned driver): completes the
+  // order (or backorders the remainder) recording signature_method='physical'.
+  | { action: 'confirm_physical_signature'; signerName: string }
   // Approve a knowingly-short order (manager+): reserve what's available, the
   // rest backorders at hand-over.
   | { action: 'approve_partial' }

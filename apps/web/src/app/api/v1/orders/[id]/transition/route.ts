@@ -36,6 +36,7 @@ const bodySchema = z.object({
     'mark_in_transit',
     'resume_fulfillment',
     'close_partial',
+    'confirm_physical_signature',
     'cancel',
   ]),
   reason: z.string().max(500).optional(),
@@ -43,6 +44,8 @@ const bodySchema = z.object({
   deliveryUserId: z.string().uuid().optional(),
   /** Required for assign_picking (the member to assign as picker). */
   pickerUserId: z.string().uuid().optional(),
+  /** Required for confirm_physical_signature (who signed the paper). */
+  signerName: z.string().min(1).max(120).optional(),
   internalNotes: z.string().max(2000).optional(),
 });
 
@@ -141,6 +144,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       case 'close_partial':
         order = await svc.closePartial(id);
         break;
+      case 'confirm_physical_signature': {
+        const signer = a.signerName?.trim();
+        if (!signer) {
+          return NextResponse.json(
+            { error: 'validation_error', message: 'signerName is required' },
+            { status: 400 },
+          );
+        }
+        order = await svc.confirmPhysicalSignature(id, signer);
+        break;
+      }
       case 'cancel':
         order = await svc.cancel(id, a.reason?.trim() || null);
         break;

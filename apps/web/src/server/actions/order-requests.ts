@@ -240,6 +240,32 @@ export async function completePickingAction(
 
 const backorderExitSchema = z.object({ id: z.string().uuid() });
 
+const physicalSignatureSchema = z.object({
+  id: z.string().uuid(),
+  signerName: z.string().trim().min(1).max(120),
+});
+
+/**
+ * Record a paper signature at hand-over (manager+ or the assigned driver —
+ * the RPC enforces it). Runs the same completed/backordered fork as the
+ * digital sign page.
+ */
+export async function confirmPhysicalSignatureAction(
+  input: z.input<typeof physicalSignatureSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = physicalSignatureSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Signer name is required');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    await svc.confirmPhysicalSignature(parsed.data.id, parsed.data.signerName);
+    revalidatePath('/dashboard/orders');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 export async function approveOrderPartialAction(
   input: z.input<typeof backorderExitSchema>,
 ): Promise<ActionResult<void>> {
