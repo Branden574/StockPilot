@@ -32,8 +32,10 @@ function safeRedirectPath(raw: string | null): string {
   return raw;
 }
 
-/** Only the email types we actually send through this route. */
-const ALLOWED_TYPES: ReadonlySet<EmailOtpType> = new Set(['recovery', 'invite']);
+/** Only the email types we actually send through this route. 'magiclink' is
+ *  the B2B portal invite fallback for EXISTING auth users (generateLink rejects
+ *  type 'invite' for an already-registered email — see CustomersService). */
+const ALLOWED_TYPES: ReadonlySet<EmailOtpType> = new Set(['recovery', 'invite', 'magiclink']);
 
 function failureRedirect(origin: string, type: string | null): NextResponse {
   // Expired/used/invalid link. Recovery users get sent back to the reset
@@ -56,8 +58,14 @@ export async function GET(request: NextRequest) {
     return failureRedirect(origin, type);
   }
 
-  const heading = type === 'recovery' ? 'Reset your password' : 'Accept your invite';
-  const button = type === 'recovery' ? 'Continue to set a new password' : 'Continue to StockPilot';
+  const heading =
+    type === 'recovery'
+      ? 'Reset your password'
+      : type === 'magiclink'
+        ? 'Sign in'
+        : 'Accept your invite';
+  const button =
+    type === 'recovery' ? 'Continue to set a new password' : 'Continue to StockPilot';
   // Plain server-rendered HTML on purpose: zero JS, works in every client,
   // and the token is only ever consumed by the human pressing the button.
   const html = `<!doctype html>

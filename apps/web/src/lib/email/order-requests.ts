@@ -248,6 +248,11 @@ function buildTrackUrl(
   recipientEmail: string,
   publicRequestToken: string | null,
 ): string {
+  // B2B portal customers are authenticated but have NO dashboard access — send
+  // them to their portal, where their order history lives.
+  if (row.source === 'portal') {
+    return `${appUrl}/portal`;
+  }
   if (row.requester_user_id) {
     return `${appUrl}/dashboard/orders/${row.id}`;
   }

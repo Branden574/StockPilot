@@ -2,9 +2,32 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { planAllowsB2bPortal, type OrgBillingState } from '@stockpilot/core';
+
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { reportError } from '@/lib/error-reporter';
+import { dispatchEvent } from '@/server/services/integration-events';
+
+/**
+ * Paginate an admin-client select to exhaustion in 1000-row windows. Portal
+ * reads run on the service-role client (portal users have no RLS grants), so
+ * they don't get fetchAllRows' RLS context — this is the same range-loop with
+ * an explicit 1000 cap per PostgREST's max_rows.
+ */
+async function fetchAllAdmin<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown }>,
+): Promise<T[]> {
+  const out: T[] = [];
+  const SIZE = 1000;
+  for (let from = 0; ; from += SIZE) {
+    const { data } = await page(from, from + SIZE - 1);
+    const rows = (data ?? []) as T[];
+    out.push(...rows);
+    if (rows.length < SIZE) break;
+  }
+  return out;
+}
 
 /**
  * B2B customer portal — the CUSTOMER-facing read/write surface (P2/P3).
@@ -59,32 +82,75 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
   if (!user) return null;
 
   const admin = createAdminClient();
-  const { data: mapping } = await admin
+  const { data: mappings } = await admin
     .from('customer_users')
-    .select('customer_id, email, accepted_at, customer:customers(id, name, status, organization_id, price_list_id)')
-    .eq('user_id', user.id)
-    .order('invited_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!mapping) return null;
+    .select(
+      'customer_id, email, accepted_at, invited_at, customer:customers(id, name, status, organization_id, price_list_id)',
+    )
+    .eq('user_id', user.id);
 
-  const customerRaw = (mapping as Record<string, unknown>).customer;
-  const customer = (Array.isArray(customerRaw) ? customerRaw[0] : customerRaw) as {
+  type Cust = {
     id: string;
     name: string;
     status: string;
     organization_id: string;
     price_list_id: string | null;
-  } | null;
-  if (!customer || customer.status !== 'active') return null;
+  };
+  const candidates = ((mappings ?? []) as Array<Record<string, unknown>>)
+    .map((m) => {
+      const cRaw = m.customer;
+      const c = (Array.isArray(cRaw) ? cRaw[0] : cRaw) as Cust | null;
+      return c && c.status === 'active'
+        ? {
+            email: m.email as string,
+            accepted_at: (m.accepted_at as string | null) ?? null,
+            invited_at: (m.invited_at as string) ?? '',
+            customer: c,
+          }
+        : null;
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+  if (candidates.length === 0) return null;
 
-  const { data: org } = await admin
-    .from('organizations')
-    .select('name, logo_url')
-    .eq('id', customer.organization_id)
-    .maybeSingle();
+  // SECURITY (cross-org hijack, caught in review): an ACCEPTED mapping always
+  // wins over a merely-invited one, so a fresh, unconsented invite from another
+  // org can NEVER shadow the customer's existing portal. Among equal
+  // accept-status, newest invite wins (lets a legitimate re-assignment take
+  // effect once the user actually returns).
+  candidates.sort((a, b) => {
+    const aAcc = a.accepted_at ? 1 : 0;
+    const bAcc = b.accepted_at ? 1 : 0;
+    if (aAcc !== bAcc) return bAcc - aAcc;
+    return String(b.invited_at).localeCompare(String(a.invited_at));
+  });
+  const chosen = candidates[0]!;
+  const customer = chosen.customer;
 
-  if (!(mapping as { accepted_at: string | null }).accepted_at) {
+  // Module + plan gate: disabling b2b_portal OR downgrading below Business
+  // shuts the customer portal off, mirroring the org-side gate. On the admin
+  // client (portal users have no RLS grants), scoped to the customer's org.
+  const [{ data: moduleRow }, { data: org }] = await Promise.all([
+    admin
+      .from('organization_modules')
+      .select('module_id')
+      .eq('organization_id', customer.organization_id)
+      .eq('module_id', 'b2b_portal')
+      .eq('enabled', true)
+      .maybeSingle(),
+    admin
+      .from('organizations')
+      .select(
+        'name, logo_url, plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
+      )
+      .eq('id', customer.organization_id)
+      .maybeSingle(),
+  ]);
+  if (!moduleRow) return null;
+  if (!planAllowsB2bPortal(((org as OrgBillingState | null) ?? { plan: null }) as OrgBillingState)) {
+    return null;
+  }
+
+  if (!chosen.accepted_at) {
     await admin
       .from('customer_users')
       .update({ accepted_at: new Date().toISOString() })
@@ -95,7 +161,7 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
 
   return {
     userId: user.id,
-    email: (mapping as { email: string }).email,
+    email: chosen.email,
     customerId: customer.id,
     customerName: customer.name,
     organizationId: customer.organization_id,
@@ -114,21 +180,29 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
   if (!ctx.priceListId) return [];
   const admin = createAdminClient();
 
-  const [{ data: catalogRows }, { data: priceRows }] = await Promise.all([
-    admin.from('customer_catalog').select('item_id').eq('customer_id', ctx.customerId).limit(1000),
-    admin
-      .from('price_list_items')
-      .select('item_id, unit_price')
-      .eq('price_list_id', ctx.priceListId)
-      .limit(1000),
+  // Paginate both to exhaustion — checkout re-validates against this exact set,
+  // so a silent 1000-row cap would let a visible item fail at checkout (recurring
+  // pattern: never leave an undisclosed cap on a set another path re-checks).
+  const [catalogRows, priceRows] = await Promise.all([
+    fetchAllAdmin<{ item_id: string }>((from, to) =>
+      admin
+        .from('customer_catalog')
+        .select('item_id')
+        .eq('customer_id', ctx.customerId)
+        .order('item_id', { ascending: true })
+        .range(from, to),
+    ),
+    fetchAllAdmin<{ item_id: string; unit_price: number }>((from, to) =>
+      admin
+        .from('price_list_items')
+        .select('item_id, unit_price')
+        .eq('price_list_id', ctx.priceListId as string)
+        .order('item_id', { ascending: true })
+        .range(from, to),
+    ),
   ]);
-  const allowed = new Set(((catalogRows ?? []) as Array<{ item_id: string }>).map((r) => r.item_id));
-  const prices = new Map(
-    ((priceRows ?? []) as Array<{ item_id: string; unit_price: number }>).map((r) => [
-      r.item_id,
-      Number(r.unit_price) || 0,
-    ]),
-  );
+  const allowed = new Set(catalogRows.map((r) => r.item_id));
+  const prices = new Map(priceRows.map((r) => [r.item_id, Number(r.unit_price) || 0]));
   const ids = [...allowed].filter((id) => prices.has(id));
   if (ids.length === 0) return [];
 
@@ -182,18 +256,34 @@ export async function portalSubmitOrder(
   }
 
   const admin = createAdminClient();
-  // Portal items may span warehouses; the order header needs ONE. Use the
-  // first line's item warehouse (v1 — orgs overwhelmingly run one warehouse
-  // per customer relationship).
-  const firstLine = parsed.lines[0];
-  if (!firstLine) throw new Error('Your cart is empty.');
-  const { data: firstItem } = await admin
+
+  // Resolve item cost + warehouse for every line (org-scoped). The order header
+  // needs ONE warehouse and the approve pipeline rejects mixed-warehouse lines
+  // (item_warehouse_mismatch), so a cart spanning warehouses is refused up
+  // front with a clear message rather than creating an un-approvable order.
+  const itemIds = [...new Set(parsed.lines.map((l) => l.itemId))];
+  const { data: itemRows } = await admin
     .from('inventory_items')
-    .select('warehouse_id')
-    .eq('id', firstLine.itemId)
-    .maybeSingle();
-  const warehouseId = (firstItem as { warehouse_id: string | null } | null)?.warehouse_id;
-  if (!warehouseId) throw new Error('Could not resolve a warehouse for this order.');
+    .select('id, warehouse_id, unit_cost')
+    .eq('organization_id', ctx.organizationId)
+    .in('id', itemIds);
+  const itemMeta = new Map(
+    ((itemRows ?? []) as Array<{ id: string; warehouse_id: string | null; unit_cost: number | null }>).map(
+      (r) => [r.id, r],
+    ),
+  );
+  const warehouses = new Set<string>();
+  for (const id of itemIds) {
+    const wh = itemMeta.get(id)?.warehouse_id;
+    if (wh) warehouses.add(wh);
+  }
+  if (warehouses.size === 0) throw new Error('Could not resolve a warehouse for this order.');
+  if (warehouses.size > 1) {
+    throw new Error(
+      'These items ship from different warehouses — please place a separate order per warehouse.',
+    );
+  }
+  const warehouseId = [...warehouses][0]!;
 
   const { data: header, error: headerErr } = await admin
     .from('order_requests')
@@ -212,14 +302,21 @@ export async function portalSubmitOrder(
     .select('id')
     .single();
   if (headerErr || !header) {
-    throw new Error(headerErr?.message ?? 'Order could not be submitted.');
+    void reportError(new Error(headerErr?.message ?? 'header insert failed'), {
+      tag: 'portal.submit.header',
+    });
+    throw new Error('Order could not be submitted. Please try again.');
   }
 
+  // Accounting split: unit_cost_at_request = the item's COST (consistent with
+  // internal/public orders + the Sage/QBO return-valuation readers);
+  // unit_price_at_request = the customer's SELL price (portal history reads it).
   const linePayload = parsed.lines.map((l) => ({
     order_request_id: header.id as string,
     item_id: l.itemId,
     quantity_requested: l.quantity,
-    unit_cost_at_request: byId.get(l.itemId)?.unitPrice ?? 0,
+    unit_cost_at_request: Number(itemMeta.get(l.itemId)?.unit_cost) || 0,
+    unit_price_at_request: byId.get(l.itemId)?.unitPrice ?? 0,
   }));
   const { error: lineErr } = await admin.from('order_request_lines').insert(linePayload);
   if (lineErr) {
@@ -228,6 +325,14 @@ export async function portalSubmitOrder(
     void reportError(new Error(lineErr.message), { tag: 'portal.submit.lines' });
     throw new Error('Order could not be submitted. Please try again.');
   }
+
+  // Feed the org's integration/audit surfaces like any other new order.
+  void dispatchEvent(ctx.organizationId, 'order.created', {
+    id: header.id as string,
+    orderNumber: (header.id as string).slice(0, 8).toUpperCase(),
+    source: 'portal',
+    customerId: ctx.customerId,
+  });
 
   return { id: header.id as string };
 }
@@ -238,7 +343,7 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
   const { data } = await admin
     .from('order_requests')
     .select(
-      'id, status, created_at, lines:order_request_lines(item_id, quantity_requested, unit_cost_at_request, item:inventory_items(name))',
+      'id, status, created_at, lines:order_request_lines(item_id, quantity_requested, unit_price_at_request, item:inventory_items(name))',
     )
     .eq('organization_id', ctx.organizationId)
     .eq('customer_id', ctx.customerId)
@@ -253,7 +358,8 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
         itemId: l.item_id as string,
         name: itemObj?.name ?? 'Item',
         quantity: Number(l.quantity_requested) || 0,
-        unitPrice: Number(l.unit_cost_at_request) || 0,
+        // SELL price the customer paid — never the cost snapshot.
+        unitPrice: Number(l.unit_price_at_request) || 0,
       };
     });
     return {

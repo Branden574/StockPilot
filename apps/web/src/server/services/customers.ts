@@ -54,6 +54,18 @@ export class CustomersService {
     assertPermission(this.ctx, 'customers:manage');
   }
 
+  /** Reject a price_list_id that isn't this org's (the FK alone allows any). */
+  private async assertPriceListInOrg(priceListId: string | null | undefined): Promise<void> {
+    if (!priceListId) return;
+    const { data } = await this.ctx.supabase
+      .from('price_lists')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', priceListId)
+      .maybeSingle();
+    if (!data) throw new ServiceError('not_found', 'Price list not found.');
+  }
+
   /** Business+ effective-plan check for surface-growing mutations. */
   private async assertPlanAllows(): Promise<void> {
     const { data } = await this.ctx.supabase
@@ -111,6 +123,7 @@ export class CustomersService {
     this.gate();
     await this.assertPlanAllows();
     const parsed = customerSchema.parse(input);
+    await this.assertPriceListInOrg(parsed.priceListId ?? null);
     const { data, error } = await this.ctx.supabase
       .from('customers')
       .insert({
@@ -133,6 +146,7 @@ export class CustomersService {
   async update(id: string, input: CustomerInput): Promise<void> {
     this.gate();
     const parsed = customerSchema.parse(input);
+    await this.assertPriceListInOrg(parsed.priceListId ?? null);
     const { data, error } = await this.ctx.supabase
       .from('customers')
       .update({
