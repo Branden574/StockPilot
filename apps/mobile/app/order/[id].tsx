@@ -116,6 +116,13 @@ interface OrderHeader {
   isShortStock: boolean;
   /** Whether any still-owed line has available stock (gates "Resume fulfillment"). */
   hasFulfillableStock: boolean;
+  /** What's being ordered — name/sku/requested (+fulfilled once shipping starts). */
+  lines: Array<{
+    name: string;
+    sku: string | null;
+    requested: number;
+    fulfilled: number;
+  }>;
 }
 
 interface Attachment {
@@ -230,17 +237,19 @@ export default function OrderDetail() {
       .eq('organization_id', orgId)
       .eq('id', id)
       .maybeSingle();
-    // Line roll-ups for the backorder progress card (owed = requested −
-    // fulfilled). Kept as a light sum query — the screen doesn't render a
-    // per-line table.
+    // Order lines — both the per-line ITEMS list (a manager must SEE what's
+    // being ordered before approving) and the backorder roll-ups.
     const { data: lineRows } = await supabase
       .from('order_request_lines')
-      .select('item_id, quantity_requested, quantity_fulfilled')
+      .select(
+        'item_id, quantity_requested, quantity_fulfilled, item:inventory_items(name, sku)',
+      )
       .eq('order_request_id', id);
     const rows = (lineRows ?? []) as {
       item_id: string | null;
       quantity_requested: number | null;
       quantity_fulfilled: number | null;
+      item: { name: string | null; sku: string | null } | { name: string | null; sku: string | null }[] | null;
     }[];
     const totalRequested = rows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
     const totalFulfilled = rows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
@@ -325,6 +334,15 @@ export default function OrderDetail() {
         totalFulfilled,
         isShortStock,
         hasFulfillableStock,
+        lines: rows.map((l) => {
+          const itemObj = Array.isArray(l.item) ? l.item[0] : l.item;
+          return {
+            name: itemObj?.name ?? 'Unknown item',
+            sku: itemObj?.sku ?? null,
+            requested: Number(l.quantity_requested) || 0,
+            fulfilled: Number(l.quantity_fulfilled) || 0,
+          };
+        }),
       });
     }
     await loadAttachments();
@@ -745,6 +763,55 @@ export default function OrderDetail() {
                 />
               </View>
             </Card>
+          ) : null}
+
+          {order.lines.length > 0 ? (
+            <View style={{ gap: 10 }}>
+              <Eyebrow>
+                {`ITEMS · ${order.lines.length} LINE${order.lines.length === 1 ? '' : 'S'} · ${totalRequested} UNITS`}
+              </Eyebrow>
+              <Card padding={0}>
+                {order.lines.map((l, i) => (
+                  <View
+                    key={`${l.sku ?? l.name}-${i}`}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 12,
+                      paddingHorizontal: 14,
+                      paddingVertical: 12,
+                      borderTopWidth: i === 0 ? 0 : 1,
+                      borderTopColor: c.hair,
+                    }}
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Body size={14} color={c.ink} numberOfLines={2}>
+                        {l.name}
+                      </Body>
+                      {l.sku ? (
+                        <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+                          {l.sku}
+                        </Mono>
+                      ) : null}
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Mono size={13} color={c.ink}>
+                        ×{l.requested}
+                      </Mono>
+                      {l.fulfilled > 0 && l.fulfilled < l.requested ? (
+                        <Mono size={10.5} color="#b45309" style={{ marginTop: 2 }}>
+                          {l.fulfilled} provided · {l.requested - l.fulfilled} owed
+                        </Mono>
+                      ) : l.fulfilled >= l.requested && l.requested > 0 ? (
+                        <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
+                          fulfilled
+                        </Mono>
+                      ) : null}
+                    </View>
+                  </View>
+                ))}
+              </Card>
+            </View>
           ) : null}
 
           {isPickingPhase && order ? (
