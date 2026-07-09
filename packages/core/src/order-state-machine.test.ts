@@ -223,6 +223,37 @@ describe('availableOrderActions', () => {
       expect(a).toEqual(['print_pick_slip']);
     });
 
+    it('viewerCanPick=false (no pick permission or out-of-warehouse): view/print only, no Claim', () => {
+      // A viewer role, or a warehouse-scoped staffer viewing an out-of-scope
+      // order — the backend would reject the pick, so the UI must not offer it.
+      const staff = availableOrderActions({
+        ...picking,
+        assignedPickerId: null,
+        viewerUserId: 'u-staff',
+        viewerCanPick: false,
+      });
+      expect(staff).toEqual(['print_pick_slip']);
+      // Even a manager passed viewerCanPick=false (out-of-scope) is gated.
+      const mgr = availableOrderActions({
+        ...picking,
+        viewerRole: 'manager',
+        assignedPickerId: null,
+        viewerUserId: 'u-mgr',
+        viewerCanPick: false,
+      });
+      expect(mgr).toEqual(['print_pick_slip']);
+    });
+
+    it('viewerCanPick=true (default) preserves the normal claim/pick actions', () => {
+      const a = availableOrderActions({
+        ...picking,
+        assignedPickerId: null,
+        viewerUserId: 'u-staff',
+        viewerCanPick: true,
+      });
+      expect(a).toContain('claim_picking');
+    });
+
     it('UNCLAIMED + manager: can pick directly + reassign; no release (nothing to release)', () => {
       const a = availableOrderActions({
         ...picking,

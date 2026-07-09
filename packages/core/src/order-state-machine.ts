@@ -168,6 +168,17 @@ export interface AvailableActionsInput {
   viewerUserId: string;
   assignedPickerId: string | null;
   assignedDeliveryUserId: string | null;
+  /**
+   * Whether this viewer can actually perform pick mutations on THIS order —
+   * i.e. they hold the pick permission (items:update, or are manager+) AND have
+   * write access to the order's warehouse. The caller computes it (the state
+   * machine has no permission/warehouse knowledge). When false, the picking
+   * phase offers only view/print, never Claim/Pick/Complete/Release — so the UI
+   * never advertises an action the backend (which checks both) would reject.
+   * Optional + defaults to true so existing callers/tests that don't gate on it
+   * keep their prior behavior. Picking callers MUST pass it.
+   */
+  viewerCanPick?: boolean;
 }
 
 const MANAGER_OR_ABOVE: Role[] = ['owner', 'admin', 'manager'];
@@ -206,6 +217,11 @@ export function availableOrderActions(input: AvailableActionsInput): OrderAction
         input.assignedPickerId !== null && input.assignedPickerId === input.viewerUserId;
       // Anyone with order access can view/print the pick slip.
       actions.push('print_pick_slip');
+      // A viewer who can't actually pick this order (no pick permission, or no
+      // write access to its warehouse) gets view/print only — never a Claim/
+      // Pick/Complete/Release button the backend would reject. `viewerCanPick`
+      // defaults to true so non-picking callers are unaffected.
+      if (input.viewerCanPick === false) break;
       if (isManagerOrAbove) {
         // Full control: pick directly (override), assign/reassign, complete.
         actions.push('open_digital_pick', 'mark_picking_complete', 'reassign_picker', 'cancel');
