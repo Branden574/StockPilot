@@ -5,7 +5,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
-import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
 export const runtime = 'nodejs';
@@ -24,17 +24,21 @@ export const dynamic = 'force-dynamic';
  *
  * Body: { fromLocationId, toLocationId, quantity, notes? }
  *
- * Tenant guard: we verify the destination belongs to the caller's org and is a
- * real placement location (not staging/unplaced) before the move — mirrors
- * placeStockAction, the stricter of the two web paths. The source is org- and
- * stock-verified inside transfer_stock (mig 0201). Inline rack CREATION is
+ * Defense in depth (three independent org-scoping layers, none sufficient to
+ * bypass alone): (1) transfer_stock reads the item under the CALLER's RLS, so a
+ * foreign-org itemId is invisible → item_not_found; (2) the RPC asserts BOTH
+ * locations belong to the item's org (assert_location_in_org, mig 0201/0231);
+ * (3) this route additionally pins the destination to THIS session's org
+ * (ctx.organizationId) and rejects the staging/unplaced system buckets — which
+ * also gives a clean 400 instead of a generic RPC 500. Inline rack CREATION is
  * web-only for now; mobile picks an existing destination.
  */
 const bodySchema = z
   .object({
     fromLocationId: z.string().uuid(),
     toLocationId: z.string().uuid(),
-    quantity: z.coerce.number().positive(),
+    // `.finite()` rejects "Infinity"/"NaN" that coerce would otherwise pass.
+    quantity: z.coerce.number().positive().finite(),
     notes: z.string().max(2000).optional(),
   })
   .refine((v) => v.fromLocationId !== v.toLocationId, {
@@ -62,6 +66,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const { id } = await params;
+  if (!z.string().uuid().safeParse(id).success) {
+    return NextResponse.json(
+      { error: 'validation_error', message: 'Invalid item id.' },
+      { status: 400 },
+    );
+  }
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
@@ -72,10 +82,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const body = parsed.data;
 
   try {
-    // TENANT-ISOLATION GUARD: verify the destination is in the caller's org and
-    // is a real placement location. transfer_stock verifies the ITEM's org but
-    // not the referenced location's org (same class as the Phase 2a 0199 RLS
-    // finding), and you can't place stock INTO a system holding bucket.
+    // Fail-fast on authorization BEFORE probing any locations — a caller without
+    // stock:transfer shouldn't even learn whether a location exists. Throws
+    // ServiceError('forbidden') → 403; transferStock asserts it again (defense
+    // in depth).
+    assertPermission(ctx, 'stock:transfer');
+
+    // TENANT-ISOLATION GUARD: pin the destination to THIS session's org and
+    // reject the staging/unplaced system buckets. transfer_stock already asserts
+    // both locations belong to the item's org (assert_location_in_org, 0201/0231);
+    // this additionally ties the destination to ctx.organizationId (matters for a
+    // dual-org member) and yields a clean 400 rather than a generic RPC 500.
     const { data: dest } = await ctx.supabase
       .from('locations')
       .select('id, kind')
@@ -99,7 +116,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       );
     }
 
-    // Asserts 'stock:transfer' internally, then calls transfer_stock.
+    // Re-asserts 'stock:transfer' internally, then calls transfer_stock.
     const svc = new InventoryService(ctx);
     await svc.transferStock({
       itemId: id,
