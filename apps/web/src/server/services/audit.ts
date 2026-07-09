@@ -98,6 +98,9 @@ export type AuditEvent =
   // above so historical audit-log queries stay valid; new emissions use
   // this prefix.
   | 'order.pick_slip_generated'
+  | 'order.picking_claimed'
+  | 'order.picker_assigned'
+  | 'order.picking_released'
   | 'order.picking_complete'
   | 'order.packing_slip_generated'
   | 'order.staged_for_pickup'

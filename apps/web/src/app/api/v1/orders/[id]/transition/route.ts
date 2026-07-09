@@ -25,6 +25,9 @@ const bodySchema = z.object({
     'approve',
     'deny',
     'generate_pick_slip',
+    'claim_picking',
+    'assign_picking',
+    'release_picking',
     'complete_picking',
     'generate_packing_slips',
     'stage',
@@ -35,6 +38,8 @@ const bodySchema = z.object({
   reason: z.string().max(500).optional(),
   target: z.enum(['staged_for_pickup', 'staged_for_delivery']).optional(),
   deliveryUserId: z.string().uuid().optional(),
+  /** Required for assign_picking (the member to assign as picker). */
+  pickerUserId: z.string().uuid().optional(),
   internalNotes: z.string().max(2000).optional(),
 });
 
@@ -81,6 +86,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         break;
       case 'generate_pick_slip':
         order = await svc.generatePickSlip(id);
+        break;
+      case 'claim_picking':
+        order = await svc.claimPicking(id);
+        break;
+      case 'assign_picking':
+        if (!a.pickerUserId) {
+          return NextResponse.json(
+            { error: 'validation_error', message: 'A picker is required to assign.' },
+            { status: 400 },
+          );
+        }
+        order = await svc.assignPicking(id, a.pickerUserId);
+        break;
+      case 'release_picking':
+        order = await svc.releasePicking(id);
         break;
       case 'complete_picking':
         order = await svc.completePicking(id);

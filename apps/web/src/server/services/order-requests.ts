@@ -1069,6 +1069,11 @@ export class OrderRequestsService {
         throw new ServiceError('validation_error', 'Picked quantity exceeds requested.');
       if (msg.includes('order_request_line_not_found'))
         throw new ServiceError('not_found', 'Line not found.');
+      if (msg.includes('not_assigned_picker'))
+        throw new ServiceError(
+          'forbidden',
+          'This order is assigned to another picker. Claim it or ask a manager to reassign it.',
+        );
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Not allowed to pick on this order.');
       if (msg.includes('invalid_status_transition'))
@@ -1094,9 +1099,14 @@ export class OrderRequestsService {
         );
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'Order is no longer being picked.');
+      if (msg.includes('not_assigned_picker'))
+        throw new ServiceError(
+          'forbidden',
+          'Only the assigned picker or a manager can complete picking for this order.',
+        );
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Not allowed to complete picking on this order.');
-      throw new ServiceError('internal_error', msg);
+      throw new ServiceError('internal_error', 'Could not complete picking.');
     }
     const row = data as OrderRequestRow;
     await audit(
@@ -1104,6 +1114,106 @@ export class OrderRequestsService {
       this.ctx,
     );
     return row;
+  }
+
+  /**
+   * Claim an unassigned picking order for the current user — the race-safe
+   * self-assign. The claim_picking RPC does a locked, unassigned-only write, so
+   * two simultaneous claims cannot both win: the loser gets `conflict`.
+   */
+  async claimPicking(id: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
+    assertPermission(this.ctx, 'items:update');
+    await this.requireWarehouseAccess(id, 'write');
+    const { data, error } = await this.ctx.supabase.rpc('claim_picking', { p_order_id: id });
+    if (error) {
+      const msg = error.message ?? '';
+      if (msg.includes('already_claimed'))
+        throw new ServiceError('conflict', 'This order has already been claimed by someone else.');
+      if (msg.includes('invalid_status_transition'))
+        throw new ServiceError('validation_error', 'This order is not in a claimable picking state.');
+      if (msg.includes('order_request_not_found'))
+        throw new ServiceError('not_found', 'Order not found.');
+      if (msg.includes('forbidden'))
+        throw new ServiceError('forbidden', 'You do not have access to this order.');
+      throw new ServiceError('internal_error', 'Could not claim picking.');
+    }
+    await audit(
+      { event: 'order.picking_claimed', entityType: 'order_request', entityId: id },
+      this.ctx,
+    );
+    return data as OrderRequestRow;
+  }
+
+  /**
+   * Manager+ only: assign OR reassign the picker to a specific member. Pushes an
+   * assignment notification to the new picker (mirrors delivery assignment).
+   */
+  async assignPicking(id: string, pickerUserId: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
+    // Authorization (manager+) is enforced inside the RPC; keep the module gate
+    // here. A blanket permission assert would wrongly block a manager who lacks
+    // a specific granular permission but is manager-by-role.
+    await this.requireWarehouseAccess(id, 'write');
+    const { data, error } = await this.ctx.supabase.rpc('assign_picking', {
+      p_order_id: id,
+      p_user_id: pickerUserId,
+    });
+    if (error) {
+      const msg = error.message ?? '';
+      if (msg.includes('invalid_picker'))
+        throw new ServiceError('validation_error', 'That user is not an active member of this organization.');
+      if (msg.includes('invalid_status_transition'))
+        throw new ServiceError('validation_error', 'A picker can only be assigned while the order is being picked.');
+      if (msg.includes('order_request_not_found'))
+        throw new ServiceError('not_found', 'Order not found.');
+      if (msg.includes('forbidden'))
+        throw new ServiceError('forbidden', 'Only a manager can assign or reassign the picker.');
+      throw new ServiceError('internal_error', 'Could not assign the picker.');
+    }
+    const row = data as OrderRequestRow;
+    await audit(
+      {
+        event: 'order.picker_assigned',
+        entityType: 'order_request',
+        entityId: id,
+        extra: { assigned_picker_id: pickerUserId },
+      },
+      this.ctx,
+    );
+    // Notify the newly-assigned picker (push + bell), unless they assigned
+    // themselves.
+    if (pickerUserId !== this.ctx.userId) {
+      void this.notifyPickerAssignment(pickerUserId, id, row.requester_name);
+    }
+    return row;
+  }
+
+  /**
+   * Release a picking claim: the assigned picker (self-release) or a manager+.
+   * Authorization is enforced in the RPC. Picked quantities are preserved.
+   */
+  async releasePicking(id: string): Promise<OrderRequestRow> {
+    assertModuleEnabled(this.ctx, 'orders');
+    assertPermission(this.ctx, 'items:update');
+    await this.requireWarehouseAccess(id, 'write');
+    const { data, error } = await this.ctx.supabase.rpc('release_picking', { p_order_id: id });
+    if (error) {
+      const msg = error.message ?? '';
+      if (msg.includes('order_request_not_found'))
+        throw new ServiceError('not_found', 'Order not found.');
+      if (msg.includes('forbidden'))
+        throw new ServiceError(
+          'forbidden',
+          'Only the assigned picker or a manager can release this claim.',
+        );
+      throw new ServiceError('internal_error', 'Could not release the claim.');
+    }
+    await audit(
+      { event: 'order.picking_released', entityType: 'order_request', entityId: id },
+      this.ctx,
+    );
+    return data as OrderRequestRow;
   }
 
   async generatePackingSlips(id: string): Promise<OrderRequestRow> {
@@ -1752,6 +1862,43 @@ export class OrderRequestsService {
       });
     } catch (e) {
       console.warn('[order-requests] assignment notification failed', e);
+    }
+  }
+
+  /**
+   * Push + in-app bell to a picker a manager just assigned to an order.
+   * Mirrors notifyAssignment; gated by the same push preference.
+   */
+  private async notifyPickerAssignment(
+    pickerUserId: string,
+    orderId: string,
+    requesterName: string | null,
+  ): Promise<void> {
+    try {
+      const admin = createAdminClient();
+      const { data: pref } = await admin
+        .from('notification_preferences')
+        .select('push_order_assigned_to_me')
+        .eq('user_id', pickerUserId)
+        .maybeSingle();
+      const wantsPush =
+        (pref as { push_order_assigned_to_me?: boolean | null } | null)
+          ?.push_order_assigned_to_me !== false;
+      if (!wantsPush) return;
+      const body = requesterName
+        ? `You're assigned to pick the order for ${requesterName}.`
+        : "You've been assigned to pick an order.";
+      await createNotification({
+        organizationId: this.ctx.organizationId,
+        userId: pickerUserId,
+        type: 'order_request.picker_assigned',
+        title: 'New picking assignment',
+        body,
+        link: `/dashboard/orders/${orderId}`,
+        metadata: { order_request_id: orderId },
+      });
+    } catch (e) {
+      console.warn('[order-requests] picker assignment notification failed', e);
     }
   }
 
