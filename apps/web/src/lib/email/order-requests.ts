@@ -320,8 +320,9 @@ async function isPublicEmailUnsubscribed(email: string): Promise<boolean> {
  */
 // Hosted PNG (not inline SVG): Gmail/Outlook strip <svg>, so the brand mark
 // must be a real raster image at an absolute URL to render in the inbox.
-// Served from apps/web/public/email-logo.png.
-const BRAND_MARK_SVG = `<img src="https://stockpilotusa.com/email-logo.png" width="28" height="28" alt="StockPilot" style="display:inline-block;vertical-align:middle;margin-right:10px;width:28px;height:28px;border-radius:6px" />`;
+// Served from apps/web/public/email-logo.png. ?v=2 cache-busts GoogleImageProxy's
+// stale failure cache — see EMAIL_LOGO_URL in templates.tsx for the full story.
+const BRAND_MARK_SVG = `<img src="https://stockpilotusa.com/email-logo.png?v=2" width="28" height="28" alt="StockPilot" style="display:inline-block;vertical-align:middle;margin-right:10px;width:28px;height:28px;border-radius:6px" />`;
 
 // ─── Template ────────────────────────────────────────────────────────
 

@@ -6,7 +6,11 @@ import type { DigestPayload } from '@/server/services/digest';
  * email MUST be a real raster image at an absolute URL. Served from
  * apps/web/public/email-logo.png.
  */
-export const EMAIL_LOGO_URL = 'https://stockpilotusa.com/email-logo.png';
+// ?v=2 cache-busts Google's image proxy: GoogleImageProxy cached a failure for
+// the bare URL when the logo first shipped (2026-06-18) and kept serving the
+// broken state long after the file itself served fine — the proxy caches
+// per-URL, failures included. Bump the version if it ever breaks again.
+export const EMAIL_LOGO_URL = 'https://stockpilotusa.com/email-logo.png?v=2';
 export function emailLogoImg(size = 28): string {
   const r = Math.round(size * 0.22);
   return `<img src="${EMAIL_LOGO_URL}" width="${size}" height="${size}" alt="StockPilot" style="display:inline-block;vertical-align:middle;width:${size}px;height:${size}px;border-radius:${r}px;" />`;
