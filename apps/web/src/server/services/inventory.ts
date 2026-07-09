@@ -1842,17 +1842,17 @@ export class InventoryService {
       .single();
 
     if (error) {
-      // Duplicate SKU at the same location trips the partial unique index
-      // inventory_items_org_sku_bin_unique (organization_id, sku,
-      // bin_location) WHERE deleted_at IS NULL. Surface it as a clear,
-      // actionable message — matching create()'s handling — instead of the
-      // opaque "internal error" the raw rethrow produced (the reason a
-      // pasted/copied SKU appeared to fail for no visible reason while an
-      // auto-generated SKU saved fine).
+      // Duplicate SKU at the same PLACEMENT trips the partial unique index
+      // inventory_items_org_sku_charter_bin_unique (organization_id, sku,
+      // charter_id, bin_location) WHERE deleted_at IS NULL (migration 0234).
+      // The same SKU is ALLOWED across different charters/racks (Model B: one
+      // row per placement) — a collision only means this exact charter + rack
+      // already carries that SKU. Surface it as a clear, actionable message
+      // instead of the opaque "internal error" the raw rethrow produced.
       if (error.code === '23505') {
         throw new ServiceError(
           'conflict',
-          'Another item at this location already uses that SKU. SKUs must be unique per location — change the SKU, or move this item to a different rack/location.',
+          'Another item in the same charter and rack already uses that SKU. The same SKU can live under different charters — change the SKU, the charter, or the rack/location.',
         );
       }
       throw new ServiceError('internal_error', error.message);

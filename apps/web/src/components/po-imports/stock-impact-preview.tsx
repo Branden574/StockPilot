@@ -293,8 +293,7 @@ export function StockImpactPreview({
                 {r.projectedQty != null && (
                   <span className="opacity-80">
                     {' '}
-                    — will create a new item; new placement{' '}
-                    {formatNumber(r.currentQty ?? 0)} → {formatNumber(r.projectedQty)}
+                    — will create a new item
                     {r.skuTotalCurrentQty != null && r.skuTotalProjectedQty != null && (
                       <>
                         {' '}
@@ -319,19 +318,15 @@ export function StockImpactPreview({
               <TableHead>From PO</TableHead>
               <TableHead
                 className="text-right"
-                title="Sum of on-hand across every placement (rack/charter) sharing this SKU — not just the row below"
+                title="Units this line adds to the SKU when received. You choose the charter/rack it lands in at receiving."
               >
-                SKU total
+                Adding
               </TableHead>
-              <TableHead className="text-right" title="This specific placement's own on-hand">
-                Placement current
-              </TableHead>
-              <TableHead className="text-right">Δ</TableHead>
               <TableHead
                 className="text-right"
-                title="This specific placement's on-hand after receipt"
+                title="Total on-hand for this SKU across every charter/rack it lives in, before → after this PO. Where the units land is decided at receiving, so only the SKU total is projected here."
               >
-                Placement after
+                SKU total
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -339,7 +334,7 @@ export function StockImpactPreview({
             {mapped.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={5}
                   className="text-muted-foreground py-8 text-center text-xs"
                 >
                   No inventory lines mapped yet. Pick an internal item for each
@@ -359,7 +354,10 @@ export function StockImpactPreview({
                 <TableCell className="text-muted-foreground max-w-[260px] truncate text-xs">
                   {r.description}
                 </TableCell>
-                <TableCell className="text-right font-semibold tabular-nums">
+                <TableCell className="text-success text-right tabular-nums whitespace-nowrap">
+                  +{formatNumber(r.qty)} unit{r.qty === 1 ? '' : 's'}
+                </TableCell>
+                <TableCell className="text-right font-semibold tabular-nums whitespace-nowrap">
                   {r.skuTotalCurrentQty != null && r.skuTotalProjectedQty != null ? (
                     <>
                       {formatNumber(r.skuTotalCurrentQty)} →{' '}
@@ -368,15 +366,6 @@ export function StockImpactPreview({
                   ) : (
                     <span className="text-muted-foreground font-normal">—</span>
                   )}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatNumber(r.currentQty ?? 0)}
-                </TableCell>
-                <TableCell className="text-success text-right font-mono tabular-nums">
-                  +{formatNumber(r.qty)}
-                </TableCell>
-                <TableCell className="text-right font-semibold tabular-nums">
-                  {formatNumber(r.projectedQty ?? 0)}
                 </TableCell>
               </TableRow>
             ))}
