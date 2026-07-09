@@ -25,6 +25,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
+import { resolveScanMatches, sanitizeScanCode } from '@/lib/scan-resolve';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { radius, space, theme } from '@/lib/theme';
@@ -42,6 +43,23 @@ interface FoundItem {
   bin_location: string | null;
   custom_fields: Record<string, unknown> | null;
   image_url: string | null;
+}
+
+/**
+ * One placement row candidate for a scanned barcode/SKU. Under Model B the
+ * same SKU can exist as multiple rows (one per charter/rack) — see
+ * 0008_warehouse_charters + 0126_relax_sku_uniqueness_per_location. When a
+ * scan resolves to more than one of these, the user picks which placement
+ * to adjust instead of an arbitrary row being grabbed.
+ */
+interface ScanCandidate {
+  id: string;
+  sku: string;
+  barcode: string | null;
+  charterId: string | null;
+  charterName: string | null;
+  binLocation: string | null;
+  quantityOnHand: number;
 }
 
 /**
@@ -136,6 +154,10 @@ export default function Scan() {
   const [lastCode, setLastCode] = React.useState<string | null>(null);
   const [signatureToken, setSignatureToken] = React.useState<string | null>(null);
   const [signatureModalVisible, setSignatureModalVisible] = React.useState(false);
+  // Set when a scanned code resolves to MORE THAN ONE placement row (same
+  // SKU under different charters/racks) — the picker sheet renders while
+  // this is non-null, and is cleared once the user picks one or cancels.
+  const [placementChoices, setPlacementChoices] = React.useState<ScanCandidate[] | null>(null);
 
 
   /** Loads an item's rich detail (with image + location name) by id. */
@@ -188,19 +210,67 @@ export default function Scan() {
     };
   }
 
-  /** Loads an item by scanned bare value (matches barcode or SKU). */
-  async function loadItemByValue(value: string): Promise<FoundItem | null> {
+  /**
+   * Loads an item by scanned bare value (matches barcode or SKU). Under
+   * Model B the same value can match MULTIPLE placement rows — this
+   * resolves every match rather than grabbing an arbitrary one:
+   *   - 0 matches → null (caller falls into the "not in inventory" flow).
+   *   - 1 match → resolved directly, same as before.
+   *   - >1 matches → sets `placementChoices` so the picker sheet renders,
+   *     and returns 'ambiguous' so the caller does NOT treat this as a
+   *     miss (it very much exists — the user just needs to say which row).
+   */
+  async function loadItemByValue(value: string): Promise<FoundItem | null | 'ambiguous'> {
     if (!orgId) return null;
-    const { data: row } = await supabase
+    // Strip characters that would break the `.or(...)` filter string (a
+    // stray `,`/`()`/`%` in a scanned barcode would otherwise be parsed as
+    // extra filter clauses) — mirrors the web lookup route's sanitization.
+    const safe = sanitizeScanCode(value);
+    const { data: rows } = await supabase
       .from('inventory_items')
-      .select('id')
+      .select(
+        `id, sku, barcode, charter_id, bin_location, quantity_on_hand,
+         charter:charters!charter_id (name)`,
+      )
       .eq('organization_id', orgId)
-      .or(`barcode.eq.${value},sku.eq.${value}`)
-      .is('deleted_at', null)
-      .limit(1)
-      .maybeSingle();
-    if (!row) return null;
-    return loadItemById((row as { id: string }).id);
+      .or(`barcode.eq.${safe},sku.eq.${safe}`)
+      .is('deleted_at', null);
+
+    const candidates: ScanCandidate[] = ((rows ?? []) as Record<string, unknown>[]).map((r) => {
+      const charterRaw = r.charter as { name?: string | null } | { name?: string | null }[] | null;
+      const charterObj = Array.isArray(charterRaw) ? charterRaw[0] : charterRaw;
+      return {
+        id: r.id as string,
+        sku: r.sku as string,
+        barcode: (r.barcode as string | null) ?? null,
+        charterId: (r.charter_id as string | null) ?? null,
+        charterName: charterObj?.name ?? null,
+        binLocation: (r.bin_location as string | null) ?? null,
+        quantityOnHand: Number(r.quantity_on_hand) || 0,
+      };
+    });
+
+    const resolution = resolveScanMatches(candidates, safe);
+    if (resolution.kind === 'not_found') return null;
+    if (resolution.kind === 'multiple') {
+      setPlacementChoices(resolution.matches);
+      return 'ambiguous';
+    }
+    return loadItemById(resolution.match.id);
+  }
+
+  /** User picked a specific placement from the disambiguation sheet. */
+  async function choosePlacement(candidate: ScanCandidate) {
+    setPlacementChoices(null);
+    setBusy(true);
+    const found = await loadItemById(candidate.id);
+    setBusy(false);
+    if (found) setItem(found);
+    else reset();
+  }
+
+  function cancelPlacementChoice() {
+    reset();
   }
 
   async function onBarCodeScanned({ data }: { data: string }) {
@@ -229,6 +299,13 @@ export default function Scan() {
     const found = directId
       ? await loadItemById(directId)
       : await loadItemByValue(data);
+
+    if (found === 'ambiguous') {
+      // loadItemByValue already populated `placementChoices` — the picker
+      // sheet renders below; wait for the user to choose (or cancel).
+      setBusy(false);
+      return;
+    }
 
     if (!found) {
       // Not in inventory yet. If the code looks like an ISBN, try the
@@ -303,6 +380,7 @@ export default function Scan() {
     setItem(null);
     setAddBook(null);
     setAddItem(null);
+    setPlacementChoices(null);
     setLastCode(null);
     setScanning(true);
   }
@@ -528,7 +606,7 @@ export default function Scan() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {scanning && !item && !addBook && mode === 'lookup' ? (
+      {scanning && !item && !addBook && !placementChoices && mode === 'lookup' ? (
         <CameraView
           style={StyleSheet.absoluteFill}
           facing="back"
@@ -753,7 +831,36 @@ export default function Scan() {
         </View>
       )}
 
-      {busy && !item && !addBook && !addItem && (
+      {placementChoices && (
+        <View style={styles.sheet}>
+          <ScrollView contentContainerStyle={{ paddingBottom: space.md }}>
+            <Text style={styles.pickerTitle}>Multiple placements found</Text>
+            <Text style={styles.pickerSubtitle}>
+              This SKU is stocked in more than one place. Choose which one to adjust.
+            </Text>
+            {placementChoices.map((c) => (
+              <Pressable
+                key={c.id}
+                style={({ pressed }) => [styles.pickerRow, pressed && { opacity: 0.7 }]}
+                onPress={() => void choosePlacement(c)}
+                disabled={busy}
+              >
+                <Text style={styles.pickerRowTitle} numberOfLines={1}>
+                  {c.charterName ?? 'Unassigned charter'}
+                </Text>
+                <Text style={styles.pickerRowSubtitle} numberOfLines={1}>
+                  {c.binLocation ?? 'No bin set'} · {c.quantityOnHand} on hand
+                </Text>
+              </Pressable>
+            ))}
+            <Pressable style={styles.dismiss} onPress={cancelPlacementChoice} disabled={busy}>
+              <Text style={styles.dismissLabel}>Cancel</Text>
+            </Pressable>
+          </ScrollView>
+        </View>
+      )}
+
+      {busy && !item && !addBook && !addItem && !placementChoices && (
         <ActivityIndicator style={styles.spinner} color="#fafaf7" size="large" />
       )}
 
@@ -990,6 +1097,19 @@ const styles = StyleSheet.create({
   photoBtnLabel: { color: theme.text, fontWeight: '600', fontSize: 13 },
   dismiss: { flex: 1, alignItems: 'center', paddingVertical: 10 },
   dismissLabel: { color: theme.primary, fontSize: 13, fontWeight: '600' },
+  pickerTitle: { color: theme.text, fontSize: 17, fontWeight: '700' },
+  pickerSubtitle: { color: theme.textMuted, fontSize: 13, marginTop: 4, marginBottom: space.md },
+  pickerRow: {
+    paddingVertical: 12,
+    paddingHorizontal: space.md,
+    borderRadius: radius.md,
+    backgroundColor: theme.bgElevated,
+    borderWidth: 1,
+    borderColor: theme.border,
+    marginBottom: space.sm,
+  },
+  pickerRowTitle: { color: theme.text, fontSize: 15, fontWeight: '700' },
+  pickerRowSubtitle: { color: theme.textMuted, fontSize: 12.5, marginTop: 2 },
   permission: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: space.xl, backgroundColor: theme.bg },
   permTitle: { color: theme.text, fontSize: 20, fontWeight: '700' },
   permBody: { color: theme.textMuted, fontSize: 14, textAlign: 'center', marginTop: space.sm },

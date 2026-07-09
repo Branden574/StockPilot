@@ -50,7 +50,8 @@ export async function GET(
     const svc = new ReportsService(ctx);
 
     if (slug === 'inventory-valuation') {
-      const data = await svc.inventoryValuation();
+      const charterId = url.searchParams.get('charterId');
+      const data = await svc.inventoryValuation({ charterId });
       const csv = toCsv(
         ['SKU', 'Name', 'Warehouse', 'Category', 'Qty on hand', 'Unit cost', 'Value'],
         data.rows.map((r) => ({
@@ -63,7 +64,7 @@ export async function GET(
           Value: r.value.toFixed(2),
         })),
       );
-      return csvResponse(slug, csv);
+      return csvResponse(slug, csv, charterId ? 'charter' : undefined);
     }
 
     if (slug === 'stock-movements') {

@@ -1,6 +1,17 @@
 'use client';
 
-import { ChevronDown, Download, Loader2, Pin, Plus, ScanLine, Search, Users, X } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Loader2,
+  Pin,
+  Plus,
+  ScanLine,
+  Search,
+  Users,
+  X,
+} from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -9,6 +20,12 @@ import * as React from 'react';
 import { BulkActions } from '@/components/inventory/bulk-actions';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
+import {
+  groupPlacementsBySku,
+  rollupStatus,
+  type PlacementRow as SkuInputRow,
+  type SkuGroup,
+} from '@/lib/inventory/group-by-sku';
 import {
   createSavedViewAction,
   deleteSavedViewAction,
@@ -125,6 +142,25 @@ interface Lookups {
    *  the "Generic" pill (any charter the warehouse services can use). */
   charters?: Map<string, { name: string; code: string | null }>;
 }
+
+/**
+ * Model B SKU grouping (see the `skuGroups` derivation below): the shape
+ * fed into Task 1's groupPlacementsBySku. PlacementRow's index signature
+ * (`[k: string]: unknown`) lets us ride the ORIGINAL Item along under
+ * `__item` — groupPlacementsBySku only reads/sums the declared fields,
+ * but the object it hands back is the exact same reference, so casting
+ * back to `SkuGroupInputRow` recovers the full row for rendering.
+ */
+type SkuGroupInputRow = SkuInputRow & { __item: Item };
+
+/** One row the table body actually renders: either a plain placement
+ *  row (today's per-rack `<tr>`, unchanged) or a SKU-group header
+ *  (collapsed by default; expanding reveals its `items` as the SAME
+ *  per-row `<tr>`s beneath it). `rowIdx` is a running position used
+ *  only for the "first ~12 rows load with priority" image hint. */
+type RenderEntry =
+  | { kind: 'row'; item: Item; rowIdx: number }
+  | { kind: 'header'; group: SkuGroup; items: Item[]; rowIdx: number };
 
 /** A full-dataset row for instant mode: the table row shape plus the
  *  columns the local matcher (barcode/model_number) and the created_*
@@ -721,6 +757,11 @@ export function InventoryTable({
 
   const view = paramsToView(params.get('stock'));
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  // Model B SKU grouping — which SKU-group headers are expanded, keyed
+  // on the group's `sku` string (guaranteed non-blank: a blank/whitespace
+  // SKU is never grouped into a >1-placement header — see
+  // lib/inventory/group-by-sku.ts). Collapsed (empty set) by default.
+  const [expandedSkuGroups, setExpandedSkuGroups] = React.useState<Set<string>>(new Set());
 
   const sort = paramsToSort(params.get('sort'));
   // OPTIMISTIC filter selections — these flip synchronously on click and
@@ -1035,6 +1076,105 @@ export function InventoryTable({
     // be a fresh reference every render and re-fire on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prewarmKey]);
+
+  // ── Model B: SKU-grouped rows (Items list only — Books never split
+  // rows, so grouping adds nothing there and stays off) ──────────────
+  // `displayed` is already one row per (sku, charter, rack) holding
+  // (the existing placement split from instant-mode/page.tsx). We feed
+  // that flat list through Task 1's groupPlacementsBySku (pure, sums
+  // lineQuantity — a READ-TIME display sum only; no record is written
+  // or changed) to cluster same-SKU rows together. A SKU whose group
+  // has more than one placement collapses into ONE header row with the
+  // summed total and a chevron; a SKU with exactly one placement (the
+  // common case — most items live in a single rack/charter) renders
+  // exactly as it does today, byte-identical, with no header at all.
+  // The underlying Item object for each placement rides along under
+  // `__item` (PlacementRow's index signature allows it) so the exact
+  // same per-row <tr> markup can be reused unchanged when a group
+  // expands.
+  // Model B: full-dataset (not page-slice) per-SKU on-hand totals, keyed
+  // for the SKU-group headers below. A SKU's placements can be MULTIPLE
+  // DISTINCT inventory_items rows (one per charter), and the default
+  // last-updated sort can split them across pages — summing only the
+  // current page's rows (as groupPlacementsBySku does) would silently
+  // show a PARTIAL total for a group that straddles a page boundary.
+  // Instant mode has the complete filtered dataset client-side
+  // (instantView.filteredRows — every filter applied, every page), so
+  // this map always holds the TRUE total. `null` in server mode, where
+  // only the current page is available and there's no cheap way to get
+  // the full sum without a new query (see skuGroups below for the
+  // degraded-but-honest server-mode fallback).
+  const skuTotalsFull = React.useMemo(() => {
+    if (!instantView) return null;
+    const m = new Map<string, number>();
+    for (const r of instantView.filteredRows) {
+      const key = r.sku.trim();
+      if (!key) continue; // blank skus are never grouped — see group-by-sku.ts
+      m.set(key, (m.get(key) ?? 0) + (Number(r.quantity_on_hand) || 0));
+    }
+    return m;
+  }, [instantView]);
+
+  const skuGroups = React.useMemo<SkuGroup[] | null>(() => {
+    if (showBookFields) return null;
+    const rows: SkuGroupInputRow[] = displayed.map((it) => ({
+      id: it.rowKey ?? it.id,
+      sku: it.sku,
+      name: it.name,
+      charterId: it.charter_id,
+      placementLabel: it.placement_label ?? null,
+      lineQuantity: it.line_quantity ?? it.quantity_on_hand,
+      __item: it,
+    }));
+    const groups = groupPlacementsBySku(rows);
+    if (!skuTotalsFull) {
+      // Server mode: no full-dataset sum available. A single page (every
+      // row for this view is already on screen) is still exact even
+      // here; a multi-placement group on a multi-page result COULD be
+      // missing rows sitting on another page, so it's flagged rather
+      // than silently shown as if it were complete (recurring bug
+      // pattern #18 — disclose silent caps, never hide them).
+      const singlePage = effectiveTotal <= pageSize;
+      if (singlePage) return groups;
+      return groups.map((g) => (g.placements.length > 1 ? { ...g, totalIsPartial: true } : g));
+    }
+    // Instant mode: replace the page-slice sum with the FULL filtered-set
+    // total for this SKU — always exact, never partial.
+    return groups.map((g) => {
+      const key = g.sku.trim();
+      const full = key ? skuTotalsFull.get(key) : undefined;
+      return full != null ? { ...g, total: full } : g;
+    });
+  }, [displayed, showBookFields, skuTotalsFull, effectiveTotal, pageSize]);
+
+  const renderItems = React.useMemo<RenderEntry[]>(() => {
+    let idx = 0;
+    if (!skuGroups) {
+      return displayed.map((item) => ({ kind: 'row' as const, item, rowIdx: idx++ }));
+    }
+    const out: RenderEntry[] = [];
+    for (const g of skuGroups) {
+      const groupItems = g.placements.map((p) => (p as unknown as SkuGroupInputRow).__item);
+      if (groupItems.length <= 1) {
+        for (const it of groupItems) out.push({ kind: 'row', item: it, rowIdx: idx++ });
+        continue;
+      }
+      out.push({ kind: 'header', group: g, items: groupItems, rowIdx: idx++ });
+      if (expandedSkuGroups.has(g.sku)) {
+        for (const it of groupItems) out.push({ kind: 'row', item: it, rowIdx: idx++ });
+      }
+    }
+    return out;
+  }, [skuGroups, displayed, expandedSkuGroups]);
+
+  function toggleSkuGroup(sku: string) {
+    setExpandedSkuGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(sku)) next.delete(sku);
+      else next.add(sku);
+      return next;
+    });
+  }
 
   return (
     <div className="space-y-4">
@@ -1382,7 +1522,31 @@ export function InventoryTable({
                 </td>
               </tr>
             )}
-            {displayed.map((item, rowIdx) => {
+            {renderItems.map((entry) => {
+              // Model B SKU-group header: one collapsed row per SKU that
+              // has MORE than one placement, showing the summed on-hand
+              // total. A chevron toggles `expandedSkuGroups`, which
+              // re-derives `renderItems` to splice the group's own
+              // placement rows (the SAME `<tr>`s below, unchanged) in
+              // right after it. Not selectable — no checkbox.
+              if (entry.kind === 'header') {
+                return (
+                  <SkuGroupHeaderRow
+                    key={`sku-group:${entry.group.sku}`}
+                    group={entry.group}
+                    items={entry.items}
+                    expanded={expandedSkuGroups.has(entry.group.sku)}
+                    onToggle={() => toggleSkuGroup(entry.group.sku)}
+                    lookups={lookups}
+                    sparkMode={sparkMode}
+                    trends={effectiveTrends}
+                    rowLinkPrefix={rowLinkPrefix}
+                    currentListUrl={currentListUrl}
+                    rowIdx={entry.rowIdx}
+                  />
+                );
+              }
+              const { item, rowIdx } = entry;
               const category = item.category_id ? lookups.categories.get(item.category_id) : null;
               const location = item.primary_location_id
                 ? lookups.locations.get(item.primary_location_id)
@@ -1936,6 +2100,236 @@ export function Pagination({
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Model B: the collapsed SKU-group header row. Renders once per SKU that
+ * has MORE than one placement (a SKU with exactly one placement renders
+ * as a plain row instead — see the `skuGroups`/`renderItems` derivation
+ * in InventoryTable). NOT selectable (no checkbox — bulk actions only
+ * ever target the individual placement rows beneath it, unchanged).
+ *
+ * DISPLAY ONLY: `group.total` is a read-time SUM of the already-computed
+ * per-placement `lineQuantity` values (see group-by-sku.ts) — it never
+ * writes or recomputes any record, mirroring exactly what the expanded
+ * rows already show added up.
+ */
+function SkuGroupHeaderRow({
+  group,
+  items,
+  expanded,
+  onToggle,
+  lookups,
+  sparkMode,
+  trends,
+  rowLinkPrefix,
+  currentListUrl,
+  rowIdx,
+}: {
+  group: SkuGroup;
+  items: Item[];
+  expanded: boolean;
+  onToggle: () => void;
+  lookups: Lookups;
+  sparkMode: SparkMode;
+  trends: InventoryTableProps['trends'];
+  rowLinkPrefix: string;
+  currentListUrl: string;
+  rowIdx: number;
+}) {
+  // Most rollup fields come from the FIRST placement (first-seen order —
+  // see group-by-sku.ts). In the common case (one item split across racks/
+  // charters) every placement shares the same name/category/image, so
+  // this is exact; in the rarer case of genuinely distinct item rows
+  // sharing a SKU it's a reasonable representative, and the charter
+  // column below falls back to "Multiple" rather than showing a wrong
+  // single charter. Status is the ONE exception: it's per-placement and
+  // can legitimately differ, so it's rolled up conservatively below
+  // instead of taken from `first` (see `rolledUpStatus`).
+  const first = items[0]!;
+  const status = deriveStatus(group.total, first.reorder_point);
+  const par = Math.max(first.reorder_point * 4, group.total * 1.5, 10);
+  const series = seriesForRow(first.id, group.total, sparkMode, trends);
+  const category = first.category_id ? lookups.categories.get(first.category_id) : null;
+  const location = first.primary_location_id
+    ? lookups.locations.get(first.primary_location_id)
+    : null;
+  const distinctCharterIds = new Set(items.map((it) => it.charter_id ?? ''));
+  const rowThumbSrc = first.image_thumb_url ?? first.image_url;
+  // `status` is a PER-PLACEMENT field — placements of one SKU can
+  // legitimately differ (e.g. one discontinued at a site while others stay
+  // active). Never take just the first placement's status here: that can
+  // mask a discontinued/archived placement behind a healthy badge for the
+  // whole group. Roll up conservatively instead (see group-by-sku.ts).
+  const rolledUpStatus = rollupStatus(items.map((it) => it.status));
+
+  return (
+    <tr className="border-b border-border bg-muted/30 transition-colors last:border-0">
+      {/* Not selectable — no checkbox (bulk actions target placements). */}
+      <td className="px-3" />
+      <td className="py-2.5 pr-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.sku} (${items.length} placements)`}
+            className="grid h-5 w-5 shrink-0 place-items-center rounded-sm text-[var(--ed-ink-3)] transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <ChevronRight
+              className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')}
+            />
+          </button>
+          <ImageHoverPreview
+            src={first.image_url ?? null}
+            srcLoader={
+              !first.image_url && first.image_thumb_url
+                ? () => loadMasterImageUrl(first.id)
+                : undefined
+            }
+            alt={first.name}
+            title={first.name}
+            subtitle={group.sku}
+            meta={
+              <span>
+                On hand{' '}
+                <span
+                  className="text-foreground font-medium tabular-nums"
+                  title={
+                    group.totalIsPartial
+                      ? 'This total only counts placements on the current page — other pages may hold more of this SKU.'
+                      : undefined
+                  }
+                >
+                  {formatNumber(group.total)}
+                </span>
+                {group.totalIsPartial && (
+                  <span aria-hidden className="ml-0.5 text-[var(--ed-ink-4)]">
+                    *
+                  </span>
+                )}
+              </span>
+            }
+            className="shrink-0"
+          >
+            {rowThumbSrc ? (
+              <Image
+                src={rowThumbSrc}
+                unoptimized={!!first.image_thumb_url}
+                alt=""
+                width={56}
+                height={56}
+                sizes="28px"
+                priority={rowIdx < 12}
+                placeholder={first.image_lqip ? 'blur' : 'empty'}
+                blurDataURL={first.image_lqip ?? undefined}
+                className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
+              />
+            ) : (
+              <span
+                aria-hidden
+                className="h-7 w-7 shrink-0 rounded-[5px] border border-border"
+                style={{
+                  background:
+                    'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
+                }}
+              />
+            )}
+          </ImageHoverPreview>
+          <Link
+            href={`${rowLinkPrefix}/${first.id}?return=${encodeURIComponent(currentListUrl)}`}
+            prefetch={false}
+            className="font-medium hover:underline"
+          >
+            {first.name}
+          </Link>
+        </div>
+      </td>
+      <td className="px-3 font-mono text-[11.5px] tracking-[-0.01em] text-[var(--ed-ink-3)]">
+        {group.sku}
+      </td>
+      <td className="px-3">
+        {category ? (
+          <span
+            className="inline-flex items-center gap-1.5 text-[12px]"
+            style={category.color ? { color: category.color } : undefined}
+          >
+            {category.color && (
+              <span
+                aria-hidden
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: category.color }}
+              />
+            )}
+            {category.name}
+          </span>
+        ) : (
+          <span className="text-[12px] text-[var(--ed-ink-4)]">—</span>
+        )}
+      </td>
+      <td className="px-3 text-[12px]">
+        {distinctCharterIds.size > 1 ? (
+          <span
+            className="text-[11px] text-[var(--ed-ink-4)] italic"
+            title="Placements span multiple charters — expand to see each"
+          >
+            Multiple
+          </span>
+        ) : first.charter_id ? (
+          (() => {
+            const charter = lookups.charters?.get(first.charter_id!) ?? null;
+            return charter ? (
+              <span className="text-[var(--ed-ink-2)]" title={charter.name}>
+                {charter.code ?? charter.name}
+              </span>
+            ) : (
+              <span className="text-[11px] text-[var(--ed-ink-4)] italic">Generic</span>
+            );
+          })()
+        ) : (
+          <span
+            className="text-[11px] text-[var(--ed-ink-4)] italic"
+            title="Generic stock — any charter serviced by this warehouse can use it"
+          >
+            Generic
+          </span>
+        )}
+      </td>
+      <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">{location?.name ?? '—'}</td>
+      <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+        {items.length} location{items.length === 1 ? '' : 's'}
+      </td>
+      <td
+        className="px-3 text-right font-mono font-medium tabular-nums"
+        title={
+          group.totalIsPartial
+            ? 'This total only counts placements on the current page — other pages may hold more of this SKU.'
+            : undefined
+        }
+      >
+        {formatNumber(group.total)}
+        {group.totalIsPartial && (
+          <span aria-hidden className="ml-0.5 text-[var(--ed-ink-4)]">
+            *
+          </span>
+        )}
+      </td>
+      <td className="px-3">
+        <StockBar stock={group.total} par={par} status={status} />
+      </td>
+      <td className="px-3 text-right">
+        <Sparkline data={series} width={56} height={18} />
+      </td>
+      <td className="px-3">
+        <StockStatusBadge
+          quantity={group.total}
+          reorderPoint={first.reorder_point}
+          itemStatus={rolledUpStatus}
+        />
+      </td>
+      <td className="px-3 text-right text-[11.5px] text-[var(--ed-ink-4)]">—</td>
+    </tr>
   );
 }
 

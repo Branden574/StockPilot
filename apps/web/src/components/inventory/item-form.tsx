@@ -831,6 +831,7 @@ export function ItemForm({
       )}
 
       <Section title="Basics">
+        <SharedFieldsNote />
         <Field label="Name" error={errors.name?.message}>
           <Input placeholder="Wireless mouse" autoFocus {...register('name')} />
         </Field>
@@ -946,6 +947,7 @@ export function ItemForm({
       </Section>
 
       <Section title="Classification">
+        <SharedFieldsNote />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label>Item type</Label>
@@ -1057,6 +1059,9 @@ export function ItemForm({
             );
           })()}
         </div>
+        <PlacementOnlyNote>
+          primary location, bin/shelf, and rack apply just to this placement of the SKU.
+        </PlacementOnlyNote>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <SelectField
             label="Primary location"
@@ -1159,6 +1164,10 @@ export function ItemForm({
       )}
 
       <Section title={`${warehouseLabel} & ${charterLabel.toLowerCase()}`}>
+        <PlacementOnlyNote>
+          {warehouseLabel.toLowerCase()} and {charterLabel.toLowerCase()} apply just to this
+          placement, not other racks or charters carrying this SKU.
+        </PlacementOnlyNote>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label>{warehouseLabel}</Label>
@@ -1236,6 +1245,7 @@ export function ItemForm({
       </Section>
 
       <Section title="Pricing & stock">
+        <SharedFieldsNote />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Unit cost" error={errors.unitCost?.message}>
             <Controller
@@ -1289,28 +1299,34 @@ export function ItemForm({
             return (
               <Field label="On hand" error={errors.quantityOnHand?.message}>
                 {isEdit ? (
-                  <div className="flex items-center gap-2">
-                    <Input
-                      type="number"
-                      step="1"
-                      {...register('quantityOnHand', { valueAsNumber: true })}
-                      disabled
-                      className="bg-muted/40 cursor-not-allowed opacity-70"
-                      aria-readonly
-                    />
-                    {defaults?.id && (
-                      <StockAdjustDialog
-                        itemId={defaults.id}
-                        itemName={defaults?.name ?? 'this item'}
-                        currentQuantity={defaults?.quantityOnHand ?? 0}
-                        trigger={
-                          <Button type="button" variant="outline" size="sm" className="shrink-0">
-                            Adjust
-                          </Button>
-                        }
+                  <>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        step="1"
+                        {...register('quantityOnHand', { valueAsNumber: true })}
+                        disabled
+                        className="bg-muted/40 cursor-not-allowed opacity-70"
+                        aria-readonly
                       />
-                    )}
-                  </div>
+                      {defaults?.id && (
+                        <StockAdjustDialog
+                          itemId={defaults.id}
+                          itemName={defaults?.name ?? 'this item'}
+                          currentQuantity={defaults?.quantityOnHand ?? 0}
+                          trigger={
+                            <Button type="button" variant="outline" size="sm" className="shrink-0">
+                              Adjust
+                            </Button>
+                          }
+                        />
+                      )}
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-muted-foreground">
+                      <span className="font-medium text-foreground">This placement only</span>
+                      {' — quantity lives at this specific rack/charter, not other placements of this SKU.'}
+                    </p>
+                  </>
                 ) : (
                   <Controller
                     control={control}
@@ -1582,6 +1598,36 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h3 className="text-sm font-semibold text-muted-foreground">{title}</h3>
       <div className="space-y-3">{children}</div>
     </div>
+  );
+}
+
+/**
+ * Task 4 (Model B / SKU grouping clarity — pure copy/UX, no logic change):
+ * a SKU's "product" fields (name, SKU, barcode, description, category,
+ * item type, unit cost, retail price, reorder point/quantity) are SHARED
+ * across every placement of that SKU — editing one here propagates
+ * server-side to every other rack/warehouse/charter row sharing the SKU
+ * (see InventoryService.update, Task 3). "Placement" fields (warehouse,
+ * charter, location/rack, quantity, status) only ever apply to THIS row.
+ * These two notes just label which group a field belongs to; they don't
+ * change any submit/propagation behavior.
+ */
+function SharedFieldsNote() {
+  return (
+    <p className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-[11.5px] text-muted-foreground">
+      <span className="font-medium text-foreground">Shared across all placements of this SKU</span>
+      {' — editing here updates every rack/charter this item lives in.'}
+    </p>
+  );
+}
+
+function PlacementOnlyNote({ children }: { children?: React.ReactNode }) {
+  return (
+    <p className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-[11.5px] text-muted-foreground">
+      <span className="font-medium text-foreground">This placement only</span>
+      {' — '}
+      {children ?? 'changes here apply just to this rack/charter, not other placements of this SKU.'}
+    </p>
   );
 }
 

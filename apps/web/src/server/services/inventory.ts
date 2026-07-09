@@ -7,6 +7,7 @@ import {
   getWarehouseAccess,
   ForbiddenError,
 } from '@/lib/auth/warehouse';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import type {
   AdjustStockInput,
@@ -44,6 +45,28 @@ export function deriveAgeDays(receivedAtIso: string | null, nowMs: number): numb
 // cross-tenant escape). Drop anything that isn't a clean UUID before it reaches
 // the filter string. Security audit 2026-06-09.
 const CHARTER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Model B — "one product = one SKU": these are the SHARED product columns.
+// Editing any of them on ONE placement (inventory_items row) of a SKU must
+// fan out the same value to every OTHER non-deleted row sharing that item's
+// (organization_id, sku) — see InventoryService.update(). Everything else
+// (charter_id, warehouse_id, primary_location_id, bin_location,
+// quantity_on_hand, status, rack custom_fields) is PER-PLACEMENT and must
+// never be propagated. Names match the snake_case columns already used as
+// keys in update()'s `updates` object, so building the propagated subset is
+// a plain key pick — no camelCase→column mapping needed here.
+const SHARED_ITEM_FIELDS = [
+  'name',
+  'sku',
+  'unit_cost',
+  'retail_price',
+  'description',
+  'category_id',
+  'barcode',
+  'reorder_point',
+  'reorder_quantity',
+  'item_type',
+] as const;
 
 export type ItemListSort =
   | 'updated_desc'
@@ -1729,6 +1752,13 @@ export class InventoryService {
     const currentWarehouseId = (current as { warehouse_id?: string | null }).warehouse_id ?? null;
     if (currentWarehouseId) await assertWarehouseAccess(currentWarehouseId, 'write', this.ctx);
 
+    // Model B: capture the ORIGINAL sku BEFORE the patch is applied. This is
+    // the key used to find this item's other placements — capturing it now
+    // (not after `updates.sku` is set below) means an edit that changes the
+    // sku re-keys the WHOLE group together, rather than orphaning siblings
+    // under the old sku.
+    const originalSku = (current as { sku?: string | null }).sku ?? null;
+
     const updates: Record<string, unknown> = { updated_by: this.ctx.userId };
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.sku !== undefined) updates.sku = patch.sku;
@@ -1795,6 +1825,14 @@ export class InventoryService {
       updates.charter_id = patch.charterId ?? null;
     }
 
+    // Model B: the subset of this edit that is a SHARED product field (vs.
+    // per-placement). Picked from `updates` (already snake_case columns) so
+    // there's no separate camelCase→column mapping to keep in sync.
+    const sharedUpdates: Record<string, unknown> = {};
+    for (const key of SHARED_ITEM_FIELDS) {
+      if (key in updates) sharedUpdates[key] = updates[key];
+    }
+
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
       .update(updates)
@@ -1820,6 +1858,65 @@ export class InventoryService {
       throw new ServiceError('internal_error', error.message);
     }
 
+    // Model B: fan out shared product fields to every OTHER placement of
+    // this SKU. Keyed on the ORIGINAL sku (captured above, before the patch)
+    // so that a sku edit re-keys the whole group together. Per-placement
+    // fields (charter/warehouse/location/bin/on-hand/status, rack
+    // custom_fields) are never in sharedUpdates, so a charter/qty-only edit
+    // never reaches this block. Blank/whitespace skus are never grouped
+    // (matches groupPlacementsBySku's "blank sku = its own placement").
+    // On-hand is per-row and is NEVER touched here — no adjust_stock call.
+    let propagatedToSku: string | null = null;
+    if (originalSku && originalSku.trim().length > 0 && Object.keys(sharedUpdates).length > 0) {
+      // KNOWN LIMITATION: the target row was already updated (and committed)
+      // in the prior statement above, in a SEPARATE statement from this
+      // sibling fan-out — there is no shared transaction wrapping the two.
+      // If this edit is a `sku` re-key and the NEW sku collides with an
+      // existing row at one sibling's (org, sku, bin_location), this UPDATE
+      // fails with 23505 below and the group is left SPLIT: the target row
+      // now sits on the new sku while its siblings are still on the old one.
+      // This is surfaced to the caller as the `conflict` error (not silent,
+      // not cross-tenant — organization_id stays scoped throughout — and
+      // on-hand quantities / stock ledger are untouched), but it is a real
+      // data-shape limitation until this fan-out is done. A fully-atomic
+      // group re-key would require moving target+siblings into one
+      // transactional RPC (tracked follow-up, not yet built).
+      //
+      // Deliberately the SERVICE-ROLE admin client, not this.ctx.supabase:
+      // the RLS-scoped client is subject to inventory_items_update →
+      // user_can_access_inventory(warehouse_id, charter_id, 'write') (mig
+      // 0008), so a warehouse-scoped staff user editing a shared field would
+      // have this UPDATE silently RLS-filter out sibling placements sitting
+      // in warehouses/charters they can't write to. PostgREST reports a
+      // zero-row-matched UPDATE as success (no error), so that would leave
+      // the "shared" field SILENTLY DIVERGED across placements — exactly the
+      // invariant this fan-out exists to guarantee. Product-level fields are
+      // org-wide by design, so propagation must be all-or-nothing regardless
+      // of the editor's warehouse scope. The target row above stays on
+      // this.ctx.supabase (RLS-guarded) — only this sibling fan-out is
+      // privileged, and the explicit organization_id filter below is the
+      // mandatory tenant-isolation floor now that RLS is bypassed.
+      const { error: sibErr } = await createAdminClient()
+        .from('inventory_items')
+        .update({ ...sharedUpdates, updated_by: this.ctx.userId })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('sku', originalSku)
+        .is('deleted_at', null)
+        .neq('id', id);
+      if (sibErr) {
+        if (sibErr.code === '23505') {
+          throw new ServiceError(
+            'conflict',
+            'Another item at a shared location already uses that SKU. Change the SKU or resolve the conflict first.',
+          );
+        }
+        throw new ServiceError('internal_error', sibErr.message);
+      }
+      // If sku itself changed, the group's new identity is the new sku;
+      // otherwise it's unchanged (still originalSku).
+      propagatedToSku = (sharedUpdates.sku as string | undefined) ?? originalSku;
+    }
+
     // Drop the cosmetic `updated_by` from the changed-keys list so the
     // audit row reflects what the caller actually edited.
     const changedKeys = Object.keys(updates).filter((k) => k !== 'updated_by');
@@ -1829,7 +1926,10 @@ export class InventoryService {
         entityType: 'inventory_item',
         entityId: id,
         warehouseId: (data as { warehouse_id?: string | null }).warehouse_id ?? null,
-        extra: { changed_keys: changedKeys },
+        extra: {
+          changed_keys: changedKeys,
+          ...(propagatedToSku ? { propagated_to_sku: propagatedToSku } : {}),
+        },
       },
       this.ctx,
     );

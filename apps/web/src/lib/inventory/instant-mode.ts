@@ -385,6 +385,17 @@ export interface InstantViewResult<T> {
   pageCount: number;
   /** The clamped page's item-level rows, filtered + sorted. */
   pageItems: T[];
+  /**
+   * EVERY row in the FULL filtered set (every active filter applied, NOT
+   * clamped to the current page — the same set `total`/`valueOnHand` are
+   * computed over). Model B's SKU-group headers (inventory-table.tsx) sum
+   * `quantity_on_hand` across this to get a group's TRUE total: a SKU's
+   * placements can be MULTIPLE DISTINCT inventory_items rows (one per
+   * charter), and the default last-updated sort can split them across
+   * pages — summing only `pageItems` would silently show a partial total
+   * for a group that straddles a page boundary.
+   */
+  filteredRows: readonly T[];
 }
 
 /**
@@ -410,7 +421,7 @@ export function deriveInstantView<T extends InstantModeRow>(
   const page = Math.min(Math.max(1, state.page), pageCount);
   const sorted = sortInstantRows(filtered, state.sort);
   const pageItems = sorted.slice((page - 1) * pageSize, page * pageSize);
-  return { total, valueOnHand, page, pageCount, pageItems };
+  return { total, valueOnHand, page, pageCount, pageItems, filteredRows: filtered };
 }
 
 /* ---- placement expansion (Items page's one-line-per-rack) ------------------ */

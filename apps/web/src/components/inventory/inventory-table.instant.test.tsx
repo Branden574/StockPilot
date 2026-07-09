@@ -289,7 +289,12 @@ describe('InventoryTable instant mode', () => {
     );
   });
 
-  it('expands placement rows per page when the Items dataset ships holdings (one line per rack)', () => {
+  it('expands placement rows per page when the Items dataset ships holdings (one line per rack)', async () => {
+    // CHANGED (Model B / SKU grouping): a SKU with >1 placement now
+    // collapses into ONE header row by default — the one-row-per-rack
+    // layout only reappears after expanding the group. Was: asserted 2
+    // rendered rows with no interaction.
+    const user = userEvent.setup();
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
     const rows = [item({ id: 'a', name: 'Split Item', quantity_on_hand: 500 })];
@@ -312,15 +317,25 @@ describe('InventoryTable instant mode', () => {
       />,
     );
 
-    // One item → two rendered rows, one per rack, with per-line labels.
-    expect(screen.getAllByRole('link', { name: 'Split Item' })).toHaveLength(2);
+    // Collapsed by default: ONE grouped row, headline = the summed total.
+    expect(screen.getAllByRole('link', { name: 'Split Item' })).toHaveLength(1);
+    expect(screen.getByText('500')).toBeInTheDocument();
+    expect(screen.queryByText('1-A')).not.toBeInTheDocument();
+
+    // Expand → one item, two rendered placement rows, one per rack, with
+    // per-line labels (the header's own row/link stays visible too).
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+    expect(screen.getAllByRole('link', { name: 'Split Item' })).toHaveLength(3);
     expect(screen.getByText('1-A')).toBeInTheDocument();
     expect(screen.getByText('2-C')).toBeInTheDocument();
     // Footer counts ITEMS, not expanded lines.
     expect(screen.getByText(/1 SKUs/)).toBeInTheDocument();
   });
 
-  it('marks staging/unplaced split rows AMBER with an "awaiting put-away" line', () => {
+  it('marks staging/unplaced split rows AMBER with an "awaiting put-away" line', async () => {
+    // CHANGED (Model B / SKU grouping): expand the collapsed SKU group
+    // first — these assertions used to hold with no interaction.
+    const user = userEvent.setup();
     getSearchParams('');
     window.history.replaceState(null, '', '/dashboard/inventory');
     const rows = [item({ id: 'b', name: 'Awaiting Item', quantity_on_hand: 8 })];
@@ -344,6 +359,8 @@ describe('InventoryTable instant mode', () => {
       />,
     );
 
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+
     // The two not-put-away buckets each surface an "awaiting put-away" line;
     // the placed rack row does not.
     expect(screen.getAllByText('awaiting put-away')).toHaveLength(2);
@@ -356,6 +373,138 @@ describe('InventoryTable instant mode', () => {
     expect(staging.className).toContain('text-warning');
     expect(unplaced.className).toContain('text-warning');
     expect(placed.className).not.toContain('text-warning');
+  });
+
+  // Model B: same-SKU placements collapse into ONE grouped row with the
+  // summed on-hand total, expandable via a chevron. Adapted from the SDD
+  // brief's test skeleton to this file's harness (item()/renderInstant/
+  // the `placement` map for split rows).
+  it('groups placements of one SKU into a single row showing the summed total, expandable', async () => {
+    const user = userEvent.setup();
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const rows = [
+      item({ id: 'g', name: 'Acer Chromebook', sku: 'SP-G69UU-05H', quantity_on_hand: 281 }),
+    ];
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={1}
+        pageSize={30}
+        instant={{
+          items: rows,
+          view: 'items',
+          placement: {
+            g: [
+              { locationId: 'L1', label: 'CVW-Manchester · 1-A', kind: 'rack', quantity: 75 },
+              { locationId: 'L2', label: 'CVLYII-Visalia · 1-C', kind: 'rack', quantity: 100 },
+              { locationId: 'L3', label: 'CVSII-Madera · 2-A', kind: 'rack', quantity: 106 },
+            ],
+          },
+        }}
+      />,
+    );
+
+    // ONE SKU row, headline total 281 (not three separate rows by default).
+    expect(screen.getByText('281')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Acer Chromebook' })).toHaveLength(1);
+    expect(screen.queryByText('CVW-Manchester · 1-A')).not.toBeInTheDocument();
+
+    // Expand → placements visible.
+    await user.click(screen.getByRole('button', { name: /expand|show placements|SP-G69UU-05H/i }));
+    expect(screen.getByText('CVW-Manchester · 1-A')).toBeInTheDocument();
+    expect(screen.getByText('CVSII-Madera · 2-A')).toBeInTheDocument();
+  });
+
+  // `status` is a PER-PLACEMENT field — genuinely distinct inventory_items
+  // rows sharing one SKU can have different statuses (e.g. discontinued at
+  // one site, active at another). The group-header Status badge must never
+  // read as a plain healthy "In stock" when part of the group is
+  // discontinued/archived — it must roll up conservatively instead of
+  // reading only the first placement (see rollupStatus in group-by-sku.ts).
+  it('group header status never shows a plain healthy badge when a placement is discontinued', () => {
+    // status=all: the default view filters to active-only, which would
+    // hide the discontinued placement entirely rather than exercise the
+    // rollup — mirrors the existing "?status=archived deep link" test.
+    getSearchParams('status=all');
+    window.history.replaceState(null, '', '/dashboard/inventory?status=all');
+    const rows = [
+      item({ id: 'a', name: 'Mixed Status Widget', sku: 'SKU-MIXED', status: 'active', quantity_on_hand: 100 }),
+      item({ id: 'b', name: 'Mixed Status Widget', sku: 'SKU-MIXED', status: 'discontinued', quantity_on_hand: 50 }),
+    ];
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={2}
+        pageSize={30}
+        instant={{ items: rows, view: 'items' }}
+      />,
+    );
+
+    // Collapsed by default: ONE grouped header row for the shared SKU.
+    expect(screen.getAllByRole('link', { name: 'Mixed Status Widget' })).toHaveLength(1);
+    // The header must surface the discontinued placement, not a healthy
+    // "In stock" badge that hides it.
+    expect(screen.getByText('Discontinued')).toBeInTheDocument();
+    expect(screen.queryByText('In stock')).not.toBeInTheDocument();
+  });
+
+  // Model B whole-branch review finding 2: the group HEADER total must be
+  // the FULL cross-page sum, not a page-slice sum. A SKU's placements can
+  // be MULTIPLE DISTINCT inventory_items rows (one per charter), and the
+  // default last-updated sort can split those rows across a page boundary
+  // — three placements of one SKU with pageSize=2 land two-on-page-1,
+  // one-on-page-2. Instant mode has the complete filtered dataset
+  // client-side, so the header must sum ALL THREE (281), not just the
+  // two visible on the current page (175).
+  it('shows the FULL cross-page total for a SKU whose 3 placements straddle a page boundary', () => {
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const rows = [
+      item({
+        id: 'a',
+        name: 'Split Widget',
+        sku: 'SP-SPLIT',
+        quantity_on_hand: 75,
+        updated_at: '2026-01-03T00:00:00+00:00',
+      }),
+      item({
+        id: 'b',
+        name: 'Split Widget',
+        sku: 'SP-SPLIT',
+        quantity_on_hand: 100,
+        updated_at: '2026-01-02T00:00:00+00:00',
+      }),
+      item({
+        id: 'c',
+        name: 'Split Widget',
+        sku: 'SP-SPLIT',
+        quantity_on_hand: 106,
+        updated_at: '2026-01-01T00:00:00+00:00',
+      }),
+    ];
+    render(
+      <InventoryTable
+        items={rows}
+        lookups={EMPTY_LOOKUPS}
+        total={3}
+        pageSize={2}
+        instant={{ items: rows, view: 'items' }}
+      />,
+    );
+
+    // Default sort is updated_desc, so page 1 = [a, b] and page 2 = [c] —
+    // confirms the group genuinely straddles a page boundary here.
+    expect(screen.getAllByRole('button', { name: /jump to page/i })[0]).toHaveTextContent(
+      'Page 1 of 2',
+    );
+
+    // Header shows the FULL sum (75 + 100 + 106 = 281), never the
+    // page-1-only sum (75 + 100 = 175).
+    expect(screen.getByText('281')).toBeInTheDocument();
+    expect(screen.queryByText('175')).not.toBeInTheDocument();
   });
 });
 
@@ -515,11 +664,17 @@ describe('InventoryTable per-rack-row selection', () => {
   }
 
   it('checking one rack row marks ONLY that row — not the same item’s other rack row', async () => {
+    // CHANGED (Model B / SKU grouping): the two rack rows now sit behind
+    // a collapsed SKU-group header — expand it first to reach their
+    // checkboxes (the header itself is never selectable, so the total
+    // checkbox count is unchanged: select-all + the 2 rack checkboxes).
     const user = userEvent.setup();
     renderTwoRacks();
 
-    // Two split rows for the one SKU.
-    expect(screen.getAllByRole('link', { name: 'Acer Chromebook 511' })).toHaveLength(2);
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+
+    // Header's own row link + two split rows for the one SKU.
+    expect(screen.getAllByRole('link', { name: 'Acer Chromebook 511' })).toHaveLength(3);
 
     // Checkboxes: [0] = header select-all, [1] = rack 1-C, [2] = rack 2-C.
     const boxes = screen.getAllByRole('checkbox');
@@ -537,8 +692,12 @@ describe('InventoryTable per-rack-row selection', () => {
   });
 
   it('selecting BOTH racks of ONE item resolves to a single distinct item id — archive/label/export affect 1 item, counter reads 1', async () => {
+    // CHANGED (Model B / SKU grouping): expand the collapsed SKU group
+    // first to reach the two rack checkboxes.
     const user = userEvent.setup();
     renderTwoRacks();
+
+    await user.click(screen.getByRole('button', { name: /expand/i }));
 
     const [, rack1C, rack2C] = screen.getAllByRole('checkbox');
 

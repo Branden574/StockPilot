@@ -105,9 +105,27 @@ export async function GET(
     let auditExtra: Record<string, unknown> = {};
 
     if (slug === 'inventory-valuation') {
-      const data = await reportsSvc.inventoryValuation();
+      const charterId = url.searchParams.get('charterId');
+      const data = await reportsSvc.inventoryValuation({ charterId });
       title = 'Inventory valuation';
-      subtitle = `as of ${formatDateForPdf(new Date())}`;
+      // Resolve a display name for the subtitle when charter-scoped. Best
+      // effort only — org-scoped lookup, so a foreign/invalid charterId
+      // (which inventoryValuation() already turned into an empty report)
+      // just falls back to showing the raw id rather than failing the PDF.
+      let charterLabel: string | null = null;
+      if (charterId) {
+        const { data: charterRow } = await ctx.supabase
+          .from('charters')
+          .select('name')
+          .eq('organization_id', ctx.organizationId)
+          .eq('id', charterId)
+          .maybeSingle();
+        charterLabel = (charterRow as { name?: string } | null)?.name ?? charterId;
+        suffix = 'charter';
+      }
+      subtitle = charterLabel
+        ? `as of ${formatDateForPdf(new Date())} · Charter: ${charterLabel}`
+        : `as of ${formatDateForPdf(new Date())}`;
       const itemIds = photosDisabled ? [] : data.rows.map((r) => r.itemId);
       const thumbs = await primaryThumbsByItemId(imagesSvc, itemIds);
       sections = [
@@ -137,7 +155,7 @@ export async function GET(
         },
       ];
       footerNote = `${formatNumberForPdf(data.itemCount)} items · ${formatNumberForPdf(data.totalUnits)} units · total value ${formatCurrencyForPdf(data.totalValue)}`;
-      auditExtra = { item_count: data.itemCount, total_value: data.totalValue };
+      auditExtra = { item_count: data.itemCount, total_value: data.totalValue, charter_id: charterId ?? undefined };
     } else if (slug === 'stock-movements') {
       const days = parseDays(url.searchParams.get('days'));
       const data = await reportsSvc.movementSummary(days);

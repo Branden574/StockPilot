@@ -146,6 +146,23 @@ export function PoImportDetail({
     () => new Map(items.map((i) => [i.id, i])),
     [items],
   );
+  // Model B: the org's data model allows the same SKU across multiple
+  // inventory_items rows — one per charter/rack "placement" (see
+  // lib/inventory/group-by-sku.ts). A line's matched/created item is only
+  // ONE placement, which can be a small slice of a much bigger SKU total
+  // (e.g. the matched placement holds 100 while the SKU totals 281 across
+  // placements) — showing only "100 → 200" reads as wrong to the owner.
+  // Computed here from the SAME full `items` list already loaded via
+  // listForMatching (no extra DB query) and threaded into buildPreview /
+  // StockImpactPreview as a pure, read-time, display-only projection.
+  const skuTotalBySku = React.useMemo(() => {
+    const m = new Map<string, number>();
+    for (const i of items) {
+      if (!i.sku) continue;
+      m.set(i.sku, (m.get(i.sku) ?? 0) + (i.quantityOnHand || 0));
+    }
+    return m;
+  }, [items]);
   // ItemCombobox resolves its trigger label from its OWN items prop — a line
   // already matched to a NON-oldest duplicate row must have that row appended
   // to the options, or the trigger would fall back to the placeholder.
@@ -268,8 +285,8 @@ export function PoImportDetail({
 
   // eslint-disable-next-line react-hooks/preserve-manual-memoization -- manual memo intentional
   const preview = React.useMemo(
-    () => buildPreview(lines, overrides, items),
-    [lines, overrides, items],
+    () => buildPreview(lines, overrides, items, skuTotalBySku),
+    [lines, overrides, items, skuTotalBySku],
   );
 
   const isScan = header.source_type === 'scan';
@@ -705,7 +722,12 @@ export function PoImportDetail({
       </div>
 
       {canApprove && (
-        <StockImpactPreview lines={lines} overrides={overrides} items={items} />
+        <StockImpactPreview
+          lines={lines}
+          overrides={overrides}
+          items={items}
+          skuTotalBySku={skuTotalBySku}
+        />
       )}
 
       {canApprove && (

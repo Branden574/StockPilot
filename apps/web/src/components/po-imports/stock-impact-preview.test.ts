@@ -154,3 +154,112 @@ describe('buildPreview', () => {
     expect(rows[0]!.projectedQty).toBe(15);
   });
 });
+
+// Model B: the org's data model allows the same SKU across multiple
+// inventory_items rows (one per charter/rack "placement" — see
+// lib/inventory/group-by-sku.ts). A line matches/creates ONE placement, but
+// that placement can be a small slice of a much bigger SKU total (e.g. the
+// matched placement holds 100 while the SKU totals 281 across placements) —
+// showing only "100 → 200" reads as wrong to the owner. The preview must
+// show BOTH the SKU aggregate (summed across every placement sharing that
+// SKU) and the specific placement's own before/after.
+describe('buildPreview — SKU aggregate (Model B placements)', () => {
+  const PLACEMENT_A: PreviewItem = {
+    id: 'placement-a',
+    sku: 'SKU-X',
+    name: 'Chromebook 511',
+    quantityOnHand: 100,
+  };
+  const PLACEMENT_B: PreviewItem = {
+    id: 'placement-b',
+    sku: 'SKU-X',
+    name: 'Chromebook 511',
+    quantityOnHand: 181,
+  };
+  // What the PAGE computes from the FULL items list (listForMatching) —
+  // sum of quantityOnHand over every row sharing the target SKU. 100 + 181.
+  const SKU_TOTAL_BY_SKU = new Map<string, number>([['SKU-X', 281]]);
+
+  it('shows the SKU aggregate (281 → 381) AND the specific placement (100 → 200) for a mapped line', () => {
+    const lines = [line('1', { item_id: 'placement-a', qty_ordered_original: 100 })];
+    const { rows } = buildPreview(lines, {}, [PLACEMENT_A, PLACEMENT_B], SKU_TOTAL_BY_SKU);
+    // The specific placement (the matched row) — unchanged single-record math.
+    expect(rows[0]!.currentQty).toBe(100);
+    expect(rows[0]!.projectedQty).toBe(200);
+    // The SKU aggregate — summed across ALL placements sharing the SKU, plus
+    // this line's qty. This is the "281 vs 100" fix.
+    expect(rows[0]!.skuTotalCurrentQty).toBe(281);
+    expect(rows[0]!.skuTotalProjectedQty).toBe(381);
+  });
+
+  it('two lines landing on different placements of the same SKU stack in the SKU aggregate (each placement keeps its own math)', () => {
+    const lines = [
+      line('1', { item_id: 'placement-a', qty_ordered_original: 20 }),
+      line('2', { item_id: 'placement-b', qty_ordered_original: 30 }),
+    ];
+    const { rows } = buildPreview(lines, {}, [PLACEMENT_A, PLACEMENT_B], SKU_TOTAL_BY_SKU);
+    expect(rows[0]!.currentQty).toBe(100);
+    expect(rows[0]!.projectedQty).toBe(120);
+    expect(rows[1]!.currentQty).toBe(181);
+    expect(rows[1]!.projectedQty).toBe(211);
+    // Both rows report the SAME SKU-level aggregate: 281 baseline + 20 + 30.
+    expect(rows[0]!.skuTotalCurrentQty).toBe(281);
+    expect(rows[0]!.skuTotalProjectedQty).toBe(331);
+    expect(rows[1]!.skuTotalCurrentQty).toBe(281);
+    expect(rows[1]!.skuTotalProjectedQty).toBe(331);
+  });
+
+  it('a create-new (unmapped, unaccepted-suggestion) line shows placement 0 → qty, and the SKU total rises by the same qty', () => {
+    const lines = [
+      line('1', {
+        qty_ordered_original: 100,
+        suggested_item_id: 'placement-a',
+      } as Partial<PoImportLineRow>),
+    ];
+    // Even though the map carries a real total for SKU-X, an unaccepted
+    // suggestion must NEVER borrow it (same rule as the existing "unaccepted
+    // suggestion projects from 0" test above) — the SKU total starts fresh
+    // at 0, same as the placement.
+    const { rows } = buildPreview(lines, {}, [PLACEMENT_A, PLACEMENT_B], SKU_TOTAL_BY_SKU);
+    expect(rows[0]!.status).toBe('unmapped');
+    expect(rows[0]!.currentQty).toBe(0);
+    expect(rows[0]!.projectedQty).toBe(100);
+    expect(rows[0]!.skuTotalCurrentQty).toBe(0);
+    expect(rows[0]!.skuTotalProjectedQty).toBe(100);
+  });
+
+  it('omitting skuTotalBySku falls back to the placement qty (backward compatible; no crash)', () => {
+    const lines = [line('1', { item_id: 'placement-a', qty_ordered_original: 100 })];
+    const { rows } = buildPreview(lines, {}, [PLACEMENT_A, PLACEMENT_B]); // no 4th arg
+    expect(rows[0]!.currentQty).toBe(100);
+    expect(rows[0]!.skuTotalCurrentQty).toBe(100);
+    expect(rows[0]!.skuTotalProjectedQty).toBe(200);
+  });
+
+  it('buildPreview is a pure projection: no mutation of its inputs, deterministic for the same inputs', () => {
+    const lines = [
+      line('1', { item_id: 'placement-a', qty_ordered_original: 100 }),
+      line('2', { qty_ordered_original: 5 }),
+    ];
+    const items = [PLACEMENT_A, PLACEMENT_B];
+    const overrides: Record<string, PreviewLineOverride> = {};
+    const skuTotalBySku = new Map(SKU_TOTAL_BY_SKU);
+
+    const linesSnapshot = JSON.parse(JSON.stringify(lines));
+    const itemsSnapshot = JSON.parse(JSON.stringify(items));
+    const overridesSnapshot = JSON.parse(JSON.stringify(overrides));
+    const skuTotalSnapshot = new Map(skuTotalBySku);
+
+    const result1 = buildPreview(lines, overrides, items, skuTotalBySku);
+    const result2 = buildPreview(lines, overrides, items, skuTotalBySku);
+
+    // No side effects on any input — a pure function reads, never writes.
+    expect(lines).toEqual(linesSnapshot);
+    expect(items).toEqual(itemsSnapshot);
+    expect(overrides).toEqual(overridesSnapshot);
+    expect(skuTotalBySku).toEqual(skuTotalSnapshot);
+    // Same inputs → same (deep-equal) outputs, every call — no hidden state,
+    // no async/timers/network involved.
+    expect(result2).toEqual(result1);
+  });
+});
