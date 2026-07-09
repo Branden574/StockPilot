@@ -15,8 +15,7 @@
 
 /** Recognized apparel size tokens, longest-first so the regex prefers the
  *  longer match (`XXXXXL` over `XXXXL`, `2XL` over a bare `L`, `XS` over `S`). */
-const SIZE_ALTERNATION =
-  '6XL|5XL|4XL|3XL|2XL|XXXXXL|XXXXL|XXXL|XXL|XL|XS|L|M|S';
+const SIZE_ALTERNATION = '6XL|5XL|4XL|3XL|2XL|XXXXXL|XXXXL|XXXL|XXL|XL|XS|L|M|S';
 
 /** Trailing size on a NAME — separated by ` - `, `-`, or whitespace. */
 const SIZE_NAME_REGEX = new RegExp(`(?:\\s*-\\s*|\\s+)(?:${SIZE_ALTERNATION})\\s*$`, 'i');
@@ -140,7 +139,13 @@ export function groupBySizeRun<T>(
     if (key && (counts.get(key) ?? 0) >= 2) {
       let g = groups.get(key);
       if (!g) {
-        g = { styleKey: key, baseName: stripSizeSuffix(m.name), total: 0, sizeCount: 0, members: [] };
+        g = {
+          styleKey: key,
+          baseName: stripSizeSuffix(m.name),
+          total: 0,
+          sizeCount: 0,
+          members: [],
+        };
         groups.set(key, g);
         out.push({ kind: 'size-run', group: g });
       }

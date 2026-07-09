@@ -36,10 +36,7 @@ import {
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
-import {
-  ImageHoverPreview,
-  prewarmPreviewImages,
-} from '@/components/ui/image-hover-preview';
+import { ImageHoverPreview, prewarmPreviewImages } from '@/components/ui/image-hover-preview';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { downloadInventoryExport, type InventoryExportRequest } from '@/lib/download-export';
@@ -582,9 +579,7 @@ export function InventoryTable({
   // `undefined` = the streamed payload hasn't resolved yet; `null` = it
   // resolved to "no dataset" (over-cap org / loader failure) — server
   // mode is final. The distinction drives `instantPending` below.
-  const [adopted, setAdopted] = React.useState<InstantAdoptedPayload | null | undefined>(
-    undefined,
-  );
+  const [adopted, setAdopted] = React.useState<InstantAdoptedPayload | null | undefined>(undefined);
   const handleAdopt = React.useCallback((payload: InstantAdoptedPayload | null) => {
     setAdopted(payload);
   }, []);
@@ -708,12 +703,8 @@ export function InventoryTable({
     return items.filter((i) => {
       const name = (i.name ?? '').toLowerCase();
       const sku = (i.sku ?? '').toLowerCase();
-      const barcode = (
-        (i as { barcode?: string | null }).barcode ?? ''
-      ).toLowerCase();
-      return (
-        name.includes(needle) || sku.includes(needle) || barcode.includes(needle)
-      );
+      const barcode = ((i as { barcode?: string | null }).barcode ?? '').toLowerCase();
+      return name.includes(needle) || sku.includes(needle) || barcode.includes(needle);
     });
   }, [items, q, instantMode]);
 
@@ -746,12 +737,7 @@ export function InventoryTable({
 
   const instantView = React.useMemo(() => {
     if (!effectiveInstant || !instantState) return null;
-    return deriveInstantView(
-      effectiveInstant.items,
-      instantState,
-      effectiveInstant.view,
-      pageSize,
-    );
+    return deriveInstantView(effectiveInstant.items, instantState, effectiveInstant.view, pageSize);
   }, [effectiveInstant, instantState, pageSize]);
 
   // Items view: expand the page's items into one row per holding line —
@@ -1041,8 +1027,7 @@ export function InventoryTable({
   // (deriveInstantView), so it tracks every active filter including q.
   const valueOnHand = instantView
     ? instantView.valueOnHand
-    : valueOnHandProp ??
-      items.reduce((s, it) => s + it.quantity_on_hand * it.unit_cost, 0);
+    : (valueOnHandProp ?? items.reduce((s, it) => s + it.quantity_on_hand * it.unit_cost, 0));
 
   // Total + current page: locally derived in instant mode (clamped to
   // the filtered set), server-provided otherwise.
@@ -1216,9 +1201,7 @@ export function InventoryTable({
         out.push({ kind: 'passthrough', entry: ge.entry });
         continue;
       }
-      const items = ge.group.members.map(
-        (m) => (m as Extract<RenderEntry, { kind: 'row' }>).item,
-      );
+      const items = ge.group.members.map((m) => (m as Extract<RenderEntry, { kind: 'row' }>).item);
       out.push({ kind: 'style', group: ge.group, items });
       if (styleSearchActive || expandedStyleGroups.has(ge.group.styleKey)) {
         for (const m of ge.group.members) out.push({ kind: 'passthrough', entry: m });
@@ -1266,9 +1249,7 @@ export function InventoryTable({
             // Instant mode: the stock filter derives locally, so the chip
             // becomes a shallow push (same URL, zero server work).
             onClick={
-              instantMode
-                ? (e) => interceptShallowNav(e, hrefForView(v), shallowPush)
-                : undefined
+              instantMode ? (e) => interceptShallowNav(e, hrefForView(v), shallowPush) : undefined
             }
             className={cn(
               'inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[11.5px] transition-colors',
@@ -1310,181 +1291,181 @@ export function InventoryTable({
           reports). Gmail-style swap keeps every table pixel exactly where
           it was. */}
       <div className="grid">
-      <div
-        className={cn(
-          'col-start-1 row-start-1 flex flex-wrap items-center gap-2',
-          selected.size > 0 && 'invisible',
-        )}
-      >
-        <div className="relative min-w-[180px] max-w-md flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ed-ink-4)]" />
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search name, SKU, barcode…"
-            className={cn('h-8 pl-8 text-[12.5px]', onScanRequest && 'pr-8')}
-            aria-label="Search items"
-          />
-          {onScanRequest && (
+        <div
+          className={cn(
+            'col-start-1 row-start-1 flex flex-wrap items-center gap-2',
+            selected.size > 0 && 'invisible',
+          )}
+        >
+          <div className="relative min-w-[180px] max-w-md flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ed-ink-4)]" />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search name, SKU, barcode…"
+              className={cn('h-8 pl-8 text-[12.5px]', onScanRequest && 'pr-8')}
+              aria-label="Search items"
+            />
+            {onScanRequest && (
+              <button
+                type="button"
+                onClick={onScanRequest}
+                className="hover:text-foreground absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-[var(--ed-ink-4)] transition-colors"
+                aria-label="Scan barcode"
+              >
+                <ScanLine className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          <SortMenu value={sort} onChange={setSort} />
+
+          {categories.length > 0 && (
+            <MultiSelectFilter
+              label="Category"
+              options={categories}
+              selected={categoryIds}
+              onChange={(ids) => setMultiParam('cat', ids)}
+            />
+          )}
+
+          {locations.length > 0 && (
+            <MultiSelectFilter
+              label="Location"
+              options={locations}
+              selected={locationIds}
+              onChange={(ids) => setMultiParam('loc', ids)}
+            />
+          )}
+
+          {charters.length > 0 && (
+            <MultiSelectFilter
+              label="Charter"
+              // "Generic" is the sentinel for items with charter_id IS NULL
+              // — stock that any charter the warehouse services can use.
+              // Sits at the top so the most common pick is immediately
+              // reachable; real charters follow in their natural order.
+              options={[
+                { id: 'generic', name: 'Generic (any charter)' },
+                ...charters.map((c) => ({
+                  id: c.id,
+                  name: c.code ? `${c.name} · ${c.code}` : c.name,
+                })),
+              ]}
+              selected={charterIds}
+              onChange={(ids) => setMultiParam('charter', ids)}
+            />
+          )}
+
+          {(activeFilterCount > 0 || params.get('sort') || q.trim()) && (
             <button
               type="button"
-              onClick={onScanRequest}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-[var(--ed-ink-4)] transition-colors hover:text-foreground"
-              aria-label="Scan barcode"
+              onClick={clearAllFilters}
+              className="border-border hover:text-foreground inline-flex h-8 items-center gap-1 rounded-md border border-dashed px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)]"
+              aria-label="Clear all filters"
             >
-              <ScanLine className="h-3.5 w-3.5" />
+              <X className="h-3 w-3" /> Clear
             </button>
           )}
-        </div>
 
-        <SortMenu value={sort} onChange={setSort} />
-
-        {categories.length > 0 && (
-          <MultiSelectFilter
-            label="Category"
-            options={categories}
-            selected={categoryIds}
-            onChange={(ids) => setMultiParam('cat', ids)}
-          />
-        )}
-
-        {locations.length > 0 && (
-          <MultiSelectFilter
-            label="Location"
-            options={locations}
-            selected={locationIds}
-            onChange={(ids) => setMultiParam('loc', ids)}
-          />
-        )}
-
-        {charters.length > 0 && (
-          <MultiSelectFilter
-            label="Charter"
-            // "Generic" is the sentinel for items with charter_id IS NULL
-            // — stock that any charter the warehouse services can use.
-            // Sits at the top so the most common pick is immediately
-            // reachable; real charters follow in their natural order.
-            options={[
-              { id: 'generic', name: 'Generic (any charter)' },
-              ...charters.map((c) => ({
-                id: c.id,
-                name: c.code ? `${c.name} · ${c.code}` : c.name,
-              })),
-            ]}
-            selected={charterIds}
-            onChange={(ids) => setMultiParam('charter', ids)}
-          />
-        )}
-
-        {(activeFilterCount > 0 || params.get('sort') || q.trim()) && (
           <button
             type="button"
-            onClick={clearAllFilters}
-            className="inline-flex h-8 items-center gap-1 rounded-md border border-dashed border-border px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)] hover:text-foreground"
-            aria-label="Clear all filters"
+            onClick={() => setStockView((v) => (v === 'placed' ? 'total' : 'placed'))}
+            className="border-border hover:text-foreground inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)]"
+            aria-label="Toggle on-hand view"
+            title="Switch between total on-hand and placed-only"
           >
-            <X className="h-3 w-3" /> Clear
+            {stockView === 'placed' ? 'On hand: placed only' : 'On hand: total'}
           </button>
-        )}
 
-        <button
-          type="button"
-          onClick={() => setStockView((v) => (v === 'placed' ? 'total' : 'placed'))}
-          className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)] hover:text-foreground"
-          aria-label="Toggle on-hand view"
-          title="Switch between total on-hand and placed-only"
-        >
-          {stockView === 'placed' ? 'On hand: placed only' : 'On hand: total'}
-        </button>
+          <ExportMenu
+            params={params}
+            itemType={showBookFields ? 'book' : (params.get('type') ?? 'product')}
+          />
 
-        <ExportMenu
-          params={params}
-          itemType={showBookFields ? 'book' : params.get('type') ?? 'product'}
-        />
-
-        <p className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-[var(--ed-ink-3)]">
-          {/* Filter round-trip affordance: rows stay visible (dimmed) while
+          <p className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-[var(--ed-ink-3)]">
+            {/* Filter round-trip affordance: rows stay visible (dimmed) while
               the new result set loads; this small spinner is the "working"
               signal — mirrors the search box's "(searching…)" treatment. */}
-          {isFilterPending && (
-            <Loader2 aria-label="Updating results" className="h-3 w-3 animate-spin" />
-          )}
-          {(() => {
-            // Instant mode: the totals ARE the filtered set (the
-            // buildSumPage mirror runs locally over the full dataset),
-            // so the footer never needs the "Showing N matching" hedge
-            // or the "(searching…)" phase — every keystroke's answer is
-            // complete.
-            if (instantMode) {
+            {isFilterPending && (
+              <Loader2 aria-label="Updating results" className="h-3 w-3 animate-spin" />
+            )}
+            {(() => {
+              // Instant mode: the totals ARE the filtered set (the
+              // buildSumPage mirror runs locally over the full dataset),
+              // so the footer never needs the "Showing N matching" hedge
+              // or the "(searching…)" phase — every keystroke's answer is
+              // complete.
+              if (instantMode) {
+                return (
+                  <>
+                    {formatNumber(effectiveTotal)} SKUs · {formatCurrency(valueOnHand)} on hand
+                  </>
+                );
+              }
+              const needle = q.trim();
+              if (!needle) {
+                return (
+                  <>
+                    {formatNumber(total)} SKUs · {formatCurrency(valueOnHand)} on hand
+                  </>
+                );
+              }
               return (
                 <>
-                  {formatNumber(effectiveTotal)} SKUs · {formatCurrency(valueOnHand)} on hand
+                  Showing {formatNumber(displayed.length)} matching &ldquo;{needle}&rdquo;
+                  {serverLoading ? ' (searching…)' : null}
                 </>
               );
-            }
-            const needle = q.trim();
-            if (!needle) {
-              return (
-                <>
-                  {formatNumber(total)} SKUs · {formatCurrency(valueOnHand)} on hand
-                </>
-              );
-            }
-            return (
-              <>
-                Showing {formatNumber(displayed.length)} matching &ldquo;{needle}&rdquo;
-                {serverLoading ? ' (searching…)' : null}
-              </>
-            );
-          })()}
-        </p>
-      </div>
+            })()}
+          </p>
+        </div>
 
-      {/* Bulk actions layer — always mounted (see grid-stack note above),
+        {/* Bulk actions layer — always mounted (see grid-stack note above),
           revealed in place of the toolbar while rows are selected. */}
-      <div
-        className={cn(
-          'col-start-1 row-start-1 flex min-w-0 flex-col justify-center',
-          selected.size === 0 && 'invisible',
-        )}
-      >
-        <BulkActions
-          // DISTINCT item ids (not rowKeys) — actions are item-level and the
-          // counter is selectedIds.length, so both stay correct even when two
-          // rack rows of the same item are checked.
-          selectedIds={selectedItemIds}
-          categories={categories}
-          suppliers={suppliers}
-          locations={locations}
-          tags={tags}
-          onClear={() => setSelected(new Set())}
-          // Instant mode holds the FULL dataset, so cross-page selections
-          // resolve against it; server mode keeps today's page-row scan.
-          // Match on the deduped item-id set (selection now keys on rowKey).
-          hasArchivedSelection={(effectiveInstant?.items ?? items).some(
-            (i) => selectedItemIdSet.has(i.id) && i.status === 'archived',
+        <div
+          className={cn(
+            'col-start-1 row-start-1 flex min-w-0 flex-col justify-center',
+            selected.size === 0 && 'invisible',
           )}
-          onCycleCount={() => {
-            // Books tab and Items tab share this table; infer the pick
-            // type from the base path so the confirm screen can group
-            // Products vs Books. sku/name are display-only — the server
-            // re-validates by id.
-            const itemType = basePath.includes('/books') ? 'book' : 'product';
-            const byId = new Map<string, Item>();
-            for (const r of effectiveInstant?.items ?? items) byId.set(r.id, r);
-            for (const r of serverHits ?? []) byId.set(r.id, r);
-            // Distinct item ids — one cycle-count pick per item, never one
-            // per rack row.
-            const picks = selectedItemIds.map((id) => {
-              const r = byId.get(id);
-              return { id, sku: r?.sku ?? '', name: r?.name ?? 'Item', itemType };
-            });
-            addToCount(picks);
-            setSelected(new Set());
-            router.push('/dashboard/cycle-counts/new');
-          }}
-        />
-      </div>
+        >
+          <BulkActions
+            // DISTINCT item ids (not rowKeys) — actions are item-level and the
+            // counter is selectedIds.length, so both stay correct even when two
+            // rack rows of the same item are checked.
+            selectedIds={selectedItemIds}
+            categories={categories}
+            suppliers={suppliers}
+            locations={locations}
+            tags={tags}
+            onClear={() => setSelected(new Set())}
+            // Instant mode holds the FULL dataset, so cross-page selections
+            // resolve against it; server mode keeps today's page-row scan.
+            // Match on the deduped item-id set (selection now keys on rowKey).
+            hasArchivedSelection={(effectiveInstant?.items ?? items).some(
+              (i) => selectedItemIdSet.has(i.id) && i.status === 'archived',
+            )}
+            onCycleCount={() => {
+              // Books tab and Items tab share this table; infer the pick
+              // type from the base path so the confirm screen can group
+              // Products vs Books. sku/name are display-only — the server
+              // re-validates by id.
+              const itemType = basePath.includes('/books') ? 'book' : 'product';
+              const byId = new Map<string, Item>();
+              for (const r of effectiveInstant?.items ?? items) byId.set(r.id, r);
+              for (const r of serverHits ?? []) byId.set(r.id, r);
+              // Distinct item ids — one cycle-count pick per item, never one
+              // per rack row.
+              const picks = selectedItemIds.map((id) => {
+                const r = byId.get(id);
+                return { id, sku: r?.sku ?? '', name: r?.name ?? 'Item', itemType };
+              });
+              addToCount(picks);
+              setSelected(new Set());
+              router.push('/dashboard/cycle-counts/new');
+            }}
+          />
+        </div>
       </div>
 
       {/* Top pagination — mirrors the bottom one so users on long lists
@@ -1512,7 +1493,7 @@ export function InventoryTable({
       <div
         aria-busy={isFilterPending}
         className={cn(
-          'overflow-x-auto rounded-[10px] border border-border bg-card transition-opacity',
+          'border-border bg-card overflow-x-auto rounded-[10px] border transition-opacity',
           // Subtle pending treatment ONLY — never pointer-events-none. The
           // old pointer-events-none silently swallowed every row-checkbox
           // click for the full filter round-trip (seconds at org scale),
@@ -1526,7 +1507,7 @@ export function InventoryTable({
       >
         <table className="w-full min-w-[720px] text-[12.5px]">
           <thead>
-            <tr className="border-b border-border">
+            <tr className="border-border border-b">
               <th className="w-8 px-3">
                 <Checkbox
                   checked={allVisibleSelected}
@@ -1650,7 +1631,7 @@ export function InventoryTable({
                 <tr
                   key={item.rowKey ?? item.id}
                   className={cn(
-                    'border-b border-border transition-colors last:border-0',
+                    'border-border border-b transition-colors last:border-0',
                     isSelected ? 'bg-[hsl(var(--accent)/0.10)]' : 'hover:bg-muted/60',
                   )}
                 >
@@ -1723,12 +1704,12 @@ export function InventoryTable({
                             // to the empty bg-muted background.
                             placeholder={item.image_lqip ? 'blur' : 'empty'}
                             blurDataURL={item.image_lqip ?? undefined}
-                            className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
+                            className="border-border bg-muted h-7 w-7 shrink-0 rounded-[5px] border object-cover"
                           />
                         ) : (
                           <span
                             aria-hidden
-                            className="h-7 w-7 shrink-0 rounded-[5px] border border-border"
+                            className="border-border h-7 w-7 shrink-0 rounded-[5px] border"
                             style={{
                               background:
                                 'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
@@ -1782,7 +1763,7 @@ export function InventoryTable({
                   <td className="px-3 text-[12px]">
                     {(() => {
                       const charter = item.charter_id
-                        ? lookups.charters?.get(item.charter_id) ?? null
+                        ? (lookups.charters?.get(item.charter_id) ?? null)
                         : null;
                       if (charter) {
                         return (
@@ -1795,7 +1776,7 @@ export function InventoryTable({
                       // serviced by the warehouse can pull from it).
                       return (
                         <span
-                          className="text-[11px] text-[var(--ed-ink-4)] italic"
+                          className="text-[11px] italic text-[var(--ed-ink-4)]"
                           title="Generic stock — any charter serviced by this warehouse can use it"
                         >
                           Generic
@@ -1803,7 +1784,9 @@ export function InventoryTable({
                       );
                     })()}
                   </td>
-                  <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">{location?.name ?? '—'}</td>
+                  <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
+                    {location?.name ?? '—'}
+                  </td>
                   {!showBookFields && (
                     <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
                       {(() => {
@@ -1815,8 +1798,7 @@ export function InventoryTable({
                         // card and the qty sub-line below).
                         if (item.placement_label !== undefined) {
                           const awaiting =
-                            item.placement_kind === 'staging' ||
-                            item.placement_kind === 'unplaced';
+                            item.placement_kind === 'staging' || item.placement_kind === 'unplaced';
                           return item.placement_label ? (
                             <span
                               className={
@@ -1878,9 +1860,7 @@ export function InventoryTable({
                           </td>
                           <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
                             {storage.rackLabel ? (
-                              <span className="font-mono tabular-nums">
-                                {storage.rackLabel}
-                              </span>
+                              <span className="font-mono tabular-nums">{storage.rackLabel}</span>
                             ) : (
                               <span className="text-[var(--ed-ink-4)]">—</span>
                             )}
@@ -1892,9 +1872,7 @@ export function InventoryTable({
                                   aria-hidden
                                   title={color ? color.label : 'No color set'}
                                   className="border-border inline-block h-2.5 w-2.5 rounded-full border"
-                                  style={
-                                    color ? { backgroundColor: color.hex } : undefined
-                                  }
+                                  style={color ? { backgroundColor: color.hex } : undefined}
                                 />
                                 <span className="font-mono tabular-nums">
                                   {storage.crateNumber}
@@ -1916,8 +1894,7 @@ export function InventoryTable({
                       // 2026-07-08). Placed rack rows show just the number.
                       if (item.line_quantity !== undefined) {
                         const awaiting =
-                          item.placement_kind === 'staging' ||
-                          item.placement_kind === 'unplaced';
+                          item.placement_kind === 'staging' || item.placement_kind === 'unplaced';
                         return (
                           <>
                             {formatNumber(item.line_quantity)}
@@ -2038,9 +2015,7 @@ export function InventoryTable({
         )}
         {canCreate && (
           <Button asChild>
-            <Link href={`${basePath}/new`}>
-              + New {showBookFields ? 'book' : 'item'}
-            </Link>
+            <Link href={`${basePath}/new`}>+ New {showBookFields ? 'book' : 'item'}</Link>
           </Button>
         )}
       </div>
@@ -2126,7 +2101,7 @@ export function Pagination({
             <button
               type="button"
               aria-label="Jump to page"
-              className="hover:text-foreground hover:bg-muted/40 cursor-pointer rounded px-2 py-0.5 text-[11.5px] text-muted-foreground transition-colors"
+              className="hover:text-foreground hover:bg-muted/40 text-muted-foreground cursor-pointer rounded px-2 py-0.5 text-[11.5px] transition-colors"
             >
               Page {safePage} of {totalPages}
             </button>
@@ -2244,7 +2219,7 @@ function SkuGroupHeaderRow({
   const rolledUpStatus = rollupStatus(items.map((it) => it.status));
 
   return (
-    <tr className="border-b border-border bg-muted/30 transition-colors last:border-0">
+    <tr className="border-border bg-muted/30 border-b transition-colors last:border-0">
       {/* Not selectable — no checkbox (bulk actions target placements). */}
       <td className="px-3" />
       <td className="py-2.5 pr-3">
@@ -2254,7 +2229,7 @@ function SkuGroupHeaderRow({
             onClick={onToggle}
             aria-expanded={expanded}
             aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.sku} (${items.length} placements)`}
-            className="grid h-5 w-5 shrink-0 place-items-center rounded-sm text-[var(--ed-ink-3)] transition-colors hover:bg-muted hover:text-foreground"
+            className="hover:bg-muted hover:text-foreground grid h-5 w-5 shrink-0 place-items-center rounded-sm text-[var(--ed-ink-3)] transition-colors"
           >
             <ChevronRight
               className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')}
@@ -2303,12 +2278,12 @@ function SkuGroupHeaderRow({
                 priority={rowIdx < 12}
                 placeholder={first.image_lqip ? 'blur' : 'empty'}
                 blurDataURL={first.image_lqip ?? undefined}
-                className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
+                className="border-border bg-muted h-7 w-7 shrink-0 rounded-[5px] border object-cover"
               />
             ) : (
               <span
                 aria-hidden
-                className="h-7 w-7 shrink-0 rounded-[5px] border border-border"
+                className="border-border h-7 w-7 shrink-0 rounded-[5px] border"
                 style={{
                   background:
                     'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
@@ -2350,7 +2325,7 @@ function SkuGroupHeaderRow({
       <td className="px-3 text-[12px]">
         {distinctCharterIds.size > 1 ? (
           <span
-            className="text-[11px] text-[var(--ed-ink-4)] italic"
+            className="text-[11px] italic text-[var(--ed-ink-4)]"
             title="Placements span multiple charters — expand to see each"
           >
             Multiple
@@ -2363,12 +2338,12 @@ function SkuGroupHeaderRow({
                 {charter.code ?? charter.name}
               </span>
             ) : (
-              <span className="text-[11px] text-[var(--ed-ink-4)] italic">Generic</span>
+              <span className="text-[11px] italic text-[var(--ed-ink-4)]">Generic</span>
             );
           })()
         ) : (
           <span
-            className="text-[11px] text-[var(--ed-ink-4)] italic"
+            className="text-[11px] italic text-[var(--ed-ink-4)]"
             title="Generic stock — any charter serviced by this warehouse can use it"
           >
             Generic
@@ -2450,7 +2425,7 @@ function StyleGroupHeaderRow({
   const sizeLabel = `${group.sizeCount} size${group.sizeCount === 1 ? '' : 's'}`;
 
   return (
-    <tr className="border-b border-border bg-muted/30 transition-colors last:border-0">
+    <tr className="border-border bg-muted/30 border-b transition-colors last:border-0">
       {/* Not selectable — no checkbox (bulk actions target the member rows). */}
       <td className="px-3" />
       <td className="py-2.5 pr-3">
@@ -2460,7 +2435,7 @@ function StyleGroupHeaderRow({
             onClick={onToggle}
             aria-expanded={expanded}
             aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.baseName} (${sizeLabel})`}
-            className="grid h-5 w-5 shrink-0 place-items-center rounded-sm text-[var(--ed-ink-3)] transition-colors hover:bg-muted hover:text-foreground"
+            className="hover:bg-muted hover:text-foreground grid h-5 w-5 shrink-0 place-items-center rounded-sm text-[var(--ed-ink-3)] transition-colors"
           >
             <ChevronRight
               className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')}
@@ -2496,12 +2471,12 @@ function StyleGroupHeaderRow({
                 sizes="28px"
                 placeholder={first.image_lqip ? 'blur' : 'empty'}
                 blurDataURL={first.image_lqip ?? undefined}
-                className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
+                className="border-border bg-muted h-7 w-7 shrink-0 rounded-[5px] border object-cover"
               />
             ) : (
               <span
                 aria-hidden
-                className="h-7 w-7 shrink-0 rounded-[5px] border border-border"
+                className="border-border h-7 w-7 shrink-0 rounded-[5px] border"
                 style={{
                   background:
                     'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
@@ -2516,13 +2491,13 @@ function StyleGroupHeaderRow({
           >
             {group.baseName}
           </Link>
-          <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10.5px] font-medium text-[var(--ed-ink-3)]">
+          <span className="border-border shrink-0 rounded-full border px-1.5 py-0.5 text-[10.5px] font-medium text-[var(--ed-ink-3)]">
             {sizeLabel}
           </span>
         </div>
       </td>
       {/* SKU — a run spans multiple SKUs, so no single value. */}
-      <td className="px-3 text-[11.5px] text-[var(--ed-ink-4)] italic">—</td>
+      <td className="px-3 text-[11.5px] italic text-[var(--ed-ink-4)]">—</td>
       <td className="px-3">
         {category ? (
           <span
@@ -2545,7 +2520,7 @@ function StyleGroupHeaderRow({
       <td className="px-3 text-[12px]">
         {distinctCharterIds.size > 1 ? (
           <span
-            className="text-[11px] text-[var(--ed-ink-4)] italic"
+            className="text-[11px] italic text-[var(--ed-ink-4)]"
             title="Sizes span multiple charters — expand to see each"
           >
             Multiple
@@ -2558,12 +2533,12 @@ function StyleGroupHeaderRow({
                 {charter.code ?? charter.name}
               </span>
             ) : (
-              <span className="text-[11px] text-[var(--ed-ink-4)] italic">Generic</span>
+              <span className="text-[11px] italic text-[var(--ed-ink-4)]">Generic</span>
             );
           })()
         ) : (
           <span
-            className="text-[11px] text-[var(--ed-ink-4)] italic"
+            className="text-[11px] italic text-[var(--ed-ink-4)]"
             title="Generic stock — any charter serviced by this warehouse can use it"
           >
             Generic
@@ -2607,7 +2582,7 @@ function CheckTick() {
   return (
     <span
       aria-hidden
-      className="h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2 border-background"
+      className="border-background h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2"
     />
   );
 }
@@ -2633,7 +2608,7 @@ function Checkbox({
       {checked ? (
         <CheckTick />
       ) : indeterminate ? (
-        <span aria-hidden className="h-[2px] w-[10px] rounded-full bg-background" />
+        <span aria-hidden className="bg-background h-[2px] w-[10px] rounded-full" />
       ) : null}
     </button>
   );
@@ -2665,7 +2640,7 @@ function SortMenu({ value, onChange }: { value: SortKey; onChange: (k: SortKey) 
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
+          className="border-border bg-background inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
           aria-label={`Sort by ${current.label}`}
         >
           <span className="text-[var(--ed-ink-4)]">Sort:</span>
@@ -2684,7 +2659,7 @@ function SortMenu({ value, onChange }: { value: SortKey; onChange: (k: SortKey) 
                 setOpen(false);
               }}
               className={cn(
-                'rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-muted',
+                'hover:bg-muted rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors',
                 opt.value === value && 'bg-muted font-medium',
               )}
             >
@@ -2741,7 +2716,7 @@ export function MultiSelectFilter({
         <button
           type="button"
           className={cn(
-            'inline-flex h-8 items-center gap-1.5 rounded-md border bg-background px-2.5 text-[12px] transition-colors hover:border-[var(--ed-line-strong)]',
+            'bg-background inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] transition-colors hover:border-[var(--ed-line-strong)]',
             selected.size > 0
               ? 'border-foreground text-foreground'
               : 'border-border text-[var(--ed-ink-2)]',
@@ -2750,7 +2725,7 @@ export function MultiSelectFilter({
         >
           <span>{label}</span>
           {selected.size > 0 && (
-            <span className="grid h-4 min-w-4 place-items-center rounded-full bg-foreground px-1 font-mono text-[10px] tabular-nums text-background">
+            <span className="bg-foreground text-background grid h-4 min-w-4 place-items-center rounded-full px-1 font-mono text-[10px] tabular-nums">
               {selected.size}
             </span>
           )}
@@ -2784,7 +2759,7 @@ export function MultiSelectFilter({
                         role="checkbox"
                         aria-checked={isOn}
                         onClick={() => toggle(opt.id)}
-                        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-muted"
+                        className="hover:bg-muted flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors"
                       >
                         <CheckGlyph checked={isOn} />
                         <span className="truncate">{opt.name}</span>
@@ -2796,11 +2771,11 @@ export function MultiSelectFilter({
             )}
           </div>
           {selected.size > 0 && (
-            <div className="border-t border-border pt-2">
+            <div className="border-border border-t pt-2">
               <button
                 type="button"
                 onClick={() => onChange(new Set())}
-                className="text-[11.5px] text-[var(--ed-ink-3)] underline-offset-2 hover:text-foreground hover:underline"
+                className="hover:text-foreground text-[11.5px] text-[var(--ed-ink-3)] underline-offset-2 hover:underline"
               >
                 Clear {label.toLowerCase()}
               </button>
@@ -2833,7 +2808,7 @@ function ExportFormatRow({
           type="button"
           disabled={busy}
           onClick={() => onPick(f.format)}
-          className="flex-1 rounded-sm border border-border bg-background px-2 py-1 text-[11px] font-medium transition-colors hover:bg-muted disabled:opacity-50"
+          className="border-border bg-background hover:bg-muted flex-1 rounded-sm border px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50"
         >
           {f.label}
         </button>
@@ -2881,7 +2856,7 @@ function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: s
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
+          className="border-border bg-background inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)]"
           aria-label="Export"
         >
           <Download className="h-3 w-3" />
@@ -2969,8 +2944,10 @@ function describeState(state: SavedViewSummary['state']): string {
   else if (state.stock === 'out') parts.push('out of stock');
   if (state.status && state.status !== 'active') parts.push(state.status);
   if (state.type && state.type !== 'product') parts.push(state.type);
-  if (state.cat?.length) parts.push(`${state.cat.length} categor${state.cat.length === 1 ? 'y' : 'ies'}`);
-  if (state.loc?.length) parts.push(`${state.loc.length} location${state.loc.length === 1 ? '' : 's'}`);
+  if (state.cat?.length)
+    parts.push(`${state.cat.length} categor${state.cat.length === 1 ? 'y' : 'ies'}`);
+  if (state.loc?.length)
+    parts.push(`${state.loc.length} location${state.loc.length === 1 ? '' : 's'}`);
   if (state.warehouseId) parts.push('warehouse');
   if (state.sort) parts.push(`sorted ${state.sort.replace('_', ' ')}`);
   return parts.length === 0 ? 'No filters set' : parts.join(' · ');
@@ -3037,7 +3014,9 @@ function SavedViewChip({
       toast.error(res.error.message);
       return;
     }
-    toast.success(next ? `View "${view.name}" shared with the team.` : `View "${view.name}" set to private.`);
+    toast.success(
+      next ? `View "${view.name}" shared with the team.` : `View "${view.name}" set to private.`,
+    );
     router.refresh();
   }
 
@@ -3065,9 +3044,11 @@ function SavedViewChip({
           type="button"
           onClick={toggleShare}
           disabled={sharing}
-          aria-label={view.isShared ? `Make view ${view.name} private` : `Share view ${view.name} with team`}
+          aria-label={
+            view.isShared ? `Make view ${view.name} private` : `Share view ${view.name} with team`
+          }
           className={cn(
-            'ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity hover:bg-foreground/15 group-hover:opacity-100',
+            'hover:bg-foreground/15 ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity group-hover:opacity-100',
             isActive && 'hover:bg-background/20',
           )}
         >
@@ -3087,11 +3068,15 @@ function SavedViewChip({
           disabled={deleting}
           aria-label={`Delete view ${view.name}`}
           className={cn(
-            'ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity hover:bg-foreground/15 group-hover:opacity-100',
+            'hover:bg-foreground/15 ml-0.5 grid h-4 w-4 place-items-center rounded-full opacity-0 transition-opacity group-hover:opacity-100',
             isActive && 'hover:bg-background/20',
           )}
         >
-          {deleting ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <X className="h-2.5 w-2.5" />}
+          {deleting ? (
+            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          ) : (
+            <X className="h-2.5 w-2.5" />
+          )}
         </button>
       )}
       <DestructiveConfirm
@@ -3151,7 +3136,9 @@ function SaveCurrentViewButton({
       return;
     }
     toast.success(
-      shareWithTeam ? `View "${trimmed}" saved and shared with the team.` : `View "${trimmed}" saved.`,
+      shareWithTeam
+        ? `View "${trimmed}" saved and shared with the team.`
+        : `View "${trimmed}" saved.`,
     );
     setOpen(false);
     router.refresh();
@@ -3162,7 +3149,7 @@ function SaveCurrentViewButton({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-border px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)] hover:text-foreground"
+          className="border-border hover:text-foreground inline-flex h-6 items-center gap-1 rounded-full border border-dashed px-2.5 text-[11.5px] text-[var(--ed-ink-3)] transition-colors hover:border-[var(--ed-line-strong)]"
         >
           <Plus className="h-3 w-3" /> Save view
         </button>
@@ -3185,7 +3172,7 @@ function SaveCurrentViewButton({
               className="mt-1 h-8 text-[12.5px]"
             />
           </div>
-          <div className="rounded-md border border-border bg-muted/30 px-2.5 py-2">
+          <div className="border-border bg-muted/30 rounded-md border px-2.5 py-2">
             <div className="text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)]">
               Saving
             </div>
@@ -3193,18 +3180,17 @@ function SaveCurrentViewButton({
               {describeState(currentState)}
             </div>
           </div>
-          <label className="flex items-start gap-2 cursor-pointer">
+          <label className="flex cursor-pointer items-start gap-2">
             <input
               type="checkbox"
               checked={shareWithTeam}
               onChange={(e) => setShareWithTeam(e.target.checked)}
-              className="mt-0.5 h-3.5 w-3.5 rounded border-border text-primary focus:ring-primary"
+              className="border-border text-primary focus:ring-primary mt-0.5 h-3.5 w-3.5 rounded"
             />
             <div className="flex-1">
               <div className="text-[12px] font-medium">Share with team</div>
               <div className="text-[11px] text-[var(--ed-ink-3)]">
-                Everyone in your org will see this view. Only you can edit or
-                delete it.
+                Everyone in your org will see this view. Only you can edit or delete it.
               </div>
             </div>
           </label>
@@ -3236,7 +3222,7 @@ function SparkModeToggle({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="ml-auto inline-flex h-5 items-center gap-1 rounded-sm px-1 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)] hover:text-foreground"
+          className="hover:text-foreground ml-auto inline-flex h-5 items-center gap-1 rounded-sm px-1 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--ed-ink-4)]"
           aria-label={`Sparkline mode: ${mode === 'qty' ? 'quantity trend' : 'movement count'}`}
         >
           {label}
@@ -3259,7 +3245,7 @@ function SparkModeToggle({
                 setOpen(false);
               }}
               className={cn(
-                'rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors hover:bg-muted',
+                'hover:bg-muted rounded-sm px-2 py-1.5 text-left text-[12.5px] transition-colors',
                 opt.value === mode && 'bg-muted font-medium',
               )}
             >

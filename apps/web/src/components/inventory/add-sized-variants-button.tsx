@@ -24,7 +24,17 @@ import { cn } from '@/lib/utils';
 import { bulkCreateSizedVariantsAction } from '@/server/actions/inventory';
 
 type SizeCode = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL' | 'XXXXXL';
-const ALL_SIZES: ReadonlyArray<SizeCode> = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL'];
+const ALL_SIZES: ReadonlyArray<SizeCode> = [
+  'XS',
+  'S',
+  'M',
+  'L',
+  'XL',
+  'XXL',
+  'XXXL',
+  'XXXXL',
+  'XXXXXL',
+];
 
 // Size parsing (stripSizeSuffix / stripSkuSuffix) now lives in @stockpilot/core
 // (`inventory/size-run`), shared with the inventory-list size-run grouping. That
@@ -65,9 +75,7 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
   const [baseSku, setBaseSku] = React.useState<string>(
     stripSkuSuffix(source.sku, source.name) ?? '',
   );
-  const [selected, setSelected] = React.useState<
-    Array<{ size: SizeCode; quantity: number }>
-  >([]);
+  const [selected, setSelected] = React.useState<Array<{ size: SizeCode; quantity: number }>>([]);
 
   React.useEffect(() => {
     if (open) {
@@ -111,17 +119,14 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
         toast.error(res.error.message);
         return;
       }
-      toast.success(
-        `Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`,
-      );
+      toast.success(`Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`);
       setOpen(false);
       // Route back to the tab the source item lives on, preserving
       // the page / search / filter state the user was on (read from
       // sessionStorage, written by the list table on every render).
       // Books have their own /dashboard/books page; everything else
       // funnels to /dashboard/inventory.
-      const basePath =
-        source.itemType === 'book' ? '/dashboard/books' : '/dashboard/inventory';
+      const basePath = source.itemType === 'book' ? '/dashboard/books' : '/dashboard/inventory';
       router.push(resolveListReturnHref(basePath, null));
     } finally {
       setBusy(false);
@@ -130,12 +135,7 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
 
   return (
     <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={() => setOpen(true)}
-      >
+      <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
         <Plus className="h-3.5 w-3.5" /> Add more sizes
       </Button>
       <Dialog open={open} onOpenChange={(v) => (busy ? null : setOpen(v))}>
@@ -143,9 +143,8 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
           <DialogHeader>
             <DialogTitle>Add sized variants</DialogTitle>
             <DialogDescription>
-              Creates one new inventory row per size you pick, copying the
-              supplier, category, warehouse, prices, and reorder thresholds
-              from this item. This item stays unchanged.
+              Creates one new inventory row per size you pick, copying the supplier, category,
+              warehouse, prices, and reorder thresholds from this item. This item stays unchanged.
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3">
@@ -162,8 +161,7 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="add-base-sku">
-                Base SKU{' '}
-                <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+                Base SKU <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
               </Label>
               <Input
                 id="add-base-sku"
@@ -193,10 +191,8 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
                       )
                     }
                     className={cn(
-                      'rounded border border-border px-2.5 py-1 text-xs transition-colors',
-                      picked
-                        ? 'bg-foreground text-background'
-                        : 'hover:bg-muted',
+                      'border-border rounded border px-2.5 py-1 text-xs transition-colors',
+                      picked ? 'bg-foreground text-background' : 'hover:bg-muted',
                     )}
                   >
                     {s}
@@ -221,21 +217,14 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
                       }
                       className="h-8 w-24"
                     />
-                    <span className="text-muted-foreground text-[11px]">
-                      on hand
-                    </span>
+                    <span className="text-muted-foreground text-[11px]">on hand</span>
                   </div>
                 ))}
               </div>
             )}
           </div>
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setOpen(false)}
-              disabled={busy}
-            >
+            <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={busy}>
               Cancel
             </Button>
             <Button type="button" onClick={apply} disabled={busy}>
