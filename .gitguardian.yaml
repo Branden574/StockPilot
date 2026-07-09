@@ -1,0 +1,12 @@
+# GitGuardian (ggshield) configuration.
+#
+# apps/web/src/lib/auth/platform-passphrase.ts is a pure scrypt hashing utility
+# for the platform org-deletion passphrase — it contains NO hardcoded secret.
+# GitGuardian's generic "password" detector false-positives on the 'NFKC' string
+# literal (a Unicode normalization form) in code that mentions "passphrase". The
+# real passphrase is user input, hashed at runtime with a random salt, and stored
+# only as a hash in the DB — never in code or git history. (Incident #34676051.)
+version: 2
+secret:
+  ignored-paths:
+    - apps/web/src/lib/auth/platform-passphrase.ts
