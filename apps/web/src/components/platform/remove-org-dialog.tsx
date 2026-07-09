@@ -17,6 +17,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { PasswordInput } from '@/components/ui/password-input';
+import { useStepUp } from '@/components/auth/step-up-modal';
 import { removeOrgAction } from '@/server/actions/platform-admin';
 
 /**
@@ -39,14 +40,14 @@ export function RemoveOrgDialog({
   orgName: string;
 }) {
   const router = useRouter();
+  const stepUp = useStepUp();
   const [open, setOpen] = React.useState(false);
   const [confirmName, setConfirmName] = React.useState('');
   const [passphrase, setPassphrase] = React.useState('');
   const [alsoDeleteOrphanedUsers, setAlsoDeleteOrphanedUsers] = React.useState(false);
   const [pending, start] = React.useTransition();
 
-  const canConfirm =
-    confirmName.trim().length > 0 && passphrase.length > 0 && !pending;
+  const canConfirm = confirmName.trim().length > 0 && passphrase.length > 0 && !pending;
 
   function reset() {
     setConfirmName('');
@@ -63,12 +64,19 @@ export function RemoveOrgDialog({
   function onConfirm() {
     if (!canConfirm) return;
     start(async () => {
-      const res = await removeOrgAction({
+      const payload = {
         orgId: organizationId,
         passphrase,
         confirmName,
         alsoDeleteOrphanedUsers,
-      });
+      };
+      let res = await removeOrgAction(payload);
+      // Fresh MFA step-up needed → prompt for the authenticator code in-place
+      // (no sign-out) and retry, instead of bouncing the operator to re-login.
+      if (!res.ok && res.error.details?.reason === 'aal2_required') {
+        if (!(await stepUp.ensure())) return;
+        res = await removeOrgAction(payload);
+      }
       if (res.ok) {
         const { deletedUsers } = res.data;
         toast.success(
@@ -80,8 +88,6 @@ export function RemoveOrgDialog({
         reset();
         router.push('/platform');
         router.refresh();
-      } else if (res.error.details?.reason === 'aal2_required') {
-        toast.error('Re-authenticate with MFA, then try again.');
       } else {
         // Keep the dialog open so the operator can fix the passphrase / name.
         toast.error(res.error.message);
@@ -90,91 +96,92 @@ export function RemoveOrgDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <Button type="button" variant="destructive" onClick={() => setOpen(true)}>
-        <Trash2 className="h-4 w-4" />
-        Remove organization
-      </Button>
+    <>
+      {stepUp.modal}
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <Button type="button" variant="destructive" onClick={() => setOpen(true)}>
+          <Trash2 className="h-4 w-4" />
+          Remove organization
+        </Button>
 
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <TriangleAlert className="h-5 w-5 text-destructive" strokeWidth={2} />
-            Remove “{orgName}”
-          </DialogTitle>
-          <DialogDescription>
-            This permanently deletes the organization and its database records — items, orders,
-            movements, members, and so on. This cannot be undone. (Uploaded files in storage are
-            not swept and may remain as orphaned objects.)
-          </DialogDescription>
-        </DialogHeader>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <TriangleAlert className="text-destructive h-5 w-5" strokeWidth={2} />
+              Remove “{orgName}”
+            </DialogTitle>
+            <DialogDescription>
+              This permanently deletes the organization and its database records — items, orders,
+              movements, members, and so on. This cannot be undone. (Uploaded files in storage are
+              not swept and may remain as orphaned objects.)
+            </DialogDescription>
+          </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="remove-org-name">
-              Type the organization name to confirm
-            </Label>
-            <Input
-              id="remove-org-name"
-              autoComplete="off"
-              placeholder={orgName}
-              value={confirmName}
-              onChange={(e) => setConfirmName(e.target.value)}
-              disabled={pending}
-            />
-            <p className="text-[11.5px] text-muted-foreground">
-              Must exactly match <span className="font-medium text-foreground">{orgName}</span>.
-            </p>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="remove-org-name">Type the organization name to confirm</Label>
+              <Input
+                id="remove-org-name"
+                autoComplete="off"
+                placeholder={orgName}
+                value={confirmName}
+                onChange={(e) => setConfirmName(e.target.value)}
+                disabled={pending}
+              />
+              <p className="text-muted-foreground text-[11.5px]">
+                Must exactly match <span className="text-foreground font-medium">{orgName}</span>.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="remove-org-passphrase">Deletion passphrase</Label>
+              <PasswordInput
+                id="remove-org-passphrase"
+                autoComplete="off"
+                placeholder="Global org-deletion passphrase"
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                disabled={pending}
+              />
+            </div>
+
+            <label className="flex items-start gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={alsoDeleteOrphanedUsers}
+                onChange={(e) => setAlsoDeleteOrphanedUsers(e.target.checked)}
+                disabled={pending}
+              />
+              <span>
+                Also delete member accounts that belong <span className="font-medium">only</span> to
+                this org (their sign-in is removed too).
+              </span>
+            </label>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="remove-org-passphrase">Deletion passphrase</Label>
-            <PasswordInput
-              id="remove-org-passphrase"
-              autoComplete="off"
-              placeholder="Global org-deletion passphrase"
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
               disabled={pending}
-            />
-          </div>
-
-          <label className="flex items-start gap-2 text-[13px]">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={alsoDeleteOrphanedUsers}
-              onChange={(e) => setAlsoDeleteOrphanedUsers(e.target.checked)}
-              disabled={pending}
-            />
-            <span>
-              Also delete member accounts that belong <span className="font-medium">only</span> to
-              this org (their sign-in is removed too).
-            </span>
-          </label>
-        </div>
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={pending}
-          >
-            Cancel
-          </Button>
-          <Button type="button" variant="destructive" onClick={onConfirm} disabled={!canConfirm}>
-            {pending ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Deleting…
-              </>
-            ) : (
-              'Permanently delete'
-            )}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            >
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" onClick={onConfirm} disabled={!canConfirm}>
+              {pending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Deleting…
+                </>
+              ) : (
+                'Permanently delete'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
