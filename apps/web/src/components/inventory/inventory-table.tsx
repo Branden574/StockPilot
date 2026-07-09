@@ -1177,10 +1177,10 @@ export function InventoryTable({
   // ("Pink Shirt - L / - XL / - 2XL") into ONE expandable header ON TOP of the
   // SKU grouping above. Display-only — members keep their own SKU/count/rack. A
   // multi-placement SKU header is never folded in (groupable: false). Off for
-  // Books (never sized, and their header layout differs). During an active
-  // search the runs auto-expand so a matched size (already filtered into
-  // `renderItems`) is never hidden inside a collapsed header.
-  const styleSearchActive = q.trim().length > 0;
+  // Books (never sized, and their header layout differs). Collapsed by default;
+  // the chevron alone controls expansion — an earlier build force-expanded runs
+  // during a search, which made the collapse arrow do nothing while filtering
+  // (exactly when the collapsed view is most wanted).
   const styledRenderItems = React.useMemo<StyledEntry[]>(() => {
     if (showBookFields) {
       return renderItems.map((entry) => ({ kind: 'passthrough', entry }));
@@ -1203,12 +1203,12 @@ export function InventoryTable({
       }
       const items = ge.group.members.map((m) => (m as Extract<RenderEntry, { kind: 'row' }>).item);
       out.push({ kind: 'style', group: ge.group, items });
-      if (styleSearchActive || expandedStyleGroups.has(ge.group.styleKey)) {
+      if (expandedStyleGroups.has(ge.group.styleKey)) {
         for (const m of ge.group.members) out.push({ kind: 'passthrough', entry: m });
       }
     }
     return out;
-  }, [renderItems, expandedStyleGroups, styleSearchActive, showBookFields]);
+  }, [renderItems, expandedStyleGroups, showBookFields]);
 
   function toggleStyleGroup(styleKey: string) {
     setExpandedStyleGroups((prev) => {
@@ -1574,7 +1574,7 @@ export function InventoryTable({
                     key={`style-group:${se.group.styleKey}`}
                     group={se.group}
                     items={se.items}
-                    expanded={styleSearchActive || expandedStyleGroups.has(se.group.styleKey)}
+                    expanded={expandedStyleGroups.has(se.group.styleKey)}
                     onToggle={() => toggleStyleGroup(se.group.styleKey)}
                     lookups={lookups}
                     rowLinkPrefix={rowLinkPrefix}
