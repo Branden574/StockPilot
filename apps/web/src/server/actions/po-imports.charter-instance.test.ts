@@ -23,11 +23,17 @@ vi.mock('@/server/services/vendor-item-mappings', () => ({
   VendorItemMappingsService: { forCurrentUser: vi.fn(async () => ({ upsert: mockUpsert })) },
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({ organizationId: 'org-test', userId: 'user-test', role: 'admin' })),
+  requireOrgContext: vi.fn(async () => ({
+    organizationId: 'org-test',
+    userId: 'user-test',
+    role: 'admin',
+  })),
 }));
 
 const { mockSupabaseRef } = vi.hoisted(() => ({ mockSupabaseRef: { client: null as unknown } }));
-vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(async () => mockSupabaseRef.client) }));
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: vi.fn(async () => mockSupabaseRef.client),
+}));
 
 import { createItemsFromPoLinesAction } from './po-imports';
 
@@ -168,11 +174,12 @@ describe('createItemsFromPoLinesAction — charter-per-instance (advisory match)
     expect(mockCreate).toHaveBeenCalledTimes(2); // two separate instances, never merged
   });
 
-  it('explicit use_existing STILL links (opt-in) and does not create', async () => {
+  it('use_existing under the SAME charter links the chosen item directly (no create)', async () => {
     const stub = installStub({
       charterRow: { id: CHARTER_KVA },
       lines: [baseLine({ vendor_item_number: 'BC-CHROME' })],
-      inventoryItems: [{ id: ITEM_CVW_ID }],
+      // The chosen item already belongs to the selected charter (KVA).
+      inventoryItems: [{ id: ITEM_CVW_ID, sku: 'SKU-X', charter_id: CHARTER_KVA }],
     });
 
     const result = await createItemsFromPoLinesAction({
@@ -192,6 +199,117 @@ describe('createItemsFromPoLinesAction — charter-per-instance (advisory match)
     expect(mockCreate).not.toHaveBeenCalled();
     const upd = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
     expect(upd.item_id).toBe(ITEM_CVW_ID);
+    expect(upd.item_created).toBe(false);
+  });
+
+  it('use_existing under a DIFFERENT charter creates a separate instance under the SELECTED charter (dropdown wins)', async () => {
+    // The chosen item is under CVW (CHARTER_DEF), but the import selected KVA.
+    // Owner decision: the selected charter wins — a NEW same-SKU instance is
+    // created under KVA and the CVW item is left untouched. The two
+    // inventory_items.select calls (existing fetch, then the KVA-sibling
+    // lookup) are modeled statefully: the sibling doesn't exist yet.
+    let sel = 0;
+    const stub = makeSupabaseStub({
+      'po_imports.select': { data: { id: PO_IMPORT_ID }, error: null },
+      'charters.select': { data: { id: CHARTER_KVA }, error: null },
+      'locations.select': { data: { id: 'loc-1' }, error: null },
+      'po_import_lines.select': {
+        data: [baseLine({ vendor_item_number: 'BC-CHROME' })],
+        error: null,
+      },
+      'po_import_lines.update': { data: null, error: null },
+      'inventory_items.select': () => {
+        sel += 1;
+        return sel === 1
+          ? {
+              data: [
+                {
+                  id: ITEM_CVW_ID,
+                  sku: 'SKU-X',
+                  name: 'Chromebook',
+                  barcode: 'BC-CHROME',
+                  charter_id: CHARTER_DEF,
+                  unit_cost: 5,
+                  retail_price: 0,
+                  category_id: null,
+                  supplier_id: null,
+                  warehouse_id: WAREHOUSE_ID,
+                  unit_of_measure: 'unit',
+                  item_type: 'product',
+                  tracking_type: 'none',
+                },
+              ],
+              error: null,
+            }
+          : { data: [], error: null }; // no KVA sibling yet → create one
+      },
+    });
+    mockSupabaseRef.client = stub.client;
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      charterId: CHARTER_KVA,
+      decisions: { [LINE_ID]: { mode: 'use_existing', itemId: ITEM_CVW_ID } },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.created).toBe(1);
+      expect(result.data.linked).toBe(0);
+    }
+    // A NEW item is created under KVA, copying the CVW item's SKU/name.
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ charterId: CHARTER_KVA, sku: 'SKU-X', name: 'Chromebook' }),
+    );
+    const upd = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(upd.item_id).toBe('new-item-1'); // the created KVA sibling
+    expect(upd.item_id).not.toBe(ITEM_CVW_ID); // never the CVW item
+    expect(upd.item_created).toBe(true);
+  });
+
+  it('use_existing under a DIFFERENT charter LINKS an already-existing sibling under the selected charter (no duplicate create)', async () => {
+    // Same as above but a KVA sibling already exists → link it, don't create.
+    const KVA_SIBLING = '99999999-9999-9999-9999-99999999aaaa';
+    let sel = 0;
+    const stub = makeSupabaseStub({
+      'po_imports.select': { data: { id: PO_IMPORT_ID }, error: null },
+      'charters.select': { data: { id: CHARTER_KVA }, error: null },
+      'locations.select': { data: { id: 'loc-1' }, error: null },
+      'po_import_lines.select': {
+        data: [baseLine({ vendor_item_number: 'BC-CHROME' })],
+        error: null,
+      },
+      'po_import_lines.update': { data: null, error: null },
+      'inventory_items.select': () => {
+        sel += 1;
+        return sel === 1
+          ? { data: [{ id: ITEM_CVW_ID, sku: 'SKU-X', charter_id: CHARTER_DEF }], error: null }
+          : { data: [{ id: KVA_SIBLING }], error: null }; // KVA sibling already exists
+      },
+    });
+    mockSupabaseRef.client = stub.client;
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+      charterId: CHARTER_KVA,
+      decisions: { [LINE_ID]: { mode: 'use_existing', itemId: ITEM_CVW_ID } },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.linked).toBe(1);
+      expect(result.data.created).toBe(0);
+    }
+    expect(mockCreate).not.toHaveBeenCalled();
+    const upd = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
+    expect(upd.item_id).toBe(KVA_SIBLING);
     expect(upd.item_created).toBe(false);
   });
 });

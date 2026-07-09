@@ -14,18 +14,9 @@ import { isbnVariants } from '@/lib/books/isbn-variants';
 import { createClient } from '@/lib/supabase/server';
 import { generateSku } from '@/lib/utils';
 
-import {
-  approvePoImportSchema,
-  err,
-  ok,
-  type ActionResult,
-} from '@stockpilot/core';
+import { approvePoImportSchema, err, ok, type ActionResult } from '@stockpilot/core';
 
-const ALLOWED_MIME = new Set([
-  'application/pdf',
-  'text/csv',
-  'application/vnd.ms-excel',
-]);
+const ALLOWED_MIME = new Set(['application/pdf', 'text/csv', 'application/vnd.ms-excel']);
 const MAX_BYTES = 25 * 1024 * 1024;
 
 const presignSchema = z.object({
@@ -301,12 +292,7 @@ export async function createItemsFromPoLinesAction(input: {
       let bookIsbn: string | null = null;
       let isbnMatchItemId: string | null = null;
       if (parsed.data.itemType === 'book') {
-        const haystack = [
-          vendorItemNumber,
-          vendorProductNumber,
-          auxiliaryNumber,
-          description,
-        ]
+        const haystack = [vendorItemNumber, vendorProductNumber, auxiliaryNumber, description]
           .filter(Boolean)
           .join(' ');
         bookIsbn = extractIsbnsFromText(haystack)[0] ?? null;
@@ -346,11 +332,9 @@ export async function createItemsFromPoLinesAction(input: {
       // findDuplicatesForPoLinesAction.
       let barcodeMatchItemId: string | null = null;
       if (parsed.data.itemType !== 'book' && decision.mode === 'create') {
-        const vendorNumbers = [
-          vendorItemNumber,
-          vendorProductNumber,
-          auxiliaryNumber,
-        ].filter((v): v is string => typeof v === 'string' && v.length > 0);
+        const vendorNumbers = [vendorItemNumber, vendorProductNumber, auxiliaryNumber].filter(
+          (v): v is string => typeof v === 'string' && v.length > 0,
+        );
         if (vendorNumbers.length > 0) {
           const { data: byBarcode, error: barcodeErr } = await supabase
             .from('inventory_items')
@@ -371,6 +355,11 @@ export async function createItemsFromPoLinesAction(input: {
         }
       }
 
+      // Whether THIS line created a brand-new inventory_items row (vs linking an
+      // existing one) — drives `item_created` below so cancel-cleanup only
+      // archives items the import actually spawned.
+      let didCreate = false;
+
       if (decision.mode === 'use_existing') {
         if (!decision.itemId) {
           return err(
@@ -378,10 +367,13 @@ export async function createItemsFromPoLinesAction(input: {
             `Line ${l.line_number} marked use_existing but no itemId provided`,
           );
         }
-        // Defense: confirm the chosen item belongs to the caller's org.
+        // Confirm the chosen item belongs to the caller's org, and read its
+        // charter + identity so we can honor the SELECTED charter (below).
         const { data: existing, error: chkErr } = await supabase
           .from('inventory_items')
-          .select('id')
+          .select(
+            'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type',
+          )
           .eq('organization_id', ctx.organizationId)
           .eq('id', decision.itemId)
           .is('deleted_at', null)
@@ -390,8 +382,66 @@ export async function createItemsFromPoLinesAction(input: {
         if (!existing) {
           return err('not_found', `Existing item for line ${l.line_number} not found`);
         }
-        resolvedItemId = existing.id as string;
-        linked++;
+
+        const existingCharter = (existing.charter_id as string | null) ?? null;
+        if (existingCharter === charterId) {
+          // Same charter (both-generic/null counts as same) → link the item.
+          resolvedItemId = existing.id as string;
+          linked++;
+        } else {
+          // SELECTED CHARTER WINS (owner decision 2026-07-09): never reuse or
+          // re-charter an item under a DIFFERENT charter. Resolve to the
+          // same-SKU instance under the SELECTED charter — find it, or create a
+          // separate instance, leaving the chosen item untouched. 0234's
+          // charter-aware SKU uniqueness makes (org, sku, selectedCharter, null)
+          // its own row, so e.g. KVA and CVW stock stay separate.
+          const existingSku = existing.sku as string;
+          let sibQuery = supabase
+            .from('inventory_items')
+            .select('id')
+            .eq('organization_id', ctx.organizationId)
+            .eq('sku', existingSku)
+            .is('bin_location', null)
+            .is('deleted_at', null);
+          sibQuery =
+            charterId === null
+              ? sibQuery.is('charter_id', null)
+              : sibQuery.eq('charter_id', charterId);
+          const { data: sibling, error: sibErr } = await sibQuery.maybeSingle();
+          if (sibErr) throw new ServiceError('internal_error', sibErr.message);
+
+          if (sibling) {
+            resolvedItemId = sibling.id as string;
+            linked++;
+          } else {
+            const siblingItem = await inventorySvc.create({
+              name: existing.name as string,
+              sku: existingSku,
+              barcode: (existing.barcode as string | null) ?? undefined,
+              unitCost: Number(existing.unit_cost ?? 0) || 0,
+              retailPrice: Number(existing.retail_price ?? 0) || 0,
+              quantityOnHand: 0,
+              reorderPoint: 0,
+              reorderQuantity: 0,
+              unitOfMeasure: (existing.unit_of_measure as string | null) ?? 'unit',
+              supplierId: (existing.supplier_id as string | null) ?? parsed.data.vendorId,
+              warehouseId: (existing.warehouse_id as string | null) ?? parsed.data.warehouseId,
+              charterId,
+              categoryId: (existing.category_id as string | null) ?? null,
+              primaryLocationId,
+              trackingType: (existing.tracking_type as 'none' | 'lot' | 'serial' | null) ?? 'none',
+              itemType:
+                (existing.item_type as 'product' | 'book' | 'asset' | 'consumable' | null) ??
+                parsed.data.itemType ??
+                'product',
+              customFields: {},
+              status: 'active',
+            });
+            resolvedItemId = siblingItem.id as string;
+            created++;
+            didCreate = true;
+          }
+        }
       } else {
         // DEFAULT: create a new instance under the CHOSEN charter. A
         // barcode/ISBN hit does NOT link here — matching is advisory only
@@ -404,9 +454,8 @@ export async function createItemsFromPoLinesAction(input: {
         // since the manufacturer's part number already lives in `barcode`.
         const overrideName = parsed.data.nameOverrides?.[l.id as string]?.trim();
         const cleanedName = description.replace(/\s*\([^)]*\)\s*$/, '').trim();
-        const finalName = (overrideName && overrideName.length > 0
-          ? overrideName
-          : cleanedName || description
+        const finalName = (
+          overrideName && overrideName.length > 0 ? overrideName : cleanedName || description
         ).slice(0, 200);
 
         const item = await inventorySvc.create({
@@ -433,6 +482,7 @@ export async function createItemsFromPoLinesAction(input: {
           status: 'active',
         });
         created++;
+        didCreate = true;
         resolvedItemId = item.id as string;
       }
       // Barcode/ISBN match is advisory only — surfaced for a human to review,
@@ -450,10 +500,11 @@ export async function createItemsFromPoLinesAction(input: {
           suggested_item_id: suggestedItemId,
           match_status: 'mapped',
           exception_reason: null,
-          // Only flag item_created when WE actually created a new item —
-          // use_existing links to a pre-existing item, which cancel-cleanup
-          // must never archive.
-          item_created: decision.mode !== 'use_existing',
+          // Flag item_created only when WE actually created a new inventory row
+          // (the create branch, OR a use_existing line whose selected charter
+          // forced a new same-SKU instance). Linking a pre-existing item stays
+          // false so cancel-cleanup never archives it.
+          item_created: didCreate,
         })
         .eq('id', l.id as string);
       if (updErr) throw new ServiceError('internal_error', updErr.message);
