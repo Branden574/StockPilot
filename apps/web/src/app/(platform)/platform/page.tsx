@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
+import { DeletionPassphraseForm } from '@/components/platform/deletion-passphrase-form';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
+import { createAdminClient } from '@/lib/supabase/admin';
 import {
   getPlatformMetrics,
   listOrgsForPlatform,
@@ -71,6 +73,23 @@ export default async function PlatformOrgsPage({
     listOrgsForPlatform(q),
     getPlatformMetrics(),
   ]);
+
+  // Whether a deletion passphrase already exists — drives the "current
+  // passphrase" field on rotation. Service-role read of the locked settings row.
+  let passphraseConfigured = false;
+  try {
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from('platform_settings')
+      .select('org_deletion_passphrase_hash')
+      .eq('id', true)
+      .maybeSingle();
+    passphraseConfigured = Boolean(
+      (data as { org_deletion_passphrase_hash: string | null } | null)?.org_deletion_passphrase_hash,
+    );
+  } catch {
+    passphraseConfigured = false;
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1280px] px-6 pb-20 pt-7">
@@ -179,6 +198,11 @@ export default async function PlatformOrgsPage({
           {orgs.length} organization{orgs.length === 1 ? '' : 's'}.
         </p>
       )}
+
+      {/* Global danger-zone control — the passphrase that gates every org delete. */}
+      <div className="mt-10 border-t border-border pt-8">
+        <DeletionPassphraseForm isConfigured={passphraseConfigured} />
+      </div>
     </div>
   );
 }

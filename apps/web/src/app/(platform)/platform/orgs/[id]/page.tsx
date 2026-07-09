@@ -5,6 +5,7 @@ import { notFound } from 'next/navigation';
 import { ActAsButton } from '@/components/platform/act-as-button';
 import { BillingPanel } from '@/components/platform/billing-panel';
 import { PasswordResetButton } from '@/components/platform/password-reset-button';
+import { RemoveOrgDialog } from '@/components/platform/remove-org-dialog';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
@@ -131,6 +132,18 @@ export default async function PlatformOrgDetailPage({
         {tab === 'users' && (await UsersTab({ orgId: id }))}
         {tab === 'orders' && (await OrdersTab({ orgId: id }))}
         {tab === 'billing' && (await BillingTab({ orgId: id }))}
+      </div>
+
+      {/* ── Danger zone ──────────────────────────────────────────────── */}
+      <div className="mt-10 rounded-[10px] border border-destructive/40 bg-card p-4 sm:p-5">
+        <h2 className="font-display text-[15px] font-medium text-destructive">Danger zone</h2>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="max-w-xl text-[12.5px] text-[var(--ed-ink-3)]">
+            Permanently delete this organization and everything in it. Requires a fresh MFA step-up,
+            the global deletion passphrase, and retyping the org name. Irreversible.
+          </p>
+          <RemoveOrgDialog organizationId={overview.id} orgName={overview.name} />
+        </div>
       </div>
     </div>
   );

@@ -4,12 +4,15 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
+import { hashPassphrase, verifyPassphrase } from '@/lib/auth/platform-passphrase';
 import { sendEmail } from '@/lib/email/resend';
 import { inviteEmailHtml, inviteEmailText } from '@/lib/email/templates';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { slugify } from '@/lib/utils';
+import { recordPlatformAudit } from '@/server/services/platform/audit';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -271,4 +274,227 @@ async function ensureUniqueSlug(
       return `${base}-${Math.random().toString(36).slice(2, 7)}`;
     }
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Org-deletion passphrase + passphrase-gated hard delete
+// ─────────────────────────────────────────────────────────────────────────────
+
+const setPassphraseSchema = z.object({
+  passphrase: z.string().min(12).max(200),
+  /** Required to ROTATE an existing passphrase (ignored on the first-ever set). */
+  currentPassphrase: z.string().max(200).optional(),
+});
+
+/**
+ * Set/rotate the platform org-deletion passphrase. A SECOND factor beyond the
+ * platform-admin allowlist + AAL2: no org can be hard-deleted without it. Stored
+ * as a scrypt hash — never retrievable. Gated by a fresh MFA step-up.
+ *
+ * CRITICAL: rotating an existing passphrase REQUIRES the current one. Without
+ * that, a compromised platform-admin session could simply overwrite the
+ * passphrase with a known value and then delete — defeating the whole point of
+ * the second factor. The first-ever set (bootstrap, no passphrase yet) is open.
+ */
+export async function setOrgDeletionPassphraseAction(
+  input: z.input<typeof setPassphraseSchema>,
+): Promise<ActionResult<void>> {
+  const gate = await checkPlatformAdmin({ requireStepUp: true });
+  if (!gate.ok) {
+    return gate.reason === 'aal2_required'
+      ? err('forbidden', 'Re-authenticate with MFA to set the deletion passphrase.', {
+          reason: 'aal2_required',
+        })
+      : err('forbidden', 'Not authorized.');
+  }
+  const parsed = setPassphraseSchema.safeParse(input);
+  if (!parsed.success) {
+    return err('validation_error', 'Passphrase must be at least 12 characters.');
+  }
+  let admin;
+  try {
+    admin = createAdminClient();
+  } catch {
+    return err('internal_error', 'Server is missing SUPABASE_SERVICE_ROLE_KEY.');
+  }
+  // Fail-closed brute-force guard: the currentPassphrase check below is a secret
+  // oracle, so throttle rotate attempts per-actor exactly like the delete path —
+  // otherwise a hijacked session could hammer guesses at the current passphrase.
+  const rlRotate = await checkRateLimit(
+    `org-passphrase-rotate:${gate.session.userId}`,
+    5,
+    60_000,
+    'closed',
+  );
+  if (!rlRotate.allowed) {
+    return err('rate_limited', 'Too many attempts — wait a minute and try again.');
+  }
+  // If a passphrase already exists, the caller must prove they know it before
+  // rotating it — a stolen session cannot silently swap it out.
+  const { data: existing } = await admin
+    .from('platform_settings')
+    .select('org_deletion_passphrase_hash, org_deletion_passphrase_salt')
+    .eq('id', true)
+    .maybeSingle();
+  const cur = existing as
+    | { org_deletion_passphrase_hash: string | null; org_deletion_passphrase_salt: string | null }
+    | null;
+  if (cur?.org_deletion_passphrase_hash && cur?.org_deletion_passphrase_salt) {
+    if (
+      !verifyPassphrase(
+        parsed.data.currentPassphrase ?? '',
+        cur.org_deletion_passphrase_hash,
+        cur.org_deletion_passphrase_salt,
+      )
+    ) {
+      return err('forbidden', 'Enter the current deletion passphrase to change it.');
+    }
+  }
+  const { hash, salt } = hashPassphrase(parsed.data.passphrase);
+  const { error } = await admin.from('platform_settings').upsert({
+    id: true,
+    org_deletion_passphrase_hash: hash,
+    org_deletion_passphrase_salt: salt,
+    updated_at: new Date().toISOString(),
+    updated_by: gate.session.userId,
+  });
+  if (error) return err('internal_error', 'Could not save the passphrase.');
+  await recordPlatformAudit({
+    actorUserId: gate.session.userId,
+    actorEmail: gate.session.email,
+    action: 'deletion_passphrase_set',
+  });
+  return ok(undefined);
+}
+
+const removeOrgSchema = z.object({
+  orgId: z.string().uuid(),
+  passphrase: z.string().min(1).max(200),
+  /** The operator must retype the org's exact name — a second, human confirm. */
+  confirmName: z.string().min(1).max(200),
+  /** Also delete members whose ONLY org is this one (onboarding-mistake accounts). */
+  alsoDeleteOrphanedUsers: z.boolean().optional(),
+});
+
+/**
+ * Hard-delete an organization (cascade). Requires: platform-admin + fresh AAL2,
+ * the correct deletion passphrase (scrypt-verified, rate-limited), AND the
+ * operator re-typing the org's exact name. Audited. Irreversible.
+ */
+export async function removeOrgAction(
+  input: z.input<typeof removeOrgSchema>,
+): Promise<ActionResult<{ deletedUsers: number }>> {
+  const gate = await checkPlatformAdmin({ requireStepUp: true });
+  if (!gate.ok) {
+    return gate.reason === 'aal2_required'
+      ? err('forbidden', 'Re-authenticate with MFA to remove an organization.', {
+          reason: 'aal2_required',
+        })
+      : err('forbidden', 'Not authorized.');
+  }
+  const parsed = removeOrgSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input.');
+
+  // Brute-force guard on the passphrase — 5 attempts/min per admin. FAIL CLOSED:
+  // on this irreversible action a rate-limiter error must block, not wave through.
+  const rl = await checkRateLimit(`org-delete:${gate.session.userId}`, 5, 60_000, 'closed');
+  if (!rl.allowed) {
+    return err('rate_limited', 'Too many attempts — wait a minute and try again.');
+  }
+
+  let admin;
+  try {
+    admin = createAdminClient();
+  } catch {
+    return err('internal_error', 'Server is missing SUPABASE_SERVICE_ROLE_KEY.');
+  }
+
+  // 1. A passphrase must be configured, and it must match.
+  const { data: settings } = await admin
+    .from('platform_settings')
+    .select('org_deletion_passphrase_hash, org_deletion_passphrase_salt')
+    .eq('id', true)
+    .maybeSingle();
+  const s = settings as
+    | { org_deletion_passphrase_hash: string | null; org_deletion_passphrase_salt: string | null }
+    | null;
+  if (!s?.org_deletion_passphrase_hash || !s?.org_deletion_passphrase_salt) {
+    return err(
+      'validation_error',
+      'Set an org-deletion passphrase (Platform → Settings) before removing any organization.',
+    );
+  }
+  if (
+    !verifyPassphrase(parsed.data.passphrase, s.org_deletion_passphrase_hash, s.org_deletion_passphrase_salt)
+  ) {
+    return err('forbidden', 'Incorrect deletion passphrase.');
+  }
+
+  // 2. Load the org + require an exact name re-type.
+  const { data: org } = await admin
+    .from('organizations')
+    .select('id, name, slug')
+    .eq('id', parsed.data.orgId)
+    .maybeSingle();
+  const o = org as { id: string; name: string; slug: string } | null;
+  if (!o) return err('not_found', 'Organization not found.');
+  if (o.name !== parsed.data.confirmName.trim()) {
+    return err('validation_error', 'The typed organization name does not match.');
+  }
+
+  // 3. Collect members whose ONLY membership is this org BEFORE the cascade
+  //    removes the membership rows (so we can optionally delete those orphan
+  //    accounts — the common "created under the wrong email" case).
+  const orphanUserIds: string[] = [];
+  if (parsed.data.alsoDeleteOrphanedUsers) {
+    const { data: members } = await admin
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', parsed.data.orgId);
+    for (const m of (members ?? []) as Array<{ user_id: string }>) {
+      // NEVER delete the acting admin's own account, even if they happen to be
+      // the sole member of a throwaway org.
+      if (m.user_id === gate.session.userId) continue;
+      const { count } = await admin
+        .from('organization_members')
+        .select('organization_id', { count: 'exact', head: true })
+        .eq('user_id', m.user_id)
+        .neq('organization_id', parsed.data.orgId);
+      if ((count ?? 0) === 0) orphanUserIds.push(m.user_id);
+    }
+  }
+
+  // 4. Hard delete the org (FK cascades its data + memberships).
+  const { error: delErr } = await admin.from('organizations').delete().eq('id', parsed.data.orgId);
+  if (delErr) return err('internal_error', 'Could not delete the organization.');
+
+  // 5. Delete the now-orphaned accounts (best-effort; failure doesn't undo the
+  //    org delete, which already succeeded). RE-VERIFY zero memberships right
+  //    before each delete: the org cascade has already removed this org's
+  //    membership rows, so any remaining row means the user was added to another
+  //    org after our pre-delete snapshot — close that TOCTOU race and skip them.
+  let deletedUsers = 0;
+  for (const uid of orphanUserIds) {
+    try {
+      const { count } = await admin
+        .from('organization_members')
+        .select('organization_id', { count: 'exact', head: true })
+        .eq('user_id', uid);
+      if ((count ?? 0) > 0) continue; // gained another org in the meantime — keep
+      await admin.auth.admin.deleteUser(uid);
+      deletedUsers += 1;
+    } catch (e) {
+      await reportError(e, { tag: 'platform-admin.orphan-user-delete', extra: { uid } });
+    }
+  }
+
+  await recordPlatformAudit({
+    actorUserId: gate.session.userId,
+    actorEmail: gate.session.email,
+    action: 'org_deleted',
+    targetOrganizationId: null, // the org row is gone; keep name/slug in detail
+    detail: { orgId: o.id, name: o.name, slug: o.slug, deletedOrphanUsers: deletedUsers },
+  });
+  revalidatePath('/platform');
+  return ok({ deletedUsers });
 }

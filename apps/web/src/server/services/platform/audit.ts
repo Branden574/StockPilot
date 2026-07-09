@@ -24,7 +24,9 @@ export type PlatformAuditAction =
   | 'billing_changed'
   | 'password_reset_sent'
   | 'org_provisioned'
-  | 'ticket_updated';
+  | 'ticket_updated'
+  | 'deletion_passphrase_set'
+  | 'org_deleted';
 
 export interface RecordPlatformAuditInput {
   actorUserId: string;
