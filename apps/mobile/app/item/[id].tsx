@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ArrowLeftRight,
   ArrowUpRight,
+  Boxes,
   Camera,
   ChevronLeft,
   Edit3,
@@ -26,6 +27,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { can, type Role } from '@stockpilot/core';
+
+import { MoveStockModal } from '@/components/move-stock-modal';
 import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
 import { Card, Hair } from '@/components/ui/card';
@@ -50,6 +54,7 @@ import {
 } from '@/lib/serials';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
 
@@ -135,12 +140,20 @@ export default function ItemDetail() {
   const [busy, setBusy] = React.useState(false);
   const [tab, setTab] = React.useState<TabId>('overview');
   const [adjustOpen, setAdjustOpen] = React.useState(false);
+  const [moveOpen, setMoveOpen] = React.useState(false);
   const [photoBusy, setPhotoBusy] = React.useState(false);
   const [serialCount, setSerialCount] = React.useState(0);
+  const permissions = useEffectivePermissions();
   // Staff+ may manage serials — mirrors the serial_registry write RLS
   // (has_org_role(org,'staff') + warehouse-in-org, mig 0203). Cosmetic
   // gate only; RLS independently enforces on every write.
   const canWriteSerials = role !== null && role !== 'viewer';
+  // Transfer / put-away gate — mirrors the web dialog's 'stock:transfer'
+  // requirement. Cosmetic only; the /api/v1/items/[id]/transfer route
+  // re-asserts stock:transfer inside InventoryService.transferStock.
+  const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
+  const canTransfer =
+    isManager || (role !== null && can({ role: role as Role, permissions }, 'stock:transfer'));
 
   const load = React.useCallback(async () => {
     if (!id) return;
@@ -182,18 +195,16 @@ export default function ItemDetail() {
     const itemTypeStr = (r.item_type as string | null) ?? 'product';
     const isBook = itemTypeStr === 'book';
     const rackNum = isBook
-      ? cfStr('book_rack_number') ?? cfStr('rack_number')
-      : cfStr('rack_number') ?? cfStr('book_rack_number');
+      ? (cfStr('book_rack_number') ?? cfStr('rack_number'))
+      : (cfStr('rack_number') ?? cfStr('book_rack_number'));
     const rackRow = isBook
-      ? cfStr('book_rack_row') ?? cfStr('rack_row')
-      : cfStr('rack_row') ?? cfStr('book_rack_row');
+      ? (cfStr('book_rack_row') ?? cfStr('rack_row'))
+      : (cfStr('rack_row') ?? cfStr('book_rack_row'));
     // Legacy free-text rack label support (older imports stamped this
     // single value before the structured number/row split).
-    const legacyRack =
-      cfStr('rackLabel') ?? cfStr('rack_label') ?? cfStr('rack');
-    const rackLabel = rackNum || rackRow
-      ? [rackNum, rackRow].filter(Boolean).join(' · ')
-      : legacyRack;
+    const legacyRack = cfStr('rackLabel') ?? cfStr('rack_label') ?? cfStr('rack');
+    const rackLabel =
+      rackNum || rackRow ? [rackNum, rackRow].filter(Boolean).join(' · ') : legacyRack;
     const crateColor = cfStr('crateColor') ?? cfStr('crate_color');
     const crateNumber = cfStr('crateNumber') ?? cfStr('crate_number');
     const grade = cfStr('grade');
@@ -230,9 +241,7 @@ export default function ItemDetail() {
     ]);
     setSerialCount(serialResp.count ?? 0);
     warehouseName = (whResp?.data?.name as string | undefined) ?? null;
-    charterName = charterId
-      ? ((chResp?.data?.name as string | undefined) ?? null)
-      : 'Generic';
+    charterName = charterId ? ((chResp?.data?.name as string | undefined) ?? null) : 'Generic';
 
     // Primary image — cached signed URL (reused across screens).
     const { data: imgRow } = await supabase
@@ -265,9 +274,9 @@ export default function ItemDetail() {
       unit_of_measure: (r.unit_of_measure as string) ?? 'EA',
       status: r.status as string,
       category_id: (r.category_id as string | null) ?? null,
-      category_name: Array.isArray(cat) ? cat[0]?.name ?? null : cat?.name ?? null,
-      supplier_name: Array.isArray(sup) ? sup[0]?.name ?? null : sup?.name ?? null,
-      location_name: Array.isArray(loc) ? loc[0]?.name ?? null : loc?.name ?? null,
+      category_name: Array.isArray(cat) ? (cat[0]?.name ?? null) : (cat?.name ?? null),
+      supplier_name: Array.isArray(sup) ? (sup[0]?.name ?? null) : (sup?.name ?? null),
+      location_name: Array.isArray(loc) ? (loc[0]?.name ?? null) : (loc?.name ?? null),
       warehouse_name: warehouseName,
       bin_location: (r.bin_location as string | null) ?? null,
       charter_name: charterName,
@@ -307,7 +316,7 @@ export default function ItemDetail() {
           moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
           reason: (r.reason as string | null) ?? null,
           created_at: r.created_at as string,
-          actor: Array.isArray(actor) ? actor[0] ?? null : actor,
+          actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
         };
       }),
     );
@@ -344,9 +353,9 @@ export default function ItemDetail() {
 
   function openEdit() {
     if (!item) return;
-    Linking.openURL(
-      `https://stockpilotusa.com/dashboard/inventory/${item.id}/edit`,
-    ).catch(() => undefined);
+    Linking.openURL(`https://stockpilotusa.com/dashboard/inventory/${item.id}/edit`).catch(
+      () => undefined,
+    );
   }
 
   async function pickFromCamera() {
@@ -372,10 +381,7 @@ export default function ItemDetail() {
       const ext = (a.uri.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'jpg').toLowerCase();
       await uploadAndReplace(a.uri, ext);
     } catch (e) {
-      Alert.alert(
-        'Camera unavailable',
-        e instanceof Error ? e.message : 'Use Library instead.',
-      );
+      Alert.alert('Camera unavailable', e instanceof Error ? e.message : 'Use Library instead.');
     }
   }
 
@@ -400,15 +406,11 @@ export default function ItemDetail() {
   function openPhotoActions() {
     if (!item || photoBusy) return;
     const hasPhoto = !!item.imageUrl;
-    Alert.alert(
-      hasPhoto ? 'Replace photo' : 'Add photo',
-      undefined,
-      [
-        { text: 'Take photo', onPress: () => void pickFromCamera() },
-        { text: 'Choose from library', onPress: () => void pickFromLibrary() },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-    );
+    Alert.alert(hasPhoto ? 'Replace photo' : 'Add photo', undefined, [
+      { text: 'Take photo', onPress: () => void pickFromCamera() },
+      { text: 'Choose from library', onPress: () => void pickFromLibrary() },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   }
 
   async function uploadAndReplace(uri: string, ext: string) {
@@ -463,7 +465,12 @@ export default function ItemDetail() {
 
   if (!item) {
     return (
-      <View style={[styles.root, { backgroundColor: c.paper, justifyContent: 'center', alignItems: 'center' }]}>
+      <View
+        style={[
+          styles.root,
+          { backgroundColor: c.paper, justifyContent: 'center', alignItems: 'center' },
+        ]}
+      >
         <ActivityIndicator color={c.ink} />
       </View>
     );
@@ -595,7 +602,12 @@ export default function ItemDetail() {
             <Card hero style={{ padding: 20 }}>
               <Eyebrow>ON HAND</Eyebrow>
               <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 8 }}>
-                <Mono size={56} tracking={-0.025} color={c.ink} style={{ fontFamily: FONT.display }}>
+                <Mono
+                  size={56}
+                  tracking={-0.025}
+                  color={c.ink}
+                  style={{ fontFamily: FONT.display }}
+                >
                   {item.quantity_on_hand}
                 </Mono>
                 <Body size={16} color={c.ink4}>
@@ -627,14 +639,25 @@ export default function ItemDetail() {
               >
                 Adjust with reason
               </Button>
+              {canTransfer ? (
+                <Button
+                  block
+                  variant="outline"
+                  onPress={() => setMoveOpen(true)}
+                  leading={<Boxes size={16} color={c.ink} strokeWidth={1.5} />}
+                  style={{ marginTop: 10 }}
+                >
+                  Transfer / put away
+                </Button>
+              ) : null}
               {/* Task 4 (Model B / SKU grouping clarity): quantity is a
                   PER-PLACEMENT field — adjusting it here only changes
                   on-hand at this item's specific rack/charter, never other
                   placements sharing the same SKU. Copy/UX only, no logic
                   change. */}
               <Body muted size={11} style={{ marginTop: 10, textAlign: 'center' }}>
-                This placement only — on-hand adjustments here apply just to this
-                rack/charter, not other placements of this SKU.
+                This placement only — on-hand adjustments here apply just to this rack/charter, not
+                other placements of this SKU.
               </Body>
             </Card>
 
@@ -657,8 +680,8 @@ export default function ItemDetail() {
                 Task 3) — none of them are editable in-app, so this just tells
                 the user what "Edit on web" (below) will affect. */}
             <Body muted size={11} style={{ textAlign: 'center' }}>
-              Shared across all placements of this SKU — name, SKU, cost, price,
-              and category update everywhere this item lives when edited on web.
+              Shared across all placements of this SKU — name, SKU, cost, price, and category update
+              everywhere this item lives when edited on web.
             </Body>
 
             {/* Location block — only render when at least one field is
@@ -667,7 +690,8 @@ export default function ItemDetail() {
             {(() => {
               const isBookView = item.item_type === 'book';
               const rows: Array<{ label: string; value: string }> = [];
-              if (item.warehouse_name) rows.push({ label: 'WAREHOUSE', value: item.warehouse_name });
+              if (item.warehouse_name)
+                rows.push({ label: 'WAREHOUSE', value: item.warehouse_name });
               if (item.charter_name) rows.push({ label: 'CHARTER', value: item.charter_name });
               if (item.location_name) rows.push({ label: 'LOCATION', value: item.location_name });
               if (item.rack_label) rows.push({ label: 'RACK', value: item.rack_label });
@@ -698,8 +722,8 @@ export default function ItemDetail() {
                   {/* Task 4: warehouse/charter/location/rack are PER-PLACEMENT —
                       they describe just this row, not the whole SKU. */}
                   <Body muted size={11} style={{ textAlign: 'center' }}>
-                    This placement only — describes just this rack/charter, not
-                    other placements of this SKU.
+                    This placement only — describes just this rack/charter, not other placements of
+                    this SKU.
                   </Body>
                 </>
               );
@@ -777,6 +801,18 @@ export default function ItemDetail() {
           setAdjustOpen(false);
         }}
       />
+
+      <MoveStockModal
+        visible={moveOpen}
+        itemId={item.id}
+        itemName={item.name}
+        organizationId={item.organization_id}
+        onClose={() => setMoveOpen(false)}
+        onMoved={() => {
+          void load();
+          if (tab === 'movements') void loadMovements();
+        }}
+      />
     </View>
   );
 }
@@ -792,10 +828,7 @@ function TabButton({
 }) {
   const { c } = useTheme();
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, flex: 1 })}
-    >
+    <Pressable onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, flex: 1 })}>
       <View
         style={{
           paddingVertical: 12,
@@ -926,7 +959,13 @@ function MovementCard({ movement }: { movement: MovementRow }) {
             {reasonLabel ? ` · ${reasonLabel}` : ''}
           </Body>
           <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
-            {actor} · {new Date(movement.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+            {actor} ·{' '}
+            {new Date(movement.created_at).toLocaleString(undefined, {
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+            })}
           </Mono>
         </View>
         <View style={{ alignItems: 'flex-end' }}>
@@ -983,8 +1022,7 @@ function AdjustModal({
 
   const parsedDelta = parseInt(delta, 10);
   const isValid = !Number.isNaN(parsedDelta) && parsedDelta !== 0;
-  const preview =
-    isValid ? item.quantity_on_hand + parsedDelta : item.quantity_on_hand;
+  const preview = isValid ? item.quantity_on_hand + parsedDelta : item.quantity_on_hand;
 
   return (
     <Modal
@@ -1008,124 +1046,125 @@ function AdjustModal({
             },
           ]}
         >
-        <Pressable
-          onPress={() => undefined}
-          style={[
-            {
-              backgroundColor: c.card,
-              borderTopLeftRadius: 24,
-              borderTopRightRadius: 24,
-              paddingTop: 12,
-              paddingBottom: 36,
-              paddingHorizontal: 22,
-            },
-            SHADOW.sheet,
-          ]}
-        >
-          <View style={{ alignItems: 'center', marginBottom: 18 }}>
-            <View
-              style={{
-                width: 36,
-                height: 5,
-                borderRadius: 100,
-                backgroundColor: mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
-              }}
-            />
-          </View>
-          <Eyebrow>ADJUST STOCK</Eyebrow>
-          <Display size={24} style={{ marginTop: 10 }}>
-            {item.name}
-          </Display>
-          <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
-            on hand {item.quantity_on_hand} {item.unit_of_measure}
-          </Mono>
-
-          <View style={{ marginTop: 20, gap: 14 }}>
-            <View style={{ gap: 6 }}>
-              <Mono size={10} tracking={0.12} upper color={c.ink4}>
-                CHANGE (+ ADDS, − REMOVES)
-              </Mono>
-              <TextInput
-                value={delta}
-                onChangeText={setDelta}
-                placeholder="e.g. -3 or 12"
-                placeholderTextColor={c.ink5}
-                keyboardType="numbers-and-punctuation"
-                autoFocus
+          <Pressable
+            onPress={() => undefined}
+            style={[
+              {
+                backgroundColor: c.card,
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                paddingTop: 12,
+                paddingBottom: 36,
+                paddingHorizontal: 22,
+              },
+              SHADOW.sheet,
+            ]}
+          >
+            <View style={{ alignItems: 'center', marginBottom: 18 }}>
+              <View
                 style={{
-                  fontFamily: FONT.display,
-                  fontSize: 18,
-                  height: 52,
-                  paddingHorizontal: 14,
-                  borderWidth: 1,
-                  borderColor: c.hair,
-                  borderRadius: 8,
-                  color: c.ink,
-                  backgroundColor: c.paper2,
+                  width: 36,
+                  height: 5,
+                  borderRadius: 100,
+                  backgroundColor:
+                    mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
                 }}
               />
             </View>
-            <View style={{ gap: 6 }}>
-              <Mono size={10} tracking={0.12} upper color={c.ink4}>
-                REASON (OPTIONAL)
-              </Mono>
-              <TextInput
-                value={reason}
-                onChangeText={setReason}
-                placeholder="Cycle count variance, damage, etc."
-                placeholderTextColor={c.ink5}
-                style={{
-                  fontFamily: FONT.displayRegular,
-                  fontSize: 15,
-                  height: 50,
-                  paddingHorizontal: 14,
-                  borderWidth: 1,
-                  borderColor: c.hair,
-                  borderRadius: 8,
-                  color: c.ink,
-                  backgroundColor: c.paper2,
-                }}
-              />
-            </View>
-            <View
-              style={{
-                flexDirection: 'row',
-                justifyContent: 'space-between',
-                alignItems: 'baseline',
-                marginTop: 4,
-              }}
-            >
-              <Mono size={10.5} tracking={0.12} upper color={c.ink4}>
-                NEW TOTAL
-              </Mono>
-              <Mono
-                size={28}
-                tracking={-0.022}
-                color={preview < 0 ? ACCENT.crit : preview === 0 ? ACCENT.warn : c.ink}
-                style={{ fontFamily: FONT.display }}
-              >
-                {preview}
-              </Mono>
-            </View>
-          </View>
+            <Eyebrow>ADJUST STOCK</Eyebrow>
+            <Display size={24} style={{ marginTop: 10 }}>
+              {item.name}
+            </Display>
+            <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+              on hand {item.quantity_on_hand} {item.unit_of_measure}
+            </Mono>
 
-          <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
-            <View style={{ flex: 1 }}>
-              <Button block variant="ghost" onPress={onClose}>
-                Cancel
-              </Button>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Button
-                block
-                onPress={() => isValid && onConfirm(parsedDelta, reason || 'Mobile detail')}
-                disabled={!isValid || busy}
+            <View style={{ marginTop: 20, gap: 14 }}>
+              <View style={{ gap: 6 }}>
+                <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                  CHANGE (+ ADDS, − REMOVES)
+                </Mono>
+                <TextInput
+                  value={delta}
+                  onChangeText={setDelta}
+                  placeholder="e.g. -3 or 12"
+                  placeholderTextColor={c.ink5}
+                  keyboardType="numbers-and-punctuation"
+                  autoFocus
+                  style={{
+                    fontFamily: FONT.display,
+                    fontSize: 18,
+                    height: 52,
+                    paddingHorizontal: 14,
+                    borderWidth: 1,
+                    borderColor: c.hair,
+                    borderRadius: 8,
+                    color: c.ink,
+                    backgroundColor: c.paper2,
+                  }}
+                />
+              </View>
+              <View style={{ gap: 6 }}>
+                <Mono size={10} tracking={0.12} upper color={c.ink4}>
+                  REASON (OPTIONAL)
+                </Mono>
+                <TextInput
+                  value={reason}
+                  onChangeText={setReason}
+                  placeholder="Cycle count variance, damage, etc."
+                  placeholderTextColor={c.ink5}
+                  style={{
+                    fontFamily: FONT.displayRegular,
+                    fontSize: 15,
+                    height: 50,
+                    paddingHorizontal: 14,
+                    borderWidth: 1,
+                    borderColor: c.hair,
+                    borderRadius: 8,
+                    color: c.ink,
+                    backgroundColor: c.paper2,
+                  }}
+                />
+              </View>
+              <View
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'baseline',
+                  marginTop: 4,
+                }}
               >
-                {busy ? 'Saving…' : 'Confirm'}
-              </Button>
+                <Mono size={10.5} tracking={0.12} upper color={c.ink4}>
+                  NEW TOTAL
+                </Mono>
+                <Mono
+                  size={28}
+                  tracking={-0.022}
+                  color={preview < 0 ? ACCENT.crit : preview === 0 ? ACCENT.warn : c.ink}
+                  style={{ fontFamily: FONT.display }}
+                >
+                  {preview}
+                </Mono>
+              </View>
             </View>
-          </View>
-        </Pressable>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+              <View style={{ flex: 1 }}>
+                <Button block variant="ghost" onPress={onClose}>
+                  Cancel
+                </Button>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Button
+                  block
+                  onPress={() => isValid && onConfirm(parsedDelta, reason || 'Mobile detail')}
+                  disabled={!isValid || busy}
+                >
+                  {busy ? 'Saving…' : 'Confirm'}
+                </Button>
+              </View>
+            </View>
+          </Pressable>
         </Pressable>
       </KeyboardAvoidingView>
     </Modal>
@@ -1178,7 +1217,11 @@ function SerialsCard({
 
   const fetchPage = React.useCallback(
     async (offset: number): Promise<{ rows: SerialRow[]; count: number } | null> => {
-      const { data, count, error: qErr } = await supabase
+      const {
+        data,
+        count,
+        error: qErr,
+      } = await supabase
         .from('serial_registry')
         .select('id, serial_number, current_status, receipt_line_id, created_at', {
           count: 'exact',
@@ -1263,9 +1306,7 @@ function SerialsCard({
       );
       return;
     }
-    setRows((prev) =>
-      prev.map((r) => (r.id === row.id ? { ...r, current_status: next } : r)),
-    );
+    setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, current_status: next } : r)));
   }
 
   function confirmDelete(row: SerialRow) {
@@ -1546,8 +1587,7 @@ function SerialStatusSheet({
                 width: 36,
                 height: 5,
                 borderRadius: 100,
-                backgroundColor:
-                  mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
+                backgroundColor: mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
               }}
             />
           </View>
@@ -1633,9 +1673,7 @@ function AddSerialsModal({
 }) {
   const { c, mode } = useTheme();
   const [text, setText] = React.useState('');
-  const [warehouses, setWarehouses] = React.useState<{ id: string; name: string }[] | null>(
-    null,
-  );
+  const [warehouses, setWarehouses] = React.useState<{ id: string; name: string }[] | null>(null);
   const [warehouseId, setWarehouseId] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -1787,8 +1825,8 @@ function AddSerialsModal({
                 />
                 {parsed.serials.length > 0 && parsed.errors.length === 0 ? (
                   <Mono size={10} tracking={0.04} color={c.ink4}>
-                    {parsed.serials.length}{' '}
-                    {parsed.serials.length === 1 ? 'serial' : 'serials'} ready
+                    {parsed.serials.length} {parsed.serials.length === 1 ? 'serial' : 'serials'}{' '}
+                    ready
                   </Mono>
                 ) : null}
                 {parsed.errors.map((e) => (
