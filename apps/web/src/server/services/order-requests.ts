@@ -39,7 +39,7 @@ export type OrderRequestStatus =
   | 'denied'
   | 'cancelled';
 
-export type OrderRequestSource = 'internal' | 'public_link';
+export type OrderRequestSource = 'internal' | 'public_link' | 'portal';
 
 export interface OrderRequestRow {
   id: string;

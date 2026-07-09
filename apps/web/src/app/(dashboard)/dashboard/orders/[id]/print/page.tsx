@@ -257,7 +257,7 @@ export default async function OrderPrintPage({
               <div className="text-xs text-neutral-800">{request.requester_email}</div>
             )}
             <div className="mt-1 text-xs uppercase tracking-wider text-neutral-600">
-              {request.source === 'public_link' ? 'External request' : 'Internal request'}
+              {request.source === 'public_link' ? 'External request' : request.source === 'portal' ? 'Customer portal order' : 'Internal request'}
             </div>
           </div>
         </section>

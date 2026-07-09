@@ -37,5 +37,9 @@ export const config = {
     '/signup',
     '/reset/:path*',
     '/invite/:path*',
+    // B2B customer portal: authenticated (magic-link) customer principal —
+    // needs the same session verify + cookie refresh as the dashboard.
+    '/portal/:path*',
+    '/portal',
   ],
 };

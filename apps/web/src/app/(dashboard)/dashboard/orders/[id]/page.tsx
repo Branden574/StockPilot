@@ -669,7 +669,7 @@ export default async function OrderDetailPage({
               <div className="flex justify-between gap-3">
                 <dt className="text-muted-foreground">Source</dt>
                 <dd className="text-right capitalize">
-                  {request.source === 'public_link' ? 'Public link' : 'Internal'}
+                  {request.source === 'public_link' ? 'Public link' : request.source === 'portal' ? 'Customer portal' : 'Internal'}
                 </dd>
               </div>
               <div className="flex justify-between gap-3">
