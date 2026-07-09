@@ -8,6 +8,7 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { dispatchEvent } from '@/server/services/integration-events';
+import { createNotification } from '@/server/services/notifications';
 
 // Why a route handler instead of a Server Action: the public sign page
 // renders <SignatureCollector /> only while `signed_at IS NULL`. A
@@ -121,6 +122,21 @@ export async function POST(req: NextRequest) {
     fulfillment_type: 'pickup' | 'delivery';
   };
 
+  // Before the hand-over: how much had ALREADY shipped. >0 means a prior batch
+  // went out (i.e. this order was resumed from backordered), so a completion now
+  // is the "backordered remainder shipped" case rather than a first delivery.
+  let priorFulfilled = 0;
+  {
+    const { data: priorLines } = await admin
+      .from('order_request_lines')
+      .select('quantity_fulfilled')
+      .eq('order_request_id', order.id);
+    priorFulfilled = ((priorLines ?? []) as { quantity_fulfilled: number | null }[]).reduce(
+      (s, l) => s + (Number(l.quantity_fulfilled) || 0),
+      0,
+    );
+  }
+
   const { data: confirmed, error } = await admin.rpc('confirm_order_signature', {
     p_id: order.id,
     p_signature_token: parsed.data.token,
@@ -157,62 +173,113 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Live tracking: the order just left in_transit (now completed) — purge the
-  // driver's live GPS point so no location lingers after delivery (best-effort).
+  // The hand-over either COMPLETED the order (owed 0) or forked it to
+  // BACKORDERED (still owed units) — the 0244 fork. Read the resulting status
+  // + line totals once and branch every downstream side effect on it: a
+  // backordered hand-over is NOT a completion, so it must not mint a return
+  // token, send a "completed" email, or fire order.completed.
+  const { data: fullRow } = await admin
+    .from('order_requests')
+    .select('*')
+    .eq('id', order.id)
+    .single();
+  const newStatus = (fullRow as { status?: string } | null)?.status ?? null;
+  const isCompleted = newStatus === 'completed';
+  const isBackordered = newStatus === 'backordered';
+
+  const { data: aggLines } = await admin
+    .from('order_request_lines')
+    .select('quantity_requested, quantity_fulfilled')
+    .eq('order_request_id', order.id);
+  const aggRows = (aggLines ?? []) as {
+    quantity_requested: number | null;
+    quantity_fulfilled: number | null;
+  }[];
+  const totalRequested = aggRows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
+  const totalFulfilled = aggRows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
+  const owed = Math.max(0, totalRequested - totalFulfilled);
+
+  // Live tracking: purge the driver's live GPS point after this leg (best-effort).
   try {
     await admin.from('delivery_locations').delete().eq('order_request_id', order.id);
   } catch {
     /* non-fatal */
   }
 
-  // Returns Phase B (B4): the order just became 'completed' and is therefore
-  // RETURNABLE. If the org has the off-by-default `returns` module enabled,
-  // mint a per-order return_token (0156) so the requester can be emailed a
-  // self-service return link (/returns/request/<token>). Best-effort and
-  // idempotent — we only set the token when it's still NULL, so a replayed
-  // sign (already guarded against double-completion by the RPC) never rotates
-  // an issued token. A failure here must NOT fail the signature.
-  try {
-    const { data: modRow } = await admin
-      .from('organization_modules')
-      .select('module_id')
-      .eq('organization_id', order.organization_id)
-      .eq('module_id', 'returns')
-      .eq('enabled', true)
-      .maybeSingle();
-    if (modRow) {
-      const newToken = crypto.randomUUID();
-      // Only stamp + email when the token was still NULL — the .select()
-      // returns zero rows on a replay (token already set), so a repeated
-      // sign never re-sends the return link.
-      const { data: tokened } = await admin
-        .from('order_requests')
-        .update({ return_token: newToken })
-        .eq('id', order.id)
-        .is('return_token', null)
-        .select('id')
+  // Returns Phase B (B4): ONLY a completed order is RETURNABLE. A backordered
+  // hand-over must NOT mint a return token or email a return link. If the org
+  // has the off-by-default `returns` module enabled, mint a per-order
+  // return_token (0156) so the requester can be emailed a self-service return
+  // link. Idempotent — token minted only while still NULL, so a replayed sign
+  // never rotates an issued token. Best-effort: a failure never fails the sign.
+  if (isCompleted) {
+    try {
+      const { data: modRow } = await admin
+        .from('organization_modules')
+        .select('module_id')
+        .eq('organization_id', order.organization_id)
+        .eq('module_id', 'returns')
+        .eq('enabled', true)
         .maybeSingle();
-      if (tokened && order.requester_email) {
-        await sendReturnLinkEmail({
-          to: order.requester_email,
-          recipientName: order.requester_name,
-          appUrl: env.NEXT_PUBLIC_APP_URL,
-          token: newToken,
-        });
+      if (modRow) {
+        const newToken = crypto.randomUUID();
+        const { data: tokened } = await admin
+          .from('order_requests')
+          .update({ return_token: newToken })
+          .eq('id', order.id)
+          .is('return_token', null)
+          .select('id')
+          .maybeSingle();
+        if (tokened && order.requester_email) {
+          await sendReturnLinkEmail({
+            to: order.requester_email,
+            recipientName: order.requester_name,
+            appUrl: env.NEXT_PUBLIC_APP_URL,
+            token: newToken,
+          });
+        }
       }
+    } catch {
+      /* non-fatal — the order is completed regardless of token issuance */
     }
-  } catch {
-    /* non-fatal — the order is completed regardless of token issuance */
   }
 
-  // Fetch the full row for the completion email payload. Done AFTER
-  // the RPC succeeds so the email reflects the final completed state.
-  const { data: fullRow } = await admin
-    .from('order_requests')
-    .select('*')
-    .eq('id', order.id)
-    .single();
-  if (fullRow) {
+  // Backordered fork: the customer took what we had; the order stays open owing
+  // `owed`. Tell the REQUESTER (in-app + email), fire a status_changed event,
+  // and stop here — none of the completion side effects apply.
+  if (isBackordered) {
+    void notifyRequesterBackordered({
+      organizationId: order.organization_id,
+      orderId: order.id,
+      requesterUserId: order.requester_user_id,
+      requesterEmail: order.requester_email,
+      requesterName: order.requester_name,
+      appUrl: env.NEXT_PUBLIC_APP_URL,
+      provided: totalFulfilled,
+      requested: totalRequested,
+      owed,
+    });
+    void dispatchEvent(order.organization_id, 'order.status_changed', {
+      id: order.id,
+      orderNumber: order.id.slice(0, 8).toUpperCase(),
+      status: 'backordered',
+    });
+    return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
+  }
+
+  if (isCompleted && fullRow) {
+    // A previously-backordered order whose remainder just shipped — tell the
+    // requester their wait is over (in-app + email), on top of the receipt.
+    if (priorFulfilled > 0) {
+      void notifyRequesterBackorderShipped({
+        organizationId: order.organization_id,
+        orderId: order.id,
+        requesterUserId: order.requester_user_id,
+        requesterEmail: order.requester_email,
+        requesterName: order.requester_name,
+        appUrl: env.NEXT_PUBLIC_APP_URL,
+      });
+    }
     try {
       // Respect notification_preferences.email_order_completed for the
       // internal requester (column added in 0113). External public-link
@@ -256,12 +323,15 @@ export async function POST(req: NextRequest) {
   }
 
   // Dispatch order.completed integration event (best-effort, fire-and-forget).
-  void dispatchEvent(order.organization_id, 'order.completed', {
-    id: order.id,
-    orderNumber: order.id.slice(0, 8).toUpperCase(),
-    signerName: parsed.data.signerName,
-    signerEmail: parsed.data.signerEmail,
-  });
+  // Only a genuine completion — the backordered fork returned above.
+  if (isCompleted) {
+    void dispatchEvent(order.organization_id, 'order.completed', {
+      id: order.id,
+      orderNumber: order.id.slice(0, 8).toUpperCase(),
+      signerName: parsed.data.signerName,
+      signerEmail: parsed.data.signerEmail,
+    });
+  }
 
   return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
 }
@@ -298,6 +368,125 @@ async function sendReturnLinkEmail(args: {
     text:
       `Hi ${firstName},\n\nYour order is complete. If you need to send anything back, ` +
       `start a return request here:\n${url}\n\nThe warehouse team will review it.`,
+  });
+}
+
+/**
+ * Requester notification for a PARTIAL hand-over (order → backordered). In-app +
+ * push for internal requesters, transactional email for anyone with an address.
+ * Best-effort — swallows all errors so a notification failure never fails the
+ * fulfillment. Backorder Phase 3.
+ */
+async function notifyRequesterBackordered(args: {
+  organizationId: string;
+  orderId: string;
+  requesterUserId: string | null;
+  requesterEmail: string | null;
+  requesterName: string | null;
+  appUrl: string;
+  provided: number;
+  requested: number;
+  owed: number;
+}): Promise<void> {
+  const orderNo = args.orderId.slice(0, 8).toUpperCase();
+  const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
+  const title = `Order #${orderNo}: partially fulfilled`;
+  const body = `${args.provided} of ${args.requested} provided — ${args.owed} backordered. We'll ship the rest when stock arrives.`;
+  try {
+    if (args.requesterUserId) {
+      await createNotification({
+        organizationId: args.organizationId,
+        userId: args.requesterUserId,
+        type: 'order_backordered',
+        title,
+        body,
+        link,
+        metadata: {
+          orderId: args.orderId,
+          provided: args.provided,
+          requested: args.requested,
+          owed: args.owed,
+        },
+      });
+    }
+    if (args.requesterEmail) {
+      await sendBackorderEmail({
+        to: args.requesterEmail,
+        recipientName: args.requesterName,
+        subject: title,
+        message:
+          `${args.provided} of ${args.requested} items from your order have been fulfilled. ` +
+          `The remaining ${args.owed} are backordered and will ship as soon as they're back in stock.`,
+      });
+    }
+  } catch {
+    /* best-effort — never fail the fulfillment on a notification error */
+  }
+}
+
+/**
+ * Requester notification when a previously-backordered order finally completes
+ * (its remainder shipped). Backorder Phase 3. Best-effort.
+ */
+async function notifyRequesterBackorderShipped(args: {
+  organizationId: string;
+  orderId: string;
+  requesterUserId: string | null;
+  requesterEmail: string | null;
+  requesterName: string | null;
+  appUrl: string;
+}): Promise<void> {
+  const orderNo = args.orderId.slice(0, 8).toUpperCase();
+  const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
+  const title = `Order #${orderNo}: backordered items shipped`;
+  const body = 'The remaining items on your order have shipped — it is now fully fulfilled.';
+  try {
+    if (args.requesterUserId) {
+      await createNotification({
+        organizationId: args.organizationId,
+        userId: args.requesterUserId,
+        type: 'order_backorder_shipped',
+        title,
+        body,
+        link,
+        metadata: { orderId: args.orderId },
+      });
+    }
+    if (args.requesterEmail) {
+      await sendBackorderEmail({
+        to: args.requesterEmail,
+        recipientName: args.requesterName,
+        subject: title,
+        message:
+          'Good news — the backordered items on your order have now shipped, ' +
+          'so your order is complete.',
+      });
+    }
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Bare transactional email for the two backorder notices (no template coupling). */
+async function sendBackorderEmail(args: {
+  to: string;
+  recipientName: string | null;
+  subject: string;
+  message: string;
+}): Promise<void> {
+  const firstName = args.recipientName?.split(' ')[0] ?? 'there';
+  const safeName = escapeHtml(firstName);
+  const safeMsg = escapeHtml(args.message);
+  await sendEmail({
+    to: args.to,
+    subject: args.subject,
+    html:
+      `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:480px;margin:0 auto;color:#111">` +
+      `<p>Hi ${safeName},</p>` +
+      `<p>${safeMsg}</p>` +
+      `<p style="color:#666;font-size:12px">You're receiving this because you placed an order with us.</p>` +
+      `</div>`,
+    text: `Hi ${firstName},\n\n${args.message}`,
   });
 }
 
