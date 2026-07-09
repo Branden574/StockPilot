@@ -126,7 +126,9 @@ export function AddItemCard({ user, result, onCancel, onCreated }: Props) {
           organization_id: orgId,
           sku: sku.trim(),
           name: name.trim(),
-          barcode: result.upc,
+          // Photo ID without a readable code passes upc: '' — store NULL, not
+          // a placeholder that would collide future barcode lookups.
+          barcode: result.upc || null,
           model_number: modelNumber.trim() || null,
           description: enrichment.description?.slice(0, 5000) ?? null,
           item_type: 'product',
@@ -299,7 +301,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function suggestedSku(upc: string): string {
   const cleaned = upc.replace(/[^0-9]/g, '');
-  return `ITEM-${cleaned.slice(-8) || cleaned}`;
+  // No readable code (Photo ID without a visible barcode) → time-based suffix
+  // so two such adds never collide on a shared bare 'ITEM-' SKU.
+  if (!cleaned) return `ITEM-${Date.now().toString().slice(-8)}`;
+  return `ITEM-${cleaned.slice(-8)}`;
 }
 
 const styles = StyleSheet.create({

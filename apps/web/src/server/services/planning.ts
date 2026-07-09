@@ -97,7 +97,7 @@ export class PlanningService {
    * non-deleted items, sorted by urgency (lowest days-of-cover first; items with
    * no cover but a positive suggested deficit float to the top).
    */
-  async getReorderSuggestions(_params: { warehouseId?: string } = {}): Promise<PlanningSuggestion[]> {
+  async getReorderSuggestions(params: { warehouseId?: string } = {}): Promise<PlanningSuggestion[]> {
     assertModuleEnabled(this.ctx, 'planning');
     // Defense-in-depth on the registry's dependsOn: ['inventory','purchase_orders']
     // contract. dependsOn is normally enforced at toggle/pack-apply time, but a
@@ -121,9 +121,9 @@ export class PlanningService {
       created_at: string;
     };
 
-    // Fetch the candidate set. warehouseId is reserved for a future
-    // per-warehouse slice; velocity is org-scoped today, so we keep the filter
-    // signature stable without scoping the velocity calc yet.
+    // Fetch the candidate set, optionally sliced to one warehouse (the AI
+    // suggestReorderPoints tool passes warehouseId; velocity math itself stays
+    // per-item so the slice is just a candidate filter).
     //
     // PostgREST clamps any single response to `[api] max_rows = 1000`, so the
     // former `.limit(MAX_ITEMS)` SILENTLY returned at most 1000 items — every
@@ -131,8 +131,8 @@ export class PlanningService {
     // 1000-row `.range()` windows with a stable `.order('id')` and accumulate
     // up to MAX_ITEMS (same cap class as forecasting.ts / order-requests.ts).
     const items = await fetchAllRows<Row>(
-      (from, to) =>
-        this.ctx.supabase
+      (from, to) => {
+        let q = this.ctx.supabase
           .from('inventory_items')
           .select(
             'id, sku, name, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, supplier_id, created_at',
@@ -140,9 +140,10 @@ export class PlanningService {
           .eq('organization_id', this.ctx.organizationId)
           .is('deleted_at', null)
           .eq('status', 'active')
-          .eq('is_rental', false)
-          .order('id', { ascending: true })
-          .range(from, to),
+          .eq('is_rental', false);
+        if (params.warehouseId) q = q.eq('warehouse_id', params.warehouseId);
+        return q.order('id', { ascending: true }).range(from, to);
+      },
       { cap: MAX_ITEMS },
     );
     if (items.length === 0) return [];

@@ -503,7 +503,9 @@ export default function Scan() {
           }
         }
         setAddItem({
-          upc: visionUpc || 'unknown',
+          // Empty when Vision couldn't read a real code — AddItemCard treats
+          // an empty upc as "no barcode" (never persist a placeholder string).
+          upc: visionUpc,
           source: 'ai-fallback',
           existingItem: null,
           enrichment: vision.title

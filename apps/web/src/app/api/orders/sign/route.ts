@@ -282,11 +282,13 @@ export async function POST(req: NextRequest) {
     });
     // The physical SIGNER gets a transactional receipt of what they just signed
     // for — parity with the completed path, where the signer is always emailed.
-    // Deduped: if the signer IS the requester they already got the notice above.
-    if (
-      parsed.data.signerEmail.toLowerCase() !==
-      (order.requester_email ?? '').toLowerCase()
-    ) {
+    // Deduped against the requester notice — but only when that notice was
+    // actually SENT: an opted-out requester who signs still gets their
+    // transactional receipt (matching the completed path's semantics).
+    const signerIsRequester =
+      parsed.data.signerEmail.toLowerCase() ===
+      (order.requester_email ?? '').toLowerCase();
+    if (!signerIsRequester || requesterEmailOptedOut) {
       try {
         await sendBackorderEmail({
           to: parsed.data.signerEmail,

@@ -1258,29 +1258,42 @@ const applyReorderPointTool: ToolExecutor = {
     if (!Number.isFinite(reorderPoint) || reorderPoint < 0) {
       throw new Error('reorderPoint must be a number ≥ 0');
     }
-    const patch: Record<string, number> = { reorder_point: reorderPoint };
+    // UpdateItemInput is camelCase — snake_case keys would be silently ignored
+    // by InventoryService.update (caught by adversarial review; the compiler
+    // checks this now that there's no cast).
+    const patch: { reorderPoint: number; reorderQuantity?: number } = {
+      reorderPoint,
+    };
     if (args.reorderQuantity !== undefined && args.reorderQuantity !== null) {
       const reorderQuantity = Number(args.reorderQuantity);
       if (!Number.isFinite(reorderQuantity) || reorderQuantity < 0) {
         throw new Error('reorderQuantity must be a number ≥ 0');
       }
-      patch.reorder_quantity = reorderQuantity;
+      patch.reorderQuantity = reorderQuantity;
     }
     const svc = new InventoryService(ctx);
     // Fetch first so the reply can show old → new (update() itself asserts
     // items:update and audits).
     const before = await svc.get(itemId);
-    const updated = await svc.update(itemId, patch as never);
+    const updated = await svc.update(itemId, patch);
+    // Echo what the DB actually holds — never report the input as applied.
+    const updatedRow = updated as { name?: string; reorder_point?: number; reorder_quantity?: number };
+    if (Number(updatedRow.reorder_point) !== reorderPoint) {
+      throw new Error('reorder point write did not land — item unchanged');
+    }
     return {
       itemId,
-      name: (updated as { name?: string }).name ?? (before as { name?: string }).name ?? null,
+      name: updatedRow.name ?? (before as { name?: string }).name ?? null,
       previous: {
         reorderPoint: (before as { reorder_point?: number }).reorder_point ?? null,
         reorderQuantity: (before as { reorder_quantity?: number }).reorder_quantity ?? null,
       },
       applied: {
-        reorderPoint,
-        reorderQuantity: patch.reorder_quantity ?? null,
+        reorderPoint: Number(updatedRow.reorder_point),
+        reorderQuantity:
+          updatedRow.reorder_quantity !== undefined && updatedRow.reorder_quantity !== null
+            ? Number(updatedRow.reorder_quantity)
+            : null,
       },
     };
   },

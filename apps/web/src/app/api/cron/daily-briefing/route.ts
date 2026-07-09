@@ -55,6 +55,7 @@ export async function GET(req: NextRequest) {
         .select('organization_id')
         .eq('module_id', 'ai')
         .eq('enabled', true)
+        .order('organization_id', { ascending: true })
         .range(from, to),
     );
 
@@ -69,7 +70,12 @@ export async function GET(req: NextRequest) {
         if (insights.signals.length === 0) continue; // quiet day — say nothing
 
         // Narrative is a graceful enhancement; the signal lines stand alone.
-        const narrative = await summarizeInsights(insights);
+        // 10s race so one slow Gemini call can't eat the 300s budget across a
+        // multi-org fan-out (summarizeInsights itself never throws).
+        const narrative = await Promise.race([
+          summarizeInsights(insights),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+        ]);
         const top = insights.signals
           .slice(0, 3)
           .map((s) => `${s.count} ${s.label}`)
@@ -92,6 +98,11 @@ export async function GET(req: NextRequest) {
 
         for (const m of (admins ?? []) as Array<{ user_id: string }>) {
           // One briefing per user per day — idempotent across cron re-fires.
+          // Read-then-insert (not atomic): two exactly-concurrent invocations
+          // could double-send. Vercel cron never runs the same job in
+          // parallel, so the residual risk is a manual curl during the cron
+          // second — accepted; revisit with a partial unique index if this
+          // ever gains a second trigger path.
           const { data: existing } = await admin
             .from('notifications')
             .select('id')

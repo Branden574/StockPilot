@@ -3,6 +3,7 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 
 import { audit } from './audit';
+import { InventoryService } from './inventory';
 import {
   VendorItemMappingsService,
 } from './vendor-item-mappings';
@@ -590,6 +591,123 @@ export class PoImportsService {
       );
     }
 
+    // Verify the chosen charter belongs to this org FIRST — it drives both the
+    // PO's bill-to tag and the item-instance re-resolution below.
+    let selectedCharterId: string | null = null;
+    if (input.charterId) {
+      const { data: charter } = await this.ctx.supabase
+        .from('charters')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', input.charterId)
+        .maybeSingle();
+      selectedCharterId = (charter?.id as string | undefined) ?? null;
+    }
+
+    // SELECTED CHARTER WINS (owner decision 2026-07-09): the charter picked at
+    // approve governs which ITEM INSTANCE each line receives against. A line
+    // can arrive pointing at an item under a DIFFERENT charter via the review
+    // combobox override (its dropdown dedupes options by SKU — oldest wins) or
+    // a stale prior resolution. resolveLines re-resolves its own use_existing
+    // decisions, but approve() is the LAST gate every path funnels through, so
+    // enforce it here too: swap in (or create, qty 0) the same-SKU sibling
+    // under the selected charter. The mismatched item is left untouched.
+    {
+      const linkedIds = [...new Set(inventoryLines.map((l) => l.item_id as string))];
+      if (linkedIds.length > 0) {
+        const { data: linkedItems, error: liErr } = await this.ctx.supabase
+          .from('inventory_items')
+          .select(
+            'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type',
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .in('id', linkedIds)
+          .is('deleted_at', null);
+        if (liErr) throw new ServiceError('internal_error', liErr.message);
+        type LinkedItem = {
+          id: string;
+          sku: string;
+          name: string;
+          barcode: string | null;
+          charter_id: string | null;
+          unit_cost: number | null;
+          retail_price: number | null;
+          category_id: string | null;
+          supplier_id: string | null;
+          warehouse_id: string | null;
+          unit_of_measure: string | null;
+          item_type: string | null;
+          tracking_type: string | null;
+        };
+        const byId = new Map(
+          ((linkedItems ?? []) as LinkedItem[]).map((i) => [i.id, i]),
+        );
+        const remap = new Map<string, string>();
+        for (const [id, it] of byId) {
+          const itemCharter = it.charter_id ?? null;
+          if (itemCharter === selectedCharterId) continue;
+          // Find the sibling instance under the selected charter…
+          let sibQuery = this.ctx.supabase
+            .from('inventory_items')
+            .select('id')
+            .eq('organization_id', this.ctx.organizationId)
+            .eq('sku', it.sku)
+            .is('bin_location', null)
+            .is('deleted_at', null);
+          sibQuery =
+            selectedCharterId === null
+              ? sibQuery.is('charter_id', null)
+              : sibQuery.eq('charter_id', selectedCharterId);
+          const { data: sibling, error: sibErr } = await sibQuery.maybeSingle();
+          if (sibErr) throw new ServiceError('internal_error', sibErr.message);
+          if (sibling) {
+            remap.set(id, sibling.id as string);
+          } else {
+            // …or create it (qty 0 — receiving posts the stock).
+            const inventorySvc = new InventoryService(this.ctx);
+            const created = await inventorySvc.create({
+              name: it.name,
+              sku: it.sku,
+              barcode: it.barcode ?? undefined,
+              unitCost: Number(it.unit_cost ?? 0) || 0,
+              retailPrice: Number(it.retail_price ?? 0) || 0,
+              quantityOnHand: 0,
+              reorderPoint: 0,
+              reorderQuantity: 0,
+              unitOfMeasure: it.unit_of_measure ?? 'unit',
+              supplierId: it.supplier_id ?? input.vendorId,
+              warehouseId: it.warehouse_id ?? input.warehouseId,
+              charterId: selectedCharterId,
+              categoryId: it.category_id ?? null,
+              primaryLocationId: null,
+              trackingType: (it.tracking_type as 'none' | 'lot' | 'serial' | null) ?? 'none',
+              itemType:
+                (it.item_type as 'product' | 'book' | 'asset' | 'consumable' | null) ?? 'product',
+              customFields: {},
+              status: 'active',
+            });
+            remap.set(id, created.id as string);
+          }
+        }
+        if (remap.size > 0) {
+          for (const l of inventoryLines) {
+            const target = remap.get(l.item_id as string);
+            if (!target) continue;
+            l.item_id = target;
+            // Keep the import line's record pointing at what was ACTUALLY
+            // received against, and mark created siblings for cancel-cleanup.
+            const { error: updErr } = await this.ctx.supabase
+              .from('po_import_lines')
+              .update({ item_id: target })
+              .eq('id', l.id)
+              .select('id')
+              .maybeSingle();
+            if (updErr) throw new ServiceError('internal_error', updErr.message);
+          }
+        }
+      }
+    }
+
     const { data: nextNum } = await this.ctx.supabase.rpc('next_po_number', {
       p_org_id: this.ctx.organizationId,
     });
@@ -617,18 +735,9 @@ export class PoImportsService {
       input.locationId ?? null,
     );
 
-    // Verify the chosen bill-to charter belongs to this org before tagging the
-    // PO with it; a spoofed/cross-tenant id is silently dropped (never written).
-    let billToCharterId: string | null = null;
-    if (input.charterId) {
-      const { data: charter } = await this.ctx.supabase
-        .from('charters')
-        .select('id')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('id', input.charterId)
-        .maybeSingle();
-      billToCharterId = (charter?.id as string | undefined) ?? null;
-    }
+    // Bill-to = the same org-verified charter computed above (spoofed /
+    // cross-tenant ids were already silently dropped there).
+    const billToCharterId: string | null = selectedCharterId;
 
     const { data: po, error: poErr } = await this.ctx.supabase
       .from('purchase_orders')
