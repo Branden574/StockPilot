@@ -20,6 +20,7 @@ import * as React from 'react';
 import { BulkActions } from '@/components/inventory/bulk-actions';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
+import { groupBySizeRun, type SizeRunGroup } from '@stockpilot/core';
 import {
   groupPlacementsBySku,
   rollupStatus,
@@ -161,6 +162,14 @@ type SkuGroupInputRow = SkuInputRow & { __item: Item };
 type RenderEntry =
   | { kind: 'row'; item: Item; rowIdx: number }
   | { kind: 'header'; group: SkuGroup; items: Item[]; rowIdx: number };
+
+/** The size-run layer sits ON TOP of RenderEntry: a run of same-base sized
+ *  items (Pink Shirt - L/XL/2XL) collapses into one `style` header whose
+ *  members are the underlying RenderEntry rows; everything else is a
+ *  `passthrough` rendered exactly as before. Display-only. */
+type StyledEntry =
+  | { kind: 'style'; group: SizeRunGroup<RenderEntry>; items: Item[] }
+  | { kind: 'passthrough'; entry: RenderEntry };
 
 /** A full-dataset row for instant mode: the table row shape plus the
  *  columns the local matcher (barcode/model_number) and the created_*
@@ -762,6 +771,9 @@ export function InventoryTable({
   // SKU is never grouped into a >1-placement header — see
   // lib/inventory/group-by-sku.ts). Collapsed (empty set) by default.
   const [expandedSkuGroups, setExpandedSkuGroups] = React.useState<Set<string>>(new Set());
+  // Size-run (apparel) grouping expand state — keyed by the derived style base.
+  // Collapsed by default, like the SKU groups above.
+  const [expandedStyleGroups, setExpandedStyleGroups] = React.useState<Set<string>>(new Set());
 
   const sort = paramsToSort(params.get('sort'));
   // OPTIMISTIC filter selections — these flip synchronously on click and
@@ -1176,6 +1188,54 @@ export function InventoryTable({
     });
   }
 
+  // Size-run (apparel) grouping: collapse a run of same-base sized items
+  // ("Pink Shirt - L / - XL / - 2XL") into ONE expandable header ON TOP of the
+  // SKU grouping above. Display-only — members keep their own SKU/count/rack. A
+  // multi-placement SKU header is never folded in (groupable: false). Off for
+  // Books (never sized, and their header layout differs). During an active
+  // search the runs auto-expand so a matched size (already filtered into
+  // `renderItems`) is never hidden inside a collapsed header.
+  const styleSearchActive = q.trim().length > 0;
+  const styledRenderItems = React.useMemo<StyledEntry[]>(() => {
+    if (showBookFields) {
+      return renderItems.map((entry) => ({ kind: 'passthrough', entry }));
+    }
+    const grouped = groupBySizeRun<RenderEntry>(renderItems, (entry) =>
+      entry.kind === 'row'
+        ? {
+            key: entry.item.rowKey ?? entry.item.id,
+            name: entry.item.name,
+            quantity: Number(entry.item.quantity_on_hand) || 0,
+            groupable: true,
+          }
+        : { key: `sku:${entry.group.sku}`, name: entry.group.name, quantity: 0, groupable: false },
+    );
+    const out: StyledEntry[] = [];
+    for (const ge of grouped) {
+      if (ge.kind === 'single') {
+        out.push({ kind: 'passthrough', entry: ge.entry });
+        continue;
+      }
+      const items = ge.group.members.map(
+        (m) => (m as Extract<RenderEntry, { kind: 'row' }>).item,
+      );
+      out.push({ kind: 'style', group: ge.group, items });
+      if (styleSearchActive || expandedStyleGroups.has(ge.group.styleKey)) {
+        for (const m of ge.group.members) out.push({ kind: 'passthrough', entry: m });
+      }
+    }
+    return out;
+  }, [renderItems, expandedStyleGroups, styleSearchActive, showBookFields]);
+
+  function toggleStyleGroup(styleKey: string) {
+    setExpandedStyleGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(styleKey)) next.delete(styleKey);
+      else next.add(styleKey);
+      return next;
+    });
+  }
+
   return (
     <div className="space-y-4">
       {/* React 19 use() dataset handoff: an invisible leaf that suspends
@@ -1522,7 +1582,26 @@ export function InventoryTable({
                 </td>
               </tr>
             )}
-            {renderItems.map((entry) => {
+            {styledRenderItems.map((se) => {
+              // Size-run (apparel) header — one collapsed row per style base
+              // (e.g. "L4L - Pink Shirt"), stacked ABOVE the SKU grouping.
+              // Expanding splices its member rows (the SAME `<tr>`s below) in
+              // right after it.
+              if (se.kind === 'style') {
+                return (
+                  <StyleGroupHeaderRow
+                    key={`style-group:${se.group.styleKey}`}
+                    group={se.group}
+                    items={se.items}
+                    expanded={styleSearchActive || expandedStyleGroups.has(se.group.styleKey)}
+                    onToggle={() => toggleStyleGroup(se.group.styleKey)}
+                    lookups={lookups}
+                    rowLinkPrefix={rowLinkPrefix}
+                    currentListUrl={currentListUrl}
+                  />
+                );
+              }
+              const entry = se.entry;
               // Model B SKU-group header: one collapsed row per SKU that
               // has MORE than one placement, showing the summed on-hand
               // total. A chevron toggles `expandedSkuGroups`, which
@@ -2321,6 +2400,185 @@ function SkuGroupHeaderRow({
       <td className="px-3 text-right">
         <Sparkline data={series} width={56} height={18} />
       </td>
+      <td className="px-3">
+        <StockStatusBadge
+          quantity={group.total}
+          reorderPoint={first.reorder_point}
+          itemStatus={rolledUpStatus}
+        />
+      </td>
+      <td className="px-3 text-right text-[11.5px] text-[var(--ed-ink-4)]">—</td>
+    </tr>
+  );
+}
+
+/**
+ * Size-run (apparel) group header — one collapsed row for a run of same-base
+ * sized items ("L4L - Pink Shirt - L / - XL / - 2XL"). A clone of
+ * SkuGroupHeaderRow adapted for a run: the SKU column reads "—" (members have
+ * distinct SKUs), the roll-up total sums member on-hand, and a "N sizes" chip
+ * shows the run size. Not selectable (bulk actions target the member rows).
+ */
+function StyleGroupHeaderRow({
+  group,
+  items,
+  expanded,
+  onToggle,
+  lookups,
+  rowLinkPrefix,
+  currentListUrl,
+}: {
+  group: SizeRunGroup<RenderEntry>;
+  items: Item[];
+  expanded: boolean;
+  onToggle: () => void;
+  lookups: Lookups;
+  rowLinkPrefix: string;
+  currentListUrl: string;
+}) {
+  const first = items[0]!;
+  const status = deriveStatus(group.total, first.reorder_point);
+  const par = Math.max(first.reorder_point * 4, group.total * 1.5, 10);
+  const category = first.category_id ? lookups.categories.get(first.category_id) : null;
+  const location = first.primary_location_id
+    ? lookups.locations.get(first.primary_location_id)
+    : null;
+  const distinctCharterIds = new Set(items.map((it) => it.charter_id ?? ''));
+  const rowThumbSrc = first.image_thumb_url ?? first.image_url;
+  // Status is per-member and can differ; roll up conservatively (see group-by-sku).
+  const rolledUpStatus = rollupStatus(items.map((it) => it.status));
+  const sizeLabel = `${group.sizeCount} size${group.sizeCount === 1 ? '' : 's'}`;
+
+  return (
+    <tr className="border-b border-border bg-muted/30 transition-colors last:border-0">
+      {/* Not selectable — no checkbox (bulk actions target the member rows). */}
+      <td className="px-3" />
+      <td className="py-2.5 pr-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.baseName} (${sizeLabel})`}
+            className="grid h-5 w-5 shrink-0 place-items-center rounded-sm text-[var(--ed-ink-3)] transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <ChevronRight
+              className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-90')}
+            />
+          </button>
+          <ImageHoverPreview
+            src={first.image_url ?? null}
+            srcLoader={
+              !first.image_url && first.image_thumb_url
+                ? () => loadMasterImageUrl(first.id)
+                : undefined
+            }
+            alt={first.name}
+            title={group.baseName}
+            subtitle={sizeLabel}
+            meta={
+              <span>
+                On hand{' '}
+                <span className="text-foreground font-medium tabular-nums">
+                  {formatNumber(group.total)}
+                </span>
+              </span>
+            }
+            className="shrink-0"
+          >
+            {rowThumbSrc ? (
+              <Image
+                src={rowThumbSrc}
+                unoptimized={!!first.image_thumb_url}
+                alt=""
+                width={56}
+                height={56}
+                sizes="28px"
+                placeholder={first.image_lqip ? 'blur' : 'empty'}
+                blurDataURL={first.image_lqip ?? undefined}
+                className="h-7 w-7 shrink-0 rounded-[5px] border border-border bg-muted object-cover"
+              />
+            ) : (
+              <span
+                aria-hidden
+                className="h-7 w-7 shrink-0 rounded-[5px] border border-border"
+                style={{
+                  background:
+                    'repeating-linear-gradient(45deg, hsl(var(--border)) 0 1px, transparent 1px 6px), hsl(var(--muted))',
+                }}
+              />
+            )}
+          </ImageHoverPreview>
+          <Link
+            href={`${rowLinkPrefix}/${first.id}?return=${encodeURIComponent(currentListUrl)}`}
+            prefetch={false}
+            className="font-medium hover:underline"
+          >
+            {group.baseName}
+          </Link>
+          <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10.5px] font-medium text-[var(--ed-ink-3)]">
+            {sizeLabel}
+          </span>
+        </div>
+      </td>
+      {/* SKU — a run spans multiple SKUs, so no single value. */}
+      <td className="px-3 text-[11.5px] text-[var(--ed-ink-4)] italic">—</td>
+      <td className="px-3">
+        {category ? (
+          <span
+            className="inline-flex items-center gap-1.5 text-[12px]"
+            style={category.color ? { color: category.color } : undefined}
+          >
+            {category.color && (
+              <span
+                aria-hidden
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: category.color }}
+              />
+            )}
+            {category.name}
+          </span>
+        ) : (
+          <span className="text-[12px] text-[var(--ed-ink-4)]">—</span>
+        )}
+      </td>
+      <td className="px-3 text-[12px]">
+        {distinctCharterIds.size > 1 ? (
+          <span
+            className="text-[11px] text-[var(--ed-ink-4)] italic"
+            title="Sizes span multiple charters — expand to see each"
+          >
+            Multiple
+          </span>
+        ) : first.charter_id ? (
+          (() => {
+            const charter = lookups.charters?.get(first.charter_id!) ?? null;
+            return charter ? (
+              <span className="text-[var(--ed-ink-2)]" title={charter.name}>
+                {charter.code ?? charter.name}
+              </span>
+            ) : (
+              <span className="text-[11px] text-[var(--ed-ink-4)] italic">Generic</span>
+            );
+          })()
+        ) : (
+          <span
+            className="text-[11px] text-[var(--ed-ink-4)] italic"
+            title="Generic stock — any charter serviced by this warehouse can use it"
+          >
+            Generic
+          </span>
+        )}
+      </td>
+      <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">{location?.name ?? '—'}</td>
+      <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">{sizeLabel}</td>
+      <td className="px-3 text-right font-mono font-medium tabular-nums">
+        {formatNumber(group.total)}
+      </td>
+      <td className="px-3">
+        <StockBar stock={group.total} par={par} status={status} />
+      </td>
+      <td className="px-3 text-right text-[11.5px] text-[var(--ed-ink-4)]">—</td>
       <td className="px-3">
         <StockStatusBadge
           quantity={group.total}
