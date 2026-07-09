@@ -4,6 +4,7 @@ import {
   ALLOWED_TRANSITIONS,
   assertTransition,
   availableOrderActions,
+  derivePickingStatus,
   OrderTransitionError,
   type OrderStatus,
 } from './order-state-machine';
@@ -192,5 +193,73 @@ describe('availableOrderActions', () => {
     expect(availableOrderActions({ ...base, status: 'denied' })).toEqual([
       'view_denial_reason',
     ]);
+  });
+
+  // ── Picking claim / lock (owner: admin=manager+, must-claim-before-pick,
+  //    self-release) ──────────────────────────────────────────────────────────
+  describe('picking claim/lock', () => {
+    const picking = { ...base, status: 'pick_slip_generated' as const, viewerRole: 'staff' as const };
+
+    it('UNCLAIMED + staff: can Claim, but cannot pick or complete yet', () => {
+      const a = availableOrderActions({ ...picking, assignedPickerId: null, viewerUserId: 'u-staff' });
+      expect(a).toContain('claim_picking');
+      expect(a).toContain('print_pick_slip');
+      expect(a).not.toContain('open_digital_pick');
+      expect(a).not.toContain('mark_picking_complete');
+      expect(a).not.toContain('release_picking');
+    });
+
+    it('ASSIGNED TO ME + staff: can pick, complete, and self-release; cannot re-claim', () => {
+      const a = availableOrderActions({ ...picking, assignedPickerId: 'u-staff', viewerUserId: 'u-staff' });
+      expect(a).toContain('open_digital_pick');
+      expect(a).toContain('mark_picking_complete');
+      expect(a).toContain('release_picking');
+      expect(a).not.toContain('claim_picking');
+      expect(a).not.toContain('reassign_picker'); // staff can't reassign
+    });
+
+    it('ASSIGNED TO SOMEONE ELSE + staff: view/print only — no claim, no pick', () => {
+      const a = availableOrderActions({ ...picking, assignedPickerId: 'u-other', viewerUserId: 'u-staff' });
+      expect(a).toEqual(['print_pick_slip']);
+    });
+
+    it('UNCLAIMED + manager: can pick directly + reassign; no release (nothing to release)', () => {
+      const a = availableOrderActions({
+        ...picking,
+        viewerRole: 'manager',
+        assignedPickerId: null,
+        viewerUserId: 'u-mgr',
+      });
+      expect(a).toContain('open_digital_pick');
+      expect(a).toContain('mark_picking_complete');
+      expect(a).toContain('reassign_picker');
+      expect(a).not.toContain('release_picking');
+      expect(a).not.toContain('claim_picking');
+    });
+
+    it('ASSIGNED TO SOMEONE ELSE + manager: full override incl. release + reassign', () => {
+      const a = availableOrderActions({
+        ...picking,
+        viewerRole: 'manager',
+        assignedPickerId: 'u-other',
+        viewerUserId: 'u-mgr',
+      });
+      expect(a).toContain('open_digital_pick');
+      expect(a).toContain('mark_picking_complete');
+      expect(a).toContain('reassign_picker');
+      expect(a).toContain('release_picking');
+    });
+  });
+
+  describe('derivePickingStatus', () => {
+    it('maps status + assignment to the display status', () => {
+      expect(derivePickingStatus('approved', null)).toBeNull();
+      expect(derivePickingStatus('pick_slip_generated', null)).toBe('unassigned');
+      expect(derivePickingStatus('pick_slip_generated', 'u-1')).toBe('assigned');
+      expect(derivePickingStatus('picking_in_progress', 'u-1')).toBe('in_progress');
+      expect(derivePickingStatus('picking_in_progress', null)).toBe('unassigned');
+      expect(derivePickingStatus('picking_complete', 'u-1')).toBe('completed');
+      expect(derivePickingStatus('completed', 'u-1')).toBe('completed');
+    });
   });
 });
