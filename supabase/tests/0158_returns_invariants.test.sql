@@ -20,7 +20,7 @@
 
 begin;
 
-select plan(27);
+select plan(28);
 
 -- ─────────────────────────────────────────────────────────────────────
 -- Stable UUIDs so assertions are deterministic.
@@ -132,18 +132,21 @@ insert into public.order_requests
   values (:order_cancel, :org_id, :wh_id, 'in_transit', :mgr_id, 'internal', 'pickup')
   on conflict (id) do nothing;
 
--- Source lines. quantity_fulfilled simulates the fulfilment decrement; the
--- return budget = quantity_fulfilled - returned_quantity.
+-- Source lines. quantity_fulfilled simulates the SHIPPED (handed-over) decrement;
+-- the return budget = quantity_fulfilled - returned_quantity. The cancel line
+-- additionally carries quantity_picked = 3 — a CURRENT staged batch still in the
+-- building (as after a resume: 5 already shipped, 3 re-picked). Under the 0244
+-- model cancel restocks that staged batch, never the shipped total.
 insert into public.order_request_lines
-  (id, order_request_id, item_id, quantity_requested, quantity_fulfilled)
+  (id, order_request_id, item_id, quantity_requested, quantity_fulfilled, quantity_picked)
   values
-    (:line_restock, :order_id, :item_restock, 10, 5),
-    (:line_scrap,   :order_id, :item_scrap,   10, 5),
-    (:line_over,    :order_id, :item_over,    10, 5),
-    (:line_cross,   :order_id, :item_cross,   10, 5),
-    (:line_durable, :order_id, :item_durable, 10, 5),
-    (:line_idem,    :order_id, :item_idem,    10, 5),
-    (:line_cancel,  :order_cancel, :item_cancel, 10, 5)
+    (:line_restock, :order_id, :item_restock, 10, 5, null),
+    (:line_scrap,   :order_id, :item_scrap,   10, 5, null),
+    (:line_over,    :order_id, :item_over,    10, 5, null),
+    (:line_cross,   :order_id, :item_cross,   10, 5, null),
+    (:line_durable, :order_id, :item_durable, 10, 5, null),
+    (:line_idem,    :order_id, :item_idem,    10, 5, null),
+    (:line_cancel,  :order_cancel, :item_cancel, 10, 5, 3)
   on conflict (id) do nothing;
 
 -- Become the manager so auth.uid() resolves inside the SECURITY DEFINER RPC and
@@ -416,11 +419,14 @@ select is(
 );
 
 -- ═════════════════════════════════════════════════════════════════════
--- INVARIANT 7 — cancel-after-return: cancel_order_request restocks only
--- quantity_fulfilled - returned_quantity (no double-restock of returned units).
--- order_cancel line: fulfilled=5, item on_hand=100. Apply a return for 2 first
--- (on_hand 100 -> 102, returned_quantity=2). Then cancel: should restore only
--- 5 - 2 = 3 (on_hand 102 -> 105), NOT the full 5.
+-- INVARIANT 7 — cancel restocks the STAGED batch, never the shipped total
+-- (the 0244 Model-A guarantee, exercised on the resume→cancel edge).
+-- order_cancel line: quantity_fulfilled=5 (shipped in a prior batch),
+-- quantity_picked=3 (current staged batch), item on_hand=100.
+-- A return of 2 against the SHIPPED units restocks 2 (on_hand 100 -> 102,
+-- returned_quantity=2). Then cancel restocks only the STAGED 3 (on_hand
+-- 102 -> 105) — independent of the return — and PRESERVES quantity_fulfilled=5
+-- (goods that left the building are never un-shipped by a cancel).
 -- ═════════════════════════════════════════════════════════════════════
 insert into public.returns (id, organization_id, order_request_id, status)
   values (:ret_cancel, :org_id, :order_cancel, 'received');
@@ -433,7 +439,7 @@ do $$ begin perform public.process_return_disposition('a7777777-7777-7777-7777-7
 select is(
   (select quantity_on_hand from public.inventory_items where id = :item_cancel),
   102::numeric(14,4),
-  'Cancel-after-return setup: return of 2 restocked (100 -> 102)'
+  'Cancel setup: return of 2 against shipped units restocked (100 -> 102)'
 );
 
 do $$ begin perform public.cancel_order_request('ec000000-0000-0000-0000-0000000000ca', 'test cancel'); end $$;
@@ -441,7 +447,7 @@ do $$ begin perform public.cancel_order_request('ec000000-0000-0000-0000-0000000
 select is(
   (select quantity_on_hand from public.inventory_items where id = :item_cancel),
   105::numeric(14,4),
-  'Cancel restores only fulfilled - returned (3), not the full 5 (102 -> 105)'
+  'Cancel restocks the staged batch (3), independent of the return (102 -> 105)'
 );
 
 select is(
@@ -452,8 +458,14 @@ select is(
 
 select is(
   (select quantity_fulfilled from public.order_request_lines where id = :line_cancel),
-  0::numeric(14,4),
-  'cancel_order_request zeroes quantity_fulfilled on the cancelled line'
+  5::numeric(14,4),
+  'cancel PRESERVES quantity_fulfilled (shipped record kept, not zeroed)'
+);
+
+select is(
+  (select quantity_picked from public.order_request_lines where id = :line_cancel),
+  null,
+  'cancel clears quantity_picked (staged batch restocked, cannot be replayed)'
 );
 
 select * from finish();
