@@ -39,3 +39,46 @@ export async function listOrderDrivers(orderId: string): Promise<OrderDriver[]> 
   );
   return drivers;
 }
+
+/** One order line as returned by GET /api/v1/orders/<id>, for digital picking. */
+export interface OrderDetailLine {
+  id: string;
+  quantity_requested: number;
+  quantity_picked: number | null;
+  quantity_fulfilled: number | null;
+  notes: string | null;
+  item: {
+    id: string;
+    name: string;
+    sku: string | null;
+  } | null;
+}
+
+export interface OrderDetail {
+  order: { id: string; status: string; [k: string]: unknown };
+  lines: OrderDetailLine[];
+  warehouseName: string | null;
+  requesterName: string | null;
+  requesterEmail: string | null;
+}
+
+/** Fetch an order's header + per-line items so the app can pick line-by-line. */
+export async function getOrderDetail(orderId: string): Promise<OrderDetail> {
+  return api<OrderDetail>(`/api/v1/orders/${orderId}`);
+}
+
+/**
+ * Record a per-line picked quantity (native parity for the web DigitalPick card).
+ * Does NOT decrement stock — that happens at complete_picking. The server caps
+ * qty at the line's requested amount (over_pick → thrown with the server msg).
+ */
+export async function recordPickedLine(
+  orderId: string,
+  lineId: string,
+  quantity: number,
+): Promise<void> {
+  await api(`/api/v1/orders/${orderId}/pick-line`, {
+    method: 'POST',
+    body: { lineId, quantity },
+  });
+}

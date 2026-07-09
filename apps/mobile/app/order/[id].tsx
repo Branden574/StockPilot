@@ -16,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { DigitalPick } from '@/components/digital-pick';
 import { SignaturePadModal } from '@/components/signature-pad-modal';
 
 import { CachedImage } from '@/components/ui/cached-image';
@@ -571,8 +572,12 @@ export default function OrderDetail() {
                   )
                 : null}
               {order.status === 'pick_slip_generated' || order.status === 'picking_in_progress'
-                ? actionBtn('Mark picking complete', 'cp', () =>
-                    void act({ action: 'complete_picking' }, 'cp'),
+                ? // Native line-by-line digital picking (parity with the web
+                  // DigitalPick workspace) — enter the actual qty picked per
+                  // line, or "Fill all as requested", then Complete. Replaces
+                  // the old bulk-only "mark all complete" button.
+                  (
+                    <DigitalPick orderId={id!} onCompleted={() => void load()} />
                   )
                 : null}
               {order.status === 'picking_complete'
