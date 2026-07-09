@@ -17,6 +17,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { buildPoCharges } from '@/lib/po-imports/charges';
 import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -544,8 +545,10 @@ export class PoImportsService {
   /**
    * Approves a parsed import: creates a real purchase_orders row in
    * status='expected_inbound' and copies inventory lines into
-   * purchase_order_items. Tax / freight / service / non_inventory lines are
-   * skipped. Inventory stock is NOT touched.
+   * purchase_order_items. Tax / freight / service / fee / discount lines are
+   * persisted as FINANCIAL-ONLY purchase_order_charges (they appear on the PO
+   * PDF and roll into total, but never become items and never touch stock).
+   * Inventory stock is NOT touched.
    */
   async approve(input: ApprovePoImportInput): Promise<{ poId: string }> {
     assertModuleEnabled(this.ctx, 'po_imports');
@@ -597,6 +600,15 @@ export class PoImportsService {
       0,
     );
 
+    // Non-inventory lines (tax / freight / White Glove service / e-waste fee /
+    // discount / unmatched-but-priced) are FINANCIAL-ONLY: they belong on the PO
+    // document and roll into its total, but they NEVER become items and NEVER
+    // touch stock (owner requirement). Persisted as purchase_order_charges (a
+    // table with no item_id and no FK to inventory_items → no path to a stock
+    // movement). Everything in finalLines that is not inventory is a charge, so
+    // nothing priced is dropped.
+    const { chargeRows, chargeTotal } = buildPoCharges(finalLines, this.ctx.organizationId);
+
     // Receiving posts against a destination location. The user MUST have
     // chosen one at import review — there is deliberately no fallback (the
     // old auto-pick/auto-create path silently spawned junk locations).
@@ -629,7 +641,9 @@ export class PoImportsService {
         expected_at: input.expectedAt ?? null,
         notes: `Imported from PO file (po_import ${input.poImportId})`,
         subtotal,
-        total: subtotal,
+        // Total is the TRUE invoice value: goods + every charge. subtotal stays
+        // goods-only so the PDF can print Subtotal → charges → Total.
+        total: subtotal + chargeTotal,
         status: 'expected_inbound',
         created_by: this.ctx.userId,
         updated_by: this.ctx.userId,
@@ -652,6 +666,17 @@ export class PoImportsService {
           })),
         );
       if (lineErr) throw new ServiceError('internal_error', lineErr.message);
+    }
+
+    // Persist the financial-only charges (tax/freight/service/fee/discount/other)
+    // so they render on the PO PDF and reconcile with total. No stock, no items.
+    if (chargeRows.length > 0) {
+      const { error: chargeErr } = await this.ctx.supabase
+        .from('purchase_order_charges')
+        .insert(
+          chargeRows.map((c) => ({ ...c, purchase_order_id: po.id as string })),
+        );
+      if (chargeErr) throw new ServiceError('internal_error', chargeErr.message);
     }
 
     // Stamp the items THIS import created (not pre-existing items the user
@@ -693,6 +718,9 @@ export class PoImportsService {
         after: {
           poId: po.id,
           lineCount: inventoryLines.length,
+          chargeCount: chargeRows.length,
+          chargeTotal,
+          total: subtotal + chargeTotal,
           warehouseId: input.warehouseId,
         },
       },

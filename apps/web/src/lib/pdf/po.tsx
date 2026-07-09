@@ -40,6 +40,20 @@ export interface PoPdfReceipt {
   totalRejected: number;
 }
 
+/**
+ * A financial-only charge (tax, freight, White Glove service, e-waste fee,
+ * discount…) — rendered as a line row in the PO's existing item table but with
+ * no SKU and no receiving columns, since it never becomes stock.
+ */
+export interface PoPdfCharge {
+  label: string;
+  /** Optional qty + unit cost for a faithful "100 @ $9.00" row; null = flat. */
+  quantity: number | null;
+  unitCost: number | null;
+  /** Signed line total (discounts negative). Rolls into the PO total. */
+  amount: number;
+}
+
 export interface PoPdfHeader {
   poNumber: string;
   status: string;
@@ -87,6 +101,8 @@ export interface PoPdfBillToCharter {
 interface PurchaseOrderPdfProps {
   po: PoPdfHeader;
   lines: PoPdfLine[];
+  /** Financial-only charges (tax/freight/service/fee/discount). Empty = none. */
+  charges?: PoPdfCharge[];
   org: PoPdfOrg;
   supplier: PoPdfSupplier | null;
   destination: PoPdfDestination | null;
@@ -121,6 +137,7 @@ const RECEIPT_COLS = {
 export function PurchaseOrderPdf({
   po,
   lines,
+  charges = [],
   org,
   supplier,
   destination,
@@ -129,13 +146,20 @@ export function PurchaseOrderPdf({
 }: PurchaseOrderPdfProps) {
   const subtotal = Number(po.subtotal) || 0;
   const total = Number(po.total) || 0;
+  const hasCharges = charges.length > 0;
+  const chargesSum = charges.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+  // When explicit charges exist they are itemized as line rows AND rolled up in
+  // the totals block, so the total reconciles as subtotal + charges. For POs
+  // with NO charge rows (older/manual POs) fall back to the legacy derived
+  // "Tax & shipping" / "Adjustments" split from (total − subtotal), so their
+  // PDFs are unchanged.
   const rawAdjustment = total - subtotal;
-  // Tax + shipping is rendered as a positive surcharge line. Negative
-  // adjustments (discounts, returns netted into the total) are shown
-  // separately as "Adjustments" so the reader doesn't see a
-  // "-$25.00" tucked into a label that says "Tax & shipping".
-  const taxAndShipping = rawAdjustment > 0 ? rawAdjustment : 0;
-  const negativeAdjustment = rawAdjustment < 0 ? rawAdjustment : 0;
+  const taxAndShipping = !hasCharges && rawAdjustment > 0 ? rawAdjustment : 0;
+  const negativeAdjustment = !hasCharges && rawAdjustment < 0 ? rawAdjustment : 0;
+  // Defensive reconciliation: if the stored total doesn't equal subtotal +
+  // itemized charges (data drift), surface the gap rather than print a total
+  // that doesn't add up.
+  const chargeResidual = hasCharges ? total - subtotal - chargesSum : 0;
   const isDraft = (po.status ?? '').toLowerCase() === 'draft';
   const terms = (org.poTerms ?? '').trim();
   const hasTerms = terms.length > 0;
@@ -264,20 +288,21 @@ export function PurchaseOrderPdf({
                 Line total
               </Text>
             </View>
-            {lines.length === 0 ? (
+            {lines.length === 0 && charges.length === 0 ? (
               <View style={pdfStyles.tRow}>
                 <Text style={[pdfStyles.tCell, pdfStyles.muted, { flex: 1 }]}>
                   No line items.
                 </Text>
               </View>
             ) : (
-              lines.map((l, i) => (
+              <>
+                {lines.map((l, i) => (
                 // No `wrap={false}` here: long descriptions are pre-
                 // truncated above, but if a single name still wraps onto
                 // 2 lines we'd rather page-break the row than overflow
                 // the page bottom.
                 <View
-                   
+
                   key={`${l.sku}-${i}`}
                   style={pdfStyles.tRow}
                 >
@@ -319,7 +344,58 @@ export function PurchaseOrderPdf({
                     {formatCurrencyForPdf(l.lineTotal)}
                   </Text>
                 </View>
-              ))
+                ))}
+                {/*
+                 * Financial-only charges (tax / freight / White Glove service /
+                 * e-waste fee / discount) render as line rows in the SAME table,
+                 * but with a dash for SKU and the receiving columns — they never
+                 * become stock, so there is nothing to receive. Numbering
+                 * continues after the inventory lines.
+                 */}
+                {charges.map((c, ci) => {
+                  // Only show "qty @ unit cost" when it actually foots to the
+                  // line amount (so a discount — qty 5 × $10 but a −$50 total —
+                  // renders as a flat −$50 instead of a row that doesn't add up).
+                  const foots =
+                    c.quantity != null &&
+                    c.unitCost != null &&
+                    Math.abs(c.quantity * c.unitCost - c.amount) < 0.005;
+                  return (
+                    <View key={`charge-${ci}`} style={pdfStyles.tRow}>
+                      <Text style={[pdfStyles.tCell, pdfStyles.muted, { flex: PO_COLS.num }]}>
+                        {lines.length + ci + 1}
+                      </Text>
+                      <Text
+                        style={[pdfStyles.tCell, pdfStyles.tCellMono, pdfStyles.muted, { flex: PO_COLS.sku }]}
+                      >
+                        —
+                      </Text>
+                      <Text style={[pdfStyles.tCell, { flex: PO_COLS.name }]}>
+                        {truncate(c.label, DESCRIPTION_MAX)}
+                      </Text>
+                      <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.qty }]}>
+                        {foots ? formatNumberForPdf(c.quantity as number) : '—'}
+                      </Text>
+                      <Text
+                        style={[pdfStyles.tCell, pdfStyles.tRight, pdfStyles.muted, { flex: PO_COLS.recv }]}
+                      >
+                        —
+                      </Text>
+                      <Text
+                        style={[pdfStyles.tCell, pdfStyles.tRight, pdfStyles.muted, { flex: PO_COLS.out }]}
+                      >
+                        —
+                      </Text>
+                      <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.unit }]}>
+                        {foots ? formatCurrencyForPdf(c.unitCost as number) : '—'}
+                      </Text>
+                      <Text style={[pdfStyles.tCell, pdfStyles.tRight, { flex: PO_COLS.total }]}>
+                        {formatCurrencyForPdf(c.amount)}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </>
             )}
           </View>
         </View>
@@ -330,6 +406,23 @@ export function PurchaseOrderPdf({
               <Text style={pdfStyles.totalsLabel}>Subtotal</Text>
               <Text style={pdfStyles.totalsValue}>{formatCurrencyForPdf(subtotal)}</Text>
             </View>
+            {hasCharges ? (
+              // Roll-up of the itemized charge rows above (Subtotal + Charges =
+              // Total). The individual charges are the line rows in the table.
+              <View style={pdfStyles.totalsRow}>
+                <Text style={pdfStyles.totalsLabel}>Charges</Text>
+                <Text style={pdfStyles.totalsValue}>{formatCurrencyForPdf(chargesSum)}</Text>
+              </View>
+            ) : null}
+            {Math.abs(chargeResidual) >= 0.005 ? (
+              // Not an anonymous "Other": if the stored total doesn't equal
+              // subtotal + itemized charges, the number is unreconciled — name
+              // it so a reader never mistakes a data-drift gap for a real charge.
+              <View style={pdfStyles.totalsRow}>
+                <Text style={pdfStyles.totalsLabel}>Unreconciled difference</Text>
+                <Text style={pdfStyles.totalsValue}>{formatCurrencyForPdf(chargeResidual)}</Text>
+              </View>
+            ) : null}
             {taxAndShipping > 0 ? (
               <View style={pdfStyles.totalsRow}>
                 <Text style={pdfStyles.totalsLabel}>Tax & shipping</Text>
