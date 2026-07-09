@@ -404,15 +404,31 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     const awaitingPutAway =
                       Number((item as { staged_quantity?: number }).staged_quantity ?? 0) +
                       Number((item as { unplaced_quantity?: number }).unplaced_quantity ?? 0);
-                    // Amber, matching the Items list — received stock that
-                    // hasn't been put away must be unmistakable (owner
-                    // decision 2026-07-08). The operational staged-vs-unplaced
-                    // split lives on the Staging page.
-                    return awaitingPutAway > 0 ? (
-                      <p className="text-warning w-full text-xs font-medium">
-                        {formatNumber(awaitingPutAway)} awaiting put-away
+                    if (awaitingPutAway <= 0) return null;
+                    // The "On hand" number above INCLUDES this awaiting-put-away
+                    // stock, but the placed-rack breakdown does NOT — so without
+                    // this line the racks (e.g. 250 + 250 = 500) don't add up to
+                    // On hand (600). Spell the split out so active vs. staged is
+                    // never silently combined (owner report 2026-07-09): placed +
+                    // awaiting put-away = on hand.
+                    const onHand = Number(item.quantity_on_hand as number) || 0;
+                    const placed = Math.max(0, onHand - awaitingPutAway);
+                    return (
+                      <p className="text-muted-foreground w-full text-xs">
+                        <span className="text-foreground font-medium tabular-nums">
+                          {formatNumber(placed)}
+                        </span>{' '}
+                        placed{' + '}
+                        <span className="text-warning font-medium tabular-nums">
+                          {formatNumber(awaitingPutAway)}
+                        </span>{' '}
+                        awaiting put-away{' = '}
+                        <span className="text-foreground font-medium tabular-nums">
+                          {formatNumber(onHand)}
+                        </span>{' '}
+                        on hand
                       </p>
-                    ) : null;
+                    );
                   })()}
                 </DetailRow>
                 {/* Rentals reservation surface — only the rentals item detail
