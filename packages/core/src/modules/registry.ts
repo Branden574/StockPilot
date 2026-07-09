@@ -534,7 +534,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // Portal checkout creates order_requests, so the orders pipeline must be on.
     dependsOn: ['orders'],
     permissions: ['customers:manage'],
-    surfaces: ['web', 'api'],
+    surfaces: ['web', 'mobile', 'api'],
     apiPrefixes: ['/api/portal'],
     ownsTables: [
       'customers',
@@ -549,6 +549,8 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // /portal/* outside the dashboard shell. Web-only (P4 adds mobile).
     placements: [
       { surface: 'web_sidebar', section: 'workspace', label: 'Customers', href: '/dashboard/customers', iconName: 'Handshake', defaultSortOrder: 82, requires: 'customers:manage' },
+      // Mobile twin (parity rule): org-side customers management, read + archive.
+      { surface: 'mobile_drawer', section: 'workspace', label: 'Customers', href: '/customers', iconName: 'Handshake', defaultSortOrder: 82, requires: 'customers:manage' },
     ],
   },
 

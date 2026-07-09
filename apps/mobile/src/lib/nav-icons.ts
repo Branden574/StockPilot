@@ -10,6 +10,7 @@ import {
   ClipboardList,
   Cog,
   FileLock,
+  Handshake,
   Home,
   Layers,
   type LucideIcon,
@@ -41,6 +42,7 @@ import { ZendeskLogo } from '@/components/zendesk-logo';
  */
 export const NAV_ICONS: Record<string, LucideIcon> = {
   Home,
+  Handshake,
   RefreshCw,
   Box,
   BookOpen,
