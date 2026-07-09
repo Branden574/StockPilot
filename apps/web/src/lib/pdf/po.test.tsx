@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { PurchaseOrderPdf, type PoPdfBillToCharter, type PoPdfHeader, type PoPdfLine } from './po';
+import {
+  PurchaseOrderPdf,
+  type PoPdfBillToCharter,
+  type PoPdfCharge,
+  type PoPdfHeader,
+  type PoPdfLine,
+} from './po';
 
 /**
  * Lightweight tree-walker tests for PurchaseOrderPdf. We can't actually render
@@ -79,11 +85,14 @@ function render(opts: {
   status?: string;
   poTerms?: string | null;
   lines?: PoPdfLine[];
+  charges?: PoPdfCharge[];
+  header?: Partial<PoPdfHeader>;
   billToCharter?: PoPdfBillToCharter | null;
 }): TreeNode[] {
   const tree = PurchaseOrderPdf({
-    po: { ...baseHeader, status: opts.status ?? baseHeader.status },
+    po: { ...baseHeader, status: opts.status ?? baseHeader.status, ...opts.header },
     lines: opts.lines ?? baseLines,
+    charges: opts.charges,
     org: {
       name: 'Acme Co',
       logoUrl: null,
@@ -241,6 +250,50 @@ describe('PurchaseOrderPdf', () => {
     expect(allText).toContain('Subtotal');
     expect(allText).toContain('Total');
     expect(allText).toContain('Widget');
+  });
+
+  // The owner's real Microix PO (PO-KVAII-001690): $46,995 of goods + 4 charges
+  // (Shipping 475, Sales tax 3999.23, White Glove 900, E-Waste 400) = $52,769.23.
+  const ownerCharges: PoPdfCharge[] = [
+    { label: 'Shipping', quantity: null, unitCost: null, amount: 475 },
+    { label: 'Sales tax 8.35%', quantity: null, unitCost: null, amount: 3999.23 },
+    { label: 'White Glove Service', quantity: 100, unitCost: 9, amount: 900 },
+    { label: 'CA E-Waste Fee', quantity: 100, unitCost: 4, amount: 400 },
+  ];
+
+  it('renders each charge as a labeled line row and a Charges roll-up', () => {
+    const nodes = render({
+      header: { subtotal: 46995, total: 52769.23 },
+      lines: [
+        { sku: 'SP-EPOMX-QAN', name: 'Acer Chromebook 511', quantityOrdered: 100, quantityReceived: 0, unitCost: 469.95, lineTotal: 46995 },
+      ],
+      charges: ownerCharges,
+    });
+    const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
+    // Every charge label appears (as a line row in the table).
+    for (const label of ['Shipping', 'Sales tax 8.35%', 'White Glove Service', 'CA E-Waste Fee']) {
+      expect(allText).toContain(label);
+    }
+    // Roll-up row + the true grand total.
+    expect(allText).toContain('Charges');
+    expect(allText).toContain('$52,769.23');
+    // The White Glove qty (100) shows on its charge row.
+    expect(allText).toContain('100');
+  });
+
+  it('does NOT render a Charges roll-up when there are no charges', () => {
+    const nodes = render({ charges: [] });
+    const label = nodes.find((n) => textOf(n.props.children).trim() === 'Charges');
+    expect(label).toBeUndefined();
+  });
+
+  it('preserves the legacy derived "Tax & shipping" line for older POs with no charge rows', () => {
+    // total > subtotal but no explicit charges → the pre-0235 fallback still
+    // shows the derived surcharge so historical PO PDFs are unchanged.
+    const nodes = render({ header: { subtotal: 100, total: 125 }, charges: [] });
+    const allText = nodes.map((n) => textOf(n.props.children)).join(' ');
+    expect(allText).toContain('Tax & shipping');
+    expect(allText).not.toContain('Charges');
   });
 
   it('does not blow up when the type guard helper sees plain elements', () => {

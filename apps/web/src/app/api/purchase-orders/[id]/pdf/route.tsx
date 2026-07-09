@@ -5,9 +5,16 @@ import { renderToStream } from '@react-pdf/renderer';
 import { can } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { humanizeChargeType } from '@/lib/po-imports/charges';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
-import { PurchaseOrderPdf, type PoPdfBillToCharter, type PoPdfLine, type PoPdfReceipt } from '@/lib/pdf/po';
+import {
+  PurchaseOrderPdf,
+  type PoPdfBillToCharter,
+  type PoPdfCharge,
+  type PoPdfLine,
+  type PoPdfReceipt,
+} from '@/lib/pdf/po';
 import { audit } from '@/server/services/audit';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -73,6 +80,28 @@ export async function GET(
         lineTotal: Number(l.line_total) || 0,
       };
     });
+
+    // Financial-only charges (tax/freight/service/fee/discount) → line rows on
+    // the PDF. Org-scoped via RLS; ordered as captured. Best-effort: a missing
+    // table or error just renders the PO without charge lines.
+    let chargeRows: PoPdfCharge[] = [];
+    try {
+      const { data: chargeData } = await ctx.supabase
+        .from('purchase_order_charges')
+        .select('label, charge_type, quantity, unit_cost, amount, sort_order')
+        .eq('purchase_order_id', id)
+        .order('sort_order', { ascending: true });
+      chargeRows = ((chargeData ?? []) as Array<Record<string, unknown>>).map((c) => ({
+        label:
+          ((c.label as string | null) ?? '').trim() ||
+          humanizeChargeType((c.charge_type as string | null) ?? 'other'),
+        quantity: c.quantity != null ? Number(c.quantity) : null,
+        unitCost: c.unit_cost != null ? Number(c.unit_cost) : null,
+        amount: Number(c.amount) || 0,
+      }));
+    } catch {
+      chargeRows = [];
+    }
 
     // Receiving history → receipts table on the PDF. Best-effort: if the
     // receiving module is disabled (or the lookup errors) we still render the
@@ -211,6 +240,7 @@ export async function GET(
           total: Number((po as { total?: number }).total) || 0,
         }}
         lines={lineRows}
+        charges={chargeRows}
         org={{ name: orgName, logoUrl: orgLogoUrl, poTerms: orgPoTerms }}
         supplier={supplier}
         destination={destination}
