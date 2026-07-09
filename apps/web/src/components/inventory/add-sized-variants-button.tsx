@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { stripSizeSuffix, stripSkuSuffix } from '@stockpilot/core';
+
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -24,35 +26,9 @@ import { bulkCreateSizedVariantsAction } from '@/server/actions/inventory';
 type SizeCode = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'XXXL' | 'XXXXL' | 'XXXXXL';
 const ALL_SIZES: ReadonlyArray<SizeCode> = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'XXXXXL'];
 
-// Note: alternation order matters — list longest-first so the engine
-// prefers `XXXXXL` over `XXXXL`, etc., and `XS` over `S` (otherwise
-// "L4L Tee XS" would match `S` and leave a trailing `X` on the base).
-const SIZE_NAME_REGEX = /(?:\s*-\s*|\s+)(?:XXXXXL|XXXXL|XXXL|XXL|XL|XS|L|M|S)\s*$/i;
-const SIZE_SKU_REGEX = /-(?:XXXXXL|XXXXL|XXXL|XXL|XL|XS|L|M|S)$/i;
-
-/**
- * Strip a trailing size suffix from a name so we can pre-fill the base
- * for "Add more sizes". Handles ' - S', '- S', and a bare trailing size
- * token (e.g. "L4L Grey Quarter Zip Men's XXL"). Returns the original
- * string when no recognized suffix is present.
- */
-function stripSizeSuffix(s: string): string {
-  return s.replace(SIZE_NAME_REGEX, '').trim();
-}
-
-/**
- * Strip a trailing size suffix from a SKU — BUT only when the name had
- * a recognized size suffix too. Auto-generated SKUs are random base36
- * and can coincidentally end in `-L`/`-M`/`-S` even when the item isn't
- * sized; without the name-side check we'd mangle e.g. "SP-OKX68-UAL"
- * into "SP-OKX68-UA". Tying it to the name keeps the heuristic safe:
- * if the source item's name doesn't look sized, leave the SKU alone.
- */
-function stripSkuSuffix(sku: string | null, name: string): string | null {
-  if (!sku) return null;
-  if (!SIZE_NAME_REGEX.test(name)) return sku;
-  return sku.replace(SIZE_SKU_REGEX, '');
-}
+// Size parsing (stripSizeSuffix / stripSkuSuffix) now lives in @stockpilot/core
+// (`inventory/size-run`), shared with the inventory-list size-run grouping. That
+// shared copy also recognizes 2XL/3XL/4XL/5XL, which this private copy did not.
 
 export interface AddSizedVariantsButtonProps {
   /** Base values pulled from the item currently being edited. */

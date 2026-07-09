@@ -14,3 +14,4 @@ export * from './pricing/google-books';
 export * from './geo/distance';
 export * from './purchasing/recurring';
 export * from './signature';
+export * from './inventory/size-run';
