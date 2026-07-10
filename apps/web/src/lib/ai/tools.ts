@@ -2471,6 +2471,81 @@ const backfillEmbeddingsTool: ToolExecutor = {
   },
 };
 
+
+const listScheduleEventsTool: ToolExecutor = {
+  declaration: {
+    name: 'listScheduleEvents',
+    description:
+      "READ-ONLY — upcoming team Schedule events (deliveries, pickups, kit drops), soonest first. Use for 'what deliveries are scheduled this week', 'what's on the calendar'. Events auto-created from orders carry the order number in the title (e.g. 'SO-000045 delivery').",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        limit: { type: SchemaType.NUMBER, description: 'Max events (1-50). Default 15.' },
+      },
+    },
+  },
+  async execute(args, ctx) {
+    const { ScheduleService } = await import('@/server/services/schedule');
+    const svc = new ScheduleService(ctx);
+    const limit = Math.min(50, Math.max(1, Number(args.limit) || 15));
+    const rows = await svc.listUpcoming(limit);
+    return {
+      total: rows.length,
+      events: rows.map((e) => ({
+        id: e.id,
+        title: dataTag(e.title),
+        startsAt: e.startsAt,
+        endsAt: e.endsAt,
+        status: e.status,
+        location: dataTag(e.locationText),
+        warehouseName: e.warehouseName,
+        requesterName: dataTag(e.requesterName),
+      })),
+    };
+  },
+};
+
+const createScheduleEventTool: ToolExecutor = {
+  declaration: {
+    name: 'createScheduleEvent',
+    description:
+      'WRITE — create a team Schedule event. Requires schedule:manage. Only call after the user explicitly confirms title + date/time in this conversation. startsAt must be a future ISO-8601 datetime WITH timezone offset.',
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        title: { type: SchemaType.STRING, description: 'Event title (1-200 chars).' },
+        startsAt: {
+          type: SchemaType.STRING,
+          description: "Start datetime, ISO-8601 with offset, e.g. '2026-07-15T08:00:00-07:00'.",
+        },
+        endsAt: { type: SchemaType.STRING, description: 'Optional end datetime (ISO-8601 with offset).' },
+        locationText: { type: SchemaType.STRING, description: 'Optional location label.' },
+        details: { type: SchemaType.STRING, description: 'Optional free-text details.' },
+      },
+      required: ['title', 'startsAt'],
+    },
+  },
+  async execute(args, ctx) {
+    const { ScheduleService } = await import('@/server/services/schedule');
+    const { createScheduleEventSchema } = await import('@stockpilot/core');
+    const parsed = createScheduleEventSchema.safeParse({
+      title: args.title,
+      startsAt: args.startsAt,
+      endsAt: typeof args.endsAt === 'string' && args.endsAt ? args.endsAt : null,
+      locationText: typeof args.locationText === 'string' ? args.locationText : undefined,
+      details: typeof args.details === 'string' ? args.details : undefined,
+      allDay: false,
+      status: 'scheduled',
+    });
+    if (!parsed.success) {
+      throw new Error(parsed.error.issues[0]?.message ?? 'Invalid event input');
+    }
+    const svc = new ScheduleService(ctx);
+    const row = await svc.create(parsed.data);
+    return { created: true, id: row.id, title: dataTag(row.title), startsAt: row.startsAt };
+  },
+};
+
 export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   searchInventory: searchInventoryTool,
   listCategories: listCategoriesTool,
@@ -2516,6 +2591,8 @@ export const TOOL_CATALOG: Record<string, ToolExecutor> = {
   // Wave 4 — semantic search
   searchInventorySemantic: searchInventorySemanticTool,
   backfillEmbeddings: backfillEmbeddingsTool,
+  listScheduleEvents: listScheduleEventsTool,
+  createScheduleEvent: createScheduleEventTool,
 };
 
 export function toolDeclarations(): FunctionDeclaration[] {

@@ -131,6 +131,100 @@ export async function createOrderRequestAction(
   }
 }
 
+
+const setNeededBySchema = z.object({
+  id: z.string().uuid(),
+  neededBy: z
+    .string()
+    .datetime({ offset: true })
+    .refine((v) => new Date(v).getTime() > Date.now(), {
+      message: 'Needed-by must be in the future.',
+    }),
+});
+
+/**
+ * Manager: set/replace a pending order's needed-by deadline (typically from
+ * the AI note-parse suggestion). Pending-only — after approval the schedule
+ * event already exists and edits belong on the event itself.
+ */
+export async function setOrderNeededByAction(
+  input: z.input<typeof setNeededBySchema>,
+): Promise<ActionResult<void>> {
+  const parsed = setNeededBySchema.safeParse(input);
+  if (!parsed.success)
+    return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
+  try {
+    const ctx = await withContext();
+    const { assertPermission } = await import('@/server/services/context');
+    assertPermission(ctx, 'orders:approve');
+    const { data: row, error } = await ctx.supabase
+      .from('order_requests')
+      .update({ needed_by: parsed.data.neededBy })
+      .eq('id', parsed.data.id)
+      .eq('organization_id', ctx.organizationId)
+      .eq('status', 'pending_approval')
+      .select('id')
+      .maybeSingle();
+    if (error) return err('internal_error', error.message);
+    if (!row) return err('conflict', 'Order not found or no longer pending.');
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+/**
+ * Manager: ask Claude to extract a needed-by datetime from the requester's
+ * free-text note ("needed by 7/15 @ 1pm"). SUGGESTION ONLY — the manager
+ * applies it explicitly; nothing is written here. Returns null when no
+ * parseable deadline, no AI key, or on any error (fail quiet).
+ */
+export async function suggestNeededByAction(
+  orderId: string,
+): Promise<ActionResult<{ iso: string | null }>> {
+  const idParse = z.string().uuid().safeParse(orderId);
+  if (!idParse.success) return err('validation_error', 'Invalid order id');
+  try {
+    const ctx = await withContext();
+    const { assertPermission } = await import('@/server/services/context');
+    assertPermission(ctx, 'orders:approve');
+    const { resolveAiProvider } = await import('@/lib/ai/provider');
+    if (resolveAiProvider() !== 'claude') return ok({ iso: null });
+    const { data: row } = await ctx.supabase
+      .from('order_requests')
+      .select('notes, needed_by, created_at')
+      .eq('id', idParse.data)
+      .eq('organization_id', ctx.organizationId)
+      .maybeSingle();
+    const note = (row?.notes as string | null)?.trim();
+    if (!row || row.needed_by || !note) return ok({ iso: null });
+    const { claudeGenerateJson } = await import('@/lib/ai/claude');
+    const out = await claudeGenerateJson<{ iso: string | null }>({
+      system:
+        'You extract an explicit "needed by" deadline from a warehouse order note. Return iso as a full ISO-8601 datetime with -07:00 offset (America/Los_Angeles). If the note names a date without a time, use 09:00. If there is NO explicit deadline in the note, return iso: null. NEVER guess or invent a date.',
+      prompt: `Order submitted at: ${row.created_at}\nRequester note:\n${note.slice(0, 1500)}`,
+      schema: {
+        type: 'object',
+        properties: { iso: { type: 'string' } },
+        required: [],
+      },
+      maxTokens: 200,
+      temperature: 0,
+    });
+    const iso = typeof out?.iso === 'string' ? out.iso : null;
+    // Trust nothing: must parse, must be within 1h..1y from now.
+    if (!iso) return ok({ iso: null });
+    const t = new Date(iso).getTime();
+    if (!Number.isFinite(t) || t < Date.now() || t > Date.now() + 365 * 24 * 3600 * 1000) {
+      return ok({ iso: null });
+    }
+    return ok({ iso: new Date(t).toISOString() });
+  } catch {
+    return ok({ iso: null });
+  }
+}
+
 const cancelSchema = z.object({
   id: z.string().uuid(),
   reason: z.string().max(500).nullable().optional(),

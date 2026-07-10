@@ -562,6 +562,8 @@ export default async function OrderDetailPage({
               orderId={id}
               status={request.status}
               internalNotes={request.internal_notes}
+              neededBy={(request as { needed_by?: string | null }).needed_by ?? null}
+              hasRequesterNote={Boolean(request.notes?.trim())}
               fulfillmentType={request.fulfillment_type}
               assignedDeliveryUserId={request.assigned_delivery_user_id}
               signatureToken={request.signature_token}
@@ -633,6 +635,19 @@ export default async function OrderDetailPage({
               Dates
             </h2>
             <dl className="space-y-1.5 text-[11.5px]">
+              {(request as { needed_by?: string | null }).needed_by && (
+                <div className="flex justify-between gap-3">
+                  <dt className="text-muted-foreground">Needed by</dt>
+                  <dd className="text-right font-medium">
+                    {new Date(
+                      (request as { needed_by?: string | null }).needed_by as string,
+                    ).toLocaleString('en-US', {
+                      weekday: 'short', month: 'short', day: 'numeric',
+                      hour: 'numeric', minute: '2-digit',
+                    })}
+                  </dd>
+                </div>
+              )}
               {TIMELINE_FIELDS.map(({ key, label }) => {
                 const v = request[key] as string | null;
                 if (!v) return null;

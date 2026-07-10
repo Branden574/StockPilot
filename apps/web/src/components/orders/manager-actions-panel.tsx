@@ -7,6 +7,7 @@ import {
   ClipboardCheck,
   ClipboardList,
   Hand,
+  CalendarClock,
   Loader2,
   PackageCheck,
   PackageX,
@@ -15,6 +16,7 @@ import {
   RotateCcw,
   Save,
   ScanLine,
+  Sparkles,
   Truck,
   Unlock,
   User,
@@ -56,7 +58,9 @@ import {
   releasePickingAction,
   resumeFulfillmentAction,
   setOrderInternalNotesAction,
+  setOrderNeededByAction,
   stageOrderAction,
+  suggestNeededByAction,
 } from '@/server/actions/order-requests';
 import { availableOrderActions, derivePickingStatus, type Role } from '@stockpilot/core';
 
@@ -66,6 +70,10 @@ interface Props {
   orderId: string;
   status: OrderRequestStatus;
   internalNotes: string | null;
+  /** Order's needed-by deadline (null = unset). Drives the AI suggest chip. */
+  neededBy: string | null;
+  /** Whether the requester wrote a free-text note the AI could parse. */
+  hasRequesterNote: boolean;
   fulfillmentType: 'pickup' | 'delivery';
   assignedDeliveryUserId: string | null;
   signatureToken: string | null;
@@ -137,6 +145,8 @@ export function ManagerActionsPanel({
   orderId,
   status,
   internalNotes,
+  neededBy,
+  hasRequesterNote,
   fulfillmentType,
   assignedDeliveryUserId,
   signatureToken,
@@ -456,6 +466,11 @@ export function ManagerActionsPanel({
         <div className="flex flex-wrap gap-2">
           {status === 'pending_approval' && canApprove && (
             <>
+              <NeededBySuggest
+                orderId={orderId}
+                neededBy={neededBy}
+                hasRequesterNote={hasRequesterNote}
+              />
               <Button variant="gradient" onClick={approve} disabled={busy !== null}>
                 {busy === 'approve' ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -985,5 +1000,100 @@ export function ManagerActionsPanel({
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+
+/**
+ * AI needed-by suggestion (pending orders without a deadline whose requester
+ * wrote a note). Claude parses the note server-side; the manager EXPLICITLY
+ * applies the suggestion — nothing is written until they click Apply. When a
+ * deadline is already set, shows it as a passive chip instead.
+ */
+function NeededBySuggest({
+  orderId,
+  neededBy,
+  hasRequesterNote,
+}: {
+  orderId: string;
+  neededBy: string | null;
+  hasRequesterNote: boolean;
+}) {
+  const router = useRouter();
+  const [phase, setPhase] = React.useState<'idle' | 'loading' | 'suggested' | 'applying' | 'none'>('idle');
+  const [iso, setIso] = React.useState<string | null>(null);
+
+  if (neededBy) {
+    return (
+      <div className="text-muted-foreground -mt-1 mb-1 flex w-full items-center gap-1.5 text-xs">
+        <CalendarClock className="size-3.5" />
+        Needed by{' '}
+        <span className="text-foreground font-medium">
+          {new Date(neededBy).toLocaleString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+          })}
+        </span>
+        <span>— approval adds it to the Schedule.</span>
+      </div>
+    );
+  }
+  if (!hasRequesterNote || phase === 'none') return null;
+
+  async function suggest() {
+    setPhase('loading');
+    const res = await suggestNeededByAction(orderId);
+    if (!res.ok || !res.data.iso) {
+      setPhase('none');
+      if (res.ok) toast.info('No deadline found in the requester note.');
+      return;
+    }
+    setIso(res.data.iso);
+    setPhase('suggested');
+  }
+
+  async function apply() {
+    if (!iso) return;
+    setPhase('applying');
+    const res = await setOrderNeededByAction({ id: orderId, neededBy: iso });
+    if (!res.ok) {
+      toast.error(res.error.message);
+      setPhase('suggested');
+      return;
+    }
+    toast.success('Needed-by set — approval will add it to the Schedule.');
+    router.refresh();
+  }
+
+  return (
+    <div className="-mt-1 mb-1 flex w-full flex-wrap items-center gap-2 text-xs">
+      {phase === 'idle' || phase === 'loading' ? (
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={suggest} disabled={phase === 'loading'}>
+          {phase === 'loading' ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Sparkles className="size-3.5" />
+          )}
+          Suggest deadline from note (AI)
+        </Button>
+      ) : (
+        <>
+          <span className="text-muted-foreground inline-flex items-center gap-1.5">
+            <Sparkles className="size-3.5" /> AI read the note as
+            <span className="text-foreground font-medium">
+              {iso &&
+                new Date(iso).toLocaleString('en-US', {
+                  weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+                })}
+            </span>
+          </span>
+          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={apply} disabled={phase === 'applying'}>
+            {phase === 'applying' ? <Loader2 className="size-3.5 animate-spin" /> : 'Apply'}
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setPhase('none')}>
+            Dismiss
+          </Button>
+        </>
+      )}
+    </div>
   );
 }

@@ -35,7 +35,9 @@ vi.mock('@/server/actions/order-requests', () => ({
   markInTransitAction: vi.fn(),
   releasePickingAction: vi.fn(),
   setOrderInternalNotesAction: vi.fn(),
+  setOrderNeededByAction: vi.fn(),
   stageOrderAction: vi.fn(),
+  suggestNeededByAction: vi.fn(),
 }));
 
 type PanelProps = React.ComponentProps<typeof ManagerActionsPanel>;
@@ -45,6 +47,8 @@ function baseProps(overrides: Partial<PanelProps> = {}): PanelProps {
     orderId: 'order-1',
     status: 'pick_slip_generated',
     internalNotes: null,
+    neededBy: null,
+    hasRequesterNote: false,
     fulfillmentType: 'pickup',
     assignedDeliveryUserId: null,
     signatureToken: null,
