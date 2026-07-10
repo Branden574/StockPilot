@@ -5,6 +5,7 @@ import { formatOrderNumber, isManagerOrAbove } from '@stockpilot/core';
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { reportError as reportSrvError } from '@/lib/error-reporter';
 import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
@@ -45,6 +46,8 @@ export interface OrderRequestRow {
   id: string;
   /** Per-org sequential order number (mig 0254). */
   order_number: number | null;
+  /** Structured needed-by datetime (mig 0255) — drives the auto schedule event. */
+  needed_by: string | null;
   organization_id: string;
   warehouse_id: string;
   status: OrderRequestStatus;
@@ -226,6 +229,9 @@ export interface OrderRequestDetail {
 export interface CreateOrderRequestInput {
   warehouseId: string;
   notes?: string | null;
+  /** Structured "needed by" datetime (ISO) — drives the auto-created
+   *  schedule event at approval. Replaces burying dates in notes. */
+  neededBy?: string | null;
   fulfillmentType: 'pickup' | 'delivery';
   requesterPhone?: string | null;
   deliveryCharterId?: string | null;
@@ -843,6 +849,7 @@ export class OrderRequestsService {
         requester_name: input.onBehalfOf?.name ?? null,
         requester_email: input.onBehalfOf?.email ?? null,
         notes: input.notes ?? null,
+        needed_by: input.neededBy ?? null,
         fulfillment_type: input.fulfillmentType,
         requester_phone: input.requesterPhone ?? null,
         delivery_charter_id: input.deliveryCharterId ?? null,
@@ -1034,8 +1041,51 @@ export class OrderRequestsService {
       orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       approvedBy: this.ctx.userId,
     });
+    void this.autoScheduleFromOrder(row);
     return row;
   }
+
+  /**
+   * Orders → Schedule: when an approved order carries a needed_by datetime,
+   * auto-create a linked calendar event so the team sees the deadline without
+   * anyone hand-copying it (mig 0255). Admin client because the approver may
+   * lack schedule:manage / the schedule module — the event is a system
+   * artifact of approval, not a user calendar write. created_by = the
+   * approving user (column is NOT NULL and RLS update rights key off it).
+   * The partial unique index makes re-approval after resume idempotent
+   * (23505 → ignore). Fire-and-forget: never blocks or fails an approval.
+   */
+  private async autoScheduleFromOrder(row: OrderRequestRow): Promise<void> {
+    try {
+      if (!row.needed_by) return;
+      const admin = createAdminClient();
+      const so = formatOrderNumber(row.order_number) ?? row.id.slice(0, 8).toUpperCase();
+      const requester = (row.requester_name as string | null) ?? null;
+      const { error } = await admin.from('schedule_events').insert({
+        organization_id: row.organization_id,
+        title: `${so} ${row.fulfillment_type === 'delivery' ? 'delivery' : 'pickup'}${requester ? ` — ${requester}` : ''}`,
+        starts_at: row.needed_by,
+        warehouse_id: row.warehouse_id,
+        requester_name: requester,
+        details: `Auto-created from order ${so}. Needed by ${new Date(row.needed_by).toLocaleString('en-US')}.`,
+        status: 'scheduled',
+        order_request_id: row.id,
+        assigned_user_id: (row as unknown as { assigned_delivery_user_id?: string | null }).assigned_delivery_user_id ?? null,
+        created_by: this.ctx.userId,
+      });
+      if (error && error.code !== '23505') {
+        void reportSrvError(new Error(error.message), {
+          tag: 'orders.auto-schedule',
+          organizationId: this.ctx.organizationId,
+          extra: { orderId: row.id },
+        });
+      }
+    } catch (e) {
+      void reportSrvError(e, { tag: 'orders.auto-schedule', organizationId: this.ctx.organizationId });
+    }
+  }
+
+
 
   /**
    * Approve a knowingly-short order: reserve what's available now and let the
@@ -1073,8 +1123,12 @@ export class OrderRequestsService {
       orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       approvedBy: this.ctx.userId,
     });
+    void this.autoScheduleFromOrder(row);
     return row;
   }
+
+
+
 
   async generatePickSlip(id: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');

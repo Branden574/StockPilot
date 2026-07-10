@@ -38,6 +38,14 @@ const createSchema = z
   .object({
     warehouseId: z.string().uuid(),
     notes: z.string().max(2000).nullable().optional(),
+    // Structured needed-by datetime; must be in the future when provided.
+    neededBy: z
+      .string()
+      .datetime({ offset: true })
+      .nullish()
+      .refine((v) => !v || new Date(v).getTime() > Date.now(), {
+        message: 'Needed-by must be in the future.',
+      }),
     // Rolling-deploy safety: default to 'pickup' when an older client
     // bundle submits without the field. Mirrors the public POST schema
     // so behavior stays consistent across both create surfaces.
@@ -103,6 +111,7 @@ export async function createOrderRequestAction(
     const row = await svc.create({
       warehouseId: parsed.data.warehouseId,
       notes: parsed.data.notes ?? null,
+      neededBy: parsed.data.neededBy ?? null,
       fulfillmentType: parsed.data.fulfillmentType,
       requesterPhone: parsed.data.requesterPhone ?? null,
       deliveryCharterId: parsed.data.deliveryCharterId ?? null,
