@@ -35,6 +35,8 @@ export interface ScheduleEventRow {
   bundleWarehouseId: string | null;
   /** True when at least one bundle_distributions row references this event. */
   bundleDistributed: boolean;
+  /** Linked order (auto-created events, mig 0255) — null for manual events. */
+  orderRequestId: string | null;
   createdBy: string;
   createdByName: string | null;
   createdAt: string;
@@ -49,7 +51,7 @@ export interface ScheduleEventRow {
 const SELECT_COLUMNS = `
   id, organization_id, title, starts_at, ends_at, all_day,
   location_text, warehouse_id, requester_name, details, status,
-  bundle_id, bundle_quantity, bundle_warehouse_id,
+  bundle_id, bundle_quantity, bundle_warehouse_id, order_request_id,
   created_by, updated_by, created_at, updated_at,
   warehouse:warehouses!warehouse_id (name)
 `;
@@ -110,6 +112,7 @@ function mapRow(
       raw.bundle_quantity == null ? null : Number(raw.bundle_quantity),
     bundleWarehouseId: (raw.bundle_warehouse_id as string | null) ?? null,
     bundleDistributed: distributedEventIds.has(id),
+    orderRequestId: (raw.order_request_id as string | null) ?? null,
     createdBy,
     createdByName: creatorByUserId.get(createdBy) ?? null,
     createdAt: raw.created_at as string,

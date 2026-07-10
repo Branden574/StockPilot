@@ -1,4 +1,4 @@
-import { ChevronLeft, MapPin, Package, User2 } from 'lucide-react';
+import { ChevronLeft, MapPin, Package, ShoppingCart, User2 } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
@@ -6,6 +6,8 @@ import { ScheduleStatusActions } from '@/components/schedule/schedule-status-act
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { formatOrderNumber } from '@stockpilot/core';
+import { createClient } from '@/lib/supabase/server';
 import { requireOrgContext } from '@/lib/auth/session';
 import { formatOrgDate, formatOrgTime } from '@/lib/timezone';
 import { formatNumber } from '@/lib/utils';
@@ -73,6 +75,26 @@ export default async function ScheduleEventDetailPage({
     throw e;
   }
 
+  // Linked order chip (auto-created events, mig 0255): resolve the SO number
+  // + live status. Cheap single read; RLS-scoped; null-safe on stale links.
+  let linkedOrder: { so: string; status: string } | null = null;
+  if (event.orderRequestId) {
+    const supa = await createClient();
+    const { data: ord } = await supa
+      .from('order_requests')
+      .select('order_number, status')
+      .eq('id', event.orderRequestId)
+      .maybeSingle();
+    if (ord) {
+      linkedOrder = {
+        so:
+          formatOrderNumber((ord.order_number as number | null) ?? null) ??
+          event.orderRequestId.slice(0, 8).toUpperCase(),
+        status: (ord.status as string) ?? 'unknown',
+      };
+    }
+  }
+
   // If a bundle is linked, surface its name + the destination warehouse
   // name in a side card. Two extra cheap reads; bail silently on either
   // if RLS or a stale id slips through.
@@ -129,7 +151,28 @@ export default async function ScheduleEventDetailPage({
         </div>
       </div>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-2">
+      {linkedOrder && (
+        <Card className="mt-6">
+          <CardContent className="flex items-center gap-2 py-3 text-sm">
+            <ShoppingCart className="text-muted-foreground h-3.5 w-3.5" />
+            <span className="text-muted-foreground">Linked order</span>
+            <Link
+              href={`/dashboard/orders/${event.orderRequestId}`}
+              className="font-mono font-medium tabular-nums hover:underline"
+            >
+              {linkedOrder.so}
+            </Link>
+            <Badge variant="outline" className="ml-1 capitalize">
+              {linkedOrder.status.replace(/_/g, ' ')}
+            </Badge>
+            <span className="text-muted-foreground ml-auto text-[12px]">
+              completes/cancels this event automatically
+            </span>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
