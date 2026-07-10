@@ -3,6 +3,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { env } from '@/lib/env';
+import { claudeGenerateJsonString } from '@/lib/ai/claude';
+import { resolveAiProvider } from '@/lib/ai/provider';
 import {
   buildShelfScanPrompt,
   parseShelfScanResponse,
@@ -151,27 +153,36 @@ export async function POST(
     );
   }
 
-  // Call Gemini. Structured-output schema enforces the response
+  // Call the vision model. Structured-output schema enforces the response
   // shape; parseShelfScanResponse defensively filters anything that
   // sneaks past (hallucinated SKU, out-of-range confidence, etc).
   const base64 = Buffer.from(photoBytes).toString('base64');
-  const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({
-    model: env.GEMINI_MODEL,
-    generationConfig: {
-      responseMimeType: 'application/json',
-      responseSchema: SHELF_SCAN_RESPONSE_SCHEMA,
-    },
-  });
   const prompt = buildShelfScanPrompt(lineSet);
+  const useClaude = resolveAiProvider() === 'claude';
+  const modelVersion = useClaude ? env.ANTHROPIC_MODEL : env.GEMINI_MODEL;
 
   let rawResponse: string;
   try {
-    const result = await model.generateContent([
-      { text: prompt },
-      { inlineData: { data: base64, mimeType } },
-    ]);
-    rawResponse = result.response.text();
+    if (useClaude) {
+      rawResponse = await claudeGenerateJsonString({
+        prompt,
+        media: [{ data: base64, mediaType: mimeType }],
+        schema: SHELF_SCAN_RESPONSE_SCHEMA as Record<string, unknown>,
+      });
+    } else {
+      const model = new GoogleGenerativeAI(env.GEMINI_API_KEY).getGenerativeModel({
+        model: env.GEMINI_MODEL,
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: SHELF_SCAN_RESPONSE_SCHEMA,
+        },
+      });
+      const result = await model.generateContent([
+        { text: prompt },
+        { inlineData: { data: base64, mimeType } },
+      ]);
+      rawResponse = result.response.text();
+    }
   } catch (e) {
     return NextResponse.json(
       { error: 'vision_failed', message: e instanceof Error ? e.message : 'unknown' },
@@ -189,7 +200,7 @@ export async function POST(
       cycleCountId,
       photoStoragePath,
       geminiResponse: safeJsonParse(rawResponse),
-      modelVersion: env.GEMINI_MODEL,
+      modelVersion,
     });
     scanId = inserted.id;
   } catch (e) {

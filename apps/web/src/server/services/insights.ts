@@ -2,6 +2,8 @@ import 'server-only';
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
+import { claudeGenerateText } from '@/lib/ai/claude';
+import { resolveAiProvider } from '@/lib/ai/provider';
 import { env } from '@/lib/env';
 
 import { withContext, type ServiceContext } from './context';
@@ -80,19 +82,26 @@ export async function gatherInsightsForCtx(ctx: ServiceContext): Promise<Insight
  * model errors — never throws.
  */
 export async function summarizeInsights(result: InsightsResult): Promise<string | null> {
-  if (!env.GEMINI_API_KEY || result.signals.length === 0) return null;
+  if (result.signals.length === 0) return null;
+  const useClaude = resolveAiProvider() === 'claude';
+  if (useClaude ? !env.ANTHROPIC_API_KEY : !env.GEMINI_API_KEY) return null;
   try {
-    const model = new GoogleGenerativeAI(env.GEMINI_API_KEY).getGenerativeModel({
-      model: env.GEMINI_MODEL,
-    });
     const facts = result.signals.map((s) => `- ${s.count} ${s.label}`).join('\n');
     const low = result.lowStock
       .slice(0, 5)
       .map((i) => `${i.name} (${i.sku}): ${i.qty} on hand, reorder at ${i.reorderPoint}`)
       .join('; ');
     const prompt = `You are an inventory operations assistant. In 2-3 plain sentences, write a "what needs attention today" briefing for a warehouse manager based ONLY on these facts. Lead with the most urgent, be specific with numbers, and never invent anything not listed.\n\nSignals:\n${facts}${low ? `\n\nLow-stock examples: ${low}` : ''}`;
-    const res = await model.generateContent(prompt);
-    const text = res.response.text().trim();
+    let text: string;
+    if (useClaude) {
+      text = await claudeGenerateText({ prompt, maxTokens: 512 });
+    } else {
+      const model = new GoogleGenerativeAI(env.GEMINI_API_KEY).getGenerativeModel({
+        model: env.GEMINI_MODEL,
+      });
+      const res = await model.generateContent(prompt);
+      text = res.response.text().trim();
+    }
     return text || null;
   } catch {
     return null;

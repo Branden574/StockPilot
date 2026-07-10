@@ -14,7 +14,7 @@ import { TOOL_CATALOG, toolDeclarations } from './tools';
 
 // Same env-driven default as the scan extractor — see lib/env.ts.
 export const CHAT_MODEL_NAME = env.GEMINI_MODEL;
-const MAX_TOOL_HOPS = 6;
+export const MAX_TOOL_HOPS = 6;
 /**
  * Hard cap on how many parallel tool calls we'll run in a single
  * Gemini round. Gemini occasionally emits a runaway list — usually
@@ -24,13 +24,13 @@ const MAX_TOOL_HOPS = 6;
  * of searches + a couple of warehouse lookups) without letting things
  * spiral.
  */
-const MAX_TOOL_CALLS_PER_ROUND = 8;
+export const MAX_TOOL_CALLS_PER_ROUND = 8;
 /**
  * Hard cap on conversation history passed to the model. Combined with
  * the per-session DB cap in sessions.ts (60 messages), this keeps the
  * prompt bounded even if the DB layer's cap is later loosened.
  */
-const MAX_HISTORY_TURNS = 40;
+export const MAX_HISTORY_TURNS = 40;
 
 /**
  * Canned, safe user-facing messages for tool failures, keyed by error
@@ -39,7 +39,7 @@ const MAX_HISTORY_TURNS = 40;
  * This stops PII / stack traces / SQL hints from leaking into the
  * model context (which then ends up in the visible assistant reply).
  */
-function classifyToolErrorMessage(err: unknown): string {
+export function classifyToolErrorMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err ?? '');
   const text = raw.toLowerCase();
   if (text.includes('permission denied') || text.includes('forbidden') || text.includes('missing permission')) {
@@ -66,7 +66,18 @@ function classifyToolErrorMessage(err: unknown): string {
   return 'The tool call failed. Try again or rephrase the request.';
 }
 
-const SYSTEM_PROMPT = `You are StockPilot's inventory assistant — concise, factual, and grounded.
+/**
+ * Strip <data>…</data> fences from model output. Free-text pulled from the DB
+ * is wrapped in these fences before it enters the model (see dataTag() in
+ * tools.ts); stripping them on the way out guarantees the tags NEVER reach the
+ * user regardless of model behavior, and keeps the persisted history clean.
+ * Shared by both the Gemini loop and the Claude twin (chat-claude.ts).
+ */
+export function scrubDataTags(s: string): string {
+  return s.replace(/<\/?data>/gi, '');
+}
+
+export const SYSTEM_PROMPT = `You are StockPilot's inventory assistant — concise, factual, and grounded.
 
 Rules:
 - ALWAYS prefer calling a tool to look up real data over guessing.
@@ -440,21 +451,6 @@ export async function* streamChat(
 
   const toolCallsUsed: ToolCallRecord[] = [];
   let assembledReply = '';
-
-  /**
-   * Belt-and-suspenders cleanup of any <data>…</data> tags Gemini
-   * leaks into its own output. The system prompt forbids it, but the
-   * model occasionally echoes them anyway (especially after seeing
-   * dozens of tool-result entries that all carry the wrapper). We
-   * strip them deterministically before emitting to the client so the
-   * tags NEVER reach the user, regardless of model behavior.
-   *
-   * The same scrub runs on the final assembledReply that gets
-   * persisted, so the chat history is also clean.
-   */
-  function scrubDataTags(s: string): string {
-    return s.replace(/<\/?data>/gi, '');
-  }
 
   for (let hop = 0; hop < MAX_TOOL_HOPS; hop++) {
     if (signal?.aborted) throw new Error('aborted');

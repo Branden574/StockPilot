@@ -3,6 +3,8 @@ import 'server-only';
 import { GoogleGenerativeAI, SchemaType, type FunctionDeclaration } from '@google/generative-ai';
 
 import { lookupIsbn as lookupIsbnLib } from '@/lib/books/lookup';
+import { claudeGenerateJsonString } from './claude';
+import { resolveAiProvider } from './provider';
 import { env } from '@/lib/env';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
@@ -1375,8 +1377,9 @@ const identifyFromPhotoTool: ToolExecutor = {
     },
   },
   async execute(args) {
-    if (!env.GEMINI_API_KEY) {
-      throw new Error('GEMINI_API_KEY not configured');
+    const usingClaude = resolveAiProvider() === 'claude';
+    if (usingClaude ? !env.ANTHROPIC_API_KEY : !env.GEMINI_API_KEY) {
+      throw new Error(usingClaude ? 'ANTHROPIC_API_KEY not configured' : 'GEMINI_API_KEY not configured');
     }
     const url = String(args.imageUrl ?? '');
     if (!/^https?:\/\//i.test(url)) {
@@ -1486,33 +1489,26 @@ const identifyFromPhotoTool: ToolExecutor = {
     }
 
     const base64 = Buffer.from(bytes).toString('base64');
-    const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-    const visionModel = genAI.getGenerativeModel({
-      model: VISION_MODEL,
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: SchemaType.OBJECT,
-          properties: {
-            title: { type: SchemaType.STRING },
-            author: { type: SchemaType.STRING },
-            isbn: { type: SchemaType.STRING },
-            publisher: { type: SchemaType.STRING },
-            edition: { type: SchemaType.STRING },
-            language: { type: SchemaType.STRING },
-            confidence: {
-              type: SchemaType.STRING,
-              description: "One of 'high', 'medium', 'low'.",
-            },
-            notes: {
-              type: SchemaType.STRING,
-              description: 'Anything the model wants to flag — partial cover, blur, wrong angle, etc.',
-            },
-          },
-          required: ['title', 'confidence'],
+    const responseSchema = {
+      type: SchemaType.OBJECT,
+      properties: {
+        title: { type: SchemaType.STRING },
+        author: { type: SchemaType.STRING },
+        isbn: { type: SchemaType.STRING },
+        publisher: { type: SchemaType.STRING },
+        edition: { type: SchemaType.STRING },
+        language: { type: SchemaType.STRING },
+        confidence: {
+          type: SchemaType.STRING,
+          description: "One of 'high', 'medium', 'low'.",
+        },
+        notes: {
+          type: SchemaType.STRING,
+          description: 'Anything the model wants to flag — partial cover, blur, wrong angle, etc.',
         },
       },
-    });
+      required: ['title', 'confidence'],
+    };
 
     const prompt = `You are identifying the book or product in this image.
 Return only the requested JSON. If a field isn't clearly visible or
@@ -1524,12 +1520,25 @@ the title. Confidence rubric:
   - "low": you're inferring from a partial or blurry view
 ${hint ? `\nUser hint: ${hint}` : ''}`;
 
-    const result = await visionModel.generateContent([
-      { text: prompt },
-      { inlineData: { data: base64, mimeType } },
-    ]);
-
-    const raw = result.response.text();
+    let raw: string;
+    if (usingClaude) {
+      raw = await claudeGenerateJsonString({
+        prompt,
+        media: [{ data: base64, mediaType: mimeType }],
+        schema: responseSchema as Record<string, unknown>,
+      });
+    } else {
+      const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
+      const visionModel = genAI.getGenerativeModel({
+        model: VISION_MODEL,
+        generationConfig: { responseMimeType: 'application/json', responseSchema },
+      });
+      const result = await visionModel.generateContent([
+        { text: prompt },
+        { inlineData: { data: base64, mimeType } },
+      ]);
+      raw = result.response.text();
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);

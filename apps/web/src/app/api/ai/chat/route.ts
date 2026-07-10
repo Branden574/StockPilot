@@ -7,6 +7,8 @@ import { assertModuleEnabled, ServiceError } from '@/server/services/context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { buildOrgSnapshot, streamChat, type ChatTurn, type ToolCallRecord } from '@/lib/ai/chat';
+import { streamChatClaude } from '@/lib/ai/chat-claude';
+import { resolveAiProvider } from '@/lib/ai/provider';
 import { classifyAiError } from '@/lib/ai/errors';
 import { classifyIntent, intentNudge } from '@/lib/ai/intent';
 import {
@@ -305,7 +307,12 @@ export async function POST(req: Request) {
         const snapshot = [orgSnapshot, userBlock, pageBlock, intentBlock]
           .filter(Boolean)
           .join('\n\n');
-        const iter = streamChat(history, payload.message, ctx, {
+        // Provider seam: Claude when a key is configured (AI_PROVIDER=gemini
+        // is the rollback lever). Both generators share the SAME signature,
+        // event stream, and { reply, toolCallsUsed } return — the loop below
+        // is provider-agnostic.
+        const runChat = resolveAiProvider() === 'claude' ? streamChatClaude : streamChat;
+        const iter = runChat(history, payload.message, ctx, {
           signal: req.signal,
           snapshot,
         });

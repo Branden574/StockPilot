@@ -2,6 +2,8 @@ import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { claudeGenerateJsonString } from '@/lib/ai/claude';
+import { resolveAiProvider } from '@/lib/ai/provider';
 import { env } from '@/lib/env';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { assertModuleEnabled, ServiceError } from '@/server/services/context';
@@ -119,35 +121,31 @@ export async function POST(req: NextRequest) {
   }
 
   const base64 = Buffer.from(bytes).toString('base64');
-  const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({
-    model: env.GEMINI_MODEL,
-    generationConfig: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: SchemaType.OBJECT,
-        properties: {
-          // 'book' or 'product' — the client branches on this: books flow to
-          // the ISBN pipeline, products to the UPC/new-item pipeline.
-          kind: { type: SchemaType.STRING },
-          title: { type: SchemaType.STRING },
-          author: { type: SchemaType.STRING },
-          isbn: { type: SchemaType.STRING },
-          publisher: { type: SchemaType.STRING },
-          edition: { type: SchemaType.STRING },
-          language: { type: SchemaType.STRING },
-          // Product-side fields (omitted for books).
-          upc: { type: SchemaType.STRING },
-          brand: { type: SchemaType.STRING },
-          modelNumber: { type: SchemaType.STRING },
-          category: { type: SchemaType.STRING },
-          confidence: { type: SchemaType.STRING },
-          notes: { type: SchemaType.STRING },
-        },
-        required: ['kind', 'title', 'confidence'],
-      },
+  // Shared response shape — a Gemini responseSchema whose SchemaType enum
+  // values are the lowercase JSON-Schema type strings, so it doubles as the
+  // Claude forced-tool input_schema (see lib/ai/claude.ts).
+  const responseSchema = {
+    type: SchemaType.OBJECT,
+    properties: {
+      // 'book' or 'product' — the client branches on this: books flow to
+      // the ISBN pipeline, products to the UPC/new-item pipeline.
+      kind: { type: SchemaType.STRING },
+      title: { type: SchemaType.STRING },
+      author: { type: SchemaType.STRING },
+      isbn: { type: SchemaType.STRING },
+      publisher: { type: SchemaType.STRING },
+      edition: { type: SchemaType.STRING },
+      language: { type: SchemaType.STRING },
+      // Product-side fields (omitted for books).
+      upc: { type: SchemaType.STRING },
+      brand: { type: SchemaType.STRING },
+      modelNumber: { type: SchemaType.STRING },
+      category: { type: SchemaType.STRING },
+      confidence: { type: SchemaType.STRING },
+      notes: { type: SchemaType.STRING },
     },
-  });
+    required: ['kind', 'title', 'confidence'],
+  };
 
   const prompt = `You are identifying the book or general product in this image.
 Return only the requested JSON. First set "kind": "book" if this is a
@@ -165,11 +163,24 @@ Confidence rubric:
 ${hint ? `\nUser hint: ${hint}` : ''}`;
 
   try {
-    const result = await model.generateContent([
-      { text: prompt },
-      { inlineData: { data: base64, mimeType } },
-    ]);
-    const raw = result.response.text();
+    let raw: string;
+    if (resolveAiProvider() === 'claude') {
+      raw = await claudeGenerateJsonString({
+        prompt,
+        media: [{ data: base64, mediaType: mimeType }],
+        schema: responseSchema as Record<string, unknown>,
+      });
+    } else {
+      const model = new GoogleGenerativeAI(env.GEMINI_API_KEY).getGenerativeModel({
+        model: env.GEMINI_MODEL,
+        generationConfig: { responseMimeType: 'application/json', responseSchema },
+      });
+      const result = await model.generateContent([
+        { text: prompt },
+        { inlineData: { data: base64, mimeType } },
+      ]);
+      raw = result.response.text();
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);

@@ -2,6 +2,8 @@ import 'server-only';
 
 import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 
+import { claudeGenerateJsonString } from '@/lib/ai/claude';
+import { resolveAiProvider } from '@/lib/ai/provider';
 import { env } from '@/lib/env';
 
 import type { BookMetadata } from './lookup';
@@ -63,21 +65,30 @@ interface GeminiBookResponse {
 }
 
 export async function fetchGeminiBookMetadata(isbn: string): Promise<BookMetadata | null> {
-  if (!env.GEMINI_API_KEY) return null;
+  const useClaude = resolveAiProvider() === 'claude';
+  if (useClaude ? !env.ANTHROPIC_API_KEY : !env.GEMINI_API_KEY) return null;
   try {
-    const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({
-      model: MODEL_NAME,
-      systemInstruction: SYSTEM_PROMPT,
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: responseSchema as never,
-      },
-    });
-    const result = await model.generateContent(
-      `ISBN: ${isbn}\n\nIdentify this book. Follow the schema and confidence rules.`,
-    );
-    const raw = result.response.text();
+    const prompt = `ISBN: ${isbn}\n\nIdentify this book. Follow the schema and confidence rules.`;
+    let raw: string;
+    if (useClaude) {
+      raw = await claudeGenerateJsonString({
+        system: SYSTEM_PROMPT,
+        prompt,
+        schema: responseSchema as unknown as Record<string, unknown>,
+      });
+    } else {
+      const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
+      const model = genAI.getGenerativeModel({
+        model: MODEL_NAME,
+        systemInstruction: SYSTEM_PROMPT,
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: responseSchema as never,
+        },
+      });
+      const result = await model.generateContent(prompt);
+      raw = result.response.text();
+    }
     let parsed: GeminiBookResponse;
     try {
       parsed = JSON.parse(raw) as GeminiBookResponse;

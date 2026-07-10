@@ -2,6 +2,8 @@ import 'server-only';
 
 import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
 
+import { claudeGenerateJsonString } from '@/lib/ai/claude';
+import { resolveAiProvider } from '@/lib/ai/provider';
 import { env } from '@/lib/env';
 
 /**
@@ -185,43 +187,59 @@ export const SCAN_MODEL_NAME = env.GEMINI_MODEL;
  *     (treat as "not a PO" — don't waste a po_imports row)
  */
 export async function extractPoFromMedia(inputs: ScanInput[]): Promise<ExtractedPo> {
-  if (!env.GEMINI_API_KEY) {
-    throw new Error(
-      'GEMINI_API_KEY is not set. Get a free key at https://aistudio.google.com/app/apikey and add it to apps/web/.env.local.',
-    );
-  }
   if (inputs.length === 0) {
     throw new Error('No media provided to extract.');
   }
 
-  const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({
-    model: SCAN_MODEL_NAME,
-    systemInstruction: SYSTEM_PROMPT,
-    generationConfig: {
-      responseMimeType: 'application/json',
-       
-      responseSchema: PO_SCHEMA as any,
+  const useClaude = resolveAiProvider() === 'claude';
+  if (useClaude ? !env.ANTHROPIC_API_KEY : !env.GEMINI_API_KEY) {
+    throw new Error(
+      useClaude
+        ? 'ANTHROPIC_API_KEY is not set. Add it to apps/web/.env.local + Vercel env.'
+        : 'GEMINI_API_KEY is not set. Get a free key at https://aistudio.google.com/app/apikey and add it to apps/web/.env.local.',
+    );
+  }
+
+  let text: string;
+  if (useClaude) {
+    text = await claudeGenerateJsonString({
+      system: SYSTEM_PROMPT,
+      prompt: 'Extract the purchase order from this document.',
+      media: inputs.map((i) => ({ data: i.base64, mediaType: i.mimeType })),
+      schema: PO_SCHEMA as unknown as Record<string, unknown>,
       temperature: 0.05,
-    },
-  });
+      maxTokens: 4096,
+    });
+  } else {
+    const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({
+      model: SCAN_MODEL_NAME,
+      systemInstruction: SYSTEM_PROMPT,
+      generationConfig: {
+        responseMimeType: 'application/json',
 
-  const parts = inputs.map((i) => ({
-    inlineData: { data: i.base64, mimeType: i.mimeType },
-  }));
+        responseSchema: PO_SCHEMA as any,
+        temperature: 0.05,
+      },
+    });
 
-  const result = await model.generateContent([
-    ...parts,
-    { text: 'Extract the purchase order from this document.' },
-  ]);
+    const parts = inputs.map((i) => ({
+      inlineData: { data: i.base64, mimeType: i.mimeType },
+    }));
 
-  const text = result.response.text();
+    const result = await model.generateContent([
+      ...parts,
+      { text: 'Extract the purchase order from this document.' },
+    ]);
+    text = result.response.text();
+  }
+
   let parsed: ExtractedPo;
   try {
     parsed = JSON.parse(text) as ExtractedPo;
   } catch (e) {
     throw new Error(
-      `Gemini returned non-JSON: ${(e as Error).message}\nRaw: ${text.slice(0, 500)}`,
+      `AI returned non-JSON: ${(e as Error).message}\nRaw: ${text.slice(0, 500)}`,
     );
   }
 

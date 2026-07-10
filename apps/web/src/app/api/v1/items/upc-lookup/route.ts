@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { claudeGenerateText } from '@/lib/ai/claude';
+import { resolveAiProvider } from '@/lib/ai/provider';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -101,16 +103,20 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * Description-only Gemini call. The prompt is built so the model
- * never has to guess identifying details — it just paraphrases the
- * name/brand it was handed.
+ * Description-only model call. The prompt is built so the model never
+ * has to guess identifying details — it just paraphrases the name/brand
+ * it was handed. Routes to Claude when configured (see lib/ai/provider).
  */
 async function describeWithGemini(name: string, brand: string | null): Promise<string> {
+  const prompt = buildAiDescriptionPrompt(name, brand);
+  if (resolveAiProvider() === 'claude') {
+    if (!env.ANTHROPIC_API_KEY) return '';
+    return claudeGenerateText({ prompt, maxTokens: 512 });
+  }
   if (!env.GEMINI_API_KEY) return '';
   const { GoogleGenerativeAI } = await import('@google/generative-ai');
   const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
   const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-  const prompt = buildAiDescriptionPrompt(name, brand);
   const resp = await model.generateContent(prompt);
   return resp.response.text().trim();
 }

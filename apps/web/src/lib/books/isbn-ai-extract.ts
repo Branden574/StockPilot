@@ -6,6 +6,8 @@ import {
   type Part,
 } from '@google/generative-ai';
 
+import { claudeGenerateJsonString } from '@/lib/ai/claude';
+import { resolveAiProvider } from '@/lib/ai/provider';
 import { env } from '@/lib/env';
 
 import { extractIsbnsFromText } from './isbn-extract';
@@ -127,12 +129,23 @@ function parseCandidates(raw: string): AiExtractCandidate[] {
   return out;
 }
 
-async function callGeminiOnText(text: string): Promise<AiExtractCandidate[]> {
+async function callModelOnText(text: string): Promise<AiExtractCandidate[]> {
   const trimmed =
     text.length > MAX_PROMPT_CHARS
       ? text.slice(0, MAX_PROMPT_CHARS) +
         `\n\n[truncated; original was ${text.length} chars]`
       : text;
+  if (resolveAiProvider() === 'claude') {
+    if (!env.ANTHROPIC_API_KEY) {
+      throw new Error('ANTHROPIC_API_KEY is not set. AI extract is disabled until you add a key.');
+    }
+    const raw = await claudeGenerateJsonString({
+      system: SYSTEM_PROMPT,
+      prompt: trimmed,
+      schema: responseSchema as unknown as Record<string, unknown>,
+    });
+    return parseCandidates(raw);
+  }
   const model = buildModel();
   const result = await model.generateContent(trimmed);
   return parseCandidates(result.response.text());
@@ -146,16 +159,28 @@ async function callGeminiOnText(text: string): Promise<AiExtractCandidate[]> {
  * roughly 50 MB or 1000 pages on Gemini 2.5 Flash; we cap upload
  * size separately at 10 MB so this is fine in practice.
  */
-async function callGeminiOnBuffer(
+async function callModelOnBuffer(
   buffer: Buffer,
   mimeType: string,
 ): Promise<AiExtractCandidate[]> {
+  const instruction =
+    'Extract every ISBN you can find in the attached document, including ones inside images, tables, or scans. Follow the schema.';
+  if (resolveAiProvider() === 'claude') {
+    if (!env.ANTHROPIC_API_KEY) {
+      throw new Error('ANTHROPIC_API_KEY is not set. AI extract is disabled until you add a key.');
+    }
+    const raw = await claudeGenerateJsonString({
+      system: SYSTEM_PROMPT,
+      prompt: instruction,
+      media: [{ data: buffer.toString('base64'), mediaType: mimeType }],
+      schema: responseSchema as unknown as Record<string, unknown>,
+    });
+    return parseCandidates(raw);
+  }
   const model = buildModel();
   const parts: Part[] = [
     { inlineData: { data: buffer.toString('base64'), mimeType } },
-    {
-      text: 'Extract every ISBN you can find in the attached document, including ones inside images, tables, or scans. Follow the schema.',
-    },
+    { text: instruction },
   ];
   const result = await model.generateContent(parts);
   return parseCandidates(result.response.text());
@@ -261,7 +286,7 @@ export async function aiExtractIsbnsFromBuffer(
 ): Promise<AiExtractResult> {
   let aiCandidates: AiExtractCandidate[] = [];
   try {
-    aiCandidates = await callGeminiOnBuffer(buffer, mimeType);
+    aiCandidates = await callModelOnBuffer(buffer, mimeType);
   } catch (err) {
     return {
       isbns: [],
@@ -276,7 +301,7 @@ export async function aiExtractIsbns(text: string): Promise<AiExtractResult> {
   const regexHits = extractIsbnsFromText(text);
   let aiCandidates: AiExtractCandidate[] = [];
   try {
-    aiCandidates = await callGeminiOnText(text);
+    aiCandidates = await callModelOnText(text);
   } catch (err) {
     return {
       isbns: regexHits,

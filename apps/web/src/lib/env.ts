@@ -96,6 +96,21 @@ const serverSchema = z.object({
     .default('gemini-2.5-flash')
     .transform((s) => s.trim()),
 
+  // ── Anthropic (Claude) — the generative-AI provider switch ─────────────
+  // Setting ANTHROPIC_API_KEY flips every GENERATIVE surface (chat + tools,
+  // photo ID, shelf/PO scan, narratives) to Claude; embeddings stay on Gemini
+  // (Anthropic has no embeddings API — re-embedding is a separate migration).
+  // AI_PROVIDER=gemini is the instant rollback lever (key stays set).
+  ANTHROPIC_API_KEY: optionalSecret.transform((s) => s.trim()),
+  // Pinned snapshot (production prefers pinned IDs over floating aliases so a
+  // model rev can't silently change behavior). Override per-env to bump.
+  ANTHROPIC_MODEL: z
+    .string()
+    .optional()
+    .default('claude-haiku-4-5-20251001')
+    .transform((s) => s.trim()),
+  AI_PROVIDER: z.enum(['claude', 'gemini']).optional(),
+
   // QuickBooks Online connector (integrations module). OAuth2 app
   // credentials from the Intuit developer portal. Only required when the
   // integrations module is enabled and an org connects QuickBooks; unset
