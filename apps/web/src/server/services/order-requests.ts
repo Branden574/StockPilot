@@ -1007,28 +1007,6 @@ export class OrderRequestsService {
         throw new ServiceError('forbidden', 'Only managers can approve requests');
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'This request is no longer pending approval');
-      if (msg.includes('insufficient_placed_stock')) {
-        // Name the order's items so the picker knows exactly what to put away.
-        let items = '';
-        try {
-          const { data: ln } = await this.ctx.supabase
-            .from('order_request_lines')
-            .select('quantity_requested, quantity_fulfilled, item:inventory_items!item_id(name, sku)')
-            .eq('order_request_id', id);
-          items = ((ln ?? []) as { quantity_requested: number; quantity_fulfilled: number; item: { name: string; sku: string } | { name: string; sku: string }[] | null }[])
-            .map((l) => {
-              const it = Array.isArray(l.item) ? l.item[0] : l.item;
-              const owed = Math.max(0, (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0));
-              return it ? `${it.name} (${it.sku}) — ${owed} needed` : null;
-            })
-            .filter(Boolean)
-            .join('; ');
-        } catch { /* message still useful without the list */ }
-        throw new ServiceError(
-          'validation_error',
-          `Not enough PUT-AWAY stock to complete this pick. Part of this item's on-hand total is still in Staging (awaiting put-away) or unplaced, and picking can only draw from placed rack/crate stock. Fix: open Inventory → Staging, put away the needed units, then retry.${items ? ` Short line(s): ${items}.` : ''}`,
-        );
-      }
       if (msg.includes('insufficient_stock'))
         throw new ServiceError(
           'validation_error',
@@ -1190,6 +1168,28 @@ export class OrderRequestsService {
     });
     if (error) {
       const msg = error.message ?? '';
+      if (msg.includes('insufficient_placed_stock')) {
+        // Name the order's items so the picker knows exactly what to put away.
+        let items = '';
+        try {
+          const { data: ln } = await this.ctx.supabase
+            .from('order_request_lines')
+            .select('quantity_requested, quantity_fulfilled, item:inventory_items!item_id(name, sku)')
+            .eq('order_request_id', id);
+          items = ((ln ?? []) as { quantity_requested: number; quantity_fulfilled: number; item: { name: string; sku: string } | { name: string; sku: string }[] | null }[])
+            .map((l) => {
+              const it = Array.isArray(l.item) ? l.item[0] : l.item;
+              const owed = Math.max(0, (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0));
+              return it ? `${it.name} (${it.sku}) — ${owed} needed` : null;
+            })
+            .filter(Boolean)
+            .join('; ');
+        } catch { /* message still useful without the list */ }
+        throw new ServiceError(
+          'validation_error',
+          `Not enough PUT-AWAY stock to complete this pick. Part of this item's on-hand total is still in Staging (awaiting put-away) or unplaced, and picking can only draw from placed rack/crate stock. Fix: open Inventory → Staging, put away the needed units, then retry.${items ? ` Short line(s): ${items}.` : ''}`,
+        );
+      }
       if (msg.includes('insufficient_stock'))
         throw new ServiceError(
           'validation_error',
