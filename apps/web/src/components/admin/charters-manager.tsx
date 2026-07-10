@@ -231,20 +231,25 @@ function CharterTableRow({
       <TableCell className="font-mono text-xs text-muted-foreground">{row.code ?? '—'}</TableCell>
       <TableCell className="text-right tabular-nums">{row.warehouse_count}</TableCell>
       <TableCell className="text-right tabular-nums">{row.user_count}</TableCell>
-      <TableCell className="max-w-xs text-sm text-muted-foreground">
+      <TableCell className="w-[280px] max-w-[280px] text-sm text-muted-foreground">
         {isAddressEmpty(row.address) ? (
           <span className="inline-flex items-center gap-1.5 text-amber-600 dark:text-amber-500">
             <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
             <span className="text-xs">Needed for shipping labels</span>
           </span>
         ) : (
-          <span className="inline-flex items-start gap-1.5">
+          // Wrap long mailing addresses inside the bounded cell instead of
+          // truncating with nowrap — nowrap expands the auto-layout column and
+          // shoves the Actions/Edit buttons off-screen (owner caught this).
+          <span className="flex min-w-0 items-start gap-1.5">
             <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">{formatAddressLines(row.address).join(', ')}</span>
+            <span className="min-w-0 break-words">
+              {formatAddressLines(row.address).join(', ')}
+            </span>
           </span>
         )}
       </TableCell>
-      <TableCell className="flex justify-end gap-2">
+      <TableCell className="flex justify-end gap-2 whitespace-nowrap">
         {isArchivedView ? (
           <>
             <Button

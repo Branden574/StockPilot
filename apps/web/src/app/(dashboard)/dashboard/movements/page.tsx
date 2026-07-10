@@ -1,9 +1,9 @@
 import { ArrowLeftRight } from 'lucide-react';
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { EmptyState } from '@/components/ui/empty-state';
-import { Button } from '@/components/ui/button';
+import { MovementsSearch } from '@/components/movements/movements-search';
+import { Pagination } from '@/components/ui/pagination';
 import {
   Table,
   TableBody,
@@ -24,7 +24,7 @@ const PAGE_SIZE = 50;
 export default async function MovementsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<{ page?: string; q?: string }>;
 }) {
   // Movements is the org-wide stock_movements ledger — viewer doesn't
   // have activity_logs:read, so they get bounced back to the dashboard
@@ -37,21 +37,37 @@ export default async function MovementsPage({
   const params = await searchParams;
   const page = clampPage(params.page);
   const offset = (page - 1) * PAGE_SIZE;
+  const search = (params.q ?? '').trim();
 
   const [movementsSvc, warehouseFilter] = await Promise.all([
     MovementsService.forCurrentUser(),
     getActiveWarehouseFilter(),
   ]);
-  // Fetch one extra row to detect whether a next page exists without a
-  // separate count query (count(*) on stock_movements is slow on big
-  // ledgers).
-  const movements = await movementsSvc.list({
-    limit: PAGE_SIZE + 1,
-    offset,
-    warehouseId: warehouseFilter ?? undefined,
-  });
+  // One extra row detects a next page even if the count is unavailable; the
+  // count drives the numbered pager.
+  const [movements, total] = await Promise.all([
+    movementsSvc.list({
+      limit: PAGE_SIZE + 1,
+      offset,
+      warehouseId: warehouseFilter ?? undefined,
+      search: search || undefined,
+    }),
+    movementsSvc
+      .count({ warehouseId: warehouseFilter ?? undefined, search: search || undefined })
+      .catch(() => null),
+  ]);
   const hasNext = movements.length > PAGE_SIZE;
   const visible = hasNext ? movements.slice(0, PAGE_SIZE) : movements;
+  const totalPages = total != null ? Math.max(1, Math.ceil(total / PAGE_SIZE)) : undefined;
+
+  // Preserve the active search across page links.
+  const hrefForPage = (n: number) => {
+    const sp = new URLSearchParams();
+    if (search) sp.set('q', search);
+    if (n > 1) sp.set('page', String(n));
+    const qs = sp.toString();
+    return qs ? `/dashboard/movements?${qs}` : '/dashboard/movements';
+  };
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -63,15 +79,30 @@ export default async function MovementsPage({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <MovementsSearch initialQuery={search} />
           <p className="text-muted-foreground text-xs tabular-nums">
-            Page {page} · {PAGE_SIZE} per page
+            {total != null
+              ? `${formatNumber(total)} movement${total === 1 ? '' : 's'}`
+              : `Page ${page}`}
           </p>
-          <Pager page={page} hasNext={hasNext} />
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            hasNext={hasNext}
+            hrefForPage={hrefForPage}
+          />
         </div>
       </div>
 
       {visible.length === 0 ? (
-        page === 1 ? (
+        search ? (
+          <EmptyState
+            icon={ArrowLeftRight}
+            title="No movements match"
+            description={`Nothing found for "${search}". Try a different item name or SKU, or clear the search.`}
+            cta={{ label: 'Clear search', href: '/dashboard/movements' }}
+          />
+        ) : page === 1 ? (
           <EmptyState
             icon={ArrowLeftRight}
             title="No movements yet"
@@ -168,34 +199,16 @@ export default async function MovementsPage({
         </div>
       )}
 
-      <div className="mt-4 flex items-center justify-between">
-        <Pager page={page} hasNext={hasNext} />
-      </div>
-    </div>
-  );
-}
-
-function Pager({ page, hasNext }: { page: number; hasNext: boolean }) {
-  return (
-    <div className="flex items-center gap-2">
-      <Button asChild variant="outline" size="sm" disabled={page <= 1}>
-        <Link
-          href={page <= 1 ? '#' : `/dashboard/movements?page=${page - 1}`}
-          aria-disabled={page <= 1}
-          className={page <= 1 ? 'pointer-events-none opacity-50' : ''}
-        >
-          ← Newer
-        </Link>
-      </Button>
-      <Button asChild variant="outline" size="sm" disabled={!hasNext}>
-        <Link
-          href={hasNext ? `/dashboard/movements?page=${page + 1}` : '#'}
-          aria-disabled={!hasNext}
-          className={!hasNext ? 'pointer-events-none opacity-50' : ''}
-        >
-          Older →
-        </Link>
-      </Button>
+      {visible.length > 0 && (
+        <div className="mt-4 flex items-center justify-end">
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            hasNext={hasNext}
+            hrefForPage={hrefForPage}
+          />
+        </div>
+      )}
     </div>
   );
 }

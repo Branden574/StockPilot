@@ -217,6 +217,9 @@ export const pdfStyles = StyleSheet.create({
   mono: { fontFamily: 'Courier' },
   small: { fontSize: 8 },
   bold: { fontFamily: 'Helvetica-Bold' },
+  // Identity / address lines (Bill to, Supplier). Roomier line-height so a
+  // multi-line mailing address reads as an address, not a cramped run.
+  identityLine: { lineHeight: 1.5, marginBottom: 0.5 },
 
   // Optional table-footer row — used for warehouse subtotals in the
   // inventory snapshot. Visually distinct (slightly heavier divider,

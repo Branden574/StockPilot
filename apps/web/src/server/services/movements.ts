@@ -72,6 +72,8 @@ export class MovementsService {
       until?: string;
       /** Movement type filter (e.g. 'adjust', 'transfer', 'receive_po'). */
       types?: string[];
+      /** Free-text search over the item's name / sku. */
+      search?: string;
     } = {},
   ) {
     const limit = Math.min(params.limit ?? 50, 200);
@@ -117,6 +119,13 @@ export class MovementsService {
     if (params.until) query = query.lt('created_at', params.until);
     if (params.types && params.types.length > 0) {
       query = query.in('movement_type', params.types);
+    }
+    const search = params.search?.trim();
+    if (search) {
+      const esc = escapeIlike(search);
+      // OR across the embedded item's name + sku (referencedTable scopes the
+      // .or to the joined table; the !inner embed makes it a real filter).
+      query = query.or(`name.ilike.%${esc}%,sku.ilike.%${esc}%`, { referencedTable: 'item' });
     }
 
     const { data, error } = await query;
@@ -169,6 +178,58 @@ export class MovementsService {
       return { ...r, reason, item, actor } as MovementWithItem;
     });
   }
+
+  /**
+   * Total count for the ledger under the same filters `list()` uses — powers
+   * numbered pagination. Head-only count (no rows). At extreme ledger scale
+   * (>~1M rows) this exact count over the item join can get heavy; real orgs
+   * are far smaller, and the caller can fall back to Prev/Next if it's null.
+   */
+  async count(
+    params: {
+      itemId?: string;
+      warehouseId?: string;
+      since?: string;
+      until?: string;
+      types?: string[];
+      search?: string;
+    } = {},
+  ): Promise<number> {
+    const access = await getWarehouseAccess(this.ctx);
+    let query = this.ctx.supabase
+      .from('stock_movements')
+      .select('id, item:inventory_items!item_id!inner (id, name, sku, warehouse_id, deleted_at)', {
+        count: 'exact',
+        head: true,
+      })
+      .eq('organization_id', this.ctx.organizationId)
+      .is('item.deleted_at', null);
+
+    if (!access.hasAllAccess) {
+      if (access.readableIds.length === 0) return 0;
+      query = query.in('item.warehouse_id', access.readableIds);
+    } else if (params.warehouseId) {
+      query = query.eq('item.warehouse_id', params.warehouseId);
+    }
+    if (params.itemId) query = query.eq('item_id', params.itemId);
+    if (params.since) query = query.gte('created_at', params.since);
+    if (params.until) query = query.lt('created_at', params.until);
+    if (params.types && params.types.length > 0) query = query.in('movement_type', params.types);
+    const search = params.search?.trim();
+    if (search) {
+      const esc = escapeIlike(search);
+      query = query.or(`name.ilike.%${esc}%,sku.ilike.%${esc}%`, { referencedTable: 'item' });
+    }
+
+    const { count, error } = await query;
+    if (error) throw new ServiceError('internal_error', error.message);
+    return count ?? 0;
+  }
+}
+
+/** Escape ILIKE wildcards so a user's %/_/\ in search is literal (pattern #16). */
+function escapeIlike(q: string): string {
+  return q.replace(/[\\%_]/g, (m) => `\\${m}`);
 }
 
 export interface DashboardSummary {

@@ -156,17 +156,12 @@ describe('PurchaseOrderPdf', () => {
     expect(body).toBeDefined();
   });
 
-  it('always renders both signature column captions', () => {
+  it('does NOT render the signature block (removed 2026-07-10 per owner)', () => {
     const nodes = render({});
     const captions = nodes
       .map((n) => textOf(n.props.children))
       .filter((t) => t.includes('Authorized by') || t.includes('Accepted by'));
-    expect(captions.some((t) => t.includes('Authorized by (StockPilot)'))).toBe(
-      true,
-    );
-    expect(captions.some((t) => t.includes('Accepted by (Supplier)'))).toBe(
-      true,
-    );
+    expect(captions).toHaveLength(0);
   });
 
   it('renders an Outstanding column header', () => {

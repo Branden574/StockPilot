@@ -192,7 +192,7 @@ export function PurchaseOrderPdf({
         <View style={[pdfStyles.section, pdfStyles.twoCol]}>
           <View style={pdfStyles.col}>
             <Text style={pdfStyles.sectionTitle}>Bill to</Text>
-            <Text style={pdfStyles.bold}>{org.name}</Text>
+            <Text style={[pdfStyles.bold, pdfStyles.identityLine]}>{org.name}</Text>
             {/*
              * Bill-to charter (purchase_orders.charter_id) — the campus/entity
              * this PO is billed to. Renders its name, code, mailing address, and
@@ -200,28 +200,28 @@ export function PurchaseOrderPdf({
              */}
             {billToCharter ? (
               <>
-                <Text style={pdfStyles.bold}>
+                <Text style={[pdfStyles.bold, pdfStyles.identityLine]}>
                   {billToCharter.name}
                   {billToCharter.code ? ` (${billToCharter.code})` : ''}
                 </Text>
                 {billToCharter.addressLines.map((line, i) => (
-                  <Text key={`bca-${i}`} style={pdfStyles.muted}>
+                  <Text key={`bca-${i}`} style={[pdfStyles.muted, pdfStyles.identityLine]}>
                     {line}
                   </Text>
                 ))}
                 {billToCharter.contactName ? (
-                  <Text style={pdfStyles.muted}>{billToCharter.contactName}</Text>
+                  <Text style={[pdfStyles.muted, pdfStyles.identityLine]}>{billToCharter.contactName}</Text>
                 ) : null}
                 {billToCharter.contactEmail ? (
-                  <Text style={pdfStyles.muted}>{billToCharter.contactEmail}</Text>
+                  <Text style={[pdfStyles.muted, pdfStyles.identityLine]}>{billToCharter.contactEmail}</Text>
                 ) : null}
                 {billToCharter.contactPhone ? (
-                  <Text style={pdfStyles.muted}>{billToCharter.contactPhone}</Text>
+                  <Text style={[pdfStyles.muted, pdfStyles.identityLine]}>{billToCharter.contactPhone}</Text>
                 ) : null}
               </>
             ) : null}
             {destination?.warehouseName ? (
-              <Text style={pdfStyles.muted}>
+              <Text style={[pdfStyles.muted, pdfStyles.identityLine]}>
                 Ship to: {destination.warehouseName}
                 {destination.locationName ? ` · ${destination.locationName}` : ''}
               </Text>
@@ -231,22 +231,22 @@ export function PurchaseOrderPdf({
             <Text style={pdfStyles.sectionTitle}>Supplier</Text>
             {supplier ? (
               <>
-                <Text style={pdfStyles.bold}>{supplier.name}</Text>
+                <Text style={[pdfStyles.bold, pdfStyles.identityLine]}>{supplier.name}</Text>
                 {supplier.contactName ? (
-                  <Text style={pdfStyles.muted}>{supplier.contactName}</Text>
+                  <Text style={[pdfStyles.muted, pdfStyles.identityLine]}>{supplier.contactName}</Text>
                 ) : null}
                 {supplier.email ? (
-                  <Text style={pdfStyles.muted}>{supplier.email}</Text>
+                  <Text style={[pdfStyles.muted, pdfStyles.identityLine]}>{supplier.email}</Text>
                 ) : null}
                 {supplier.phone ? (
-                  <Text style={pdfStyles.muted}>{supplier.phone}</Text>
+                  <Text style={[pdfStyles.muted, pdfStyles.identityLine]}>{supplier.phone}</Text>
                 ) : null}
                 {supplier.website ? (
-                  <Text style={pdfStyles.muted}>{supplier.website}</Text>
+                  <Text style={[pdfStyles.muted, pdfStyles.identityLine]}>{supplier.website}</Text>
                 ) : null}
               </>
             ) : (
-              <Text style={pdfStyles.muted}>No supplier assigned</Text>
+              <Text style={[pdfStyles.muted, pdfStyles.identityLine]}>No supplier assigned</Text>
             )}
           </View>
         </View>
@@ -505,28 +505,8 @@ export function PurchaseOrderPdf({
          * (when present) or below the totals box. wrap={false} keeps the
          * two columns on the same page.
          */}
-        <View style={pdfStyles.signatureWrap} wrap={false}>
-          <View style={pdfStyles.signatureCol}>
-            <Text style={pdfStyles.signatureCaption}>
-              Authorized by (StockPilot)
-            </Text>
-            <View style={pdfStyles.signatureLine} />
-            <View style={pdfStyles.signatureMetaRow}>
-              <Text style={pdfStyles.signatureMeta}>Name: ____________________</Text>
-              <Text style={pdfStyles.signatureMeta}>Date: __________</Text>
-            </View>
-          </View>
-          <View style={pdfStyles.signatureCol}>
-            <Text style={pdfStyles.signatureCaption}>
-              Accepted by (Supplier)
-            </Text>
-            <View style={pdfStyles.signatureLine} />
-            <View style={pdfStyles.signatureMetaRow}>
-              <Text style={pdfStyles.signatureMeta}>Name: ____________________</Text>
-              <Text style={pdfStyles.signatureMeta}>Date: __________</Text>
-            </View>
-          </View>
-        </View>
+        {/* Signature block removed 2026-07-10 (owner request — POs don't need
+            the authorized-by / accepted-by sign-off lines). */}
 
         <View style={pdfStyles.footer} fixed>
           <Text>{org.name} · Generated by StockPilot</Text>
