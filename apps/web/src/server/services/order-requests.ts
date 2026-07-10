@@ -257,6 +257,36 @@ export interface CreateOrderRequestInput {
   }>;
 }
 
+
+/**
+ * Orders → Schedule cleanup: when a linked order reaches a terminal state,
+ * close its auto-created calendar event so the Schedule tidies itself
+ * (owner ask 2026-07-10: "no Start button babysitting"). completed-order →
+ * event completed; cancelled/denied order → event cancelled. Only touches
+ * events still open (scheduled/in_progress); manual terminal states win.
+ * Admin client + fire-and-forget: never blocks or fails the order flow.
+ */
+export async function syncOrderScheduleEvent(
+  orderId: string,
+  outcome: 'completed' | 'cancelled',
+  organizationId?: string,
+): Promise<void> {
+  try {
+    const admin = createAdminClient();
+    await admin
+      .from('schedule_events')
+      .update({ status: outcome })
+      .eq('order_request_id', orderId)
+      .in('status', ['scheduled', 'in_progress']);
+  } catch (e) {
+    void reportSrvError(e, {
+      tag: 'orders.auto-schedule.sync',
+      organizationId: organizationId ?? null,
+      extra: { orderId, outcome },
+    });
+  }
+}
+
 export class OrderRequestsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -983,6 +1013,7 @@ export class OrderRequestsService {
       orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       cancelledBy: this.ctx.userId,
     });
+    void syncOrderScheduleEvent(id, 'cancelled', this.ctx.organizationId);
     return row;
   }
 
@@ -1455,6 +1486,7 @@ export class OrderRequestsService {
           status: 'backordered',
         });
       } else if (row.status === 'completed') {
+        void syncOrderScheduleEvent(id, 'completed', this.ctx.organizationId);
         if (priorFulfilled > 0) {
           await notifyRequesterBackorderShipped({
             organizationId: this.ctx.organizationId,
@@ -1945,6 +1977,7 @@ export class OrderRequestsService {
       reason,
       deniedBy: this.ctx.userId,
     });
+    void syncOrderScheduleEvent(id, 'cancelled', this.ctx.organizationId);
 
     // Zendesk shell: a denied order is an "order problem" ticket (best-effort).
     try {

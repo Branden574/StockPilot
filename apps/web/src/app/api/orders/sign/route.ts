@@ -14,6 +14,7 @@ import {
   sendBackorderEmail,
 } from '@/server/lib/order-handover-notify';
 import { dispatchEvent } from '@/server/services/integration-events';
+import { syncOrderScheduleEvent } from '@/server/services/order-requests';
 
 // Why a route handler instead of a Server Action: the public sign page
 // renders <SignatureCollector /> only while `signed_at IS NULL`. A
@@ -239,6 +240,8 @@ export async function POST(req: NextRequest) {
   // link. Idempotent — token minted only while still NULL, so a replayed sign
   // never rotates an issued token. Best-effort: a failure never fails the sign.
   if (isCompleted) {
+    // Close the linked auto-created Schedule event (order fulfilled).
+    void syncOrderScheduleEvent(order.id, 'completed', order.organization_id);
     try {
       const { data: modRow } = await admin
         .from('organization_modules')
