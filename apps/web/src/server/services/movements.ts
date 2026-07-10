@@ -76,7 +76,9 @@ export class MovementsService {
       search?: string;
     } = {},
   ) {
-    const limit = Math.min(params.limit ?? 50, 200);
+    // Cap raised to 1000 (one PostgREST page) so the movements page's instant
+    // mode can load the whole small-org ledger; other callers pass small limits.
+    const limit = Math.min(params.limit ?? 50, 1000);
     const offset = Math.max(0, params.offset ?? 0);
     // Pass our own ctx so the helper doesn't fall back to
     // requireOrgContext() — in API routes that path throws NEXT_REDIRECT

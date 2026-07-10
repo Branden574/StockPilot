@@ -31,7 +31,7 @@ const PAGE_SIZE = 50;
  * matching Items/Books). Above it, server-side search + numbered pages hold —
  * the ledger can reach millions of rows and must not all cross the wire.
  */
-const MOVEMENTS_INSTANT_CAP = 2000;
+const MOVEMENTS_INSTANT_CAP = 1000;
 
 export default async function MovementsPage({
   searchParams,
@@ -124,13 +124,10 @@ export default async function MovementsPage({
         {!instant && total !== 0 && (
           <div className="flex flex-wrap items-center gap-3">
             <MovementsSearch initialQuery={search} />
-            <p className="text-muted-foreground text-xs tabular-nums">
-              {total != null
-                ? `${formatNumber(total)} movement${total === 1 ? '' : 's'}`
-                : `Page ${page}`}
-            </p>
             <Pagination
               page={page}
+              pageSize={PAGE_SIZE}
+              total={total}
               totalPages={totalPages}
               hasNext={hasNext}
               hrefForPage={hrefForPage}

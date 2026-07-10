@@ -1,143 +1,214 @@
-import Link from 'next/link';
+'use client';
 
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import * as React from 'react';
+
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
 /**
- * Numbered pagination. Renders First/Prev, a windowed run of page numbers
- * (±`window` around the current page, with ellipses), and Next/Last. Pure +
- * server-friendly — the caller supplies `hrefForPage(n)` so it works with any
- * searchParams scheme. When `totalPages` is unknown (a big ledger where an
- * exact count is too slow), pass `hasNext` instead and it degrades to
- * Prev/Next only.
+ * Numbered pagination matching the Items pager: "Showing X–Y of Z", Prev, a
+ * "Page N of M" popover to jump to any page, and Next. Works in two modes —
+ * link mode (`hrefForPage`, server pages) or client mode (`onPageChange`, an
+ * already-loaded set). Provide `total` + `pageSize` for the row-range text and
+ * page count; otherwise pass `totalPages` (or just `hasNext` to degrade to
+ * Prev/Next only).
  */
 export function Pagination({
   page,
-  totalPages,
+  pageSize,
+  total,
+  totalPages: totalPagesProp,
   hasNext,
   hrefForPage,
   onPageChange,
-  window = 2,
   className,
 }: {
   page: number;
+  pageSize?: number;
+  total?: number | null;
   totalPages?: number;
   hasNext?: boolean;
-  /** Link mode (server pages). Provide this OR onPageChange. */
   hrefForPage?: (n: number) => string;
-  /** Button mode (client-side pagination over an already-loaded set). */
   onPageChange?: (n: number) => void;
-  window?: number;
   className?: string;
 }) {
+  const router = useRouter();
+  const totalPages =
+    total != null && pageSize ? Math.max(1, Math.ceil(total / pageSize)) : totalPagesProp;
   const numbered = typeof totalPages === 'number' && totalPages > 0;
-  const last = numbered ? totalPages : undefined;
-  const canPrev = page > 1;
-  const canNext = numbered ? page < (last as number) : Boolean(hasNext);
+  const safePage = numbered ? Math.min(Math.max(1, page), totalPages as number) : page;
+  const prevDisabled = safePage <= 1;
+  const nextDisabled = numbered ? safePage >= (totalPages as number) : !hasNext;
 
-  // Windowed page list with ellipsis sentinels (0 = gap).
-  const pages: number[] = [];
-  if (numbered) {
-    const from = Math.max(1, page - window);
-    const to = Math.min(last as number, page + window);
-    if (from > 1) {
-      pages.push(1);
-      if (from > 2) pages.push(0);
-    }
-    for (let n = from; n <= to; n++) pages.push(n);
-    if (to < (last as number)) {
-      if (to < (last as number) - 1) pages.push(0);
-      pages.push(last as number);
-    }
-  }
-
-  const cell = (n: number, label: string, key: string, current?: boolean, disabled?: boolean) => (
-    <PageCell
-      key={key}
-      href={hrefForPage?.(n)}
-      onClick={onPageChange ? () => onPageChange(n) : undefined}
-      current={current}
-      disabled={disabled}
-      ariaLabel={label}
-    >
-      {label === 'Previous page' ? '←' : label === 'Next page' ? '→' : n}
-    </PageCell>
+  const go = React.useCallback(
+    (n: number) => {
+      if (onPageChange) onPageChange(n);
+      else if (hrefForPage) router.push(hrefForPage(n));
+    },
+    [onPageChange, hrefForPage, router],
   );
 
+  // Row-range text ("Showing 51–100 of 350") when we know the totals.
+  const range =
+    total != null && pageSize ? (
+      <span>
+        Showing <span className="text-foreground font-medium">{(safePage - 1) * pageSize + 1}</span>–
+        <span className="text-foreground font-medium">{Math.min(safePage * pageSize, total)}</span>{' '}
+        of <span className="text-foreground font-medium">{total}</span>
+      </span>
+    ) : null;
+
   return (
-    <nav
-      role="navigation"
-      aria-label="Pagination"
-      className={cn('flex items-center gap-1', className)}
+    <div
+      className={cn('text-muted-foreground flex items-center gap-3 text-[12px]', className)}
     >
-      {cell(page - 1, 'Previous page', 'prev', false, !canPrev)}
+      {range}
+      <div className="flex items-center gap-1">
+        <PageBtn disabled={prevDisabled} href={hrefForPage?.(safePage - 1)} onClick={() => go(safePage - 1)}>
+          ← Prev
+        </PageBtn>
 
-      {numbered ? (
-        pages.map((n, i) =>
-          n === 0 ? (
-            <span key={`gap-${i}`} className="text-muted-foreground px-1.5 text-sm">
-              …
-            </span>
-          ) : (
-            cell(n, `Page ${n}`, `p${n}`, n === page)
-          ),
-        )
-      ) : (
-        <span className="text-muted-foreground px-2 text-sm tabular-nums">Page {page}</span>
-      )}
+        {numbered ? (
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                aria-label="Jump to page"
+                className="hover:text-foreground hover:bg-muted/40 text-muted-foreground cursor-pointer rounded px-2 py-0.5 text-[11.5px] transition-colors"
+              >
+                Page {safePage} of {totalPages}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="center" side="top" className="max-h-[360px] w-auto min-w-[260px] overflow-y-auto p-2">
+              <JumpGrid
+                totalPages={totalPages as number}
+                current={safePage}
+                hrefForPage={hrefForPage}
+                go={go}
+              />
+            </PopoverContent>
+          </Popover>
+        ) : (
+          <span className="px-2 tabular-nums">Page {safePage}</span>
+        )}
 
-      {cell(page + 1, 'Next page', 'next', false, !canNext)}
-    </nav>
+        <PageBtn disabled={nextDisabled} href={hrefForPage?.(safePage + 1)} onClick={() => go(safePage + 1)}>
+          Next →
+        </PageBtn>
+      </div>
+    </div>
   );
 }
 
-function PageCell({
+/** Prev/Next control — a Link in href mode, a button in client mode. */
+function PageBtn({
+  disabled,
   href,
   onClick,
   children,
-  disabled,
-  current,
-  ariaLabel,
 }: {
+  disabled: boolean;
   href?: string;
-  onClick?: () => void;
+  onClick: () => void;
   children: React.ReactNode;
-  disabled?: boolean;
-  current?: boolean;
-  ariaLabel?: string;
 }) {
-  const base =
-    'inline-flex h-8 min-w-8 items-center justify-center rounded-md border px-2 text-sm tabular-nums transition-colors';
   if (disabled) {
     return (
-      <span aria-disabled className={cn(base, 'text-muted-foreground opacity-50')}>
+      <Button variant="outline" size="sm" disabled>
         {children}
-      </span>
+      </Button>
     );
   }
-  const active = current
-    ? 'bg-foreground text-background border-foreground font-medium'
-    : 'bg-card hover:bg-accent';
-  if (onClick) {
+  if (href) {
     return (
-      <button
-        type="button"
-        onClick={onClick}
-        aria-label={ariaLabel}
-        aria-current={current ? 'page' : undefined}
-        className={cn(base, active)}
-      >
-        {children}
-      </button>
+      <Button asChild variant="outline" size="sm">
+        <Link href={href}>{children}</Link>
+      </Button>
     );
   }
   return (
-    <Link
-      href={href ?? '#'}
-      aria-label={ariaLabel}
-      aria-current={current ? 'page' : undefined}
-      className={cn(base, active)}
-    >
+    <Button variant="outline" size="sm" onClick={onClick}>
       {children}
-    </Link>
+    </Button>
+  );
+}
+
+/**
+ * The jump target. For a manageable page count, a grid of every page (like
+ * Items). For a very large count (a big server-paginated ledger), a "go to
+ * page" number input instead of thousands of buttons.
+ */
+function JumpGrid({
+  totalPages,
+  current,
+  hrefForPage,
+  go,
+}: {
+  totalPages: number;
+  current: number;
+  hrefForPage?: (n: number) => string;
+  go: (n: number) => void;
+}) {
+  const [value, setValue] = React.useState('');
+  if (totalPages > 120) {
+    const submit = () => {
+      const n = Math.min(Math.max(1, Math.floor(Number(value) || 0)), totalPages);
+      if (n) go(n);
+    };
+    return (
+      <div className="flex items-center gap-2 p-1">
+        <Input
+          type="number"
+          min={1}
+          max={totalPages}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit();
+          }}
+          placeholder={`1–${totalPages}`}
+          className="h-8 w-28"
+          aria-label="Go to page"
+          autoFocus
+        />
+        <Button size="sm" onClick={submit}>
+          Go
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-5 gap-1 sm:grid-cols-8">
+      {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) =>
+        hrefForPage ? (
+          <Button
+            key={n}
+            asChild
+            variant={n === current ? 'default' : 'ghost'}
+            size="sm"
+            className="h-7 w-full px-2 text-[12px]"
+          >
+            <Link href={hrefForPage(n)} aria-current={n === current ? 'page' : undefined}>
+              {n}
+            </Link>
+          </Button>
+        ) : (
+          <Button
+            key={n}
+            variant={n === current ? 'default' : 'ghost'}
+            size="sm"
+            className="h-7 w-full px-2 text-[12px]"
+            onClick={() => go(n)}
+            aria-current={n === current ? 'page' : undefined}
+          >
+            {n}
+          </Button>
+        ),
+      )}
+    </div>
   );
 }

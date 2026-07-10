@@ -65,9 +65,6 @@ export function MovementsInstantTable({ rows }: { rows: MovementDisplayRow[] }) 
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-end gap-3">
-        <p className="text-muted-foreground text-xs tabular-nums">
-          {formatNumber(filtered.length)} movement{filtered.length === 1 ? '' : 's'}
-        </p>
         <div className="relative min-w-[220px] max-w-xs flex-1 sm:flex-none">
           <Search className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
           <Input
@@ -89,9 +86,12 @@ export function MovementsInstantTable({ rows }: { rows: MovementDisplayRow[] }) 
             </button>
           )}
         </div>
-        {totalPages > 1 && (
-          <Pagination page={safePage} totalPages={totalPages} onPageChange={setPage} />
-        )}
+        <Pagination
+          page={safePage}
+          pageSize={PAGE_SIZE}
+          total={filtered.length}
+          onPageChange={setPage}
+        />
       </div>
 
       {visible.length === 0 ? (
