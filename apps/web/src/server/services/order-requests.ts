@@ -150,6 +150,8 @@ export interface ActiveReservation {
 
 export interface OrderRequestSummary {
   id: string;
+  /** Per-org sequential order number (mig 0254) — the human handle ("#12"). */
+  orderNumber: number;
   status: OrderRequestStatus;
   warehouseId: string;
   warehouseName: string | null;
@@ -285,7 +287,7 @@ export class OrderRequestsService {
         // are NULL (the common case for not-yet-picked orders). Splitting
         // those two joins out and batching the lookup keeps the main
         // query lean.
-        `id, status, warehouse_id, requester_user_id, requester_email,
+        `id, order_number, status, warehouse_id, requester_user_id, requester_email,
          requester_name, requester_org_label, source, notes,
          created_at, updated_at, approved_at, delivered_at,
          fulfillment_type, assigned_picker_id, assigned_delivery_user_id,
@@ -394,6 +396,7 @@ export class OrderRequestsService {
 
       return {
         id: r.id as string,
+        orderNumber: Number(r.order_number) || 0,
         status: r.status as OrderRequestStatus,
         warehouseId: r.warehouse_id as string,
         warehouseName,

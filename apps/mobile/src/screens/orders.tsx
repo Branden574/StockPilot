@@ -15,6 +15,7 @@ import { useTheme } from '@/lib/use-theme';
 
 interface OrderRow {
   id: string;
+  order_number: number | null;
   status: string;
   requester: string;
   requester_org_label: string | null;
@@ -58,7 +59,7 @@ export default function OrdersScreen() {
         // `requester:user_profiles!requester_user_id` resolves the team-member
         // name that internal orders DON'T denormalize onto the row (else they
         // showed "Unknown requester"). RLS lets org members read each other.
-        `id, status, requester_name, requester_email, requester_user_id, requester_org_label,
+        `id, order_number, status, requester_name, requester_email, requester_user_id, requester_org_label,
          approved_at, delivered_at, created_at,
          warehouse:warehouses!warehouse_id (name),
          requester:user_profiles!requester_user_id (full_name, email),
@@ -75,6 +76,7 @@ export default function OrdersScreen() {
         const lines = (r.lines as unknown[] | null) ?? [];
         return {
           id: r.id as string,
+          order_number: (r.order_number as number | null) ?? null,
           status: r.status as string,
           requester: resolveRequesterLabel({
             requesterName: (r.requester_name as string | null) ?? null,
@@ -140,7 +142,7 @@ function OrderCard({ order }: { order: OrderRow }) {
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
-              — {order.warehouse?.name ?? 'No warehouse'}
+              {order.order_number ? `#${order.order_number} — ` : '— '}{order.warehouse?.name ?? 'No warehouse'}
             </Mono>
             <Body size={15.5} color={c.ink} style={{ marginTop: 6, fontFamily: FONT.display }}>
               {requester}

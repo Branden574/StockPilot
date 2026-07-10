@@ -88,6 +88,7 @@ function mimeForExt(ext: string): string {
 }
 
 interface OrderHeader {
+  orderNumber: number | null;
   id: string;
   status: string;
   requester: string | null;
@@ -230,7 +231,7 @@ export default function OrderDetail() {
         // `picker:user_profiles!assigned_picker_id` resolves the claimant's name
         // for the picker chip (assigned_picker_id FK → user_profiles.id, mig
         // 0109). RLS lets org members read each other, same as the requester join.
-        `id, status, requester_name, requester_email, requester_user_id, requester_org_label,
+        `id, order_number, status, requester_name, requester_email, requester_user_id, requester_org_label,
          signed_by_name, signed_at, created_at,
          assigned_delivery_user_id, assigned_picker_id, fulfillment_type, signature_token,
          warehouse:warehouses!warehouse_id (name),
@@ -319,6 +320,7 @@ export default function OrderDetail() {
       const pkObj = Array.isArray(pk) ? pk[0] : pk;
       setOrder({
         id: r.id as string,
+        orderNumber: (r.order_number as number | null) ?? null,
         status: r.status as string,
         requester: resolveRequesterLabel({
           requesterName: (r.requester_name as string | null) ?? null,
@@ -739,7 +741,7 @@ export default function OrderDetail() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
         >
           <View style={{ paddingTop: 4 }}>
-            <Eyebrow>{`ORDER · ${order.status.replace(/_/g, ' ').toUpperCase()}`}</Eyebrow>
+            <Eyebrow>{`ORDER${order.orderNumber ? ` #${order.orderNumber}` : ''} · ${order.status.replace(/_/g, ' ').toUpperCase()}`}</Eyebrow>
             <Display size={30} style={{ marginTop: 10 }}>
               {order.requester ?? 'Order'}
             </Display>

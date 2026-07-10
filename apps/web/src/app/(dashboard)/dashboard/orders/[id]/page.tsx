@@ -396,7 +396,12 @@ export default async function OrderDetailPage({
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="truncate text-2xl font-semibold tracking-tight">
-                Order request
+                Order request{' '}
+                {(request as { order_number?: number | null }).order_number ? (
+                  <span className="text-muted-foreground font-mono tabular-nums">
+                    #{(request as { order_number?: number | null }).order_number}
+                  </span>
+                ) : null}
               </h1>
               <OrderStatusBadge status={request.status} />
               {request.source === 'public_link' && (

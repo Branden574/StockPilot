@@ -1,3 +1,4 @@
+import { updateTag } from 'next/cache';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
@@ -166,6 +167,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (a.action === 'complete_picking' || a.action === 'cancel') {
       revalidateInventoryList(ctx.organizationId);
     }
+    // Every transition can move availability (reserve/release/decrement) —
+    // bust the storefront catalog so "avail" pills update near-instantly
+    // (mobile transitions must refresh the web Place-an-Order page too).
+    updateTag('orders-new-v2-catalog');
     return NextResponse.json({ order });
   } catch (e) {
     if (e instanceof ServiceError) {

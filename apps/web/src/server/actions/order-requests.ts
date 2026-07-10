@@ -1,6 +1,6 @@
 'use server';
 
-import { revalidatePath } from 'next/cache';
+import { revalidatePath, updateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
@@ -12,6 +12,20 @@ import { err, isManagerOrAbove, ok, type ActionResult } from '@stockpilot/core';
 function toResult<T>(error: unknown): ActionResult<T> {
   if (error instanceof ServiceError) return err(error.code, error.message);
   return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+}
+
+/**
+ * Bust the storefront catalog cache (60s TTL) after any mutation that moves
+ * availability (available = on-hand − reserved): approve/partial-approve and
+ * resume RESERVE stock; cancel/deny/close-partial RELEASE it; the signature
+ * hand-over DECREMENTS on-hand. Without this the "Place an Order" page shows
+ * stale avail pills for up to a minute after an order changes state — the
+ * owner expects near-instant. Same global-tag pattern as user-categories
+ * (these mutations are orders-of-magnitude rarer than catalog reads, so
+ * nuking the tag org-wide is cheap).
+ */
+function revalidateOrdersCatalog() {
+  updateTag('orders-new-v2-catalog');
 }
 
 // Per-line cap matches the public endpoint so a viewer can't drain an
@@ -101,6 +115,7 @@ export async function createOrderRequestAction(
       })),
     });
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     return ok({ id: row.id });
   } catch (e) {
     return toResult(e);
@@ -121,6 +136,7 @@ export async function cancelOrderRequestAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.cancel(parsed.data.id, parsed.data.reason ?? null);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     // Cancel restocks already-picked stock — the cached list view must drop.
     await revalidateInventoryListForCurrentOrg();
@@ -144,6 +160,7 @@ export async function approveOrderRequestAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.approve(parsed.data.id, parsed.data.internalNotes ?? null);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -166,6 +183,7 @@ export async function denyOrderRequestAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.deny(parsed.data.id, parsed.data.reason);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -184,6 +202,7 @@ export async function generatePickSlipAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.generatePickSlip(parsed.data.id);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -229,6 +248,7 @@ export async function completePickingAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.completePicking(parsed.data.id);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
     await revalidateInventoryListForCurrentOrg();
@@ -259,6 +279,7 @@ export async function confirmPhysicalSignatureAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.confirmPhysicalSignature(parsed.data.id, parsed.data.signerName);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -275,6 +296,7 @@ export async function approveOrderPartialAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.approvePartial(parsed.data.id);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
@@ -292,6 +314,7 @@ export async function resumeFulfillmentAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.resumeFulfillment(parsed.data.id);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -308,6 +331,7 @@ export async function closePartialAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.closePartial(parsed.data.id);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -401,6 +425,7 @@ export async function generatePackingSlipsAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.generatePackingSlips(parsed.data.id);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -422,6 +447,7 @@ export async function stageOrderAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.stageOrder(parsed.data.id, parsed.data.target);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -461,6 +487,7 @@ export async function claimPickingAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.claimPicking(parsed.data.id);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
     return ok(undefined);
@@ -480,6 +507,7 @@ export async function assignPickingAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.assignPicking(parsed.data.id, parsed.data.pickerUserId);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
     return ok(undefined);
@@ -499,6 +527,7 @@ export async function releasePickingAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.releasePicking(parsed.data.id);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
     return ok(undefined);
@@ -518,6 +547,7 @@ export async function markInTransitAction(
     const svc = await OrderRequestsService.forCurrentUser();
     await svc.markInTransit(parsed.data.id);
     revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {

@@ -238,6 +238,7 @@ export default async function OrdersPage({
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-16">Order #</TableHead>
                   <TableHead>Requester</TableHead>
                   <TableHead>Warehouse</TableHead>
                   <TableHead className="text-right">Lines</TableHead>
@@ -253,6 +254,14 @@ export default async function OrdersPage({
               <TableBody>
                 {visible.map((r) => (
                   <TableRow key={r.id}>
+                    <TableCell>
+                      <Link
+                        href={`/dashboard/orders/${r.id}`}
+                        className="font-mono text-sm font-medium tabular-nums hover:underline"
+                      >
+                        #{r.orderNumber}
+                      </Link>
+                    </TableCell>
                     <TableCell>
                       <Link
                         href={`/dashboard/orders/${r.id}`}
