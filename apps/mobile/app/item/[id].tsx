@@ -27,7 +27,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { can, type Role } from '@stockpilot/core';
+import { can, getCrateColor, type Role } from '@stockpilot/core';
 
 import { MoveStockModal } from '@/components/move-stock-modal';
 import { Button } from '@/components/ui/button';
@@ -209,9 +209,15 @@ export default function ItemDetail() {
     const legacyRack = cfStr('rackLabel') ?? cfStr('rack_label') ?? cfStr('rack');
     const rackLabel =
       rackNum || rackRow ? [rackNum, rackRow].filter(Boolean).join(' · ') : legacyRack;
-    const crateColor = cfStr('crateColor') ?? cfStr('crate_color');
-    const crateNumber = cfStr('crateNumber') ?? cfStr('crate_number');
-    const grade = cfStr('grade');
+    // Canonical keys (what the web book form writes, see lib/book-storage.ts):
+    // book_crate_color / book_crate_number / book_grade. The bare variants are
+    // legacy fallbacks only — reading ONLY those was why book details showed no
+    // crate color/number on mobile (owner caught 2026-07-10).
+    const crateColor =
+      cfStr('book_crate_color') ?? cfStr('crateColor') ?? cfStr('crate_color');
+    const crateNumber =
+      cfStr('book_crate_number') ?? cfStr('crateNumber') ?? cfStr('crate_number');
+    const grade = cfStr('book_grade') ?? cfStr('grade');
 
     // Warehouse is resolved in a second pass to avoid a multi-FK embed
     // (`warehouses` has two relations into other tables that confuse
@@ -693,16 +699,22 @@ export default function ItemDetail() {
                 its "Location & storage" section. */}
             {(() => {
               const isBookView = item.item_type === 'book';
-              const rows: Array<{ label: string; value: string }> = [];
+              const rows: Array<{ label: string; value: string; dot?: string | null }> = [];
               if (item.warehouse_name)
                 rows.push({ label: 'WAREHOUSE', value: item.warehouse_name });
               if (item.charter_name) rows.push({ label: 'CHARTER', value: item.charter_name });
               if (item.location_name) rows.push({ label: 'LOCATION', value: item.location_name });
               if (item.rack_label) rows.push({ label: 'RACK', value: item.rack_label });
               if (isBookView && (item.crate_color || item.crate_number)) {
+                // Same presentation as web: "Red 5" + a color swatch (the
+                // number identifies the crate; the color is the visual aid).
+                const cc = getCrateColor(item.crate_color);
                 rows.push({
                   label: 'CRATE',
-                  value: [item.crate_color, item.crate_number].filter(Boolean).join(' · '),
+                  value: [cc?.label ?? item.crate_color, item.crate_number]
+                    .filter(Boolean)
+                    .join(' '),
+                  dot: cc?.hex ?? null,
                 });
               }
               if (isBookView && item.grade) rows.push({ label: 'GRADE', value: item.grade });
@@ -719,7 +731,7 @@ export default function ItemDetail() {
                     {rows.map((row, i) => (
                       <React.Fragment key={row.label}>
                         {i > 0 ? <Hair inset={20} /> : null}
-                        <MetaRow label={row.label} value={row.value} />
+                        <MetaRow label={row.label} value={row.value} dot={row.dot} />
                       </React.Fragment>
                     ))}
                   </Card>
@@ -894,7 +906,7 @@ function QuickBtn({
   );
 }
 
-function MetaRow({ label, value }: { label: string; value: string }) {
+function MetaRow({ label, value, dot }: { label: string; value: string; dot?: string | null }) {
   const { c } = useTheme();
   return (
     <View
@@ -909,9 +921,23 @@ function MetaRow({ label, value }: { label: string; value: string }) {
       <Mono size={10.5} tracking={0.12} upper color={c.ink4}>
         {label}
       </Mono>
-      <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
-        {value}
-      </Body>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        {dot ? (
+          <View
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: 5,
+              backgroundColor: dot,
+              borderWidth: 1,
+              borderColor: c.hair,
+            }}
+          />
+        ) : null}
+        <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+          {value}
+        </Body>
+      </View>
     </View>
   );
 }

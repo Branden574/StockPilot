@@ -15,3 +15,4 @@ export * from './geo/distance';
 export * from './purchasing/recurring';
 export * from './signature';
 export * from './inventory/size-run';
+export * from './inventory/crate-colors';

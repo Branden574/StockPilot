@@ -11,20 +11,11 @@
  * the existing book "author" field already uses.
  */
 
-export const CRATE_COLORS = [
-  { slug: 'red', label: 'Red', hex: '#ef4444' },
-  { slug: 'orange', label: 'Orange', hex: '#f97316' },
-  { slug: 'yellow', label: 'Yellow', hex: '#eab308' },
-  { slug: 'green', label: 'Green', hex: '#22c55e' },
-  { slug: 'blue', label: 'Blue', hex: '#3b82f6' },
-  { slug: 'purple', label: 'Purple', hex: '#a855f7' },
-  { slug: 'pink', label: 'Pink', hex: '#ec4899' },
-  { slug: 'black', label: 'Black', hex: '#27272a' },
-  { slug: 'white', label: 'White', hex: '#f4f4f5' },
-  { slug: 'gray', label: 'Gray', hex: '#9ca3af' },
-] as const;
+// CRATE_COLORS moved to @stockpilot/core (shared with mobile); re-exported here
+// so existing imports keep working.
+import { getCrateColor } from '@stockpilot/core';
 
-export type CrateColorSlug = (typeof CRATE_COLORS)[number]['slug'];
+export { CRATE_COLORS, getCrateColor, type CrateColorSlug } from '@stockpilot/core';
 
 export const CRATE_NUMBERS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as const;
 
@@ -53,11 +44,6 @@ export const GRADES = [
 ] as const;
 
 export type Grade = (typeof GRADES)[number];
-
-export function getCrateColor(slug: string | null | undefined) {
-  if (!slug) return null;
-  return CRATE_COLORS.find((c) => c.slug === slug) ?? null;
-}
 
 /** Formats a grade slug for display ("3" → "Grade 3", "K" → "Kindergarten"). */
 export function formatGrade(slug: string | null | undefined): string | null {
