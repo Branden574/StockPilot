@@ -642,11 +642,26 @@ export class PoImportsService {
         const byId = new Map(
           ((linkedItems ?? []) as LinkedItem[]).map((i) => [i.id, i]),
         );
+        // Items THIS import just created (0 qty, no history). For these we
+        // RE-CHARTER in place rather than spawn a sibling — otherwise the
+        // create-items-then-approve flow leaves a Generic orphan next to the
+        // charter instance (the duplicate the owner caught 2026-07-10). Only a
+        // PRE-EXISTING item under a different charter gets a sibling (the KVA
+        // "use existing" case — never re-charter stock we didn't just create).
+        const importCreatedItemIds = new Set(
+          inventoryLines
+            .filter((l) => (l as { item_created?: boolean }).item_created === true)
+            .map((l) => l.item_id as string),
+        );
         const remap = new Map<string, string>();
+        const orphanIds: string[] = [];
+        const inventorySvc = new InventoryService(this.ctx);
         for (const [id, it] of byId) {
           const itemCharter = it.charter_id ?? null;
           if (itemCharter === selectedCharterId) continue;
-          // Find the sibling instance under the selected charter…
+          const createdHere = importCreatedItemIds.has(id);
+
+          // Is there already a sibling under the selected charter?
           let sibQuery = this.ctx.supabase
             .from('inventory_items')
             .select('id')
@@ -660,11 +675,28 @@ export class PoImportsService {
               : sibQuery.eq('charter_id', selectedCharterId);
           const { data: sibling, error: sibErr } = await sibQuery.maybeSingle();
           if (sibErr) throw new ServiceError('internal_error', sibErr.message);
+
           if (sibling) {
+            // Link to the existing sibling. If the mismatched item was a fresh
+            // import creation, it's now a superseded orphan → archive it.
             remap.set(id, sibling.id as string);
+            if (createdHere) orphanIds.push(id);
+          } else if (createdHere) {
+            // Re-charter the just-created item in place — no duplicate, no
+            // remap (the line keeps pointing at it). Safe: 0 qty, no movements,
+            // and no sibling exists to collide with the (org,sku,charter,bin)
+            // uniqueness (0234).
+            const { error: rcErr } = await this.ctx.supabase
+              .from('inventory_items')
+              .update({ charter_id: selectedCharterId })
+              .eq('organization_id', this.ctx.organizationId)
+              .eq('id', id)
+              .select('id')
+              .maybeSingle();
+            if (rcErr) throw new ServiceError('internal_error', rcErr.message);
           } else {
-            // …or create it (qty 0 — receiving posts the stock).
-            const inventorySvc = new InventoryService(this.ctx);
+            // Pre-existing item under a different charter → create a qty-0
+            // sibling under the selected charter (receiving posts the stock).
             const created = await inventorySvc.create({
               name: it.name,
               sku: it.sku,
@@ -688,6 +720,14 @@ export class PoImportsService {
             });
             remap.set(id, created.id as string);
           }
+        }
+        // Archive fresh orphans superseded by a sibling link (0 qty, unused).
+        for (const oid of orphanIds) {
+          await this.ctx.supabase
+            .from('inventory_items')
+            .update({ status: 'archived', deleted_at: new Date().toISOString() })
+            .eq('organization_id', this.ctx.organizationId)
+            .eq('id', oid);
         }
         if (remap.size > 0) {
           for (const l of inventoryLines) {
