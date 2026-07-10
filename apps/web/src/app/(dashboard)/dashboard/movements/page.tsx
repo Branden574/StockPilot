@@ -3,6 +3,10 @@ import { redirect } from 'next/navigation';
 
 import { EmptyState } from '@/components/ui/empty-state';
 import { MovementsSearch } from '@/components/movements/movements-search';
+import {
+  MovementsInstantTable,
+  type MovementDisplayRow,
+} from '@/components/movements/movements-instant-table';
 import { Pagination } from '@/components/ui/pagination';
 import {
   Table,
@@ -20,6 +24,14 @@ import { formatNumber, formatRelative } from '@/lib/utils';
 import { can } from '@stockpilot/core';
 
 const PAGE_SIZE = 50;
+
+/**
+ * Instant-search threshold. At or below this many movements (warehouse-scoped),
+ * the whole ledger loads and search + paging run client-side (zero-latency,
+ * matching Items/Books). Above it, server-side search + numbered pages hold —
+ * the ledger can reach millions of rows and must not all cross the wire.
+ */
+const MOVEMENTS_INSTANT_CAP = 2000;
 
 export default async function MovementsPage({
   searchParams,
@@ -43,24 +55,55 @@ export default async function MovementsPage({
     MovementsService.forCurrentUser(),
     getActiveWarehouseFilter(),
   ]);
-  // One extra row detects a next page even if the count is unavailable; the
-  // count drives the numbered pager.
-  const [movements, total] = await Promise.all([
-    movementsSvc.list({
-      limit: PAGE_SIZE + 1,
-      offset,
-      warehouseId: warehouseFilter ?? undefined,
-      search: search || undefined,
-    }),
-    movementsSvc
-      .count({ warehouseId: warehouseFilter ?? undefined, search: search || undefined })
-      .catch(() => null),
-  ]);
-  const hasNext = movements.length > PAGE_SIZE;
-  const visible = hasNext ? movements.slice(0, PAGE_SIZE) : movements;
-  const totalPages = total != null ? Math.max(1, Math.ceil(total / PAGE_SIZE)) : undefined;
+  const warehouseId = warehouseFilter ?? undefined;
 
-  // Preserve the active search across page links.
+  // Instant mode: when the whole warehouse-scoped ledger fits under the cap,
+  // load it all and let the client filter + page with zero latency (like
+  // Items/Books). Decided on the UNFILTERED count since instant mode ignores
+  // the server ?q.
+  const totalAll = await movementsSvc.count({ warehouseId }).catch(() => null);
+  const instant = totalAll != null && totalAll <= MOVEMENTS_INSTANT_CAP;
+
+  let instantRows: MovementDisplayRow[] = [];
+  let visible: Awaited<ReturnType<typeof movementsSvc.list>> = [];
+  let total: number | null = totalAll;
+  let hasNext = false;
+  let totalPages: number | undefined;
+
+  if (instant) {
+    const all = await movementsSvc.list({ limit: MOVEMENTS_INSTANT_CAP, offset: 0, warehouseId });
+    instantRows = all.map((m) => ({
+      id: m.id as string,
+      movementType: m.movement_type as string,
+      quantityChange: Number(m.quantity_change),
+      newQuantity: Number(m.new_quantity),
+      movedQuantity: m.moved_quantity == null ? null : Number(m.moved_quantity),
+      reason: (m.reason as string | null) ?? (m.notes as string | null) ?? null,
+      createdAt: m.created_at as string,
+      itemName: m.item?.name ?? null,
+      itemSku: m.item?.sku ?? null,
+      actorLabel: m.actor?.fullName ?? m.actor?.email ?? (m.user_id ? 'Unknown' : 'System'),
+      actorEmail: m.actor?.fullName && m.actor?.email ? m.actor.email : null,
+    }));
+  } else {
+    // One extra row detects a next page even if the count is unavailable; the
+    // count drives the numbered pager. Server-side search here.
+    const [movements, cnt] = await Promise.all([
+      movementsSvc.list({
+        limit: PAGE_SIZE + 1,
+        offset,
+        warehouseId,
+        search: search || undefined,
+      }),
+      movementsSvc.count({ warehouseId, search: search || undefined }).catch(() => null),
+    ]);
+    hasNext = movements.length > PAGE_SIZE;
+    visible = hasNext ? movements.slice(0, PAGE_SIZE) : movements;
+    total = cnt;
+    totalPages = cnt != null ? Math.max(1, Math.ceil(cnt / PAGE_SIZE)) : undefined;
+  }
+
+  // Preserve the active search across (server-mode) page links.
   const hrefForPage = (n: number) => {
     const sp = new URLSearchParams();
     if (search) sp.set('q', search);
@@ -78,23 +121,34 @@ export default async function MovementsPage({
             Every quantity change, audited. The ledger is append-only.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <MovementsSearch initialQuery={search} />
-          <p className="text-muted-foreground text-xs tabular-nums">
-            {total != null
-              ? `${formatNumber(total)} movement${total === 1 ? '' : 's'}`
-              : `Page ${page}`}
-          </p>
-          <Pagination
-            page={page}
-            totalPages={totalPages}
-            hasNext={hasNext}
-            hrefForPage={hrefForPage}
-          />
-        </div>
+        {!instant && total !== 0 && (
+          <div className="flex flex-wrap items-center gap-3">
+            <MovementsSearch initialQuery={search} />
+            <p className="text-muted-foreground text-xs tabular-nums">
+              {total != null
+                ? `${formatNumber(total)} movement${total === 1 ? '' : 's'}`
+                : `Page ${page}`}
+            </p>
+            <Pagination
+              page={page}
+              totalPages={totalPages}
+              hasNext={hasNext}
+              hrefForPage={hrefForPage}
+            />
+          </div>
+        )}
       </div>
 
-      {visible.length === 0 ? (
+      {total === 0 ? (
+        <EmptyState
+          icon={ArrowLeftRight}
+          title="No movements yet"
+          description="Every stock change gets recorded here — create an item, adjust quantity, or receive a PO and it'll show up."
+          cta={{ label: 'Go to inventory', href: '/dashboard/inventory' }}
+        />
+      ) : instant ? (
+        <MovementsInstantTable rows={instantRows} />
+      ) : visible.length === 0 ? (
         search ? (
           <EmptyState
             icon={ArrowLeftRight}

@@ -17,6 +17,7 @@ import { StatCard } from '@/components/dashboard/stat-card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
 import { Button } from '@/components/ui/button';
+import { PoInstantTable, type PoInstantRow } from '@/components/po/po-instant-table';
 import { PoSearch } from '@/components/po/po-search';
 import {
   Table,
@@ -70,6 +71,14 @@ const TAB_STATUSES: Record<Exclude<PoTab, 'all'>, string[]> = {
  * plus an unbounded HTML table per view.
  */
 const PAGE_SIZE = 30;
+
+/**
+ * Instant-search threshold. When the org has ≤ this many POs total, the active
+ * tab is loaded in full and filtered client-side (zero-latency, matching the
+ * Items/Books instant experience). Above it, server-side pagination + search
+ * (the mig-0227 scale path) stays in force.
+ */
+const PO_INSTANT_CAP = 800;
 
 function isPoTab(value: string | undefined): value is PoTab {
   return TAB_ORDER.includes(value as PoTab);
@@ -135,6 +144,10 @@ export default async function PurchaseOrdersPage({
   let supplierMap = new Map<string, string>();
   let loadFailed = false;
   let activeWarehouse: string | null = null;
+  // Instant mode: when the org's whole PO set is small, load the active tab in
+  // full and filter client-side (zero-latency, like Items/Books). Above the cap
+  // we stay on the scale-safe server pagination + search (mig 0227).
+  let instant = false;
   try {
     const [poSvc, supplierSvc, warehouseFilter] = await Promise.all([
       PurchaseOrdersService.forCurrentUser(),
@@ -142,18 +155,21 @@ export default async function PurchaseOrdersPage({
       getActiveWarehouseFilter(),
     ]);
     activeWarehouse = warehouseFilter ?? null;
-    const [rawStats, poPage, suppliers] = await Promise.all([
+    // Stats + suppliers first — stats.totalCount decides instant vs server.
+    const [rawStats, suppliers] = await Promise.all([
       poSvc.listStats({ warehouseId: warehouseFilter ?? undefined }),
-      poSvc.listPage({
-        warehouseId: warehouseFilter ?? undefined,
-        statuses: tab === 'all' ? null : TAB_STATUSES[tab],
-        q,
-        page,
-        perPage: PAGE_SIZE,
-      }),
       supplierSvc.list(),
     ]);
     stats = rawStats;
+    instant = rawStats.totalCount <= PO_INSTANT_CAP;
+    const poPage = await poSvc.listPage({
+      warehouseId: warehouseFilter ?? undefined,
+      statuses: tab === 'all' ? null : TAB_STATUSES[tab],
+      // Instant mode filters client-side, so it loads the tab unfiltered.
+      q: instant ? '' : q,
+      page: instant ? 1 : page,
+      perPage: instant ? PO_INSTANT_CAP : PAGE_SIZE,
+    });
     visible = poPage.rows;
     totalFiltered = poPage.total;
     supplierMap = new Map(suppliers.map((s) => [s.id as string, s.name as string]));
@@ -273,7 +289,7 @@ export default async function PurchaseOrdersPage({
           })}
         </nav>
 
-        <PoSearch key={`${tab}:${q}`} status={tab} initialQuery={q} />
+        {!instant && <PoSearch key={`${tab}:${q}`} status={tab} initialQuery={q} />}
       </div>
 
       {/* Table */}
@@ -295,6 +311,19 @@ export default async function PurchaseOrdersPage({
             description="Draft a PO with line items, send it to a supplier, then receive against it to bump stock automatically."
             cta={{ label: 'Create your first PO', href: '/dashboard/purchase-orders/new' }}
           />
+        ) : instant ? (
+          visible.length === 0 ? (
+            <EmptyState
+              icon={ClipboardList}
+              title={`Nothing in ${TAB_LABELS[tab].toLowerCase()}`}
+              description="Switch tabs above to see purchase orders in other stages."
+            />
+          ) : (
+            <PoInstantTable
+              rows={visible as PoInstantRow[]}
+              supplierNames={Object.fromEntries(supplierMap)}
+            />
+          )
         ) : visible.length === 0 ? (
           <EmptyState
             icon={ClipboardList}
@@ -384,7 +413,7 @@ export default async function PurchaseOrdersPage({
             state's "jump back with the pagination below" copy always has the
             controls it points at (a filtered total ≤ PAGE_SIZE used to hide
             them, stranding the user on a stale ?page= link). */}
-        {!loadFailed && (totalFiltered > PAGE_SIZE || page > 1) && (
+        {!instant && !loadFailed && (totalFiltered > PAGE_SIZE || page > 1) && (
           <div className="text-muted-foreground mt-3 flex items-center justify-between gap-3 text-[12px]">
             {/* A stale deep link (?page= past the end) has an empty window —
                 skip the row range but keep Prev/Next so the user can get back. */}

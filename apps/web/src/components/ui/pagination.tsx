@@ -15,13 +15,17 @@ export function Pagination({
   totalPages,
   hasNext,
   hrefForPage,
+  onPageChange,
   window = 2,
   className,
 }: {
   page: number;
   totalPages?: number;
   hasNext?: boolean;
-  hrefForPage: (n: number) => string;
+  /** Link mode (server pages). Provide this OR onPageChange. */
+  hrefForPage?: (n: number) => string;
+  /** Button mode (client-side pagination over an already-loaded set). */
+  onPageChange?: (n: number) => void;
   window?: number;
   className?: string;
 }) {
@@ -46,52 +50,56 @@ export function Pagination({
     }
   }
 
+  const cell = (n: number, label: string, key: string, current?: boolean, disabled?: boolean) => (
+    <PageCell
+      key={key}
+      href={hrefForPage?.(n)}
+      onClick={onPageChange ? () => onPageChange(n) : undefined}
+      current={current}
+      disabled={disabled}
+      ariaLabel={label}
+    >
+      {label === 'Previous page' ? '←' : label === 'Next page' ? '→' : n}
+    </PageCell>
+  );
+
   return (
     <nav
       role="navigation"
       aria-label="Pagination"
       className={cn('flex items-center gap-1', className)}
     >
-      <PageLink href={hrefForPage(page - 1)} disabled={!canPrev} ariaLabel="Previous page">
-        ←
-      </PageLink>
+      {cell(page - 1, 'Previous page', 'prev', false, !canPrev)}
 
-      {numbered
-        ? pages.map((n, i) =>
-            n === 0 ? (
-              <span key={`gap-${i}`} className="text-muted-foreground px-1.5 text-sm">
-                …
-              </span>
-            ) : (
-              <PageLink
-                key={n}
-                href={hrefForPage(n)}
-                current={n === page}
-                ariaLabel={`Page ${n}`}
-              >
-                {n}
-              </PageLink>
-            ),
-          )
-        : (
-            <span className="text-muted-foreground px-2 text-sm tabular-nums">Page {page}</span>
-          )}
+      {numbered ? (
+        pages.map((n, i) =>
+          n === 0 ? (
+            <span key={`gap-${i}`} className="text-muted-foreground px-1.5 text-sm">
+              …
+            </span>
+          ) : (
+            cell(n, `Page ${n}`, `p${n}`, n === page)
+          ),
+        )
+      ) : (
+        <span className="text-muted-foreground px-2 text-sm tabular-nums">Page {page}</span>
+      )}
 
-      <PageLink href={hrefForPage(page + 1)} disabled={!canNext} ariaLabel="Next page">
-        →
-      </PageLink>
+      {cell(page + 1, 'Next page', 'next', false, !canNext)}
     </nav>
   );
 }
 
-function PageLink({
+function PageCell({
   href,
+  onClick,
   children,
   disabled,
   current,
   ariaLabel,
 }: {
-  href: string;
+  href?: string;
+  onClick?: () => void;
   children: React.ReactNode;
   disabled?: boolean;
   current?: boolean;
@@ -106,17 +114,28 @@ function PageLink({
       </span>
     );
   }
+  const active = current
+    ? 'bg-foreground text-background border-foreground font-medium'
+    : 'bg-card hover:bg-accent';
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={ariaLabel}
+        aria-current={current ? 'page' : undefined}
+        className={cn(base, active)}
+      >
+        {children}
+      </button>
+    );
+  }
   return (
     <Link
-      href={href}
+      href={href ?? '#'}
       aria-label={ariaLabel}
       aria-current={current ? 'page' : undefined}
-      className={cn(
-        base,
-        current
-          ? 'bg-foreground text-background border-foreground font-medium'
-          : 'bg-card hover:bg-accent',
-      )}
+      className={cn(base, active)}
     >
       {children}
     </Link>
