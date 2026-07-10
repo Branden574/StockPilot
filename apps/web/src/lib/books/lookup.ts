@@ -60,10 +60,26 @@ function detectGrade(blob: string | null | undefined): string | null {
 }
 
 async function fetchGoogleBooks(isbn: string): Promise<BookMetadata | null> {
-  const res = await fetch(
-    `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn)}`,
-    { signal: AbortSignal.timeout(5000) },
-  );
+  const params = new URLSearchParams({ q: `isbn:${isbn}` });
+  // Keyless works at LOW volume, but the keyless quota is shared per egress
+  // IP — on Vercel's shared IPs it is routinely exhausted by other tenants,
+  // which used to make our best source silently return 429 all day (and the
+  // pipeline then treated "quota exceeded" as "book doesn't exist", pushing
+  // every scan to the AI fallback). Set GOOGLE_BOOKS_API_KEY to get a quota
+  // attributed to OUR project instead.
+  const { env } = await import('@/lib/env');
+  if (env.GOOGLE_BOOKS_API_KEY) params.set('key', env.GOOGLE_BOOKS_API_KEY);
+  const res = await fetch(`https://www.googleapis.com/books/v1/volumes?${params.toString()}`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (res.status === 429) {
+    // Make quota exhaustion VISIBLE in logs — silently mapping it to
+    // "no data" is how the wrong-book hallucination hid for so long.
+    console.warn(
+      '[books] Google Books 429 (quota exhausted) — set GOOGLE_BOOKS_API_KEY to restore the primary lookup source',
+    );
+    return null;
+  }
   if (!res.ok) return null;
   const data = (await res.json()) as {
     items?: Array<{

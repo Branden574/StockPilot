@@ -64,6 +64,65 @@ interface GeminiBookResponse {
   confidence: 'high' | 'medium' | 'low' | string;
 }
 
+/**
+ * Reverse-verify an AI-claimed title against Google Books.
+ *
+ *   'confirmed'    — a Google Books edition of this title carries our ISBN.
+ *   'contradicted' — Google Books KNOWS this title, but none of its editions
+ *                    matches our ISBN (10 or 13 form) → the AI pinned a known
+ *                    book onto the wrong ISBN. Drop it.
+ *   'unknown'      — Google Books has no results for the title (or errored /
+ *                    returned no identifiers at all) → can't disprove; keep.
+ *
+ * Exported for unit tests (fetch is mocked there).
+ */
+export async function verifyAiTitleAgainstGoogleBooks(
+  isbn: string,
+  title: string,
+  firstAuthor: string | null,
+): Promise<'confirmed' | 'contradicted' | 'unknown'> {
+  try {
+    const { isbnVariants } = await import('./isbn-variants');
+    const ours = new Set(isbnVariants(isbn));
+    if (ours.size === 0) return 'unknown';
+
+    // NOTE: term separator must be a SPACE — a literal '+' gets percent-
+    // encoded to %2B by URLSearchParams and Google returns zero results.
+    const q = `intitle:"${title}"` + (firstAuthor ? ` inauthor:"${firstAuthor}"` : '');
+    const params = new URLSearchParams({
+      q,
+      maxResults: '20',
+      fields: 'items(volumeInfo(industryIdentifiers))',
+    });
+    if (env.GOOGLE_BOOKS_API_KEY) params.set('key', env.GOOGLE_BOOKS_API_KEY);
+    const res = await fetch(`https://www.googleapis.com/books/v1/volumes?${params.toString()}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return 'unknown';
+    const data = (await res.json()) as {
+      items?: Array<{
+        volumeInfo?: { industryIdentifiers?: Array<{ identifier?: string }> };
+      }>;
+    };
+    const items = data.items ?? [];
+    if (items.length === 0) return 'unknown';
+
+    const theirs = items.flatMap(
+      (it) =>
+        it.volumeInfo?.industryIdentifiers
+          ?.map((id) => (id.identifier ?? '').replace(/[^0-9Xx]/g, '').toUpperCase())
+          .filter(Boolean) ?? [],
+    );
+    // Editions exist but expose no ISBNs at all → can't disprove either way.
+    if (theirs.length === 0) return 'unknown';
+    return theirs.some((t) => ours.has(t)) ? 'confirmed' : 'contradicted';
+  } catch {
+    // Network hiccup must never take down the lookup — verification is
+    // best-effort; fail open to the old behavior.
+    return 'unknown';
+  }
+}
+
 export async function fetchGeminiBookMetadata(isbn: string): Promise<BookMetadata | null> {
   const useClaude = resolveAiProvider() === 'claude';
   if (useClaude ? !env.ANTHROPIC_API_KEY : !env.GEMINI_API_KEY) return null;
@@ -108,6 +167,23 @@ export async function fetchGeminiBookMetadata(isbn: string): Promise<BookMetadat
           (a): a is string => typeof a === 'string' && a.trim().length > 0,
         )
       : [];
+
+    // REVERSE-VERIFICATION (hallucination guard, layer 2). The self-reported
+    // confidence enum is not enough: in the field the model answered a real
+    // HMH civics ISBN (9780544917149) with "The Martian" at claimed-high
+    // confidence — a FAMOUS title grabbed off the publisher prefix. The
+    // asymmetry that saves us: hallucinations are famous books, and famous
+    // books ARE in Google Books with their real ISBNs. So look the claimed
+    // title up; if Google Books KNOWS the title but none of its editions
+    // carries this ISBN, the model is contradicted → drop. A title Google
+    // Books has never heard of stays (that's the obscure-academic case this
+    // 5th source exists for, and it can't be disproven).
+    if (
+      (await verifyAiTitleAgainstGoogleBooks(isbn, parsed.title.trim(), authors[0] ?? null)) ===
+      'contradicted'
+    ) {
+      return null;
+    }
 
     return {
       isbn,
