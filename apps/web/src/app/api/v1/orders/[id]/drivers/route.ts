@@ -24,24 +24,36 @@ export async function GET(req: NextRequest) {
   try {
     const { data: members, error } = await ctx.supabase
       .from('organization_members')
-      .select('user_id, user:user_profiles!user_id (id, full_name, email)')
+      .select('user_id, is_delivery_driver, user:user_profiles!user_id (id, full_name, email)')
       .eq('organization_id', ctx.organizationId)
       .not('accepted_at', 'is', null);
     if (error) return NextResponse.json({ error: 'internal_error' }, { status: 500 });
 
     type MemberRow = {
       user_id: string;
+      is_delivery_driver: boolean | null;
       user:
         | { id: string; full_name: string | null; email: string }
         | { id: string; full_name: string | null; email: string }[]
         | null;
     };
-    const drivers = ((members ?? []) as MemberRow[])
-      .flatMap((m) => {
-        const u = Array.isArray(m.user) ? m.user[0] : m.user;
-        if (!u || typeof u.email !== 'string') return [];
-        return [{ id: u.id, name: u.full_name?.trim() || u.email, email: u.email }];
-      })
+    const allStaff = ((members ?? []) as MemberRow[]).flatMap((m) => {
+      const u = Array.isArray(m.user) ? m.user[0] : m.user;
+      if (!u || typeof u.email !== 'string') return [];
+      return [
+        {
+          id: u.id,
+          name: u.full_name?.trim() || u.email,
+          email: u.email,
+          isDriver: Boolean(m.is_delivery_driver),
+        },
+      ];
+    });
+    // Marked delivery drivers only (Team page toggle); all-staff fallback
+    // while the org has none marked — mirrors the web order-detail page.
+    const marked = allStaff.filter((m) => m.isDriver);
+    const drivers = (marked.length > 0 ? marked : allStaff)
+      .map(({ id, name, email }) => ({ id, name, email }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
     return NextResponse.json({ drivers });

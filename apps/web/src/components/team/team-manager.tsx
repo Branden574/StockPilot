@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, Copy, Loader2, Mail, MoreHorizontal, Send, Trash2, UserPlus } from 'lucide-react';
+import { Check, Copy, Loader2, Mail, MoreHorizontal, Send, Trash2, Truck, UserPlus } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
@@ -51,6 +51,7 @@ import {
   revokeInviteAction,
   sendMemberPasswordResetAction,
   setMemberChartersAction,
+  setMemberDriverAction,
   transferOwnershipAction,
   updateMemberRoleAction,
 } from '@/server/actions/team';
@@ -77,6 +78,9 @@ interface Member {
   /** charter_ids the member currently oversees at `warehouseId`. Empty = "all
    *  charters" at that warehouse. */
   charterIds: string[];
+  /** Marked delivery driver — only these members populate the
+   *  Assign-delivery picker on orders. */
+  isDriver: boolean;
 }
 
 interface PendingInvite {
@@ -256,6 +260,20 @@ function MemberRow({
     }
   }
 
+  async function toggleDriver() {
+    const next = !member.isDriver;
+    const res = await setMemberDriverAction({ memberId: member.id, isDriver: next });
+    if (!res.ok) toast.error(res.error.message);
+    else {
+      toast.success(
+        next
+          ? `${displayName} marked as a delivery driver.`
+          : `${displayName} is no longer a delivery driver.`,
+      );
+      router.refresh();
+    }
+  }
+
   async function confirmRemove() {
     setRemoveBusy(true);
     const res = await removeMemberAction(member.id);
@@ -324,7 +342,17 @@ function MemberRow({
         </div>
       </TableCell>
       <TableCell>
-        <RoleBadge role={member.role} />
+        <div className="flex items-center gap-1.5">
+          <RoleBadge role={member.role} />
+          {member.isDriver && (
+            <span
+              title="Delivery driver — appears in the Assign-delivery picker"
+              className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300"
+            >
+              <Truck className="size-3" /> Driver
+            </span>
+          )}
+        </div>
       </TableCell>
       <TableCell className="text-xs text-muted-foreground">
         {member.acceptedAt ? 'Active' : 'Invited'}
@@ -355,6 +383,13 @@ function MemberRow({
                 </DropdownMenuItem>
               ))}
               <DropdownMenuSeparator />
+              {/* Only accepted members can be handed deliveries. */}
+              {member.acceptedAt !== null && (
+                <DropdownMenuItem onClick={() => void toggleDriver()}>
+                  <Truck className="mr-2 h-4 w-4" />
+                  {member.isDriver ? 'Remove delivery driver' : 'Mark as delivery driver'}
+                </DropdownMenuItem>
+              )}
               {canManageCharters && (
                 <DropdownMenuItem onClick={() => setChartersOpen(true)}>
                   {charterSingular}s…

@@ -31,7 +31,7 @@ export class TeamService {
       .from('organization_members')
       .select(
         `
-        id, role, invited_at, accepted_at, created_at, user_id,
+        id, role, invited_at, accepted_at, created_at, user_id, is_delivery_driver,
         user:user_id (id, email, full_name, avatar_url)
       `,
       )
@@ -49,6 +49,7 @@ export class TeamService {
         accepted_at: (m.accepted_at as string | null) ?? null,
         created_at: m.created_at as string,
         user_id: m.user_id as string,
+        is_delivery_driver: Boolean(m.is_delivery_driver),
         user:
           userObj && typeof userObj === 'object'
             ? {
@@ -391,6 +392,38 @@ export class TeamService {
       from: target.role as string,
       to: role,
     });
+  }
+
+  /**
+   * Mark/unmark a member as a delivery driver. Only marked drivers appear in
+   * the Assign-delivery picker (with an all-staff fallback while an org has
+   * none marked). Same permission as role management — it changes who can be
+   * handed deliveries. Unlike updateMemberRole there is no self-mod block:
+   * marking yourself a driver is harmless and common for small teams.
+   */
+  async setDeliveryDriver(memberId: string, isDriver: boolean) {
+    assertPermission(this.ctx, 'members:update_role');
+    const { data: row, error } = await this.ctx.supabase
+      .from('organization_members')
+      .update({ is_delivery_driver: isDriver })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', memberId)
+      .select('id, user_id')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    // Fail closed on 0-row updates (member vanished / RLS filtered).
+    if (!row) throw new ServiceError('not_found', 'Member not found');
+
+    await audit(
+      {
+        event: isDriver ? 'user.driver.marked' : 'user.driver.unmarked',
+        entityType: 'organization_member',
+        entityId: memberId,
+        before: { is_delivery_driver: !isDriver },
+        after: { is_delivery_driver: isDriver },
+      },
+      this.ctx,
+    );
   }
 
   async removeMember(memberId: string) {

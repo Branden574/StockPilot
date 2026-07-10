@@ -118,6 +118,27 @@ export async function updateMemberRoleAction(
   }
 }
 
+const setMemberDriverSchema = z.object({
+  memberId: z.string().uuid(),
+  isDriver: z.boolean(),
+});
+
+/** Mark/unmark a member as a delivery driver (drives the Assign-delivery picker). */
+export async function setMemberDriverAction(
+  input: z.infer<typeof setMemberDriverSchema>,
+): Promise<ActionResult<void>> {
+  const parsed = setMemberDriverSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await TeamService.forCurrentUser();
+    await svc.setDeliveryDriver(parsed.data.memberId, parsed.data.isDriver);
+    revalidatePath('/dashboard/team');
+    return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
 const removeMemberSchema = z.object({ memberId: z.string().uuid() });
 
 export async function removeMemberAction(memberId: string): Promise<ActionResult<void>> {

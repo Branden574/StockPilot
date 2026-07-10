@@ -229,31 +229,36 @@ export default async function OrderDetailPage({
     const supabase = await createClient();
     const { data: members } = await supabase
       .from('organization_members')
-      .select('user_id, user:user_profiles!user_id (id, full_name, email)')
+      .select('user_id, is_delivery_driver, user:user_profiles!user_id (id, full_name, email)')
       .eq('organization_id', ctx.organizationId)
       .not('accepted_at', 'is', null);
     type MemberRow = {
       user_id: string;
+      is_delivery_driver: boolean | null;
       user:
         | { id: string; full_name: string | null; email: string }
         | { id: string; full_name: string | null; email: string }[]
         | null;
     };
-    drivers = ((members ?? []) as MemberRow[])
-      .flatMap((m) => {
-        const u = Array.isArray(m.user) ? m.user[0] : m.user;
-        if (!u || typeof u.email !== 'string') return [];
-        return [
-          {
-            userId: u.id,
-            fullName: u.full_name ?? null,
-            email: u.email,
-          },
-        ];
-      })
-      .sort((a, b) =>
-        (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email),
-      );
+    const allStaff = ((members ?? []) as MemberRow[]).flatMap((m) => {
+      const u = Array.isArray(m.user) ? m.user[0] : m.user;
+      if (!u || typeof u.email !== 'string') return [];
+      return [
+        {
+          userId: u.id,
+          fullName: u.full_name ?? null,
+          email: u.email,
+          isDriver: Boolean(m.is_delivery_driver),
+        },
+      ];
+    });
+    // Only members MARKED as delivery drivers (Team page toggle). Fallback to
+    // all staff while an org has nobody marked yet, so the dialog never
+    // renders an empty picker on day one.
+    const marked = allStaff.filter((m) => m.isDriver);
+    drivers = (marked.length > 0 ? marked : allStaff)
+      .map(({ userId, fullName, email }) => ({ userId, fullName, email }))
+      .sort((a, b) => (a.fullName ?? a.email).localeCompare(b.fullName ?? b.email));
   }
 
   // Picking claim/lock — candidate pickers for the AssignPickerDialog (manager+

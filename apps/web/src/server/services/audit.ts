@@ -11,6 +11,8 @@ export type AuditEvent =
   | 'user.invite.accepted'
   | 'user.invite.revoked'
   | 'user.role.changed'
+  | 'user.driver.marked'
+  | 'user.driver.unmarked'
   | 'user.warehouse.changed'
   | 'user.category_access.updated'
   | 'permissions.role_override'
