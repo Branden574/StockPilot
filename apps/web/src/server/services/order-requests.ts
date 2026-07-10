@@ -43,6 +43,8 @@ export type OrderRequestSource = 'internal' | 'public_link' | 'portal';
 
 export interface OrderRequestRow {
   id: string;
+  /** Per-org sequential order number (mig 0254). */
+  order_number: number | null;
   organization_id: string;
   warehouse_id: string;
   status: OrderRequestStatus;
@@ -886,7 +888,7 @@ export class OrderRequestsService {
     // the org has no endpoints; cron backstops delivery).
     void dispatchEvent(this.ctx.organizationId, 'order.created', {
       id: row.id,
-      orderNumber: row.id.slice(0, 8).toUpperCase(),
+      orderNumber: row.order_number ? `${row.order_number}` : row.id.slice(0, 8).toUpperCase(),
       requester: (row as { requester_name?: string | null }).requester_name ?? null,
       lineCount: linePayload.length,
     });
@@ -971,7 +973,7 @@ export class OrderRequestsService {
     void this.notifyEmail(row, 'cancelled');
     void dispatchEvent(this.ctx.organizationId, 'order.cancelled', {
       id,
-      orderNumber: id.slice(0, 8).toUpperCase(),
+      orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
       cancelledBy: this.ctx.userId,
     });
     return row;
@@ -1029,7 +1031,7 @@ export class OrderRequestsService {
     void this.notifyEmail(row, 'approved');
     void dispatchEvent(this.ctx.organizationId, 'order.approved', {
       id,
-      orderNumber: id.slice(0, 8).toUpperCase(),
+      orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
       approvedBy: this.ctx.userId,
     });
     return row;
@@ -1068,7 +1070,7 @@ export class OrderRequestsService {
     void this.notifyEmail(row, 'approved');
     void dispatchEvent(this.ctx.organizationId, 'order.approved', {
       id,
-      orderNumber: id.slice(0, 8).toUpperCase(),
+      orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
       approvedBy: this.ctx.userId,
     });
     return row;
@@ -1257,7 +1259,7 @@ export class OrderRequestsService {
     // The sign-route completion fires this; the manager close path must match.
     void dispatchEvent(this.ctx.organizationId, 'order.completed', {
       id,
-      orderNumber: id.slice(0, 8).toUpperCase(),
+      orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
       closedPartial: true,
     });
     void broadcastOrderChanged(this.ctx.organizationId, id);
@@ -1373,7 +1375,7 @@ export class OrderRequestsService {
         });
         void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
           id,
-          orderNumber: id.slice(0, 8).toUpperCase(),
+          orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
           status: 'backordered',
         });
       } else if (row.status === 'completed') {
@@ -1393,7 +1395,7 @@ export class OrderRequestsService {
         void this.notifyEmail(row, 'completed');
         void dispatchEvent(this.ctx.organizationId, 'order.completed', {
           id,
-          orderNumber: id.slice(0, 8).toUpperCase(),
+          orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
           signerName: trimmed,
           signatureMethod: 'physical',
         });
@@ -1578,7 +1580,9 @@ export class OrderRequestsService {
     // own). Lets a subscriber follow the full order lifecycle via one stream.
     void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
       id,
-      orderNumber: id.slice(0, 8).toUpperCase(),
+      orderNumber: (updated as OrderRequestRow).order_number
+        ? `${(updated as OrderRequestRow).order_number}`
+        : id.slice(0, 8).toUpperCase(),
       status: 'packing_slip_generated',
     });
     return updated as OrderRequestRow;
@@ -1664,7 +1668,9 @@ export class OrderRequestsService {
     // Generic lifecycle webhook (no dedicated topic for staging).
     void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
       id,
-      orderNumber: id.slice(0, 8).toUpperCase(),
+      orderNumber: (updated as OrderRequestRow).order_number
+        ? `${(updated as OrderRequestRow).order_number}`
+        : id.slice(0, 8).toUpperCase(),
       status: target,
     });
     return updated as OrderRequestRow;
@@ -1808,7 +1814,7 @@ export class OrderRequestsService {
     void this.notifyEmail(finalRow, 'in_transit');
     void dispatchEvent(this.ctx.organizationId, 'order.in_transit', {
       id,
-      orderNumber: id.slice(0, 8).toUpperCase(),
+      orderNumber: finalRow.order_number ? `${finalRow.order_number}` : id.slice(0, 8).toUpperCase(),
       markedBy: this.ctx.userId,
     });
     return finalRow;
@@ -1849,7 +1855,7 @@ export class OrderRequestsService {
     void this.notifyEmail(row, 'denied');
     void dispatchEvent(this.ctx.organizationId, 'order.denied', {
       id,
-      orderNumber: id.slice(0, 8).toUpperCase(),
+      orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
       reason,
       deniedBy: this.ctx.userId,
     });

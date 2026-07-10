@@ -323,8 +323,8 @@ export const styles = StyleSheet.create({
 
 // ── Data helpers ──────────────────────────────────────────────────────
 
-export function formatOrderCode(id: string): string {
-  return id.slice(0, 8).toUpperCase();
+export function formatOrderCode(id: string, orderNumber?: number | null): string {
+  return orderNumber ? `${orderNumber}` : id.slice(0, 8).toUpperCase();
 }
 
 export function formatPackedDate(
@@ -503,7 +503,7 @@ export function MetaGrid({
     <View style={styles.metaGrid}>
       <View style={styles.metaCell}>
         <Text style={styles.metaLabel}>ORDER</Text>
-        <Text style={styles.metaValue}>{formatOrderCode(request.id)}</Text>
+        <Text style={styles.metaValue}>{formatOrderCode(request.id, request.order_number)}</Text>
         <Text style={styles.metaSub}>{totalLines} line{totalLines === 1 ? '' : 's'}</Text>
       </View>
       <View style={styles.metaCell}>

@@ -40,7 +40,7 @@ export async function renderCustomerPackingSlipPdf(
   const tz = orgTimezone ?? 'UTC';
   const { request, lines } = detail;
   const isPickup = request.fulfillment_type === 'pickup';
-  const orderCode = formatOrderCode(request.id);
+  const orderCode = formatOrderCode(request.id, request.order_number);
   // Resolved requester name (falls back to the joined user_profiles for
   // internal self-submit orders where request.requester_name is NULL).
   const shipToName = detail.requesterName ?? null;
