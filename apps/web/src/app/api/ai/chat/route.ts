@@ -431,6 +431,10 @@ export async function POST(req: Request) {
       'Cache-Control': 'no-cache, no-transform',
       // Hint to any reverse proxy (e.g. nginx) not to buffer.
       'X-Accel-Buffering': 'no',
+      // Observability: which generative provider actually served this turn.
+      // Lets us confirm the Gemini→Claude switch took effect in each env
+      // (and debug a silent Gemini fallback) without shipping debug UI.
+      'x-ai-provider': resolveAiProvider(),
     },
   });
 }
