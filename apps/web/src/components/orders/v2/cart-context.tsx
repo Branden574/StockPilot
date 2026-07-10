@@ -22,6 +22,7 @@ export function initialCartState(
     fulfillmentType: init.fulfillmentType,
     onBehalfOf: init.onBehalfOf ?? null,
     notes: init.notes ?? '',
+    neededBy: '',
     lines: [],
   };
 }
@@ -29,7 +30,8 @@ export function initialCartState(
 export function cartReducer(state: CartState, action: CartAction): CartState {
   switch (action.type) {
     case 'hydrate':
-      return action.state;
+      // Old persisted drafts predate neededBy — default it in.
+      return { ...action.state, neededBy: action.state.neededBy ?? '' };
     case 'add': {
       const delta = action.quantity ?? 1;
       const existing = state.lines.find((l) => l.itemId === action.itemId);
@@ -98,6 +100,8 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       return { ...state, ...action.patch };
     case 'set-notes':
       return { ...state, notes: action.value };
+    case 'set-needed-by':
+      return { ...state, neededBy: action.value };
     case 'set-warehouse':
       return { ...state, warehouseId: action.warehouseId, lines: [] };
     default:

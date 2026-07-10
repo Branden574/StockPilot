@@ -253,6 +253,24 @@ export function CartRail({
         )}
       </div>
 
+      {/* Needed by — optional deadline; approval auto-creates a linked
+          Schedule event + reminders (mig 0255). */}
+      <div className="sf-needed-by">
+        <label htmlFor="sf-needed-by-input">
+          Needed by <span className="opt">Optional</span>
+        </label>
+        <input
+          id="sf-needed-by-input"
+          type="datetime-local"
+          value={state.neededBy}
+          min={new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 16)}
+          onChange={(e) => dispatch({ type: 'set-needed-by', value: e.target.value })}
+        />
+        {state.neededBy !== '' && (
+          <p className="hint">Approval adds this to the team Schedule with reminders.</p>
+        )}
+      </div>
+
       {/* Footer */}
       <div className="sf-cart-foot">
         <div className="sf-tot">

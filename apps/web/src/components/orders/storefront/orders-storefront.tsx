@@ -753,6 +753,9 @@ function StorefrontCatalog({
       const res = await createOrderRequestAction({
         warehouseId: state.warehouseId,
         notes: state.notes.trim() || null,
+        // datetime-local has no offset; Date() interprets it in the user's
+        // zone, toISOString() normalizes to UTC for the zod .datetime check.
+        neededBy: state.neededBy ? new Date(state.neededBy).toISOString() : null,
         fulfillmentType: state.fulfillmentType,
         requesterPhone: null,
         deliveryCharterId:
