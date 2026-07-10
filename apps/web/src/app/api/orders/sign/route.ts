@@ -1,4 +1,4 @@
-import { updateTag } from 'next/cache';
+import { revalidateTag } from 'next/cache';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
@@ -180,7 +180,7 @@ export async function POST(req: NextRequest) {
 
   // Hand-over decrements on-hand + consumes reservations — bust the
   // storefront catalog so the Place-an-Order avail pills update immediately.
-  updateTag('orders-new-v2-catalog');
+  revalidateTag('orders-new-v2-catalog', 'max');
 
   // The hand-over either COMPLETED the order (owed 0) or forked it to
   // BACKORDERED (still owed units) — the 0244 fork. Read the resulting status
