@@ -1809,6 +1809,20 @@ export class OrderRequestsService {
       id,
       (updated as OrderRequestRow).requester_name,
     );
+    // Keep the auto-created schedule event pointed at the current driver so
+    // reminder pushes/emails reach the right person. Fire-and-forget; awaited
+    // internally (bug-pattern #22: a bare void on a BUILDER is a no-op, so
+    // this wraps the builder in a real async fn).
+    void (async () => {
+      try {
+        await createAdminClient()
+          .from('schedule_events')
+          .update({ assigned_user_id: deliveryUserId })
+          .eq('order_request_id', id);
+      } catch (e) {
+        void reportSrvError(e, { tag: 'orders.auto-schedule.assign', organizationId: this.ctx.organizationId });
+      }
+    })();
     return updated as OrderRequestRow;
   }
 

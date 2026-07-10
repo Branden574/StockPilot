@@ -1,7 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "ignoreCommand": "bash -c 'if [ \"${VERCEL_GIT_COMMIT_REF#dependabot/}\" != \"$VERCEL_GIT_COMMIT_REF\" ]; then exit 0; else exit 1; fi'",
-  "regions": ["iad1"],
+  "regions": [
+    "iad1"
+  ],
   "crons": [
     {
       "path": "/api/cron/purge-ai-chat-history",
@@ -58,6 +60,10 @@
     {
       "path": "/api/cron/prewarm-orders-catalog",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/schedule-reminders",
+      "schedule": "*/10 * * * *"
     }
   ],
   "functions": {
