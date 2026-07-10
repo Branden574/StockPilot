@@ -9,7 +9,7 @@ import * as React from 'react';
 
 import type { CartLineState, CatalogItem } from '../v2/types';
 
-import { SfAddControl, SfPhoto } from './storefront-cards';
+import { CharterTag, SfAddControl, SfPhoto } from './storefront-cards';
 import {
   availableOf,
   cartTotals,
@@ -297,6 +297,7 @@ export function ReviewModal({
                       <div style={{ minWidth: 0 }}>
                         <div className="nm">{item?.name ?? line.itemId}</div>
                         <div className="sk2">{item?.sku ?? ''}</div>
+                        {item && <CharterTag item={item} />}
                       </div>
                       <div className="q">× {line.quantity}</div>
                     </div>

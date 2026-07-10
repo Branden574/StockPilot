@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Eye,
+  Landmark,
   Minus,
   Plus,
   Search,
@@ -37,6 +38,31 @@ export interface CardCallbacks {
   /** Set an exact quantity (typed into a stepper); ≤0 removes the line. */
   onSetQty: (itemId: string, quantity: number) => void;
   onQuickView: (itemId: string) => void;
+}
+
+/**
+ * Item-ownership charter chip — the site/charter this stock is EARMARKED for
+ * (inventory_items.charter_id → charterName/charterCode). This is what tells a
+ * requester "what site this thing is for." Distinct from the ORDER's
+ * delivery-site charter (that's shown separately as "Deliver to"). Renders
+ * nothing for generic/shared stock (charterName null). Shared by the catalog
+ * tiles, cart lines, and review lines so the label is identical everywhere.
+ */
+export function CharterTag({
+  item,
+}: {
+  item: Pick<CatalogItem, 'charterName' | 'charterCode'>;
+}) {
+  if (!item.charterName) return null;
+  const full = `Earmarked for ${item.charterName}${
+    item.charterCode ? ` (${item.charterCode})` : ''
+  }`;
+  return (
+    <span className="sf-charter" title={full}>
+      <Landmark size={11} aria-hidden />
+      <span className="sf-charter-nm">{item.charterName}</span>
+    </span>
+  );
 }
 
 /* ---- typeable quantity field (shared by every stepper) --------------- */
@@ -251,6 +277,7 @@ export const ProductCard = React.memo(function ProductCard({
           <span className="sep">·</span>
           <span className="cat">{item.categoryName ?? 'Uncategorized'}</span>
         </div>
+        <CharterTag item={item} />
         <div className="sf-card-ctl">
           <SfAddControl
             item={item}
@@ -296,6 +323,7 @@ export const CompactRow = React.memo(function CompactRow({
       <div style={{ minWidth: 0 }}>
         <div className="nm">{item.name}</div>
         <div className="sk2">{item.sku}</div>
+        <CharterTag item={item} />
       </div>
       <div className="cat">{item.categoryName ?? 'Uncategorized'}</div>
       <div className={status === 'ok' ? 'avl' : `avl ${status}`}>

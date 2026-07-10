@@ -130,6 +130,13 @@ export interface OrderRequestLineWithItem extends OrderRequestLineRow {
     /** Phase 5 (lot_serial): "none" | "lot" | "serial" — drives the
      *  advisory FEFO picking hint on the pick surface. */
     tracking_type: string | null;
+    /** Item-ownership charter (inventory_items.charter_id) — the site this
+     *  stock is earmarked for. null = generic/shared stock. Distinct from the
+     *  order's delivery_charter_id (destination). Surfaced per-line so a
+     *  viewer/picker knows which site each item belongs to. */
+    charter_id: string | null;
+    charter_name: string | null;
+    charter_code: string | null;
   } | null;
 }
 
@@ -627,7 +634,8 @@ export class OrderRequestsService {
           `id, order_request_id, item_id, quantity_requested,
            quantity_fulfilled, quantity_picked, unit_cost_at_request, notes,
            item:inventory_items!item_id (
-             id, name, sku, quantity_on_hand, barcode, model_number, item_type, custom_fields, tracking_type
+             id, name, sku, quantity_on_hand, barcode, model_number, item_type, custom_fields, tracking_type,
+             charter_id, charter:charters!charter_id ( name, code )
            )`,
         )
         .eq('order_request_id', id),
@@ -645,6 +653,7 @@ export class OrderRequestsService {
     const { data: lines, error: lErr } = linesRes;
     if (lErr) throw new ServiceError('internal_error', lErr.message);
 
+    type RawCharter = { name: string | null; code: string | null };
     type RawItem = {
       id: string;
       name: string;
@@ -655,11 +664,28 @@ export class OrderRequestsService {
       item_type: string | null;
       custom_fields: Record<string, unknown> | null;
       tracking_type: string | null;
+      charter_id: string | null;
+      charter: RawCharter | RawCharter[] | null;
     };
     const flatLines: OrderRequestLineWithItem[] = (lines ?? []).map((row) => {
       const r = row as Record<string, unknown>;
       const itemField = r.item as RawItem | RawItem[] | null;
-      const item = Array.isArray(itemField) ? (itemField[0] ?? null) : (itemField ?? null);
+      const rawItem = Array.isArray(itemField) ? (itemField[0] ?? null) : (itemField ?? null);
+      // Flatten the charter embed (object-or-array from PostgREST) onto the item.
+      const item = rawItem
+        ? (() => {
+            const c = Array.isArray(rawItem.charter)
+              ? (rawItem.charter[0] ?? null)
+              : (rawItem.charter ?? null);
+            const { charter: _charter, ...rest } = rawItem;
+            return {
+              ...rest,
+              charter_id: rawItem.charter_id ?? null,
+              charter_name: c?.name ?? null,
+              charter_code: c?.code ?? null,
+            };
+          })()
+        : null;
       const rawPicked = r.quantity_picked as number | null | undefined;
       return {
         id: r.id as string,

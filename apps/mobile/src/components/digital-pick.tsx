@@ -1,3 +1,4 @@
+import { Landmark } from 'lucide-react-native';
 import * as React from 'react';
 import { ActivityIndicator, Alert, Pressable, TextInput, View } from 'react-native';
 
@@ -8,7 +9,7 @@ import {
   transitionOrder,
   type OrderDetailLine,
 } from '@/lib/orders-api';
-import { FONT } from '@/lib/theme';
+import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -40,7 +41,7 @@ export function DigitalPick({
    */
   canPick?: boolean;
 }) {
-  const { c } = useTheme();
+  const { c, mode } = useTheme();
   const [lines, setLines] = React.useState<OrderDetailLine[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   // Current text in each line's input, and the last-persisted qty per line.
@@ -218,6 +219,36 @@ export function DigitalPick({
             <Mono size={11} color={c.ink4}>
               {line.item?.sku ?? '—'} · requested {requested}
             </Mono>
+            {line.item?.charter_name ? (
+              <View
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  alignSelf: 'flex-start',
+                  // maxWidth + flexShrink are BOTH required for numberOfLines
+                  // to ellipsize in RN (default flexShrink is 0; a flex-start
+                  // chip is otherwise measured at max-content and overflows).
+                  maxWidth: '100%',
+                  gap: 3,
+                  paddingHorizontal: 6,
+                  paddingVertical: 1,
+                  borderRadius: 999,
+                  backgroundColor: ACCENT.mintSoft,
+                }}
+              >
+                <Landmark size={10} color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk} />
+                <Mono
+                  size={10}
+                  color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
+                  numberOfLines={1}
+                  style={{ flexShrink: 1 }}
+                >
+                  {line.item.charter_code
+                    ? `${line.item.charter_name} (${line.item.charter_code})`
+                    : line.item.charter_name}
+                </Mono>
+              </View>
+            ) : null}
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               <TextInput
                 value={qty[line.id] ?? '0'}

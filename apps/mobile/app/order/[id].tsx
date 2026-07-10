@@ -1,6 +1,6 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { ArrowLeft, Camera, ImagePlus, PenLine, Trash2, Truck, X } from 'lucide-react-native';
+import { ArrowLeft, Camera, ImagePlus, Landmark, PenLine, Trash2, Truck, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -46,7 +46,7 @@ import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { supabase } from '@/lib/supabase';
 import { useWorkspace } from '@/lib/use-workspace';
-import { FONT } from '@/lib/theme';
+import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 const BUCKET = 'order-attachments';
@@ -122,6 +122,9 @@ interface OrderHeader {
     sku: string | null;
     requested: number;
     fulfilled: number;
+    /** Item-ownership charter — which site this stock is earmarked for. */
+    charterName: string | null;
+    charterCode: string | null;
   }>;
 }
 
@@ -242,14 +245,20 @@ export default function OrderDetail() {
     const { data: lineRows } = await supabase
       .from('order_request_lines')
       .select(
-        'item_id, quantity_requested, quantity_fulfilled, item:inventory_items(name, sku)',
+        'item_id, quantity_requested, quantity_fulfilled, item:inventory_items(name, sku, charter_id, charter:charters!charter_id(name, code))',
       )
       .eq('order_request_id', id);
+    type LineItemEmbed = {
+      name: string | null;
+      sku: string | null;
+      charter_id?: string | null;
+      charter?: { name: string | null; code: string | null } | { name: string | null; code: string | null }[] | null;
+    };
     const rows = (lineRows ?? []) as {
       item_id: string | null;
       quantity_requested: number | null;
       quantity_fulfilled: number | null;
-      item: { name: string | null; sku: string | null } | { name: string | null; sku: string | null }[] | null;
+      item: LineItemEmbed | LineItemEmbed[] | null;
     }[];
     const totalRequested = rows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
     const totalFulfilled = rows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
@@ -336,11 +345,16 @@ export default function OrderDetail() {
         hasFulfillableStock,
         lines: rows.map((l) => {
           const itemObj = Array.isArray(l.item) ? l.item[0] : l.item;
+          const charterObj = Array.isArray(itemObj?.charter)
+            ? itemObj?.charter[0]
+            : itemObj?.charter;
           return {
             name: itemObj?.name ?? 'Unknown item',
             sku: itemObj?.sku ?? null,
             requested: Number(l.quantity_requested) || 0,
             fulfilled: Number(l.quantity_fulfilled) || 0,
+            charterName: charterObj?.name ?? null,
+            charterCode: charterObj?.code ?? null,
           };
         }),
       });
@@ -792,6 +806,40 @@ export default function OrderDetail() {
                         <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
                           {l.sku}
                         </Mono>
+                      ) : null}
+                      {l.charterName ? (
+                        <View
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            alignSelf: 'flex-start',
+                            // maxWidth + flexShrink below are BOTH required for
+                            // numberOfLines to actually ellipsize in RN (default
+                            // flexShrink is 0, and a flex-start chip is otherwise
+                            // measured at max-content and overflows the column).
+                            maxWidth: '100%',
+                            gap: 3,
+                            marginTop: 4,
+                            paddingHorizontal: 6,
+                            paddingVertical: 1,
+                            borderRadius: 999,
+                            backgroundColor: ACCENT.mintSoft,
+                          }}
+                        >
+                          <Landmark
+                            size={10}
+                            color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
+                          />
+                          <Mono
+                            size={10}
+                            tracking={0.02}
+                            color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
+                            numberOfLines={1}
+                            style={{ flexShrink: 1 }}
+                          >
+                            {l.charterCode ? `${l.charterName} (${l.charterCode})` : l.charterName}
+                          </Mono>
+                        </View>
                       ) : null}
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>

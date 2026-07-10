@@ -1103,6 +1103,35 @@
   padding-top: 4px;
 }
 
+/* Item-ownership charter chip — "earmarked for <site>". Shared by catalog
+   tiles, cart lines, and review lines (see CharterTag in storefront-cards). */
+.sp-storefront .sf-charter {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  align-self: flex-start;
+  padding: 1px 7px 1px 5px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--sf-accent) 32%, var(--sf-line));
+  background: color-mix(in oklab, var(--sf-accent) 11%, var(--sf-bg-elev));
+  color: var(--sf-ink-3);
+  font-family: var(--sf-font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.sp-storefront .sf-charter svg {
+  color: var(--sf-accent);
+  flex: none;
+}
+.sp-storefront .sf-charter-nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Add button / stepper */
 .sp-storefront .sf-add {
   width: 100%;

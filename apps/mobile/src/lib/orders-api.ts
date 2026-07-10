@@ -87,6 +87,10 @@ export interface OrderDetailLine {
     id: string;
     name: string;
     sku: string | null;
+    /** Item-ownership charter — which site this stock is earmarked for.
+     *  Populated by OrderRequestsService.get() (charter_name/charter_code). */
+    charter_name?: string | null;
+    charter_code?: string | null;
   } | null;
 }
 

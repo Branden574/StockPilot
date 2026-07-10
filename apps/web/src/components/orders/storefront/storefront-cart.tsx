@@ -23,7 +23,7 @@ import * as React from 'react';
 import { useCart } from '../v2/cart-context';
 import type { CatalogItem } from '../v2/types';
 
-import { QtyField, SfPhoto } from './storefront-cards';
+import { CharterTag, QtyField, SfPhoto } from './storefront-cards';
 import { availableOf, cartTotals } from './storefront-logic';
 
 export interface CartSuggestion {
@@ -177,6 +177,7 @@ export function CartRail({
                 <div style={{ minWidth: 0 }}>
                   <div className="nm">{item?.name ?? line.itemId}</div>
                   <div className="sk2">{item?.sku ?? ''}</div>
+                  {item && <CharterTag item={item} />}
                 </div>
                 <div className="rt">
                   <button
