@@ -1,6 +1,6 @@
 'use server';
 
-import { revalidatePath, updateTag } from 'next/cache';
+import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
@@ -25,7 +25,7 @@ function toResult<T>(error: unknown): ActionResult<T> {
  * nuking the tag org-wide is cheap).
  */
 function revalidateOrdersCatalog() {
-  updateTag('orders-new-v2-catalog');
+  revalidateTag('orders-new-v2-catalog', 'max');
 }
 
 // Per-line cap matches the public endpoint so a viewer can't drain an

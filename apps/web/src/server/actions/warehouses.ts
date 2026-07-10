@@ -1,6 +1,6 @@
 'use server';
 
-import { revalidatePath, updateTag } from 'next/cache';
+import { revalidatePath, revalidateTag } from 'next/cache';
 
 import { ServiceError } from '@/server/services/context';
 import {
@@ -34,7 +34,7 @@ function invalidateOrgWarehouses() {
   // intended tradeoff for cache simplicity vs strict per-tenant
   // isolation. Org settings change rarely, so refreshing a few
   // sibling orgs alongside is cheap.
-  updateTag('dashboard-warehouses');
+  revalidateTag('dashboard-warehouses', 'max');
 }
 
 export async function createWarehouseAction(

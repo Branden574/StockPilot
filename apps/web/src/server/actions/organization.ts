@@ -1,6 +1,6 @@
 'use server';
 
-import { revalidatePath, updateTag } from 'next/cache';
+import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { requireSession } from '@/lib/auth/session';
@@ -165,7 +165,7 @@ export async function updateTerminologyAction(
     // settings change rarely so the cost of refreshing siblings is
     // negligible. Was per-org (`dashboard-org:<id>`) until that
     // pattern broke Server Action POSTs in Next.js 16.
-    updateTag('dashboard-org');
+    revalidateTag('dashboard-org', 'max');
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
@@ -321,7 +321,7 @@ export async function updateOrgTimezoneAction(
 
     // Bust the cached org row so PDFs / server pages pick up the new
     // tz on the next request (lib/dashboard/cached-org.ts).
-    updateTag('dashboard-org');
+    revalidateTag('dashboard-org', 'max');
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {

@@ -1,6 +1,6 @@
 'use server';
 
-import { revalidatePath, updateTag } from 'next/cache';
+import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { ServiceError, withContext } from '@/server/services/context';
@@ -39,7 +39,7 @@ export async function setUserCategoryAccessAction(
     // 'orders-new-v2-catalog' so the next read (including the admin's
     // own follow-up render) sees the new visibility. The 30s TTL on
     // these entries refills the cache for unaffected users.
-    updateTag('orders-new-v2-catalog');
+    revalidateTag('orders-new-v2-catalog', 'max');
 
     // Server-rendered pages that show inventory lists need a fresh
     // read for the target user on their next visit. Path-based

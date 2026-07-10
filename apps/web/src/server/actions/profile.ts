@@ -1,6 +1,6 @@
 'use server';
 
-import { revalidatePath, updateTag } from 'next/cache';
+import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
@@ -301,7 +301,7 @@ export async function setOrgLogoUrlAction(input: {
     // Invalidate the cached org row in lib/dashboard/cached-org.ts so
     // the new logo appears in the dashboard shell on next nav instead
     // of being stale for up to 60s. Static cross-org tag.
-    updateTag('dashboard-org');
+    revalidateTag('dashboard-org', 'max');
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
