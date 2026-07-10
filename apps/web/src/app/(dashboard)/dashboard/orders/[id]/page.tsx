@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
+import { can, formatOrderNumber, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -397,9 +397,9 @@ export default async function OrderDetailPage({
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="truncate text-2xl font-semibold tracking-tight">
                 Order request{' '}
-                {(request as { order_number?: number | null }).order_number ? (
+                {formatOrderNumber((request as { order_number?: number | null }).order_number) ? (
                   <span className="text-muted-foreground font-mono tabular-nums">
-                    #{(request as { order_number?: number | null }).order_number}
+                    {formatOrderNumber((request as { order_number?: number | null }).order_number)}
                   </span>
                 ) : null}
               </h1>

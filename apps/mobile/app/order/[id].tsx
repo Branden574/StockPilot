@@ -37,6 +37,7 @@ import {
 import {
   availableOrderActions,
   can,
+  formatOrderNumber,
   derivePickingStatus,
   type FulfillmentType,
   type OrderStatus,
@@ -741,7 +742,7 @@ export default function OrderDetail() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
         >
           <View style={{ paddingTop: 4 }}>
-            <Eyebrow>{`ORDER${order.orderNumber ? ` #${order.orderNumber}` : ''} · ${order.status.replace(/_/g, ' ').toUpperCase()}`}</Eyebrow>
+            <Eyebrow>{`ORDER${order.orderNumber ? ` ${formatOrderNumber(order.orderNumber)}` : ''} · ${order.status.replace(/_/g, ' ').toUpperCase()}`}</Eyebrow>
             <Display size={30} style={{ marginTop: 10 }}>
               {order.requester ?? 'Order'}
             </Display>

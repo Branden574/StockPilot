@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { isManagerOrAbove } from '@stockpilot/core';
+import { formatOrderNumber, isManagerOrAbove } from '@stockpilot/core';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
@@ -888,7 +888,7 @@ export class OrderRequestsService {
     // the org has no endpoints; cron backstops delivery).
     void dispatchEvent(this.ctx.organizationId, 'order.created', {
       id: row.id,
-      orderNumber: row.order_number ? `${row.order_number}` : row.id.slice(0, 8).toUpperCase(),
+      orderNumber: formatOrderNumber(row.order_number) ?? row.id.slice(0, 8).toUpperCase(),
       requester: (row as { requester_name?: string | null }).requester_name ?? null,
       lineCount: linePayload.length,
     });
@@ -973,7 +973,7 @@ export class OrderRequestsService {
     void this.notifyEmail(row, 'cancelled');
     void dispatchEvent(this.ctx.organizationId, 'order.cancelled', {
       id,
-      orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
+      orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       cancelledBy: this.ctx.userId,
     });
     return row;
@@ -1007,6 +1007,28 @@ export class OrderRequestsService {
         throw new ServiceError('forbidden', 'Only managers can approve requests');
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'This request is no longer pending approval');
+      if (msg.includes('insufficient_placed_stock')) {
+        // Name the order's items so the picker knows exactly what to put away.
+        let items = '';
+        try {
+          const { data: ln } = await this.ctx.supabase
+            .from('order_request_lines')
+            .select('quantity_requested, quantity_fulfilled, item:inventory_items!item_id(name, sku)')
+            .eq('order_request_id', id);
+          items = ((ln ?? []) as { quantity_requested: number; quantity_fulfilled: number; item: { name: string; sku: string } | { name: string; sku: string }[] | null }[])
+            .map((l) => {
+              const it = Array.isArray(l.item) ? l.item[0] : l.item;
+              const owed = Math.max(0, (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0));
+              return it ? `${it.name} (${it.sku}) — ${owed} needed` : null;
+            })
+            .filter(Boolean)
+            .join('; ');
+        } catch { /* message still useful without the list */ }
+        throw new ServiceError(
+          'validation_error',
+          `Not enough PUT-AWAY stock to complete this pick. Part of this item's on-hand total is still in Staging (awaiting put-away) or unplaced, and picking can only draw from placed rack/crate stock. Fix: open Inventory → Staging, put away the needed units, then retry.${items ? ` Short line(s): ${items}.` : ''}`,
+        );
+      }
       if (msg.includes('insufficient_stock'))
         throw new ServiceError(
           'validation_error',
@@ -1031,7 +1053,7 @@ export class OrderRequestsService {
     void this.notifyEmail(row, 'approved');
     void dispatchEvent(this.ctx.organizationId, 'order.approved', {
       id,
-      orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
+      orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       approvedBy: this.ctx.userId,
     });
     return row;
@@ -1070,7 +1092,7 @@ export class OrderRequestsService {
     void this.notifyEmail(row, 'approved');
     void dispatchEvent(this.ctx.organizationId, 'order.approved', {
       id,
-      orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
+      orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       approvedBy: this.ctx.userId,
     });
     return row;
@@ -1259,7 +1281,7 @@ export class OrderRequestsService {
     // The sign-route completion fires this; the manager close path must match.
     void dispatchEvent(this.ctx.organizationId, 'order.completed', {
       id,
-      orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
+      orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       closedPartial: true,
     });
     void broadcastOrderChanged(this.ctx.organizationId, id);
@@ -1375,7 +1397,7 @@ export class OrderRequestsService {
         });
         void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
           id,
-          orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
+          orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
           status: 'backordered',
         });
       } else if (row.status === 'completed') {
@@ -1395,7 +1417,7 @@ export class OrderRequestsService {
         void this.notifyEmail(row, 'completed');
         void dispatchEvent(this.ctx.organizationId, 'order.completed', {
           id,
-          orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
+          orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
           signerName: trimmed,
           signatureMethod: 'physical',
         });
@@ -1580,9 +1602,7 @@ export class OrderRequestsService {
     // own). Lets a subscriber follow the full order lifecycle via one stream.
     void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
       id,
-      orderNumber: (updated as OrderRequestRow).order_number
-        ? `${(updated as OrderRequestRow).order_number}`
-        : id.slice(0, 8).toUpperCase(),
+      orderNumber: formatOrderNumber((updated as OrderRequestRow).order_number) ?? id.slice(0, 8).toUpperCase(),
       status: 'packing_slip_generated',
     });
     return updated as OrderRequestRow;
@@ -1668,9 +1688,7 @@ export class OrderRequestsService {
     // Generic lifecycle webhook (no dedicated topic for staging).
     void dispatchEvent(this.ctx.organizationId, 'order.status_changed', {
       id,
-      orderNumber: (updated as OrderRequestRow).order_number
-        ? `${(updated as OrderRequestRow).order_number}`
-        : id.slice(0, 8).toUpperCase(),
+      orderNumber: formatOrderNumber((updated as OrderRequestRow).order_number) ?? id.slice(0, 8).toUpperCase(),
       status: target,
     });
     return updated as OrderRequestRow;
@@ -1814,7 +1832,7 @@ export class OrderRequestsService {
     void this.notifyEmail(finalRow, 'in_transit');
     void dispatchEvent(this.ctx.organizationId, 'order.in_transit', {
       id,
-      orderNumber: finalRow.order_number ? `${finalRow.order_number}` : id.slice(0, 8).toUpperCase(),
+      orderNumber: formatOrderNumber(finalRow.order_number) ?? id.slice(0, 8).toUpperCase(),
       markedBy: this.ctx.userId,
     });
     return finalRow;
@@ -1855,7 +1873,7 @@ export class OrderRequestsService {
     void this.notifyEmail(row, 'denied');
     void dispatchEvent(this.ctx.organizationId, 'order.denied', {
       id,
-      orderNumber: row.order_number ? `${row.order_number}` : id.slice(0, 8).toUpperCase(),
+      orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       reason,
       deniedBy: this.ctx.userId,
     });

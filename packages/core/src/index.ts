@@ -16,3 +16,4 @@ export * from './purchasing/recurring';
 export * from './signature';
 export * from './inventory/size-run';
 export * from './inventory/crate-colors';
+export * from './orders/order-number';

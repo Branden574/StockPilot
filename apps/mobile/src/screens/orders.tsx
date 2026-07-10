@@ -1,3 +1,4 @@
+import { formatOrderNumber } from '@stockpilot/core';
 import { type Href, useRouter } from 'expo-router';
 import { ShoppingCart } from 'lucide-react-native';
 import * as React from 'react';
@@ -142,7 +143,7 @@ function OrderCard({ order }: { order: OrderRow }) {
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
-              {order.order_number ? `#${order.order_number} — ` : '— '}{order.warehouse?.name ?? 'No warehouse'}
+              {order.order_number ? `${formatOrderNumber(order.order_number)} — ` : '— '}{order.warehouse?.name ?? 'No warehouse'}
             </Mono>
             <Body size={15.5} color={c.ink} style={{ marginTop: 6, fontFamily: FONT.display }}>
               {requester}

@@ -1,3 +1,4 @@
+import { formatOrderNumber } from '@stockpilot/core';
 import {
   Image as PdfImage,
   Path,
@@ -324,7 +325,7 @@ export const styles = StyleSheet.create({
 // ── Data helpers ──────────────────────────────────────────────────────
 
 export function formatOrderCode(id: string, orderNumber?: number | null): string {
-  return orderNumber ? `${orderNumber}` : id.slice(0, 8).toUpperCase();
+  return formatOrderNumber(orderNumber) ?? id.slice(0, 8).toUpperCase();
 }
 
 export function formatPackedDate(

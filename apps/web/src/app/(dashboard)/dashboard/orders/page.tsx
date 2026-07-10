@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Download, Package, ShoppingCart, Truck } from 'lucide-react';
 import Link from 'next/link';
+import { formatOrderNumber } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Orders' };
 
@@ -259,7 +260,7 @@ export default async function OrdersPage({
                         href={`/dashboard/orders/${r.id}`}
                         className="font-mono text-sm font-medium tabular-nums hover:underline"
                       >
-                        #{r.orderNumber}
+                        {formatOrderNumber(r.orderNumber) ?? '—'}
                       </Link>
                     </TableCell>
                     <TableCell>

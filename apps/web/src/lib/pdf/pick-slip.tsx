@@ -1,3 +1,4 @@
+import { formatOrderNumber } from '@stockpilot/core';
 import {
   renderToStream,
   Document,
@@ -615,7 +616,7 @@ export async function renderPickSlipPdf(
     : isInProgress
       ? 'In progress'
       : 'To pick';
-  const shortId = request.order_number ? `${request.order_number}` : request.id.slice(0, 8).toUpperCase();
+  const shortId = formatOrderNumber(request.order_number) ?? request.id.slice(0, 8).toUpperCase();
   const generatedAt = request.pick_slip_generated_at
     ? new Date(request.pick_slip_generated_at).toLocaleString('en-US', {
         timeZone: opts.orgTimezone ?? 'UTC',

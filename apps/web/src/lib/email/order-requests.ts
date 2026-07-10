@@ -1,3 +1,4 @@
+import { formatOrderNumber } from '@stockpilot/core';
 import 'server-only';
 
 import { sendEmail } from './resend';
@@ -345,7 +346,7 @@ interface TemplateArgs {
 
 function renderHtml(a: TemplateArgs): string {
   const isPickup = a.request.fulfillment_type === 'pickup';
-  const orderId = a.request.order_number ? `#${a.request.order_number}` : `WO-${a.request.id.slice(0, 8).toUpperCase()}`;
+  const orderId = formatOrderNumber(a.request.order_number) ?? `WO-${a.request.id.slice(0, 8).toUpperCase()}`;
   const firstName = (a.recipientName ?? '').trim().split(/\s+/)[0] || 'there';
   const head = headlineFor(a.kind, orderId, isPickup);
   const pill = PILL_COLORS[a.kind];
@@ -513,7 +514,7 @@ function renderHtml(a: TemplateArgs): string {
 
 function renderText(a: TemplateArgs): string {
   const isPickup = a.request.fulfillment_type === 'pickup';
-  const orderId = a.request.order_number ? `#${a.request.order_number}` : `WO-${a.request.id.slice(0, 8).toUpperCase()}`;
+  const orderId = formatOrderNumber(a.request.order_number) ?? `WO-${a.request.id.slice(0, 8).toUpperCase()}`;
   const firstName = (a.recipientName ?? '').trim().split(/\s+/)[0] || 'there';
   const head = headlineFor(a.kind, orderId, isPickup);
   const lead = leadParagraph(a.kind, isPickup, firstName).replace(/<[^>]+>/g, '');
