@@ -44,18 +44,26 @@ async function CategoriesSection({ isArchivedView }: { isArchivedView: boolean }
     CategoriesService.forCurrentUser(),
   ]);
   const canManage = can(ctx, 'categories:manage');
+  // Public-catalog visibility (P3): the per-category Public / Internal-only
+  // toggle is gated on public_links:manage (the server action re-asserts).
+  const canManagePublicVisibility = can(ctx, 'public_links:manage');
   const rows = await svc.list({ includeArchived: isArchivedView });
 
   return (
     <CategoriesManager
       view={isArchivedView ? 'archived' : 'active'}
       canManage={canManage}
+      canManagePublicVisibility={canManagePublicVisibility}
       initial={rows.map((r) => ({
         id: r.id as string,
         name: r.name as string,
         description: (r.description as string | null) ?? null,
         color: (r.color as string | null) ?? null,
         supports_sizes: Boolean(r.supports_sizes),
+        public_visibility:
+          ((r.public_visibility as string | null) ?? 'public') === 'internal_only'
+            ? ('internal_only' as const)
+            : ('public' as const),
       }))}
     />
   );

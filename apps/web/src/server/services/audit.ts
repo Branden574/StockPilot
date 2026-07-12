@@ -105,6 +105,7 @@ export type AuditEvent =
   | 'public_catalog.entry_removed'
   | 'public_catalog.bulk_change'
   | 'item.public_visibility_changed'
+  | 'item.public_display_changed'
   // New 'order.*' events for the refactored pick → pack → stage → sign
   // workflow (phases 3–5). Coexist with legacy 'order_request.*' events
   // above so historical audit-log queries stay valid; new emissions use

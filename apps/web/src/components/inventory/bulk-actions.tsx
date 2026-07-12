@@ -6,6 +6,7 @@ import {
   ClipboardList,
   Download,
   FolderTree,
+  Globe,
   Layers,
   Loader2,
   MapPin,
@@ -43,6 +44,10 @@ import {
   bulkUpdateInventoryAction,
   type BulkInventoryOp,
 } from '@/server/actions/inventory';
+import {
+  bulkSetItemPublicVisibilityAction,
+  type ItemPublicVisibility,
+} from '@/server/actions/item-visibility';
 import { createDraftPosFromItemsAction } from '@/server/actions/purchase-orders';
 
 export interface BulkActionsCategory {
@@ -83,6 +88,10 @@ interface BulkActionsProps {
   /** Push the selected rows into the cycle-count selection and navigate to
       the New cycle count screen. Wired by InventoryTable. */
   onCycleCount: () => void;
+  /** Public-catalog visibility (P3): shows the "Set public visibility" bulk
+      action. Pages pass can(ctx, 'public_links:manage'); the server action
+      re-asserts. Default false → hidden for older callers. */
+  canSetPublicVisibility?: boolean;
 }
 
 type ActiveDialog =
@@ -94,7 +103,14 @@ type ActiveDialog =
   | { kind: 'set_rack' }
   | { kind: 'add_tags' }
   | { kind: 'remove_tags' }
+  | { kind: 'set_public_visibility' }
   | null;
+
+const PUBLIC_VISIBILITY_LABELS: Record<ItemPublicVisibility, string> = {
+  internal_only: 'Internal only',
+  public: 'Public',
+  hidden: 'Hidden',
+};
 
 export function BulkActions({
   selectedIds,
@@ -105,6 +121,7 @@ export function BulkActions({
   onClear,
   hasArchivedSelection,
   onCycleCount,
+  canSetPublicVisibility = false,
 }: BulkActionsProps) {
   const router = useRouter();
   const [dialog, setDialog] = React.useState<ActiveDialog>(null);
@@ -119,6 +136,11 @@ export function BulkActions({
   // close.
   const [addTagIds, setAddTagIds] = React.useState<Set<string>>(new Set());
   const [removeTagIds, setRemoveTagIds] = React.useState<Set<string>>(new Set());
+  const [publicVisibility, setPublicVisibility] =
+    React.useState<ItemPublicVisibility>('internal_only');
+  // Inline error surface for the public-visibility dialog (recurring bug
+  // pattern #20: modal errors must render IN the modal, not just a toast).
+  const [visibilityError, setVisibilityError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
@@ -127,6 +149,10 @@ export function BulkActions({
     if (dialog?.kind !== 'set_rack') {
       setRackNumber('');
       setRackRow('');
+    }
+    if (dialog?.kind !== 'set_public_visibility') {
+      setPublicVisibility('internal_only');
+      setVisibilityError(null);
     }
   }, [dialog]);
 
@@ -176,6 +202,26 @@ export function BulkActions({
     toast.success(`${parts.join(' · ')}.`);
     onClear();
     router.push('/dashboard/purchase-orders?status=draft');
+  }
+
+  async function applyPublicVisibility() {
+    setBusy(true);
+    setVisibilityError(null);
+    const r = await bulkSetItemPublicVisibilityAction({
+      itemIds: selectedIds,
+      visibility: publicVisibility,
+    });
+    setBusy(false);
+    if (!r.ok) {
+      setVisibilityError(r.error.message);
+      return;
+    }
+    toast.success(
+      `Set ${r.data.updated} item${r.data.updated === 1 ? '' : 's'} to ${PUBLIC_VISIBILITY_LABELS[publicVisibility]}.`,
+    );
+    setDialog(null);
+    onClear();
+    router.refresh();
   }
 
   async function run(op: BulkInventoryOp) {
@@ -296,6 +342,19 @@ export function BulkActions({
         >
           <Truck className="h-3 w-3" /> Set supplier
         </button>
+
+        {canSetPublicVisibility && (
+          <>
+            <span className="text-[var(--ed-ink-4)]">·</span>
+            <button
+              type="button"
+              onClick={() => setDialog({ kind: 'set_public_visibility' })}
+              className="inline-flex items-center gap-1 text-[var(--ed-ink-2)] hover:text-foreground"
+            >
+              <Globe className="h-3 w-3" /> Set public visibility
+            </button>
+          </>
+        )}
 
         <span className="text-[var(--ed-ink-4)]">·</span>
         <button
@@ -659,6 +718,60 @@ export function BulkActions({
               }
               disabled={busy}
             >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Apply'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Set public visibility (P3 public-catalog controls) */}
+      <Dialog
+        open={dialog?.kind === 'set_public_visibility'}
+        onOpenChange={(v) => (v ? null : setDialog(null))}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Set public visibility on {count} item{count === 1 ? '' : 's'}
+            </DialogTitle>
+            <DialogDescription>
+              Controls how these items can appear on public request links.
+              &lsquo;Hidden&rsquo; beats everything — the item never appears publicly, even
+              when hand-picked on a link. &lsquo;Public&rsquo; still requires the item&apos;s
+              category to be public and a link that includes the public pool. Per-link
+              curation lives in Settings → Public request links.
+            </DialogDescription>
+          </DialogHeader>
+          <Select
+            value={publicVisibility}
+            onValueChange={(v) => setPublicVisibility(v as ItemPublicVisibility)}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="internal_only">Internal only</SelectItem>
+              <SelectItem value="public">Public</SelectItem>
+              <SelectItem value="hidden">Hidden</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-muted-foreground text-[12.5px]">
+            Set {count} item{count === 1 ? '' : 's'} to{' '}
+            <span className="text-foreground font-medium">
+              {PUBLIC_VISIBILITY_LABELS[publicVisibility]}
+            </span>
+            .
+          </p>
+          {visibilityError && (
+            <p className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-3 py-2 text-[12.5px]">
+              {visibilityError}
+            </p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialog(null)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button onClick={applyPublicVisibility} disabled={busy}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Apply'}
             </Button>
           </DialogFooter>

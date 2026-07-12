@@ -46,6 +46,11 @@ import {
   updateItemAction,
 } from '@/server/actions/inventory';
 import { createImageUploadAction, recordImageAction } from '@/server/actions/item-images';
+import {
+  setItemPublicDisplayAction,
+  setItemPublicVisibilityAction,
+  type ItemPublicVisibility,
+} from '@/server/actions/item-visibility';
 import { setItemTagsAction } from '@/server/actions/tags';
 
 import {
@@ -135,6 +140,20 @@ interface ItemFormProps {
   customFieldDefs?: CustomFieldDefinition[];
   /** Phase 5: when true, show the Lot & expiry section (lot_serial module on). */
   lotSerialEnabled?: boolean;
+  /**
+   * Public-catalog visibility (P3). The select renders only in EDIT mode and
+   * only when the viewer holds public_links:manage (page passes
+   * can(ctx, 'public_links:manage')). Saved after the item save via its own
+   * server action — the field is not part of the item schema, mirroring how
+   * tags persist.
+   */
+  canManagePublicVisibility?: boolean;
+  /** The item's stored public_visibility (edit mode). Default internal_only. */
+  initialPublicVisibility?: ItemPublicVisibility;
+  /** The item's stored public_display_name (edit mode). NULL → falls back to name publicly. */
+  initialPublicDisplayName?: string | null;
+  /** The item's stored public_description (edit mode). */
+  initialPublicDescription?: string | null;
 }
 
 export function ItemForm({
@@ -156,6 +175,10 @@ export function ItemForm({
   isRentalFixed = false,
   customFieldDefs = [],
   lotSerialEnabled = false,
+  canManagePublicVisibility = false,
+  initialPublicVisibility = 'internal_only',
+  initialPublicDisplayName = null,
+  initialPublicDescription = null,
 }: ItemFormProps) {
   const router = useRouter();
   const isEdit = Boolean(defaults?.id);
@@ -309,6 +332,23 @@ export function ItemForm({
     setSelectedSizes([]);
   }, [watchedCategoryId]);
   const [lookingUp, setLookingUp] = React.useState(false);
+
+  // Public-catalog visibility — independent of RHF (not part of the item
+  // schema); persisted via setItemPublicVisibilityAction after the item save
+  // resolves, same pattern as tags below. Edit mode + permission only.
+  const showPublicVisibility = isEdit && canManagePublicVisibility;
+  const [publicVisibility, setPublicVisibility] =
+    React.useState<ItemPublicVisibility>(initialPublicVisibility);
+  // Public-facing display name/description (0261 columns). Kept as plain
+  // strings for the inputs; normalized to trimmed-or-null at submit so the
+  // stored value matches what the public loader expects (NULL = fall back
+  // to the internal name / no description).
+  const [publicDisplayName, setPublicDisplayName] = React.useState<string>(
+    initialPublicDisplayName ?? '',
+  );
+  const [publicDescription, setPublicDescription] = React.useState<string>(
+    initialPublicDescription ?? '',
+  );
 
   // Tag selection — independent of RHF because tags don't live on the
   // inventory_items row; they're persisted to item_tags via a separate
@@ -719,6 +759,43 @@ export function ItemForm({
       }
     }
 
+    // Public-catalog visibility rides the same post-save pattern as tags:
+    // the item row is already saved, so a failure here surfaces as a
+    // warning + retry instead of rolling the whole submit back.
+    if (showPublicVisibility && publicVisibility !== initialPublicVisibility) {
+      const visRes = await setItemPublicVisibilityAction({
+        itemId,
+        visibility: publicVisibility,
+      });
+      if (!visRes.ok) {
+        toast.warning(
+          `Item saved, but public visibility couldn't be updated: ${visRes.error.message}`,
+        );
+      }
+    }
+
+    // Public display name/description ride the same post-save pattern.
+    // Normalize both sides to trimmed-or-null before comparing so retyping
+    // the same value (or adding trailing whitespace) doesn't fire a write.
+    if (showPublicVisibility) {
+      const nextDisplayName = publicDisplayName.trim() || null;
+      const nextDescription = publicDescription.trim() || null;
+      const prevDisplayName = (initialPublicDisplayName ?? '').trim() || null;
+      const prevDescription = (initialPublicDescription ?? '').trim() || null;
+      if (nextDisplayName !== prevDisplayName || nextDescription !== prevDescription) {
+        const displayRes = await setItemPublicDisplayAction({
+          itemId,
+          publicDisplayName: nextDisplayName,
+          publicDescription: nextDescription,
+        });
+        if (!displayRes.ok) {
+          toast.warning(
+            `Item saved, but the public display fields couldn't be updated: ${displayRes.error.message}`,
+          );
+        }
+      }
+    }
+
     // Photo uploads are only staged in the create flow; edit flow uses the
     // ImageUploader on the item detail page directly against an existing id.
     if (!isEdit && staged.length > 0) {
@@ -1059,6 +1136,60 @@ export function ItemForm({
             );
           })()}
         </div>
+        {showPublicVisibility && (
+          <>
+            <div className="space-y-1.5">
+              <Label>Public visibility</Label>
+              <Select
+                value={publicVisibility}
+                onValueChange={(v) => setPublicVisibility(v as ItemPublicVisibility)}
+              >
+                <SelectTrigger className="sm:max-w-[280px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="internal_only">Internal only</SelectItem>
+                  <SelectItem value="public">Public</SelectItem>
+                  <SelectItem value="hidden">Hidden</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-[11px]">
+                &lsquo;Hidden&rsquo; beats everything — the item never appears publicly, even
+                when hand-picked on a link. &lsquo;Public&rsquo; still requires the item&apos;s
+                category to be public and a link that includes the public pool. Per-link
+                curation lives in Settings → Public request links.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="item-form-public-display-name">Public display name</Label>
+              <Input
+                id="item-form-public-display-name"
+                maxLength={300}
+                placeholder={watch('name') || 'Item name'}
+                value={publicDisplayName}
+                onChange={(e) => setPublicDisplayName(e.target.value)}
+              />
+              <p className="text-muted-foreground text-[11px]">
+                Shown on public request links instead of the internal name. Leave blank to
+                use the item name.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="item-form-public-description">Public description</Label>
+              <Textarea
+                id="item-form-public-description"
+                rows={3}
+                maxLength={2000}
+                value={publicDescription}
+                onChange={(e) => setPublicDescription(e.target.value)}
+              />
+              <p className="text-muted-foreground text-[11px]">
+                Shown under the item on public request links. Internal notes and
+                description are never shown publicly.
+              </p>
+            </div>
+          </>
+        )}
         <PlacementOnlyNote>
           primary location, bin/shelf, and rack apply just to this placement of the SKU.
         </PlacementOnlyNote>

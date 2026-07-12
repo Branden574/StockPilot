@@ -193,6 +193,17 @@ export default async function EditItemPage({
             returnHref={backHref}
             customFieldDefs={customFieldDefs}
             lotSerialEnabled={lotSerialEnabled}
+            canManagePublicVisibility={can(ctx, 'public_links:manage')}
+            initialPublicVisibility={
+              ((item as { public_visibility?: string | null }).public_visibility ??
+                'internal_only') as 'internal_only' | 'public' | 'hidden'
+            }
+            initialPublicDisplayName={
+              (item as { public_display_name?: string | null }).public_display_name ?? null
+            }
+            initialPublicDescription={
+              (item as { public_description?: string | null }).public_description ?? null
+            }
           />
         </CardContent>
       </Card>

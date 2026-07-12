@@ -34,7 +34,7 @@ export class CategoriesService {
   async list(opts: { includeArchived?: boolean } = {}) {
     let query = this.ctx.supabase
       .from('categories')
-      .select('id, parent_id, name, description, color, icon, supports_sizes, deleted_at, created_at, updated_at')
+      .select('id, parent_id, name, description, color, icon, supports_sizes, public_visibility, deleted_at, created_at, updated_at')
       .eq('organization_id', this.ctx.organizationId)
       .order('name', { ascending: true });
     query = opts.includeArchived

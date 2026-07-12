@@ -277,6 +277,12 @@ export interface InventoryTableProps {
    */
   canCreate?: boolean;
   /**
+   * Public-catalog visibility (P3): forwards to BulkActions to show the
+   * "Set public visibility" bulk action. Page passes
+   * can(ctx, 'public_links:manage'). Default false → hidden.
+   */
+  canSetPublicVisibility?: boolean;
+  /**
    * When provided, renders a small camera button inside the search
    * input on the right edge. Click invokes the callback so the
    * parent can open its own scanner modal + handle the result. The
@@ -549,6 +555,7 @@ export function InventoryTable({
   basePath = '/dashboard/inventory',
   showBookFields = false,
   canCreate = true,
+  canSetPublicVisibility = false,
   onScanRequest,
   page = 1,
   pageSize = 50,
@@ -1438,6 +1445,7 @@ export function InventoryTable({
             suppliers={suppliers}
             locations={locations}
             tags={tags}
+            canSetPublicVisibility={canSetPublicVisibility}
             onClear={() => setSelected(new Set())}
             // Instant mode holds the FULL dataset, so cross-page selections
             // resolve against it; server mode keeps today's page-row scan.

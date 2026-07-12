@@ -1,4 +1,4 @@
-import { Box, Boxes, CalendarClock, DollarSign, GraduationCap, Hash, History, LineChart, MapPin, PackageCheck, Printer, Tag, Truck } from 'lucide-react';
+import { Box, Boxes, CalendarClock, DollarSign, Globe, GraduationCap, Hash, History, LineChart, MapPin, PackageCheck, Printer, Tag, Truck } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -32,6 +32,7 @@ import {
   type DetailTabId,
 } from '@/components/inventory/item-detail-tabs-shared';
 import { ItemSerialsPanel } from '@/components/inventory/item-serials-panel';
+import { PublicVisibilityControl } from '@/components/inventory/public-visibility-control';
 import { MarketPricePanel } from '@/components/inventory/market-price-panel';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
@@ -128,7 +129,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
       categoryIdForFetch
         ? ctx.supabase
             .from('categories')
-            .select('id, name, color')
+            .select('id, name, color, public_visibility')
             .eq('organization_id', ctx.organizationId)
             .eq('id', categoryIdForFetch)
             .maybeSingle()
@@ -237,6 +238,22 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // server re-asserts 'locations:manage' (+ the locations plan limit) inside
   // LocationsService.create, so this only hides the UI affordance.
   const canManageLocations = can(ctx, 'locations:manage');
+  // Public-catalog visibility (P3): the row + select only render for
+  // public_links:manage holders; the server action re-asserts.
+  const canManagePublicVisibility = can(ctx, 'public_links:manage');
+  const itemPublicVisibility =
+    ((item as { public_visibility?: string | null }).public_visibility ?? 'internal_only') as
+      | 'internal_only'
+      | 'public'
+      | 'hidden';
+  const categoryIsInternalOnly =
+    ((category as { public_visibility?: string | null } | null)?.public_visibility ??
+      'public') === 'internal_only';
+  // Public display-name override (0261): surfaced read-only next to the
+  // visibility control so catalog managers can see at a glance that the
+  // public label differs from the internal name. Edited on the item edit form.
+  const itemPublicDisplayName =
+    (item as { public_display_name?: string | null }).public_display_name?.trim() || null;
 
   // ── Serial numbers panel ───────────────────────────────────────────
   // Shown for serial-tracked items, or any item that already has registry
@@ -470,6 +487,20 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     <span className="text-muted-foreground">Uncategorized</span>
                   )}
                 </DetailRow>
+                {canManagePublicVisibility && (
+                  <DetailRow icon={Globe} label="Public visibility">
+                    <PublicVisibilityControl
+                      itemId={id}
+                      value={itemPublicVisibility}
+                      categoryIsInternalOnly={categoryIsInternalOnly}
+                    />
+                    {itemPublicDisplayName && (
+                      <span className="text-muted-foreground basis-full text-xs">
+                        Public name: {itemPublicDisplayName}
+                      </span>
+                    )}
+                  </DetailRow>
+                )}
                 <DetailRow icon={MapPin} label="Location">
                   {location ? (
                     <span>{location.name as string}</span>

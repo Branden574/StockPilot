@@ -20,6 +20,13 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import {
   archiveCategoryAction,
@@ -27,6 +34,10 @@ import {
   restoreCategoryAction,
   updateCategoryAction,
 } from '@/server/actions/categories';
+import {
+  setCategoryPublicVisibilityAction,
+  type CategoryPublicVisibility,
+} from '@/server/actions/item-visibility';
 
 interface CategoryRow {
   id: string;
@@ -34,6 +45,7 @@ interface CategoryRow {
   description: string | null;
   color: string | null;
   supports_sizes: boolean;
+  public_visibility: CategoryPublicVisibility;
 }
 
 interface FormValues {
@@ -49,6 +61,7 @@ export function CategoriesManager({
   initial,
   view = 'active',
   canManage = true,
+  canManagePublicVisibility = false,
 }: {
   initial: CategoryRow[];
   view?: 'active' | 'archived';
@@ -58,6 +71,12 @@ export function CategoriesManager({
    * direct calls — this is the user-facing surface gate.
    */
   canManage?: boolean;
+  /**
+   * Public-catalog visibility (P3): shows the per-category Public /
+   * Internal-only select. Page passes can(ctx, 'public_links:manage');
+   * the server action re-asserts.
+   */
+  canManagePublicVisibility?: boolean;
 }) {
   const router = useRouter();
   const isArchivedView = view === 'archived';
@@ -116,6 +135,16 @@ export function CategoriesManager({
         )}
       </div>
 
+      {canManagePublicVisibility && initial.length > 0 && (
+        <p className="mb-4 text-xs text-muted-foreground">
+          <span className="text-foreground font-medium">Public visibility:</span>{' '}
+          &lsquo;Internal only&rsquo; removes every item in the category from the shared
+          public pool on public request links, regardless of the items&apos; own settings.
+          Items hand-picked on a specific link stay visible on that link unless the item
+          itself is Hidden.
+        </p>
+      )}
+
       {initial.length === 0 ? (
         isArchivedView ? (
           <EmptyState
@@ -153,6 +182,9 @@ export function CategoriesManager({
                 )}
                 {cat.description && (
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">{cat.description}</p>
+                )}
+                {canManagePublicVisibility && (
+                  <CategoryVisibilityControl category={cat} />
                 )}
               </div>
               {canManage && (isArchivedView ? (
@@ -345,6 +377,68 @@ function CategoryDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Per-category public-visibility select (P3 public-catalog controls).
+ * 'internal_only' pulls the whole category out of the shared-pool branch of
+ * every public link's eligibility predicate (migration 0261); explicit
+ * per-link item entries are unaffected. Errors render inline under the
+ * select (recurring bug pattern #20), and the value reverts on failure.
+ */
+function CategoryVisibilityControl({ category }: { category: CategoryRow }) {
+  const router = useRouter();
+  const [value, setValue] = React.useState<CategoryPublicVisibility>(
+    category.public_visibility,
+  );
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  async function onChange(next: string) {
+    const visibility = next as CategoryPublicVisibility;
+    if (visibility === value || busy) return;
+    const previous = value;
+    setBusy(true);
+    setError(null);
+    setValue(visibility);
+    const res = await setCategoryPublicVisibilityAction({
+      categoryId: category.id,
+      visibility,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      setValue(previous);
+      setError(res.error.message);
+      return;
+    }
+    toast.success(
+      visibility === 'public'
+        ? `"${category.name}" can appear in the public pool again.`
+        : `"${category.name}" removed from the public pool.`,
+    );
+    router.refresh();
+  }
+
+  return (
+    <div className="mt-2 space-y-1">
+      <div className="flex items-center gap-1.5">
+        <Select value={value} onValueChange={onChange} disabled={busy}>
+          <SelectTrigger
+            className="h-7 w-[150px] text-xs"
+            aria-label={`Public visibility for ${category.name}`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="public">Public</SelectItem>
+            <SelectItem value="internal_only">Internal only</SelectItem>
+          </SelectContent>
+        </Select>
+        {busy && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+      </div>
+      {error && <p className="text-destructive text-xs">{error}</p>}
+    </div>
   );
 }
 

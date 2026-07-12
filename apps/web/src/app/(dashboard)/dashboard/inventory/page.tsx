@@ -324,6 +324,9 @@ async function InventoryTableSection({
   const useSharedCaches = canUseSharedInventoryCaches(sessionCtx);
 
   const canCreate = can(sessionCtx, 'items:create');
+  // Public-catalog visibility (P3): shows the "Set public visibility" bulk
+  // action in the table's bulk bar; the server action re-asserts.
+  const canSetPublicVisibility = can(sessionCtx, 'public_links:manage');
 
   // INSTANT MODE (AWAITED) — DEEP LINKS ONLY (see the streaming note
   // below for the default view). For a manager+ deep link at or under
@@ -446,6 +449,7 @@ async function InventoryTableSection({
           charters: new Map(lookups.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
         }}
         canCreate={canCreate}
+        canSetPublicVisibility={canSetPublicVisibility}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
         charters={lookups.charters}
@@ -724,6 +728,7 @@ async function InventoryTableSection({
       valueOnHand={data.valueOnHand}
       lookups={lookups}
       canCreate={canCreate}
+      canSetPublicVisibility={canSetPublicVisibility}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}

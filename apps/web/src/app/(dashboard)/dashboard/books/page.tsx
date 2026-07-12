@@ -233,6 +233,9 @@ async function BooksTableSection({
   const useSharedCaches = canUseSharedInventoryCaches(sessionCtx);
 
   const canCreate = can(sessionCtx, 'items:create');
+  // Public-catalog visibility (P3): spec requires books get the identical
+  // bulk "Set public visibility" action; the server action re-asserts.
+  const canSetPublicVisibility = can(sessionCtx, 'public_links:manage');
 
   // INSTANT MODE — same contract as the Items page: manager+ orgs at or
   // under INSTANT_MODE_MAX_ROWS get the FULL Books dataset and the
@@ -310,6 +313,7 @@ async function BooksTableSection({
           charters: new Map(lookups.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
         }}
         canCreate={canCreate}
+        canSetPublicVisibility={canSetPublicVisibility}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
         charters={lookups.charters}
@@ -511,6 +515,7 @@ async function BooksTableSection({
       valueOnHand={data.valueOnHand}
       lookups={lookups}
       canCreate={canCreate}
+      canSetPublicVisibility={canSetPublicVisibility}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}
