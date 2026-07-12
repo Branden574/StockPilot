@@ -73,8 +73,13 @@ export default function NotificationsScreen() {
       // RLS silently drops every event. See lib/realtime-auth.ts.
       await ensureRealtimeAuth();
       if (cancelled) return;
+      // Topic must be UNIQUE per subscription: supabase.channel() returns
+      // the EXISTING instance for a repeated topic, and this effect can
+      // re-run before the previous channel's async removeChannel() lands —
+      // .on() against that still-subscribed instance throws "cannot add
+      // postgres_changes callbacks after subscribe()" (Sentry 837e6e00).
       channel = supabase
-        .channel(`notif-${user.id}`)
+        .channel(`notif-${user.id}-${Math.random().toString(36).slice(2, 8)}`)
         .on(
           'postgres_changes',
           {
@@ -88,7 +93,10 @@ export default function NotificationsScreen() {
           },
         )
         .subscribe();
-    })();
+    })().catch(() => {
+      // Never let a subscription race become an unhandled rejection —
+      // the screen still works without realtime (pull-to-refresh).
+    });
     return () => {
       cancelled = true;
       if (channel) void supabase.removeChannel(channel);
