@@ -165,6 +165,13 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
     };
   }, [phase]);
 
+  // Safety net: a running tour whose step index has no step (registry
+  // edited between renders, bad persisted index) must never strand the
+  // user under a dimmer with no card.
+  React.useEffect(() => {
+    if (phase === 'running' && !tour.steps[stepIndex]) finish('completed');
+  }, [phase, stepIndex, tour.steps, finish]);
+
   // Keyboard: Esc dismiss, arrows navigate. Focus the card per step.
   React.useEffect(() => {
     if (phase !== 'running') return;
