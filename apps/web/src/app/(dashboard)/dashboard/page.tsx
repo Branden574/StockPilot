@@ -335,7 +335,17 @@ async function DashboardBody({
       cta: 'Set up',
     },
   ];
-  const checklistComplete = checklistSteps.every((s) => s.done);
+  // Cross-device dismissal (mig 0257): treat dismissed exactly like complete
+  // — the animated Getting-started panel never returns once waved away.
+  const { data: profileRow } = await supabase
+    .from('user_profiles')
+    .select('onboarding_dismissed_at, full_name')
+    .eq('id', ctx.userId)
+    .maybeSingle();
+  const checklistDismissed = Boolean(
+    (profileRow as { onboarding_dismissed_at?: string | null } | null)?.onboarding_dismissed_at,
+  );
+  const checklistComplete = checklistDismissed || checklistSteps.every((s) => s.done);
 
   // Real 14-day qty trends for the low-stock table sparklines. Replaces the
   // synthetic Math.sin curve every row used to show. One small query
