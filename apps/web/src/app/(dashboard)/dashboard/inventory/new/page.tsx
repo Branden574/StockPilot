@@ -19,6 +19,8 @@ import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 
 import { can, resolveTerminology } from '@stockpilot/core';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { NEW_ITEM_TOUR } from '@/lib/onboarding/tours';
 
 export default async function NewItemPage() {
   const ctx = await requireOrgContext();
@@ -125,12 +127,15 @@ export default async function NewItemPage() {
   return (
     <div className="container mx-auto flex min-h-full max-w-3xl flex-col px-4 py-8 sm:px-6">
       <div className="mb-6">
-        <Link
-          href="/dashboard/inventory"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to inventory
-        </Link>
+        <div className="flex items-center justify-between">
+          <Link
+            href="/dashboard/inventory"
+            className="text-muted-foreground hover:text-foreground text-sm"
+          >
+            ← Back to inventory
+          </Link>
+          <PageTour tour={NEW_ITEM_TOUR} />
+        </div>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">New item</h1>
         <p className="text-muted-foreground mt-1 text-sm">
           Add a single item. Use CSV import for bulk in Phase 5.

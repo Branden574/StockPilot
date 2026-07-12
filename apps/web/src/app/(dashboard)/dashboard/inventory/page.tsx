@@ -42,6 +42,8 @@ import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { ITEMS_PAGE_TOUR } from '@/lib/onboarding/tours';
 
 // Dropped from 50 → 30 after the Playwright speed sweep showed the
 // inventory list pulling ~3 MB and 6.2s to load on a warm cache. The
@@ -182,6 +184,7 @@ export default async function InventoryPage({
           <RackFilterDropdown racks={racks} />
           {canCreate && lifecycleStatus !== 'archived' && (
             <>
+              <PageTour tour={ITEMS_PAGE_TOUR} />
               <Button asChild variant="outline">
                 <Link href="/dashboard/inventory/import">Import CSV</Link>
               </Button>
