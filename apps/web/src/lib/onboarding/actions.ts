@@ -59,6 +59,12 @@ export async function recordTourOutcomeAction(
 const announcementSeenSchema = z.object({
   ids: z.array(z.string().min(1).max(80)).min(1).max(50),
   outcome: z.enum(['seen', 'dismissed']),
+  /**
+   * Closing the modal means "I'm caught up": stamp EVERY registry
+   * announcement, not just the (capped) ones shown — otherwise the backlog
+   * drips one modal per page load.
+   */
+  all: z.boolean().optional(),
 });
 
 /**
@@ -103,8 +109,11 @@ export async function recordAnnouncementsSeenAction(
       .maybeSingle();
     const current = (row?.viewed_announcements as Record<string, unknown> | null) ?? {};
     const at = new Date().toISOString();
+    const ids = parsed.data.all
+      ? (await import('@/lib/onboarding/announcements')).ANNOUNCEMENTS.map((a) => a.id)
+      : parsed.data.ids;
     const additions = Object.fromEntries(
-      parsed.data.ids.map((id) => [id, { at, outcome: parsed.data.outcome }]),
+      ids.map((id) => [id, (current[id] as object | undefined) ?? { at, outcome: parsed.data.outcome }]),
     );
     await ctx.supabase.from('user_onboarding').upsert(
       {

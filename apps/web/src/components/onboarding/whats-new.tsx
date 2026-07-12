@@ -34,16 +34,25 @@ export function WhatsNew() {
 
   React.useEffect(() => {
     if (new URLSearchParams(window.location.search).get('tour')) return;
+    // Session guard: covers the server write still being in flight when the
+    // user navigates right after closing (read-after-write race).
+    try {
+      if (sessionStorage.getItem('sp-whats-new-closed')) return;
+    } catch {
+      /* storage unavailable — server state still gates */
+    }
     let cancelled = false;
     void getUnseenAnnouncementsAction().then((unseen) => {
       if (cancelled || unseen.length === 0) return;
       setItems(unseen);
       // Small delay: let the page render before we speak up.
       setTimeout(() => {
-        if (!cancelled) {
-          setOpen(true);
-          capture('whats_new_shown', { count: unseen.length, ids: unseen.map((u) => u.id) });
-        }
+        if (cancelled) return;
+        // One interruption at a time (PRD §15): if a tour prompt or a
+        // running tour is on screen, stay quiet — we retry next page load.
+        if (document.querySelector('[data-tour-open]')) return;
+        setOpen(true);
+        capture('whats_new_shown', { count: unseen.length, ids: unseen.map((u) => u.id) });
       }, 1200);
     });
     return () => {
@@ -54,8 +63,13 @@ export function WhatsNew() {
   const close = React.useCallback(
     (outcome: 'seen' | 'dismissed') => {
       setOpen(false);
+      try {
+        sessionStorage.setItem('sp-whats-new-closed', '1');
+      } catch {
+        /* best-effort */
+      }
       capture('whats_new_closed', { outcome, ids: items.map((i) => i.id) });
-      void recordAnnouncementsSeenAction({ ids: items.map((i) => i.id), outcome });
+      void recordAnnouncementsSeenAction({ ids: items.map((i) => i.id), outcome, all: true });
     },
     [items],
   );

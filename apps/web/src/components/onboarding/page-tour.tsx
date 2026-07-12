@@ -192,6 +192,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
         createPortal(
           <div
             role="dialog"
+            data-tour-open
             aria-label={`${tour.name} tour offer`}
             className="bg-card animate-in fade-in slide-in-from-bottom-2 fixed right-4 bottom-4 z-50 w-80 rounded-xl border p-4 shadow-lg"
           >
@@ -227,7 +228,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
       {phase === 'running' &&
         step &&
         createPortal(
-          <div className="fixed inset-0 z-[70]" aria-live="polite">
+          <div className="fixed inset-0 z-[70]" data-tour-open aria-live="polite">
             {/* Dimmer with a punched-out spotlight (giant box-shadow trick). */}
             <div
               aria-hidden
