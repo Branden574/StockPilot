@@ -594,7 +594,7 @@ export default function Inventory() {
           ListEmptyComponent={
             /* Ghost only for a genuinely empty org — an empty SEARCH result
                must not claim the org has no items yet. */
-            tourActive && !q.trim() && filterCount === 0 ? (
+            tourActive && total === 0 && !q.trim() && filterCount === 0 ? (
               <SampleItemRow />
             ) : (
               <View style={styles.empty}>

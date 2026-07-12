@@ -1,9 +1,10 @@
-import { useLocalSearchParams } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Sparkles, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   AccessibilityInfo,
   Animated,
+  Keyboard,
   Modal,
   Pressable,
   StyleSheet,
@@ -43,6 +44,16 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   const insets = useSafeAreaInsets();
   const { width: winW, height: winH } = useWindowDimensions();
   const params = useLocalSearchParams<{ tour?: string }>();
+  // Tab navigators keep every screen MOUNTED — without this gate all
+  // screens' offers open their Modals at once and the topmost (wrong)
+  // one wins. Only the focused screen may present.
+  const [isFocused, setIsFocused] = React.useState(false);
+  useFocusEffect(
+    React.useCallback(() => {
+      setIsFocused(true);
+      return () => setIsFocused(false);
+    }, []),
+  );
   const [phase, setPhase] = React.useState<'idle' | 'offer' | 'running'>('idle');
   const [step, setStep] = React.useState(0);
   const [rect, setRect] = React.useState<TargetRect | null>(null);
@@ -73,19 +84,22 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   React.useEffect(() => {
     if (params.tour === tour.id && !autoStarted.current) {
       autoStarted.current = true;
+      Keyboard.dismiss();
       setStep(0);
       setPhase('running');
+    } else if (params.tour !== tour.id) {
+      autoStarted.current = false; // a fresh link may start it again
     }
   }, [params.tour, tour.id]);
 
   // Broadcast running state so screens can adapt (sample rows on empty orgs).
   React.useEffect(() => {
-    if (phase === 'running') {
+    if (phase === 'running' && isFocused) {
       setActiveTour(tour.id);
       return () => setActiveTour(null);
     }
     return undefined;
-  }, [phase, tour.id]);
+  }, [phase, tour.id, isFocused]);
 
   // Measure the current step's target. A beat's delay lets tour-reactive UI
   // (e.g. the sample row) mount before we measure it.
@@ -95,21 +109,24 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
       return;
     }
     const targetId = tour.steps[step]?.targetId;
-    if (!targetId) {
-      setRect(null);
-      return;
-    }
+    setRect(null); // never let the previous step's highlight linger
+    if (!targetId) return;
     let cancelled = false;
     const t = setTimeout(() => {
       void measureTarget(targetId).then((r) => {
-        if (!cancelled) setRect(r);
+        if (cancelled) return;
+        // Off-screen (scrolled away but still mounted) measures "successfully"
+        // with an out-of-window y — treat as unmeasurable or the clamp would
+        // spotlight whatever sits at the screen edge.
+        const visible = r && r.y + r.height > 0 && r.y < winH && r.x + r.width > 0 && r.x < winW;
+        setRect(visible ? r : null);
       });
     }, 120);
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [phase, step, tour.steps]);
+  }, [phase, step, tour.steps, winW, winH]);
 
   React.useEffect(() => {
     if (phase === 'idle') return;
@@ -126,6 +143,14 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
     setStep(0);
     setRect(null);
     void recordTourOutcome(tour.id, tour.version, outcome);
+  };
+
+  // Backdrop tap: close WITHOUT stamping — an accidental tap outside the
+  // card must not mark the tour dismissed-forever. It re-offers next visit.
+  const softExit = () => {
+    setPhase('idle');
+    setStep(0);
+    setRect(null);
   };
 
   const current = tour.steps[step];
@@ -153,6 +178,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
         accessibilityRole="button"
         accessibilityLabel={`Start the ${tour.name} tour`}
         onPress={() => {
+          Keyboard.dismiss();
           setStep(0);
           setPhase('running');
         }}
@@ -168,16 +194,19 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
       </Pressable>
 
       <Modal
-        visible={phase !== 'idle'}
+        visible={isFocused && phase !== 'idle'}
         transparent
+        statusBarTranslucent
         animationType="none"
         onRequestClose={() => finish('dismissed')}
       >
-        <Pressable
-          accessibilityLabel="Exit tour"
-          style={styles.fill}
-          onPress={() => finish('dismissed')}
-        >
+        <View style={styles.fill}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Exit tour"
+            style={StyleSheet.absoluteFill}
+            onPress={softExit}
+          />
           {/* Dimmer: full wash, or four rects around the spotlight hole. */}
           {phase === 'running' && hole ? (
             <View pointerEvents="none" style={StyleSheet.absoluteFill}>
@@ -193,7 +222,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                     top: hole.y,
                     width: hole.w,
                     height: hole.h,
-                    borderColor: c.card,
+                    borderColor: 'rgba(255,255,255,0.95)',
                     opacity: fade,
                   },
                 ]}
@@ -215,7 +244,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
               { opacity: fade },
             ]}
           >
-            <Pressable
+            <View
               accessibilityViewIsModal
               style={[
                 cardOnTop ? styles.cardFloating : styles.sheet,
@@ -251,6 +280,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                     <Pressable
                       accessibilityRole="button"
                       onPress={() => {
+                        Keyboard.dismiss();
                         setStep(0);
                         setPhase('running');
                       }}
@@ -318,9 +348,9 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                   </View>
                 </>
               ) : null}
-            </Pressable>
+            </View>
           </Animated.View>
-        </Pressable>
+        </View>
       </Modal>
     </>
   );
