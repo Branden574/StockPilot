@@ -36,6 +36,7 @@ import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
+import { useTourTarget } from '@/lib/tour-targets';
 import { MOBILE_HOME_TOUR } from '@/lib/onboarding';
 
 interface Summary {
@@ -80,6 +81,7 @@ export default function Home() {
   const profile = useProfile();
   const tabBarHeight = useBottomTabBarHeight();
   const [summary, setSummary] = React.useState<Summary | null>(null);
+  const scanTargetRef = useTourTarget('home-scan');
   const [recent, setRecent] = React.useState<RecentMovement[]>([]);
   const [orgName, setOrgName] = React.useState<string>('Your workspace');
   const [refreshing, setRefreshing] = React.useState(false);
@@ -273,7 +275,7 @@ export default function Home() {
               </View>
             </View>
 
-            <View style={{ paddingHorizontal: 20, marginTop: 20 }}>
+            <View ref={scanTargetRef} collapsable={false} style={{ paddingHorizontal: 20, marginTop: 20 }}>
               <Pressable
                 onPress={() => router.push('/scan')}
                 style={({ pressed }) => ({ opacity: pressed ? 0.92 : 1 })}

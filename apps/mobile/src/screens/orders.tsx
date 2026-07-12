@@ -14,6 +14,7 @@ import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
+import { useTourTarget } from '@/lib/tour-targets';
 import { MOBILE_ORDERS_TOUR } from '@/lib/onboarding';
 
 interface OrderRow {
@@ -51,6 +52,7 @@ const STATUS_META: Record<string, { label: string; status: 'ok' | 'warn' | 'crit
 export default function OrdersScreen() {
   const { orgId } = useOrg();
   const [rows, setRows] = React.useState<OrderRow[]>([]);
+  const firstRowTargetRef = useTourTarget('orders-first-row');
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
 
@@ -124,7 +126,15 @@ export default function OrdersScreen() {
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(o) => o.id}
-      renderItem={(o) => <OrderCard order={o} />}
+      renderItem={(o, i) =>
+        i === 0 ? (
+          <View ref={firstRowTargetRef} collapsable={false}>
+            <OrderCard order={o} />
+          </View>
+        ) : (
+          <OrderCard order={o} />
+        )
+      }
       trailing={<MobileTour tour={MOBILE_ORDERS_TOUR} />}
     />
   );

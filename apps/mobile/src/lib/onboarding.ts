@@ -11,6 +11,8 @@ import { supabase } from './supabase';
 export interface MobileTourStep {
   title: string;
   body: string;
+  /** Registered spotlight target (lib/tour-targets); absent/unmeasurable = plain step. */
+  targetId?: string;
 }
 
 export interface MobileTourDefinition {
@@ -94,7 +96,8 @@ export const MOBILE_HOME_TOUR: MobileTourDefinition = {
     },
     {
       title: 'Scan is the fast path',
-      body: 'The center Scan tab reads barcodes and ISBNs. Point it at a book cover and the AI can identify it even without a barcode.',
+      body: 'Reads barcodes, QR codes, and ISBNs. Point it at a book cover and the AI can identify it even without a barcode.',
+      targetId: 'home-scan',
     },
     {
       title: 'Stays in sync with the web',
@@ -110,11 +113,18 @@ export const MOBILE_INVENTORY_TOUR: MobileTourDefinition = {
   steps: [
     {
       title: 'Every item, in your pocket',
-      body: 'Search by name or SKU, and pull down to refresh. Items load 50 at a time, so even huge catalogs stay fast.',
+      body: 'Search by name or SKU — or tap the barcode icon to scan. Items load 50 at a time, so even huge catalogs stay fast.',
+      targetId: 'inventory-search',
+    },
+    {
+      title: 'Add from anywhere',
+      body: 'The + button creates a new item in seconds — only a name is required. Everything else can come later.',
+      targetId: 'inventory-add',
     },
     {
       title: 'Tap an item for everything',
       body: 'Stock levels by location, serial numbers, photos, and movement history — plus Adjust and Transfer if your role allows it.',
+      targetId: 'inventory-first-row',
     },
     {
       title: 'On hand vs placed',
@@ -134,7 +144,8 @@ export const MOBILE_ORDERS_TOUR: MobileTourDefinition = {
     },
     {
       title: 'Claim before you pick',
-      body: 'Press “Claim picking” on an order to lock it to you — that is what prevents two people picking the same order. Digital picking then walks you line by line.',
+      body: 'Open an order and press “Claim picking” to lock it to you — that is what prevents two people picking the same order. Digital picking then walks you line by line.',
+      targetId: 'orders-first-row',
     },
     {
       title: 'Fulfilled means handed over',

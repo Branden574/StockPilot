@@ -57,6 +57,7 @@ import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
+import { useTourActive, useTourTarget } from '@/lib/tour-targets';
 import { MOBILE_INVENTORY_TOUR } from '@/lib/onboarding';
 
 interface Item {
@@ -111,6 +112,9 @@ export default function Inventory() {
   const [orgId, setOrgId] = React.useState<string | null>(null);
   const { activeOrgId, activeWarehouseId } = useWorkspace();
   const [items, setItems] = React.useState<Item[]>([]);
+  const searchTargetRef = useTourTarget('inventory-search');
+  const addTargetRef = useTourTarget('inventory-add');
+  const tourActive = useTourActive('mobile-inventory');
   const [q, setQ] = React.useState('');
   const [page, setPage] = React.useState(1);
   // Size-run grouping (apparel): collapse a run of same-base sized items on this
@@ -483,7 +487,7 @@ export default function Inventory() {
           />
         );
       }
-      return (
+      const itemRow = (
         <ItemRow
           item={row.item}
           isLast={index === groupedRows.length - 1}
@@ -492,6 +496,12 @@ export default function Inventory() {
           selectMode={selectMode}
           onToggleSelect={onToggleSelect}
         />
+      );
+      // First visible row doubles as the tour's "tap an item" spotlight.
+      return index === 0 ? (
+        <TourRowAnchor>{itemRow}</TourRowAnchor>
+      ) : (
+        itemRow
       );
     },
     [groupedRows.length, expandedGroups, toggleGroup, onItemPress, selectMode, onToggleSelect],
@@ -516,7 +526,9 @@ export default function Inventory() {
               icon={selectMode ? Check : ListChecks}
               onPress={() => setSelectMode((v) => !v)}
             />
-            <IconChip icon={Plus} onPress={() => router.push('/item/new')} />
+            <View ref={addTargetRef} collapsable={false}>
+              <IconChip icon={Plus} onPress={() => router.push('/item/new')} />
+            </View>
           </View>
         </View>
         <View style={styles.head}>
@@ -530,7 +542,11 @@ export default function Inventory() {
         </View>
 
         <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }}>
-          <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair }]}>
+          <View
+            ref={searchTargetRef}
+            collapsable={false}
+            style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair }]}
+          >
             <Search size={16} color={c.ink4} strokeWidth={1.4} />
             <TextInput
               value={q}
@@ -576,12 +592,18 @@ export default function Inventory() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.ink} />
           }
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <Body color={c.ink}>No items match.</Body>
-              <Body muted style={{ marginTop: 4, textAlign: 'center' }}>
-                Adjust filters or add items from the web app.
-              </Body>
-            </View>
+            /* Ghost only for a genuinely empty org — an empty SEARCH result
+               must not claim the org has no items yet. */
+            tourActive && !q.trim() && filterCount === 0 ? (
+              <SampleItemRow />
+            ) : (
+              <View style={styles.empty}>
+                <Body color={c.ink}>No items match.</Body>
+                <Body muted style={{ marginTop: 4, textAlign: 'center' }}>
+                  Adjust filters or add items from the web app.
+                </Body>
+              </View>
+            )
           }
           ListHeaderComponent={listHeader}
           ListFooterComponent={
@@ -828,3 +850,70 @@ const rowStyles = StyleSheet.create({
     paddingHorizontal: 16,
   },
 });
+
+/**
+ * Measurable wrapper marking the first list row as the tour's
+ * "tap an item" spotlight target (collapsable=false keeps the native
+ * view alive for measureInWindow on Android).
+ */
+function TourRowAnchor({ children }: { children: React.ReactNode }) {
+  const ref = useTourTarget('inventory-first-row');
+  return (
+    <View ref={ref} collapsable={false}>
+      {children}
+    </View>
+  );
+}
+
+/**
+ * Ghost row for brand-new orgs (owner request 2026-07-11): when the tour
+ * runs on an EMPTY list, "tap an item" would point at nothing — so we show
+ * a clearly-labeled sample row for the spotlight to land on. Client-side
+ * only, never written to the database; it disappears with the tour.
+ */
+function SampleItemRow() {
+  const { c } = useTheme();
+  const ref = useTourTarget('inventory-first-row');
+  return (
+    <View ref={ref} collapsable={false}>
+      <View
+        style={{
+          backgroundColor: c.card,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: c.hair,
+          borderRadius: 10,
+        }}
+      >
+        <View style={rowStyles.row}>
+          <Thumb size={56} icon={Box} pip={ACCENT.pipTeal} imageUrl={null} recyclingKey="sample" />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Mono
+              color={c.ink}
+              size={15.5}
+              tracking={0}
+              style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
+            >
+              Acer Chromebook 511
+            </Mono>
+            <Mono size={11} color={c.ink4} tracking={0.04} numberOfLines={1} style={{ marginTop: 4 }}>
+              SAMPLE-001 · example item
+            </Mono>
+          </View>
+          <View style={{ alignItems: 'flex-end', gap: 6 }}>
+            <Mono
+              size={17}
+              tracking={0}
+              style={{ fontFamily: FONT.display, letterSpacing: -0.31, color: c.ink }}
+            >
+              25
+            </Mono>
+            <Pill status="ok">SAMPLE</Pill>
+          </View>
+        </View>
+      </View>
+      <Body muted size={11.5} style={{ marginTop: 8, textAlign: 'center' }}>
+        Example only — it disappears when the tour ends. Your real items will appear here.
+      </Body>
+    </View>
+  );
+}
