@@ -7,6 +7,7 @@ import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { isLinkOpen } from '@/server/services/public-catalog';
 
 import type { OrderRequestRow } from '@/server/services/order-requests';
 
@@ -299,20 +300,62 @@ export async function POST(req: NextRequest) {
 
   const admin = createAdminClient();
 
-  // 3. Resolve the org by token. If the token doesn't exist we return
-  // 404 so we don't leak which orgs use the feature.
-  const { data: org, error: orgErr } = await admin
-    .from('organizations')
-    .select('id')
-    .eq('public_request_token', body.token)
+  // 3. Resolve the token: public_request_links FIRST (migration 0261 moved
+  // every org's legacy token onto its "General request link", so existing
+  // URLs land here), then the organizations.public_request_token fallback
+  // for tokens that predate/escaped the backfill. Unknown token AND a
+  // closed link both return the same 404 so we leak neither which orgs use
+  // the feature nor a link's enabled/expired state.
+  type PublicLinkRow = {
+    id: string;
+    organization_id: string;
+    active: boolean;
+    expires_at: string | null;
+    available_from: string | null;
+    available_until: string | null;
+    default_max_qty: number | null;
+  };
+  const { data: linkRowRaw, error: linkErr } = await admin
+    .from('public_request_links')
+    .select(
+      'id, organization_id, active, expires_at, available_from, available_until, default_max_qty',
+    )
+    .eq('token', body.token)
     .maybeSingle();
-  if (orgErr) {
+  if (linkErr) {
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
-  if (!org) {
-    return NextResponse.json({ error: 'not_found' }, { status: 404 });
+  const link = (linkRowRaw as PublicLinkRow | null) ?? null;
+
+  let organizationId: string;
+  if (link) {
+    if (
+      !isLinkOpen({
+        active: link.active,
+        expiresAt: link.expires_at,
+        availableFrom: link.available_from,
+        availableUntil: link.available_until,
+      })
+    ) {
+      return NextResponse.json({ error: 'not_found' }, { status: 404 });
+    }
+    organizationId = link.organization_id;
+  } else {
+    // Legacy fallback — org token without a links row (droppable once
+    // verified unused; plan, locked decision 1).
+    const { data: org, error: orgErr } = await admin
+      .from('organizations')
+      .select('id')
+      .eq('public_request_token', body.token)
+      .maybeSingle();
+    if (orgErr) {
+      return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    }
+    if (!org) {
+      return NextResponse.json({ error: 'not_found' }, { status: 404 });
+    }
+    organizationId = (org as { id: string }).id;
   }
-  const organizationId = (org as { id: string }).id;
 
   // Module gate — public order requests are an optional module. The
   // service layer's assertModuleEnabled can't run here (no
@@ -371,41 +414,101 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 5. Validate every line item: belongs to this org + warehouse,
-  // item_type='book', not soft-deleted, status='active'. Snapshot
-  // unit_cost from each item. Operates on `dedupedLines` so the
-  // validation set matches what we'll actually insert.
+  // 5. Validate every line item against the SAME eligibility predicate the
+  // catalog renders from — `public.public_link_eligible_items` (mig 0261):
+  // item active + not deleted + this publicly-orderable warehouse + not
+  // 'hidden' + on this link's catalog (explicit entry or public pool) +
+  // link open + per-type toggle. Always FRESH — never the 60s-cached
+  // catalog — so an item pulled from the link mid-session is rejected
+  // here even if the visitor's page still shows it. Also enforces the
+  // per-line qty cap (entry cap ?? link default ?? unlimited) and
+  // snapshots unit_cost. Operates on `dedupedLines` so the validation set
+  // matches what we'll actually insert.
   const itemIds = [...new Set(dedupedLines.map((l) => l.itemId))];
-  const { data: items, error: itemsErr } = await admin
-    .from('inventory_items')
-    .select('id, warehouse_id, unit_cost, item_type, status, deleted_at')
-    .eq('organization_id', organizationId)
-    .in('id', itemIds);
-  if (itemsErr) {
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
-  }
-  type ItemRow = {
-    id: string;
-    warehouse_id: string | null;
-    unit_cost: number | string | null;
-    item_type: string;
-    status: string;
-    deleted_at: string | null;
-  };
   const itemMap = new Map<string, { unitCost: number }>();
-  for (const row of (items ?? []) as ItemRow[]) {
-    if (row.deleted_at) continue;
-    if (row.status !== 'active') continue;
-    if (row.item_type !== 'book') continue;
-    if (row.warehouse_id !== body.warehouseId) continue;
-    itemMap.set(row.id, { unitCost: Number(row.unit_cost) || 0 });
-  }
-  for (const line of dedupedLines) {
-    if (!itemMap.has(line.itemId)) {
-      return NextResponse.json(
-        { error: 'invalid_line', message: 'One of the books is no longer available.' },
-        { status: 400 },
-      );
+
+  if (link) {
+    const { data: eligibleRows, error: eligErr } = await admin.rpc(
+      'public_link_eligible_items',
+      { p_link_id: link.id, p_warehouse_id: body.warehouseId },
+    );
+    if (eligErr) {
+      return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    }
+    const maxQtyByItem = new Map<string, number | null>(
+      ((eligibleRows ?? []) as Array<{ item_id: string; max_qty: number | null }>).map(
+        (r) => [r.item_id, r.max_qty],
+      ),
+    );
+    for (const line of dedupedLines) {
+      if (!maxQtyByItem.has(line.itemId)) {
+        return NextResponse.json(
+          {
+            error: 'invalid_line',
+            message:
+              'This item is no longer available through this request form. Please remove it and submit again.',
+          },
+          { status: 400 },
+        );
+      }
+      const cap = maxQtyByItem.get(line.itemId) ?? null;
+      if (cap !== null && line.quantity > cap) {
+        return NextResponse.json(
+          {
+            error: 'invalid_line',
+            message: `One of the items exceeds this form's limit of ${cap} per request. Please lower the quantity and submit again.`,
+          },
+          { status: 400 },
+        );
+      }
+    }
+    // unit_cost snapshot for the eligible lines (internal bookkeeping —
+    // never returned to the requester).
+    const { data: items, error: itemsErr } = await admin
+      .from('inventory_items')
+      .select('id, unit_cost')
+      .eq('organization_id', organizationId)
+      .in('id', itemIds);
+    if (itemsErr) {
+      return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    }
+    for (const row of (items ?? []) as Array<{ id: string; unit_cost: number | string | null }>) {
+      itemMap.set(row.id, { unitCost: Number(row.unit_cost) || 0 });
+    }
+  } else {
+    // Legacy fallback (org token without a links row): the pre-0261 checks —
+    // belongs to this org + warehouse, item_type='book', not soft-deleted,
+    // status='active'.
+    const { data: items, error: itemsErr } = await admin
+      .from('inventory_items')
+      .select('id, warehouse_id, unit_cost, item_type, status, deleted_at')
+      .eq('organization_id', organizationId)
+      .in('id', itemIds);
+    if (itemsErr) {
+      return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    }
+    type ItemRow = {
+      id: string;
+      warehouse_id: string | null;
+      unit_cost: number | string | null;
+      item_type: string;
+      status: string;
+      deleted_at: string | null;
+    };
+    for (const row of (items ?? []) as ItemRow[]) {
+      if (row.deleted_at) continue;
+      if (row.status !== 'active') continue;
+      if (row.item_type !== 'book') continue;
+      if (row.warehouse_id !== body.warehouseId) continue;
+      itemMap.set(row.id, { unitCost: Number(row.unit_cost) || 0 });
+    }
+    for (const line of dedupedLines) {
+      if (!itemMap.has(line.itemId)) {
+        return NextResponse.json(
+          { error: 'invalid_line', message: 'One of the books is no longer available.' },
+          { status: 400 },
+        );
+      }
     }
   }
 

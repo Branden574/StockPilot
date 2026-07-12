@@ -1,4 +1,3 @@
-import { unstable_cache } from 'next/cache';
 import Image from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -7,7 +6,13 @@ import { PublicOrdersV2 } from '@/components/orders/public-v2/public-orders-v2';
 import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { getPublicBookCatalog } from '@/server/services/public-catalog';
+import {
+  getPublicBookCatalog,
+  getPublicCatalogForLink,
+  isLinkOpen,
+  resolvePublicRequestToken,
+  toLegacyCatalogItems,
+} from '@/server/services/public-catalog';
 
 /**
  * F9: org.logo_url is editable by org admins and could in theory hold
@@ -28,50 +33,20 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Cached resolver: token → minimal org row. Called from both
- * generateMetadata AND the page render in the same request — caching
- * dedupes both within one render AND lets repeat visits within 60s
- * skip the Supabase round-trip entirely.
- *
- * Stale window for an org name/logo/blurb is acceptable; renames and
- * blurb edits are extremely rare and 60s drift on a public landing
- * page is invisible. If a token is rotated/revoked, the prior owner
- * could see stale rendering for up to 60s — but the order-submit
- * endpoint validates the token fresh on POST, so submissions still
- * fail closed even if the page renders stale.
- */
-const getOrgByPublicToken = unstable_cache(
-  async (token: string) => {
-    const admin = createAdminClient();
-    const { data } = await admin
-      .from('organizations')
-      .select('id, name, logo_url, public_request_blurb')
-      .eq('public_request_token', token)
-      .maybeSingle();
-    return data as
-      | { id: string; name: string; logo_url: string | null; public_request_blurb: string | null }
-      | null;
-  },
-  ['public-org-by-token-v1'],
-  { revalidate: 60, tags: ['public-org-by-token'] },
-);
-
-/**
  * Public order-request landing page.
  *
  * URL: `/r/<token>` — anyone with the link lands here. Anonymous, no
  * auth required. Uses the service-role admin client because the visitor
  * has no Supabase JWT; the token IS the auth.
  *
- * Renders:
- *   - Org branding (name, logo, blurb)
- *   - Warehouse picker (only if more than one is publicly orderable)
- *   - Book grid filtered to the chosen warehouse
- *   - The submit form (`<PublicOrderForm />`)
- *
- * If zero warehouses are flagged `is_public_orderable` we show a
- * friendly "not currently accepting requests" card instead of a broken
- * empty form.
+ * Since migration 0261 a token resolves to a public_request_links row
+ * FIRST (each org's legacy token was migrated onto its "General request
+ * link", so existing URLs keep working), with the old
+ * organizations.public_request_token lookup as a fallback. The link row
+ * decides what this page shows: active/expiry/date-window gate the whole
+ * page, and the catalog is the link's curated item set resolved through
+ * the shared `public_link_eligible_items` predicate — the same one the
+ * submit endpoint enforces.
  */
 
 interface WarehouseSummary {
@@ -85,8 +60,8 @@ export async function generateMetadata({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const orgRow = await getOrgByPublicToken(token);
-  const orgName = orgRow?.name ?? 'Order request';
+  const resolved = token && token.length >= 16 ? await resolvePublicRequestToken(token) : null;
+  const orgName = resolved?.org.name ?? 'Order request';
   return {
     title: `${orgName} · Place an order`,
     robots: { index: false, follow: false },
@@ -105,10 +80,31 @@ export default async function PublicOrderRequestPage({
   const sp = await searchParams;
   const warehouseQuery = Array.isArray(sp.w) ? sp.w[0] : sp.w;
 
-  // 1. Resolve the org. 404 silently if the token is unknown. Shared
-  // cached lookup with generateMetadata above — same DB row, one fetch.
-  const org = await getOrgByPublicToken(token);
-  if (!org) notFound();
+  // 1. Resolve the token → link + org (links-table first, org-token
+  // fallback). 404 silently if the token is unknown. Shared cached lookup
+  // with generateMetadata above — same rows, one fetch.
+  const resolved = await resolvePublicRequestToken(token);
+  if (!resolved) notFound();
+  const { org, link } = resolved;
+
+  // 1b. A disabled / expired / out-of-window link renders the friendly
+  // "closed" card — the URL is real, the org just isn't taking requests
+  // through it right now. (Submit independently re-checks and 404s.)
+  if (link && !isLinkOpen(link)) {
+    return (
+      <div className="mx-auto max-w-md py-10">
+        <Header org={org} />
+        <div className="border-border bg-card mt-8 rounded-2xl border p-6 text-center">
+          <h2 className="font-display text-lg">Not accepting requests</h2>
+          <p className="text-muted-foreground mt-2 text-sm">
+            This request link isn&apos;t currently open. Please check back
+            later or reach out to the organization directly.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const admin = createAdminClient();
 
   // 2. Eligible warehouses.
@@ -127,7 +123,7 @@ export default async function PublicOrderRequestPage({
   if (warehouses.length === 0) {
     return (
       <div className="mx-auto max-w-md py-10">
-        <Header org={org} />
+        <Header org={org} link={link} />
         <div className="border-border bg-card mt-8 rounded-2xl border p-6 text-center">
           <h2 className="font-display text-lg">Not accepting requests</h2>
           <p className="text-muted-foreground mt-2 text-sm">
@@ -147,7 +143,17 @@ export default async function PublicOrderRequestPage({
     : null;
   const activeWarehouse = requested ?? warehouses[0];
   if (!activeWarehouse) notFound();
-  const items = await getPublicBookCatalog(org.id, activeWarehouse.id);
+
+  // 3. The link's curated catalog (or the legacy org-token path for a token
+  // that predates the 0261 backfill). The transitional adapter narrows the
+  // link-aware PublicCatalogItem onto the CatalogItem interface the current
+  // public UI still consumes — internal-only fields are structurally absent.
+  const items: CatalogItem[] = link
+    ? toLegacyCatalogItems(
+        await getPublicCatalogForLink(link, activeWarehouse.id),
+        activeWarehouse.id,
+      )
+    : await getPublicBookCatalog(org.id, activeWarehouse.id);
   const aisles = buildAisles(items);
 
   // Charters serviced by the active warehouse — restricted to status=
@@ -180,7 +186,12 @@ export default async function PublicOrderRequestPage({
 
   return (
     <div>
-      <Header org={org} warehouseName={activeWarehouse.name} catalogCount={items.length} />
+      <Header
+        org={org}
+        link={link}
+        warehouseName={activeWarehouse.name}
+        catalogCount={items.length}
+      />
       <PublicOrdersV2
         token={token}
         orgName={org.name}
@@ -201,13 +212,17 @@ export default async function PublicOrderRequestPage({
 
 function Header({
   org,
+  link,
   warehouseName,
   catalogCount,
 }: {
   org: { name: string; logo_url: string | null; public_request_blurb: string | null };
+  link?: { instructions: string | null } | null;
   warehouseName?: string;
   catalogCount?: number;
 }) {
+  // Per-link instructions beat the org-wide blurb when set.
+  const blurb = link?.instructions?.trim() || org.public_request_blurb;
   return (
     <header className="mb-8">
       {/* Brand row */}
@@ -253,11 +268,11 @@ function Header({
             Request books &amp;{' '}
             <span className="text-muted-foreground italic">classroom supplies.</span>
           </h1>
-          {org.public_request_blurb ? (
+          {blurb ? (
             // Blurb may contain markdown; rendered as plain text with line
             // breaks preserved.
             <p className="text-muted-foreground mt-4 max-w-[52ch] whitespace-pre-line text-sm leading-relaxed">
-              {org.public_request_blurb}
+              {blurb}
             </p>
           ) : (
             <p className="text-muted-foreground mt-4 max-w-[52ch] text-sm leading-relaxed">

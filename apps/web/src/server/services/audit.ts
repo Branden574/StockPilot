@@ -95,6 +95,16 @@ export type AuditEvent =
   | 'order_request.cancelled'
   | 'order_request.delivered'
   | 'order_request.public_link_rotated'
+  // Public request links + per-link catalog curation (mig 0261). Every
+  // visibility-affecting change is audited with link_id / item_id / before /
+  // after in metadata so "who exposed what, when" is always answerable.
+  | 'public_link.created'
+  | 'public_link.updated'
+  | 'public_link.disabled'
+  | 'public_catalog.entry_added'
+  | 'public_catalog.entry_removed'
+  | 'public_catalog.bulk_change'
+  | 'item.public_visibility_changed'
   // New 'order.*' events for the refactored pick → pack → stage → sign
   // workflow (phases 3–5). Coexist with legacy 'order_request.*' events
   // above so historical audit-log queries stay valid; new emissions use

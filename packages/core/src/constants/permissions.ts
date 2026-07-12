@@ -45,6 +45,13 @@ export const PERMISSIONS = [
   'orders:request',
   'orders:approve',
   'orders:assign_delivery',
+  // Public request links (public_requests module): create/disable the shared
+  // /r/<token> links and curate exactly which items each link's catalog
+  // exposes (per-link allowlist, public pool, qty caps). Admin-only by
+  // default — a link config mistake exposes catalog data to anyone holding
+  // the URL, the same blast radius as rotating the org token
+  // (organization:update, also admin+).
+  'public_links:manage',
   // B2B customers (b2b_portal module): manage customer accounts, portal user
   // invites, price lists, and per-customer catalogs. Manager+ — the same
   // people who approve the orders those customers place.
@@ -271,6 +278,9 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   'categories:manage',
   'suppliers:manage',
   'orders:approve',
+  //   public request links (mig 0261) — RLS is has_permission-based from day
+  //   one, so a grant is fully effective end-to-end.
+  'public_links:manage',
 ]);
 
 /**
@@ -461,6 +471,12 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     group: 'Order requests',
     label: 'Assign deliveries',
     description: 'Assign a staged delivery to a driver. Manager+ only.',
+  },
+  'public_links:manage': {
+    group: 'Order requests',
+    label: 'Manage public request links',
+    description:
+      'Create and disable public order-request links and curate which items each link exposes.',
   },
 
   'customers:manage': {

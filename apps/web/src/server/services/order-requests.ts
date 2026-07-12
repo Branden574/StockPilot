@@ -2055,6 +2055,21 @@ export class OrderRequestsService {
     // service gate with RLS: admin+ only.
     assertPermission(this.ctx, 'organization:update');
     const token = generateToken();
+    // Load the CURRENT token first: since migration 0261 the /r/<token>
+    // read path resolves public_request_links FIRST, and the org's legacy
+    // token lives on its migrated "General request link". Rotating only the
+    // organizations column would leave the old token alive in the links
+    // table — rotation would silently stop invalidating the old URL. So the
+    // matching link row (same token) is rotated in the same operation.
+    const { data: orgRow, error: readErr } = await this.ctx.supabase
+      .from('organizations')
+      .select('public_request_token')
+      .eq('id', this.ctx.organizationId)
+      .maybeSingle();
+    if (readErr) throw new ServiceError('internal_error', readErr.message);
+    const oldToken =
+      (orgRow as { public_request_token: string | null } | null)
+        ?.public_request_token ?? null;
     const { error } = await this.ctx.supabase
       .from('organizations')
       .update({
@@ -2063,6 +2078,47 @@ export class OrderRequestsService {
       })
       .eq('id', this.ctx.organizationId);
     if (error) throw new ServiceError('internal_error', error.message);
+    let linkSynced = false;
+    if (oldToken) {
+      const { data: updatedLinks, error: linkErr } = await this.ctx.supabase
+        .from('public_request_links')
+        .update({ token })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('token', oldToken)
+        .select('id');
+      if (linkErr) throw new ServiceError('internal_error', linkErr.message);
+      linkSynced = (updatedLinks ?? []).length > 0;
+    }
+    if (!linkSynced) {
+      // First-time enablement (or pre-0261 drift): no link row carries the
+      // old token, so mint the org's "General request link" now with the
+      // same frozen-behavior defaults as the 0261 backfill — exact counts,
+      // books only, no public pool — and seed explicit entries for every
+      // currently-eligible book so the page shows exactly what the legacy
+      // flow would have shown. Without this, a fresh enablement between P1
+      // and the P2 catalog editor would land on an empty catalog with no
+      // way to fix it.
+      const { data: newLink, error: insErr } = await this.ctx.supabase
+        .from('public_request_links')
+        .insert({
+          organization_id: this.ctx.organizationId,
+          name: 'General request link',
+          token,
+          active: true,
+          availability_display: 'exact',
+          books_enabled: true,
+          items_enabled: false,
+          include_public_pool: false,
+          created_by: this.ctx.userId,
+        })
+        .select('id')
+        .single();
+      if (insErr || !newLink) {
+        throw new ServiceError('internal_error', insErr?.message ?? 'link_create_failed');
+      }
+      const linkId = (newLink as { id: string }).id;
+      await this.seedGeneralLinkEntries(linkId);
+    }
     await audit(
       {
         event: 'order_request.public_link_rotated',
@@ -2072,6 +2128,54 @@ export class OrderRequestsService {
       this.ctx,
     );
     return { token };
+  }
+
+  /**
+   * Seeds a freshly-minted General request link with an explicit catalog
+   * entry for every currently-eligible book (active, not deleted, in a
+   * publicly-orderable warehouse) — the same freeze semantics as the 0261
+   * backfill. Paginates the id scan (PostgREST caps a select at 1000 rows)
+   * and chunk-inserts the entries.
+   */
+  private async seedGeneralLinkEntries(linkId: string): Promise<void> {
+    const { data: whs, error: whErr } = await this.ctx.supabase
+      .from('warehouses')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('is_public_orderable', true);
+    if (whErr) throw new ServiceError('internal_error', whErr.message);
+    const whIds = ((whs ?? []) as Array<{ id: string }>).map((w) => w.id);
+    if (whIds.length === 0) return;
+
+    const PAGE = 1000;
+    let from = 0;
+    for (;;) {
+      const { data: items, error: itemsErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('warehouse_id', whIds)
+        .eq('item_type', 'book')
+        .eq('status', 'active')
+        .is('deleted_at', null)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (itemsErr) throw new ServiceError('internal_error', itemsErr.message);
+      const ids = ((items ?? []) as Array<{ id: string }>).map((i) => i.id);
+      if (ids.length === 0) break;
+      for (let i = 0; i < ids.length; i += 500) {
+        const chunk = ids.slice(i, i + 500);
+        const { error: entryErr } = await this.ctx.supabase
+          .from('public_link_catalog_entries')
+          .upsert(
+            chunk.map((itemId) => ({ link_id: linkId, item_id: itemId })),
+            { onConflict: 'link_id,item_id' },
+          );
+        if (entryErr) throw new ServiceError('internal_error', entryErr.message);
+      }
+      if (ids.length < PAGE) break;
+      from += PAGE;
+    }
   }
 
   async setBlurb(blurb: string | null): Promise<void> {

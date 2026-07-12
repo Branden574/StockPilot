@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { ItemImagesService } from '@/server/services/item-images';
+import { isLinkOpen } from '@/server/services/public-catalog';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,16 +38,52 @@ export async function GET(req: NextRequest) {
 
   const admin = createAdminClient();
 
-  // Resolve org by token.
-  const { data: org } = await admin
-    .from('organizations')
-    .select('id')
-    .eq('public_request_token', token)
+  // Resolve the token: links-table first (mig 0261 — the migrated General
+  // links carry the legacy org tokens), organizations fallback. The signed
+  // set is the LINK's eligible catalog, resolved through the same
+  // `public_link_eligible_items` predicate as the page and the submit
+  // endpoint, so thumbnails can't be used to enumerate items a link
+  // doesn't expose.
+  const { data: linkRow } = await admin
+    .from('public_request_links')
+    .select('id, organization_id, active, expires_at, available_from, available_until')
+    .eq('token', token)
     .maybeSingle();
-  if (!org) {
-    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
+  type LinkRow = {
+    id: string;
+    organization_id: string;
+    active: boolean;
+    expires_at: string | null;
+    available_from: string | null;
+    available_until: string | null;
+  };
+  const link = (linkRow as LinkRow | null) ?? null;
+
+  let organizationId: string;
+  if (link) {
+    if (
+      !isLinkOpen({
+        active: link.active,
+        expiresAt: link.expires_at,
+        availableFrom: link.available_from,
+        availableUntil: link.available_until,
+      })
+    ) {
+      return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
+    }
+    organizationId = link.organization_id;
+  } else {
+    // Legacy fallback — org token without a links row.
+    const { data: org } = await admin
+      .from('organizations')
+      .select('id')
+      .eq('public_request_token', token)
+      .maybeSingle();
+    if (!org) {
+      return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
+    }
+    organizationId = (org as { id: string }).id;
   }
-  const organizationId = (org as { id: string }).id;
 
   // Confirm warehouseId belongs to this org and is publicly orderable.
   const { data: wh } = await admin
@@ -60,18 +97,29 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
   }
 
-  // Get book item_ids for this warehouse.
-  const { data: items } = await admin
-    .from('inventory_items')
-    .select('id')
-    .eq('organization_id', organizationId)
-    .eq('warehouse_id', warehouseId)
-    .eq('item_type', 'book')
-    .eq('status', 'active')
-    .is('deleted_at', null)
-    .limit(500);
-
-  const itemIds = ((items ?? []) as Array<{ id: string }>).map((i) => i.id);
+  // Eligible item_ids for this link + warehouse (or the pre-0261 book set
+  // on the legacy fallback path).
+  let itemIds: string[];
+  if (link) {
+    const { data: eligibleRows } = await admin.rpc('public_link_eligible_items', {
+      p_link_id: link.id,
+      p_warehouse_id: warehouseId,
+    });
+    itemIds = ((eligibleRows ?? []) as Array<{ item_id: string }>)
+      .map((r) => r.item_id)
+      .slice(0, 500);
+  } else {
+    const { data: items } = await admin
+      .from('inventory_items')
+      .select('id')
+      .eq('organization_id', organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('item_type', 'book')
+      .eq('status', 'active')
+      .is('deleted_at', null)
+      .limit(500);
+    itemIds = ((items ?? []) as Array<{ id: string }>).map((i) => i.id);
+  }
   if (itemIds.length === 0) {
     return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
   }
