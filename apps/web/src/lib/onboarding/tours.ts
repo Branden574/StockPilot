@@ -77,3 +77,61 @@ export const NEW_ITEM_TOUR: TourDefinition = {
     },
   ],
 };
+
+export const STAGING_TOUR: TourDefinition = {
+  id: 'staging-page',
+  version: 1,
+  name: 'Staging',
+  steps: [
+    {
+      target: 'main h1',
+      title: 'The receiving dock, digitally',
+      body: 'Stock that has ARRIVED but has not been put away yet lands here — counted in your totals, but not yet pickable from a rack.',
+    },
+    {
+      title: 'Staged vs active',
+      body: 'Staged/unplaced stock cannot be picked for orders — picking only draws from placed rack or crate stock. Putting items away is what makes them usable.',
+    },
+    {
+      target: 'main table',
+      title: 'What is waiting',
+      body: 'Each row shows the item, quantity, the purchase order it came from, and how long it has been waiting. Old rows usually mean a put-away got missed.',
+      optional: true,
+    },
+    {
+      target: '[role="checkbox"][aria-label="Select all placeable rows"]',
+      title: 'Put stock away',
+      body: 'Select rows (or use the per-row Place button) and assign a rack — that moves stock from staged to placed, ready for picking.',
+      optional: true,
+    },
+  ],
+};
+
+export const ORDERS_TOUR: TourDefinition = {
+  id: 'orders-page',
+  version: 1,
+  name: 'Orders',
+  steps: [
+    {
+      target: 'main h1',
+      title: 'Every request, one queue',
+      body: 'Orders your team (or external requesters) submit flow through here — from approval to picking, packing, staging, delivery, and sign-off.',
+    },
+    {
+      target: 'nav[aria-label="Status"]',
+      title: 'The lifecycle, as tabs',
+      body: 'Each tab is a stage: Needs approval → Picking → Packing → Staged → In transit → Completed. An order moves left to right; Backordered holds partially-fulfilled orders awaiting stock.',
+      optional: true,
+    },
+    {
+      target: 'a[href="/dashboard/orders/new"]',
+      title: 'Place an order',
+      body: 'Opens the storefront: browse the catalog, set a Needed-by date (it auto-schedules a calendar event with reminders at approval), and submit for review.',
+      optional: true,
+    },
+    {
+      title: 'Order numbers',
+      body: 'Every order gets a number like SO-000045 — it appears on pick slips, packing slips, emails, and the Schedule, so anyone can reference it unambiguously.',
+    },
+  ],
+};

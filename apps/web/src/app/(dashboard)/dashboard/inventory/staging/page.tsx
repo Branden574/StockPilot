@@ -10,6 +10,8 @@ import { LocationsService } from '@/server/services/locations';
 import { WarehousesService } from '@/server/services/warehouses';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { STAGING_TOUR } from '@/lib/onboarding/tours';
 
 export const metadata: Metadata = { title: 'Staging' };
 
@@ -46,6 +48,7 @@ export default async function StagingPage({
       <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Staging</h1>
+          <PageTour tour={STAGING_TOUR} />
           <p className="text-muted-foreground mt-1 text-sm">
             Stock waiting to be placed into a rack or crate — received from POs
             (staged) or on hand but never placed (unplaced).

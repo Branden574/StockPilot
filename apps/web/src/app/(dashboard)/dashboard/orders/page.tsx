@@ -28,6 +28,8 @@ import {
   type OrderRequestSummary,
 } from '@/server/services/order-requests';
 import { formatNumber, formatRelative } from '@/lib/utils';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { ORDERS_TOUR } from '@/lib/onboarding/tours';
 
 const PAGE_SIZE = 50;
 
@@ -158,6 +160,7 @@ export default async function OrdersPage({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <PageTour tour={ORDERS_TOUR} />
           {/* Export the org-wide order history. Gated on orders:approve
               (manager+) — the same permission that lets this page show
               every org order; requesters without it only see their own
