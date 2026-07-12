@@ -26,7 +26,7 @@ export type DomainPack =
   | 'light_3pl';
 export type ModuleId =
   | 'overview' | 'inventory' | 'movements' | 'categories' | 'locations'
-  | 'reports' | 'notifications' | 'team' | 'settings' | 'admin_tools' | 'charters' | 'scan'
+  | 'reports' | 'notifications' | 'team' | 'settings' | 'admin_tools' | 'charters' | 'scan' | 'support'
   | 'books' | 'rentals' | 'bundles' | 'orders' | 'cycle_counts' | 'procedures'
   | 'purchase_orders' | 'receiving' | 'po_imports' | 'suppliers' | 'schedule' | 'ai' | 'public_requests'
   | 'integrations' | 'shipping' | 'returns' | 'planning' | 'b2b_portal'
@@ -262,6 +262,24 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     defaultOnFor: [],
     placements: [
       { surface: 'mobile_drawer', section: 'tools', label: 'Scan', href: '/scan', iconName: 'ScanLine', defaultSortOrder: 0, mobileTabEligible: true },
+    ],
+  },
+  support: {
+    id: 'support',
+    tier: 'core',
+    title: 'Support',
+    dependsOn: [],
+    permissions: [],
+    surfaces: ['web'],
+    apiPrefixes: [],
+    // support_tickets is a PLATFORM-level table (mig 0173, service-role only),
+    // not org-owned data, so it is deliberately not listed here.
+    ownsTables: [],
+    defaultOnFor: [],
+    placements: [
+      // Web-only for now — the native surface ships separately. sortOrder 35
+      // slots between Team (30) and Settings (40) in the workspace section.
+      { surface: 'web_sidebar', section: 'workspace', label: 'Support', href: '/dashboard/support', iconName: 'LifeBuoy', defaultSortOrder: 35 },
     ],
   },
 

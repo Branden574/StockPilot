@@ -36,6 +36,8 @@ export interface SupportTicketRow {
   status: TicketStatus;
   pageUrl: string | null;
   adminNotes: string | null;
+  /** Storage key in the private support-attachments bucket (mig 0260). */
+  attachmentPath: string | null;
   createdAt: string;
   updatedAt: string;
   resolvedAt: string | null;
@@ -52,6 +54,12 @@ export interface CreateSupportTicketInput {
   userAgent?: string | null;
   organizationId?: string | null;
   submittedBy?: string | null;
+  /**
+   * Storage key of an optional screenshot in the private support-attachments
+   * bucket. Callers MUST have verified the `{submittedBy}/` prefix already
+   * (the dashboard action does) — this layer just persists it.
+   */
+  attachmentPath?: string | null;
 }
 
 function mapRow(r: Record<string, unknown>): SupportTicketRow {
@@ -68,6 +76,7 @@ function mapRow(r: Record<string, unknown>): SupportTicketRow {
     status: r.status as TicketStatus,
     pageUrl: (r.page_url as string | null) ?? null,
     adminNotes: (r.admin_notes as string | null) ?? null,
+    attachmentPath: (r.attachment_path as string | null) ?? null,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
     resolvedAt: (r.resolved_at as string | null) ?? null,
@@ -89,6 +98,7 @@ export async function createSupportTicket(input: CreateSupportTicketInput): Prom
       message: input.message.trim().slice(0, 8000),
       page_url: input.pageUrl?.slice(0, 500) ?? null,
       user_agent: input.userAgent?.slice(0, 500) ?? null,
+      attachment_path: input.attachmentPath ?? null,
     })
     .select('id')
     .single();
@@ -141,6 +151,53 @@ export async function listSupportTickets(opts?: {
   const { data, error } = await q;
   if (error) throw new Error(`support_tickets list: ${error.message}`);
   return (data ?? []).map((r) => mapRow(r as Record<string, unknown>));
+}
+
+/**
+ * The tickets ONE user submitted from ONE workspace — powers the
+ * "My submissions" list on /dashboard/support. Service-role read (RLS has no
+ * policies), so BOTH filters are mandatory and must come from the server
+ * session, never the client.
+ */
+export async function listMyTickets(opts: {
+  userId: string;
+  organizationId: string;
+}): Promise<SupportTicketRow[]> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from('support_tickets')
+    .select('*')
+    .eq('submitted_by', opts.userId)
+    .eq('organization_id', opts.organizationId)
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) throw new Error(`support_tickets listMyTickets: ${error.message}`);
+  return (data ?? []).map((r) => mapRow(r as Record<string, unknown>));
+}
+
+/**
+ * Short-lived (1 h) signed URLs for ticket screenshots in the private
+ * support-attachments bucket, batched in ONE storage call. Service-role —
+ * callers must already be behind a platform-admin gate. Best-effort: missing
+ * objects are simply absent from the result, never thrown.
+ */
+export async function createAttachmentSignedUrls(
+  paths: string[],
+): Promise<Record<string, string>> {
+  if (paths.length === 0) return {};
+  const admin = createAdminClient();
+  const { data, error } = await admin.storage
+    .from('support-attachments')
+    .createSignedUrls(paths, 60 * 60);
+  if (error) {
+    void reportError(error, { tag: 'support-tickets.signed-urls' });
+    return {};
+  }
+  const byPath: Record<string, string> = {};
+  for (const row of data ?? []) {
+    if (row.path && row.signedUrl && !row.error) byPath[row.path] = row.signedUrl;
+  }
+  return byPath;
 }
 
 export async function updateSupportTicket(

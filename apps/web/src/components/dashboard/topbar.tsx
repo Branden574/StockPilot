@@ -1,6 +1,6 @@
 'use client';
 
-import { BookOpen, HelpCircle, Search } from 'lucide-react';
+import { BookOpen, HelpCircle, LifeBuoy, Search } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import * as React from 'react';
@@ -151,6 +151,15 @@ export function Topbar({
         title="Help & Learning"
       >
         <BookOpen className="h-3.5 w-3.5" aria-hidden />
+      </Link>
+
+      <Link
+        href="/dashboard/support"
+        className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        aria-label="Support & feedback"
+        title="Support & feedback"
+      >
+        <LifeBuoy className="h-3.5 w-3.5" aria-hidden />
       </Link>
 
       <ThemeToggle />

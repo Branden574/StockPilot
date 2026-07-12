@@ -37,7 +37,14 @@ const FILTERS: Array<{ key: string; label: string; match: (t: SupportTicketRow) 
 const selectClass =
   'border-border bg-background h-9 rounded-md border px-2 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
-export function SupportTriage({ tickets }: { tickets: SupportTicketRow[] }) {
+export function SupportTriage({
+  tickets,
+  attachmentUrls,
+}: {
+  tickets: SupportTicketRow[];
+  /** ticketId → 1-hour signed URL for its screenshot (server-minted). */
+  attachmentUrls?: Record<string, string>;
+}) {
   const router = useRouter();
   const [filter, setFilter] = React.useState('open');
   const [openId, setOpenId] = React.useState<string | null>(null);
@@ -75,6 +82,7 @@ export function SupportTriage({ tickets }: { tickets: SupportTicketRow[] }) {
             <TicketCard
               key={t.id}
               ticket={t}
+              attachmentUrl={attachmentUrls?.[t.id]}
               expanded={openId === t.id}
               onToggle={() => setOpenId((id) => (id === t.id ? null : t.id))}
               onSaved={() => router.refresh()}
@@ -88,11 +96,13 @@ export function SupportTriage({ tickets }: { tickets: SupportTicketRow[] }) {
 
 function TicketCard({
   ticket,
+  attachmentUrl,
   expanded,
   onToggle,
   onSaved,
 }: {
   ticket: SupportTicketRow;
+  attachmentUrl?: string;
   expanded: boolean;
   onToggle: () => void;
   onSaved: () => void;
@@ -140,6 +150,19 @@ function TicketCard({
             {ticket.pageUrl && (
               <p className="text-muted-foreground mt-2 break-all text-xs">
                 Reported from: {ticket.pageUrl}
+              </p>
+            )}
+            {attachmentUrl && (
+              <p className="mt-2 text-xs">
+                <a
+                  href={attachmentUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-foreground font-medium underline underline-offset-2 hover:opacity-80"
+                >
+                  Screenshot
+                </a>{' '}
+                <span className="text-muted-foreground">(link valid ~1 hour)</span>
               </p>
             )}
           </div>

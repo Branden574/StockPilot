@@ -89,7 +89,7 @@ describe('nav order is frozen to the original static nav', () => {
       '/dashboard/purchase-orders/imports', '/dashboard/locations', '/dashboard/suppliers',
       '/dashboard/reports',
       '/dashboard/ai', '/dashboard/insights', '/dashboard/schedule', '/dashboard/notifications',
-      '/dashboard/team', '/dashboard/settings',
+      '/dashboard/team', '/dashboard/support', '/dashboard/settings',
       '/dashboard/admin', '/dashboard/admin/charters', '/dashboard/admin/warehouses',
       '/dashboard/admin/bins', '/dashboard/admin/users', '/dashboard/admin/vendor-mappings',
       '/dashboard/admin/uom-conversions', '/dashboard/admin/reconciliation', '/dashboard/admin/audit',

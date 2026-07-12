@@ -5,7 +5,7 @@ import { headers } from 'next/headers';
 import { z } from 'zod';
 
 import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
-import { requireSession } from '@/lib/auth/session';
+import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
@@ -76,6 +76,68 @@ export async function createSupportTicketAction(
   } catch (e) {
     void reportError(e, { tag: 'support-tickets.create' });
     return err('internal_error', 'Could not submit your ticket. Please email support directly.');
+  }
+}
+
+// ── Dashboard: signed-in members submit from /dashboard/support ─────────────
+const dashboardSchema = z.object({
+  category: z.enum(['bug', 'feature', 'billing', 'other']),
+  subject: z.string().trim().min(3, 'Add a short subject').max(140),
+  message: z.string().trim().min(10, 'Tell us a little more').max(4000),
+  /** Storage key of an already-uploaded screenshot (support-attachments). */
+  attachmentPath: z.string().trim().min(1).max(300).optional(),
+});
+
+export type DashboardTicketResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * In-app "Support & feedback" submission. Unlike the public marketing action
+ * above, the caller is authenticated: identity (org + user + email) comes from
+ * the server session — NEVER from the client. Plain `{ ok, error }` result;
+ * never throws to the client.
+ */
+export async function submitDashboardTicketAction(
+  input: z.input<typeof dashboardSchema>,
+): Promise<DashboardTicketResult> {
+  const ctx = await requireOrgContext();
+
+  const parsed = dashboardSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? 'Please check the form.' };
+  }
+  const data = parsed.data;
+
+  // The storage policy (mig 0260) only lets a user upload under their own
+  // auth-uid folder; re-assert the same invariant here so a forged path can
+  // never attach someone else's upload to this ticket.
+  if (data.attachmentPath && !data.attachmentPath.startsWith(`${ctx.userId}/`)) {
+    return { ok: false, error: 'Invalid attachment. Please re-upload your screenshot.' };
+  }
+
+  // Authenticated surface, so a generous per-user cap; fail-closed to match
+  // the public form (a limiter outage must not open the floodgates).
+  const limit = await checkRateLimit(`support:user:${ctx.userId}`, 10, 60 * 60 * 1000, 'closed');
+  if (!limit.allowed) {
+    return { ok: false, error: 'Too many tickets in the last hour. Please try again later.' };
+  }
+
+  try {
+    await createSupportTicket({
+      name: ctx.fullName,
+      email: ctx.email,
+      category: data.category,
+      subject: data.subject,
+      message: data.message,
+      pageUrl: '/dashboard/support',
+      organizationId: ctx.organizationId,
+      submittedBy: ctx.userId,
+      attachmentPath: data.attachmentPath ?? null,
+    });
+    revalidatePath('/dashboard/support');
+    return { ok: true };
+  } catch (e) {
+    void reportError(e, { tag: 'support-tickets.dashboard-create' });
+    return { ok: false, error: 'Could not submit your request. Please try again.' };
   }
 }
 

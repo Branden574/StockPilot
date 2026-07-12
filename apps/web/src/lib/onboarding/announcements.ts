@@ -19,6 +19,13 @@ export interface Announcement {
 
 export const ANNOUNCEMENTS: Announcement[] = [
   {
+    id: 'support-feedback-2026-07',
+    date: '2026-07-12',
+    title: 'Support & feedback, right in the app',
+    body: 'Hit a bug, want a feature, or have a billing question? Open Support & feedback (workspace sidebar or the life-ring in the top bar), attach a screenshot, and send it straight to the StockPilot team — then track the status of everything you’ve submitted on the same page.',
+    cta: { href: '/dashboard/support', label: 'Open Support & feedback' },
+  },
+  {
     id: 'onboarding-tours-2026-07',
     date: '2026-07-11',
     title: 'Interactive tours + Help center',

@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 
 import { SupportTriage } from '@/components/admin/support-triage';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
-import { listSupportTickets } from '@/server/services/support-tickets';
+import { createAttachmentSignedUrls, listSupportTickets } from '@/server/services/support-tickets';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Support tickets · Platform' };
@@ -19,6 +19,17 @@ export default async function PlatformSupportPage() {
   const tickets = await listSupportTickets();
   const open = tickets.filter((t) => t.status === 'open' || t.status === 'in_progress').length;
 
+  // Screenshots live in a PRIVATE bucket with no read policy — mint 1-hour
+  // signed URLs server-side (service-role) behind the platform-admin gate,
+  // in one batched storage call.
+  const paths = tickets.flatMap((t) => (t.attachmentPath ? [t.attachmentPath] : []));
+  const urlByPath = await createAttachmentSignedUrls(paths);
+  const attachmentUrls: Record<string, string> = {};
+  for (const t of tickets) {
+    const url = t.attachmentPath ? urlByPath[t.attachmentPath] : undefined;
+    if (url) attachmentUrls[t.id] = url;
+  }
+
   return (
     <div className="mx-auto w-full max-w-[1280px] px-6 pb-20 pt-7">
       <div className="mb-6 border-b border-border pb-4">
@@ -27,7 +38,7 @@ export default async function PlatformSupportPage() {
           {open} open · {tickets.length} total — submitted from the public support page.
         </p>
       </div>
-      <SupportTriage tickets={tickets} />
+      <SupportTriage tickets={tickets} attachmentUrls={attachmentUrls} />
     </div>
   );
 }
