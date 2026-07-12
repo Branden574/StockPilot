@@ -76,7 +76,12 @@ export async function GET(req: Request) {
   for (const ev of (data ?? []) as EventRow[]) {
     try {
       const isOneHour = ev.starts_at <= in1h && !ev.reminded_1h_at;
-      const isDayAhead = !isOneHour && !ev.reminded_24h_at;
+      // 24h reminder is only meaningful BEFORE the 1h one. An event that
+      // enters the system already inside the 1h window (or whose 1h notice
+      // was sent) must never get a late "tomorrow" notice — the field bug
+      // was 'in 1 hour' at 6:20 followed by 'tomorrow' at 6:30 for the
+      // same event (owner-reported duplicate, 2026-07-11).
+      const isDayAhead = !isOneHour && !ev.reminded_24h_at && !ev.reminded_1h_at;
       if (!isOneHour && !isDayAhead) continue;
 
       // Stamp FIRST (crash-safe dedupe), and only proceed if we won the write.
