@@ -11,7 +11,17 @@
  * All sources are keyless free public APIs. Each fetch has its own
  * AbortSignal.timeout() so a single slow source can't pin the whole
  * lookup — a 7s LoC slowpoke caps the whole thing.
+ *
+ * A persistent cache (book_metadata_cache, migration 0262) fronts the whole
+ * pipeline: a resolved ISBN is served from the DB on later scans, so repeat
+ * scans and bulk-import duplicates cost zero external-API quota (the Google
+ * Books daily quota was the bottleneck). Records that resolved WITHOUT Google
+ * Books (the source that intermittently 429s) are marked provisional and
+ * re-verified after a window so a thin record captured during an outage is
+ * upgraded once the quota recovers, rather than frozen forever.
  */
+
+import { isbnVariants } from './isbn-variants';
 
 export type LookupSource =
   | 'google-books'
@@ -40,6 +50,120 @@ export function normalizeIsbn(raw: string): string | null {
   const cleaned = raw.replace(/[^0-9Xx]/g, '').toUpperCase();
   if (cleaned.length === 10 || cleaned.length === 13) return cleaned;
   return null;
+}
+
+/**
+ * Canonical cache key for an ISBN: the ISBN-13 form when derivable (so the
+ * same physical book scanned as its ISBN-10 or ISBN-13 barcode shares one
+ * cache row), else the input unchanged (979-prefixed 13s have no ISBN-10;
+ * unparseable values fall back to themselves).
+ */
+function canonicalIsbnKey(normalized: string): string {
+  const variants = isbnVariants(normalized);
+  return variants.find((v) => v.length === 13) ?? normalized;
+}
+
+/**
+ * Persistent cache read (books "database", migration 0262). Best-effort:
+ * ANY failure (DB down, row shape drift) returns null so the caller falls
+ * through to a live lookup — the cache must never break a scan. Keyed by the
+ * canonical ISBN-13.
+ */
+/**
+ * A cached record is "authoritative" (serve forever) when Google Books — the
+ * richest source and the one that intermittently 429s — contributed to it.
+ * A record WITHOUT google-books is "provisional": it was likely captured
+ * while the quota was exhausted (Open Library / LoC only → correct title but
+ * thinner description/cover), so we re-verify it after this window instead of
+ * freezing degraded metadata. On re-verify the live lookup re-caches: it
+ * upgrades to authoritative once the quota recovers, or resets the window if
+ * Google Books is still down (bounded to one retry per window, self-healing).
+ */
+const PROVISIONAL_RECHECK_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+async function readBookCache(key: string): Promise<BookMetadata | null> {
+  try {
+    const { createAdminClient } = await import('@/lib/supabase/admin');
+    const admin = createAdminClient();
+    const { data } = await admin
+      .from('book_metadata_cache')
+      .select(
+        'isbn, title, authors, publisher, published_date, description, page_count, thumbnail_url, grade, source, sources, fetched_at',
+      )
+      .eq('isbn', key)
+      .maybeSingle();
+    if (!data) return null;
+    const r = data as {
+      isbn: string;
+      title: string | null;
+      authors: unknown;
+      publisher: string | null;
+      published_date: string | null;
+      description: string | null;
+      page_count: number | null;
+      thumbnail_url: string | null;
+      grade: string | null;
+      source: string | null;
+      sources: unknown;
+      fetched_at: string;
+    };
+    // Provisional (no google-books) + past the recheck window → miss, so the
+    // caller runs a fresh lookup and re-caches (see PROVISIONAL_RECHECK_MS).
+    const hasRichSource = Array.isArray(r.sources) && r.sources.includes('google-books');
+    if (!hasRichSource) {
+      const ageMs = Date.now() - new Date(r.fetched_at).getTime();
+      if (Number.isFinite(ageMs) && ageMs > PROVISIONAL_RECHECK_MS) return null;
+    }
+    return {
+      isbn: r.isbn,
+      title: r.title,
+      authors: Array.isArray(r.authors) ? (r.authors as string[]) : [],
+      publisher: r.publisher,
+      publishedDate: r.published_date,
+      description: r.description,
+      pageCount: r.page_count,
+      thumbnailUrl: r.thumbnail_url,
+      grade: r.grade,
+      source: (r.source as LookupSource | null) ?? 'open-library',
+      sources: Array.isArray(r.sources) ? (r.sources as LookupSource[]) : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persistent cache write (best-effort — a write failure never surfaces to
+ * the caller). Only real-bibliographic-source results reach here (the caller
+ * excludes AI-fallback-only and untitled results). Upserts on the canonical
+ * ISBN-13: a provisional row (no google-books) re-verified after the recheck
+ * window is overwritten here — upgraded to authoritative when the quota has
+ * recovered, or re-stamped (window reset) if Google Books is still down.
+ */
+async function writeBookCache(key: string, meta: BookMetadata): Promise<void> {
+  try {
+    const { createAdminClient } = await import('@/lib/supabase/admin');
+    const admin = createAdminClient();
+    await admin.from('book_metadata_cache').upsert(
+      {
+        isbn: key,
+        title: meta.title,
+        authors: meta.authors,
+        publisher: meta.publisher,
+        published_date: meta.publishedDate,
+        description: meta.description,
+        page_count: meta.pageCount,
+        thumbnail_url: meta.thumbnailUrl,
+        grade: meta.grade,
+        source: meta.source,
+        sources: meta.sources ?? [meta.source],
+        fetched_at: new Date().toISOString(),
+      },
+      { onConflict: 'isbn' },
+    );
+  } catch {
+    // best-effort: caching is an optimization, never a correctness requirement
+  }
 }
 
 function detectGrade(blob: string | null | undefined): string | null {
@@ -242,6 +366,15 @@ function pickFirst<T>(
 export async function lookupIsbn(rawIsbn: string): Promise<BookMetadata | null> {
   const isbn = normalizeIsbn(rawIsbn);
   if (!isbn) return null;
+
+  // Cache-first: a previously-resolved ISBN is served from our own DB with
+  // no external calls. Return with the isbn the caller actually passed (the
+  // row is keyed by the canonical ISBN-13, which may differ from a scanned
+  // ISBN-10) so downstream behaviour is unchanged.
+  const cacheKey = canonicalIsbnKey(isbn);
+  const cached = await readBookCache(cacheKey);
+  if (cached) return { ...cached, isbn };
+
   const settled = await Promise.allSettled([
     fetchGoogleBooks(isbn),
     fetchOpenLibrary(isbn),
@@ -275,7 +408,7 @@ export async function lookupIsbn(rawIsbn: string): Promise<BookMetadata | null> 
   const thumbs = hits.map((h) => h.thumbnailUrl);
   const grades = hits.map((h) => h.grade);
 
-  return {
+  const merged: BookMetadata = {
     isbn,
     title: pickFirst(titles, (s) => s.trim().length === 0),
     authors: pickFirst(authorLists, (a) => a.length === 0) ?? [],
@@ -288,4 +421,16 @@ export async function lookupIsbn(rawIsbn: string): Promise<BookMetadata | null> 
     source: hits[0]!.source,
     sources: hits.map((h) => h.source),
   };
+
+  // Persist only titled results from a REAL bibliographic source. An
+  // AI-fallback-only ('gemini') result is verified per-request by the
+  // hallucination guard and deliberately never cached — we don't want a
+  // possibly-wrong AI answer served from cache forever, and a later scan can
+  // still resolve it from Google Books / Open Library / LoC.
+  const hasRealSource = merged.sources?.some((s) => s !== 'gemini') ?? false;
+  if (merged.title && hasRealSource) {
+    await writeBookCache(cacheKey, merged);
+  }
+
+  return merged;
 }

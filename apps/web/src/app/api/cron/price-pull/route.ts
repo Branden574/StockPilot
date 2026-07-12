@@ -65,7 +65,15 @@ export async function GET(req: Request) {
   // (an uncatchable hard-kill would silently skip the remaining orgs) or blow
   // Google's daily quota. `deadlineMs` gives ~10s headroom; `GLOBAL_CAP` bounds
   // total observations across ALL orgs this run.
-  const GLOBAL_CAP = 500; // total observations per cron invocation
+  //
+  // Capped at 200 (was 500) to leave headroom in the Google Books daily quota
+  // (~1,000 queries/day/project) for INTERACTIVE scans/imports — price pulls
+  // and metadata lookups share the same key, and a 500-call pull at 9am used
+  // to starve scanning for the rest of the day. Metadata lookups are now
+  // cached (book_metadata_cache, 0262) so they rarely hit Google Books, but
+  // price observations must stay fresh and can't be cached — so the cron gets
+  // the smaller, bounded share.
+  const GLOBAL_CAP = 200; // total observations per cron invocation
   const deadlineMs = Date.now() + 50_000; // headroom under maxDuration=60
   let used = 0;
   for (const orgId of orgIds) {
