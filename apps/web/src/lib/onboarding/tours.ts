@@ -368,3 +368,38 @@ export const AI_TOUR: TourDefinition = {
     },
   ],
 };
+
+export const NAV_SETTINGS_TOUR: TourDefinition = {
+  id: 'nav-settings',
+  version: 1,
+  name: 'Navigation & labels',
+  steps: [
+    {
+      target: 'main h1',
+      title: 'Make the app speak your words',
+      body: 'Rename, reorder, or hide any sidebar button. Changes apply to everyone in the organization — on the web and in the mobile app.',
+    },
+    {
+      target: 'input[aria-label^="Rename"]',
+      title: 'Rename anything',
+      body: 'Type the word your team already uses — Items can become Textbooks, Staging can become Receiving. Page titles and menus follow everywhere.',
+    },
+    {
+      target: 'button[aria-label^="Hide "], button[aria-label^="Show "]',
+      title: 'Hide what you do not use',
+      body: 'The eye toggle removes a button from everyone\u2019s sidebar without deleting any data — bring it back any time.',
+      optional: true,
+    },
+    {
+      target: 'button[aria-label^="Move "]',
+      title: 'Put daily work on top',
+      body: 'Reorder buttons so the screens your team opens most sit first.',
+      optional: true,
+    },
+    {
+      target: '[data-tour="nav-actions"]',
+      title: 'Nothing changes until you save',
+      body: 'Experiment freely \u2014 Save changes applies it for the whole team, and Reset to default undoes every customization in one click.',
+    },
+  ],
+};

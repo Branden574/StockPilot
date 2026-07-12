@@ -30,6 +30,7 @@ export const TOUR_ROUTES: Record<string, string | undefined> = {
   'order-detail': undefined,
   'po-imports': '/dashboard/purchase-orders/imports',
   'settings-hub': '/dashboard/settings',
+  'nav-settings': '/dashboard/settings/navigation',
   reports: '/dashboard/reports',
   'ai-assistant': '/dashboard/ai',
   'item-detail': undefined,
@@ -111,8 +112,8 @@ export const WORKFLOW_GUIDES: WorkflowGuide[] = [
       {
         title: 'Rename what things are called',
         body: 'Charters → Schools, Items → Inventory, Staging → Receiving — the sidebar, page titles, and pickers follow everywhere, on web and mobile.',
-        href: '/dashboard/settings/navigation',
-        linkText: 'Navigation & labels',
+        href: '/dashboard/settings/navigation?tour=nav-settings',
+        linkText: 'Navigation & labels (with tour)',
       },
       {
         title: 'Turn off what you do not use',

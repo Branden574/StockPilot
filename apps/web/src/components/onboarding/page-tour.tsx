@@ -10,6 +10,7 @@ import {
   recordTourOutcomeAction,
 } from '@/lib/onboarding/actions';
 import type { TourDefinition, TourStep } from '@/lib/onboarding/types';
+import { setActiveTour } from '@/lib/onboarding/tour-broadcast';
 import { capture } from '@/lib/analytics';
 
 /**
@@ -136,6 +137,16 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, [tour.id]);
+
+  // Announce while running so tour-reactive UI (e.g. the empty-org sample
+  // row on Items) can mount before its step is measured.
+  React.useEffect(() => {
+    if (phase === 'running') {
+      setActiveTour(tour.id);
+      return () => setActiveTour(null);
+    }
+    return undefined;
+  }, [phase, tour.id]);
 
   // Keep the spotlight glued to its element through scroll/resize.
   React.useEffect(() => {

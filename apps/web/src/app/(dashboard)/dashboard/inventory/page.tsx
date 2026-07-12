@@ -43,6 +43,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { PageTour } from '@/components/onboarding/page-tour';
+import { TourSampleItem } from '@/components/onboarding/tour-sample-item';
 import { ITEMS_PAGE_TOUR } from '@/lib/onboarding/tours';
 
 // Dropped from 50 → 30 after the Playwright speed sweep showed the
@@ -773,20 +774,25 @@ function inventoryEmptyState({
   }
   if (!params.q && !params.stock) {
     return (
-      <EmptyState
-        icon={Boxes}
-        title="No items yet"
-        description={
-          canCreate
-            ? 'Add your first item to start tracking stock, locations, and movements.'
-            : 'No items have been added to this workspace yet.'
-        }
-        cta={
-          canCreate
-            ? { label: 'Add your first item', href: '/dashboard/inventory/new' }
-            : undefined
-        }
-      />
+      <>
+        {/* Renders only while the Items tour runs — gives its "here's a
+            row" step a labeled example to spotlight on a brand-new org. */}
+        <TourSampleItem />
+        <EmptyState
+          icon={Boxes}
+          title="No items yet"
+          description={
+            canCreate
+              ? 'Add your first item to start tracking stock, locations, and movements.'
+              : 'No items have been added to this workspace yet.'
+          }
+          cta={
+            canCreate
+              ? { label: 'Add your first item', href: '/dashboard/inventory/new' }
+              : undefined
+          }
+        />
+      </>
     );
   }
   if (params.stock === 'low') {

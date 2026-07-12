@@ -457,7 +457,7 @@ export function NavCustomizer({ baseSections, initialOverrides }: NavCustomizerP
         </Button>
       </section>
 
-      <div className="flex items-center gap-3">
+      <div data-tour="nav-actions" className="flex items-center gap-3">
         <Button type="button" onClick={save} disabled={saving}>
           {saving ? 'Saving…' : 'Save changes'}
         </Button>

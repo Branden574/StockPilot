@@ -7,6 +7,8 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { getModulesForRequest, getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 
 import { can, resolveSurface, type NavOverrides, type NavSectionKey } from '@stockpilot/core';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { NAV_SETTINGS_TOUR } from '@/lib/onboarding/tours';
 
 export const metadata: Metadata = { title: 'Navigation — Settings' };
 
@@ -60,7 +62,10 @@ export default async function NavigationSettingsPage() {
         >
           ← Back to settings
         </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Navigation</h1>
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight">Navigation</h1>
+          <PageTour tour={NAV_SETTINGS_TOUR} />
+        </div>
         <p className="text-muted-foreground mt-1 text-sm">
           Hide, rename, and reorder sidebar items, or add custom links, for your whole
           organization. Items follow each member&apos;s role and your enabled modules — hiding an
