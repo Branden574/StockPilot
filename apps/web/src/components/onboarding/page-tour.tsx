@@ -44,6 +44,41 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
+/**
+ * Card position for a spotlit step. Prefers below the target, then above,
+ * then BESIDE it — a target as tall as the viewport (the sidebar, a full
+ * table) has no room above or below, and the old logic parked the card at
+ * `top: bottom-of-target + 14` = past the screen edge (owner-reported:
+ * dashboard tour step 2 highlighted the sidebar with no card in sight).
+ * Every branch clamps into the viewport.
+ */
+function cardPosition(
+  rect: Rect | null,
+  placement?: 'top' | 'bottom',
+): React.CSSProperties {
+  if (!rect) return { left: '50%', top: '40%', transform: 'translate(-50%, -50%)' };
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const CARD_W = 380;
+  const CARD_H = 250; // estimate — cards are text-sized, this bounds clamping
+  const GAP = 14;
+  const left = Math.max(8, Math.min(rect.left, W - CARD_W));
+  const spaceBelow = H - (rect.top + rect.height);
+  const spaceAbove = rect.top;
+  if (placement === 'top' && spaceAbove >= CARD_H) {
+    return { left, bottom: H - rect.top + GAP };
+  }
+  if (spaceBelow >= CARD_H) {
+    return { left, top: rect.top + rect.height + GAP };
+  }
+  if (spaceAbove >= CARD_H) {
+    return { left, bottom: H - rect.top + GAP };
+  }
+  // Tall target: sit beside it (right edge preferred), vertically clamped.
+  const sideLeft = Math.max(8, Math.min(rect.left + rect.width + GAP, W - CARD_W));
+  return { left: sideLeft, top: Math.max(16, Math.min(rect.top + 24, H - CARD_H - 16)) };
+}
+
 /** Wait for a step's target to exist (dynamic content), up to ~4s. */
 async function waitForTarget(selector: string): Promise<Element | null> {
   for (let i = 0; i < 16; i++) {
@@ -269,14 +304,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
               aria-label={step.title}
               tabIndex={-1}
               className="bg-card fixed z-[71] w-[min(360px,calc(100vw-32px))] rounded-xl border p-4 shadow-xl outline-none"
-              style={{
-                transition,
-                ...(rect
-                  ? step.placement === 'top' || rect.top > window.innerHeight * 0.6
-                    ? { left: Math.min(rect.left, window.innerWidth - 380), bottom: window.innerHeight - rect.top + 14 }
-                    : { left: Math.min(rect.left, window.innerWidth - 380), top: rect.top + rect.height + 14 }
-                  : { left: '50%', top: '40%', transform: 'translate(-50%, -50%)' }),
-              }}
+              style={{ transition, ...cardPosition(rect, step.placement) }}
             >
               <div className="flex items-start justify-between gap-3">
                 <p className="text-sm font-semibold">{step.title}</p>
