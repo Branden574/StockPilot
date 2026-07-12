@@ -1,17 +1,17 @@
+import { Ban } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import type { ReactNode } from 'react';
 
 import { PublicOrdersV2 } from '@/components/orders/public-v2/public-orders-v2';
-import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
+import type { PublicCatalogItem } from '@/components/orders/public-v2/types';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
-  getPublicBookCatalog,
   getPublicCatalogForLink,
   isLinkOpen,
   resolvePublicRequestToken,
-  toLegacyCatalogItems,
 } from '@/server/services/public-catalog';
 
 /**
@@ -46,7 +46,8 @@ export const dynamic = 'force-dynamic';
  * decides what this page shows: active/expiry/date-window gate the whole
  * page, and the catalog is the link's curated item set resolved through
  * the shared `public_link_eligible_items` predicate — the same one the
- * submit endpoint enforces.
+ * submit endpoint enforces. The payload is PublicCatalogItem only: no
+ * sku, cost, location, reserved, or charter data ever serializes here.
  */
 
 interface WarehouseSummary {
@@ -92,16 +93,10 @@ export default async function PublicOrderRequestPage({
   // through it right now. (Submit independently re-checks and 404s.)
   if (link && !isLinkOpen(link)) {
     return (
-      <div className="mx-auto max-w-md py-10">
-        <Header org={org} />
-        <div className="border-border bg-card mt-8 rounded-2xl border p-6 text-center">
-          <h2 className="font-display text-lg">Not accepting requests</h2>
-          <p className="text-muted-foreground mt-2 text-sm">
-            This request link isn&apos;t currently open. Please check back
-            later or reach out to the organization directly.
-          </p>
-        </div>
-      </div>
+      <ClosedShell org={org}>
+        This request link isn&apos;t currently open. Please check back later or
+        reach out to the organization directly.
+      </ClosedShell>
     );
   }
 
@@ -122,17 +117,10 @@ export default async function PublicOrderRequestPage({
   // No eligible warehouses → render the friendly "closed" card.
   if (warehouses.length === 0) {
     return (
-      <div className="mx-auto max-w-md py-10">
-        <Header org={org} link={link} />
-        <div className="border-border bg-card mt-8 rounded-2xl border p-6 text-center">
-          <h2 className="font-display text-lg">Not accepting requests</h2>
-          <p className="text-muted-foreground mt-2 text-sm">
-            This organization isn&apos;t currently accepting public order
-            requests. Please check back later or reach out to them
-            directly.
-          </p>
-        </div>
-      </div>
+      <ClosedShell org={org}>
+        This organization isn&apos;t currently accepting public order requests.
+        Please check back later or reach out to them directly.
+      </ClosedShell>
     );
   }
 
@@ -144,17 +132,13 @@ export default async function PublicOrderRequestPage({
   const activeWarehouse = requested ?? warehouses[0];
   if (!activeWarehouse) notFound();
 
-  // 3. The link's curated catalog (or the legacy org-token path for a token
-  // that predates the 0261 backfill). The transitional adapter narrows the
-  // link-aware PublicCatalogItem onto the CatalogItem interface the current
-  // public UI still consumes — internal-only fields are structurally absent.
-  const items: CatalogItem[] = link
-    ? toLegacyCatalogItems(
-        await getPublicCatalogForLink(link, activeWarehouse.id),
-        activeWarehouse.id,
-      )
-    : await getPublicBookCatalog(org.id, activeWarehouse.id);
-  const aisles = buildAisles(items);
+  // 3. The link's curated catalog, rendered as PublicCatalogItem directly.
+  // link=null is the legacy fallback for a token that predates the 0261
+  // backfill — it has no catalog config, so it resolves to an empty catalog
+  // (fail closed) and the page shows the "no items available" message.
+  const items: PublicCatalogItem[] = link
+    ? await getPublicCatalogForLink(link, activeWarehouse.id)
+    : [];
 
   // Charters serviced by the active warehouse — restricted to status=
   // 'active' so the dropdown never shows archived/inactive sites. The
@@ -185,7 +169,8 @@ export default async function PublicOrderRequestPage({
     .map(({ id, name, code }) => ({ id, name, code }));
 
   return (
-    <div>
+    <div className="sp-storefront sf-public">
+      <BrandRow org={org} />
       <Header
         org={org}
         link={link}
@@ -198,17 +183,48 @@ export default async function PublicOrderRequestPage({
         warehouses={warehouses}
         initialWarehouseId={activeWarehouse.id}
         items={items}
-        aisles={aisles}
+        availabilityDisplay={link?.availabilityDisplay ?? 'none'}
         chartersForWarehouse={chartersForWarehouse}
       />
-      <p className="text-muted-foreground mt-10 text-center text-xs">
-        <Link className="underline" href="/r/track">
-          Track an order you&apos;ve already submitted
-        </Link>
+      <p className="sfp-track">
+        <Link href="/r/track">Track an order you&apos;ve already submitted</Link>
       </p>
     </div>
   );
 }
+
+/* ---- org brand row (logo + name) ---------------------------------------- */
+
+function BrandRow({
+  org,
+}: {
+  org: { name: string; logo_url: string | null };
+}) {
+  return (
+    <div className="sfp-brand">
+      {isAllowedLogoUrl(org.logo_url) ? (
+        <Image
+          src={org.logo_url}
+          alt={`${org.name} logo`}
+          width={40}
+          height={40}
+          priority
+          sizes="40px"
+          className="sfp-logo"
+        />
+      ) : (
+        <div className="sfp-logo-fallback">{org.name.slice(0, 1).toUpperCase()}</div>
+      )}
+      <div className="sfp-org">
+        <div className="nm">{org.name}</div>
+        <div className="sub">Supply Requests</div>
+      </div>
+      <span className="sfp-powered">Powered by StockPilot</span>
+    </div>
+  );
+}
+
+/* ---- page head (title + blurb + meta) ------------------------------------ */
 
 function Header({
   org,
@@ -216,134 +232,73 @@ function Header({
   warehouseName,
   catalogCount,
 }: {
-  org: { name: string; logo_url: string | null; public_request_blurb: string | null };
+  org: { name: string; public_request_blurb: string | null };
   link?: { instructions: string | null } | null;
   warehouseName?: string;
   catalogCount?: number;
 }) {
-  // Per-link instructions beat the org-wide blurb when set.
+  // Per-link instructions beat the org-wide blurb when set. May contain
+  // line breaks — rendered as plain text, breaks preserved (white-space:
+  // pre-line on .sf-sub).
   const blurb = link?.instructions?.trim() || org.public_request_blurb;
   return (
-    <header className="mb-8">
-      {/* Brand row */}
-      <div className="border-border flex items-center gap-3 border-b pb-5">
-        {isAllowedLogoUrl(org.logo_url) ? (
-          <Image
-            src={org.logo_url}
-            alt={`${org.name} logo`}
-            width={40}
-            height={40}
-            priority
-            sizes="40px"
-            className="h-10 w-10 rounded-lg object-cover"
-          />
-        ) : (
-          <div className="bg-foreground text-background font-display grid h-10 w-10 place-items-center rounded-lg text-sm font-semibold">
-            {org.name.slice(0, 1).toUpperCase()}
-          </div>
-        )}
-        <div className="min-w-0">
-          <div className="font-display text-[15px] font-semibold leading-tight tracking-[-0.02em]">
-            {org.name}
-          </div>
-          <div className="text-muted-foreground mt-0.5 font-mono text-[10px] uppercase tracking-[0.16em]">
-            Supply Requests
-          </div>
+    <div className="sf-head">
+      <div style={{ minWidth: 0 }}>
+        <h1 className="sf-title">Place an order</h1>
+        <div className="sf-sub">
+          {blurb ||
+            'Browse the catalog, add what you need, and tell us how to get it ' +
+              "to you. Our team reviews every request before stock is pulled — " +
+              "you'll get an email confirmation once it's approved."}
         </div>
-        <span className="text-muted-foreground ml-auto hidden text-[11px] sm:inline">
-          Powered by StockPilot
-        </span>
       </div>
-
-      {/* Intro. On phones the intro + meta STACK (full width each) — a
-          flex-wrap row here squeezed the blurb into a ~100px column because
-          the intro is flex-1/min-w-0 and the meta keeps its width, so the
-          row never actually wrapped. Side-by-side only kicks in at sm+. */}
-      <div className="mt-7 flex flex-col gap-8 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-x-10 sm:gap-y-6">
-        <div className="min-w-0 sm:flex-1">
-          <div className="text-primary mb-3 font-mono text-[11px] uppercase tracking-[0.18em]">
-            Place an order
+      {warehouseName && typeof catalogCount === 'number' ? (
+        <dl className="sfp-meta">
+          <div className="row">
+            <dt>Location</dt>
+            <dd>
+              <span className="d" />
+              {warehouseName}
+            </dd>
           </div>
-          <h1 className="font-display max-w-[16ch] text-3xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[38px]">
-            Request books &amp;{' '}
-            <span className="text-muted-foreground italic">classroom supplies.</span>
-          </h1>
-          {blurb ? (
-            // Blurb may contain markdown; rendered as plain text with line
-            // breaks preserved.
-            <p className="text-muted-foreground mt-4 max-w-[52ch] whitespace-pre-line text-sm leading-relaxed">
-              {blurb}
-            </p>
-          ) : (
-            <p className="text-muted-foreground mt-4 max-w-[52ch] text-sm leading-relaxed">
-              Browse the catalog, add what your campus needs, and tell us how to get
-              it to you. Our team reviews every request before stock is pulled —
-              you&apos;ll get an email confirmation once it&apos;s approved.
-            </p>
-          )}
-        </div>
-
-        {warehouseName && typeof catalogCount === 'number' ? (
-          <dl className="flex w-full flex-col gap-2.5 text-[12.5px] sm:w-auto sm:shrink-0">
-            <div className="flex items-center gap-2.5">
-              <dt className="text-muted-foreground w-24 font-mono text-[10px] uppercase tracking-[0.14em]">
-                Warehouse
-              </dt>
-              <dd className="text-foreground/90 flex items-center gap-2">
-                <span className="bg-primary h-1.5 w-1.5 rounded-full" />
-                {warehouseName}
-              </dd>
-            </div>
-            <div className="flex items-center gap-2.5">
-              <dt className="text-muted-foreground w-24 font-mono text-[10px] uppercase tracking-[0.14em]">
-                Catalog
-              </dt>
-              <dd className="text-foreground/90">{catalogCount} items in stock</dd>
-            </div>
-            <div className="flex items-center gap-2.5">
-              <dt className="text-muted-foreground w-24 font-mono text-[10px] uppercase tracking-[0.14em]">
-                Turnaround
-              </dt>
-              <dd className="text-foreground/90">Reviewed within 1 business day</dd>
-            </div>
-          </dl>
-        ) : null}
-      </div>
-    </header>
+          <div className="row">
+            <dt>Catalog</dt>
+            <dd>
+              {catalogCount} {catalogCount === 1 ? 'item' : 'items'} available
+            </dd>
+          </div>
+          <div className="row">
+            <dt>Turnaround</dt>
+            <dd>Reviewed within 1 business day</dd>
+          </div>
+        </dl>
+      ) : null}
+    </div>
   );
 }
 
+/* ---- closed / not-accepting shell ----------------------------------------- */
 
-/**
- * Derives the aisle summary list from the loaded catalog items.
- * Named aisles are sorted alphabetically; the synthetic "Uncategorized"
- * bucket appears last if any items have no category.
- */
-function buildAisles(items: CatalogItem[]): AisleSummary[] {
-  const countById = new Map<string, number>();
-  let uncategorizedCount = 0;
-  const nameById = new Map<string, string>();
-
-  for (const it of items) {
-    if (it.categoryId === null) {
-      uncategorizedCount++;
-    } else {
-      countById.set(it.categoryId, (countById.get(it.categoryId) ?? 0) + 1);
-      if (it.categoryName) nameById.set(it.categoryId, it.categoryName);
-    }
-  }
-
-  const named: AisleSummary[] = Array.from(countById.entries())
-    .map(([id, itemCount]) => ({
-      id,
-      name: nameById.get(id) ?? id,
-      itemCount,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  if (uncategorizedCount > 0) {
-    named.push({ id: null, name: 'Uncategorized', itemCount: uncategorizedCount });
-  }
-
-  return named;
+function ClosedShell({
+  org,
+  children,
+}: {
+  org: { name: string; logo_url: string | null };
+  children: ReactNode;
+}) {
+  return (
+    <div className="sp-storefront sf-public">
+      <BrandRow org={org} />
+      <div className="sf-empty sfp-closed" role="status">
+        <div className="big">
+          <Ban size={24} aria-hidden />
+        </div>
+        <h4>Not accepting requests</h4>
+        <p>{children}</p>
+      </div>
+      <p className="sfp-track">
+        <Link href="/r/track">Track an order you&apos;ve already submitted</Link>
+      </p>
+    </div>
+  );
 }

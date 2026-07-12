@@ -85,6 +85,22 @@ export async function GET(req: NextRequest) {
     organizationId = (org as { id: string }).id;
   }
 
+  // Module gate (review finding 2026-07-12): mirror the submit route — the
+  // `public_requests` module is optional, so an explicit enabled row is
+  // required. Without this, an org that disabled the module kept signing
+  // catalog thumbnails for anyone holding an old link. Empty response (not
+  // an error) — same shape as every other ineligible branch here.
+  const { data: modRow } = await admin
+    .from('organization_modules')
+    .select('module_id')
+    .eq('organization_id', organizationId)
+    .eq('module_id', 'public_requests')
+    .eq('enabled', true)
+    .maybeSingle();
+  if (!modRow) {
+    return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
+  }
+
   // Confirm warehouseId belongs to this org and is publicly orderable.
   const { data: wh } = await admin
     .from('warehouses')

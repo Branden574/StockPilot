@@ -1,13 +1,36 @@
 'use client';
 
-import { Loader2, Minus, Plus, ShoppingCart, Trash2 } from 'lucide-react';
+// Public request cart — the internal storefront's sf-cart rail skin
+// (storefront-cart.tsx) on the anonymous /r/<token> flow. Submit still
+// posts to POST /api/v1/public/order-requests and hands off to the
+// double-opt-in "Check your inbox" panel via onSubmitted; only the
+// presentation changed in P4.
+
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Minus,
+  Package,
+  PencilLine,
+  Plus,
+  ShoppingCart,
+  Trash2,
+  Truck,
+  Warehouse,
+} from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
 import { clearCartDraft, useCart } from '@/components/orders/v2/cart-context';
-import type { CatalogItem } from '@/components/orders/v2/types';
+
+import { QtyField } from '../storefront/storefront-cards';
+import { cartTotals } from '../storefront/storefront-logic';
+
+import { PublicPhoto } from './public-item-card';
+import { publicCapFinite, publicCapOf } from './public-logic';
+import type { PublicCatalogItem } from './types';
 
 export interface SubmittedState {
   id: string;
@@ -17,9 +40,13 @@ export interface SubmittedState {
 
 interface PublicCartRailProps {
   token: string;
+  /** Raw warehouse id — goes into the submit payload. */
   warehouseId: string;
-  /** Map of itemId → CatalogItem for thumbnail + name lookups in the rail. */
-  itemMap: Map<string, CatalogItem>;
+  /** localStorage draft key ("public:<warehouseId>") — cleared on success. */
+  draftKey: string;
+  warehouseName: string;
+  /** Map of itemId → PublicCatalogItem for thumbnail + name lookups. */
+  itemMap: ReadonlyMap<string, PublicCatalogItem>;
   /** Requester fields — owned by the root and passed down so this component
    *  can include them in the submit payload without duplicating state. */
   name: string;
@@ -30,17 +57,11 @@ interface PublicCartRailProps {
   onSubmitted: (state: SubmittedState) => void;
 }
 
-/**
- * Sticky cart rail for the public order link.
- *
- * Visual structure mirrors the staff CartRail for consistency, but the
- * submit logic posts to POST /api/v1/public/order-requests (not the
- * createOrderRequestAction server action). On success, calls onSubmitted
- * so the root can switch to the "Check your inbox" panel.
- */
 export function PublicCartRail({
   token,
   warehouseId,
+  draftKey,
+  warehouseName,
   itemMap,
   name,
   email,
@@ -51,19 +72,20 @@ export function PublicCartRail({
 }: PublicCartRailProps) {
   const { state, dispatch } = useCart();
   const [submitting, setSubmitting] = React.useState(false);
+  const [notesOpen, setNotesOpen] = React.useState(false);
 
   const lines = state.lines;
-  const totalQty = lines.reduce((s, l) => s + l.quantity, 0);
+  const { lineCount, unitCount } = cartTotals(lines);
 
   // Screen-reader live region for cart changes
   const [announcement, setAnnouncement] = React.useState('');
-  const prevCount = React.useRef(totalQty);
+  const prevCount = React.useRef(unitCount);
   React.useEffect(() => {
-    if (totalQty !== prevCount.current) {
-      setAnnouncement(`${totalQty} item${totalQty === 1 ? '' : 's'} in cart.`);
-      prevCount.current = totalQty;
+    if (unitCount !== prevCount.current) {
+      setAnnouncement(`${unitCount} item${unitCount === 1 ? '' : 's'} in cart.`);
+      prevCount.current = unitCount;
     }
-  }, [totalQty]);
+  }, [unitCount]);
 
   async function handleSubmit() {
     if (submitting) return;
@@ -73,7 +95,7 @@ export function PublicCartRail({
       return;
     }
     if (lines.length === 0) {
-      toast.error('Add at least one book.');
+      toast.error('Add at least one item.');
       return;
     }
     if (state.fulfillmentType === 'delivery' && !state.charterId) {
@@ -103,19 +125,22 @@ export function PublicCartRail({
         }),
       });
 
-      const json = await res.json().catch(() => ({})) as Record<string, unknown>;
+      const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
 
       if (!res.ok) {
         toast.error(
           (json.message as string | undefined) ??
-          (json.error as string | undefined) ??
-          'Something went wrong.',
+            (json.error as string | undefined) ??
+            'Something went wrong.',
         );
         return;
       }
 
       const ok = json as { id: string; trackUrl: string };
-      clearCartDraft(warehouseId);
+      // Clear the persisted PUBLIC draft (key is prefixed "public:<wh>" to
+      // avoid colliding with a staff draft on a shared browser).
+      clearCartDraft(draftKey);
+      dispatch({ type: 'clear' });
       onSubmitted({ id: ok.id, email: email.trim(), trackUrl: ok.trackUrl });
     } catch {
       toast.error("Couldn't reach the server. Try again.");
@@ -125,143 +150,179 @@ export function PublicCartRail({
   }
 
   return (
-    <div aria-label="Cart">
-      {/* Screen-reader live region */}
-      <div aria-live="polite" aria-atomic="true" className="sr-only">
+    <div className="sf-cart" aria-label="Request cart">
+      <div aria-live="polite" aria-atomic="true" className="sf-sr-only">
         {announcement}
       </div>
 
-      <div className="rounded-xl border bg-card p-4 space-y-4">
-        {/* Header */}
-        <div className="flex items-center gap-2">
-          <ShoppingCart className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold">
-            Cart
-            {totalQty > 0 && (
-              <span className="ml-1.5 text-muted-foreground font-normal">
-                ({totalQty})
-              </span>
-            )}
-          </h2>
-          {name.trim() && (
-            <span className="ml-auto text-xs text-muted-foreground truncate max-w-[140px]">
-              {name.trim()}
-            </span>
-          )}
-        </div>
+      {/* Header */}
+      <div className="sf-cart-head">
+        <ShoppingCart size={15} />
+        <span className="ttl">Your Request</span>
+        <span className="cnt" data-zero={unitCount === 0}>
+          {unitCount}
+        </span>
+        {lineCount > 0 && (
+          <button type="button" className="clr" onClick={() => dispatch({ type: 'clear' })}>
+            Clear all
+          </button>
+        )}
+      </div>
 
-        {/* Line items */}
-        {lines.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            Your cart is empty. Add books from the catalog.
-          </p>
+      {/* Context strip */}
+      <div className="sf-cart-ctx">
+        <span className="sf-ctx-chip">
+          <span className="icon">
+            <Warehouse size={11} />
+          </span>
+          {warehouseName}
+        </span>
+        <span className="sf-ctx-chip">
+          <span className="icon">
+            {state.fulfillmentType === 'pickup' ? <Package size={11} /> : <Truck size={11} />}
+          </span>
+          {state.fulfillmentType === 'pickup' ? 'Pickup' : 'Delivery'}
+        </span>
+        {name.trim() !== '' && (
+          <span className="sf-ctx-chip">For {name.trim().split(/\s+/)[0]}</span>
+        )}
+      </div>
+
+      {/* Line items / empty state */}
+      <div className="sf-cart-list">
+        {lineCount === 0 ? (
+          <div className="sf-cart-empty">
+            <div className="ring">
+              <ShoppingCart size={26} />
+            </div>
+            <h5>Nothing here yet</h5>
+            <p>
+              Browse the catalog and add items —
+              <br />
+              they queue here until you send the request.
+            </p>
+          </div>
         ) : (
-          <ul className="divide-y divide-border text-xs space-y-0">
-            {lines.map((line) => {
-              const item = itemMap.get(line.itemId);
-              const itemName = item?.name ?? line.itemId;
-              const imageUrl = item?.imageUrl ?? null;
-              const maxQty = item?.quantityOnHand ?? Infinity;
-
-              return (
-                <li key={line.itemId} className="flex items-start gap-2 py-2">
-                  {/* Thumbnail */}
-                  <div className="h-9 w-9 flex-none rounded-md border bg-muted overflow-hidden">
-                    {imageUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={imageUrl}
-                        alt=""
-                        loading="lazy"
-                        decoding="async"
-                        className="h-full w-full object-cover"
-                      />
-                    ) : null}
-                  </div>
-
-                  {/* Name + stepper */}
-                  <div className="flex-1 min-w-0 space-y-1">
-                    <p className="font-medium truncate leading-tight" title={itemName}>
-                      {itemName}
-                    </p>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => dispatch({ type: 'dec', itemId: line.itemId })}
-                        className="flex items-center justify-center h-6 w-6 rounded border border-border hover:bg-muted transition-colors"
-                        aria-label="Decrease quantity"
-                      >
-                        <Minus className="h-3 w-3" />
-                      </button>
-                      <span className="w-6 text-center tabular-nums font-semibold">
-                        {line.quantity}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => dispatch({ type: 'inc', itemId: line.itemId })}
-                        disabled={line.quantity >= maxQty}
-                        className="flex items-center justify-center h-6 w-6 rounded border border-border hover:bg-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        aria-label="Increase quantity"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Remove */}
+          lines.map((line) => {
+            const item = itemMap.get(line.itemId);
+            const cap = item ? publicCapOf(item) : Infinity;
+            const atMax = line.quantity >= cap;
+            const over = line.quantity > cap;
+            const limitBound = item?.maxQty != null && cap === item.maxQty;
+            return (
+              <div className="sf-line" key={line.itemId}>
+                <div className="th">
+                  {item ? <PublicPhoto item={item} /> : <div className="sf-ph" />}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div className="nm">{item?.displayName ?? 'Unavailable item'}</div>
+                  {item?.categoryLabel ? <div className="sk2">{item.categoryLabel}</div> : null}
+                </div>
+                <div className="rt">
                   <button
                     type="button"
+                    className="rm"
+                    title="Remove"
+                    aria-label={`Remove ${item?.displayName ?? 'item'} from cart`}
                     onClick={() => dispatch({ type: 'remove', itemId: line.itemId })}
-                    className="text-muted-foreground hover:text-destructive transition-colors mt-0.5"
-                    aria-label={`Remove ${itemName} from cart`}
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
+                    <Trash2 size={12} />
                   </button>
-                </li>
-              );
-            })}
-          </ul>
+                  <div className="sf-step mini">
+                    <button
+                      type="button"
+                      onClick={() => dispatch({ type: 'dec', itemId: line.itemId })}
+                      aria-label="Decrease quantity"
+                    >
+                      <Minus size={11} />
+                    </button>
+                    <QtyField
+                      itemId={line.itemId}
+                      qty={line.quantity}
+                      available={item ? publicCapFinite(item) : line.quantity}
+                      onSetQty={(itemId, quantity) =>
+                        dispatch({ type: 'set-qty', itemId, quantity })
+                      }
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!atMax) dispatch({ type: 'inc', itemId: line.itemId });
+                      }}
+                      disabled={atMax}
+                      aria-label="Increase quantity"
+                    >
+                      <Plus size={11} />
+                    </button>
+                  </div>
+                </div>
+                {item && (atMax || over) && Number.isFinite(cap) && (
+                  <div className="sf-line-warn">
+                    <AlertTriangle size={12} />
+                    {over
+                      ? limitBound
+                        ? `Limit ${item.maxQty} per request — reduce quantity`
+                        : `Only ${cap} available — reduce quantity`
+                      : limitBound
+                        ? `Limit ${item.maxQty} per request`
+                        : `All ${cap} available are in your request`}
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
+      </div>
 
-        {/* Notes */}
-        <div className="space-y-1">
-          <label htmlFor="pub-v2-cart-notes" className="text-xs text-muted-foreground">
-            Notes
-            <span className="ml-1 font-normal">(optional)</span>
-          </label>
-          <Textarea
-            id="pub-v2-cart-notes"
-            value={state.notes}
-            onChange={(e) => dispatch({ type: 'set-notes', value: e.target.value })}
-            rows={2}
-            maxLength={2000}
-            placeholder="Anything the manager should know…"
-            className="text-xs resize-none"
-          />
-        </div>
-
-        {/* Totals */}
-        {lines.length > 0 && (
-          <div className="space-y-1 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Total qty</span>
-              <span className="tabular-nums font-semibold">{totalQty}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Submit */}
-        <Button
+      {/* Notes (collapsible) */}
+      <div className="sf-notes" data-open={notesOpen}>
+        <button
           type="button"
-          className="w-full"
-          onClick={handleSubmit}
-          disabled={submitting || lines.length === 0}
+          className="sf-notes-head"
+          onClick={() => setNotesOpen((o) => !o)}
+          aria-expanded={notesOpen}
         >
-          {submitting ? (
-            <Loader2 className="h-4 w-4 animate-spin mr-2" />
-          ) : null}
-          Send request
-        </Button>
+          <PencilLine size={13} />
+          <span>Notes</span>
+          <span className="opt">Optional</span>
+          {!notesOpen && state.notes.trim() !== '' && <span className="dot-has" />}
+          <span className="chev">
+            <ChevronDown size={13} />
+          </span>
+        </button>
+        {notesOpen && (
+          <textarea
+            placeholder="Anything the team should know — deadlines, event, room number…"
+            value={state.notes}
+            maxLength={2000}
+            onChange={(e) => dispatch({ type: 'set-notes', value: e.target.value })}
+          />
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="sf-cart-foot">
+        <div className="sf-tot">
+          <span>Line items</span>
+          <span className="v">{lineCount}</span>
+        </div>
+        <div className="sf-tot">
+          <span>Total units</span>
+          <span className="v">{unitCount}</span>
+        </div>
+        <button
+          type="button"
+          className="sf-submit"
+          disabled={submitting || lineCount === 0}
+          onClick={() => void handleSubmit()}
+        >
+          {submitting ? <Loader2 size={14} className="animate-spin" /> : null}
+          Send request <ChevronRight size={14} />
+        </button>
+        <div className="fine">
+          We&apos;ll email you a confirmation link first — the request is only
+          reviewed after you confirm.
+        </div>
       </div>
     </div>
   );

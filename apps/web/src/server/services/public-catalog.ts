@@ -4,7 +4,10 @@ import { unstable_cache } from 'next/cache';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 
-import type { CatalogItem } from '@/components/orders/v2/types';
+import type {
+  PublicAvailability,
+  PublicCatalogItem,
+} from '@/components/orders/public-v2/types';
 
 import { publicCatalogTag } from './public-links';
 
@@ -36,36 +39,12 @@ import { publicCatalogTag } from './public-links';
  */
 
 // ── Public schema ───────────────────────────────────────────────────────────
+// PublicCatalogItem/PublicAvailability live in
+// components/orders/public-v2/types.ts (types only — shared verbatim with
+// the anonymous UI so server payload and client rendering can't drift).
+// Re-exported here so server-side callers keep importing from the service.
 
-export type PublicAvailability =
-  /** availability_display='exact' — real net count (on hand − reserved). */
-  | { kind: 'exact'; count: number }
-  /** availability_display='bucket' — coarse bucket, no real numbers. */
-  | { kind: 'bucket'; level: 'in_stock' | 'low_stock' | 'out_of_stock' }
-  /** availability_display='none' — the link shows no stock signal at all. */
-  | { kind: 'none' };
-
-export interface PublicCatalogItem {
-  id: string;
-  /** public_display_name when set, else the internal name. */
-  displayName: string;
-  /** public_description when set; the internal description NEVER ships. */
-  publicDescription: string | null;
-  itemType: string | null;
-  categoryId: string | null;
-  categoryLabel: string | null;
-  /**
-   * Always null in the RSC payload — signed thumbnail URLs are fetched
-   * after first paint by /api/v1/public/catalog-thumbnails (same deferred
-   * pattern as before).
-   */
-  imageUrl: string | null;
-  /** Tiny base64 blur (item_images.lqip) so cards never flash a bare box. */
-  lqip: string | null;
-  availability: PublicAvailability;
-  /** Per-request qty cap: entry cap ?? link default ?? null (unlimited). */
-  maxQty: number | null;
-}
+export type { PublicAvailability, PublicCatalogItem };
 
 /** Minimal link config the public read path needs. */
 export interface PublicLinkConfig {
@@ -101,8 +80,9 @@ export interface PublicRequestContext {
 
 /**
  * Fixed public low-stock boundary for the 'bucket' display mode. Mirrors
- * PUBLIC_LOW_STOCK_THRESHOLD in public-orders-v2.tsx — the org's real
- * reorder_point is confidential and never ships to anonymous visitors.
+ * PUBLIC_LOW_STOCK_THRESHOLD in components/orders/public-v2/public-logic.ts —
+ * the org's real reorder_point is confidential and never ships to anonymous
+ * visitors.
  */
 const PUBLIC_BUCKET_LOW_THRESHOLD = 5;
 
@@ -128,6 +108,26 @@ export async function resolvePublicRequestToken(
 const resolvePublicRequestTokenCached = unstable_cache(
   async (token: string): Promise<PublicRequestContext | null> => {
     const admin = createAdminClient();
+
+    // Module gate for the READ path (review finding 2026-07-12): the submit
+    // route already 404s when `public_requests` is disabled, but without
+    // this check a previously-shared /r/<token> URL kept rendering the full
+    // catalog after an org turned the module off (entitlement boundary
+    // enforced write-only). Same posture as submit: optional module, an
+    // explicit enabled row is required; resolver returns null → the page
+    // 404s without leaking that the org exists. A query error also lands on
+    // null (fail closed). Cached with the resolution (60s TTL bounds a
+    // module toggle; link mutations revalidate the tag).
+    const moduleEnabled = async (orgId: string): Promise<boolean> => {
+      const { data } = await admin
+        .from('organization_modules')
+        .select('module_id')
+        .eq('organization_id', orgId)
+        .eq('module_id', 'public_requests')
+        .eq('enabled', true)
+        .maybeSingle();
+      return Boolean(data);
+    };
 
     const { data: linkRow } = await admin
       .from('public_request_links')
@@ -168,7 +168,7 @@ const resolvePublicRequestTokenCached = unstable_cache(
         .select(orgSelect)
         .eq('id', l.organization_id)
         .maybeSingle();
-      if (!orgRow) return null;
+      if (!orgRow || !(await moduleEnabled(l.organization_id))) return null;
       return {
         org: orgRow as OrgRow,
         link: {
@@ -196,8 +196,9 @@ const resolvePublicRequestTokenCached = unstable_cache(
       .select(orgSelect)
       .eq('public_request_token', token)
       .maybeSingle();
-    if (!orgByToken) return null;
-    return { org: orgByToken as OrgRow, link: null };
+    const legacyOrg = orgByToken as OrgRow | null;
+    if (!legacyOrg || !(await moduleEnabled(legacyOrg.id))) return null;
+    return { org: legacyOrg, link: null };
   },
   ['public-link-by-token-v1'],
   { revalidate: 60, tags: ['public-org-by-token'] },
@@ -371,85 +372,11 @@ async function loadPublicCatalogUncached(
   });
 }
 
-// ── Transitional adapter for the existing public UI ─────────────────────────
-
-/**
- * Adapts PublicCatalogItem to the internal CatalogItem interface that the
- * current public-v2 components still consume (until P4 restyles them onto
- * the narrow schema). The internal-only fields are hard-null/zero — they
- * simply do not exist on PublicCatalogItem, so this adapter cannot leak.
- *
- * Bucket/none availability maps onto sentinel counts purely so the existing
- * card logic (out ≤0, low ≤10) renders something sensible; only 'exact'
- * links (which includes every migrated General link) exist until the P2
- * admin UI can create bucketed ones.
- */
-export function toLegacyCatalogItems(
-  items: PublicCatalogItem[],
-  warehouseId: string,
-): CatalogItem[] {
-  return items.map((it) => {
-    const quantityOnHand =
-      it.availability.kind === 'exact'
-        ? it.availability.count
-        : it.availability.kind === 'bucket'
-          ? it.availability.level === 'out_of_stock'
-            ? 0
-            : it.availability.level === 'low_stock'
-              ? PUBLIC_BUCKET_LOW_THRESHOLD
-              : 999
-          : 999;
-    return {
-      id: it.id,
-      // sku intentionally no longer ships to anonymous visitors ("SKU only
-      // if intentionally enabled" — owner PRD). Empty string keeps the
-      // legacy interface satisfied without carrying the value.
-      sku: '',
-      name: it.displayName,
-      warehouseId,
-      quantityOnHand,
-      reservedQuantity: 0,
-      itemType: it.itemType,
-      categoryId: it.categoryId,
-      categoryName: it.categoryLabel,
-      charterId: null,
-      charterName: null,
-      charterCode: null,
-      rackLabel: null,
-      price: null,
-      reorderPoint: 0,
-      imageUrl: it.imageUrl,
-      lqip: it.lqip,
-    };
-  });
-}
-
-/**
- * LEGACY EXPORT — kept functional during the transition (callers pass an
- * orgId, pre-0261 style). Delegates to the link-aware path through the org's
- * migrated link: org → public_request_token → links row (same token). Orgs
- * with no token (feature off) or no matching link resolve to an empty
- * catalog — fail closed.
- */
-export async function getPublicBookCatalog(
-  orgId: string,
-  warehouseId: string,
-): Promise<CatalogItem[]> {
-  const admin = createAdminClient();
-  const { data: orgRow } = await admin
-    .from('organizations')
-    .select('public_request_token')
-    .eq('id', orgId)
-    .maybeSingle();
-  const token = (orgRow as { public_request_token: string | null } | null)
-    ?.public_request_token;
-  if (!token) return [];
-  const resolved = await resolvePublicRequestToken(token);
-  if (!resolved?.link || resolved.org.id !== orgId) return [];
-  if (!isLinkOpen(resolved.link)) return [];
-  const items = await getPublicCatalogForLink(resolved.link, warehouseId);
-  return toLegacyCatalogItems(items, warehouseId);
-}
+// (The transitional CatalogItem adapter — toLegacyCatalogItems — and the
+// legacy getPublicBookCatalog(orgId, …) export were removed in P4: the
+// public UI now renders PublicCatalogItem directly, so the anonymous
+// payload simply never carries sku/price/charter/reserved fields, not even
+// as empty strings/zeros.)
 
 function chunked<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];

@@ -1,5 +1,12 @@
 import type { ReactNode } from 'react';
 
+// P4: /r/<token> shares the internal storefront's design system.
+// storefront.css scopes every rule under .sp-storefront and the sfp-*
+// public additions under .sf-public, so neither affects /r/track or
+// /r/confirm (which render no .sp-storefront wrapper).
+import '@/components/orders/storefront/storefront.css';
+import '@/components/orders/public-v2/public-orders.css';
+
 /**
  * Layout for the public order-request surface (`/r/<token>` and
  * `/r/track`). Deliberately bare — no dashboard chrome, no sidebar, no
@@ -17,10 +24,13 @@ export default function PublicOrderRequestLayout({
 }) {
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+      {/* Wide enough for the storefront's two-column shell (catalog +
+          372px request rail) on desktop; /r/track and /r/confirm keep
+          their own max-w-md inner containers. */}
+      <main className="mx-auto w-full max-w-[1480px] px-4 py-8 sm:px-6 sm:py-10">
         {children}
       </main>
-      <footer className="text-muted-foreground mx-auto max-w-6xl px-4 pb-10 text-center text-[11px] sm:px-6">
+      <footer className="text-muted-foreground mx-auto max-w-[1480px] px-4 pb-10 text-center text-[11px] sm:px-6">
         Powered by StockPilot
       </footer>
     </div>
