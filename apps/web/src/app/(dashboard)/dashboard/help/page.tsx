@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
-import { BookOpen, CheckCircle2, Keyboard, Mail, Sparkles } from 'lucide-react';
+import { BookOpen, CheckCircle2, Gift, Keyboard, Mail, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 
 import { getTourStateAction } from '@/lib/onboarding/actions';
+import { ANNOUNCEMENTS } from '@/lib/onboarding/announcements';
 import {
   AI_TOUR,
   DASHBOARD_TOUR,
@@ -133,6 +134,28 @@ export default async function HelpPage() {
                 ))}
               </ol>
             </details>
+          ))}
+        </div>
+      </section>
+
+      <section className="mt-10">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide">
+          <Gift className="text-primary size-4" /> What&apos;s new
+        </h2>
+        <div className="mt-4 space-y-2">
+          {ANNOUNCEMENTS.map((a) => (
+            <div key={a.id} className="bg-card rounded-lg border p-3">
+              <p className="text-sm font-medium">
+                {a.title}
+                <span className="text-muted-foreground ml-2 text-xs font-normal">{a.date}</span>
+              </p>
+              <p className="text-muted-foreground mt-0.5 text-xs leading-relaxed">{a.body}</p>
+              {a.cta && (
+                <Link href={a.cta.href} className="text-primary mt-1 inline-block text-xs font-medium hover:underline">
+                  {a.cta.label} →
+                </Link>
+              )}
+            </div>
           ))}
         </div>
       </section>

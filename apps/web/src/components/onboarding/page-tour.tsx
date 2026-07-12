@@ -10,6 +10,7 @@ import {
   recordTourOutcomeAction,
 } from '@/lib/onboarding/actions';
 import type { TourDefinition, TourStep } from '@/lib/onboarding/types';
+import { capture } from '@/lib/analytics';
 
 /**
  * Spotlight tour engine (owner PRD, spec §2/§12/§16). Mount <PageTour
@@ -60,6 +61,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
   const reduced = useReducedMotion();
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   const targetRef = React.useRef<Element | null>(null);
+  const stepIndexRef = React.useRef(0);
 
   React.useEffect(() => setMounted(true), []);
 
@@ -86,6 +88,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
       setPhase('idle');
       setStepIndex(0);
       setRect(null);
+      capture(`tour_${outcome}`, { tourId: tour.id, version: tour.version, exitStep: stepIndexRef.current });
       void recordTourOutcomeAction({ tourId: tour.id, version: tour.version, outcome });
     },
     [tour.id, tour.version],
@@ -101,6 +104,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
         if (!step.target) {
           targetRef.current = null;
           setRect(null);
+          stepIndexRef.current = i;
           setStepIndex(i);
           return;
         }
@@ -110,6 +114,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
           targetRef.current = el;
           const r = el.getBoundingClientRect();
           setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+          stepIndexRef.current = i;
           setStepIndex(i);
           return;
         }
@@ -126,6 +131,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
     const want = new URLSearchParams(window.location.search).get('tour');
     if (want === tour.id) {
       setPhase('running');
+      capture('tour_started', { tourId: tour.id, via: 'deep_link' });
       void goTo(0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
@@ -172,6 +178,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
         type="button"
         onClick={() => {
           setPhase('running');
+          capture('tour_started', { tourId: tour.id, via: 'pill' });
           void goTo(0);
         }}
         className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors"
@@ -202,6 +209,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
                 size="sm"
                 onClick={() => {
                   setPhase('running');
+                  capture('tour_started', { tourId: tour.id, via: 'offer' });
                   void goTo(0);
                 }}
               >

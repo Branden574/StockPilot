@@ -56,6 +56,69 @@ export async function recordTourOutcomeAction(
   }
 }
 
+const announcementSeenSchema = z.object({
+  ids: z.array(z.string().min(1).max(80)).min(1).max(50),
+  outcome: z.enum(['seen', 'dismissed']),
+});
+
+/**
+ * Unseen announcements for the current user, role-filtered, newest first.
+ * Fail-quiet to an empty list — What's New must never break the shell.
+ */
+export async function getUnseenAnnouncementsAction(): Promise<
+  { id: string; date: string; title: string; body: string; cta?: { href: string; label: string } }[]
+> {
+  try {
+    const [{ ANNOUNCEMENTS }, ctx] = await Promise.all([
+      import('@/lib/onboarding/announcements'),
+      withContext(),
+    ]);
+    const { data } = await ctx.supabase
+      .from('user_onboarding')
+      .select('viewed_announcements')
+      .eq('user_id', ctx.userId)
+      .maybeSingle();
+    const viewed = (data?.viewed_announcements as Record<string, unknown> | null) ?? {};
+    return ANNOUNCEMENTS.filter(
+      (a) => !viewed[a.id] && (!a.roles || a.roles.includes(ctx.role)),
+    )
+      .slice(0, 3)
+      .map(({ roles: _roles, ...rest }) => rest);
+  } catch {
+    return [];
+  }
+}
+
+export async function recordAnnouncementsSeenAction(
+  input: z.input<typeof announcementSeenSchema>,
+): Promise<void> {
+  const parsed = announcementSeenSchema.safeParse(input);
+  if (!parsed.success) return;
+  try {
+    const ctx = await withContext();
+    const { data: row } = await ctx.supabase
+      .from('user_onboarding')
+      .select('viewed_announcements')
+      .eq('user_id', ctx.userId)
+      .maybeSingle();
+    const current = (row?.viewed_announcements as Record<string, unknown> | null) ?? {};
+    const at = new Date().toISOString();
+    const additions = Object.fromEntries(
+      parsed.data.ids.map((id) => [id, { at, outcome: parsed.data.outcome }]),
+    );
+    await ctx.supabase.from('user_onboarding').upsert(
+      {
+        user_id: ctx.userId,
+        role_at_onboarding: ctx.role,
+        viewed_announcements: { ...current, ...additions },
+      },
+      { onConflict: 'user_id' },
+    );
+  } catch {
+    // Best-effort — a lost mark re-shows an announcement once.
+  }
+}
+
 export interface TourStateSnapshot {
   completed: Record<string, { v?: number } | undefined>;
   dismissed: Record<string, { v?: number } | undefined>;

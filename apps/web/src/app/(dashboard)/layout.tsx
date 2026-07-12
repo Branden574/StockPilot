@@ -21,6 +21,7 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
 
 import { ROLE_LABELS, resolveTerminology } from '@stockpilot/core';
+import { WhatsNew } from '@/components/onboarding/whats-new';
 
 // Override the root layout's marketing title for everything under
 // /dashboard. Without this, every dashboard page that doesn't export
@@ -195,6 +196,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         <ImpersonationBanner />
         {showMfaBanner && <MfaRequiredBanner />}
         {children}
+        <WhatsNew />
       </DashboardShell>
     </>
   );
