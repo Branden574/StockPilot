@@ -72,7 +72,11 @@ const config: ExpoConfig = {
     ],
   },
   plugins: [
-    'expo-router',
+    // sitemap:false — never ship the route-map screen (/_sitemap, also
+    // linked from Unmatched Route) in production; owner flagged it as
+    // unnecessary internal exposure. Honored at bundle time (getRoutesCore
+    // options.sitemap !== false), so OTA delivers it.
+    ['expo-router', { sitemap: false }],
     [
       'expo-camera',
       {

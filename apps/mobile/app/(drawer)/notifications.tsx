@@ -11,6 +11,7 @@ import { Body, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { ensureRealtimeAuth } from '@/lib/realtime-auth';
 import { supabase } from '@/lib/supabase';
+import { rewriteWebPath } from '@/lib/web-path-rewrite';
 import { useWorkspace } from '@/lib/use-workspace';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -127,7 +128,10 @@ export default function NotificationsScreen() {
         prev.map((r) => (r.id === notif.id ? { ...r, read_at: new Date().toISOString() } : r)),
       );
     }
-    if (notif.link) router.push(notif.link as never);
+    // Notification links are WEB paths — translate through the ONE shared
+    // rewriter (the in-app inbox is the third deep-link door; raw
+    // router.push('/dashboard/insights') dead-ended on Unmatched Route).
+    if (notif.link) router.push(rewriteWebPath(notif.link) as never);
   }
 
   return (
