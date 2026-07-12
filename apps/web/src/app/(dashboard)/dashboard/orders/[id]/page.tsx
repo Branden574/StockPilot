@@ -40,6 +40,7 @@ import { RMAService, type ReturnableLine } from '@/server/services/returns';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDER_DETAIL_TOUR } from '@/lib/onboarding/tours';
+import { HelpTip } from '@/components/onboarding/help-tip';
 
 const TIMELINE_FIELDS: Array<{
   key: keyof OrderRequestRow;
@@ -462,7 +463,19 @@ export default async function OrderDetailPage({
                 <TableRow>
                   <TableHead>Item</TableHead>
                   <TableHead className="text-right">Requested</TableHead>
-                  <TableHead className="text-right">Fulfilled</TableHead>
+                  <TableHead className="text-right">
+                    <span className="inline-flex items-center gap-1">
+                      Fulfilled
+                      <HelpTip label="Fulfilled vs Owed">
+                        <p>
+                          Fulfilled counts units actually handed over at
+                          pickup/delivery — picked or staged units are not fulfilled
+                          yet. Owed is requested minus fulfilled; a backordered order
+                          stays live until owed reaches zero or a manager closes it.
+                        </p>
+                      </HelpTip>
+                    </span>
+                  </TableHead>
                   <TableHead className="text-right">Owed</TableHead>
                   <TableHead className="text-right">On hand</TableHead>
                 </TableRow>

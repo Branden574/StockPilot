@@ -47,6 +47,7 @@ import {
 import { dedupeItemsBySku } from '@/lib/po-imports/dedupe-items';
 
 import type { PoImportLineRow, PoImportRow } from '@/server/services/po-imports';
+import { HelpTip } from '@/components/onboarding/help-tip';
 
 // createdAt drives the match dropdown's SKU-dedupe (oldest row wins); the
 // preview only needs the PreviewItem fields and ignores the extra key.
@@ -438,7 +439,16 @@ export function PoImportDetail({
             )}
           </div>
           <div>
-            <label className="text-muted-foreground text-xs">Charter for items (optional)</label>
+            <label className="text-muted-foreground text-xs inline-flex items-center gap-1">
+              Charter for items (optional)
+              <HelpTip label="Charter for items">
+                <p>
+                  Sets who <strong>owns</strong> the stock: items created from these
+                  lines are stamped with this charter. Independent of billing — a PO
+                  billed to one charter can stock items owned by another.
+                </p>
+              </HelpTip>
+            </label>
             <Select
               value={charterId || '__none'}
               onValueChange={(v) => setCharterId(v === '__none' ? '' : v)}
@@ -457,7 +467,16 @@ export function PoImportDetail({
             </Select>
           </div>
           <div>
-            <label className="text-muted-foreground text-xs">Bill to charter (optional)</label>
+            <label className="text-muted-foreground text-xs inline-flex items-center gap-1">
+              Bill to charter (optional)
+              <HelpTip label="Bill to charter">
+                <p>
+                  Sets who is <strong>billed</strong> on the purchase-order document
+                  itself. It does not affect who owns the items — that is the other
+                  dropdown.
+                </p>
+              </HelpTip>
+            </label>
             <Select
               value={billToCharterId || '__none'}
               onValueChange={(v) => setBillToCharterId(v === '__none' ? '' : v)}

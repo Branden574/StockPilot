@@ -9,6 +9,7 @@ import { PlaceFromStagingDialog } from '@/components/inventory/place-from-stagin
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn, formatRelative } from '@/lib/utils';
+import { HelpTip } from '@/components/onboarding/help-tip';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -255,7 +256,17 @@ export function StagingTable({
                 </th>
               )}
               <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
-                Item
+                <span className="inline-flex items-center gap-1.5">
+                  Item
+                  <HelpTip label="the staged / unplaced badge">
+                    <p>
+                      <strong>staged</strong> = received from a purchase order into
+                      staging. <strong>unplaced</strong> = on-hand stock that was never
+                      put into a rack or crate. Either way it counts in your totals but
+                      cannot be picked until you place it.
+                    </p>
+                  </HelpTip>
+                </span>
               </th>
               <th className="text-muted-foreground px-3 py-2.5 text-xs font-medium uppercase tracking-wide">
                 Qty to place
