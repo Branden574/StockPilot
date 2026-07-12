@@ -56,6 +56,8 @@ import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
+import { MobileTour } from '@/components/onboarding/mobile-tour';
+import { MOBILE_INVENTORY_TOUR } from '@/lib/onboarding';
 
 interface Item {
   id: string;
@@ -522,6 +524,9 @@ export default function Inventory() {
           <Display size={34} style={{ marginTop: 12 }}>
             Items<Em>.</Em>
           </Display>
+          <View style={{ marginTop: 10 }}>
+            <MobileTour tour={MOBILE_INVENTORY_TOUR} />
+          </View>
         </View>
 
         <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }}>

@@ -13,6 +13,8 @@ import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { MobileTour } from '@/components/onboarding/mobile-tour';
+import { MOBILE_ORDERS_TOUR } from '@/lib/onboarding';
 
 interface OrderRow {
   id: string;
@@ -123,6 +125,7 @@ export default function OrdersScreen() {
       onRefresh={refresh}
       keyExtractor={(o) => o.id}
       renderItem={(o) => <OrderCard order={o} />}
+      trailing={<MobileTour tour={MOBILE_ORDERS_TOUR} />}
     />
   );
 }

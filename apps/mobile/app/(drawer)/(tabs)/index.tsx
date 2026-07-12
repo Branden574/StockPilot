@@ -35,6 +35,8 @@ import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
+import { MobileTour } from '@/components/onboarding/mobile-tour';
+import { MOBILE_HOME_TOUR } from '@/lib/onboarding';
 
 interface Summary {
   itemCount: number;
@@ -212,6 +214,9 @@ export default function Home() {
           <Mono size={13.5} tracking={0.02} color={c.ink3} style={{ marginTop: 10 }}>
             {orgName} · synced now
           </Mono>
+          <View style={{ marginTop: 12 }}>
+            <MobileTour tour={MOBILE_HOME_TOUR} />
+          </View>
         </View>
       </SafeAreaView>
 
