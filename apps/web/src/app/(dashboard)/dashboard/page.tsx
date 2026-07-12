@@ -43,6 +43,8 @@ import {
 } from '@/lib/dashboard/request-cache';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { DASHBOARD_TOUR } from '@/lib/onboarding/tours';
 
 /**
  * Returns the morning/afternoon/evening greeting word + the long-form
@@ -150,6 +152,7 @@ export default async function DashboardHome() {
             </h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <PageTour tour={DASHBOARD_TOUR} />
             <Button variant="outline" size="sm" asChild>
               <Link href="/dashboard/reports">
                 <Download className="h-3 w-3" /> Export

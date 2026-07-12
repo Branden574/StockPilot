@@ -135,3 +135,171 @@ export const ORDERS_TOUR: TourDefinition = {
     },
   ],
 };
+
+export const DASHBOARD_TOUR: TourDefinition = {
+  id: 'dashboard',
+  version: 1,
+  name: 'Dashboard',
+  steps: [
+    {
+      title: 'Your home base',
+      body: 'The dashboard summarizes stock levels, orders in flight, and recent activity at a glance. Admins can choose and reorder these widgets in Settings.',
+    },
+    {
+      target: '#dashboard-sidebar',
+      title: 'Everything lives here',
+      body: 'The sidebar is grouped into Inventory, Workspace, Tools, and Admin. You only see what your role can access — and admins can rename labels, so your words may differ from ours.',
+    },
+    {
+      target: '#dashboard-sidebar nav a[href="/dashboard/inventory"]',
+      title: 'Items',
+      body: 'The heart of the system: every physical thing you track. Start here to add or find stock.',
+      optional: true,
+    },
+    {
+      target: 'section[aria-labelledby="get-started-heading"]',
+      title: 'Getting started',
+      body: 'This checklist walks your first real actions — each step deep-links to the right place and checks itself off as you go.',
+      optional: true,
+    },
+    {
+      title: 'Tours everywhere',
+      body: 'Every major page has a small “Tour” pill like the one you clicked. Take one whenever a screen is new to you — your progress is remembered across devices.',
+    },
+  ],
+};
+
+export const ORDER_CREATE_TOUR: TourDefinition = {
+  id: 'order-create',
+  version: 1,
+  name: 'Place an order',
+  steps: [
+    {
+      title: 'A storefront for your own stock',
+      body: 'Browse the catalog and build a cart. Submitting creates a REQUEST — a manager reviews and approves before any stock is reserved.',
+    },
+    {
+      target: '.sf-setup',
+      title: 'Set up the order first',
+      body: 'Choose the warehouse and whether this is a pickup or a delivery. Deliveries need a destination site — picking it now avoids a surprise at submit.',
+    },
+    {
+      target: '[aria-label="Order progress"]',
+      title: 'Progress, not buttons',
+      body: 'This indicator advances on its own as your cart fills and you review. It shows where you are — it is not navigation.',
+      optional: true,
+    },
+    {
+      target: 'input[aria-label="Search catalog"]',
+      title: 'Find items fast',
+      body: 'Search by name or SKU, or use the category pills below to narrow the catalog.',
+      optional: true,
+    },
+    {
+      target: '[aria-label="Order cart"]',
+      title: 'Your cart',
+      body: 'Quantities are capped at what is actually available — when adding stops working, the cart shows you have claimed everything on hand.',
+      optional: true,
+    },
+    {
+      target: '#sf-needed-by-input',
+      title: 'Needed by = automatic scheduling',
+      body: 'Set a date and, once the order is approved, a team Schedule event is created automatically with reminders the day before and an hour ahead.',
+      optional: true,
+    },
+  ],
+};
+
+export const ORDER_DETAIL_TOUR: TourDefinition = {
+  id: 'order-detail',
+  version: 1,
+  name: 'Order detail',
+  steps: [
+    {
+      target: 'main h1',
+      title: 'One order, its whole story',
+      body: 'The order number and live status badge. Everything below — lines, actions, timeline — updates as the order moves through fulfillment.',
+    },
+    {
+      title: 'Requested · Fulfilled · Owed',
+      body: 'Fulfilled counts units actually HANDED OVER at pickup/delivery — not merely picked. Owed is requested minus fulfilled. “Backordered” means the order is live but waiting on stock; “Partially fulfilled” means some units already went out.',
+    },
+    {
+      target: '[data-tour="manager-actions"]',
+      title: 'Actions change with the stage',
+      body: 'This panel offers exactly the next legal steps for the order’s status and your role. The big one: staff must “Claim picking” before they can pick — it locks the order to one picker so two people never pick the same order.',
+      optional: true,
+    },
+    {
+      target: 'main aside',
+      title: 'Dates and details',
+      body: 'Key dates and delivery info live here; the Timeline section is the full audit history of who did what, when.',
+      optional: true,
+    },
+  ],
+};
+
+export const PO_IMPORTS_TOUR: TourDefinition = {
+  id: 'po-imports',
+  version: 1,
+  name: 'PO imports',
+  steps: [
+    {
+      target: 'main h1',
+      title: 'Expected inbound, staged safely',
+      body: 'An import records what a vendor PO says is coming. Nothing touches your stock counts until you actually RECEIVE the purchase order it creates.',
+    },
+    {
+      target: 'a[href="/dashboard/purchase-orders/imports/new"]',
+      title: 'Two ways in',
+      body: 'Scan a PDF with AI (it extracts lines and shows a confidence score) or upload a CSV. Either way you review every line before approving.',
+    },
+    {
+      target: 'main table',
+      title: 'Review before approve',
+      body: 'Each import shows its status here. Every line must be mapped to an internal item (or skipped) before approval — suggested matches are advisory, never automatic.',
+      optional: true,
+    },
+    {
+      title: 'The two charter dropdowns',
+      body: 'On an import you may see two similar pickers: “Charter for items” sets who OWNS the stock being created; “Bill to charter” sets who is billed on the PO document. They are independent on purpose.',
+    },
+  ],
+};
+
+export const SETTINGS_TOUR: TourDefinition = {
+  id: 'settings-hub',
+  version: 1,
+  name: 'Settings',
+  steps: [
+    {
+      target: 'main h1',
+      title: 'Make the app speak your language',
+      body: 'Settings is where the workspace is shaped: what is enabled, what things are called, and who can do what.',
+    },
+    {
+      target: 'a[href="/dashboard/settings/navigation"]',
+      title: 'Rename almost anything',
+      body: 'Charters can become Schools, Items can become Inventory, Staging can become Receiving — the sidebar and page titles follow everywhere.',
+      optional: true,
+    },
+    {
+      target: 'a[href="/dashboard/settings/modules"]',
+      title: 'Turn features on and off',
+      body: 'Disable modules you do not use and they disappear app-wide — for every member, on web and mobile.',
+      optional: true,
+    },
+    {
+      target: 'a[href="/dashboard/settings/roles"]',
+      title: 'Who can do what',
+      body: 'Grant or revoke individual permissions per role — or per person. Gates, navigation, and data access all follow.',
+      optional: true,
+    },
+    {
+      target: 'a[href="/dashboard/settings/order-statuses"]',
+      title: 'Your workflow, your words',
+      body: 'Rename order-status labels (like “Staged” or “In transit”) to match how your team already talks.',
+      optional: true,
+    },
+  ],
+};

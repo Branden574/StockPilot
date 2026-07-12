@@ -68,6 +68,8 @@ import {
 import { QuickViewDrawer, ReviewModal, SfPopover } from './storefront-overlays';
 
 import './storefront.css';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { ORDER_CREATE_TOUR } from '@/lib/onboarding/tours';
 
 const GRID_PREVIEW = 4;
 const LIST_PREVIEW = 6;
@@ -239,6 +241,7 @@ function StorefrontShell({
               Browse available inventory, add items to your cart, and submit for
               approval.
             </div>
+            <div className="mt-2"><PageTour tour={ORDER_CREATE_TOUR} /></div>
           </div>
           <FlowIndicator stage={flowStage} />
         </div>

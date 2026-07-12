@@ -38,6 +38,8 @@ import {
 } from '@/server/services/order-requests';
 import { RMAService, type ReturnableLine } from '@/server/services/returns';
 import { formatNumber, formatRelative } from '@/lib/utils';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { ORDER_DETAIL_TOUR } from '@/lib/onboarding/tours';
 
 const TIMELINE_FIELDS: Array<{
   key: keyof OrderRequestRow;
@@ -404,6 +406,7 @@ export default async function OrderDetailPage({
                 ) : null}
               </h1>
               <OrderStatusBadge status={request.status} />
+              <PageTour tour={ORDER_DETAIL_TOUR} />
               {request.source === 'public_link' && (
                 <Badge variant="outline">Public</Badge>
               )}

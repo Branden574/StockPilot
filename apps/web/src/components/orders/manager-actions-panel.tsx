@@ -454,7 +454,7 @@ export function ManagerActionsPanel({
   const dirty = notes !== initialNotes.current;
 
   return (
-    <section className="bg-card rounded-xl border">
+    <section data-tour="manager-actions" className="bg-card rounded-xl border">
       <div className="border-border border-b px-4 py-3">
         <h2 className="text-sm font-medium">Manager actions</h2>
         <p className="text-muted-foreground mt-0.5 text-[11.5px]">

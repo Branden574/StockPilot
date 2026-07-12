@@ -14,6 +14,8 @@ import {
 } from '@/components/ui/table';
 import { PoImportsService } from '@/server/services/po-imports';
 import { formatRelative } from '@/lib/utils';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { PO_IMPORTS_TOUR } from '@/lib/onboarding/tours';
 
 export default async function PoImportsPage() {
   const moduleAccess = await checkModuleAccess('po_imports');
@@ -33,9 +35,12 @@ export default async function PoImportsPage() {
             is not changed until you receive the items.
           </p>
         </div>
-        <Button asChild variant="gradient">
-          <Link href="/dashboard/purchase-orders/imports/new">+ New import</Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <PageTour tour={PO_IMPORTS_TOUR} />
+          <Button asChild variant="gradient">
+            <Link href="/dashboard/purchase-orders/imports/new">+ New import</Link>
+          </Button>
+        </div>
       </div>
 
       {imports.length === 0 ? (

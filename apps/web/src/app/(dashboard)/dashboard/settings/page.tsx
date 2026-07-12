@@ -7,6 +7,8 @@ export const metadata: Metadata = { title: 'Settings' };
 import { requireOrgContext } from '@/lib/auth/session';
 
 import { can } from '@stockpilot/core';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { SETTINGS_TOUR } from '@/lib/onboarding/tours';
 
 const BASE_SECTIONS = [
   { href: '/dashboard/settings/organization', title: 'Organization', description: 'Name, labels for charters and warehouses.' },
@@ -129,6 +131,7 @@ export default async function SettingsPage() {
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
       <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
       <p className="mt-1 text-sm text-muted-foreground">Manage your workspace and account.</p>
+      <div className="mt-2"><PageTour tour={SETTINGS_TOUR} /></div>
 
       <div className="mt-8 grid gap-4 sm:grid-cols-2">
         {sections.map((s) => (
