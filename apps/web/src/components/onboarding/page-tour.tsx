@@ -73,7 +73,8 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
       const seen =
         (done && (done.v ?? 0) >= tour.version) ||
         (waved && (waved.v ?? 0) >= tour.version);
-      if (!seen) setPhase('offer');
+      // Never downgrade a deep-link-started tour back to an offer prompt.
+      if (!seen) setPhase((p) => (p === 'idle' ? 'offer' : p));
     });
     return () => {
       cancelled = true;
@@ -118,6 +119,17 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
     },
     [tour.steps, finish],
   );
+
+  // Deep-link start: ?tour=<id> (Help center / workflow guides) launches
+  // immediately — an explicit link outranks the offer-once persistence.
+  React.useEffect(() => {
+    const want = new URLSearchParams(window.location.search).get('tour');
+    if (want === tour.id) {
+      setPhase('running');
+      void goTo(0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, [tour.id]);
 
   // Keep the spotlight glued to its element through scroll/resize.
   React.useEffect(() => {

@@ -144,13 +144,14 @@ export function Topbar({
         <HelpCircle className="h-3.5 w-3.5" aria-hidden />
       </button>
 
-      <button
-        type="button"
+      <Link
+        href="/dashboard/help"
         className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-        aria-label="Help"
+        aria-label="Help & Learning"
+        title="Help & Learning"
       >
         <BookOpen className="h-3.5 w-3.5" aria-hidden />
-      </button>
+      </Link>
 
       <ThemeToggle />
 
