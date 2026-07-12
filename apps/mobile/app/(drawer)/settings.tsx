@@ -54,6 +54,10 @@ const APP_VERSION = Constants.expoConfig?.version ?? '1.1.0';
 const OTA_DATE = Updates.createdAt
   ? new Date(Updates.createdAt).toISOString().slice(0, 10)
   : null;
+// Short unique id of the RUNNING OTA bundle — the date alone is ambiguous
+// when several updates ship the same day; this is the ground truth for
+// "is the fix on this phone yet" checks (null = embedded store bundle).
+const OTA_ID = Updates.updateId ? Updates.updateId.slice(0, 8) : null;
 
 /**
  * Settings — moved from a bottom tab into the drawer per design. Organised
@@ -428,7 +432,7 @@ export default function Settings() {
             </Body>
           </Pressable>
           <Mono size={10} tracking={0.1} color={c.ink4}>
-            {OTA_DATE ? `v${APP_VERSION} · updated ${OTA_DATE}` : `v${APP_VERSION}`}
+            {OTA_DATE ? `v${APP_VERSION} · ${OTA_DATE}${OTA_ID ? ` · #${OTA_ID}` : ''}` : `v${APP_VERSION}`}
           </Mono>
         </View>
       </ScrollView>
