@@ -119,20 +119,41 @@ export async function GET(req: Request) {
       const emailById = new Map(
         ((profiles ?? []) as { id: string; email: string | null }[]).map((p) => [p.id, p.email]),
       );
+      // Per-user prefs (0258), house fail-open pattern: missing row or null
+      // column = subscribed; only an explicit false opts out.
+      const { data: prefRows } = await admin
+        .from('notification_preferences')
+        .select('user_id, email_schedule_reminders, push_schedule_reminders')
+        .in('user_id', [...userIds]);
+      const prefById = new Map(
+        (
+          (prefRows ?? []) as {
+            user_id: string;
+            email_schedule_reminders: boolean | null;
+            push_schedule_reminders: boolean | null;
+          }[]
+        ).map((r) => [r.user_id, r]),
+      );
 
       for (const uid of userIds) {
+        const pref = prefById.get(uid);
+        const wantsPush = pref?.push_schedule_reminders !== false;
+        const wantsEmail = pref?.email_schedule_reminders !== false;
+        if (!wantsPush && !wantsEmail) continue;
         // In-app + push in one call.
-        await createNotification({
-          organizationId: ev.organization_id,
-          userId: uid,
-          type: 'schedule_reminder',
-          title,
-          body,
-          link,
-          metadata: { scheduleEventId: ev.id, horizon: isOneHour ? '1h' : '24h' },
-        });
+        if (wantsPush) {
+          await createNotification({
+            organizationId: ev.organization_id,
+            userId: uid,
+            type: 'schedule_reminder',
+            title,
+            body,
+            link,
+            metadata: { scheduleEventId: ev.id, horizon: isOneHour ? '1h' : '24h' },
+          });
+        }
         const email = emailById.get(uid);
-        if (email) {
+        if (email && wantsEmail) {
           await sendEmail({
             to: email,
             subject: title,

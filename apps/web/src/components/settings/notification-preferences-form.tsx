@@ -92,6 +92,18 @@ const TOGGLE_DEFS: ToggleDef[] = [
     hint: 'In-app notification when you\'re assigned as picker or driver.',
     group: 'push',
   },
+  {
+    key: 'email_schedule_reminders',
+    label: 'Schedule reminders',
+    hint: 'Email 24 hours and 1 hour before events you are assigned to (managers get all events).',
+    group: 'email',
+  },
+  {
+    key: 'push_schedule_reminders',
+    label: 'Schedule reminders',
+    hint: 'Push + in-app reminder 24 hours and 1 hour before scheduled events.',
+    group: 'push',
+  },
 ];
 
 interface NotificationPreferencesFormProps {
