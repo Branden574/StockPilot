@@ -93,17 +93,20 @@ const CATALOG_LIMIT = 500;
  * External cover URL to ship in the initial SSR payload. ISBN-imported books
  * store their cover in `custom_fields.thumbnail_url` — a public CDN link
  * (Open Library / Google Books) that needs no signing, so it can render with
- * the HTML. Open Library serves `-L.jpg` (large master); the grid thumbnail
- * never needs more than `-M.jpg` (~180px), so downsize it for a much smaller
- * download. Returns null unless the field is a plain http(s) URL — never
- * emits a non-URL custom field onto the public page.
+ * the HTML. Returns the cover at FULL size (e.g. Open Library `-L`): the card
+ * renders through next/image, which downscales to the exact display size and
+ * re-encodes to WebP/AVIF, so shipping the large source keeps covers SHARP on
+ * retina without a large byte cost. (An earlier `-L`→`-M` downsize here made
+ * covers upscale ~2.5× in the 220-260px retina cells and read blurry.)
+ * Returns null unless the field is a plain http(s) URL — never emits a
+ * non-URL custom field onto the public page.
  */
 function externalCoverUrl(customFields: Record<string, unknown> | null): string | null {
   const raw = customFields?.thumbnail_url;
   if (typeof raw !== 'string') return null;
   const url = raw.trim();
   if (!/^https?:\/\//i.test(url)) return null;
-  return url.replace(/(\/\/covers\.openlibrary\.org\/b\/id\/\d+)-L\.jpg$/i, '$1-M.jpg');
+  return url;
 }
 
 // ── Token → link/org resolution ─────────────────────────────────────────────

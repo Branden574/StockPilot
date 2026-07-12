@@ -7,6 +7,7 @@
 // them.
 
 import { Minus, Plus } from 'lucide-react';
+import Image from 'next/image';
 import * as React from 'react';
 
 import { QtyField } from '../storefront/storefront-cards';
@@ -20,20 +21,29 @@ import {
 } from './public-logic';
 import type { PublicCatalogItem } from './types';
 
-/** Photo box: signed thumbnail → LQIP blur → serif letter glyph. */
+/**
+ * Photo box: optimized image → LQIP blur → serif letter glyph.
+ *
+ * Renders through next/image so Vercel's optimizer downscales the SHARP
+ * source (full-size Open Library cover, or the item's master photo) to the
+ * exact 220-260px card cell as WebP/AVIF. That fixes the blur that a raw
+ * <img> showed — the SSR/deferred sources are 400-2048px, far larger than
+ * the cell, and a plain <img> was previously fed 180-200px thumbnails that
+ * upscaled ~2.5× on retina. `sizes` matches the grid (2-up under 560px,
+ * ~240px cells above); the first row loads at priority for LCP.
+ */
 export function PublicPhoto({ item, priority }: { item: PublicCatalogItem; priority?: boolean }) {
   if (item.imageUrl) {
     return (
       <div className="sf-ph">
-        {/* Above-the-fold cards (priority) load eagerly at high fetch
-            priority for a fast LCP; the rest stay lazy. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        <Image
           src={item.imageUrl}
           alt={item.displayName}
-          loading={priority ? 'eager' : 'lazy'}
-          fetchPriority={priority ? 'high' : 'auto'}
-          decoding="async"
+          fill
+          sizes="(max-width: 560px) 45vw, 240px"
+          priority={priority}
+          style={{ objectFit: 'cover' }}
+          {...(item.lqip ? { placeholder: 'blur' as const, blurDataURL: item.lqip } : {})}
         />
       </div>
     );

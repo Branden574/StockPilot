@@ -152,7 +152,11 @@ export async function GET(req: NextRequest) {
     // doesn't call assertModuleEnabled and `inventory` is a core module.
     enabledModules: new Set(),
   });
-  const urlMap = await imagesSvc.primaryImagesForPdfRendering(itemIds, 200);
+  // Sign the MASTER (sharp) source, not the 200px thumb — the public page
+  // renders through next/image, which downscales to the exact card cell, so
+  // feeding a large source produces a crisp retina thumbnail. A 200px thumb
+  // would upscale ~2.5× in the cell and read blurry.
+  const urlMap = await imagesSvc.primaryMasterUrlsForItems(itemIds);
 
   const urls: Record<string, string> = {};
   for (const [k, v] of urlMap) urls[k] = v;

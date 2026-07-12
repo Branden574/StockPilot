@@ -497,6 +497,71 @@ export class ItemImagesService {
     return result;
   }
 
+  /**
+   * Primary image URL per item pointing at the SHARP source — the master
+   * (`storage_path`, capped 2048px WebP) rather than the 200-400px
+   * pre-generated thumb. The PUBLIC catalog renders these through next/image,
+   * whose optimizer downscales + re-encodes to the exact ~240px card cell, so
+   * a large source yields a crisp retina card at a small delivered byte size.
+   * The thumb path stays right for PDF rendering and the internal picker
+   * (react-pdf can't optimize; the picker wants pre-baked thumbs) — those keep
+   * {@link primaryImagesForPdfRendering}. Falls back to
+   * `custom_fields.thumbnail_url` (external ISBN covers) for items with no
+   * `item_images` row, same as the PDF signer.
+   */
+  async primaryMasterUrlsForItems(itemIds: string[]): Promise<Map<string, string>> {
+    if (itemIds.length === 0) return new Map();
+
+    const { data, error } = await this.ctx.supabase
+      .from('item_images')
+      .select('item_id, storage_path, is_primary, sort_order')
+      .eq('organization_id', this.ctx.organizationId)
+      .in('item_id', itemIds)
+      .order('is_primary', { ascending: false })
+      .order('sort_order', { ascending: true });
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    type Row = { item_id: string; storage_path: string };
+    const pickByItem = new Map<string, Row>();
+    for (const row of (data ?? []) as Row[]) {
+      if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
+    }
+
+    const signed = await Promise.all(
+      [...pickByItem.entries()].map(async ([itemId, row]) => {
+        const url = await getCachedItemImageSignedUrl(row.storage_path);
+        return url ? ([itemId, url] as const) : null;
+      }),
+    );
+    const result = new Map<string, string>();
+    for (const entry of signed) {
+      if (entry) result.set(entry[0], entry[1]);
+    }
+
+    // Fallback: external ISBN covers stored on the item (no item_images row).
+    const unresolved = itemIds.filter((id) => !result.has(id));
+    if (unresolved.length > 0) {
+      const { data: cfRows, error: cfErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, custom_fields')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', unresolved);
+      if (cfErr) throw new ServiceError('internal_error', cfErr.message);
+      for (const row of (cfRows ?? []) as Array<{
+        id: string;
+        custom_fields: Record<string, unknown> | null;
+      }>) {
+        const cf = row.custom_fields;
+        if (cf && typeof cf === 'object') {
+          const url = (cf as { thumbnail_url?: unknown }).thumbnail_url;
+          if (typeof url === 'string' && url.length > 0 && url.length < 2000) {
+            result.set(row.id, url);
+          }
+        }
+      }
+    }
+    return result;
+  }
 
   async record(
     itemId: string,
