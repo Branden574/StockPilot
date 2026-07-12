@@ -93,7 +93,7 @@ export function WhatsNew() {
     <div className="fixed inset-0 z-[60] grid place-items-center p-4">
       <div
         aria-hidden
-        className="animate-in fade-in fixed inset-0 bg-black/50 backdrop-blur-sm"
+        className="animate-in fade-in fixed inset-0 bg-black/60"
         onClick={() => close('dismissed')}
       />
       <div
