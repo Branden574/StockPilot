@@ -21,12 +21,20 @@ import {
 import type { PublicCatalogItem } from './types';
 
 /** Photo box: signed thumbnail → LQIP blur → serif letter glyph. */
-export function PublicPhoto({ item }: { item: PublicCatalogItem }) {
+export function PublicPhoto({ item, priority }: { item: PublicCatalogItem; priority?: boolean }) {
   if (item.imageUrl) {
     return (
       <div className="sf-ph">
+        {/* Above-the-fold cards (priority) load eagerly at high fetch
+            priority for a fast LCP; the rest stay lazy. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={item.imageUrl} alt={item.displayName} loading="lazy" decoding="async" />
+        <img
+          src={item.imageUrl}
+          alt={item.displayName}
+          loading={priority ? 'eager' : 'lazy'}
+          fetchPriority={priority ? 'high' : 'auto'}
+          decoding="async"
+        />
       </div>
     );
   }
@@ -55,6 +63,8 @@ export interface PublicCardCallbacks {
 interface PublicItemCardProps extends PublicCardCallbacks {
   item: PublicCatalogItem;
   qty: number;
+  /** Above-the-fold card — its photo loads eagerly at high priority. */
+  priority?: boolean;
 }
 
 export const PublicItemCard = React.memo(function PublicItemCard({
@@ -63,6 +73,7 @@ export const PublicItemCard = React.memo(function PublicItemCard({
   onAdd,
   onDec,
   onSetQty,
+  priority,
 }: PublicItemCardProps) {
   const status = publicStatusOf(item.availability);
   const label = publicAvailabilityLabel(item.availability);
@@ -73,7 +84,7 @@ export const PublicItemCard = React.memo(function PublicItemCard({
   return (
     <div className="sf-card" data-in-cart={qty > 0} data-out={out}>
       <div className="sf-ph-box">
-        <PublicPhoto item={item} />
+        <PublicPhoto item={item} priority={priority} />
         {/* availability_display='none' ships no stock signal at all */}
         {label !== null && (
           <span className={status === 'ok' || status === null ? 'sf-avail' : `sf-avail ${status}`}>

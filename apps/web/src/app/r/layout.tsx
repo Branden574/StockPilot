@@ -24,6 +24,12 @@ export default function PublicOrderRequestLayout({
 }) {
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {/* Open the TLS connection to the book-cover CDN before the catalog
+          markup references it, so covers (shipped in the initial payload)
+          start downloading a round-trip sooner. Next hoists these into
+          <head>. crossOrigin matches the <img> anonymous fetch. */}
+      <link rel="preconnect" href="https://covers.openlibrary.org" crossOrigin="anonymous" />
+      <link rel="dns-prefetch" href="https://covers.openlibrary.org" />
       {/* Wide enough for the storefront's two-column shell (catalog +
           372px request rail) on desktop; /r/track and /r/confirm keep
           their own max-w-md inner containers. */}

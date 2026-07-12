@@ -89,6 +89,23 @@ const PUBLIC_BUCKET_LOW_THRESHOLD = 5;
 /** Hard cap on catalog size, matching the previous loader. */
 const CATALOG_LIMIT = 500;
 
+/**
+ * External cover URL to ship in the initial SSR payload. ISBN-imported books
+ * store their cover in `custom_fields.thumbnail_url` — a public CDN link
+ * (Open Library / Google Books) that needs no signing, so it can render with
+ * the HTML. Open Library serves `-L.jpg` (large master); the grid thumbnail
+ * never needs more than `-M.jpg` (~180px), so downsize it for a much smaller
+ * download. Returns null unless the field is a plain http(s) URL — never
+ * emits a non-URL custom field onto the public page.
+ */
+function externalCoverUrl(customFields: Record<string, unknown> | null): string | null {
+  const raw = customFields?.thumbnail_url;
+  if (typeof raw !== 'string') return null;
+  const url = raw.trim();
+  if (!/^https?:\/\//i.test(url)) return null;
+  return url.replace(/(\/\/covers\.openlibrary\.org\/b\/id\/\d+)-L\.jpg$/i, '$1-M.jpg');
+}
+
 // ── Token → link/org resolution ─────────────────────────────────────────────
 
 /**
@@ -269,13 +286,14 @@ async function loadPublicCatalogUncached(
     quantity_on_hand: number | null;
     item_type: string | null;
     category_id: string | null;
+    custom_fields: Record<string, unknown> | null;
   };
   const items: ItemRow[] = [];
   for (const chunk of chunked(eligibleIds, 200)) {
     const { data } = await admin
       .from('inventory_items')
       .select(
-        'id, name, public_display_name, public_description, quantity_on_hand, item_type, category_id',
+        'id, name, public_display_name, public_description, quantity_on_hand, item_type, category_id, custom_fields',
       )
       .eq('organization_id', orgId)
       .in('id', chunk);
@@ -364,7 +382,13 @@ async function loadPublicCatalogUncached(
       itemType: it.item_type ?? null,
       categoryId: it.category_id ?? null,
       categoryLabel: it.category_id ? categoryNameById.get(it.category_id) ?? null : null,
-      imageUrl: null,
+      // Ship external cover URLs in the initial payload so the browser starts
+      // downloading them with the HTML instead of waiting for the deferred
+      // client thumbnail fetch (JS + a round-trip). Only public CDN covers
+      // (ISBN-imported books) qualify — signed product photos stay deferred
+      // (signing 100+ URLs would slow first paint). The client fetch still
+      // runs and fills in the signed photos + re-confirms these covers.
+      imageUrl: externalCoverUrl(it.custom_fields),
       lqip: lqipByItem.get(it.id) ?? null,
       availability,
       maxQty: maxQtyByItem.get(it.id) ?? null,

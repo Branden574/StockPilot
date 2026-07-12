@@ -147,11 +147,16 @@ function PublicOrdersV2Inner({
     `/api/v1/public/catalog-thumbnails?token=${encodeURIComponent(token)}&warehouseId=${encodeURIComponent(initialWarehouseId)}`,
   );
 
-  // Merge fetched thumbnail URLs onto the server-rendered items
+  // Merge fetched thumbnail URLs onto the server-rendered items. The
+  // deferred fetch only FILLS items with no server-provided image (signed
+  // product photos); it never overrides an SSR cover. Covers ship in the
+  // initial payload already downsized — letting the deferred fetch replace
+  // one with the raw (larger) fallback URL would re-download the image and
+  // flicker for zero benefit.
   const items = React.useMemo<PublicCatalogItem[]>(() => {
     if (Object.keys(thumbUrls).length === 0) return rawItems;
     return rawItems.map((it) =>
-      thumbUrls[it.id] ? { ...it, imageUrl: thumbUrls[it.id]! } : it,
+      !it.imageUrl && thumbUrls[it.id] ? { ...it, imageUrl: thumbUrls[it.id]! } : it,
     );
   }, [rawItems, thumbUrls]);
 
@@ -327,7 +332,7 @@ function PublicOrdersV2Inner({
 
   const renderItems = (list: PublicCatalogItem[]) => (
     <div className="sf-grid">
-      {list.map((it) => (
+      {list.map((it, i) => (
         <PublicItemCard
           key={it.id}
           item={it}
@@ -335,6 +340,9 @@ function PublicOrdersV2Inner({
           onAdd={handleAdd}
           onDec={handleDec}
           onSetQty={handleSetQty}
+          // First row of the first render is above the fold — load those
+          // covers eagerly at high priority for a fast LCP.
+          priority={i < 6}
         />
       ))}
     </div>
