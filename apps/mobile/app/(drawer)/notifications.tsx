@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
-import { BellOff, CheckCheck } from 'lucide-react-native';
+import { BellOff, CheckCheck, X } from 'lucide-react-native';
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { Modal, Pressable, ScrollView, View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
@@ -39,6 +39,9 @@ export default function NotificationsScreen() {
   const [rows, setRows] = React.useState<NotificationRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  // Web-only notifications (briefing, digests) open the detail sheet —
+  // their link has no native page and a silent no-op tap reads as broken.
+  const [detail, setDetail] = React.useState<NotificationRow | null>(null);
 
   const load = React.useCallback(async () => {
     if (!user || !activeOrgId) return;
@@ -139,10 +142,16 @@ export default function NotificationsScreen() {
     // Notification links are WEB paths — translate through the ONE shared
     // rewriter (the in-app inbox is the third deep-link door; raw
     // router.push('/dashboard/insights') dead-ended on Unmatched Route).
-    if (notif.link) router.push(rewriteWebPath(notif.link) as never);
+    const native = notif.link ? rewriteWebPath(notif.link) : null;
+    if (native && native !== '/' && native !== '/notifications') {
+      router.push(native as never);
+    } else {
+      setDetail(notif);
+    }
   }
 
   return (
+    <>
     <DataListScreen
       eyebrow={`INBOX · ${rows.filter((r) => !r.read_at).length} UNREAD`}
       title="Notifications"
@@ -162,6 +171,61 @@ export default function NotificationsScreen() {
       keyExtractor={(n) => n.id}
       renderItem={(n) => <NotifRow row={n} onPress={() => open(n)} />}
     />
+    {detail && <NotifDetailSheet row={detail} onClose={() => setDetail(null)} />}
+    </>
+  );
+}
+
+/**
+ * Detail sheet for web-only notifications (briefing, digests): their link has
+ * no native page, and a silent no-op tap reads as broken — show the full
+ * content in-place instead.
+ */
+function NotifDetailSheet({ row, onClose }: { row: NotificationRow; onClose: () => void }) {
+  const { c } = useTheme();
+  return (
+    <Modal transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable
+        style={{
+          flex: 1,
+          justifyContent: 'center',
+          padding: 24,
+          backgroundColor: 'rgba(0,0,0,0.55)',
+        }}
+        onPress={onClose}
+      >
+        <Pressable>
+          <Card padding={18}>
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Body size={16} color={c.ink} style={{ fontFamily: FONT.display }}>
+                  {row.title}
+                </Body>
+                <Mono size={10.5} color={c.ink4} style={{ marginTop: 4 }}>
+                  {new Date(row.created_at).toLocaleString('en-US', {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit',
+                  })}
+                </Mono>
+              </View>
+              <Pressable onPress={onClose} hitSlop={10}>
+                <X size={18} color={c.ink4} />
+              </Pressable>
+            </View>
+            {row.body ? (
+              <ScrollView style={{ maxHeight: 320, marginTop: 12 }}>
+                <Body size={14} color={c.ink2}>
+                  {row.body}
+                </Body>
+              </ScrollView>
+            ) : null}
+          </Card>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
