@@ -4,6 +4,7 @@ import * as Notifications from 'expo-notifications';
 import { useEffect } from 'react';
 import { Linking, Platform } from 'react-native';
 
+import { rewriteWebPath } from './web-path-rewrite';
 import { supabase } from './supabase';
 
 import type { User } from '@supabase/supabase-js';
@@ -96,21 +97,11 @@ export function usePushNotifications(user: User | null) {
     tapSubscription = Notifications.addNotificationResponseReceivedListener((res) => {
       const link = (res.notification.request.content.data as { link?: string })?.link;
       if (link && typeof link === 'string') {
-        // Internal /dashboard/... paths are translated to native
-        // stockpilot:// deep links.
-        if (link.startsWith('/dashboard/inventory/')) {
-          const id = link.split('/').pop();
-          if (id) Linking.openURL(`stockpilot://item/${id}`).catch(() => {});
-        } else if (link.startsWith('/dashboard/purchase-orders/')) {
-          const id = link.split('/').pop();
-          if (id) Linking.openURL(`stockpilot://po/${id}`).catch(() => {});
-        } else if (link.includes('/dashboard/orders/')) {
-          // Orders deep-link to the WEB path /dashboard/orders/{id}; the mobile
-          // order screen is /order/{id}. Handles a bare path AND an accidental
-          // stockpilot://-prefixed web path (which otherwise 404s as an
-          // Unmatched Route). Extract the order UUID and route natively.
-          const id = link.match(/\/dashboard\/orders\/([0-9a-fA-F-]{36})/)?.[1];
-          if (id) Linking.openURL(`stockpilot://order/${id}`).catch(() => {});
+        // Internal web paths go through the ONE shared rewriter (see
+        // web-path-rewrite.ts) — never a local mapping table.
+        if (link.startsWith('/')) {
+          const native = rewriteWebPath(link);
+          Linking.openURL(`stockpilot://${native.replace(/^\//, '')}`).catch(() => {});
         } else if (link.startsWith('stockpilot://')) {
           Linking.openURL(link).catch(() => {});
         } else if (link.startsWith('https://')) {
