@@ -17,7 +17,7 @@ const buttonVariants = cva(
         ghost: 'hover:bg-accent hover:text-accent-foreground',
         link: 'text-primary underline-offset-4 hover:underline',
         gradient:
-          'relative overflow-hidden bg-gradient-to-r from-primary to-blue-500 text-primary-foreground shadow-md hover:shadow-lg hover:from-primary/95 hover:to-blue-500/95 active:scale-[0.98]',
+          'relative overflow-hidden bg-gradient-to-r from-[oklch(0.55_0.12_165)] to-[oklch(0.68_0.12_165)] text-white shadow-md hover:shadow-lg hover:from-[oklch(0.55_0.12_165)]/95 hover:to-[oklch(0.68_0.12_165)]/95 active:scale-[0.98]',
       },
       size: {
         default: 'h-10 px-4 py-2',
