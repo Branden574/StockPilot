@@ -45,6 +45,7 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { DASHBOARD_TOUR } from '@/lib/onboarding/tours';
+import { DEMO_ORG_ID, DemoScenarios } from '@/components/onboarding/demo-scenarios';
 
 /**
  * Returns the morning/afternoon/evening greeting word + the long-form
@@ -175,6 +176,8 @@ export default async function DashboardHome() {
           </div>
         </div>
       </section>
+
+      {ctx.organizationId === DEMO_ORG_ID && <DemoScenarios />}
 
       <Suspense fallback={<DashboardBodySkeleton />}>
         <DashboardBody ctx={ctx} warehouseFilter={warehouseFilter} />
