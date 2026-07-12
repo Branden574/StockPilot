@@ -1,9 +1,10 @@
 import { useRouter } from 'expo-router';
-import { Bell, BellOff, type LucideIcon } from 'lucide-react-native';
+import { BellOff, CheckCheck } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
+import { IconChip } from '@/components/ui/row';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
@@ -93,34 +94,22 @@ export default function NotificationsScreen() {
     };
   }, [user, load]);
 
-  // Opening the inbox = you've SEEN them: mark every unread notification read
-  // once, so the home bell badge clears. The rows stay in the list (an
-  // actionable notification isn't "done" just because it was seen) — only the
-  // NEW styling + the unread count drop. Runs once per mount; guarded so the
-  // realtime reload below can't re-trigger it into a loop.
-  const clearedRef = React.useRef(false);
-  React.useEffect(() => {
-    if (loading || clearedRef.current || !user || !activeOrgId) return;
+  // Unread stays HIGHLIGHTED until the user acts (owner ask 2026-07-10):
+  // tapping a notification marks that one read; the header check-chip marks
+  // all read. No auto-clear on open — seeing the list is not acting on it.
+  async function markAllRead() {
     const unreadIds = rows.filter((r) => !r.read_at).map((r) => r.id);
     if (unreadIds.length === 0) return;
-    clearedRef.current = true;
     const now = new Date().toISOString();
-    // MUST await/`.then` — a supabase-js builder is lazy and never sends the
-    // request otherwise (`void builder` is a no-op). Only clear the local rows
-    // once the DB write lands so the UI can't diverge from the count the bell
-    // re-reads; on failure, allow a retry on the next focus.
-    void (async () => {
-      const { error } = await supabase
-        .from('notifications')
-        .update({ read_at: now })
-        .in('id', unreadIds);
-      if (error) {
-        clearedRef.current = false;
-        return;
-      }
+    // MUST await — a supabase-js builder is lazy (`void builder` is a no-op).
+    const { error } = await supabase
+      .from('notifications')
+      .update({ read_at: now })
+      .in('id', unreadIds);
+    if (!error) {
       setRows((prev) => prev.map((r) => (r.read_at ? r : { ...r, read_at: now })));
-    })();
-  }, [loading, rows, user, activeOrgId]);
+    }
+  }
 
   async function refresh() {
     setRefreshing(true);
@@ -153,6 +142,11 @@ export default function NotificationsScreen() {
       loading={loading}
       refreshing={refreshing}
       onRefresh={refresh}
+      trailing={
+        rows.some((r) => !r.read_at) ? (
+          <IconChip icon={CheckCheck} onPress={() => void markAllRead()} />
+        ) : null
+      }
       keyExtractor={(n) => n.id}
       renderItem={(n) => <NotifRow row={n} onPress={() => open(n)} />}
     />
@@ -166,7 +160,10 @@ function NotifRow({ row, onPress }: { row: NotificationRow; onPress: () => void 
   const ago = relativeTime(when);
   return (
     <Pressable onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
-      <Card padding={14}>
+      <Card
+        padding={14}
+        style={unread ? { backgroundColor: ACCENT.mintSoft, borderColor: ACCENT.mint } : undefined}
+      >
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
           <View
             style={{
