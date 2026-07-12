@@ -79,14 +79,19 @@ function cardPosition(
   return { left: sideLeft, top: Math.max(16, Math.min(rect.top + 24, H - CARD_H - 16)) };
 }
 
-/** Wait for a step's target to exist (dynamic content), up to ~4s. */
+/**
+ * Wait briefly for a step's target (streamed/dynamic content). Kept SHORT
+ * on purpose: a permanently-absent optional target (e.g. the dismissed
+ * Getting-started panel) is skipped in under a second — the owner hit a
+ * 4s version of this and Next felt dead while it silently retried.
+ */
 async function waitForTarget(selector: string): Promise<Element | null> {
-  for (let i = 0; i < 16; i++) {
+  for (let i = 0; i < 3; i++) {
     const el = document.querySelector(selector);
     if (el) return el;
     await new Promise((r) => setTimeout(r, 250));
   }
-  return null;
+  return document.querySelector(selector);
 }
 
 export function PageTour({ tour }: { tour: TourDefinition }) {
@@ -98,6 +103,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
   const cardRef = React.useRef<HTMLDivElement | null>(null);
   const targetRef = React.useRef<Element | null>(null);
   const stepIndexRef = React.useRef(0);
+  const goToSeq = React.useRef(0);
 
   React.useEffect(() => setMounted(true), []);
 
@@ -133,6 +139,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
   // Position the spotlight for the current step; skip absent targets.
   const goTo = React.useCallback(
     async (index: number, direction: 1 | -1 = 1) => {
+      const run = ++goToSeq.current; // newer navigation cancels this walk
       const steps = tour.steps;
       let i = index;
       while (i >= 0 && i < steps.length) {
@@ -145,6 +152,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
           return;
         }
         const el = await waitForTarget(step.target);
+        if (goToSeq.current !== run) return; // superseded by a newer click
         if (el) {
           el.scrollIntoView({ block: 'center', behavior: 'auto' });
           targetRef.current = el;
