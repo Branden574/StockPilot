@@ -303,3 +303,68 @@ export const SETTINGS_TOUR: TourDefinition = {
     },
   ],
 };
+
+export const ITEM_DETAIL_TOUR: TourDefinition = {
+  id: 'item-detail',
+  version: 1,
+  name: 'Item detail',
+  steps: [
+    {
+      target: 'main h1',
+      title: 'Everything about one item',
+      body: 'Name, SKU, and a live stock-status badge. Below: placements, serials, activity, cost history, and images — the item’s full record.',
+    },
+    {
+      title: 'On hand vs placed',
+      body: 'On hand is the total you own. The placements breakdown shows WHERE it sits — racks, crates, staging, or unplaced. Only placed stock can be picked for orders; anything in staging/unplaced needs a put-away first.',
+    },
+    {
+      target: '[data-tour="item-actions"]',
+      title: 'Actions',
+      body: 'Edit details, duplicate as a template, print a barcode, adjust quantities, or transfer stock between locations — each button appears only if your role allows it.',
+      optional: true,
+    },
+  ],
+};
+
+export const REPORTS_TOUR: TourDefinition = {
+  id: 'reports',
+  version: 1,
+  name: 'Reports',
+  steps: [
+    {
+      target: 'main h1',
+      title: 'Pre-built answers',
+      body: 'Ready-made reports over your live data — stock value, movement, order history, and more. No setup required.',
+    },
+    {
+      target: 'main a[href^="/dashboard/reports/"]',
+      title: 'Open any report',
+      body: 'Each card is a full report with filters. Every one exports to CSV, so audits and board decks start here.',
+      optional: true,
+    },
+  ],
+};
+
+export const AI_TOUR: TourDefinition = {
+  id: 'ai-assistant',
+  version: 1,
+  name: 'AI assistant',
+  steps: [
+    {
+      target: 'main h1',
+      title: 'Ask in plain English',
+      body: '“What is running low?” “Total value in Warehouse A?” “Which orders are stuck?” — the assistant answers from your actual data.',
+    },
+    {
+      title: 'Grounded, not guessed',
+      body: 'Every number comes from a real query against your inventory — the assistant runs the same reads the app does. Most tools are read-only; it only changes stock when you explicitly confirm.',
+    },
+    {
+      target: '[aria-label="Ask the inventory assistant"]',
+      title: 'Start typing',
+      body: 'Ask anything — you can also attach a photo of a book or a file of ISBNs and it will identify and look items up for you.',
+      optional: true,
+    },
+  ],
+};

@@ -54,6 +54,8 @@ import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage'
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
 import { can, isLikelyIsbn } from '@stockpilot/core';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { ITEM_DETAIL_TOUR } from '@/lib/onboarding/tours';
 
 
 interface ItemDetailProps {
@@ -297,6 +299,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                 reorderPoint={item.reorder_point as number}
                 itemStatus={item.status as 'active' | 'archived' | 'discontinued'}
               />
+              <PageTour tour={ITEM_DETAIL_TOUR} />
             </div>
             <p className="text-muted-foreground mt-1 break-all font-mono text-xs">
               {item.sku as string}
@@ -309,7 +312,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
             `w-max` so children keep their natural width inside the
             scroll viewport.
           */}
-          <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+          <div data-tour="item-actions" className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
             <div className="flex w-max gap-2 sm:flex-wrap">
               {canEditItem && (() => {
                 // Append the return param so editing → save still bounces

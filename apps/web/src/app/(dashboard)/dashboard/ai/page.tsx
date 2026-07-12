@@ -7,6 +7,8 @@ import { ChatPanel } from '@/components/ai/chat-panel';
 import { requireOrgContext } from '@/lib/auth/session';
 
 import { can } from '@stockpilot/core';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { AI_TOUR } from '@/lib/onboarding/tours';
 
 export const metadata = {
   title: 'AI Assistant',
@@ -31,9 +33,12 @@ export default async function AiPage() {
           <Sparkles className="mr-1 inline h-3 w-3" />
           AI Assistant · Beta
         </p>
-        <h1 className="font-display text-[28px] font-medium tracking-[-0.025em]">
-          Ask your inventory
-        </h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="font-display text-[28px] font-medium tracking-[-0.025em]">
+            Ask your inventory
+          </h1>
+          <PageTour tour={AI_TOUR} />
+        </div>
         <p className="text-muted-foreground mt-1 text-[13.5px]">
           Tool-call-grounded chat — every numeric answer comes from a real
           query against your Supabase. Most tools are read-only; the

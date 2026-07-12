@@ -18,6 +18,8 @@ import Link from 'next/link';
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { PageTour } from '@/components/onboarding/page-tour';
+import { REPORTS_TOUR } from '@/lib/onboarding/tours';
 
 interface Report {
   slug: string;
@@ -119,7 +121,10 @@ export default async function ReportsPage() {
             {reports.length} pre-baked reports — every one is exportable to CSV.
           </p>
         </div>
-        <PdfDownloadDropdown baseUrl="/api/reports/inventory-snapshot/pdf" />
+        <div className="flex items-center gap-2">
+          <PageTour tour={REPORTS_TOUR} />
+          <PdfDownloadDropdown baseUrl="/api/reports/inventory-snapshot/pdf" />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
