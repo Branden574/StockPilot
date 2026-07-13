@@ -718,19 +718,29 @@ export class InventoryService {
   }
 
   /**
-   * Loads only the (id, sku, name, tracking_type) tuple for a list of item
-   * ids. Lets callers like the PO detail page render line rows without
-   * over-fetching the entire inventory just for name/sku lookups. Order
-   * is not guaranteed; callers should index by id.
+   * Loads only the (id, sku, name, barcode, tracking_type) tuple for a list
+   * of item ids. Lets callers like the PO detail page and the label printer
+   * render rows without over-fetching the entire inventory just for name/sku
+   * lookups. Unlike list(), this does NOT exclude rental items — a direct-id
+   * caller (labels, PO lines) legitimately references them. Order is not
+   * guaranteed; callers should index by id.
    */
   async byIds(
     ids: string[],
     opts: { includeDeleted?: boolean } = {},
-  ): Promise<Array<{ id: string; sku: string; name: string; tracking_type: 'none' | 'lot' | 'serial' }>> {
+  ): Promise<
+    Array<{
+      id: string;
+      sku: string;
+      name: string;
+      barcode: string | null;
+      tracking_type: 'none' | 'lot' | 'serial';
+    }>
+  > {
     if (ids.length === 0) return [];
     let query = this.ctx.supabase
       .from('inventory_items')
-      .select('id, sku, name, tracking_type')
+      .select('id, sku, name, barcode, tracking_type')
       .eq('organization_id', this.ctx.organizationId)
       .in('id', ids);
     // Live surfaces (lists, pickers) exclude soft-deleted items. Historical
@@ -745,6 +755,7 @@ export class InventoryService {
       id: r.id as string,
       sku: r.sku as string,
       name: r.name as string,
+      barcode: (r.barcode as string | null) ?? null,
       tracking_type: ((r.tracking_type as string | null) ?? 'none') as
         | 'none'
         | 'lot'

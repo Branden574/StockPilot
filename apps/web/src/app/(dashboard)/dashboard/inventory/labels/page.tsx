@@ -1,6 +1,6 @@
 import Link from 'next/link';
 
-import { LabelSheet, type LabelFormat } from '@/components/inventory/label-sheet';
+import { LabelSheet, parseTemplate, type LabelFormat } from '@/components/inventory/label-sheet';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
@@ -27,22 +27,24 @@ export default async function LabelsPage({
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
   const copies = Math.max(1, Math.min(20, Number(params.copies) || 1));
-  const template =
-    params.template === 'large' || params.template === 'small'
-      ? params.template
-      : 'medium';
+  const template = parseTemplate(params.template);
   const format: LabelFormat = params.format === 'qr' ? 'qr' : 'barcode';
 
   const inventorySvc = await InventoryService.forCurrentUser();
   let items: LabelItem[] = [];
   if (ids.length > 0) {
     try {
-      const list = await inventorySvc.list({ limit: 500, status: 'all', itemType: 'all' });
-      const byId = new Map(list.items.map((i) => [i.id, i]));
+      // Fetch the REQUESTED ids directly (org-scoped, RLS-applied). The old
+      // approach looked the ids up inside list({ limit: 500 }) — which
+      // excludes rental items and silently misses anything past the first
+      // 500 rows, so "Print label" from a rental item (or a big org's tail)
+      // landed on "No items selected" despite a valid ?items= URL.
+      const rows = await inventorySvc.byIds(ids.slice(0, 500));
+      const byId = new Map(rows.map((i) => [i.id, i]));
       items = ids
         .map((id) => byId.get(id))
         .filter((i): i is NonNullable<typeof i> => Boolean(i))
-        .map((i) => ({ id: i.id, name: i.name, sku: i.sku, barcode: i.barcode ?? null }));
+        .map((i) => ({ id: i.id, name: i.name, sku: i.sku, barcode: i.barcode }));
     } catch (e) {
       if (!(e instanceof ServiceError)) throw e;
     }

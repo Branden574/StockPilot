@@ -14,20 +14,49 @@ interface LabelItem {
   barcode: string | null;
 }
 
-type Template = 'small' | 'medium' | 'large';
+export type Template =
+  | 'small'
+  | 'medium'
+  | 'large'
+  | 'thermal-40x30'
+  | 'thermal-50x30'
+  | 'thermal-50x80';
 export type LabelFormat = 'barcode' | 'qr';
 
-const TEMPLATES: Record<
-  Template,
-  { label: string; widthIn: number; heightIn: number; perRow: number; gapIn: number }
-> = {
+interface TemplateDef {
+  label: string;
+  /** 'sheet' = grid of labels on US-Letter (Avery). 'thermal' = roll printer
+   *  (Phomemo M110/M120/M200-class): ONE label per page, @page size = the
+   *  label size, zero margins, page-break after every label. */
+  kind: 'sheet' | 'thermal';
+  widthIn: number;
+  heightIn: number;
+  perRow: number;
+  gapIn: number;
+  /** CSS @page size. Sheets print on letter; thermal pages ARE the label. */
+  pageSize: string;
+}
+
+const MM_PER_IN = 25.4;
+
+const TEMPLATES: Record<Template, TemplateDef> = {
   // Avery 5160 / Avery J8160 — 30 labels per US Letter sheet (3 x 10).
-  small: { label: 'Small (Avery 5160 · 1" × 2 ⅝")', widthIn: 2.625, heightIn: 1, perRow: 3, gapIn: 0.125 },
+  small: { label: 'Small (Avery 5160 · 1" × 2 ⅝")', kind: 'sheet', widthIn: 2.625, heightIn: 1, perRow: 3, gapIn: 0.125, pageSize: 'letter' },
   // Avery 5163 — 10 labels per US Letter sheet (2 x 5).
-  medium: { label: 'Medium (Avery 5163 · 2" × 4")', widthIn: 4, heightIn: 2, perRow: 2, gapIn: 0.125 },
+  medium: { label: 'Medium (Avery 5163 · 2" × 4")', kind: 'sheet', widthIn: 4, heightIn: 2, perRow: 2, gapIn: 0.125, pageSize: 'letter' },
   // Avery 5164 — 6 labels per US Letter sheet (2 x 3).
-  large: { label: 'Large (Avery 5164 · 3 ⅓" × 4")', widthIn: 4, heightIn: 3.333, perRow: 2, gapIn: 0.125 },
+  large: { label: 'Large (Avery 5164 · 3 ⅓" × 4")', kind: 'sheet', widthIn: 4, heightIn: 3.333, perRow: 2, gapIn: 0.125, pageSize: 'letter' },
+  // Thermal roll stocks (Phomemo M110/M120/M200/M220 and similar). Sizes are
+  // the common die-cut label stocks; pick the one matching the loaded roll.
+  'thermal-40x30': { label: 'Thermal roll · 40 × 30 mm (Phomemo)', kind: 'thermal', widthIn: 40 / MM_PER_IN, heightIn: 30 / MM_PER_IN, perRow: 1, gapIn: 0, pageSize: '40mm 30mm' },
+  'thermal-50x30': { label: 'Thermal roll · 50 × 30 mm (Phomemo)', kind: 'thermal', widthIn: 50 / MM_PER_IN, heightIn: 30 / MM_PER_IN, perRow: 1, gapIn: 0, pageSize: '50mm 30mm' },
+  'thermal-50x80': { label: 'Thermal roll · 50 × 80 mm (Phomemo large)', kind: 'thermal', widthIn: 50 / MM_PER_IN, heightIn: 80 / MM_PER_IN, perRow: 1, gapIn: 0, pageSize: '50mm 80mm' },
 };
+
+/** Server-safe template validation for the ?template= URL param. */
+export function parseTemplate(raw: string | undefined): Template {
+  return raw && raw in TEMPLATES ? (raw as Template) : 'medium';
+}
 
 interface Props {
   items: LabelItem[];
@@ -115,12 +144,18 @@ export function LabelSheet({
 
       <div className="label-print-page">
         <div
-          className="label-grid"
-          style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${tpl.perRow}, ${tpl.widthIn}in)`,
-            gap: `${tpl.gapIn}in`,
-          }}
+          className={tpl.kind === 'thermal' ? 'label-grid label-grid--thermal' : 'label-grid'}
+          style={
+            tpl.kind === 'thermal'
+              ? // One label per printed page — stack vertically; the print CSS
+                // page-breaks after each cell so the roll advances label by label.
+                { display: 'flex', flexDirection: 'column', gap: '8px' }
+              : {
+                  display: 'grid',
+                  gridTemplateColumns: `repeat(${tpl.perRow}, ${tpl.widthIn}in)`,
+                  gap: `${tpl.gapIn}in`,
+                }
+          }
         >
           {expanded.map((it, idx) => (
             <LabelCell
@@ -135,15 +170,20 @@ export function LabelSheet({
       </div>
 
       {/*
-        Print stylesheet: hides everything outside the label sheet, sets
-        US Letter paper, removes the dashboard chrome's body lock so the
-        sheet can flow across multiple pages.
+        Print stylesheet: hides everything outside the label sheet and removes
+        the dashboard chrome's body lock so the sheet can flow across pages.
+        @page follows the template: Avery sheets print on US Letter with a
+        0.5in margin; thermal-roll templates make the PAGE the label (e.g.
+        "50mm 80mm", zero margin) and break after every cell so each label
+        lands on its own stock — that's what roll printers like the Phomemo
+        M120 expect. The on-screen dashed cut guide never prints on thermal
+        (it would ink a frame onto the die-cut label).
       */}
       <style jsx global>{`
         @media print {
           @page {
-            size: letter;
-            margin: 0.5in;
+            size: ${tpl.pageSize};
+            margin: ${tpl.kind === 'thermal' ? '0' : '0.5in'};
           }
           html,
           body {
@@ -165,6 +205,18 @@ export function LabelSheet({
             width: 100%;
             background: #fff;
             color: #000;
+          }
+          .label-grid--thermal {
+            display: block !important;
+          }
+          .label-grid--thermal .label-cell {
+            border: none !important;
+            page-break-after: always;
+            break-after: page;
+          }
+          .label-grid--thermal .label-cell:last-child {
+            page-break-after: auto;
+            break-after: auto;
           }
         }
       `}</style>
