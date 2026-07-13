@@ -40,9 +40,14 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
   const [size, setSize] = React.useState<Template | 'auto' | 'custom'>('auto');
   // Custom label dimensions in mm — the reliable path for odd thermal rolls
   // where the physical label doesn't match a preset. Entered as printed:
-  // width across the roll, height along the feed.
-  const [customW, setCustomW] = React.useState(50);
-  const [customH, setCustomH] = React.useState(30);
+  // width across the roll, height along the feed. Held as strings so the
+  // field can be cleared/retyped freely; clamped to 5-200mm only at print
+  // time (clamping on each keystroke snapped a half-typed value back and
+  // made the input impossible to edit).
+  const [customW, setCustomW] = React.useState('50');
+  const [customH, setCustomH] = React.useState('30');
+  const clampMm = (raw: string, fallback: number) =>
+    Math.max(5, Math.min(200, Number(raw) || fallback));
   // Rotate the label content 90° — some rolls feed such that a wide barcode
   // must run along the LENGTH of the label to fit.
   const [rotate, setRotate] = React.useState(false);
@@ -126,9 +131,11 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
     let heightIn: number | null = null;
     let pageSize = 'auto';
     if (size === 'custom') {
-      widthIn = Math.max(0.2, customW / 25.4);
-      heightIn = Math.max(0.2, customH / 25.4);
-      pageSize = `${customW}mm ${customH}mm`;
+      const wMm = clampMm(customW, 50);
+      const hMm = clampMm(customH, 30);
+      widthIn = wMm / 25.4;
+      heightIn = hMm / 25.4;
+      pageSize = `${wMm}mm ${hMm}mm`;
     } else if (size !== 'auto') {
       const tpl = TEMPLATES[size];
       widthIn = tpl.widthIn;
@@ -248,10 +255,12 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
                 <span className="text-muted-foreground text-xs">Width</span>
                 <input
                   type="number"
+                  inputMode="decimal"
                   min={5}
                   max={200}
                   value={customW}
-                  onChange={(e) => setCustomW(Math.max(5, Math.min(200, Number(e.target.value) || 0)))}
+                  onChange={(e) => setCustomW(e.target.value)}
+                  onBlur={() => setCustomW(String(clampMm(customW, 50)))}
                   className="border-input bg-background h-9 w-20 rounded-md border px-2 text-sm"
                 />
                 <span className="text-muted-foreground text-xs">mm</span>
@@ -261,10 +270,12 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
                 <span className="text-muted-foreground text-xs">Height</span>
                 <input
                   type="number"
+                  inputMode="decimal"
                   min={5}
                   max={200}
                   value={customH}
-                  onChange={(e) => setCustomH(Math.max(5, Math.min(200, Number(e.target.value) || 0)))}
+                  onChange={(e) => setCustomH(e.target.value)}
+                  onBlur={() => setCustomH(String(clampMm(customH, 30)))}
                   className="border-input bg-background h-9 w-20 rounded-md border px-2 text-sm"
                 />
                 <span className="text-muted-foreground text-xs">mm</span>

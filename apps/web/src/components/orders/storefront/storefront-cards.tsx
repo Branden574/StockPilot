@@ -19,6 +19,7 @@ import {
   Search,
   Sparkles,
 } from 'lucide-react';
+import Image from 'next/image';
 import * as React from 'react';
 
 import type { CatalogItem } from '../v2/types';
@@ -152,8 +153,18 @@ export function SfPhoto({ item }: { item: CatalogItem }) {
   if (item.imageUrl) {
     return (
       <div className="sf-ph">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={item.imageUrl} alt={item.name} loading="lazy" decoding="async" />
+        {/* Routed through next/image so the optimizer downscales the SHARP
+            master (the loader now signs storage_path) to the exact retina
+            cell + AVIF/WebP + 24h edge cache. The .sf-ph img CSS (absolute
+            inset-0, object-cover) styles the underlying <img> next/image
+            renders; `fill` needs the .sf-ph (position:relative) parent. */}
+        <Image
+          src={item.imageUrl}
+          alt={item.name}
+          fill
+          sizes="(max-width: 560px) 45vw, 220px"
+          loading="lazy"
+        />
       </div>
     );
   }

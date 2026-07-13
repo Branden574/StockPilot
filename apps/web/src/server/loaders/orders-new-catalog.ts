@@ -145,8 +145,15 @@ export const loadCatalogThumbMapCached = unstable_cache(
     const thumbBatch: Array<{ itemId: string; path: string }> = [];
     const transformBatch: Array<{ itemId: string; path: string }> = [];
     for (const [itemId, row] of rowByItem) {
-      if (row.thumbPath) thumbBatch.push({ itemId, path: row.thumbPath });
-      else if (row.storagePath) transformBatch.push({ itemId, path: row.storagePath });
+      // Sign the MASTER (storage_path), not the 200px thumb: the storefront
+      // card renders through next/image (SfPhoto), whose optimizer downscales
+      // the master to the exact retina cell + AVIF/WebP + 24h edge cache.
+      // Feeding a 200px thumb to a plain <img> made it upscale (blurry on
+      // retina). One batched createSignedUrls covers all masters — same
+      // signing cost as before. thumb_path is the fallback if a row somehow
+      // lacks a master; the legacy transform branch is now unused.
+      const path = row.storagePath ?? row.thumbPath;
+      if (path) thumbBatch.push({ itemId, path });
       else if (row.lqip) media[itemId] = { url: null, lqip: row.lqip };
     }
 
@@ -217,7 +224,9 @@ export const loadCatalogThumbMapCached = unstable_cache(
 
     return media;
   },
-  ['orders-new-thumbmap-v2'],
+  // v3: URLs now point at the master (storage_path) for next/image, not the
+  // 200px thumb — bump so the 4h-cached thumb URLs don't linger post-deploy.
+  ['orders-new-thumbmap-v3'],
   { revalidate: 4 * 60 * 60, tags: ['orders-new-thumbmap'] },
 );
 
