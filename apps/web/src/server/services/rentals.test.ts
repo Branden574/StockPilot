@@ -17,6 +17,15 @@ vi.mock('./audit', () => ({
   audit: vi.fn(async () => undefined),
 }));
 
+// Reservations are RLS write-locked, so the service writes them via the
+// service-role client. The mock returns whatever makeCtx last stashed, so the
+// admin client shares the same `from()` builder as ctx.supabase (same
+// stock_reservations insert/update behaviour, driven by the same opts).
+let lastAdminClient: unknown = null;
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => lastAdminClient,
+}));
+
 import { RentalsService } from './rentals';
 import { audit } from './audit';
 
@@ -150,16 +159,13 @@ function makeCtx(opts: MakeCtxOpts = {}) {
           insert(_rows: unknown) {
             return Promise.resolve({ error: opts.reservationInsertError ?? null });
           },
+          // Release chain: .update({...}).eq('rental_id', id).is('released_at', null)
           update(_patch: unknown) {
             return {
               eq(_col: string, _val: string) {
                 return {
-                  eq(_col2: string, _val2: string) {
-                    return {
-                      is(_col3: string, _val3: null) {
-                        return Promise.resolve({ error: null });
-                      },
-                    };
+                  is(_col2: string, _val2: null) {
+                    return Promise.resolve({ error: null });
                   },
                 };
               },
@@ -222,6 +228,10 @@ function makeCtx(opts: MakeCtxOpts = {}) {
       throw new Error(`[rentals.test] unexpected table: ${table}`);
     },
   } as unknown;
+
+  // The service-role client shares this same mock (see the '@/lib/supabase/admin'
+  // mock above), so reservation writes hit the same stock_reservations builder.
+  lastAdminClient = supabase;
 
   return {
     ctx: {

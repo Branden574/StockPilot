@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createAdminClient } from '@/lib/supabase/admin';
+
 import { audit } from './audit';
 import {
   assertModuleEnabled,
@@ -196,15 +198,19 @@ export class RentalsService {
       throw new ServiceError('internal_error', linesErr.message);
     }
 
-    // Insert stock_reservations so the order picker subtracts them.
+    // Insert stock_reservations so available-to-promise drops for these units.
+    // stock_reservations is RLS write-locked (mig 0119 — only service-role /
+    // SECURITY DEFINER paths write it, same as the order approve RPC), and the
+    // row shape is (org, item, warehouse, quantity, rental_id) per mig 0263.
+    const admin = createAdminClient();
     const reservationRows = input.lines.map((l) => ({
       organization_id: this.ctx.organizationId,
       item_id: l.itemId,
+      warehouse_id: input.warehouseId,
       quantity: l.quantity,
-      reference_type: 'rental',
-      reference_id: rentalId,
+      rental_id: rentalId,
     }));
-    const { error: resvErr } = await this.ctx.supabase
+    const { error: resvErr } = await admin
       .from('stock_reservations')
       .insert(reservationRows);
     if (resvErr) {
@@ -265,12 +271,11 @@ export class RentalsService {
       .eq('id', input.id);
     if (updateErr) throw new ServiceError('internal_error', updateErr.message);
 
-    // Release all reservations.
-    await this.ctx.supabase
+    // Release all reservations for this rental (service-role — RLS-locked).
+    await createAdminClient()
       .from('stock_reservations')
-      .update({ released_at: now.toISOString() })
-      .eq('reference_type', 'rental')
-      .eq('reference_id', input.id)
+      .update({ released_at: now.toISOString(), released_reason: 'rental_returned' })
+      .eq('rental_id', input.id)
       .is('released_at', null);
 
     const expectedTime = new Date(rental.expected_return_at);
@@ -320,12 +325,11 @@ export class RentalsService {
       .eq('id', input.id);
     if (updateErr) throw new ServiceError('internal_error', updateErr.message);
 
-    // Release all reservations.
-    await this.ctx.supabase
+    // Release all reservations for this rental (service-role — RLS-locked).
+    await createAdminClient()
       .from('stock_reservations')
-      .update({ released_at: now.toISOString() })
-      .eq('reference_type', 'rental')
-      .eq('reference_id', input.id)
+      .update({ released_at: now.toISOString(), released_reason: 'rental_cancelled' })
+      .eq('rental_id', input.id)
       .is('released_at', null);
 
     void audit(
