@@ -102,6 +102,14 @@ const TYPE_OPTIONS: ReadonlyArray<{ value: ItemTypeFilter; label: string }> = [
   { value: 'non-book', label: 'Items' },
 ];
 
+// Per-row selection identity. Neither field is unique on its own: one item can
+// hold stock in BOTH staging and unplaced (two rows, same itemId), and one
+// staging LOCATION holds many items (many rows, same sourceLocationId). Key
+// selection by the composite — the same identity the <tr> key uses — so
+// checking one row never selects its neighbours sharing a location.
+const rowKey = (r: { itemId: string; sourceLocationId: string }) =>
+  `${r.itemId}::${r.sourceLocationId}`;
+
 export function StagingTable({
   rows,
   destinationsMap,
@@ -119,11 +127,10 @@ export function StagingTable({
   // filters against the current rows, so a vanished key simply drops out.
   const [selectedKeys, setSelectedKeys] = React.useState<Set<string>>(new Set());
   const placeableKeys = React.useMemo(
-    () =>
-      rows.filter((r) => canPlace && r.warehouseId !== null).map((r) => r.sourceLocationId),
+    () => rows.filter((r) => canPlace && r.warehouseId !== null).map(rowKey),
     [rows, canPlace],
   );
-  const selectedRows = rows.filter((r) => selectedKeys.has(r.sourceLocationId));
+  const selectedRows = rows.filter((r) => selectedKeys.has(rowKey(r)));
   const allSelected =
     placeableKeys.length > 0 && placeableKeys.every((k) => selectedKeys.has(k));
   function toggleRow(key: string) {
@@ -300,17 +307,18 @@ export function StagingTable({
 
               return (
                 <tr
-                  // One item can have BOTH a staging and an unplaced holding, so
-                  // key by the source holding location, not the item id.
-                  key={`${row.itemId}-${row.sourceLocationId}`}
+                  // Same composite identity as selection (rowKey): one item can
+                  // have BOTH a staging and an unplaced holding, and one location
+                  // holds many items — so neither field alone is unique.
+                  key={rowKey(row)}
                   className="border-b border-border last:border-0 hover:bg-muted/40 transition-colors"
                 >
                   {canPlace && (
                     <td className="px-3 py-3">
                       <StagingCheckbox
-                        checked={selectedKeys.has(row.sourceLocationId)}
+                        checked={selectedKeys.has(rowKey(row))}
                         disabled={!canPlaceRow}
-                        onChange={() => toggleRow(row.sourceLocationId)}
+                        onChange={() => toggleRow(rowKey(row))}
                         label={`Select ${row.name}`}
                       />
                     </td>
