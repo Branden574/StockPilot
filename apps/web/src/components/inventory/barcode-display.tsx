@@ -150,11 +150,18 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
     // still fills the label.
     const known = widthIn !== null && heightIn !== null;
     const boxCss = known ? `width:${widthIn}in;height:${heightIn}in;` : `width:100%;height:100vh;`;
-    // Rotated inner content: swap dims so after rotate(90deg) it matches the box.
-    const innerCss =
-      rotate && known
-        ? `width:${heightIn}in;height:${widthIn}in;transform:rotate(90deg);`
-        : `width:100%;height:100%;`;
+    // The inner is ABSOLUTELY centered on the label (top/left 50% +
+    // translate(-50%,-50%)) so it stays centered whether or not it is rotated.
+    // When rotating, its width/height are swapped to the box's opposite dims,
+    // then rotate(90deg) lands it back filling the label. (The previous flex
+    // approach let the pre-rotation box overflow the label and knocked the
+    // print off-center — that's the "won't center" bug.)
+    const innerDims = known
+      ? rotate
+        ? `width:${heightIn}in;height:${widthIn}in;`
+        : `width:${widthIn}in;height:${heightIn}in;`
+      : `width:100%;height:100%;`;
+    const innerTransform = `translate(-50%,-50%)${rotate && known ? ' rotate(90deg)' : ''}`;
     const isSmall = known ? Math.min(widthIn!, heightIn!) < 1.4 : false;
     const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Label</title>
@@ -163,11 +170,12 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
   html,body{margin:0;padding:0;background:#fff;}
   .lbl{
     box-sizing:border-box;${boxCss}
-    display:flex;align-items:center;justify-content:center;
-    overflow:hidden;background:#fff;break-after:avoid;page-break-after:avoid;
+    position:relative;overflow:hidden;background:#fff;
+    break-after:avoid;page-break-after:avoid;
   }
   .inner{
-    box-sizing:border-box;${innerCss}
+    box-sizing:border-box;${innerDims}
+    position:absolute;top:50%;left:50%;transform:${innerTransform};
     display:flex;flex-direction:column;align-items:center;justify-content:center;
     gap:1mm;padding:1.5mm;overflow:hidden;text-align:center;
     font-family:system-ui,-apple-system,sans-serif;color:#000;
