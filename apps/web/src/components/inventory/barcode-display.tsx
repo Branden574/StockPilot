@@ -12,6 +12,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { TEMPLATES, type Template } from '@/components/inventory/label-templates';
 
 interface BarcodeDisplayProps {
   itemId: string;
@@ -33,6 +34,10 @@ interface BarcodeDisplayProps {
 export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDisplayProps) {
   const [open, setOpen] = React.useState(false);
   const [type, setType] = React.useState<'code128' | 'qr'>(barcode ? 'code128' : 'qr');
+  // Label stock. 'auto' fits whatever the printer's paper is set to (one
+  // label); the explicit sizes force @page to the exact stock, which is how
+  // you print to a thermal roll (Phomemo M120 etc.) instead of a paper sheet.
+  const [size, setSize] = React.useState<Template | 'auto'>('auto');
   const [state, setState] = React.useState<
     | { status: 'idle' }
     | { status: 'loading' }
@@ -108,16 +113,37 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
 
   function printIt() {
     if (state.status !== 'ready') return;
+    const tpl = size === 'auto' ? null : TEMPLATES[size];
+    // Exact stock size, or 'auto' (fills whatever the printer's paper is).
+    const pageSize = tpl ? tpl.pageSize : 'auto';
+    // The label box is one physical label. It is sized to the page and clips
+    // its contents, so the barcode + text ALWAYS fit on a single label and
+    // can never spill onto extra sheets (the old sheet printed padding:32px
+    // + a full-size PNG with no @page, so a tiny thermal label tiled across
+    // ~5 pages). Small stock hides the name and shrinks text.
+    const boxCss = tpl
+      ? `width:${tpl.widthIn}in;height:${tpl.heightIn}in;`
+      : `width:100%;height:100vh;`;
+    const isSmall = tpl ? tpl.heightIn < 1.4 : false;
     const html = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title></title>
-<style>body{font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:32px;margin:0;}
-img{max-width:100%;height:auto;}
-h2{font-size:14px;margin:16px 0 4px;font-weight:600;}
-p{font-size:12px;color:#52525b;margin:0;}</style>
+<html lang="en"><head><meta charset="utf-8"><title>Label</title>
+<style>
+  @page { size: ${pageSize}; margin: 0; }
+  html,body{margin:0;padding:0;background:#fff;}
+  .lbl{
+    box-sizing:border-box;${boxCss}
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:1mm;padding:1.5mm;overflow:hidden;text-align:center;
+    font-family:system-ui,-apple-system,sans-serif;color:#000;background:#fff;
+    break-after:avoid;page-break-after:avoid;
+  }
+  .lbl img{max-width:100%;max-height:${isSmall ? '78%' : '68%'};object-fit:contain;}
+  .nm{font-size:${isSmall ? '8px' : '11px'};font-weight:600;line-height:1.1;
+    max-height:20%;overflow:hidden;${isSmall ? 'display:none;' : ''}}
+  .sk{font-family:ui-monospace,Menlo,monospace;font-size:${isSmall ? '8px' : '10px'};letter-spacing:.5px;}
+</style>
 </head><body>
-<img id="bc" alt="" />
-<h2 id="t"></h2>
-<p id="s"></p>
+<div class="lbl"><img id="bc" alt="" /><div class="nm" id="t"></div><div class="sk" id="s"></div></div>
 <script>
 (function(){
   var p=new URLSearchParams(location.hash.slice(1));
@@ -125,7 +151,10 @@ p{font-size:12px;color:#52525b;margin:0;}</style>
   document.getElementById('t').textContent=p.get('t')||'';
   document.getElementById('s').textContent=p.get('s')||'';
   document.title=p.get('t')||'Label';
-  window.addEventListener('load',function(){setTimeout(function(){window.print();},250);});
+  var img=document.getElementById('bc');
+  function go(){setTimeout(function(){window.print();},250);}
+  // Wait for the barcode image to decode before printing so it isn't blank.
+  if(img.complete){window.addEventListener('load',go);}else{img.addEventListener('load',go);img.addEventListener('error',go);}
 })();
 </script>
 </body></html>`;
@@ -149,22 +178,39 @@ p{font-size:12px;color:#52525b;margin:0;}</style>
           <DialogDescription>Generate a barcode or QR code label for this item.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="inline-flex items-center rounded-full border bg-muted/40 p-1 text-sm">
-            {(['code128', 'qr'] as const).map((opt) => (
-              <button
-                type="button"
-                key={opt}
-                onClick={() => setType(opt)}
-                className={
-                  'rounded-full px-4 py-1.5 transition-colors ' +
-                  (type === opt
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground')
-                }
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="inline-flex items-center rounded-full border bg-muted/40 p-1 text-sm">
+              {(['code128', 'qr'] as const).map((opt) => (
+                <button
+                  type="button"
+                  key={opt}
+                  onClick={() => setType(opt)}
+                  className={
+                    'rounded-full px-4 py-1.5 transition-colors ' +
+                    (type === opt
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground')
+                  }
+                >
+                  {opt === 'code128' ? 'Barcode' : 'QR code'}
+                </button>
+              ))}
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground text-xs">Label size</span>
+              <select
+                value={size}
+                onChange={(e) => setSize(e.target.value as Template | 'auto')}
+                className="border-input bg-background h-9 rounded-md border px-2.5 text-sm"
               >
-                {opt === 'code128' ? 'Barcode' : 'QR code'}
-              </button>
-            ))}
+                <option value="auto">Fit to printer (auto)</option>
+                {(Object.keys(TEMPLATES) as Template[]).map((t) => (
+                  <option key={t} value={t}>
+                    {TEMPLATES[t].label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           <div className="relative grid min-h-[180px] place-items-center rounded-lg border bg-white p-6">
             {state.status === 'loading' && (

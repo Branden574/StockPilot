@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
-import { LabelSheet, parseTemplate, type LabelFormat } from '@/components/inventory/label-sheet';
+import { LabelSheet } from '@/components/inventory/label-sheet';
+import { parseTemplate, type LabelFormat } from '@/components/inventory/label-templates';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
