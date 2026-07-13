@@ -1619,7 +1619,18 @@ export function InventoryTable({
               const location = item.primary_location_id
                 ? lookups.locations.get(item.primary_location_id)
                 : null;
-              const status = deriveStatus(item.quantity_on_hand, item.reorder_point);
+              // Status follows AVAILABLE (on-hand − reserved), matching the
+              // "{avail} avail · {out} out" indicator below. A rental checkout
+              // reserves stock instead of decrementing on-hand, so a fully
+              // checked-out item (0 avail, 1 out) must read "Out of stock", not
+              // "In stock". reservedByItem is passed ONLY by the rentals items
+              // view; everywhere else reserved is 0, so available === on-hand
+              // and the status is unchanged.
+              const reservedForStatus = reservedByItem?.get(item.id) ?? 0;
+              const status = deriveStatus(
+                Math.max(0, item.quantity_on_hand - reservedForStatus),
+                item.reorder_point,
+              );
               const par = Math.max(item.reorder_point * 4, item.quantity_on_hand * 1.5, 10);
               // Stable per (displayed, sparkMode, trends) — see seriesByItem above.
               const series = seriesByItem.get(item.id) ?? EMPTY_SERIES;
