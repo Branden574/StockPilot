@@ -62,7 +62,7 @@ const PO_SCHEMA = {
     lines: {
       type: SchemaType.ARRAY,
       description:
-        'Each line item on the PO. Include only LINE ITEMS — exclude header rows, "Subtotal:", "Tax:", "Total:" rows, and footer notes. Each tax/freight line that appears as a separate line ITEM (not in totals) goes here with the appropriate lineType.',
+        'EVERY item row in the document — one entry per printed product/asset/device/service row, in order. Include price-less rows (packing slips list quantity with no price — still include them, price 0). Do NOT merge a product row with a separate service/fee row. Exclude only header rows and the "Subtotal:"/"Tax:"/"Total:" summary rows (a tax/freight/fee that is its own item ROW still belongs here with the matching lineType).',
       items: {
         type: SchemaType.OBJECT,
         properties: {
@@ -123,19 +123,25 @@ const PO_SCHEMA = {
   required: ['poNumber', 'vendorName', 'lines', 'overallConfidence'],
 } as const;
 
-const SYSTEM_PROMPT = `You extract structured purchase-order data from photos or PDFs of POs.
+const SYSTEM_PROMPT = `You extract structured line-item data from photos or PDFs of any goods document: purchase orders, invoices, order confirmations, packing slips, delivery notes, shipping manifests, and service / recycling / eWaste orders.
 
-Rules:
+COMPLETENESS IS THE #1 GOAL — extract EVERY line item, not just the priced ones:
+- Return one \`lines\` entry for EVERY distinct product, item, asset, device, or service row in the items table. Do not stop after the first row. Count the rows and make sure your output has the same number.
+- NEVER merge two separate rows into one line. In particular, keep a PRODUCT/asset row (e.g. a device model like "Acer Chromebook 511 C737LT" with a quantity) SEPARATE from any service, handling, "white glove", or fee row — even when they sit next to each other or share a total. Each printed row is its own line.
+- PRICES ARE OPTIONAL. Packing slips, delivery notes, and service/recycling orders routinely list items with a quantity and NO price. A missing price is normal: set unitPrice and lineTotal to 0 and STILL include the line. NEVER drop or skip an item row just because it has no dollar amount — quantity + description alone make a valid line.
+- A product/asset row is \`lineType: 'inventory'\` even on a service or recycling document (the devices being processed are the inventory; the "white glove"/eWaste/handling charge is a separate 'service' or 'fee' line).
+
+Other rules:
 - Return ONLY the JSON matching the schema. No markdown, no explanation.
 - For numeric fields, return numbers (e.g. 12.5), never strings.
 - Preserve exact text in description and vendorSku — do not rephrase or normalize.
 - Be careful with character ambiguity in SKUs: O vs 0, l vs 1 vs I, S vs 5, B vs 8.
-- If a line description wraps to a second line on the page, join into one description with a space.
-- Exclude the totals rows from \`lines\` (Subtotal/Tax/Freight/Grand Total) — put those in the top-level fields.
+- If a SINGLE line's description wraps to a second physical line on the page, join it into one description with a space — but do NOT combine two DIFFERENT item rows this way.
+- Exclude only the totals rows from \`lines\` (Subtotal/Tax/Freight/Grand Total summary lines) — put those amounts in the top-level fields. A tax/freight/fee that appears as its own item ROW still goes in \`lines\` with the matching lineType.
 - For each line, set \`confidence\` lower (0.6-0.8) when SKU characters are ambiguous, when ink is faded, or when fields are partially obscured. High confidence (0.9+) only when the row is crisp and unambiguous.
 - Set \`overallConfidence\` lower when the image is skewed, low-resolution, or in an unusual layout.
-- If the document is clearly NOT a purchase order or invoice, return an empty \`lines\` array and \`overallConfidence\` near 0.
-- If a multi-page PO is provided, treat all pages as one document and merge the lines.`;
+- Return an empty \`lines\` array ONLY when the document genuinely lists no items at all (e.g. a random photo). A packing slip or price-less order is a valid document — extract its items.
+- If multiple pages/frames are provided, treat them as one document and merge the lines (but still keep each printed row separate).`;
 
 export interface ExtractedPo {
   poNumber: string;
@@ -204,7 +210,7 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
   if (useClaude) {
     text = await claudeGenerateJsonString({
       system: SYSTEM_PROMPT,
-      prompt: 'Extract the purchase order from this document.',
+      prompt: 'Extract EVERY line item from this document (it may be a purchase order, invoice, packing slip, delivery note, or service/recycling order). List each printed item row separately, including rows that have a quantity but no price.',
       media: inputs.map((i) => ({ data: i.base64, mediaType: i.mimeType })),
       schema: PO_SCHEMA as unknown as Record<string, unknown>,
       temperature: 0.05,
@@ -229,7 +235,7 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
 
     const result = await model.generateContent([
       ...parts,
-      { text: 'Extract the purchase order from this document.' },
+      { text: 'Extract EVERY line item from this document (it may be a purchase order, invoice, packing slip, delivery note, or service/recycling order). List each printed item row separately, including rows that have a quantity but no price.' },
     ]);
     text = result.response.text();
   }
