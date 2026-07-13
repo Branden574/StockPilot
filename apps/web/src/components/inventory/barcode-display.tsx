@@ -37,7 +37,15 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
   // Label stock. 'auto' fits whatever the printer's paper is set to (one
   // label); the explicit sizes force @page to the exact stock, which is how
   // you print to a thermal roll (Phomemo M120 etc.) instead of a paper sheet.
-  const [size, setSize] = React.useState<Template | 'auto'>('auto');
+  const [size, setSize] = React.useState<Template | 'auto' | 'custom'>('auto');
+  // Custom label dimensions in mm — the reliable path for odd thermal rolls
+  // where the physical label doesn't match a preset. Entered as printed:
+  // width across the roll, height along the feed.
+  const [customW, setCustomW] = React.useState(50);
+  const [customH, setCustomH] = React.useState(30);
+  // Rotate the label content 90° — some rolls feed such that a wide barcode
+  // must run along the LENGTH of the label to fit.
+  const [rotate, setRotate] = React.useState(false);
   const [state, setState] = React.useState<
     | { status: 'idle' }
     | { status: 'loading' }
@@ -113,18 +121,34 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
 
   function printIt() {
     if (state.status !== 'ready') return;
-    const tpl = size === 'auto' ? null : TEMPLATES[size];
-    // Exact stock size, or 'auto' (fills whatever the printer's paper is).
-    const pageSize = tpl ? tpl.pageSize : 'auto';
-    // The label box is one physical label. It is sized to the page and clips
-    // its contents, so the barcode + text ALWAYS fit on a single label and
-    // can never spill onto extra sheets (the old sheet printed padding:32px
-    // + a full-size PNG with no @page, so a tiny thermal label tiled across
-    // ~5 pages). Small stock hides the name and shrinks text.
-    const boxCss = tpl
-      ? `width:${tpl.widthIn}in;height:${tpl.heightIn}in;`
-      : `width:100%;height:100vh;`;
-    const isSmall = tpl ? tpl.heightIn < 1.4 : false;
+    // Resolve label size (in) + the @page size string from the chosen source.
+    let widthIn: number | null = null;
+    let heightIn: number | null = null;
+    let pageSize = 'auto';
+    if (size === 'custom') {
+      widthIn = Math.max(0.2, customW / 25.4);
+      heightIn = Math.max(0.2, customH / 25.4);
+      pageSize = `${customW}mm ${customH}mm`;
+    } else if (size !== 'auto') {
+      const tpl = TEMPLATES[size];
+      widthIn = tpl.widthIn;
+      heightIn = tpl.heightIn;
+      pageSize = tpl.pageSize;
+    }
+    // The label box IS one physical label: sized to the page, overflow clipped,
+    // so content can never spill onto the next label. 'auto' fills whatever
+    // paper the printer is set to (one page). 'rotate' turns the whole label
+    // 90° for rolls that feed the long edge first — the box keeps the page
+    // size, the inner content is rotated and its width/height swapped so it
+    // still fills the label.
+    const known = widthIn !== null && heightIn !== null;
+    const boxCss = known ? `width:${widthIn}in;height:${heightIn}in;` : `width:100%;height:100vh;`;
+    // Rotated inner content: swap dims so after rotate(90deg) it matches the box.
+    const innerCss =
+      rotate && known
+        ? `width:${heightIn}in;height:${widthIn}in;transform:rotate(90deg);`
+        : `width:100%;height:100%;`;
+    const isSmall = known ? Math.min(widthIn!, heightIn!) < 1.4 : false;
     const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Label</title>
 <style>
@@ -132,18 +156,22 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
   html,body{margin:0;padding:0;background:#fff;}
   .lbl{
     box-sizing:border-box;${boxCss}
+    display:flex;align-items:center;justify-content:center;
+    overflow:hidden;background:#fff;break-after:avoid;page-break-after:avoid;
+  }
+  .inner{
+    box-sizing:border-box;${innerCss}
     display:flex;flex-direction:column;align-items:center;justify-content:center;
     gap:1mm;padding:1.5mm;overflow:hidden;text-align:center;
-    font-family:system-ui,-apple-system,sans-serif;color:#000;background:#fff;
-    break-after:avoid;page-break-after:avoid;
+    font-family:system-ui,-apple-system,sans-serif;color:#000;
   }
-  .lbl img{max-width:100%;max-height:${isSmall ? '78%' : '68%'};object-fit:contain;}
+  .inner img{max-width:100%;max-height:${isSmall ? '78%' : '68%'};object-fit:contain;}
   .nm{font-size:${isSmall ? '8px' : '11px'};font-weight:600;line-height:1.1;
     max-height:20%;overflow:hidden;${isSmall ? 'display:none;' : ''}}
   .sk{font-family:ui-monospace,Menlo,monospace;font-size:${isSmall ? '8px' : '10px'};letter-spacing:.5px;}
 </style>
 </head><body>
-<div class="lbl"><img id="bc" alt="" /><div class="nm" id="t"></div><div class="sk" id="s"></div></div>
+<div class="lbl"><div class="inner"><img id="bc" alt="" /><div class="nm" id="t"></div><div class="sk" id="s"></div></div></div>
 <script>
 (function(){
   var p=new URLSearchParams(location.hash.slice(1));
@@ -200,7 +228,7 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
               <span className="text-muted-foreground text-xs">Label size</span>
               <select
                 value={size}
-                onChange={(e) => setSize(e.target.value as Template | 'auto')}
+                onChange={(e) => setSize(e.target.value as Template | 'auto' | 'custom')}
                 className="border-input bg-background h-9 rounded-md border px-2.5 text-sm"
               >
                 <option value="auto">Fit to printer (auto)</option>
@@ -209,9 +237,56 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
                     {TEMPLATES[t].label}
                   </option>
                 ))}
+                <option value="custom">Custom size (mm)…</option>
               </select>
             </label>
           </div>
+
+          {size === 'custom' && (
+            <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 p-3">
+              <label className="flex items-center gap-1.5 text-sm">
+                <span className="text-muted-foreground text-xs">Width</span>
+                <input
+                  type="number"
+                  min={5}
+                  max={200}
+                  value={customW}
+                  onChange={(e) => setCustomW(Math.max(5, Math.min(200, Number(e.target.value) || 0)))}
+                  className="border-input bg-background h-9 w-20 rounded-md border px-2 text-sm"
+                />
+                <span className="text-muted-foreground text-xs">mm</span>
+              </label>
+              <span className="text-muted-foreground">×</span>
+              <label className="flex items-center gap-1.5 text-sm">
+                <span className="text-muted-foreground text-xs">Height</span>
+                <input
+                  type="number"
+                  min={5}
+                  max={200}
+                  value={customH}
+                  onChange={(e) => setCustomH(Math.max(5, Math.min(200, Number(e.target.value) || 0)))}
+                  className="border-input bg-background h-9 w-20 rounded-md border px-2 text-sm"
+                />
+                <span className="text-muted-foreground text-xs">mm</span>
+              </label>
+              <p className="text-muted-foreground w-full text-[11px] leading-snug">
+                Measure your loaded label exactly (width across the roll × height along the feed).
+              </p>
+            </div>
+          )}
+
+          {size !== 'auto' && (
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={rotate}
+                onChange={(e) => setRotate(e.target.checked)}
+                className="h-4 w-4"
+              />
+              <span>Rotate 90°</span>
+              <span className="text-muted-foreground text-xs">— if the barcode prints sideways</span>
+            </label>
+          )}
           <div className="relative grid min-h-[180px] place-items-center rounded-lg border bg-white p-6">
             {state.status === 'loading' && (
               <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" />
@@ -236,6 +311,13 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
               </div>
             )}
           </div>
+          {size !== 'auto' && (
+            <p className="text-muted-foreground rounded-md bg-muted/30 px-3 py-2 text-[11px] leading-snug">
+              In the print dialog, set <strong>Scale 100%</strong> (not &ldquo;Fit&rdquo;),{' '}
+              <strong>Margins: None</strong>, and leave orientation as-is — use the Rotate 90°
+              toggle above instead of the dialog&rsquo;s Landscape option.
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button
               variant="outline"
