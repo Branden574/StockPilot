@@ -105,10 +105,14 @@ export async function claudeGenerateJson<T = unknown>(opts: {
   maxTokens?: number;
   temperature?: number;
   signal?: AbortSignal;
+  /** Override the model for THIS call (e.g. the PO-scan escalation model).
+   *  Defaults to ANTHROPIC_MODEL. Newer models (sonnet-5+) reject
+   *  `temperature` — callers overriding to one of those must omit it. */
+  model?: string;
 }): Promise<T> {
   const msg = await requireClient().messages.create(
     {
-      model: env.ANTHROPIC_MODEL,
+      model: opts.model ?? env.ANTHROPIC_MODEL,
       max_tokens: opts.maxTokens ?? 2048,
       ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
       ...(opts.system ? { system: opts.system } : {}),
@@ -144,6 +148,8 @@ export async function claudeGenerateJsonString(opts: {
   maxTokens?: number;
   temperature?: number;
   signal?: AbortSignal;
+  /** See claudeGenerateJson.model. */
+  model?: string;
 }): Promise<string> {
   return JSON.stringify(await claudeGenerateJson(opts));
 }

@@ -174,12 +174,14 @@ export interface ScanInput {
   mimeType: string;
 }
 
-// Model name comes from env so we can swap models without a code
-// deploy. Free-tier eligibility shifts per project — gemini-1.5-flash
-// has had the most reliable free quota; 2.0 / 2.5 work when enabled.
-// Default lives in lib/env.ts (currently gemini-1.5-flash); override
-// via GEMINI_MODEL env var.
-export const SCAN_MODEL_NAME = env.GEMINI_MODEL;
+// Recorded in po_imports.extraction_model — reflect the model that ACTUALLY
+// runs the scan for the active provider. Claude scans use the dedicated
+// PO-scan escalation model (ANTHROPIC_PO_SCAN_MODEL, default claude-sonnet-5):
+// verified 2026-07-13 that Haiku merges packing-slip rows into one line while
+// Sonnet extracts every row (incl. a handwritten qty) from the same photo.
+// Gemini fallback keeps GEMINI_MODEL.
+export const SCAN_MODEL_NAME =
+  resolveAiProvider() === 'claude' ? env.ANTHROPIC_PO_SCAN_MODEL : env.GEMINI_MODEL;
 
 /**
  * Sends one or more images / a PDF to Gemini Flash and returns a parsed,
@@ -213,7 +215,10 @@ export async function extractPoFromMedia(inputs: ScanInput[]): Promise<Extracted
       prompt: 'Extract EVERY line item from this document (it may be a purchase order, invoice, packing slip, delivery note, or service/recycling order). List each printed item row separately, including rows that have a quantity but no price.',
       media: inputs.map((i) => ({ data: i.base64, mediaType: i.mimeType })),
       schema: PO_SCHEMA as unknown as Record<string, unknown>,
-      temperature: 0.05,
+      // Escalated scan model (see SCAN_MODEL_NAME). No `temperature`:
+      // sonnet-5+ rejects the param, and the forced-tool + schema already
+      // constrain the output.
+      model: env.ANTHROPIC_PO_SCAN_MODEL,
       maxTokens: 4096,
     });
   } else {

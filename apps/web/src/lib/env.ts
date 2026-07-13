@@ -109,6 +109,19 @@ const serverSchema = z.object({
     .optional()
     .default('claude-haiku-4-5-20251001')
     .transform((s) => s.trim()),
+  // PO-scan-only model escalation. Verified 2026-07-13 against a real
+  // sideways, price-less OmniPro packing slip: Haiku 4.5 merges the three
+  // item rows into one (and hallucinates when the photo is upside down);
+  // Sonnet extracts all rows + the handwritten qty correctly. Scans are the
+  // rarest+heaviest AI call (a few/day), so the cost delta is negligible for
+  // a receiving-accuracy money path. Every other surface stays on
+  // ANTHROPIC_MODEL. NOTE: newer models (sonnet-5+) reject `temperature`,
+  // so the scan call must not send one.
+  ANTHROPIC_PO_SCAN_MODEL: z
+    .string()
+    .optional()
+    .default('claude-sonnet-5')
+    .transform((s) => s.trim()),
   AI_PROVIDER: z.enum(['claude', 'gemini']).optional(),
 
   // QuickBooks Online connector (integrations module). OAuth2 app
