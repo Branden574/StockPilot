@@ -6,6 +6,10 @@
   ],
   "crons": [
     {
+      "path": "/api/cron/rental-overdue",
+      "schedule": "0 15 * * *"
+    },
+    {
       "path": "/api/cron/purge-ai-chat-history",
       "schedule": "0 4 * * *"
     },

@@ -187,6 +187,11 @@ function RentalCreateFormInner({
       toast.error('Enter a borrower name.');
       return;
     }
+    const borrowerEmail = borrower.borrowerEmail?.trim() ?? '';
+    if (borrowerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(borrowerEmail)) {
+      toast.error('Enter a valid borrower email, or leave it blank.');
+      return;
+    }
     if (!expectedReturnAt) {
       toast.error('Set an expected return date.');
       return;
@@ -202,7 +207,7 @@ function RentalCreateFormInner({
         warehouseId: selectedWarehouseId,
         borrowerUserId: borrower.borrowerUserId ?? null,
         borrowerName: borrower.borrowerName.trim(),
-        borrowerEmail: borrower.borrowerEmail ?? null,
+        borrowerEmail: borrowerEmail || null,
         expectedReturnAt: returnDate.toISOString(),
         notes: notes.trim() || null,
         lines: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),

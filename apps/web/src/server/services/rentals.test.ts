@@ -16,6 +16,12 @@ vi.mock('./context', () => ({
 vi.mock('./audit', () => ({
   audit: vi.fn(async () => undefined),
 }));
+// Rental emails are best-effort side effects, not part of the service's unit
+// contract — stub them so create()/markReturned() tests stay focused.
+vi.mock('@/lib/email/rentals', () => ({
+  sendRentalCheckoutEmail: vi.fn(async () => undefined),
+  sendRentalReturnedEmail: vi.fn(async () => undefined),
+}));
 
 // Reservations are RLS write-locked, so the service writes them via the
 // service-role client. The mock returns whatever makeCtx last stashed, so the

@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { sendRentalCheckoutEmail, sendRentalReturnedEmail } from '@/lib/email/rentals';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
@@ -239,6 +240,12 @@ export class RentalsService {
       this.ctx,
     );
 
+    // Checkout confirmation to the borrower (member or external). Awaited but
+    // best-effort — the fn never throws and self-skips with no email on file;
+    // awaiting (vs fire-and-forget) guarantees delivery before the serverless
+    // function can be torn down after the response.
+    await sendRentalCheckoutEmail(rentalId);
+
     return { id: rentalId };
   }
 
@@ -296,6 +303,9 @@ export class RentalsService {
       },
       this.ctx,
     );
+
+    // Return thank-you to the borrower (best-effort; self-skips with no email).
+    await sendRentalReturnedEmail(input.id);
   }
 
   async cancel(input: CancelRentalInput): Promise<void> {

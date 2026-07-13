@@ -188,6 +188,35 @@ export function BorrowerPicker({
           Team member selected — name auto-filled.
         </p>
       )}
+
+      {/* External borrower email — only for free-text (non-member) borrowers */}
+      {!value.borrowerUserId && value.borrowerName.trim().length > 0 && (
+        <div className="mt-2 space-y-1">
+          <label
+            htmlFor="rental-borrower-email"
+            className="text-[11px] font-medium text-muted-foreground"
+          >
+            Email (optional)
+          </label>
+          <Input
+            id="rental-borrower-email"
+            type="email"
+            value={value.borrowerEmail ?? ''}
+            onChange={(e) =>
+              onChange({
+                ...value,
+                borrowerEmail: e.target.value.length > 0 ? e.target.value : null,
+              })
+            }
+            placeholder="borrower@example.com"
+            disabled={disabled}
+            autoComplete="off"
+          />
+          <p className="text-[11px] text-muted-foreground">
+            So they get a rental confirmation and return receipt.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
