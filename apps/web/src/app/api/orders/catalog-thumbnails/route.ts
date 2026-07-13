@@ -63,7 +63,13 @@ export async function GET(req: NextRequest) {
   }
 
   const imagesSvc = new ItemImagesService(ctx);
-  const urlMap = await imagesSvc.primaryImagesForPdfRendering(itemIds, 200);
+  // Sign the SHARP master (not the 200px thumb): the orders/rentals cards
+  // render through next/image (item-card.tsx), whose optimizer downscales the
+  // master to the exact retina cell + AVIF/WebP + 24h edge cache. Feeding the
+  // 200px thumb made next/image upscale it (blurry on retina) — same fix as
+  // the public catalog. Book covers fall back to custom_fields.thumbnail_url
+  // inside primaryMasterUrlsForItems.
+  const urlMap = await imagesSvc.primaryMasterUrlsForItems(itemIds);
 
   const urls: Record<string, string> = {};
   for (const [itemId, signedUrl] of urlMap) {
