@@ -1619,18 +1619,16 @@ export function InventoryTable({
               const location = item.primary_location_id
                 ? lookups.locations.get(item.primary_location_id)
                 : null;
-              // Status follows AVAILABLE (on-hand − reserved), matching the
-              // "{avail} avail · {out} out" indicator below. A rental checkout
-              // reserves stock instead of decrementing on-hand, so a fully
-              // checked-out item (0 avail, 1 out) must read "Out of stock", not
-              // "In stock". reservedByItem is passed ONLY by the rentals items
-              // view; everywhere else reserved is 0, so available === on-hand
-              // and the status is unchanged.
+              // Status badge + coverage bar follow AVAILABLE (on-hand −
+              // reserved), matching the "{avail} avail · {out} out" indicator
+              // below. A rental checkout reserves stock instead of decrementing
+              // on-hand, so a fully checked-out item (0 avail, 1 out) must read
+              // "Out of stock", not "In stock". reservedByItem is passed ONLY by
+              // the rentals items view; everywhere else reserved is 0, so
+              // available === on-hand and nothing changes.
               const reservedForStatus = reservedByItem?.get(item.id) ?? 0;
-              const status = deriveStatus(
-                Math.max(0, item.quantity_on_hand - reservedForStatus),
-                item.reorder_point,
-              );
+              const availableForStatus = Math.max(0, item.quantity_on_hand - reservedForStatus);
+              const status = deriveStatus(availableForStatus, item.reorder_point);
               const par = Math.max(item.reorder_point * 4, item.quantity_on_hand * 1.5, 10);
               // Stable per (displayed, sparkMode, trends) — see seriesByItem above.
               const series = seriesByItem.get(item.id) ?? EMPTY_SERIES;
@@ -1984,14 +1982,14 @@ export function InventoryTable({
                     })()}
                   </td>
                   <td className="px-3">
-                    <StockBar stock={item.quantity_on_hand} par={par} status={status} />
+                    <StockBar stock={availableForStatus} par={par} status={status} />
                   </td>
                   <td className="px-3 text-right">
                     <Sparkline data={series} width={56} height={18} />
                   </td>
                   <td className="px-3">
                     <StockStatusBadge
-                      quantity={item.quantity_on_hand}
+                      quantity={availableForStatus}
                       reorderPoint={item.reorder_point}
                       itemStatus={item.status}
                     />
