@@ -2,8 +2,11 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import type { createAdminClient } from '@/lib/supabase/admin';
+
 import { audit } from './audit';
 import { ServiceError, type ServiceContext } from './context';
+import { createNotification } from './notifications';
 
 // ---------------------------------------------------------------------------
 // Opt-in, per-org automatic archiving of items that stay out of stock
@@ -134,4 +137,53 @@ export async function archiveExpiredZeroStockItems(
     );
   }
   return { archived: archived.length, ids: archived.map((d) => d.id), items: archived, truncated };
+}
+
+/**
+ * Notify owner/admin/manager recipients that items were auto-archived —
+ * one notification per archived item per non-opted-out recipient. Gated by
+ * the per-user `push_item_auto_archived` preference (0267): missing prefs
+ * row OR pref = true → notify; pref explicitly false → skip. Goes through
+ * createNotification (the ONE insert path) so the 0028 AFTER-INSERT trigger
+ * fans out push — never call notifyUser() here, that double-pushes.
+ */
+export async function notifyAutoArchived(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+  items: Array<{ id: string; name: string }>,
+): Promise<void> {
+  const { data: members } = await admin
+    .from('organization_members')
+    .select('user_id')
+    .eq('organization_id', orgId)
+    .in('role', ['owner', 'admin', 'manager'])
+    .not('accepted_at', 'is', null);
+  const userIds = ((members ?? []) as Array<{ user_id: string }>).map((m) => m.user_id);
+  if (userIds.length === 0) return;
+
+  const { data: prefRows } = await admin
+    .from('notification_preferences')
+    .select('user_id, push_item_auto_archived')
+    .in('user_id', userIds);
+  const prefById = new Map(
+    (
+      (prefRows ?? []) as Array<{ user_id: string; push_item_auto_archived: boolean | null }>
+    ).map((r) => [r.user_id, r.push_item_auto_archived]),
+  );
+
+  for (const uid of userIds) {
+    // Default-on opt-out model (0092 pattern): only an explicit false skips.
+    if (prefById.get(uid) === false) continue;
+    for (const item of items) {
+      await createNotification({
+        organizationId: orgId,
+        userId: uid,
+        type: 'inventory.item.auto_archived',
+        title: 'Item auto-archived',
+        body: item.name,
+        link: `/dashboard/inventory/${item.id}`,
+        metadata: { item_id: item.id },
+      });
+    }
+  }
 }

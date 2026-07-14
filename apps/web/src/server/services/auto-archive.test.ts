@@ -4,8 +4,17 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
 
+const { mockCreateNotification } = vi.hoisted(() => ({
+  mockCreateNotification: vi.fn(async () => 'notif-id'),
+}));
+vi.mock('./notifications', () => ({ createNotification: mockCreateNotification }));
+
 import { audit } from './audit';
-import { archiveExpiredZeroStockItems, parseAutoArchiveSettings } from './auto-archive';
+import {
+  archiveExpiredZeroStockItems,
+  notifyAutoArchived,
+  parseAutoArchiveSettings,
+} from './auto-archive';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -169,5 +178,74 @@ describe('archiveExpiredZeroStockItems', () => {
     expect(res.archived).toBe(1);
     expect(res.ids).toEqual(['i1']);
     expect(vi.mocked(audit)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('notifyAutoArchived', () => {
+  const items = [
+    { id: 'item-1', name: 'Widget' },
+    { id: 'item-2', name: 'Gadget' },
+  ];
+
+  it('gates on push_item_auto_archived per recipient: explicit false skips, missing row notifies, explicit true notifies — one notice per (recipient x item)', async () => {
+    const stub = makeSupabaseStub({
+      'organization_members.select': {
+        data: [{ user_id: 'user-a' }, { user_id: 'user-b' }, { user_id: 'user-c' }],
+        error: null,
+      },
+      'notification_preferences.select': {
+        data: [
+          { user_id: 'user-a', push_item_auto_archived: false },
+          { user_id: 'user-c', push_item_auto_archived: true },
+          // user-b has NO row at all — the "missing row = notify" branch.
+        ],
+        error: null,
+      },
+    });
+
+    await notifyAutoArchived(stub.client, 'org-test', items);
+
+    const calls = mockCreateNotification.mock.calls.map(
+      (c) => (c as unknown as [Record<string, unknown>])[0],
+    );
+    expect(calls).toHaveLength(4); // A: 0, B: 2, C: 2
+
+    // A explicitly opted out — zero notices.
+    expect(calls.filter((c) => c.userId === 'user-a')).toHaveLength(0);
+
+    // B has no prefs row at all — missing row = notify — one per archived item.
+    const bCalls = calls.filter((c) => c.userId === 'user-b');
+    expect(bCalls).toHaveLength(2);
+    expect(bCalls.map((c) => (c.metadata as { item_id: string }).item_id).sort()).toEqual([
+      'item-1',
+      'item-2',
+    ]);
+
+    // C explicitly opted in — one per archived item.
+    const cCalls = calls.filter((c) => c.userId === 'user-c');
+    expect(cCalls).toHaveLength(2);
+    expect(cCalls.map((c) => (c.metadata as { item_id: string }).item_id).sort()).toEqual([
+      'item-1',
+      'item-2',
+    ]);
+
+    // Every notice goes through createNotification with the right type and
+    // carries the item's id in both metadata and the link.
+    for (const call of calls) {
+      expect(call.type).toBe('inventory.item.auto_archived');
+      const itemId = (call.metadata as { item_id: string }).item_id;
+      expect(['item-1', 'item-2']).toContain(itemId);
+      expect(call.link).toBe(`/dashboard/inventory/${itemId}`);
+    }
+  });
+
+  it('skips the notify pass with zero createNotification calls when there are no owner/admin/manager recipients', async () => {
+    const stub = makeSupabaseStub({
+      'organization_members.select': { data: [], error: null },
+    });
+
+    await notifyAutoArchived(stub.client, 'org-test', items);
+
+    expect(mockCreateNotification).not.toHaveBeenCalled();
   });
 });
