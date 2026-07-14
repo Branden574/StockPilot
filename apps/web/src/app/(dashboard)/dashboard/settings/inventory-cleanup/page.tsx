@@ -3,17 +3,20 @@ import { redirect } from 'next/navigation';
 
 import { ArchiveCleanupPanel } from '@/components/settings/archive-cleanup-panel';
 import { AutoArchivePanel } from '@/components/settings/auto-archive-panel';
-import { requireOrgContext } from '@/lib/auth/session';
-import { createClient } from '@/lib/supabase/server';
 import { parseAutoDeleteArchivedSettings } from '@/server/services/archive-cleanup';
-import { parseAutoArchiveSettings } from '@/server/services/auto-archive';
+import { countEligibleForAutoArchive, parseAutoArchiveSettings } from '@/server/services/auto-archive';
+import { withContext } from '@/server/services/context';
 
 import { can } from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Archived item cleanup' };
 
 export default async function InventoryCleanupSettingsPage() {
-  const ctx = await requireOrgContext();
+  // withContext() (not the lighter requireOrgContext()) because this page
+  // now calls countEligibleForAutoArchive(ctx, ...), a ServiceContext-taking
+  // service function — ctx.supabase below is the SAME client requireOrgContext's
+  // callers would have created separately via createClient().
+  const ctx = await withContext();
   // items:delete = same gate as Recovery, for the auto-DELETE panel below.
   // items:update = the (lighter) gate for the auto-ARCHIVE panel, which is
   // reversible. Reach the page with either; each panel is shown only to
@@ -23,7 +26,7 @@ export default async function InventoryCleanupSettingsPage() {
   const canUpdate = can(ctx, 'items:update');
   if (!canDelete && !canUpdate) redirect('/dashboard/settings');
 
-  const supabase = await createClient();
+  const supabase = ctx.supabase;
 
   const { data: mod } = await supabase
     .from('organization_modules')
@@ -34,6 +37,12 @@ export default async function InventoryCleanupSettingsPage() {
   const autoArchiveBucket = (mod?.settings as Record<string, unknown> | null | undefined)
     ?.autoArchiveOnZeroStock;
   const autoArchiveSettings = parseAutoArchiveSettings(autoArchiveBucket);
+  // Blast-radius preview for the auto-archive panel: how many items are
+  // eligible RIGHT NOW under the configured (or default) dwell window — same
+  // predicate the cron itself uses (see countEligibleForAutoArchive), so this
+  // can never drift from what actually happens on the next run. Computed
+  // regardless of `enabled` so the toggle-off state still previews impact.
+  const eligibleCount = await countEligibleForAutoArchive(ctx, autoArchiveSettings.dwellDays);
 
   let settings: { enabled: boolean; days: number } | null = null;
   let archivedCount = 0;
@@ -91,7 +100,7 @@ export default async function InventoryCleanupSettingsPage() {
             windowedCounts={windowedCounts}
           />
         ) : null}
-        <AutoArchivePanel initial={autoArchiveSettings} />
+        <AutoArchivePanel initial={autoArchiveSettings} eligibleCount={eligibleCount} />
       </div>
     </div>
   );
