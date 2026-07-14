@@ -40,6 +40,7 @@ function state(over: Partial<InstantModeState> = {}): InstantModeState {
     q: '',
     status: 'active',
     stock: null,
+    autoArchived: false,
     cat: [],
     loc: [],
     charter: [],
@@ -77,6 +78,7 @@ describe('state adapters', () => {
       q: ' lan ',
       status: 'archived',
       stock: 'low',
+      autoArchived: false,
       page: 3,
       sort: 'name_asc',
       cat: ['c1'],
@@ -89,6 +91,14 @@ describe('state adapters', () => {
       instantStateFromPageParams({ status: 'garbage', stock: 'sideways', page: '0', sort: 'nope' }),
     ).toMatchObject({ status: 'active', stock: null, page: 1, sort: 'updated_desc' });
     expect(instantStateFromPageParams({ page: 'abc' }).page).toBe(1);
+  });
+
+  it('auto=1 coerces to autoArchived:true; anything else (missing/"0"/garbage) is false', () => {
+    expect(instantStateFromPageParams({ auto: '1' }).autoArchived).toBe(true);
+    expect(instantStateFromPageParams({ auto: '0' }).autoArchived).toBe(false);
+    expect(instantStateFromPageParams({ auto: 'true' }).autoArchived).toBe(false);
+    expect(instantStateFromPageParams({}).autoArchived).toBe(false);
+    expect(instantStateFromSearchParams(new URLSearchParams('auto=1')).autoArchived).toBe(true);
   });
 
   it('searchParams adapter produces the same state as the page adapter for the same URL', () => {
@@ -124,6 +134,26 @@ describe('status filter (mirrors list(): default active, exact archived/disconti
     ['all', ['a', 'b', 'c']],
   ] as const)('status=%s', (status, ids) => {
     expect(filterInstantRows(rows, state({ status }), 'items').map((r) => r.id)).toEqual([...ids]);
+  });
+});
+
+describe('autoArchived filter (Task 8 "Auto-archived only" chip)', () => {
+  const rows = [
+    row({ id: 'a', status: 'archived', auto_archived: true }),
+    row({ id: 'b', status: 'archived', auto_archived: false }),
+    row({ id: 'c', status: 'archived' }), // undefined — same as false
+  ];
+  it('off (default): every archived row passes regardless of auto_archived', () => {
+    expect(
+      filterInstantRows(rows, state({ status: 'archived' }), 'items').map((r) => r.id),
+    ).toEqual(['a', 'b', 'c']);
+  });
+  it('on: narrows to auto_archived===true only', () => {
+    expect(
+      filterInstantRows(rows, state({ status: 'archived', autoArchived: true }), 'items').map(
+        (r) => r.id,
+      ),
+    ).toEqual(['a']);
   });
 });
 

@@ -36,6 +36,7 @@ import { Card, Hair } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { api } from '@/lib/api';
 import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
@@ -74,6 +75,10 @@ interface Item {
   retail_price: number;
   unit_of_measure: string;
   status: string;
+  /** True only when the SYSTEM auto-archived this item on zero stock
+   *  (migration 0266), as opposed to a human archiving it — drives the
+   *  "Auto-archived" badge shown alongside the Archived badge. */
+  auto_archived: boolean;
   category_id: string | null;
   category_name: string | null;
   supplier_name: string | null;
@@ -142,6 +147,7 @@ export default function ItemDetail() {
   const [adjustOpen, setAdjustOpen] = React.useState(false);
   const [moveOpen, setMoveOpen] = React.useState(false);
   const [photoBusy, setPhotoBusy] = React.useState(false);
+  const [restoring, setRestoring] = React.useState(false);
   const [serialCount, setSerialCount] = React.useState(0);
   const permissions = useEffectivePermissions();
   // Staff+ may manage serials — mirrors the serial_registry write RLS
@@ -158,6 +164,11 @@ export default function ItemDetail() {
   // asserts 'locations:manage' independently when it creates the rack.
   const canCreateLocation =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'locations:manage'));
+  // Restore gate — mirrors the web archive/restore actions' 'items:update'
+  // requirement. Cosmetic only; /api/v1/items/[id]/restore re-asserts
+  // items:update inside InventoryService.bulkUpdate.
+  const canRestore =
+    isManager || (role !== null && can({ role: role as Role, permissions }, 'items:update'));
 
   const load = React.useCallback(async () => {
     if (!id) return;
@@ -166,7 +177,7 @@ export default function ItemDetail() {
       .select(
         `id, organization_id, name, sku, barcode, description, quantity_on_hand,
          reorder_point, reorder_quantity, unit_cost, retail_price,
-         unit_of_measure, status, category_id, item_type, bin_location,
+         unit_of_measure, status, auto_archived, category_id, item_type, bin_location,
          warehouse_id, charter_id, custom_fields, tracking_type,
          category:categories!category_id (name),
          supplier:suppliers!supplier_id (name),
@@ -283,6 +294,7 @@ export default function ItemDetail() {
       retail_price: Number(r.retail_price) || 0,
       unit_of_measure: (r.unit_of_measure as string) ?? 'EA',
       status: r.status as string,
+      auto_archived: Boolean(r.auto_archived),
       category_id: (r.category_id as string | null) ?? null,
       category_name: Array.isArray(cat) ? (cat[0]?.name ?? null) : (cat?.name ?? null),
       supplier_name: Array.isArray(sup) ? (sup[0]?.name ?? null) : (sup?.name ?? null),
@@ -359,6 +371,27 @@ export default function ItemDetail() {
     }
     setItem({ ...item, quantity_on_hand: item.quantity_on_hand + delta });
     if (tab === 'movements') void loadMovements();
+  }
+
+  // T12 — REST parity for web's restore action. Goes through the Bearer
+  // api() client to POST /api/v1/items/[id]/restore (InventoryService.
+  // bulkUpdate({op:{kind:'unarchive'}}) under the hood) rather than a
+  // direct Supabase `.update()` — the service is what asserts
+  // 'items:update', clears auto_archived, and writes the audit event; a
+  // raw client mutation would silently skip all three.
+  async function restoreItem() {
+    if (!item || restoring) return;
+    setRestoring(true);
+    try {
+      await api(`/api/v1/items/${item.id}/restore`, { method: 'POST' });
+      // Optimistic flip — clears both the Archived and Auto-archived
+      // badges immediately rather than waiting on a refetch.
+      setItem({ ...item, status: 'active', auto_archived: false });
+    } catch (e) {
+      Alert.alert('Could not restore', e instanceof Error ? e.message : 'Please try again.');
+    } finally {
+      setRestoring(false);
+    }
   }
 
   function openEdit() {
@@ -513,6 +546,51 @@ export default function ItemDetail() {
             <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 6 }}>
               {[item.category_name, item.barcode].filter(Boolean).join(' · ')}
             </Mono>
+          ) : null}
+          {/* Archived / Auto-archived badges — mirrors the web detail's
+              stock-status-badge.tsx. Auto-archived is meaningless on an
+              active item, so it only ever renders alongside Archived. */}
+          {item.status === 'archived' ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
+              <Pill status="default" dot={false}>
+                ARCHIVED
+              </Pill>
+              {item.auto_archived ? (
+                <Pill status="warn" dot={false}>
+                  AUTO-ARCHIVED
+                </Pill>
+              ) : null}
+            </View>
+          ) : null}
+          {item.status === 'archived' && item.auto_archived ? (
+            <Body muted size={11} style={{ marginTop: 8 }}>
+              The system archived this item automatically after it sat at zero stock past the
+              configured dwell window.
+            </Body>
+          ) : null}
+          {/* T12: restore action, now wired to POST /api/v1/items/[id]/restore
+              (created for this task — see the route's doc-comment for why
+              mobile must go through InventoryService.bulkUpdate rather than a
+              raw client update). Cosmetic canRestore gate mirrors the route's
+              'items:update' assertion; hidden entirely for viewers/staff who
+              would just get a 403. */}
+          {item.status === 'archived' && canRestore ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onPress={() => void restoreItem()}
+              disabled={restoring}
+              leading={
+                restoring ? (
+                  <ActivityIndicator size="small" color={c.ink} />
+                ) : (
+                  <RotateCcw size={14} color={c.ink} strokeWidth={1.6} />
+                )
+              }
+              style={{ marginTop: 12, alignSelf: 'flex-start' }}
+            >
+              {restoring ? 'Restoring…' : 'Restore'}
+            </Button>
           ) : null}
         </View>
 

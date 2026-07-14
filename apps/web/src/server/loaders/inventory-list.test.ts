@@ -253,6 +253,7 @@ const baseItem = {
   charter_id: null,
   tracking_type: 'none' as const,
   item_type: 'product' as const,
+  auto_archived: false,
   custom_fields: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-02T00:00:00Z',

@@ -55,6 +55,18 @@ describe('ActivityFeed', () => {
     expect(screen.getByText('Item created')).toBeInTheDocument();
   });
 
+  // Task 8: the bulk-unarchive path now emits inventory.item.restored
+  // (instead of falling into the generic .updated event) — the Activity
+  // feed needs its own icon/label mapping so a restore doesn't render as
+  // a plain "History" fallback row.
+  it('renders Item restored label for the inventory.item.restored audit event', () => {
+    const events = [
+      makeEvent({ id: 'a9', kind: 'audit', type: 'inventory.item.restored' }),
+    ];
+    render(<ActivityFeed events={events} />);
+    expect(screen.getByText('Item restored')).toBeInTheDocument();
+  });
+
   it('shows actor name and a relative time string together', () => {
     const events = [
       makeEvent({

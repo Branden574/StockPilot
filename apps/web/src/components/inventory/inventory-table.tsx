@@ -118,6 +118,11 @@ interface Item {
    * stock really is — not the stale free-text bin_location label. Optional so
    * older callers fall back to the custom_fields label. */
   placed_racks?: string[];
+  /** True only when the SYSTEM auto-archived this item on zero stock
+   *  (migration 0266) — drives the "Auto-archived" badge next to the
+   *  Archived pill and the Archived view's "Auto-archived only" filter
+   *  chip. Optional so older callers without the column still render. */
+  auto_archived?: boolean;
   // ── "One line per rack" split-row fields (Items inventory page only) ──
   /** Unique row key when one item is split into multiple placement rows
    *  (item id + location id). Falls back to `id` when absent. */
@@ -758,6 +763,10 @@ export function InventoryTable({
   }, [effectiveInstant, instantView]);
 
   const view = paramsToView(params.get('stock'));
+  // Archived-view-only chip state (Task 8): the chip itself only renders
+  // when the URL is already scoped to the Archived tab.
+  const isArchivedView = params.get('status') === 'archived';
+  const autoArchivedOnly = params.get('auto') === '1';
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   // Model B SKU grouping — which SKU-group headers are expanded, keyed
   // on the group's `sku` string (guaranteed non-blank: a blank/whitespace
@@ -785,6 +794,20 @@ export function InventoryTable({
     else next.delete('stock');
     // Switching the view always reset to page 1 — staying on page 5
     // of "All items" doesn't make sense if Out-of-stock has 1 page.
+    next.delete('page');
+    const qs = next.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  }
+
+  // Archived-view-only "Auto-archived only" toggle (Task 8): narrows the
+  // Archived tab to rows the zero-stock cron archived, vs everything a
+  // human archived too. Same Link + shallow-nav pattern as the VIEWS
+  // chips above — a real href for bookmarkability, intercepted into a
+  // shallow history.pushState in instant mode.
+  function hrefForAutoArchivedToggle(): string {
+    const next = new URLSearchParams(params.toString());
+    if (next.get('auto') === '1') next.delete('auto');
+    else next.set('auto', '1');
     next.delete('page');
     const qs = next.toString();
     return qs ? `${basePath}?${qs}` : basePath;
@@ -1268,6 +1291,27 @@ export function InventoryTable({
             {v}
           </Link>
         ))}
+        {isArchivedView && (
+          <Link
+            href={hrefForAutoArchivedToggle()}
+            scroll={false}
+            prefetch={false}
+            onClick={
+              instantMode
+                ? (e) => interceptShallowNav(e, hrefForAutoArchivedToggle(), shallowPush)
+                : undefined
+            }
+            aria-pressed={autoArchivedOnly}
+            className={cn(
+              'inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[11.5px] transition-colors',
+              autoArchivedOnly
+                ? 'border-foreground bg-foreground text-background'
+                : 'border-border bg-background text-[var(--ed-ink-2)] hover:border-[var(--ed-line-strong)]',
+            )}
+          >
+            Auto-archived only
+          </Link>
+        )}
         {savedViews.map((sv) => (
           <SavedViewChip
             key={sv.id}
@@ -1992,6 +2036,7 @@ export function InventoryTable({
                       quantity={availableForStatus}
                       reorderPoint={item.reorder_point}
                       itemStatus={item.status}
+                      autoArchived={item.auto_archived}
                     />
                   </td>
                   <td

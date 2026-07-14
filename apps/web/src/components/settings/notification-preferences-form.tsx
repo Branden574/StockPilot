@@ -110,6 +110,12 @@ const TOGGLE_DEFS: ToggleDef[] = [
     hint: 'Push + in-app reminder 24 hours and 1 hour before scheduled events.',
     group: 'push',
   },
+  {
+    key: 'push_item_auto_archived',
+    label: 'Items auto-archived',
+    hint: 'In-app alert when an out-of-stock item is auto-archived.',
+    group: 'push',
+  },
 ];
 
 interface NotificationPreferencesFormProps {

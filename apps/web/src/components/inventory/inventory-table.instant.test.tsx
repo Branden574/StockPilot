@@ -244,6 +244,64 @@ describe('InventoryTable instant mode', () => {
     expect(screen.getByText(/1 SKUs/)).toBeInTheDocument();
   });
 
+  // Task 8: the "Auto-archived" badge + the Archived view's "Auto-archived
+  // only" filter chip.
+  it('shows the Auto-archived badge only on rows the system archived', () => {
+    renderInstant({
+      items: [
+        item({ id: 'a', name: 'System Archived', status: 'archived', auto_archived: true }),
+        item({ id: 'b', name: 'Manually Archived', status: 'archived', auto_archived: false }),
+      ],
+      search: 'status=archived',
+    });
+
+    // Both rows show the base "Archived" badge; only the system-archived
+    // row also carries "Auto-archived".
+    expect(screen.getAllByText('Archived')).toHaveLength(2);
+    expect(screen.getByText('Auto-archived')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'System Archived' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Manually Archived' })).toBeInTheDocument();
+  });
+
+  it('does not render the "Auto-archived only" chip outside the Archived view', () => {
+    renderInstant({ items: [item({ id: 'a', name: 'Live Item' })] });
+    expect(screen.queryByRole('link', { name: 'Auto-archived only' })).not.toBeInTheDocument();
+  });
+
+  it('renders the "Auto-archived only" chip (linking to ?auto=1) in the Archived view, unpressed by default', () => {
+    renderInstant({
+      items: [item({ id: 'a', name: 'Old Item', status: 'archived' })],
+      search: 'status=archived',
+    });
+    const chip = screen.getByRole('link', { name: 'Auto-archived only' });
+    expect(chip).toHaveAttribute('href', expect.stringContaining('auto=1'));
+    expect(chip).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('marks the chip pressed and drops the param (not auto=0) once ?auto=1 is set', () => {
+    renderInstant({
+      items: [item({ id: 'a', name: 'Old Item', status: 'archived' })],
+      search: 'status=archived&auto=1',
+    });
+    const chip = screen.getByRole('link', { name: 'Auto-archived only' });
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+    expect(chip).toHaveAttribute('href', expect.not.stringContaining('auto='));
+  });
+
+  it('?status=archived&auto=1 deep link narrows to auto_archived rows only', () => {
+    renderInstant({
+      items: [
+        item({ id: 'a', name: 'System Archived', status: 'archived', auto_archived: true }),
+        item({ id: 'b', name: 'Manually Archived', status: 'archived', auto_archived: false }),
+      ],
+      search: 'status=archived&auto=1',
+    });
+
+    expect(screen.getByRole('link', { name: 'System Archived' })).toBeInTheDocument();
+    expect(screen.queryByText('Manually Archived')).not.toBeInTheDocument();
+    expect(screen.getByText(/1 SKUs/)).toBeInTheDocument();
+  });
+
   it('paginates locally: Next → is a shallow history.pushState, never a router navigation', async () => {
     const user = userEvent.setup();
     const many = Array.from({ length: 35 }, (_, i) =>

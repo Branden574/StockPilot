@@ -28,7 +28,15 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 
+// bulkUpdate fires audit() per affected item — mock it so the assertions
+// below can inspect exactly which event name was emitted (Task 8's
+// archive/restore audit-label fix) without a real audit_logs write.
+vi.mock('./audit', () => ({
+  audit: vi.fn(async () => undefined),
+}));
+
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { audit } from './audit';
 import { InventoryService } from './inventory';
 import { ServiceError } from './context';
 
@@ -177,6 +185,43 @@ describe('InventoryService.list', () => {
 
     await expect(svc.list()).rejects.toBeInstanceOf(ServiceError);
   });
+
+  // Task 8: backs the Archived view's "Auto-archived only" filter chip —
+  // scoped to rows the zero-stock cron archived, not every archived row.
+  it('applies .eq("auto_archived", true) when autoArchived filter is set', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [], error: null, count: 0 },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.list({ status: 'archived', autoArchived: true });
+
+    const chain = stub.chains.get('inventory_items.select') ?? [];
+    const args = stub.chainArgs.get('inventory_items.select') ?? [];
+    const eqCalls = chain
+      .map((m, i) => ({ m, args: args[i] }))
+      .filter((c) => c.m === 'eq');
+    const eqMap = new Map(eqCalls.map((c) => [c.args![0] as string, c.args![1]]));
+    expect(eqMap.get('status')).toBe('archived');
+    expect(eqMap.get('auto_archived')).toBe(true);
+  });
+
+  it('omits the auto_archived filter when the flag is not set', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [], error: null, count: 0 },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.list({ status: 'archived' });
+
+    const chain = stub.chains.get('inventory_items.select') ?? [];
+    const args = stub.chainArgs.get('inventory_items.select') ?? [];
+    const eqArgs = chain
+      .map((m, i) => ({ m, args: args[i] }))
+      .filter((c) => c.m === 'eq')
+      .map((c) => c.args![0] as string);
+    expect(eqArgs).not.toContain('auto_archived');
+  });
 });
 
 describe('InventoryService.byIds', () => {
@@ -302,6 +347,76 @@ describe('InventoryService.bulkUpdate', () => {
     const payload = updateArgs[0]![0] as Record<string, unknown>;
     expect(payload.status).toBe('discontinued');
   });
+
+  // Task 8: the 'unarchive' op used to fall through the ternary into the
+  // generic 'inventory.item.updated' audit event, so a restore was
+  // indistinguishable from an ordinary field edit in the item's Activity
+  // feed / audit log. It must emit 'inventory.item.restored' instead
+  // (already a member of the AuditEvent union) — mirroring how 'archive'
+  // already emits 'inventory.item.archived'.
+  it('emits inventory.item.restored (not .updated) for a bulk unarchive', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [{ id: 'item-1', warehouse_id: 'wh-a' }],
+        error: null,
+      },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.bulkUpdate({ ids: ['item-1'], op: { kind: 'unarchive' } });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'inventory.item.restored', entityId: 'item-1' }),
+      expect.anything(),
+    );
+    expect(audit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'inventory.item.updated' }),
+      expect.anything(),
+    );
+  });
+
+  it('still emits inventory.item.archived for a bulk archive (unchanged)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [{ id: 'item-1', warehouse_id: 'wh-a' }],
+        error: null,
+      },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.bulkUpdate({ ids: ['item-1'], op: { kind: 'archive' } });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'inventory.item.archived', entityId: 'item-1' }),
+      expect.anything(),
+    );
+  });
+
+  // A human-initiated bulk archive/unarchive must never leave a stale
+  // auto_archived=true behind — otherwise a later receipt (which only
+  // revives auto_archived rows, see receiving.ts) or the "Auto-archived"
+  // badge could misrepresent a MANUAL action as a system one.
+  it.each(['archive', 'unarchive'] as const)(
+    'clears auto_archived on bulk %s so it can never be mistaken for a system archive',
+    async (kind) => {
+      const stub = makeSupabaseStub({
+        'inventory_items.select': {
+          data: [{ id: 'item-1', warehouse_id: 'wh-a' }],
+          error: null,
+        },
+        'inventory_items.update': { data: null, error: null },
+      });
+      const svc = new InventoryService(makeServiceContext(stub.client));
+
+      await svc.bulkUpdate({ ids: ['item-1'], op: { kind } });
+
+      const updateArgs = stub.chainArgs.get('inventory_items.update') ?? [];
+      const payload = updateArgs[0]![0] as Record<string, unknown>;
+      expect(payload.auto_archived).toBe(false);
+    },
+  );
 
   it('returns ok:0 when no allowed ids remain after warehouse filtering', async () => {
     vi.mocked(getWarehouseAccess).mockResolvedValueOnce({

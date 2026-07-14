@@ -269,6 +269,10 @@ interface InventoryListRowBase {
   charter_id: string | null;
   tracking_type: 'none' | 'lot' | 'serial';
   item_type: 'product' | 'book' | 'asset' | 'consumable';
+  /** True only when the SYSTEM auto-archived this item on zero stock
+   *  (migration 0266) — backs the Archived view's "Auto-archived"
+   *  badge + filter chip. */
+  auto_archived: boolean;
   custom_fields: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
@@ -423,7 +427,7 @@ function adminReadContext(organizationId: string): ServiceContext {
 // Verbatim copy of InventoryService.list()'s select list so cached rows
 // carry exactly the columns the live path ships.
 const ITEM_SELECT_COLUMNS =
-  'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, custom_fields, created_at, updated_at, created_by, updated_by';
+  'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, custom_fields, created_at, updated_at, created_by, updated_by';
 
 async function loadInventoryRowsUncached(
   organizationId: string,

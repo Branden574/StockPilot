@@ -305,23 +305,34 @@ export class ReceivingService {
       );
       if (itemIds.length === 0) return;
 
-      // Which of those items are currently archived?
+      // Which of those items are currently archived? Scoped to
+      // auto_archived=true (migration 0266) — a receipt implicitly
+      // revives an item the ZERO-STOCK CRON archived, but must never
+      // silently un-retire a SKU a human deliberately archived (a
+      // discontinued line that still happens to receive a return/
+      // correction). Mirrors the DB's own restock trigger
+      // (_auto_restock_restore), which carries the identical guard.
       const { data: archivedRows } = await this.ctx.supabase
         .from('inventory_items')
         .select('id, name')
         .eq('organization_id', this.ctx.organizationId)
         .in('id', itemIds)
-        .eq('status', 'archived');
+        .eq('status', 'archived')
+        .eq('auto_archived', true);
       const archived = (archivedRows ?? []) as Array<{ id: string; name: string }>;
       if (archived.length === 0) return;
 
-      // Flip them back to active. The `eq('status', 'archived')` guard
-      // makes this race-safe: if another writer un-archived between the
-      // SELECT and the UPDATE we don't accidentally touch 'discontinued'
-      // or anything else.
+      // Flip them back to active AND clear auto_archived — mirrors the DB
+      // restock trigger (_auto_restock_restore) exactly, so a later
+      // zero-stock crossing is eligible for the cron again (which only
+      // selects auto_archived=false candidates; a stale `true` here would
+      // permanently hide this item from future auto-archiving). The
+      // `eq('status', 'archived')` guard makes this race-safe: if another
+      // writer un-archived between the SELECT and the UPDATE we don't
+      // accidentally touch 'discontinued' or anything else.
       const { data: flippedRows, error: updErr } = await this.ctx.supabase
         .from('inventory_items')
-        .update({ status: 'active' })
+        .update({ status: 'active', auto_archived: false })
         .eq('organization_id', this.ctx.organizationId)
         .in('id', archived.map((a) => a.id))
         .eq('status', 'archived')

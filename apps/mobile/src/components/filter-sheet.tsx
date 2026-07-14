@@ -12,7 +12,7 @@ export interface FilterOption {
   name: string;
 }
 
-export type StockStatus = 'all' | 'low' | 'out';
+export type StockStatus = 'all' | 'low' | 'out' | 'archived';
 export type SortKey =
   | 'updated_desc'
   | 'name_asc'
@@ -170,6 +170,11 @@ export function FilterSheet({
                 label="Out of stock"
                 active={state.status === 'out'}
                 onPress={() => onChange({ ...state, status: 'out' })}
+              />
+              <RadioRow
+                label="Archived"
+                active={state.status === 'archived'}
+                onPress={() => onChange({ ...state, status: 'archived' })}
               />
             </Section>
 
@@ -367,6 +372,7 @@ export function ActiveFilterPill({
   const parts: string[] = [];
   if (state.status === 'low') parts.push('Low + critical');
   if (state.status === 'out') parts.push('Out of stock');
+  if (state.status === 'archived') parts.push('Archived');
   if (state.sort !== 'updated_desc') parts.push(SORT_LABEL[state.sort]);
   for (const id of state.categoryIds) {
     const n = lookups.categories.get(id);

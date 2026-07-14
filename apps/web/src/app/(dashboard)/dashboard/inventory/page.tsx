@@ -92,6 +92,9 @@ type InventorySearchParams = {
   q?: string;
   status?: string;
   stock?: string;
+  /** '1' narrows the Archived view to system-archived rows only (Task 8's
+   *  "Auto-archived only" filter chip). */
+  auto?: string;
   type?: string;
   page?: string;
   sort?: string;
@@ -565,6 +568,7 @@ async function InventoryTableSection({
           status: lifecycleStatus,
           lowStock: params.stock === 'low',
           outOfStock: params.stock === 'out',
+          autoArchived: params.auto === '1',
           itemType,
           warehouseId: warehouseFilter,
           categoryIds,
@@ -767,7 +771,12 @@ function inventoryEmptyState({
   canCreate: boolean;
 }) {
   if (total !== 0) return null;
-  if (lifecycleStatus === 'archived' && !params.q && !params.stock) {
+  // Excludes ?auto=1 (the "Auto-archived only" chip): a zero result there
+  // just means none of the archived items were system-archived, which is
+  // NOT the same as "nothing archived at all" — fall through to the
+  // table's plain "No items match your filters." row instead of this
+  // misleading "archive something" CTA.
+  if (lifecycleStatus === 'archived' && !params.q && !params.stock && params.auto !== '1') {
     return (
       <EmptyState
         icon={Boxes}
