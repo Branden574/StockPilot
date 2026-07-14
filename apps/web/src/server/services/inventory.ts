@@ -238,6 +238,18 @@ export function derivePlacement(
   };
 }
 
+/**
+ * The bits of a put-away destination needed to stamp an item's placement
+ * LABEL (bin_location + rack_* custom_fields). Built by the callers from the
+ * chosen/created location — an existing rack/crate or an inline-created one.
+ */
+export type PlaceDest = {
+  kind: string | null;
+  rackNumber: string | null;
+  rackRow: string | null;
+  name: string | null;
+};
+
 export class InventoryService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -2389,6 +2401,43 @@ export class InventoryService {
     });
     if (error) throw new ServiceError('internal_error', error.message);
     return data;
+  }
+
+  /**
+   * After a put-away physically moves stock onto a rack/crate (transfer_stock),
+   * stamp the item's placement LABEL so it matches the "Set rack" path. Set rack
+   * writes bin_location + rack_* custom_fields via inventory_set_rack; the
+   * Staging put-away only moved the holding and used to leave bin_location
+   * stale/NULL (owner-reported gap 2026-07-14: a Chromebook put away to rack
+   * 1-A kept bin_location NULL). Reuse the SAME RPC so both paths write the
+   * identical label — composing "num-row" exactly like the bulkUpdate set_rack
+   * branch above (crate or number-less rack → the location's display name).
+   *
+   * Best-effort: the stock is already placed, so a label-stamp failure must NOT
+   * fail the caller — it degrades to the pre-existing no-label state, which the
+   * holdings-derived RACK column already covers. inventory_set_rack (mig
+   * 0064/0068) only updates inventory_items, never item_stock_levels, so this
+   * re-stamps the label without re-moving stock. Multi-rack items get the LAST
+   * placement as their single label — the same single-label semantics Set rack
+   * already has (the accurate per-rack view is the holdings RACK column).
+   */
+  async stampPlacementBin(itemIds: string[], dest: PlaceDest): Promise<void> {
+    if (itemIds.length === 0) return;
+    const isRack = dest.kind === 'rack';
+    const num = isRack ? dest.rackNumber?.trim() || null : null;
+    const row = isRack ? dest.rackRow?.trim().toUpperCase() || null : null;
+    const bin =
+      isRack && num ? (row ? `${num}-${row}` : num) : dest.name?.trim() || null;
+    const { error } = await this.ctx.supabase.rpc('inventory_set_rack', {
+      p_item_ids: itemIds,
+      p_rack_number: num,
+      p_rack_row: row,
+      p_bin_location: bin,
+      p_scope: 'auto',
+    });
+    if (error) {
+      console.warn('[placement] bin_location stamp failed (stock still placed):', error.message);
+    }
   }
 
   /**

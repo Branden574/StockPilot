@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { deriveLocationName } from '@/lib/locations/rack-name';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { InventoryService } from '@/server/services/inventory';
+import { InventoryService, type PlaceDest } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { ServiceError, withContext } from '@/server/services/context';
 
@@ -360,55 +360,6 @@ export async function transferStockAction(
   }
 }
 
-// Destination info needed to stamp an item's placement label after a put-away.
-type PlaceDest = {
-  kind: string | null;
-  rackNumber: string | null;
-  rackRow: string | null;
-  name: string | null;
-};
-
-/**
- * After a put-away physically moves stock onto a rack/crate (transfer_stock),
- * stamp the item's placement LABEL so it matches the "Set rack" path. Set rack
- * writes bin_location + rack_* custom_fields via inventory_set_rack, but the
- * Staging put-away only moved the holding and left bin_location stale/NULL
- * (owner-reported gap 2026-07-14: a Chromebook put away to rack 1-A kept
- * bin_location NULL). Reuse the SAME RPC so both paths write identically.
- *
- * Best-effort: the stock is already placed, so a label-stamp failure must NOT
- * fail the action — it degrades to the pre-existing no-label state, which the
- * holdings-derived RACK column already covers. inventory_set_rack (mig
- * 0064/0068) only updates inventory_items; it never touches item_stock_levels,
- * so this re-stamps the label without re-moving stock. Multi-rack items get
- * the LAST placement as their single label — same single-label semantics Set
- * rack already has (the accurate per-rack view is the holdings RACK column).
- */
-async function stampBinFromDestination(
-  supabase: Awaited<ReturnType<typeof withContext>>['supabase'],
-  itemIds: string[],
-  dest: PlaceDest,
-): Promise<void> {
-  if (itemIds.length === 0) return;
-  const isRack = dest.kind === 'rack';
-  const num = isRack ? dest.rackNumber?.trim() || null : null;
-  const row = isRack ? dest.rackRow?.trim().toUpperCase() || null : null;
-  // Rack → "num-row" (identical to the Set-rack path's composedBin in
-  // services/inventory.ts); crate or number-less rack → the location's name.
-  const bin =
-    isRack && num ? (row ? `${num}-${row}` : num) : dest.name?.trim() || null;
-  const { error } = await supabase.rpc('inventory_set_rack', {
-    p_item_ids: itemIds,
-    p_rack_number: num,
-    p_rack_row: row,
-    p_bin_location: bin,
-    p_scope: 'auto',
-  });
-  if (error) {
-    console.warn('[place] bin_location stamp failed (stock still placed):', error.message);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // placeStockAction — move staged qty onto an existing or inline-created location
 // ---------------------------------------------------------------------------
@@ -507,7 +458,7 @@ export async function placeStockAction(
       notes: data.notes,
     });
     // Stamp the placement label now that the stock physically sits here.
-    await stampBinFromDestination(ctx.supabase, [data.itemId], dest);
+    await invSvc.stampPlacementBin([data.itemId], dest);
 
     revalidatePath('/dashboard/inventory/staging');
     revalidatePath('/dashboard/inventory');
@@ -660,7 +611,7 @@ export async function bulkPlaceStockAction(
       }
     }
     // One label-stamp for every item that actually landed on the destination.
-    await stampBinFromDestination(ctx.supabase, placedItemIds, dest);
+    await invSvc.stampPlacementBin(placedItemIds, dest);
 
     revalidatePath('/dashboard/inventory/staging');
     revalidatePath('/dashboard/inventory');

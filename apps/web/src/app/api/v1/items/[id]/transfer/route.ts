@@ -7,7 +7,7 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
-import { InventoryService } from '@/server/services/inventory';
+import { InventoryService, type PlaceDest } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 
 export const runtime = 'nodejs';
@@ -112,21 +112,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // in depth).
     assertPermission(ctx, 'stock:transfer');
 
+    // Read the SOURCE holding's kind once. It (a) confirms fromLocationId is a
+    // real, in-org location, (b) yields the warehouse for an inline-created
+    // rack (never trust a client warehouseId), and (c) tells a put-away (source
+    // is a staging/unplaced bucket) from a rack→rack move — only a put-away
+    // stamps the bin_location label below, mirroring web exactly (placeStockAction
+    // stamps; transferStockAction does not).
+    const { data: srcLoc } = await ctx.supabase
+      .from('locations')
+      .select('warehouse_id, kind')
+      .eq('id', body.fromLocationId)
+      .eq('organization_id', ctx.organizationId)
+      .is('deleted_at', null)
+      .maybeSingle();
+
     // Resolve the destination location id from either an existing location or an
-    // inline-created rack/crate.
+    // inline-created rack/crate, and capture what we need to stamp its label.
     let toLocationId: string;
+    let dest: PlaceDest;
     if (body.newRack) {
-      // Derive the new rack's warehouse from the SOURCE location (org-scoped) —
-      // never trust a client-supplied warehouseId. Also confirms fromLocationId
-      // is a real, in-org location before we create anything.
-      const { data: src } = await ctx.supabase
-        .from('locations')
-        .select('warehouse_id')
-        .eq('id', body.fromLocationId)
-        .eq('organization_id', ctx.organizationId)
-        .is('deleted_at', null)
-        .maybeSingle();
-      if (!src?.warehouse_id) {
+      if (!srcLoc?.warehouse_id) {
         return NextResponse.json(
           {
             error: 'validation_error',
@@ -142,27 +147,33 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         name: deriveLocationName(n),
         type: n.crateColor ? 'bin' : 'shelf',
         kind: n.crateColor ? 'crate' : 'rack',
-        warehouseId: src.warehouse_id,
+        warehouseId: srcLoc.warehouse_id,
         rackNumber: n.rackNumber,
         rackRow: n.rackRow ?? null,
         crateColor: n.crateColor ?? null,
         crateNumber: n.crateNumber ?? null,
       });
       toLocationId = created.id as string;
+      dest = {
+        kind: n.crateColor ? 'crate' : 'rack',
+        rackNumber: n.rackNumber ?? null,
+        rackRow: n.rackRow ?? null,
+        name: deriveLocationName(n),
+      };
     } else {
       // TENANT-ISOLATION GUARD: pin the destination to THIS session's org and
       // reject the staging/unplaced system buckets. transfer_stock already asserts
       // both locations belong to the item's org (assert_location_in_org, 0201/0231);
       // this additionally ties the destination to ctx.organizationId (matters for a
       // dual-org member) and yields a clean 400 rather than a generic RPC 500.
-      const { data: dest } = await ctx.supabase
+      const { data: destLoc } = await ctx.supabase
         .from('locations')
-        .select('id, kind')
+        .select('id, kind, rack_number, rack_row, name')
         .eq('id', body.toLocationId!)
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
         .maybeSingle();
-      if (!dest) {
+      if (!destLoc) {
         return NextResponse.json(
           {
             error: 'validation_error',
@@ -171,13 +182,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           { status: 400 },
         );
       }
-      if (dest.kind === 'staging' || dest.kind === 'unplaced') {
+      if (destLoc.kind === 'staging' || destLoc.kind === 'unplaced') {
         return NextResponse.json(
           { error: 'validation_error', message: 'Pick a rack or crate as the destination.' },
           { status: 400 },
         );
       }
-      toLocationId = dest.id;
+      toLocationId = destLoc.id;
+      dest = {
+        kind: destLoc.kind,
+        rackNumber: (destLoc as { rack_number: string | null }).rack_number ?? null,
+        rackRow: (destLoc as { rack_row: string | null }).rack_row ?? null,
+        name: (destLoc as { name: string | null }).name ?? null,
+      };
     }
 
     // Re-asserts 'stock:transfer' internally, then calls transfer_stock.
@@ -189,6 +206,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       quantity: body.quantity,
       notes: body.notes,
     });
+
+    // Put-away (source was a staging/unplaced bucket) stamps the placement label
+    // so bin_location tracks the rack — matching web placeStockAction. A plain
+    // rack→rack move leaves the label alone, matching web transferStockAction.
+    // Best-effort: stock is already placed, so a stamp failure never fails here.
+    if (srcLoc?.kind === 'staging' || srcLoc?.kind === 'unplaced') {
+      await svc.stampPlacementBin([id], dest);
+    }
 
     // A move re-slices this item's placement holdings shown in the cached
     // Items/Books views — refresh the org's list cache (on-hand total is
