@@ -25,6 +25,8 @@ export const NOTIFICATION_PREF_KEYS = [
   // Schedule reminders (0258):
   'email_schedule_reminders',
   'push_schedule_reminders',
+  // Auto-archive-on-zero-stock cron notice opt-out (0267):
+  'push_item_auto_archived',
 ] as const;
 
 export type NotificationPrefKey = (typeof NOTIFICATION_PREF_KEYS)[number];
