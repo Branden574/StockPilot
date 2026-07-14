@@ -24,9 +24,10 @@ function secretsEqual(a: string, b: string): boolean {
  *   T-24h — event starts within the next 24h and reminded_24h_at is null
  *   T-1h  — event starts within the next 60min and reminded_1h_at is null
  * Recipients: the event's assigned_user_id (if any) + org owners/admins/
- * managers (deduped). Each gets an in-app notification (createNotification
- * ALSO fans out Expo push — never call notifyUser on top, that double-pushes)
- * and an email resolved via user_profiles.email.
+ * managers (deduped). Each gets an in-app notification; Expo push fans out
+ * from the notifications AFTER INSERT trigger (mig 0028) — never send push
+ * from code on top of the insert, that double-pushes (diagnosed 2026-07-14)
+ * — and an email resolved via user_profiles.email.
  *
  * Dedupe by stamping reminded_*_at BEFORE sending (crash-safe direction:
  * losing one reminder beats spamming on retry loops). FAIL-OPEN per event.

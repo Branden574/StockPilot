@@ -3,7 +3,6 @@ import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { reportError } from '@/lib/error-reporter';
 
-import { notifyUser } from './push';
 import { ServiceError, withContext, type ServiceContext } from './context';
 
 export interface CreateNotificationArgs {
@@ -17,11 +16,15 @@ export interface CreateNotificationArgs {
 }
 
 /**
- * One canonical place to drop a notification into the inbox AND push
- * it to the user's registered devices. Callers (PO approval, order
- * request status changes, low-stock alerts) should funnel through
- * here instead of inserting directly so a push always accompanies
- * the row insert.
+ * One canonical place to drop a notification into the inbox. Push fan-out
+ * happens in the DATABASE: the AFTER INSERT trigger on public.notifications
+ * (trg_notifications_dispatch_push, mig 0028) posts to Expo via pg_net for
+ * every insert — the same single push path the SQL RPC writers (order
+ * status, low stock, PO received, …) already rely on. NEVER send push from
+ * here on top of the insert: a notifyUser() call here double-pushed every
+ * notification created through this function (owner's duplicate lock-screen
+ * banners, diagnosed 2026-07-14 — 1 row + 1 token, yet 2 banners: one from
+ * this code path, one from the trigger).
  *
  * Returns the inserted row id. Never throws — failures are reported
  * via reportError so the calling write path (e.g. approving a PO)
@@ -52,15 +55,8 @@ export async function createNotification(
       });
       return null;
     }
-    // Fan out to the user's devices. notifyUser is fire-and-forget
-    // safe; never throws, never blocks the caller meaningfully.
-    void notifyUser({
-      userId: args.userId,
-      title: args.title,
-      body: args.body,
-      link: args.link,
-      data: args.metadata,
-    });
+    // Push is dispatched by the notifications AFTER INSERT trigger (see the
+    // function doc) — deliberately NO notifyUser() call here.
     return (data?.id as string | undefined) ?? null;
   } catch (err) {
     void reportError(err instanceof Error ? err : new Error(String(err)), {

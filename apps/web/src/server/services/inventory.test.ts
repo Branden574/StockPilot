@@ -202,9 +202,10 @@ describe('InventoryService.byIds', () => {
     const svc = new InventoryService(makeServiceContext(stub.client));
 
     const rows = await svc.byIds(['a', 'b']);
+    // barcode rides along for the labels page (null when the row lacks it).
     expect(rows).toEqual([
-      { id: 'a', sku: 'A1', name: 'Widget A', tracking_type: 'none' },
-      { id: 'b', sku: 'B1', name: 'Widget B', tracking_type: 'lot' },
+      { id: 'a', sku: 'A1', name: 'Widget A', tracking_type: 'none', barcode: null },
+      { id: 'b', sku: 'B1', name: 'Widget B', tracking_type: 'lot', barcode: null },
     ]);
   });
 });
