@@ -13,10 +13,14 @@ vi.mock('next/cache', () => ({
 
 // Same hoisted-mock pattern as inventory.placeStock.test.ts: bulkPlaceStockAction
 // resolves withContext() once, then uses ctx.supabase for the destination
-// org-verification and new InventoryService/LocationsService for the writes.
-const { mockTransferStock, mockCreateLocation, ctxRef } = vi.hoisted(() => ({
+// org-verification and new InventoryService/LocationsService for the writes —
+// transferStock + stampPlacementBin (post-move label re-stamp, once per batch)
+// on InventoryService, findOrCreateRackOrCrate (dedup-safe rack lookup, Unit A)
+// on LocationsService.
+const { mockTransferStock, mockStampPlacementBin, mockFindOrCreateRackOrCrate, ctxRef } = vi.hoisted(() => ({
   mockTransferStock: vi.fn(async () => undefined),
-  mockCreateLocation: vi.fn(async () => ({ id: 'new-loc-99' })),
+  mockStampPlacementBin: vi.fn(async () => undefined),
+  mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
   ctxRef: { ctx: null as unknown },
 }));
 
@@ -28,12 +32,13 @@ vi.mock('@/server/services/context', async (importOriginal) => {
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: class {
     transferStock = mockTransferStock;
+    stampPlacementBin = mockStampPlacementBin;
   },
 }));
 
 vi.mock('@/server/services/locations', () => ({
   LocationsService: class {
-    create = mockCreateLocation;
+    findOrCreateRackOrCrate = mockFindOrCreateRackOrCrate;
   },
 }));
 
@@ -81,7 +86,8 @@ const TWO = [
 beforeEach(() => {
   vi.clearAllMocks();
   mockTransferStock.mockResolvedValue(undefined);
-  mockCreateLocation.mockResolvedValue({ id: 'new-loc-99' });
+  mockStampPlacementBin.mockResolvedValue(undefined);
+  mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
   installContext();
 });
 
@@ -92,7 +98,7 @@ describe('bulkPlaceStockAction', () => {
       destination: { existingLocationId: EXISTING_LOC },
     });
 
-    expect(mockCreateLocation).not.toHaveBeenCalled();
+    expect(mockFindOrCreateRackOrCrate).not.toHaveBeenCalled();
     expect(mockTransferStock).toHaveBeenCalledTimes(2);
     expect(mockTransferStock).toHaveBeenNthCalledWith(1, {
       itemId: ITEM_A,
@@ -113,23 +119,36 @@ describe('bulkPlaceStockAction', () => {
       expect(res.data.placed).toBe(2);
       expect(res.data.failed).toEqual([]);
     }
+
+    // One label-stamp for the whole batch, covering both placed items.
+    expect(mockStampPlacementBin).toHaveBeenCalledOnce();
+    expect(mockStampPlacementBin).toHaveBeenCalledWith(
+      [ITEM_A, ITEM_B],
+      { kind: 'rack', rackNumber: null, rackRow: null, name: null },
+    );
   });
 
-  it('2. creates the new rack ONCE, then places all items into it', async () => {
+  it('2. creates the new rack ONCE (via findOrCreateRackOrCrate — Unit A), then places all items into it', async () => {
     const newLocId = '99999999-9999-9999-9999-999999999999';
-    mockCreateLocation.mockResolvedValue({ id: newLocId });
+    mockFindOrCreateRackOrCrate.mockResolvedValue({ id: newLocId });
 
     const res = await bulkPlaceStockAction({
       placements: TWO,
       destination: { newRack: { warehouseId: WAREHOUSE_ID, rackNumber: 'BULK-1' } },
     });
 
-    expect(mockCreateLocation).toHaveBeenCalledOnce();
+    expect(mockFindOrCreateRackOrCrate).toHaveBeenCalledOnce();
     expect(mockTransferStock).toHaveBeenCalledTimes(2);
     expect(mockTransferStock).toHaveBeenNthCalledWith(1, expect.objectContaining({ toLocationId: newLocId, itemId: ITEM_A }));
     expect(mockTransferStock).toHaveBeenNthCalledWith(2, expect.objectContaining({ toLocationId: newLocId, itemId: ITEM_B }));
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.placed).toBe(2);
+
+    // Label stamp reflects the newly-created rack's own fields (BULK-1, no row).
+    expect(mockStampPlacementBin).toHaveBeenCalledWith(
+      [ITEM_A, ITEM_B],
+      { kind: 'rack', rackNumber: 'BULK-1', rackRow: null, name: 'BULK-1' },
+    );
   });
 
   it('3. rejects a cross-tenant existing destination — NO transfers', async () => {
@@ -174,6 +193,12 @@ describe('bulkPlaceStockAction', () => {
         { itemId: ITEM_B, message: 'Not enough available to place.' },
       ]);
     }
+
+    // Only the item that actually landed gets its label re-stamped.
+    expect(mockStampPlacementBin).toHaveBeenCalledWith(
+      [ITEM_A],
+      { kind: 'rack', rackNumber: null, rackRow: null, name: null },
+    );
   });
 
   it('6. rejects an empty placement list before touching context', async () => {

@@ -21,12 +21,15 @@ vi.mock('next/cache', () => ({
 //  - withContext() → returns a ServiceContext-shaped object whose supabase is
 //    a configurable stub (controls the locations/warehouses verification rows).
 //  - the InventoryService / LocationsService classes → spy constructors whose
-//    instances expose transferStock / create spies.
+//    instances expose transferStock / stampPlacementBin / findOrCreateRackOrCrate
+//    spies — the SAME methods the action actually calls (dedup-safe rack
+//    lookup + the post-transfer bin_location label stamp).
 // ---------------------------------------------------------------------------
 
-const { mockTransferStock, mockCreateLocation, ctxRef } = vi.hoisted(() => ({
+const { mockTransferStock, mockStampPlacementBin, mockFindOrCreateRackOrCrate, ctxRef } = vi.hoisted(() => ({
   mockTransferStock: vi.fn(async () => undefined),
-  mockCreateLocation: vi.fn(async () => ({ id: 'new-loc-99' })),
+  mockStampPlacementBin: vi.fn(async () => undefined),
+  mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
   ctxRef: { ctx: null as unknown },
 }));
 
@@ -41,12 +44,13 @@ vi.mock('@/server/services/context', async (importOriginal) => {
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: class {
     transferStock = mockTransferStock;
+    stampPlacementBin = mockStampPlacementBin;
   },
 }));
 
 vi.mock('@/server/services/locations', () => ({
   LocationsService: class {
-    create = mockCreateLocation;
+    findOrCreateRackOrCrate = mockFindOrCreateRackOrCrate;
   },
 }));
 
@@ -96,7 +100,8 @@ function installContext(opts: {
 beforeEach(() => {
   vi.clearAllMocks();
   mockTransferStock.mockResolvedValue(undefined);
-  mockCreateLocation.mockResolvedValue({ id: 'new-loc-99' });
+  mockStampPlacementBin.mockResolvedValue(undefined);
+  mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
   installContext();
 });
 
@@ -115,7 +120,7 @@ describe('placeStockAction', () => {
     });
 
     // No location was created
-    expect(mockCreateLocation).not.toHaveBeenCalled();
+    expect(mockFindOrCreateRackOrCrate).not.toHaveBeenCalled();
 
     // transfer_stock was called with the existing location id and correct quantity
     expect(mockTransferStock).toHaveBeenCalledOnce();
@@ -130,13 +135,21 @@ describe('placeStockAction', () => {
     // Action returns ok with the toLocationId
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.toLocationId).toBe(EXISTING_LOC);
+
+    // The placement label is re-stamped after the physical move, using the
+    // destination's kind/rack fields (none of which the stub location row
+    // sets here, so it's a bare rack with no number/row/name).
+    expect(mockStampPlacementBin).toHaveBeenCalledWith(
+      [ITEM_ID],
+      { kind: 'rack', rackNumber: null, rackRow: null, name: null },
+    );
   });
 
-  it('2. creates a rack then transfers to the new location id', async () => {
+  it('2. creates a rack (via the dedup-safe findOrCreateRackOrCrate lookup) then transfers to the new location id', async () => {
     const newLocId = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
 
     const callOrder: string[] = [];
-    mockCreateLocation.mockImplementation(async () => {
+    mockFindOrCreateRackOrCrate.mockImplementation(async () => {
       callOrder.push('create');
       return { id: newLocId };
     });
@@ -157,9 +170,10 @@ describe('placeStockAction', () => {
       },
     });
 
-    // Location was created with kind='rack' (no crateColor)
-    expect(mockCreateLocation).toHaveBeenCalledOnce();
-    const createArg = (mockCreateLocation.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    // findOrCreateRackOrCrate (the dedup-safe lookup — Unit A) was called
+    // with kind='rack' (no crateColor)
+    expect(mockFindOrCreateRackOrCrate).toHaveBeenCalledOnce();
+    const createArg = (mockFindOrCreateRackOrCrate.mock.calls[0] as unknown as [Record<string, unknown>])[0];
     expect(createArg.kind).toBe('rack');
     expect(createArg.type).toBe('shelf');
     expect(createArg.warehouseId).toBe(WAREHOUSE_ID);
@@ -180,6 +194,13 @@ describe('placeStockAction', () => {
 
     // create happened before transfer
     expect(callOrder).toEqual(['create', 'transfer']);
+
+    // The label stamp uses the newRack's own kind/rack fields (not a
+    // round-trip through the created location row).
+    expect(mockStampPlacementBin).toHaveBeenCalledWith(
+      [ITEM_ID],
+      { kind: 'rack', rackNumber: 'R-42', rackRow: 'B', name: 'R-42-B' },
+    );
 
     // Action returns ok with the new location id
     expect(result.ok).toBe(true);
@@ -209,7 +230,7 @@ describe('placeStockAction', () => {
 
     // No transfer or location creation was attempted
     expect(mockTransferStock).not.toHaveBeenCalled();
-    expect(mockCreateLocation).not.toHaveBeenCalled();
+    expect(mockFindOrCreateRackOrCrate).not.toHaveBeenCalled();
   });
 
   it('4. maps an insufficient_stock RPC error to a friendly message (not raw internal_error)', async () => {
@@ -251,7 +272,7 @@ describe('placeStockAction', () => {
     }
     // The cross-tenant write never reaches transfer_stock.
     expect(mockTransferStock).not.toHaveBeenCalled();
-    expect(mockCreateLocation).not.toHaveBeenCalled();
+    expect(mockFindOrCreateRackOrCrate).not.toHaveBeenCalled();
   });
 
   it('6. (FIX A) rejects placing INTO a staging/unplaced bucket', async () => {
@@ -283,7 +304,7 @@ describe('placeStockAction', () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.message).toMatch(/warehouse not found in your organization/i);
-    expect(mockCreateLocation).not.toHaveBeenCalled();
+    expect(mockFindOrCreateRackOrCrate).not.toHaveBeenCalled();
     expect(mockTransferStock).not.toHaveBeenCalled();
   });
 });
