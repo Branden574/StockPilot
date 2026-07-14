@@ -1,4 +1,4 @@
-import { formatOrderNumber } from '@stockpilot/core';
+import { can, formatOrderNumber } from '@stockpilot/core';
 import { type Href, useRouter } from 'expo-router';
 import { ShoppingCart } from 'lucide-react-native';
 import * as React from 'react';
@@ -8,7 +8,10 @@ import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
+import { useAuth } from '@/lib/auth-context';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { useRole } from '@/lib/use-role';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
@@ -51,6 +54,17 @@ const STATUS_META: Record<string, { label: string; status: 'ok' | 'warn' | 'crit
  */
 export default function OrdersScreen() {
   const { orgId } = useOrg();
+  const { user } = useAuth();
+  const { role } = useRole();
+  const permissions = useEffectivePermissions();
+  // Web parity (dashboard/orders/page.tsx): approvers see the whole org queue;
+  // everyone else sees only the orders they placed. RLS still returns all rows
+  // to any member, so — like web — this is a UX/privacy narrowing, not a hard
+  // guarantee. Default to own-only while role/permissions load so a
+  // non-approver never briefly sees the full queue (fallback role 'staff' has
+  // no orders:approve; widens to all only once an approver's set resolves).
+  const canApprove = can({ role: role ?? 'staff', permissions }, 'orders:approve');
+  const userId = user?.id ?? null;
   const [rows, setRows] = React.useState<OrderRow[]>([]);
   const firstRowTargetRef = useTourTarget('orders-first-row');
   const [loading, setLoading] = React.useState(true);
@@ -58,7 +72,14 @@ export default function OrdersScreen() {
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
-    const { data } = await supabase
+    // Non-approvers must have a user id to scope to their own requests; without
+    // one, show nothing rather than risk the full queue.
+    if (!canApprove && !userId) {
+      setRows([]);
+      setLoading(false);
+      return;
+    }
+    let query = supabase
       .from('order_requests')
       .select(
         // `requester:user_profiles!requester_user_id` resolves the team-member
@@ -70,7 +91,9 @@ export default function OrdersScreen() {
          requester:user_profiles!requester_user_id (full_name, email),
          lines:order_request_lines (id)`,
       )
-      .eq('organization_id', orgId)
+      .eq('organization_id', orgId);
+    if (!canApprove) query = query.eq('requester_user_id', userId!);
+    const { data } = await query
       .order('created_at', { ascending: false })
       .limit(100);
     setRows(
@@ -99,7 +122,7 @@ export default function OrdersScreen() {
       }),
     );
     setLoading(false);
-  }, [orgId]);
+  }, [orgId, canApprove, userId]);
 
   React.useEffect(() => {
     void load();
