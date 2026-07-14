@@ -1,5 +1,6 @@
 import {
   Archive,
+  ArchiveRestore,
   ArrowRightLeft,
   ClipboardCheck,
   Edit3,
@@ -59,6 +60,8 @@ function specFor(e: ActivityEvent): VisualSpec {
       return { Icon: Edit3, label: 'Item edited', tone: 'neutral' };
     case 'inventory.item.archived':
       return { Icon: Archive, label: 'Item archived', tone: 'warn' };
+    case 'inventory.item.restored':
+      return { Icon: ArchiveRestore, label: 'Item restored', tone: 'pos' };
     case 'inventory.item.deleted':
       return { Icon: Trash2, label: 'Item deleted', tone: 'neg' };
     case 'item.tracking_type.changed':

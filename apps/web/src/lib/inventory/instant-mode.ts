@@ -71,6 +71,11 @@ export interface InstantModeRow {
   custom_fields?: Record<string, unknown> | null;
   created_at?: string;
   updated_at: string;
+  /** True only when the SYSTEM auto-archived this row on zero stock
+   *  (migration 0266) — backs the Archived view's "Auto-archived only"
+   *  filter chip. Optional so any lighter caller of these pure
+   *  functions doesn't have to carry it. */
+  auto_archived?: boolean;
 }
 
 /** One holding line, structurally identical to the loader's
@@ -116,6 +121,11 @@ export interface InstantModeState {
   /** 'low' | 'out' from ?stock=; anything else is no stock filter —
    *  mirrors the pages' `params.stock === 'low'` exact comparison. */
   stock: 'low' | 'out' | null;
+  /** ?auto=1 — narrows to auto_archived rows only. Only meaningful
+   *  paired with status='archived' (the Archived view's "Auto-archived
+   *  only" filter chip); a no-op filter otherwise since active rows
+   *  never carry auto_archived=true (cleared on restore). */
+  autoArchived: boolean;
   cat: string[];
   loc: string[];
   charter: string[];
@@ -134,6 +144,13 @@ function coerceStatus(value: unknown): InstantModeState['status'] {
 
 function coerceStock(value: unknown): InstantModeState['stock'] {
   return value === 'low' || value === 'out' ? value : null;
+}
+
+/** Mirrors the ArchiveViewToggle-style boolean chips elsewhere: only the
+ *  exact '1' string means "on"; anything else (missing, '0', garbage) is
+ *  off. */
+function coerceAutoArchived(value: unknown): boolean {
+  return value === '1';
 }
 
 function coerceSort(value: unknown): InstantModeSort {
@@ -159,6 +176,7 @@ export function instantStateFromPageParams(params: {
   q?: string;
   status?: string;
   stock?: string;
+  auto?: string;
   page?: string;
   sort?: string;
   cat?: string | string[];
@@ -170,6 +188,7 @@ export function instantStateFromPageParams(params: {
     q: typeof params.q === 'string' ? params.q : '',
     status: coerceStatus(params.status),
     stock: coerceStock(params.stock),
+    autoArchived: coerceAutoArchived(params.auto),
     cat: parseIdList(params.cat),
     loc: parseIdList(params.loc),
     charter: parseIdList(params.charter),
@@ -189,6 +208,7 @@ export function instantStateFromSearchParams(params: {
     q: params.get('q') ?? '',
     status: coerceStatus(params.get('status') ?? undefined),
     stock: coerceStock(params.get('stock') ?? undefined),
+    autoArchived: coerceAutoArchived(params.get('auto') ?? undefined),
     cat: params.getAll('cat').filter(Boolean),
     loc: params.getAll('loc').filter(Boolean),
     charter: params.getAll('charter').filter(Boolean),
@@ -327,6 +347,7 @@ export function filterInstantRows<T extends InstantModeRow>(
     if (!rowMatchesRack(r.custom_fields, state.rack, view)) return false;
     if (state.stock === 'out' && !(r.quantity_on_hand <= 0)) return false;
     if (state.stock === 'low' && !isLowStock(r.quantity_on_hand, r.reorder_point)) return false;
+    if (state.autoArchived && r.auto_archived !== true) return false;
     return true;
   });
 }

@@ -168,6 +168,15 @@ export interface ItemListFilters {
    * sellable items. /dashboard/rentals/items passes true.
    */
   includeRentals?: boolean;
+  /**
+   * When true, restricts to rows the system auto-archived on zero stock
+   * (`inventory_items.auto_archived = true`, migration 0266) — backs the
+   * Archived view's "Auto-archived only" filter chip. Meaningless
+   * combined with an active-only status filter (auto_archived is always
+   * cleared on restore), so callers only ever pass this alongside
+   * status='archived'.
+   */
+  autoArchived?: boolean;
 }
 
 const SORT_MAP: Record<ItemListSort, { col: string; asc: boolean }> = {
@@ -296,7 +305,7 @@ export class InventoryService {
     let query = this.ctx.supabase
       .from('inventory_items')
       .select(
-        'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, custom_fields, created_at, updated_at, created_by, updated_by',
+        'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, custom_fields, created_at, updated_at, created_by, updated_by',
         // Exact count: pagination needs precise totals so "Page X of Y"
         // math doesn't lie, and the empty-state heuristics
         // (`inventory.total === 0`) don't false-fire on stale
@@ -356,6 +365,9 @@ export class InventoryService {
       query = query.eq('status', 'active');
     } else if (filters.status !== 'all') {
       query = query.eq('status', filters.status);
+    }
+    if (filters.autoArchived) {
+      query = query.eq('auto_archived', true);
     }
 
     if (filters.q && filters.q.trim()) {
@@ -540,6 +552,9 @@ export class InventoryService {
       } else if (filters.status !== 'all') {
         sumQuery = sumQuery.eq('status', filters.status);
       }
+      if (filters.autoArchived) {
+        sumQuery = sumQuery.eq('auto_archived', true);
+      }
       if (filters.q && filters.q.trim()) {
         const term = filters.q.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
         if (term) {
@@ -708,6 +723,10 @@ export class InventoryService {
         charter_id: string | null;
         tracking_type: 'none' | 'lot' | 'serial';
         item_type: 'product' | 'book' | 'asset' | 'consumable';
+        /** True only when the SYSTEM auto-archived this item on zero
+         *  stock (migration 0266) — backs the Archived view's
+         *  "Auto-archived" badge + filter chip. */
+        auto_archived: boolean;
         custom_fields: Record<string, unknown>;
         created_at: string;
         updated_at: string;
@@ -2164,9 +2183,23 @@ export class InventoryService {
     switch (input.op.kind) {
       case 'archive':
         update.status = 'archived';
+        // A human-initiated bulk archive is never a SYSTEM archive —
+        // clear the flag so it can't be mistaken for one the zero-stock
+        // cron made (guards against staleness if this row was
+        // auto-archived, manually restored, and is now being
+        // re-archived by hand). Mirrors the DB's own restore trigger
+        // (_auto_restock_restore, migration 0266), which clears the
+        // same flag on restock.
+        update.auto_archived = false;
         break;
       case 'unarchive':
         update.status = 'active';
+        // Same rationale as 'archive' above: a manual restore is never
+        // a system one, so the flag must not survive it — otherwise a
+        // later PO receipt (which only revives auto_archived=true rows,
+        // see receiving.ts's maybeAutoUnarchive) could act on a row a
+        // human already decided about.
+        update.auto_archived = false;
         break;
       case 'set_status':
         update.status = input.op.status;
@@ -2199,7 +2232,9 @@ export class InventoryService {
     const bulkEvent =
       input.op.kind === 'archive'
         ? ('inventory.item.archived' as const)
-        : ('inventory.item.updated' as const);
+        : input.op.kind === 'unarchive'
+          ? ('inventory.item.restored' as const)
+          : ('inventory.item.updated' as const);
     for (const id of allowedIds) {
       void audit(
         {

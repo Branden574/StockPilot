@@ -90,6 +90,9 @@ type BooksSearchParams = {
   q?: string;
   status?: string;
   stock?: string;
+  /** '1' narrows the Archived view to system-archived rows only (Task 8's
+   *  "Auto-archived only" filter chip). */
+  auto?: string;
   page?: string;
   sort?: string;
   cat?: string | string[];
@@ -421,6 +424,7 @@ async function BooksTableSection({
         status: lifecycleStatus,
         lowStock: params.stock === 'low',
         outOfStock: params.stock === 'out',
+        autoArchived: params.auto === '1',
         warehouseId: warehouseFilter,
         itemType: 'book',
         categoryIds,
@@ -553,7 +557,10 @@ function booksEmptyState({
   canCreate: boolean;
 }) {
   if (total !== 0) return null;
-  if (lifecycleStatus === 'archived' && !params.q && !params.stock) {
+  // Excludes ?auto=1 (the "Auto-archived only" chip) — same rationale as
+  // the Items page: a zero result there just means none of the archived
+  // books were system-archived, not that nothing is archived at all.
+  if (lifecycleStatus === 'archived' && !params.q && !params.stock && params.auto !== '1') {
     return (
       <EmptyState
         icon={BookOpen}
