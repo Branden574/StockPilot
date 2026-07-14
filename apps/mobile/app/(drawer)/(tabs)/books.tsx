@@ -64,6 +64,10 @@ interface BookRow {
   updated_at: string | null;
   imageUrl: string | null;
   grade: string | null;
+  /** True only when the SYSTEM auto-archived this item on zero stock
+   *  (migration 0266) — drives the item detail "Auto-archived" badge.
+   *  Meaningless unless status === 'archived'. */
+  auto_archived: boolean;
 }
 
 const bookKeyExtractor = (b: BookRow): string => b.id;
@@ -163,6 +167,12 @@ export default function BooksScreen() {
       };
       const ord = sortMap[f.sort];
       const isLow = f.status === 'low';
+      // Same Archived toggle as Items (FilterSheet's STOCK section) — flips
+      // this screen from active books to archived ones. This ALSO fixes a
+      // gap where this query had no status filter at all, so an
+      // auto-archived (zero-stock) book kept showing up mixed into the
+      // main catalog instead of only in the new Archived view.
+      const isArchived = f.status === 'archived';
 
       // Match web: books are identified by `item_type='book'` directly.
       // The previous category-name LIKE '%book%' filter missed every
@@ -173,11 +183,12 @@ export default function BooksScreen() {
         .from('inventory_items')
         .select(
           `id, name, sku, barcode, quantity_on_hand, reorder_point, custom_fields,
-           category_id, primary_location_id, charter_id, warehouse_id, updated_at`,
+           category_id, primary_location_id, charter_id, warehouse_id, updated_at, auto_archived`,
           { count: 'exact' },
         )
         .eq('organization_id', orgId)
         .eq('item_type', 'book')
+        .eq('status', isArchived ? 'archived' : 'active')
         .is('deleted_at', null)
         .order(ord.col, { ascending: ord.asc });
 
@@ -247,6 +258,7 @@ export default function BooksScreen() {
           updated_at: (r.updated_at as string | null) ?? null,
           imageUrl: null,
           grade: (cf?.book_grade as string | undefined) ?? null,
+          auto_archived: Boolean(r.auto_archived),
         };
       });
 

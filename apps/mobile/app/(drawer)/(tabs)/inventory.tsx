@@ -73,6 +73,10 @@ interface Item {
   charter_id: string | null;
   imageUrl: string | null;
   updated_at: string | null;
+  /** True only when the SYSTEM auto-archived this item on zero stock
+   *  (migration 0266) — drives the item detail "Auto-archived" badge.
+   *  Meaningless unless status === 'archived'. */
+  auto_archived: boolean;
 }
 
 const PIPS = [ACCENT.pipOrange, ACCENT.pipAmber, ACCENT.pipTeal, undefined, undefined, undefined];
@@ -205,16 +209,23 @@ export default function Inventory() {
       // when it's selected we fetch a wider window and skip paging.
       const isLow = f.status === 'low';
 
+      // The Archived toggle (FilterSheet's STOCK section) swaps which
+      // status bucket this screen shows — active items by default, or
+      // everything the system/a human archived when it's on. Never both:
+      // an archived item is definitionally out of stock already, so
+      // combining with 'low'/'out' wouldn't add anything.
+      const isArchived = f.status === 'archived';
+
       let req = supabase
         .from('inventory_items')
         .select(
           `id, name, sku, quantity_on_hand, reorder_point, status, category_id,
-           primary_location_id, charter_id, warehouse_id, updated_at,
+           primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
            category:categories!category_id (name)`,
           { count: 'exact' },
         )
         .eq('organization_id', orgIdParam)
-        .eq('status', 'active')
+        .eq('status', isArchived ? 'archived' : 'active')
         // Match web: the Items tab is products only. Books live on
         // their own tab; mixing them was masking the per-tab counts.
         .neq('item_type', 'book')
@@ -311,6 +322,7 @@ export default function Inventory() {
           primary_location_id: (r.primary_location_id as string | null) ?? null,
           charter_id: (r.charter_id as string | null) ?? null,
           updated_at: (r.updated_at as string | null) ?? null,
+          auto_archived: Boolean(r.auto_archived),
           imageUrl: null,
         } as Item;
       });

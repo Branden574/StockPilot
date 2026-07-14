@@ -74,6 +74,10 @@ interface Item {
   retail_price: number;
   unit_of_measure: string;
   status: string;
+  /** True only when the SYSTEM auto-archived this item on zero stock
+   *  (migration 0266), as opposed to a human archiving it — drives the
+   *  "Auto-archived" badge shown alongside the Archived badge. */
+  auto_archived: boolean;
   category_id: string | null;
   category_name: string | null;
   supplier_name: string | null;
@@ -166,7 +170,7 @@ export default function ItemDetail() {
       .select(
         `id, organization_id, name, sku, barcode, description, quantity_on_hand,
          reorder_point, reorder_quantity, unit_cost, retail_price,
-         unit_of_measure, status, category_id, item_type, bin_location,
+         unit_of_measure, status, auto_archived, category_id, item_type, bin_location,
          warehouse_id, charter_id, custom_fields, tracking_type,
          category:categories!category_id (name),
          supplier:suppliers!supplier_id (name),
@@ -283,6 +287,7 @@ export default function ItemDetail() {
       retail_price: Number(r.retail_price) || 0,
       unit_of_measure: (r.unit_of_measure as string) ?? 'EA',
       status: r.status as string,
+      auto_archived: Boolean(r.auto_archived),
       category_id: (r.category_id as string | null) ?? null,
       category_name: Array.isArray(cat) ? (cat[0]?.name ?? null) : (cat?.name ?? null),
       supplier_name: Array.isArray(sup) ? (sup[0]?.name ?? null) : (sup?.name ?? null),
@@ -513,6 +518,27 @@ export default function ItemDetail() {
             <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 6 }}>
               {[item.category_name, item.barcode].filter(Boolean).join(' · ')}
             </Mono>
+          ) : null}
+          {/* Archived / Auto-archived badges — mirrors the web detail's
+              stock-status-badge.tsx. Auto-archived is meaningless on an
+              active item, so it only ever renders alongside Archived. */}
+          {item.status === 'archived' ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
+              <Pill status="default" dot={false}>
+                ARCHIVED
+              </Pill>
+              {item.auto_archived ? (
+                <Pill status="warn" dot={false}>
+                  AUTO-ARCHIVED
+                </Pill>
+              ) : null}
+            </View>
+          ) : null}
+          {item.status === 'archived' && item.auto_archived ? (
+            <Body muted size={11} style={{ marginTop: 8 }}>
+              The system archived this item automatically after it sat at zero stock past the
+              configured dwell window.
+            </Body>
           ) : null}
         </View>
 
