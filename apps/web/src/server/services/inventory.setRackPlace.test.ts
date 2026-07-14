@@ -275,4 +275,67 @@ describe('bulkUpdate set_rack — Unit B: moves a single existing rack/crate hol
       }),
     );
   });
+
+  // Unit B review, Minor 2: the two loops above (staging/unplaced levels,
+  // then singleRackMoves) run over the SAME holdings query and are keyed
+  // by item_id independently — a single item can appear in BOTH. Prove
+  // that produces exactly two converging transfers (one per holding) for
+  // that one item, not a double-move of either holding and not an error.
+  it('one item with BOTH a staging holding and a single rack holding: both converge onto the target rack (no double-move, no error)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'item-1', warehouse_id: 'wh-1' }], error: null },
+      'rpc:inventory_set_rack': { data: 1, error: null },
+      // item-1 has a staging holding AND a single rack holding at once:
+      'item_stock_levels.select': {
+        data: [
+          {
+            item_id: 'item-1',
+            location_id: 'stg-1',
+            quantity: 4,
+            locations: { kind: 'staging', warehouse_id: 'wh-1' },
+          },
+          {
+            item_id: 'item-1',
+            location_id: 'rack-old',
+            quantity: 5,
+            locations: { kind: 'rack', warehouse_id: 'wh-1' },
+          },
+        ],
+        error: null,
+      },
+      'locations.select': { data: [{ id: 'rack-new', name: '2-B' }], error: null },
+      'rpc:transfer_stock': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const res = await svc.bulkUpdate({
+      ids: ['item-1'],
+      op: { kind: 'set_rack', rackNumber: '2', rackRow: 'B' },
+    });
+
+    expect(res.ok).toBe(1);
+    const transfers = stub.rpcCalls.filter((c) => c.name === 'transfer_stock');
+    // Exactly one transfer per holding — never a double-move of either.
+    expect(transfers).toHaveLength(2);
+    expect(transfers).toContainEqual(
+      expect.objectContaining({
+        args: expect.objectContaining({
+          p_item_id: 'item-1',
+          p_from_location_id: 'stg-1',
+          p_to_location_id: 'rack-new',
+          p_quantity: 4,
+        }),
+      }),
+    );
+    expect(transfers).toContainEqual(
+      expect.objectContaining({
+        args: expect.objectContaining({
+          p_item_id: 'item-1',
+          p_from_location_id: 'rack-old',
+          p_to_location_id: 'rack-new',
+          p_quantity: 5,
+        }),
+      }),
+    );
+  });
 });
