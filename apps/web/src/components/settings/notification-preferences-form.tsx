@@ -93,6 +93,12 @@ const TOGGLE_DEFS: ToggleDef[] = [
     group: 'push',
   },
   {
+    key: 'push_order_request_created',
+    label: 'New order requests',
+    hint: 'In-app/push alert when anyone submits a new order request (managers and above). Turn off to stop being notified about the whole team\'s order queue.',
+    group: 'push',
+  },
+  {
     key: 'email_schedule_reminders',
     label: 'Schedule reminders',
     hint: 'Email 24 hours and 1 hour before events you are assigned to (managers get all events).',

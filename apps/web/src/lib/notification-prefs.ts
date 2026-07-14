@@ -20,6 +20,8 @@ export const NOTIFICATION_PREF_KEYS = [
   'email_order_in_transit',
   'email_order_completed',
   'push_order_assigned_to_me',
+  // Manager "new order request" ping opt-out (0265):
+  'push_order_request_created',
   // Schedule reminders (0258):
   'email_schedule_reminders',
   'push_schedule_reminders',
