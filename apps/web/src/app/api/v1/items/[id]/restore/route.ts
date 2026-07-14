@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -36,6 +37,22 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+
+  // Per-user throttle — defense-in-depth on top of the service's items:update
+  // gate, matching transfer's rate limit (60/min is far above a human tapping
+  // through restores).
+  const rl = await checkRateLimit(`items-restore:${ctx.userId}`, 60, 60_000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: 'rate_limited', message: 'Too many requests — slow down.' },
+      {
+        status: 429,
+        headers: {
+          'retry-after': String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))),
+        },
+      },
+    );
+  }
 
   const { id } = await params;
   if (!z.string().uuid().safeParse(id).success) {
