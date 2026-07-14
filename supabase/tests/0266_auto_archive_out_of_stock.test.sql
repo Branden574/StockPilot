@@ -31,6 +31,17 @@
 --      update's >0 crossing — not reset by 0269's new branch, because by the
 --      time the self-UPDATE flips status, quantity_on_hand is already > 0
 --      and the reset guard (`quantity_on_hand <= 0`) is false.
+--   9. (0269 CRITICAL regression, post-review) A no-op status re-assert
+--      (`status='active'` written on an already-ACTIVE item, exactly what
+--      the Edit Item form submits on every ordinary save, e.g. a price
+--      edit) must NOT reset zero_since. Before the old.status='archived'
+--      guard was added, this column-level BEFORE UPDATE OF status trigger
+--      fired on every such write (status is in the SET list even though the
+--      value doesn't change) and `new.status is distinct from 'archived'`
+--      was true, so it clobbered zero_since := now() on an out-of-stock
+--      item that was never archived — permanently deferring the cron from
+--      ever archiving an actively-edited item. Asserts the stale zero_since
+--      is left untouched.
 --
 -- Fixture: one org + one active item at qty 10. organizations.slug (0001) and
 -- inventory_items.sku (0002) are NOT NULL with no default, so both are
@@ -40,7 +51,7 @@
 
 begin;
 
-select plan(13);
+select plan(14);
 
 insert into public.organizations (id, name, slug)
   values ('00000000-0000-0000-0000-0000000000a1', 'pgtap-org', 'pgtap-auto-archive-org')
@@ -126,6 +137,22 @@ select is((select status from public.inventory_items where id='00000000-0000-000
   'restock still auto-restores through 0269 (unaffected)');
 select is((select zero_since from public.inventory_items where id='00000000-0000-0000-0000-0000000000b1'), null,
   'restock path still ends with zero_since NULL, not reset by 0269 (0269 does not interfere)');
+
+-- 9. (0269 CRITICAL regression) A no-op status re-assert on an already-
+-- ACTIVE, out-of-stock item (mimicking the Edit Item form, which always
+-- submits status='active' unchanged on every ordinary save) must NOT reset
+-- zero_since. Set the item active + zero qty with a stale (10-days-ago)
+-- zero_since, then issue the same-value status write.
+update public.inventory_items
+  set status='active', auto_archived=false, quantity_on_hand=0
+  where id='00000000-0000-0000-0000-0000000000b1';
+update public.inventory_items set zero_since = now() - interval '10 days'
+  where id='00000000-0000-0000-0000-0000000000b1';
+update public.inventory_items set status='active'
+  where id='00000000-0000-0000-0000-0000000000b1';
+select cmp_ok((select zero_since from public.inventory_items where id='00000000-0000-0000-0000-0000000000b1'), '<',
+  now() - interval '1 day',
+  'no-op status re-assert on an already-active item does NOT reset zero_since (0269 CRITICAL fix)');
 
 select * from finish();
 rollback;

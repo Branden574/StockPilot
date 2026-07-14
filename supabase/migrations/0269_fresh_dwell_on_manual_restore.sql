@@ -22,21 +22,46 @@
 -- today. Pure NEW mutation, no self-UPDATE, so it composes with the other
 -- BEFORE triggers on this table exactly like 0268 already did.
 --
--- VERIFY no interference with the RESTOCK path (_auto_restock_restore,
--- 0266's AFTER UPDATE OF quantity_on_hand trigger): that trigger's guarded
--- self-UPDATE only fires `old.quantity_on_hand <= 0 and new.quantity_on_hand
--- > 0`, and its self-UPDATE sets `status = 'active'` while quantity_on_hand
--- is ALREADY > 0 (it changed quantity_on_hand in the same original UPDATE
--- that triggered the restore, before this trigger even runs on the
--- self-UPDATE). So when this trigger fires on that self-UPDATE, `new.status
--- is distinct from 'archived'` is true, but `new.quantity_on_hand <= 0` is
--- FALSE — the reset condition below does not apply, and zero_since is left
--- alone. It doesn't need to be touched here anyway: `trg_inventory_track_
--- zero_since` already nulled zero_since on the ORIGINAL quantity_on_hand
--- update (the >0 crossing), before either of these status-side triggers
--- ran. So the restock path is untouched by this change; only a genuine
--- manual restore of a STILL-zero item (quantity_on_hand unchanged, zero_since
--- still set from the original archive) hits the new branch.
+-- CRITICAL guard added post-review: the whole block is gated on
+-- `old.status = 'archived'`, not just `new.status is distinct from
+-- 'archived'`. A column-level `BEFORE UPDATE OF status` trigger fires
+-- whenever `status` appears in the UPDATE's SET list, even when the value
+-- is unchanged (e.g. the Edit Item form always submits `status: 'active'`
+-- on every save, including plain field edits like price). Without the
+-- old.status='archived' guard, that no-op re-assert on an already-active,
+-- out-of-stock item would satisfy `new.status is distinct from 'archived'`
+-- (true, since 'active' is distinct from 'archived') and silently reset
+-- zero_since := now() on every ordinary edit — permanently deferring the
+-- cron from ever archiving an actively-edited item. Requiring
+-- old.status='archived' restricts both the auto_archived clear and the
+-- zero_since reset to a genuine archived -> non-archived transition.
+--
+-- VERIFY no interference with 3 other paths, all satisfied by requiring
+-- old.status = 'archived':
+--
+-- 1. Cron's own archive write (old.status likely 'active' -> new.status
+--    'archived'): old.status = 'archived' is false, so the whole block is
+--    skipped — correct, nothing to clear or reset on the way IN to archived.
+--
+-- 2. RESTOCK path (_auto_restock_restore, 0266's AFTER UPDATE OF
+--    quantity_on_hand trigger): its guarded self-UPDATE only fires
+--    `old.quantity_on_hand <= 0 and new.quantity_on_hand > 0`, and that
+--    self-UPDATE sets `status = 'active'` while old.status is 'archived'
+--    (satisfying the new guard) and quantity_on_hand is ALREADY > 0 (it
+--    changed quantity_on_hand in the same original UPDATE that triggered the
+--    restore, before this trigger runs on the self-UPDATE). So auto_archived
+--    still clears correctly, but the zero_since reset guard
+--    (`new.quantity_on_hand <= 0`) is FALSE — zero_since is left alone. It
+--    doesn't need to be touched here anyway: `trg_inventory_track_zero_since`
+--    already nulled zero_since on the ORIGINAL quantity_on_hand update (the
+--    >0 crossing), before either of these status-side triggers ran. So the
+--    restock path is untouched by this change.
+--
+-- 3. Genuine MANUAL unarchive (old.status 'archived' -> new.status
+--    'active', quantity_on_hand unchanged and still <= 0, zero_since still
+--    set from the original archive): old.status='archived' is true, so the
+--    block runs — auto_archived clears and zero_since resets to now(),
+--    granting the fresh dwell window this migration exists to provide.
 --
 -- Idempotent CREATE OR REPLACE; the trigger definition itself (BEFORE UPDATE
 -- OF status, same function) is unchanged from 0268.
@@ -46,7 +71,7 @@ returns trigger
 language plpgsql
 as $$
 begin
-  if new.status is distinct from 'archived' then
+  if old.status = 'archived' and new.status is distinct from 'archived' then
     if new.auto_archived then
       new.auto_archived := false;
     end if;
@@ -55,7 +80,6 @@ begin
     if new.quantity_on_hand <= 0 and new.zero_since is not null then
       new.zero_since := now();
     end if;
-    return new;
   end if;
   return new;
 end;
