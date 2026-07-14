@@ -660,10 +660,18 @@ export class InventoryService {
     const stagedByItem = new Map<string, number>();
     const unplacedByItem = new Map<string, number>();
     const placedRacksByItem = new Map<string, string[]>();
+    // Distinct rack/crate HOLDINGS per item, keyed by location_id (never
+    // name) — the same grouping placeItemsOntoRackByName's
+    // rackHoldingsByItem uses to decide whether a bulk Set-rack may
+    // physically move an item's stock. placed_racks dedupes by NAME, so a
+    // rack called "1-A" in two different warehouses collapses to one
+    // entry there but must still count as 2 holdings here — the client's
+    // split warning reads THIS field, not placed_racks.length.
+    const rackHoldingsByItem = new Map<string, Set<string>>();
     if (ids.length > 0) {
       const { data: levels } = await this.ctx.supabase
         .from('item_stock_levels')
-        .select('item_id, quantity, locations!inner(name, kind)')
+        .select('item_id, location_id, quantity, locations!inner(name, kind)')
         .eq('organization_id', this.ctx.organizationId)
         .in('item_id', ids)
         .gt('quantity', 0);
@@ -672,6 +680,7 @@ export class InventoryService {
       // (same convention as placements() below).
       for (const lvl of (levels ?? []) as unknown as Array<{
         item_id: string;
+        location_id: string;
         quantity: number;
         locations: { name: string; kind: string };
       }>) {
@@ -686,6 +695,10 @@ export class InventoryService {
           const arr = placedRacksByItem.get(lvl.item_id) ?? [];
           if (lvl.locations.name && !arr.includes(lvl.locations.name)) arr.push(lvl.locations.name);
           placedRacksByItem.set(lvl.item_id, arr);
+
+          const set = rackHoldingsByItem.get(lvl.item_id) ?? new Set<string>();
+          set.add(lvl.location_id);
+          rackHoldingsByItem.set(lvl.item_id, set);
         }
       }
     }
@@ -700,6 +713,7 @@ export class InventoryService {
         ),
         // Sorted for stable display ("1-A, 2-C" not "2-C, 1-A").
         placed_racks: (placedRacksByItem.get(id) ?? []).sort((a, b) => a.localeCompare(b)),
+        rackHoldingsCount: rackHoldingsByItem.get(id)?.size ?? 0,
       };
     });
 
@@ -737,6 +751,10 @@ export class InventoryService {
          *  holdings), sorted. Drives the table's RACK column so it reflects
          *  real placement, not the stale bin_location label. */
         placed_racks: string[];
+        /** Distinct rack/crate holdings by location_id (NOT name) — see the
+         *  rackHoldingsByItem comment above. Drives the bulk Set-rack split
+         *  warning; must agree with the server's move/no-move gate. */
+        rackHoldingsCount: number;
       }>,
       total: totalCount,
       /** Sum of (unit_cost × quantity_on_hand) over the FULL filtered

@@ -63,6 +63,7 @@ import {
   selectPage,
 } from '@/components/inventory/selection-utils';
 import { rememberLastListUrl } from '@/lib/last-list-url';
+import { isSplitRackItem } from '@/lib/inventory/rack-holdings';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 
@@ -118,6 +119,12 @@ interface Item {
    * stock really is — not the stale free-text bin_location label. Optional so
    * older callers fall back to the custom_fields label. */
   placed_racks?: string[];
+  /** Count of DISTINCT rack/crate holdings by location_id (never name) —
+   *  see isSplitRackItem below. NOT derivable from placed_racks.length,
+   *  which dedupes by rack NAME and so under-counts a rack named the
+   *  same in two different warehouses. Optional so older callers without
+   *  the field still render (treated as 0 = "not split"). */
+  rackHoldingsCount?: number;
   /** True only when the SYSTEM auto-archived this item on zero stock
    *  (migration 0266) — drives the "Auto-archived" badge next to the
    *  Archived pill and the Archived view's "Auto-archived only" filter
@@ -1497,12 +1504,15 @@ export function InventoryTable({
             hasArchivedSelection={(effectiveInstant?.items ?? items).some(
               (i) => selectedItemIdSet.has(i.id) && i.status === 'archived',
             )}
-            // A "split" item (stock on >1 distinct rack/crate) is the one
-            // case bulk Set rack does NOT physically move — moving it would
-            // be a guess (the bulk op carries no fromLocationId). Warn in
-            // the dialog so the user reaches for Transfer instead.
+            // A "split" item (stock on >1 distinct rack/crate HOLDING) is
+            // the one case bulk Set rack does NOT physically move — moving
+            // it would be a guess (the bulk op carries no fromLocationId).
+            // Warn in the dialog so the user reaches for Transfer instead.
+            // isSplitRackItem reads rackHoldingsCount (by location_id), NOT
+            // placed_racks.length (which dedupes by rack NAME and would
+            // under-count a same-named rack split across two warehouses).
             hasSplitRackSelection={(effectiveInstant?.items ?? items).some(
-              (i) => selectedItemIdSet.has(i.id) && (i.placed_racks?.length ?? 0) > 1,
+              (i) => selectedItemIdSet.has(i.id) && isSplitRackItem(i),
             )}
             onCycleCount={() => {
               // Books tab and Items tab share this table; infer the pick

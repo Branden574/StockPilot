@@ -280,6 +280,14 @@ interface InventoryListRowBase {
   unplaced_quantity: number;
   placed_quantity: number;
   placed_racks: string[];
+  /** Count of DISTINCT rack/crate item_stock_levels HOLDINGS (by
+   *  location_id, qty>0) — NOT the same as placed_racks.length, which
+   *  dedupes by rack NAME and so collapses same-named racks in different
+   *  warehouses (e.g. two "1-A"s) down to one entry. Mirrors the
+   *  server's rackHoldingsByItem grouping in placeItemsOntoRackByName
+   *  (InventoryService) — the bulk Set-rack split warning must agree
+   *  with this count exactly, not with placed_racks. */
+  rackHoldingsCount: number;
 }
 
 /**
@@ -510,6 +518,7 @@ type RawItemRow = Omit<
   | 'unplaced_quantity'
   | 'placed_quantity'
   | 'placed_racks'
+  | 'rackHoldingsCount'
   | 'image_storage_path'
   | 'image_thumb_path'
   | 'image_lqip'
@@ -550,6 +559,11 @@ function assembleInventoryRows(
   const stagedByItem = new Map<string, number>();
   const unplacedByItem = new Map<string, number>();
   const placedRacksByItem = new Map<string, string[]>();
+  // Distinct rack/crate HOLDINGS per item, keyed by location_id (never
+  // name) — see the rackHoldingsCount field doc on InventoryListRowBase.
+  // A rack named "1-A" in two different warehouses is ONE entry in
+  // placedRacksByItem (name-deduped, for display) but TWO here.
+  const rackHoldingsByItem = new Map<string, Set<string>>();
   const placement: Record<string, InventoryPlacementLine[]> = {};
   for (const lvl of levels) {
     // Row-summary math uses the RAW kind — identical to the live
@@ -565,6 +579,10 @@ function assembleInventoryRows(
       const arr = placedRacksByItem.get(lvl.item_id) ?? [];
       if (lvl.locations.name && !arr.includes(lvl.locations.name)) arr.push(lvl.locations.name);
       placedRacksByItem.set(lvl.item_id, arr);
+
+      const set = rackHoldingsByItem.get(lvl.item_id) ?? new Set<string>();
+      set.add(lvl.location_id);
+      rackHoldingsByItem.set(lvl.item_id, set);
     }
     // The placement LINES coalesce NULL → 'unplaced' — exactly (and
     // only) where the live placementBreakdown() coalesces.
@@ -607,6 +625,7 @@ function assembleInventoryRows(
       unplaced_quantity: unplaced,
       placed_quantity: Math.max(0, Number(r.quantity_on_hand) - staged - unplaced),
       placed_racks: (placedRacksByItem.get(r.id) ?? []).sort((a, b) => a.localeCompare(b)),
+      rackHoldingsCount: rackHoldingsByItem.get(r.id)?.size ?? 0,
       image_storage_path: img?.storage_path ?? null,
       image_thumb_path: img?.thumb_path ?? null,
       image_lqip: img?.lqip ?? null,
