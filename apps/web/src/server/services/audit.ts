@@ -205,6 +205,9 @@ export type AuditEvent =
   // Archived-item auto-cleanup settings — an admin toggled auto-delete /
   // retention days, stored in organization_modules.settings for 'inventory'.
   | 'archive_cleanup_settings.updated'
+  // Auto-archive-on-zero-stock settings — an admin toggled auto-archive /
+  // dwell days, stored in organization_modules.settings for 'inventory'.
+  | 'auto_archive_settings.updated'
   // Inventory restore points (snapshots + safe-reconcile restore).
   | 'restore_point.created'
   | 'restore_point.restored'
