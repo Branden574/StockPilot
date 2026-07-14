@@ -2552,26 +2552,19 @@ export class InventoryService {
 
   /** Find an existing rack/crate location named `name` in the warehouse, or
    *  create a rack (rack_number/row set) if absent. Returns its id, or null on
-   *  a create failure (e.g. missing locations:manage) so placement degrades. */
+   *  a create failure (e.g. missing locations:manage) so placement degrades.
+   *  Delegates to LocationsService.findOrCreateRackOrCrate — the SAME
+   *  case-insensitive dedup used by the interactive Transfer/Put-away
+   *  "new rack" actions, so both creation paths agree with each other and
+   *  with the unique index added by migration 0270. */
   private async findOrCreateRackLocation(
     warehouseId: string,
     num: string,
     row: string | null,
     name: string,
   ): Promise<string | null> {
-    const { data: existing } = await this.ctx.supabase
-      .from('locations')
-      .select('id')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('warehouse_id', warehouseId)
-      .eq('name', name)
-      .in('kind', ['rack', 'crate'])
-      .is('deleted_at', null)
-      .limit(1)
-      .maybeSingle();
-    if (existing) return (existing as { id: string }).id;
     try {
-      const created = await new LocationsService(this.ctx).create({
+      const loc = await new LocationsService(this.ctx).findOrCreateRackOrCrate({
         name,
         type: 'shelf',
         kind: 'rack',
@@ -2579,7 +2572,7 @@ export class InventoryService {
         rackNumber: num,
         rackRow: row,
       });
-      return (created as { id: string }).id;
+      return (loc as { id: string }).id;
     } catch (e) {
       console.error('[set_rack place] rack create failed', {
         warehouseId,

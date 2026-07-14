@@ -94,6 +94,42 @@ export class LocationsService {
     return data;
   }
 
+  /**
+   * Find an existing non-deleted rack/crate with the same (warehouse, name)
+   * before creating a new one — every "new rack" creation path (interactive
+   * Transfer/Put-away `transferStockAction`/`placeStockAction`/
+   * `bulkPlaceStockAction`, and the bulk "Set rack" auto-place path in
+   * InventoryService) MUST dedupe this way, or repeated use of the same rack
+   * name mints a fresh `locations` row every time — the duplicate-rack bug
+   * fixed by migration 0270, which also adds a unique index on
+   * `(organization_id, warehouse_id, lower(name))` for `kind in
+   * ('rack','crate')`. Matching here MUST stay case-insensitive to match that
+   * index, or a same-name-different-case create would violate the
+   * constraint instead of reusing the existing row.
+   *
+   * Falls through to `create()` (and its permission/plan-limit asserts) when
+   * no match is found, or when `input.warehouseId` is missing (matching is
+   * scoped per-warehouse; without one there's nothing to dedupe against).
+   */
+  async findOrCreateRackOrCrate(input: CreateLocationInput) {
+    if (input.warehouseId) {
+      const { data: candidates, error } = await this.ctx.supabase
+        .from('locations')
+        .select('*')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('warehouse_id', input.warehouseId)
+        .in('kind', ['rack', 'crate'])
+        .is('deleted_at', null);
+      if (error) throw new ServiceError('internal_error', error.message);
+      const target = input.name.trim().toLowerCase();
+      const existing = (candidates ?? []).find(
+        (loc) => (loc as { name: string }).name.trim().toLowerCase() === target,
+      );
+      if (existing) return existing;
+    }
+    return this.create(input);
+  }
+
   async update(id: string, patch: UpdateLocationInput) {
     assertPermission(this.ctx, 'locations:manage');
     const updates: Record<string, unknown> = {};

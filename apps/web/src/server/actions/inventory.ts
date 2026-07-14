@@ -318,9 +318,13 @@ export async function transferStockAction(
       if (!(await warehouseInOrg(ctx, n.warehouseId))) {
         return err('validation_error', 'Warehouse not found in your organization.');
       }
-      // Asserts 'locations:manage' + assertPlanLimit('locations') internally.
+      // findOrCreateRackOrCrate reuses an existing non-deleted rack/crate
+      // with the same warehouse+name first (the interactive new-rack path
+      // used to always INSERT, minting duplicate locations — see migration
+      // 0270). Asserts 'locations:manage' + assertPlanLimit('locations')
+      // internally on the create-fallback path only.
       const locationsSvc = new LocationsService(ctx);
-      const created = await locationsSvc.create({
+      const created = await locationsSvc.findOrCreateRackOrCrate({
         name: deriveLocationName(n),
         type: n.crateColor ? 'bin' : 'shelf',
         kind: n.crateColor ? 'crate' : 'rack',
@@ -428,8 +432,12 @@ export async function placeStockAction(
       if (!(await warehouseInOrg(ctx, n.warehouseId))) {
         return err('validation_error', 'Warehouse not found in your organization.');
       }
+      // findOrCreateRackOrCrate reuses an existing non-deleted rack/crate
+      // with the same warehouse+name first — see migration 0270 (dup-rack
+      // fix) and the shared helper's doc comment for why matching stays
+      // case-insensitive.
       const locationsSvc = new LocationsService(ctx);
-      const created = await locationsSvc.create({
+      const created = await locationsSvc.findOrCreateRackOrCrate({
         name: deriveLocationName(n),
         type: n.crateColor ? 'bin' : 'shelf',
         kind: n.crateColor ? 'crate' : 'rack',
@@ -561,8 +569,12 @@ export async function bulkPlaceStockAction(
       if (!wh) {
         return err('validation_error', 'Warehouse not found in your organization.');
       }
+      // findOrCreateRackOrCrate reuses an existing non-deleted rack/crate
+      // with the same warehouse+name first — see migration 0270 (dup-rack
+      // fix) and the shared helper's doc comment for why matching stays
+      // case-insensitive.
       const locationsSvc = new LocationsService(ctx);
-      const created = await locationsSvc.create({
+      const created = await locationsSvc.findOrCreateRackOrCrate({
         name: deriveLocationName(n),
         type: n.crateColor ? 'bin' : 'shelf',
         kind: n.crateColor ? 'crate' : 'rack',
