@@ -540,6 +540,15 @@ export default function ItemDetail() {
               configured dwell window.
             </Body>
           ) : null}
+          {/* T12 (mobile restore action) is BLOCKED, not skipped: there is no
+              REST-reachable mutation for this. Restoring an archived item on
+              web goes through InventoryService.bulkUpdate({op:{kind:'unarchive'}}),
+              invoked as a Next.js Server Action (bulkUpdateInventoryAction) —
+              not a public /api/v1 route the mobile Bearer-token client can
+              call. /api/v1/items/[id]/ only has transfer/ and barcode/
+              sub-routes; no generic PATCH or bulk endpoint exists. Wiring a
+              Restore button here would require a new REST endpoint first —
+              see task-11-report.md for the full trace. */}
         </View>
 
         {/* Image — tap to add or replace */}
