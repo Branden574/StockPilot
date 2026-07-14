@@ -145,8 +145,8 @@ Apply migration via `supabase db push --linked` (before deploying web that reads
 the new columns/settings — pending migs crash pages). Deploy web. Register the
 cron in `vercel.json`. OTA mobile. Verify in Demo Co (71b27a4a-…) web + mobile.
 
-## Open items for owner review
+## Resolved decisions (owner, 2026-07-14)
 
-1. **Existing unconditional receipt auto-unarchive** (`receiving.ts` `maybeAutoUnarchive`) revives ANY archived item on receipt today — a stray receipt can un-retire a deliberately-archived SKU. To be consistent with the approved "system-archived only" reversal, recommend tightening it to also respect `auto_archived`. This is a behavior change to an existing feature — confirm before changing.
-2. **Notification style:** one notice per auto-archive vs a batched daily digest ("12 items were auto-archived"). Recommend a digest to avoid noise on cron runs that archive many.
-3. **Permission gate** on the settings toggle: `items:update` (chosen, since archive is reversible) vs `items:delete` (matches the heavier auto-delete toggle). Confirm.
+1. **Tighten the existing receipt auto-unarchive** — `receiving.ts` `maybeAutoUnarchive` currently revives ANY archived item on receipt. In scope for this feature: change it to only revive rows where `auto_archived = true`, so a stray receipt can't un-retire a deliberately-archived SKU. Consistent with the "system-archived only" reversal.
+2. **One notification per auto-archived item** (not a digest). Per-user muteable (0265 pattern), via the single AFTER-INSERT broadcast path.
+3. **Permission gate = `items:update`** ("edit items") — archive is reversible, so this is the correct gate (not `items:delete`).
