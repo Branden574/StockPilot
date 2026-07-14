@@ -391,35 +391,54 @@ function slicePages<T>(sorted: readonly T[], pageSize: number): T[][] {
 }
 
 /**
- * RUN-AWARE pagination for the Items view. The list collapses a size run
- * ("Pink Shirt - L / - XL / - 2XL") into one expandable row; if pagination
- * sliced raw rows at a fixed 30, a run straddling the boundary would render as
- * TWO separate groups on two pages (the reported bug). So: (1) build units —
- * each run (2+ items sharing a base name) is ONE unit with its members
- * clustered at the run's first-seen position; every other item is a singleton
- * unit; (2) pack units into pages of ~pageSize, never splitting a unit. A page
- * may run a few rows over pageSize to keep a run whole. Pure.
+ * RUN-AWARE pagination for the Items view. The list collapses BOTH a size run
+ * ("Pink Shirt - L / - XL / - 2XL") AND a Model B SKU family (one item row per
+ * charter sharing one SKU) into one expandable row; if pagination sliced raw
+ * rows at a fixed 30, a group straddling the boundary would render as TWO
+ * separate groups on two pages — or worse, a single stranded member renders
+ * FLAT with no arrow at all and a partial on-hand (the "Lenovo Chromebooks
+ * don't group like the Acers" bug: the family's rows ranked 8/234/240/254
+ * under updated-DESC, so no page ever held two of them). So: (1) build units —
+ * a SKU family (2+ rows sharing a non-blank SKU) is ONE unit; else a size run
+ * (2+ items sharing a base name) is ONE unit; members cluster at the unit's
+ * first-seen (best-ranked) position so the user's sort still decides where
+ * the family lands; every other item is a singleton unit; (2) pack units into
+ * pages of ~pageSize, never splitting a unit. A page may run a few rows over
+ * pageSize to keep a unit whole. SKU beats size-run when both apply — under
+ * Model B the SKU IS the product identity (mig 0234), while a size run spans
+ * DIFFERENT skus that merely share a base name. Pure.
  */
-export function runAwarePages<T extends { id: string; name: string }>(
+export function runAwarePages<T extends { id: string; name: string; sku?: string | null }>(
   sorted: readonly T[],
   pageSize: number,
 ): T[][] {
-  // Count run keys over the whole set so a lone sized item stays a singleton.
-  const counts = new Map<string, number>();
+  // Count keys over the whole set so lone members stay singletons.
+  const runCounts = new Map<string, number>();
+  const skuCounts = new Map<string, number>();
   for (const r of sorted) {
     const k = sizeRunStyleKey(r.name);
-    if (k) counts.set(k, (counts.get(k) ?? 0) + 1);
+    if (k) runCounts.set(k, (runCounts.get(k) ?? 0) + 1);
+    const s = (r.sku ?? '').trim();
+    if (s) skuCounts.set(s, (skuCounts.get(s) ?? 0) + 1);
   }
-  // Build units, clustering run members at the run's first-seen position.
+  // Unit key per row: SKU family first, then size run, else singleton.
+  const unitKeyOf = (r: T): string | null => {
+    const s = (r.sku ?? '').trim();
+    if (s && (skuCounts.get(s) ?? 0) >= 2) return `sku:${s}`;
+    const k = sizeRunStyleKey(r.name);
+    if (k && (runCounts.get(k) ?? 0) >= 2) return `run:${k}`;
+    return null;
+  };
+  // Build units, clustering members at the unit's first-seen position.
   const units: T[][] = [];
   const unitOf = new Map<string, number>();
   for (const r of sorted) {
-    const k = sizeRunStyleKey(r.name);
-    if (k && (counts.get(k) ?? 0) >= 2) {
-      let idx = unitOf.get(k);
+    const key = unitKeyOf(r);
+    if (key) {
+      let idx = unitOf.get(key);
       if (idx === undefined) {
         idx = units.length;
-        unitOf.set(k, idx);
+        unitOf.set(key, idx);
         units.push([]);
       }
       units[idx]!.push(r);

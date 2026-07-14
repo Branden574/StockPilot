@@ -76,4 +76,61 @@ describe('runAwarePages', () => {
     // 41 singletons → 30 + 11.
     expect(pages.map((p) => p.length)).toEqual([30, 11]);
   });
+
+  // ── Model B SKU families (the "Lenovo Chromebooks don't group" bug) ──
+  // One product = one SKU across several item rows (one per charter). The
+  // family's rows can rank far apart under updated-DESC (live repro: rows at
+  // positions 8/234/240/254), so no fixed page slice ever held 2+ of them
+  // and the stranded member rendered flat, no arrow, partial on-hand.
+
+  function skuRow(id: string, name: string, sku: string) {
+    return { id, name, sku };
+  }
+
+  it('clusters a SKU family scattered across the sorted set onto one page', () => {
+    const rows = [
+      skuRow('l1', 'Lenovo 300e Yoga Chromebook', 'SP-G69UU-05H'),
+      ...Array.from({ length: 50 }, (_, i) => skuRow(`f${i}`, `Filler ${i}`, `SKU-F${i}`)),
+      skuRow('l2', 'Lenovo 300e Yoga Chromebook', 'SP-G69UU-05H'),
+      ...Array.from({ length: 50 }, (_, i) => skuRow(`g${i}`, `More ${i}`, `SKU-G${i}`)),
+      skuRow('l3', 'Lenovo 300e Yoga Chromebook', 'SP-G69UU-05H'),
+      skuRow('l4', 'Lenovo 300e Yoga Chromebook', 'SP-G69UU-05H'),
+    ];
+    const pages = runAwarePages(rows, 30);
+    // All four family members land on ONE page, at the first member's rank.
+    const family = ['l1', 'l2', 'l3', 'l4'];
+    const pagesWithFamily = pages.filter((p) => p.some((r) => family.includes(r.id)));
+    expect(pagesWithFamily).toHaveLength(1);
+    expect(pagesWithFamily[0]!.filter((r) => family.includes(r.id))).toHaveLength(4);
+    // Anchored at the family's best-ranked position: page 1, contiguous.
+    const ids = pages[0]!.map((r) => r.id);
+    expect(ids.slice(0, 4)).toEqual(['l1', 'l2', 'l3', 'l4']);
+  });
+
+  it('SKU family beats size-run grouping when both apply', () => {
+    // Same SKU on two rows whose names ALSO look like a size run with a third
+    // row of a DIFFERENT sku — the sku pair must stay a unit; the odd-sku row
+    // is not pulled into their unit by the name run.
+    const rows = [
+      skuRow('a', 'Vest - S', 'SKU-SAME'),
+      ...Array.from({ length: 35 }, (_, i) => skuRow(`w${i}`, `Widget ${i}`, `W-${i}`)),
+      skuRow('b', 'Vest - M', 'SKU-SAME'),
+      skuRow('c', 'Vest - L', 'SKU-OTHER'),
+    ];
+    const pages = runAwarePages(rows, 30);
+    const pageOfA = pages.findIndex((p) => p.some((r) => r.id === 'a'));
+    const pageOfB = pages.findIndex((p) => p.some((r) => r.id === 'b'));
+    expect(pageOfA).toBe(pageOfB); // same-SKU pair co-pages
+  });
+
+  it('blank SKUs never form a family', () => {
+    const rows = [
+      skuRow('x', 'Thing One', ''),
+      skuRow('y', 'Thing Two', '  '),
+      ...Array.from({ length: 3 }, (_, i) => skuRow(`z${i}`, `Item ${i}`, `Z-${i}`)),
+    ];
+    const pages = runAwarePages(rows, 30);
+    expect(pages[0]).toHaveLength(5); // all singletons, order preserved
+    expect(pages[0]!.map((r) => r.id)).toEqual(['x', 'y', 'z0', 'z1', 'z2']);
+  });
 });
