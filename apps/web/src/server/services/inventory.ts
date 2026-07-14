@@ -2476,11 +2476,23 @@ export class InventoryService {
   }
 
   /**
-   * Bulk "Set rack" placement: move each item's NOT-YET-PLACED stock (its
-   * staging + unplaced holdings) onto the rack named `name` in that item's own
-   * warehouse. Used so bulk Set rack physically places stock instead of only
-   * writing a label. Per-holding best-effort — one failed transfer (e.g. a
-   * permission floor) is logged and skipped so the rest still place.
+   * Bulk "Set rack" placement: moves each item's stock onto the rack named
+   * `name` in that item's own warehouse. Used so bulk Set rack physically
+   * places stock instead of only writing a label. Per-holding best-effort —
+   * one failed transfer (e.g. a permission floor) is logged and skipped so
+   * the rest still place.
+   *
+   * Two cases, both driven off ONE holdings query:
+   *  - staging/unplaced — the item's NOT-YET-PLACED stock. Always moved
+   *    (this was the original fix — Set rack used to only write the label).
+   *  - rack/crate (Unit B) — stock ALREADY placed on a rack/crate. Moved
+   *    ONLY when the item has exactly one such holding (its whole in-stock
+   *    quantity sits on a single rack, so retargeting it is unambiguous).
+   *    An item with >1 rack/crate holding (a split placement) is left
+   *    completely alone here — the bulk op carries no fromLocationId, so
+   *    guessing which placement (or how much) to move would be wrong. The
+   *    label write in the caller still applies; the client warns the user
+   *    to use Transfer for those. NEVER move a split item's stock.
    */
   private async placeItemsOntoRackByName(
     itemIds: string[],
@@ -2498,23 +2510,65 @@ export class InventoryService {
     const rows = (items ?? []) as Array<{ id: string; warehouse_id: string | null }>;
     const whByItem = new Map(rows.map((i) => [i.id, i.warehouse_id]));
 
+    // ONE query covers both cases above — the `locations` embed carries the
+    // `kind` (to bucket staging/unplaced vs rack/crate) and `warehouse_id`
+    // (so a rack/crate holding resolves its destination against the
+    // warehouse it's PHYSICALLY in, not necessarily the item's declared
+    // warehouse_id).
     const { data: holdings } = await this.ctx.supabase
       .from('item_stock_levels')
-      .select('item_id, location_id, quantity, locations!inner(kind)')
+      .select('item_id, location_id, quantity, locations!inner(kind, warehouse_id)')
       .eq('organization_id', this.ctx.organizationId)
       .in('item_id', itemIds)
-      .in('locations.kind', ['staging', 'unplaced'])
+      .in('locations.kind', ['staging', 'unplaced', 'rack', 'crate'])
       .gt('quantity', 0);
-    const levels = (holdings ?? []) as unknown as Array<{
+    const allHoldings = (holdings ?? []) as unknown as Array<{
       item_id: string;
       location_id: string;
       quantity: number;
+      locations: { kind: string; warehouse_id: string | null } | null;
     }>;
-    if (levels.length === 0) return;
 
-    // Resolve (find or create) the destination rack ONCE per warehouse.
+    const levels = allHoldings.filter(
+      (h) => h.locations?.kind === 'staging' || h.locations?.kind === 'unplaced',
+    );
+
+    // Group rack/crate holdings by item so a split placement (>1 distinct
+    // holding with qty>0) can be told apart from a single one.
+    const rackHoldingsByItem = new Map<string, typeof allHoldings>();
+    for (const h of allHoldings) {
+      if (h.locations?.kind !== 'rack' && h.locations?.kind !== 'crate') continue;
+      const arr = rackHoldingsByItem.get(h.item_id) ?? [];
+      arr.push(h);
+      rackHoldingsByItem.set(h.item_id, arr);
+    }
+    const singleRackMoves: Array<{
+      item_id: string;
+      location_id: string;
+      quantity: number;
+      warehouseId: string | null;
+    }> = [];
+    for (const [itemId, hs] of rackHoldingsByItem) {
+      if (hs.length !== 1) continue; // split placement — NEVER move, label-only
+      const h = hs[0]!;
+      singleRackMoves.push({
+        item_id: itemId,
+        location_id: h.location_id,
+        quantity: Number(h.quantity),
+        warehouseId: h.locations?.warehouse_id ?? whByItem.get(itemId) ?? null,
+      });
+    }
+
+    if (levels.length === 0 && singleRackMoves.length === 0) return;
+
+    // Resolve (find or create) the destination rack ONCE per warehouse —
+    // shared by both the staging/unplaced auto-place and the single-rack
+    // move below.
+    const warehouseIds = new Set<string>();
+    for (const wh of rows.map((r) => r.warehouse_id)) if (wh) warehouseIds.add(wh);
+    for (const mv of singleRackMoves) if (mv.warehouseId) warehouseIds.add(mv.warehouseId);
     const rackByWh = new Map<string, string>();
-    for (const wh of new Set(rows.map((r) => r.warehouse_id).filter((w): w is string => !!w))) {
+    for (const wh of warehouseIds) {
       const rackId = await this.findOrCreateRackLocation(wh, num, row, name);
       if (rackId) rackByWh.set(wh, rackId);
     }
@@ -2542,6 +2596,34 @@ export class InventoryService {
           } catch (e) {
             console.error('[set_rack place] transfer failed', {
               item: h.item_id,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }),
+      );
+    }
+
+    // Single-placement rack/crate holdings (Unit B): the item's whole
+    // in-stock quantity already sits on exactly one rack/crate, so retarget
+    // it — PHYSICALLY MOVE via transfer_stock (never a raw stock-level
+    // write), same as the staging/unplaced path above. Idempotent: already
+    // on the resolved target → no-op.
+    for (let i = 0; i < singleRackMoves.length; i += CONCURRENCY) {
+      await Promise.all(
+        singleRackMoves.slice(i, i + CONCURRENCY).map(async (mv) => {
+          const toLoc = mv.warehouseId ? rackByWh.get(mv.warehouseId) : undefined;
+          if (!toLoc || toLoc === mv.location_id) return;
+          try {
+            await this.transferStock({
+              itemId: mv.item_id,
+              fromLocationId: mv.location_id,
+              toLocationId: toLoc,
+              quantity: mv.quantity,
+              notes: `Moved to rack ${name} (bulk Set rack)`,
+            });
+          } catch (e) {
+            console.error('[set_rack move] transfer failed', {
+              item: mv.item_id,
               error: e instanceof Error ? e.message : String(e),
             });
           }
