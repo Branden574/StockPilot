@@ -36,6 +36,7 @@ import { Card, Hair } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { api } from '@/lib/api';
 import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
@@ -146,6 +147,7 @@ export default function ItemDetail() {
   const [adjustOpen, setAdjustOpen] = React.useState(false);
   const [moveOpen, setMoveOpen] = React.useState(false);
   const [photoBusy, setPhotoBusy] = React.useState(false);
+  const [restoring, setRestoring] = React.useState(false);
   const [serialCount, setSerialCount] = React.useState(0);
   const permissions = useEffectivePermissions();
   // Staff+ may manage serials — mirrors the serial_registry write RLS
@@ -162,6 +164,11 @@ export default function ItemDetail() {
   // asserts 'locations:manage' independently when it creates the rack.
   const canCreateLocation =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'locations:manage'));
+  // Restore gate — mirrors the web archive/restore actions' 'items:update'
+  // requirement. Cosmetic only; /api/v1/items/[id]/restore re-asserts
+  // items:update inside InventoryService.bulkUpdate.
+  const canRestore =
+    isManager || (role !== null && can({ role: role as Role, permissions }, 'items:update'));
 
   const load = React.useCallback(async () => {
     if (!id) return;
@@ -366,6 +373,27 @@ export default function ItemDetail() {
     if (tab === 'movements') void loadMovements();
   }
 
+  // T12 — REST parity for web's restore action. Goes through the Bearer
+  // api() client to POST /api/v1/items/[id]/restore (InventoryService.
+  // bulkUpdate({op:{kind:'unarchive'}}) under the hood) rather than a
+  // direct Supabase `.update()` — the service is what asserts
+  // 'items:update', clears auto_archived, and writes the audit event; a
+  // raw client mutation would silently skip all three.
+  async function restoreItem() {
+    if (!item || restoring) return;
+    setRestoring(true);
+    try {
+      await api(`/api/v1/items/${item.id}/restore`, { method: 'POST' });
+      // Optimistic flip — clears both the Archived and Auto-archived
+      // badges immediately rather than waiting on a refetch.
+      setItem({ ...item, status: 'active', auto_archived: false });
+    } catch (e) {
+      Alert.alert('Could not restore', e instanceof Error ? e.message : 'Please try again.');
+    } finally {
+      setRestoring(false);
+    }
+  }
+
   function openEdit() {
     if (!item) return;
     Linking.openURL(`https://stockpilotusa.com/dashboard/inventory/${item.id}/edit`).catch(
@@ -540,15 +568,30 @@ export default function ItemDetail() {
               configured dwell window.
             </Body>
           ) : null}
-          {/* T12 (mobile restore action) is BLOCKED, not skipped: there is no
-              REST-reachable mutation for this. Restoring an archived item on
-              web goes through InventoryService.bulkUpdate({op:{kind:'unarchive'}}),
-              invoked as a Next.js Server Action (bulkUpdateInventoryAction) —
-              not a public /api/v1 route the mobile Bearer-token client can
-              call. /api/v1/items/[id]/ only has transfer/ and barcode/
-              sub-routes; no generic PATCH or bulk endpoint exists. Wiring a
-              Restore button here would require a new REST endpoint first —
-              see task-11-report.md for the full trace. */}
+          {/* T12: restore action, now wired to POST /api/v1/items/[id]/restore
+              (created for this task — see the route's doc-comment for why
+              mobile must go through InventoryService.bulkUpdate rather than a
+              raw client update). Cosmetic canRestore gate mirrors the route's
+              'items:update' assertion; hidden entirely for viewers/staff who
+              would just get a 403. */}
+          {item.status === 'archived' && canRestore ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onPress={() => void restoreItem()}
+              disabled={restoring}
+              leading={
+                restoring ? (
+                  <ActivityIndicator size="small" color={c.ink} />
+                ) : (
+                  <RotateCcw size={14} color={c.ink} strokeWidth={1.6} />
+                )
+              }
+              style={{ marginTop: 12, alignSelf: 'flex-start' }}
+            >
+              {restoring ? 'Restoring…' : 'Restore'}
+            </Button>
+          ) : null}
         </View>
 
         {/* Image — tap to add or replace */}
