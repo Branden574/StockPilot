@@ -12,6 +12,14 @@ import { setAutoArchiveSettingsAction } from '@/server/actions/auto-archive-sett
 
 interface Props {
   initial: { enabled: boolean; dwellDays: number };
+  /**
+   * How many items are eligible for auto-archive RIGHT NOW under the saved
+   * dwell window (server-computed via countEligibleForAutoArchive — the same
+   * predicate the cron itself uses, so this can never overstate or understate
+   * what actually happens next run). A snapshot as of page load; it does not
+   * live-update as the dwell-days input below is edited before saving.
+   */
+  eligibleCount: number;
 }
 
 /**
@@ -20,7 +28,7 @@ interface Props {
  * and the server action's permission gate (items:update) are lighter than the
  * auto-delete-archived panel's (items:delete).
  */
-export function AutoArchivePanel({ initial }: Props) {
+export function AutoArchivePanel({ initial, eligibleCount }: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -60,6 +68,28 @@ export function AutoArchivePanel({ initial }: Props) {
           />
           Automatically archive out-of-stock items
         </label>
+
+        <p
+          className={
+            enabled && eligibleCount > 0
+              ? 'text-amber-600 dark:text-amber-400 text-sm font-medium'
+              : 'text-muted-foreground text-sm'
+          }
+        >
+          {eligibleCount === 0 ? (
+            'No items are currently eligible.'
+          ) : enabled ? (
+            <>
+              <strong>{eligibleCount}</strong> {eligibleCount === 1 ? 'item is' : 'items are'}{' '}
+              currently out of stock past the window and will be archived on the next daily run.
+            </>
+          ) : (
+            <>
+              <strong>{eligibleCount}</strong> {eligibleCount === 1 ? 'item' : 'items'} would be
+              archived when you turn this on.
+            </>
+          )}
+        </p>
 
         {enabled && (
           <div className="max-w-xs space-y-1.5">

@@ -47,11 +47,11 @@ export function parseAutoArchiveSettings(raw: unknown): AutoArchiveSettings {
 const ARCHIVE_BATCH_LIMIT = 500; // matches bulkUpdate's hard cap
 
 /**
- * Archive items that have sat at/below zero stock for longer than
- * dwellDays. Org-scoped, race-guarded (re-checks status/auto_archived/
- * quantity_on_hand in the UPDATE), skips items with an open reservation
- * (approved-unpicked order or an open rental checkout), and audits per item
- * so each archive is traceable. Returns the archived count + ids + items.
+ * The candidate predicate shared by `archiveExpiredZeroStockItems` (the
+ * cron's archive pass) and `countEligibleForAutoArchive` (the settings-page
+ * preview): active, never-auto-archived, at/below zero, at-zero longer than
+ * the dwell window, and NOT a rental. Extracted so the two can never drift
+ * — the preview count must show exactly what the cron would act on.
  *
  * Rental exclusion: rentals are NOT a distinct `item_type` value (item_type
  * is one of 'product' | 'book' | 'asset' | 'consumable' — see mig 0020).
@@ -60,6 +60,66 @@ const ARCHIVE_BATCH_LIMIT = 500; // matches bulkUpdate's hard cap
  * never be swept into auto-archive on that basis alone — excluded via
  * `is_rental = false`, confirmed against inventory-list.ts's existing
  * `.eq('is_rental', false)` filter (there is no 'rental' item_type token).
+ *
+ * `columns` lets each caller select only what it needs (the archive path
+ * needs `name` for the audit trail + notify batch; the preview count only
+ * needs `id`). `limit` is shared with `ARCHIVE_BATCH_LIMIT` for the preview
+ * too: capping the count at the same number the cron would actually archive
+ * in one run keeps "N will be archived on the next daily run" literally true
+ * even when more than that many items are eligible (the rest drain next run).
+ */
+async function selectAutoArchiveCandidates(
+  ctx: ServiceContext,
+  dwellDays: number,
+  opts: { columns: string; limit: number },
+): Promise<{ rows: Array<{ id: string; name?: string }>; truncated: boolean }> {
+  const cutoff = new Date(Date.now() - dwellDays * 86_400_000).toISOString();
+
+  // zero_since NOT NULL naturally excludes never-stocked create-at-0 items
+  // (the trigger only stamps it on a >0 → <=0 crossing).
+  const { data, error } = await ctx.supabase
+    .from('inventory_items')
+    .select(opts.columns)
+    .eq('organization_id', ctx.organizationId)
+    .eq('status', 'active')
+    .eq('auto_archived', false)
+    .eq('is_rental', false)
+    .lte('quantity_on_hand', 0)
+    .not('zero_since', 'is', null)
+    .lte('zero_since', cutoff)
+    .order('zero_since', { ascending: true })
+    .limit(opts.limit);
+  if (error) throw new ServiceError('internal_error', error.message);
+  // `opts.columns` is a plain `string`, not a literal type, so supabase-js's
+  // typed `.select()` overload can't narrow the row shape (it falls back to
+  // a `GenericStringError` type) — cast through `unknown` to the real shape.
+  const rows = (data ?? []) as unknown as Array<{ id: string; name?: string }>;
+  return { rows, truncated: rows.length === opts.limit };
+}
+
+/**
+ * Item ids (from `ids`) that currently carry an open reservation
+ * (approved-unpicked order or an open rental checkout) — excluded from
+ * auto-archive. Shared by the archive pass and the preview count so the
+ * exclusion can never drift between the two.
+ */
+async function fetchReservedItemIds(ctx: ServiceContext, ids: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const { data, error } = await ctx.supabase
+    .from('stock_reservations')
+    .select('item_id')
+    .in('item_id', ids)
+    .is('released_at', null);
+  if (error) throw new ServiceError('internal_error', error.message);
+  return new Set((data ?? []).map((r) => (r as { item_id: string }).item_id));
+}
+
+/**
+ * Archive items that have sat at/below zero stock for longer than
+ * dwellDays. Org-scoped, race-guarded (re-checks status/auto_archived/
+ * quantity_on_hand in the UPDATE), skips items with an open reservation
+ * (approved-unpicked order or an open rental checkout), and audits per item
+ * so each archive is traceable. Returns the archived count + ids + items.
  */
 export async function archiveExpiredZeroStockItems(
   ctx: ServiceContext,
@@ -72,40 +132,19 @@ export async function archiveExpiredZeroStockItems(
   truncated: boolean;
 }> {
   const limit = opts.limit ?? ARCHIVE_BATCH_LIMIT;
-  const cutoff = new Date(Date.now() - dwellDays * 86_400_000).toISOString();
 
-  // Candidates: active, never-auto-archived, at/below zero, at-zero longer
-  // than the dwell window, and NOT a rental (rentals sit at zero while
-  // checked out). zero_since NOT NULL naturally excludes never-stocked
-  // create-at-0 items (the trigger only stamps it on a >0 → <=0 crossing).
-  const { data: cand, error: selErr } = await ctx.supabase
-    .from('inventory_items')
-    .select('id, name')
-    .eq('organization_id', ctx.organizationId)
-    .eq('status', 'active')
-    .eq('auto_archived', false)
-    .eq('is_rental', false)
-    .lte('quantity_on_hand', 0)
-    .not('zero_since', 'is', null)
-    .lte('zero_since', cutoff)
-    .order('zero_since', { ascending: true })
-    .limit(limit);
-  if (selErr) throw new ServiceError('internal_error', selErr.message);
-  const rows = (cand ?? []) as Array<{ id: string; name: string }>;
-  const truncated = rows.length === limit;
+  const { rows: cand, truncated } = await selectAutoArchiveCandidates(ctx, dwellDays, {
+    columns: 'id, name',
+    limit,
+  });
+  const rows = cand as Array<{ id: string; name: string }>;
   if (rows.length === 0) return { archived: 0, ids: [], items: [], truncated: false };
 
   // Exclude items with active reservations (approved-unpicked order / open rental).
-  const { data: resv, error: resvErr } = await ctx.supabase
-    .from('stock_reservations')
-    .select('item_id')
-    .in(
-      'item_id',
-      rows.map((r) => r.id),
-    )
-    .is('released_at', null);
-  if (resvErr) throw new ServiceError('internal_error', resvErr.message);
-  const reserved = new Set((resv ?? []).map((r) => (r as { item_id: string }).item_id));
+  const reserved = await fetchReservedItemIds(
+    ctx,
+    rows.map((r) => r.id),
+  );
   const eligible = rows.filter((r) => !reserved.has(r.id));
   if (eligible.length === 0) return { archived: 0, ids: [], items: [], truncated };
 
@@ -137,6 +176,36 @@ export async function archiveExpiredZeroStockItems(
     );
   }
   return { archived: archived.length, ids: archived.map((d) => d.id), items: archived, truncated };
+}
+
+/**
+ * Count items currently eligible for auto-archive under `dwellDays` — the
+ * exact same predicate as `archiveExpiredZeroStockItems` (including the
+ * reservation exclusion), via the shared `selectAutoArchiveCandidates` /
+ * `fetchReservedItemIds` helpers, so the two can never drift. Used by the
+ * inventory-cleanup settings panel to show the blast radius before/while the
+ * toggle is on. Read-only: no mutation, no audit.
+ *
+ * Capped at `ARCHIVE_BATCH_LIMIT` — the same cap the cron itself applies per
+ * run — so a very large candidate set doesn't blow up the reservation
+ * lookup, and so the number shown is never a promise the cron can't keep in
+ * one pass (if there are more than that many eligible, the rest archive on a
+ * later run, same as today).
+ */
+export async function countEligibleForAutoArchive(
+  ctx: ServiceContext,
+  dwellDays: number,
+): Promise<number> {
+  const { rows } = await selectAutoArchiveCandidates(ctx, dwellDays, {
+    columns: 'id',
+    limit: ARCHIVE_BATCH_LIMIT,
+  });
+  if (rows.length === 0) return 0;
+  const reserved = await fetchReservedItemIds(
+    ctx,
+    rows.map((r) => r.id),
+  );
+  return rows.filter((r) => !reserved.has(r.id)).length;
 }
 
 /**

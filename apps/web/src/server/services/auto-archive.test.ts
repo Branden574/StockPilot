@@ -12,6 +12,7 @@ vi.mock('./notifications', () => ({ createNotification: mockCreateNotification }
 import { audit } from './audit';
 import {
   archiveExpiredZeroStockItems,
+  countEligibleForAutoArchive,
   notifyAutoArchived,
   parseAutoArchiveSettings,
 } from './auto-archive';
@@ -178,6 +179,67 @@ describe('archiveExpiredZeroStockItems', () => {
     expect(res.archived).toBe(1);
     expect(res.ids).toEqual(['i1']);
     expect(vi.mocked(audit)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('countEligibleForAutoArchive', () => {
+  it('counts eligible candidates using the same predicate as archiveExpiredZeroStockItems, excluding reserved items', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [{ id: 'i1' }, { id: 'i2' }, { id: 'i3' }],
+        error: null,
+      },
+      'stock_reservations.select': { data: [{ item_id: 'i2' }], error: null },
+    });
+    const ctx = makeServiceContext(stub.client) as never;
+
+    const count = await countEligibleForAutoArchive(ctx, 7);
+
+    expect(count).toBe(2); // i1, i3 — i2 excluded (reserved)
+
+    // Same candidate filter chain as the archive path: active,
+    // never-auto-archived, at/below zero, zero_since set + past cutoff,
+    // never a rental, oldest-first.
+    const candChain = stub.chains.get('inventory_items.select');
+    expect(candChain).toContain('eq');
+    expect(candChain).toContain('lte');
+    expect(candChain).toContain('not');
+    expect(candChain).toContain('order');
+    expect(candChain).toContain('limit');
+    expect(candChain).not.toContain('neq'); // rentals excluded via is_rental, not item_type
+
+    // Reservation exclusion mirrors the archive path: open reservations only.
+    const resvChain = stub.chains.get('stock_reservations.select');
+    expect(resvChain).toContain('in');
+    expect(resvChain).toContain('is');
+
+    // Read-only preview: never mutates inventory_items.
+    expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
+  });
+
+  it('returns 0 with no reservation lookup when nothing is past the dwell window', async () => {
+    const stub = makeSupabaseStub({ 'inventory_items.select': { data: [], error: null } });
+    const ctx = makeServiceContext(stub.client) as never;
+
+    const count = await countEligibleForAutoArchive(ctx, 7);
+
+    expect(count).toBe(0);
+    expect(stub.chainsAll.get('stock_reservations.select')).toBeUndefined();
+  });
+
+  it('returns 0 when every candidate is reserved', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'i1' }, { id: 'i2' }], error: null },
+      'stock_reservations.select': {
+        data: [{ item_id: 'i1' }, { item_id: 'i2' }],
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client) as never;
+
+    const count = await countEligibleForAutoArchive(ctx, 7);
+
+    expect(count).toBe(0);
   });
 });
 
