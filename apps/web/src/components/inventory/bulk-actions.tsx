@@ -599,11 +599,12 @@ export function BulkActions({
           <DialogHeader>
             <DialogTitle>Set rack on {count} item{count === 1 ? '' : 's'}</DialogTitle>
             <DialogDescription>
-              Stamp the same rack on every selected item. Leave both fields
-              empty to clear the rack. The composed label
-              (e.g. <span className="font-mono">38-A</span>) also writes to
-              the legacy bin location so order pick + cycle-count PDFs
-              keep working.
+              Relabels every selected item with the same rack (e.g.{' '}
+              <span className="font-mono">38-A</span>) and moves its stock
+              onto that rack — for items that are staged, unplaced, or
+              already on a single rack/crate. Items with stock on more than
+              one rack are relabeled only; use Transfer to move those.
+              Leave both fields empty to clear the rack.
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3">
