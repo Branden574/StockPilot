@@ -17,6 +17,12 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   { re: new RegExp(`/dashboard/purchase-orders/${UUID}`), to: (m) => `/po/${m[1]}` },
   { re: /\/dashboard\/schedule(\/.*)?$/, to: () => '/schedule' },
   { re: /\/dashboard\/insights$/, to: () => '/notifications' },
+  // Real native twins for the pages What's New CTAs (and some notifications)
+  // link to — without these they fell through the catch-all to home.
+  { re: /\/dashboard\/support(\/.*)?$/, to: () => '/support' },
+  // Matches bare `/dashboard/orders` and `?status=…` (query dropped → the full
+  // Orders list) but NOT `/dashboard/orders/<uuid>` (handled by the rule above).
+  { re: /\/dashboard\/orders(\?.*)?$/, to: () => '/orders' },
   { re: /^\/dashboard(\/.*)?$/, to: () => '/' },
 ];
 

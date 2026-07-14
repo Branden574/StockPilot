@@ -84,3 +84,63 @@ export function useTourActive(tourId: string): boolean {
   }, [tourId]);
   return active;
 }
+
+/* ------------------------------------------------------------------ */
+/* Tour-VISIBILITY broadcast — the mobile analog of web's              */
+/* document.querySelector('[data-tour-open]'). Covers BOTH the OFFER   */
+/* and RUNNING phases (setActiveTour above only fires while a tour is  */
+/* RUNNING), so a global What's New can defer while ANY tour Modal is  */
+/* on screen: one interruption at a time (PRD §15).                    */
+/* ------------------------------------------------------------------ */
+
+const visibleTours = new Set<string>();
+const visibilityListeners = new Set<() => void>();
+
+export function setTourVisible(id: string, visible: boolean): void {
+  const had = visibleTours.has(id);
+  if (had === visible) return; // no state change → no notify
+  if (visible) visibleTours.add(id);
+  else visibleTours.delete(id);
+  visibilityListeners.forEach((fn) => fn());
+}
+
+export function isAnyTourVisible(): boolean {
+  return visibleTours.size > 0;
+}
+
+export function subscribeTourVisibility(fn: () => void): () => void {
+  visibilityListeners.add(fn);
+  return () => {
+    visibilityListeners.delete(fn);
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* What's New ↔ tour MUTUAL LOCK. isAnyTourVisible (above) lets What's  */
+/* New defer to a tour; this lets a tour defer to What's New — so       */
+/* whichever presents first holds the one interruption slot and the     */
+/* other yields until it clears, in BOTH directions.                    */
+/* ------------------------------------------------------------------ */
+
+let whatsNewOpen = false;
+const whatsNewListeners = new Set<(open: boolean) => void>();
+
+export function setWhatsNewOpen(open: boolean): void {
+  if (whatsNewOpen === open) return;
+  whatsNewOpen = open;
+  whatsNewListeners.forEach((fn) => fn(open));
+}
+
+/** Reactive: true while the global What's New sheet is on screen. */
+export function useWhatsNewOpen(): boolean {
+  const [open, setOpen] = React.useState(whatsNewOpen);
+  React.useEffect(() => {
+    const fn = (o: boolean) => setOpen(o);
+    whatsNewListeners.add(fn);
+    fn(whatsNewOpen);
+    return () => {
+      whatsNewListeners.delete(fn);
+    };
+  }, []);
+  return open;
+}

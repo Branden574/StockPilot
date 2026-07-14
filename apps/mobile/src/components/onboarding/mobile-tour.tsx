@@ -19,7 +19,13 @@ import {
   recordTourOutcome,
   type MobileTourDefinition,
 } from '@/lib/onboarding';
-import { measureTarget, setActiveTour, type TargetRect } from '@/lib/tour-targets';
+import {
+  measureTarget,
+  setActiveTour,
+  setTourVisible,
+  useWhatsNewOpen,
+  type TargetRect,
+} from '@/lib/tour-targets';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -44,6 +50,9 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   const insets = useSafeAreaInsets();
   const { width: winW, height: winH } = useWindowDimensions();
   const params = useLocalSearchParams<{ tour?: string }>();
+  // Mutual lock: if What's New grabbed the interruption slot first, keep this
+  // tour's Modal hidden until it closes (we keep our phase, so we re-present).
+  const whatsNewOpen = useWhatsNewOpen();
   // Tab navigators keep every screen MOUNTED — without this gate all
   // screens' offers open their Modals at once and the topmost (wrong)
   // one wins. Only the focused screen may present.
@@ -100,6 +109,13 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
     }
     return undefined;
   }, [phase, tour.id, isFocused]);
+
+  // Broadcast whether THIS tour's Modal is on screen (offer OR running) so the
+  // global What's New defers while a tour is interrupting — one at a time.
+  React.useEffect(() => {
+    setTourVisible(tour.id, isFocused && phase !== 'idle');
+    return () => setTourVisible(tour.id, false);
+  }, [isFocused, phase, tour.id]);
 
   // Measure the current step's target. A beat's delay lets tour-reactive UI
   // (e.g. the sample row) mount before we measure it.
@@ -194,7 +210,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
       </Pressable>
 
       <Modal
-        visible={isFocused && phase !== 'idle'}
+        visible={isFocused && phase !== 'idle' && !whatsNewOpen}
         transparent
         statusBarTranslucent
         animationType="none"

@@ -8,6 +8,7 @@ import { BiometricLockScreen } from '@/components/biometric-lock-screen';
 import { ColdLaunchSplash } from '@/components/cold-launch-splash';
 import { AppErrorBoundary } from '@/components/error-boundary';
 import { MfaChallengeScreen } from '@/components/mfa-challenge-screen';
+import { WhatsNew } from '@/components/onboarding/whats-new';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
@@ -145,27 +146,33 @@ function RootGate() {
   }
 
   return (
-    <Stack
-      screenOptions={{
-        headerShown: false,
-        contentStyle: { backgroundColor: c.paper },
-      }}
-    >
-      <Stack.Screen name="(auth)" />
-      <Stack.Screen name="(drawer)" />
-      <Stack.Screen name="item/[id]" options={{ presentation: 'card' }} />
-      <Stack.Screen name="order/[id]" options={{ presentation: 'card' }} />
-      <Stack.Screen name="scan-po/index" options={{ presentation: 'card' }} />
-      <Stack.Screen
-        name="cycle-count/scan/[id]"
-        options={{ presentation: 'fullScreenModal' }}
-      />
-      <Stack.Screen name="bundles/index" options={{ presentation: 'card' }} />
-      <Stack.Screen name="bundles/[id]" options={{ presentation: 'card' }} />
-      <Stack.Screen name="rentals/new" options={{ presentation: 'card' }} />
-      <Stack.Screen name="schedule/new" options={{ presentation: 'card' }} />
-      <Stack.Screen name="ai/chat" options={{ presentation: 'card' }} />
-      <Stack.Screen name="zendesk/web" options={{ presentation: 'card' }} />
-    </Stack>
+    <>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: c.paper },
+        }}
+      >
+        <Stack.Screen name="(auth)" />
+        <Stack.Screen name="(drawer)" />
+        <Stack.Screen name="item/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="order/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="scan-po/index" options={{ presentation: 'card' }} />
+        <Stack.Screen
+          name="cycle-count/scan/[id]"
+          options={{ presentation: 'fullScreenModal' }}
+        />
+        <Stack.Screen name="bundles/index" options={{ presentation: 'card' }} />
+        <Stack.Screen name="bundles/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="rentals/new" options={{ presentation: 'card' }} />
+        <Stack.Screen name="schedule/new" options={{ presentation: 'card' }} />
+        <Stack.Screen name="ai/chat" options={{ presentation: 'card' }} />
+        <Stack.Screen name="zendesk/web" options={{ presentation: 'card' }} />
+      </Stack>
+      {/* Global What's New — one mount above every authed route (drawer, tabs,
+          and cold deep-links into pushed card screens). MFA/lock states early-
+          return above, so this only renders in the normal authed shell. */}
+      {session && !loading && !mfaRequired && !locked ? <WhatsNew /> : null}
+    </>
   );
 }

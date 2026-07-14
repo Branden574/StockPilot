@@ -4,6 +4,8 @@ import { z } from 'zod';
 
 import { withContext } from '@/server/services/context';
 
+import { computeSeenViewedMap, filterUnseenForClient } from './announcement-logic';
+
 /**
  * Onboarding state persistence (mig 0259, spec §13). Backend-stored so
  * progress survives refresh, sessions, and devices. RLS restricts every
@@ -85,11 +87,7 @@ export async function getUnseenAnnouncementsAction(): Promise<
       .eq('user_id', ctx.userId)
       .maybeSingle();
     const viewed = (data?.viewed_announcements as Record<string, unknown> | null) ?? {};
-    return ANNOUNCEMENTS.filter(
-      (a) => !viewed[a.id] && (!a.roles || a.roles.includes(ctx.role)),
-    )
-      .slice(0, 3)
-      .map(({ roles: _roles, ...rest }) => rest);
+    return filterUnseenForClient(ANNOUNCEMENTS, viewed, ctx.role);
   } catch {
     return [];
   }
@@ -108,18 +106,20 @@ export async function recordAnnouncementsSeenAction(
       .eq('user_id', ctx.userId)
       .maybeSingle();
     const current = (row?.viewed_announcements as Record<string, unknown> | null) ?? {};
-    const at = new Date().toISOString();
-    const ids = parsed.data.all
-      ? (await import('@/lib/onboarding/announcements')).ANNOUNCEMENTS.map((a) => a.id)
-      : parsed.data.ids;
-    const additions = Object.fromEntries(
-      ids.map((id) => [id, (current[id] as object | undefined) ?? { at, outcome: parsed.data.outcome }]),
+    const { ANNOUNCEMENTS } = await import('@/lib/onboarding/announcements');
+    const viewedMap = computeSeenViewedMap(
+      current,
+      parsed.data.ids,
+      parsed.data.outcome,
+      parsed.data.all ?? false,
+      ANNOUNCEMENTS.map((a) => a.id),
+      new Date().toISOString(),
     );
     await ctx.supabase.from('user_onboarding').upsert(
       {
         user_id: ctx.userId,
         role_at_onboarding: ctx.role,
-        viewed_announcements: { ...current, ...additions },
+        viewed_announcements: viewedMap,
       },
       { onConflict: 'user_id' },
     );
