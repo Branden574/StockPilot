@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BulkActions } from './bulk-actions';
 
+import { isSplitRackItem } from '@/lib/inventory/rack-holdings';
+
 import { bulkUpdateInventoryAction } from '@/server/actions/inventory';
 
 vi.mock('next/navigation', () => ({
@@ -233,6 +235,81 @@ describe('BulkActions', () => {
     );
     await user.click(screen.getByRole('button', { name: /^Clear$/i }));
     expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it('Set rack dialog shows no split warning by default', async () => {
+    const user = userEvent.setup();
+    render(
+      <BulkActions
+        selectedIds={['a']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Set rack/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Set rack on 1 item/i)).toBeInTheDocument();
+    expect(screen.queryByText(/split across multiple racks/i)).not.toBeInTheDocument();
+  });
+
+  it('Set rack dialog warns when the selection includes a split-placement item', async () => {
+    const user = userEvent.setup();
+    render(
+      <BulkActions
+        selectedIds={['a', 'b']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+        hasSplitRackSelection
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Set rack/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText(/stock split across multiple racks/i),
+    ).toBeInTheDocument();
+  });
+
+  // Unit B review, Important finding: proves the derivation fix, not just
+  // that the dialog can render the warning when told to. A cross-warehouse
+  // split — the same rack NAME ("1-A") holding stock in two different
+  // warehouses — collapses to ONE entry in a name-deduped list like
+  // placed_racks, which is exactly the false negative the review caught.
+  // isSplitRackItem reads rackHoldingsCount (by location_id) instead, so
+  // it still reports this item as split.
+  it('Set rack dialog warns for the cross-warehouse case: same rack name, two distinct holdings (rackHoldingsCount=2)', async () => {
+    const user = userEvent.setup();
+    const selectedIds = ['a'];
+    const rows = [{ id: 'a', rackHoldingsCount: 2 }]; // "1-A" in wh-A + "1-A" in wh-B
+    const hasSplitRackSelection = rows.some(
+      (r) => selectedIds.includes(r.id) && isSplitRackItem(r),
+    );
+    expect(hasSplitRackSelection).toBe(true); // sanity: the derivation itself flips
+
+    render(
+      <BulkActions
+        selectedIds={selectedIds}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+        hasSplitRackSelection={hasSplitRackSelection}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Set rack/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText(/stock split across multiple racks/i),
+    ).toBeInTheDocument();
   });
 
   // The bar swaps in over the toolbar when rows are selected, so this

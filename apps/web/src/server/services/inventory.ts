@@ -660,10 +660,18 @@ export class InventoryService {
     const stagedByItem = new Map<string, number>();
     const unplacedByItem = new Map<string, number>();
     const placedRacksByItem = new Map<string, string[]>();
+    // Distinct rack/crate HOLDINGS per item, keyed by location_id (never
+    // name) — the same grouping placeItemsOntoRackByName's
+    // rackHoldingsByItem uses to decide whether a bulk Set-rack may
+    // physically move an item's stock. placed_racks dedupes by NAME, so a
+    // rack called "1-A" in two different warehouses collapses to one
+    // entry there but must still count as 2 holdings here — the client's
+    // split warning reads THIS field, not placed_racks.length.
+    const rackHoldingsByItem = new Map<string, Set<string>>();
     if (ids.length > 0) {
       const { data: levels } = await this.ctx.supabase
         .from('item_stock_levels')
-        .select('item_id, quantity, locations!inner(name, kind)')
+        .select('item_id, location_id, quantity, locations!inner(name, kind)')
         .eq('organization_id', this.ctx.organizationId)
         .in('item_id', ids)
         .gt('quantity', 0);
@@ -672,6 +680,7 @@ export class InventoryService {
       // (same convention as placements() below).
       for (const lvl of (levels ?? []) as unknown as Array<{
         item_id: string;
+        location_id: string;
         quantity: number;
         locations: { name: string; kind: string };
       }>) {
@@ -686,6 +695,10 @@ export class InventoryService {
           const arr = placedRacksByItem.get(lvl.item_id) ?? [];
           if (lvl.locations.name && !arr.includes(lvl.locations.name)) arr.push(lvl.locations.name);
           placedRacksByItem.set(lvl.item_id, arr);
+
+          const set = rackHoldingsByItem.get(lvl.item_id) ?? new Set<string>();
+          set.add(lvl.location_id);
+          rackHoldingsByItem.set(lvl.item_id, set);
         }
       }
     }
@@ -700,6 +713,7 @@ export class InventoryService {
         ),
         // Sorted for stable display ("1-A, 2-C" not "2-C, 1-A").
         placed_racks: (placedRacksByItem.get(id) ?? []).sort((a, b) => a.localeCompare(b)),
+        rackHoldingsCount: rackHoldingsByItem.get(id)?.size ?? 0,
       };
     });
 
@@ -737,6 +751,10 @@ export class InventoryService {
          *  holdings), sorted. Drives the table's RACK column so it reflects
          *  real placement, not the stale bin_location label. */
         placed_racks: string[];
+        /** Distinct rack/crate holdings by location_id (NOT name) — see the
+         *  rackHoldingsByItem comment above. Drives the bulk Set-rack split
+         *  warning; must agree with the server's move/no-move gate. */
+        rackHoldingsCount: number;
       }>,
       total: totalCount,
       /** Sum of (unit_cost × quantity_on_hand) over the FULL filtered
@@ -2476,11 +2494,23 @@ export class InventoryService {
   }
 
   /**
-   * Bulk "Set rack" placement: move each item's NOT-YET-PLACED stock (its
-   * staging + unplaced holdings) onto the rack named `name` in that item's own
-   * warehouse. Used so bulk Set rack physically places stock instead of only
-   * writing a label. Per-holding best-effort — one failed transfer (e.g. a
-   * permission floor) is logged and skipped so the rest still place.
+   * Bulk "Set rack" placement: moves each item's stock onto the rack named
+   * `name` in that item's own warehouse. Used so bulk Set rack physically
+   * places stock instead of only writing a label. Per-holding best-effort —
+   * one failed transfer (e.g. a permission floor) is logged and skipped so
+   * the rest still place.
+   *
+   * Two cases, both driven off ONE holdings query:
+   *  - staging/unplaced — the item's NOT-YET-PLACED stock. Always moved
+   *    (this was the original fix — Set rack used to only write the label).
+   *  - rack/crate (Unit B) — stock ALREADY placed on a rack/crate. Moved
+   *    ONLY when the item has exactly one such holding (its whole in-stock
+   *    quantity sits on a single rack, so retargeting it is unambiguous).
+   *    An item with >1 rack/crate holding (a split placement) is left
+   *    completely alone here — the bulk op carries no fromLocationId, so
+   *    guessing which placement (or how much) to move would be wrong. The
+   *    label write in the caller still applies; the client warns the user
+   *    to use Transfer for those. NEVER move a split item's stock.
    */
   private async placeItemsOntoRackByName(
     itemIds: string[],
@@ -2498,23 +2528,65 @@ export class InventoryService {
     const rows = (items ?? []) as Array<{ id: string; warehouse_id: string | null }>;
     const whByItem = new Map(rows.map((i) => [i.id, i.warehouse_id]));
 
+    // ONE query covers both cases above — the `locations` embed carries the
+    // `kind` (to bucket staging/unplaced vs rack/crate) and `warehouse_id`
+    // (so a rack/crate holding resolves its destination against the
+    // warehouse it's PHYSICALLY in, not necessarily the item's declared
+    // warehouse_id).
     const { data: holdings } = await this.ctx.supabase
       .from('item_stock_levels')
-      .select('item_id, location_id, quantity, locations!inner(kind)')
+      .select('item_id, location_id, quantity, locations!inner(kind, warehouse_id)')
       .eq('organization_id', this.ctx.organizationId)
       .in('item_id', itemIds)
-      .in('locations.kind', ['staging', 'unplaced'])
+      .in('locations.kind', ['staging', 'unplaced', 'rack', 'crate'])
       .gt('quantity', 0);
-    const levels = (holdings ?? []) as unknown as Array<{
+    const allHoldings = (holdings ?? []) as unknown as Array<{
       item_id: string;
       location_id: string;
       quantity: number;
+      locations: { kind: string; warehouse_id: string | null } | null;
     }>;
-    if (levels.length === 0) return;
 
-    // Resolve (find or create) the destination rack ONCE per warehouse.
+    const levels = allHoldings.filter(
+      (h) => h.locations?.kind === 'staging' || h.locations?.kind === 'unplaced',
+    );
+
+    // Group rack/crate holdings by item so a split placement (>1 distinct
+    // holding with qty>0) can be told apart from a single one.
+    const rackHoldingsByItem = new Map<string, typeof allHoldings>();
+    for (const h of allHoldings) {
+      if (h.locations?.kind !== 'rack' && h.locations?.kind !== 'crate') continue;
+      const arr = rackHoldingsByItem.get(h.item_id) ?? [];
+      arr.push(h);
+      rackHoldingsByItem.set(h.item_id, arr);
+    }
+    const singleRackMoves: Array<{
+      item_id: string;
+      location_id: string;
+      quantity: number;
+      warehouseId: string | null;
+    }> = [];
+    for (const [itemId, hs] of rackHoldingsByItem) {
+      if (hs.length !== 1) continue; // split placement — NEVER move, label-only
+      const h = hs[0]!;
+      singleRackMoves.push({
+        item_id: itemId,
+        location_id: h.location_id,
+        quantity: Number(h.quantity),
+        warehouseId: h.locations?.warehouse_id ?? whByItem.get(itemId) ?? null,
+      });
+    }
+
+    if (levels.length === 0 && singleRackMoves.length === 0) return;
+
+    // Resolve (find or create) the destination rack ONCE per warehouse —
+    // shared by both the staging/unplaced auto-place and the single-rack
+    // move below.
+    const warehouseIds = new Set<string>();
+    for (const wh of rows.map((r) => r.warehouse_id)) if (wh) warehouseIds.add(wh);
+    for (const mv of singleRackMoves) if (mv.warehouseId) warehouseIds.add(mv.warehouseId);
     const rackByWh = new Map<string, string>();
-    for (const wh of new Set(rows.map((r) => r.warehouse_id).filter((w): w is string => !!w))) {
+    for (const wh of warehouseIds) {
       const rackId = await this.findOrCreateRackLocation(wh, num, row, name);
       if (rackId) rackByWh.set(wh, rackId);
     }
@@ -2548,30 +2620,51 @@ export class InventoryService {
         }),
       );
     }
+
+    // Single-placement rack/crate holdings (Unit B): the item's whole
+    // in-stock quantity already sits on exactly one rack/crate, so retarget
+    // it — PHYSICALLY MOVE via transfer_stock (never a raw stock-level
+    // write), same as the staging/unplaced path above. Idempotent: already
+    // on the resolved target → no-op.
+    for (let i = 0; i < singleRackMoves.length; i += CONCURRENCY) {
+      await Promise.all(
+        singleRackMoves.slice(i, i + CONCURRENCY).map(async (mv) => {
+          const toLoc = mv.warehouseId ? rackByWh.get(mv.warehouseId) : undefined;
+          if (!toLoc || toLoc === mv.location_id) return;
+          try {
+            await this.transferStock({
+              itemId: mv.item_id,
+              fromLocationId: mv.location_id,
+              toLocationId: toLoc,
+              quantity: mv.quantity,
+              notes: `Moved to rack ${name} (bulk Set rack)`,
+            });
+          } catch (e) {
+            console.error('[set_rack move] transfer failed', {
+              item: mv.item_id,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }),
+      );
+    }
   }
 
   /** Find an existing rack/crate location named `name` in the warehouse, or
    *  create a rack (rack_number/row set) if absent. Returns its id, or null on
-   *  a create failure (e.g. missing locations:manage) so placement degrades. */
+   *  a create failure (e.g. missing locations:manage) so placement degrades.
+   *  Delegates to LocationsService.findOrCreateRackOrCrate — the SAME
+   *  case-insensitive dedup used by the interactive Transfer/Put-away
+   *  "new rack" actions, so both creation paths agree with each other and
+   *  with the unique index added by migration 0270. */
   private async findOrCreateRackLocation(
     warehouseId: string,
     num: string,
     row: string | null,
     name: string,
   ): Promise<string | null> {
-    const { data: existing } = await this.ctx.supabase
-      .from('locations')
-      .select('id')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('warehouse_id', warehouseId)
-      .eq('name', name)
-      .in('kind', ['rack', 'crate'])
-      .is('deleted_at', null)
-      .limit(1)
-      .maybeSingle();
-    if (existing) return (existing as { id: string }).id;
     try {
-      const created = await new LocationsService(this.ctx).create({
+      const loc = await new LocationsService(this.ctx).findOrCreateRackOrCrate({
         name,
         type: 'shelf',
         kind: 'rack',
@@ -2579,7 +2672,7 @@ export class InventoryService {
         rackNumber: num,
         rackRow: row,
       });
-      return (created as { id: string }).id;
+      return (loc as { id: string }).id;
     } catch (e) {
       console.error('[set_rack place] rack create failed', {
         warehouseId,

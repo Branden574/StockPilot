@@ -141,9 +141,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         );
       }
       const n = body.newRack;
-      // LocationsService.create asserts 'locations:manage' and scopes the insert
-      // to ctx.organizationId (racks/crates don't consume the sites plan limit).
-      const created = await new LocationsService(ctx).create({
+      // findOrCreateRackOrCrate reuses an existing non-deleted rack/crate with
+      // the same warehouse+name first — mirrors the web actions' dedup fix
+      // (migration 0270); previously this always INSERTed, minting a
+      // duplicate `locations` row every time the mobile app put away onto a
+      // rack name that already existed. Asserts 'locations:manage' and scopes
+      // the insert to ctx.organizationId on the create-fallback path only
+      // (racks/crates don't consume the sites plan limit).
+      const created = await new LocationsService(ctx).findOrCreateRackOrCrate({
         name: deriveLocationName(n),
         type: n.crateColor ? 'bin' : 'shelf',
         kind: n.crateColor ? 'crate' : 'rack',

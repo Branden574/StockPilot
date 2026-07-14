@@ -85,6 +85,13 @@ interface BulkActionsProps {
   /** Whether any of the selected rows is currently archived. Drives the
       "Restore" vs "Archive" affordance. */
   hasArchivedSelection?: boolean;
+  /** Whether any selected item's stock is split across >1 rack/crate
+      holding (placed_racks.length > 1). Bulk Set rack PHYSICALLY MOVES a
+      single-placement item's stock onto the new rack, but a split item is
+      left label-only (moving it would be a guess — the op carries no
+      fromLocationId). Drives an inline warning in the Set rack dialog
+      pointing at Transfer. */
+  hasSplitRackSelection?: boolean;
   /** Push the selected rows into the cycle-count selection and navigate to
       the New cycle count screen. Wired by InventoryTable. */
   onCycleCount: () => void;
@@ -120,6 +127,7 @@ export function BulkActions({
   tags = [],
   onClear,
   hasArchivedSelection,
+  hasSplitRackSelection,
   onCycleCount,
   canSetPublicVisibility = false,
 }: BulkActionsProps) {
@@ -591,11 +599,12 @@ export function BulkActions({
           <DialogHeader>
             <DialogTitle>Set rack on {count} item{count === 1 ? '' : 's'}</DialogTitle>
             <DialogDescription>
-              Stamp the same rack on every selected item. Leave both fields
-              empty to clear the rack. The composed label
-              (e.g. <span className="font-mono">38-A</span>) also writes to
-              the legacy bin location so order pick + cycle-count PDFs
-              keep working.
+              Relabels every selected item with the same rack (e.g.{' '}
+              <span className="font-mono">38-A</span>) and moves its stock
+              onto that rack — for items that are staged, unplaced, or
+              already on a single rack/crate. Items with stock on more than
+              one rack are relabeled only; use Transfer to move those.
+              Leave both fields empty to clear the rack.
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3">
@@ -622,6 +631,13 @@ export function BulkActions({
               />
             </div>
           </div>
+          {hasSplitRackSelection && (
+            <p className="rounded-md border border-amber-200 bg-amber-50/30 px-3 py-2 text-[12.5px] text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-400">
+              Some selected items have stock split across multiple racks. Set
+              rack updates their label only — to physically move stock, use
+              Transfer.
+            </p>
+          )}
           <DialogFooter>
             <Button
               variant="outline"

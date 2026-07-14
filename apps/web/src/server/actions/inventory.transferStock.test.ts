@@ -21,12 +21,15 @@ vi.mock('next/cache', () => ({
 //  - withContext() → a ServiceContext-shaped object whose supabase is a
 //    configurable stub (controls the warehouses verification row).
 //  - the InventoryService / LocationsService classes → spy constructors whose
-//    instances expose transferStock / create spies.
+//    instances expose transferStock / findOrCreateRackOrCrate spies — the
+//    dedup-safe rack lookup (Unit A) the action actually calls for the
+//    newRack destination, NOT a raw `create`. (transferStockAction never
+//    calls stampPlacementBin — that's placeStock/bulkPlaceStock only.)
 // ---------------------------------------------------------------------------
 
-const { mockTransferStock, mockCreateLocation, ctxRef } = vi.hoisted(() => ({
+const { mockTransferStock, mockFindOrCreateRackOrCrate, ctxRef } = vi.hoisted(() => ({
   mockTransferStock: vi.fn(async () => undefined),
-  mockCreateLocation: vi.fn(async () => ({ id: 'new-loc-99' })),
+  mockFindOrCreateRackOrCrate: vi.fn(async () => ({ id: 'new-loc-99' })),
   ctxRef: { ctx: null as unknown },
 }));
 
@@ -46,7 +49,7 @@ vi.mock('@/server/services/inventory', () => ({
 
 vi.mock('@/server/services/locations', () => ({
   LocationsService: class {
-    create = mockCreateLocation;
+    findOrCreateRackOrCrate = mockFindOrCreateRackOrCrate;
   },
 }));
 
@@ -88,7 +91,7 @@ function installContext(opts: { warehouseRow?: Record<string, unknown> | null } 
 beforeEach(() => {
   vi.clearAllMocks();
   mockTransferStock.mockResolvedValue(undefined);
-  mockCreateLocation.mockResolvedValue({ id: 'new-loc-99' });
+  mockFindOrCreateRackOrCrate.mockResolvedValue({ id: 'new-loc-99' });
   installContext();
 });
 
@@ -106,7 +109,7 @@ describe('transferStockAction (destination union)', () => {
       destination: { existingLocationId: EXISTING_LOC },
     });
 
-    expect(mockCreateLocation).not.toHaveBeenCalled();
+    expect(mockFindOrCreateRackOrCrate).not.toHaveBeenCalled();
     expect(mockTransferStock).toHaveBeenCalledOnce();
     expect(mockTransferStock).toHaveBeenCalledWith({
       itemId: ITEM_ID,
@@ -122,7 +125,7 @@ describe('transferStockAction (destination union)', () => {
   it('2. creates the new rack (org-verified warehouse) then transfers to it', async () => {
     const newLocId = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
     const callOrder: string[] = [];
-    mockCreateLocation.mockImplementation(async () => {
+    mockFindOrCreateRackOrCrate.mockImplementation(async () => {
       callOrder.push('create');
       return { id: newLocId };
     });
@@ -139,8 +142,8 @@ describe('transferStockAction (destination union)', () => {
       },
     });
 
-    expect(mockCreateLocation).toHaveBeenCalledOnce();
-    const createArg = (mockCreateLocation.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    expect(mockFindOrCreateRackOrCrate).toHaveBeenCalledOnce();
+    const createArg = (mockFindOrCreateRackOrCrate.mock.calls[0] as unknown as [Record<string, unknown>])[0];
     expect(createArg.kind).toBe('rack');
     expect(createArg.type).toBe('shelf');
     expect(createArg.warehouseId).toBe(WAREHOUSE_ID);
@@ -174,15 +177,16 @@ describe('transferStockAction (destination union)', () => {
       expect(result.error.code).toBe('validation_error');
       expect(result.error.message).toMatch(/warehouse not found in your organization/i);
     }
-    expect(mockCreateLocation).not.toHaveBeenCalled();
+    expect(mockFindOrCreateRackOrCrate).not.toHaveBeenCalled();
     expect(mockTransferStock).not.toHaveBeenCalled();
   });
 
-  it('4. permission branch: a forbidden LocationsService.create (locations:manage) blocks the transfer', async () => {
-    // LocationsService.create asserts 'locations:manage' + the locations plan
-    // limit internally — when that throws, the action must surface the error
-    // and NEVER run the transfer against a half-created destination.
-    mockCreateLocation.mockRejectedValueOnce(new ServiceError('forbidden', 'Permission denied'));
+  it('4. permission branch: a forbidden LocationsService.findOrCreateRackOrCrate (locations:manage) blocks the transfer', async () => {
+    // findOrCreateRackOrCrate falls through to create() (which asserts
+    // 'locations:manage' + the locations plan limit) when no matching
+    // rack/crate already exists — when that throws, the action must surface
+    // the error and NEVER run the transfer against a half-created destination.
+    mockFindOrCreateRackOrCrate.mockRejectedValueOnce(new ServiceError('forbidden', 'Permission denied'));
 
     const result = await transferStockAction({
       itemId: ITEM_ID,
@@ -216,7 +220,7 @@ describe('transferStockAction (destination union)', () => {
     if (!zero.ok) expect(zero.error.code).toBe('validation_error');
 
     expect(mockTransferStock).not.toHaveBeenCalled();
-    expect(mockCreateLocation).not.toHaveBeenCalled();
+    expect(mockFindOrCreateRackOrCrate).not.toHaveBeenCalled();
   });
 
   it('6. maps an insufficient_stock RPC error to a friendly message', async () => {

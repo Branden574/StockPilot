@@ -344,6 +344,7 @@ describe('loadInventoryList (cached payload shape)', () => {
     expect(row.unplaced_quantity).toBe(0);
     expect(row.placed_quantity).toBe(7); // 10 − 3 staged − 0 unplaced
     expect(row.placed_racks).toEqual([]);
+    expect(row.rackHoldingsCount).toBe(0);
 
     // Live placementBreakdown(): NULL kind IS coalesced for the lines,
     // and staging ranks before unplaced.
@@ -351,6 +352,46 @@ describe('loadInventoryList (cached payload shape)', () => {
       { locationId: 'L2', label: 'Staging', kind: 'staging', quantity: 3 },
       { locationId: 'L1', label: 'Unplaced', kind: 'unplaced', quantity: 4 },
     ]);
+  });
+
+  it('cross-warehouse split (same rack NAME, two distinct location_ids): placed_racks collapses to one name, but rackHoldingsCount stays 2 — matching the server\'s by-location_id split gate', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({
+        ...emptyModuleGate,
+        inventory_items: { data: [baseItem], count: 1, error: null },
+        item_stock_levels: {
+          data: [
+            {
+              item_id: 'i1',
+              location_id: 'rack-wh-a',
+              quantity: 4,
+              locations: { name: '1-A', kind: 'rack' },
+            },
+            {
+              item_id: 'i1',
+              location_id: 'rack-wh-b',
+              quantity: 6,
+              locations: { name: '1-A', kind: 'rack' },
+            },
+          ],
+          error: null,
+        },
+        item_images: { data: [], error: null },
+      }),
+    );
+
+    const payload = await loadInventoryList('org-1', 'all', 'items');
+    const row = payload.items[0]!;
+
+    // Display list dedupes by NAME — this is the false-negative the
+    // Unit B review caught: naively reading placed_racks.length here
+    // would report "not split" even though the stock sits on two
+    // physically distinct holdings.
+    expect(row.placed_racks).toEqual(['1-A']);
+    // The split-warning source of truth: distinct HOLDINGS by
+    // location_id, which the server's rackHoldingsByItem grouping
+    // (placeItemsOntoRackByName) also refuses to move.
+    expect(row.rackHoldingsCount).toBe(2);
   });
 });
 
@@ -363,6 +404,7 @@ function cachedRow(over: Partial<InventoryListCachedRow> = {}): InventoryListCac
     unplaced_quantity: 0,
     placed_quantity: 10,
     placed_racks: [],
+    rackHoldingsCount: 0,
     image_storage_path: null,
     image_thumb_path: null,
     image_lqip: null,
