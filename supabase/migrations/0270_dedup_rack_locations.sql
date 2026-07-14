@@ -21,17 +21,21 @@
 --
 --   1. MERGE existing duplicates via public._dedup_rack_locations() — for
 --      every group of non-deleted `locations` rows sharing
---      (organization_id, warehouse_id, lower(name)) with kind in
---      ('rack','crate'), pick the OLDEST row (by created_at, tie-broken by
---      id) as the CANONICAL row, repoint every foreign key that references
---      the duplicate rows onto the canonical row, then soft-delete
---      (deleted_at = now()) the duplicates.
+--      (organization_id, warehouse_id, lower(name), kind) — kind restricted
+--      to ('rack','crate') — pick the OLDEST row (by created_at, tie-broken
+--      by id) as the CANONICAL row, repoint every foreign key that
+--      references the duplicate rows onto the canonical row, then
+--      soft-delete (deleted_at = now()) the duplicates. `kind` is part of
+--      the grouping key (not just a filter) so a rack and a crate that
+--      happen to share a normalized name (rackNumber/crateNumber are free
+--      text up to 64 chars) are NEVER merged into each other.
 --
 --   2. PREVENT future duplicates. A partial unique index on
---      (organization_id, warehouse_id, lower(name)) for active
+--      (organization_id, warehouse_id, lower(name), kind) for active
 --      rack/crate rows, so a future find-or-existing miss (or any other
 --      write path) fails loudly with a constraint violation instead of
---      silently minting another duplicate.
+--      silently minting another duplicate — and so a same-named rack and
+--      crate can coexist without tripping the constraint.
 --
 -- The merge is a standalone function (rather than an inline DO block) so
 -- the pgTAP test (0270_dedup_rack_locations.test.sql) can re-invoke the
@@ -80,17 +84,19 @@ begin
   drop table if exists _rack_crate_dup_map;
 
   -- One row per DUPLICATE location (never per-canonical), mapping it to the
-  -- canonical id for its (org, warehouse, lower(name)) partition — oldest
-  -- created_at wins, id breaks ties deterministically. Every row in a
-  -- partition gets the SAME canonical_id from first_value() over the full
-  -- window frame, so 3+-way duplicate groups collapse onto one row too.
+  -- canonical id for its (org, warehouse, lower(name), kind) partition —
+  -- oldest created_at wins, id breaks ties deterministically. `kind` is part
+  -- of the partition key so a rack and a crate sharing a normalized name are
+  -- treated as SEPARATE groups and never merged into each other. Every row
+  -- in a partition gets the SAME canonical_id from first_value() over the
+  -- full window frame, so 3+-way duplicate groups collapse onto one row too.
   create temporary table _rack_crate_dup_map as
   select dup_id, canonical_id
   from (
     select
       loc.id as dup_id,
       first_value(loc.id) over (
-        partition by loc.organization_id, loc.warehouse_id, lower(loc.name)
+        partition by loc.organization_id, loc.warehouse_id, lower(loc.name), loc.kind
         order by loc.created_at asc, loc.id asc
         rows between unbounded preceding and unbounded following
       ) as canonical_id
@@ -206,7 +212,9 @@ select public._dedup_rack_locations();
 
 -- Prevent future duplicates. Only succeeds once the merge above has removed
 -- every existing dup — a fresh `supabase db reset` proves this (see
--- rack-A-report.md for the run).
+-- rack-A-report.md for the run). `kind` is part of the index key (not just
+-- the partial-index filter) so a rack and a crate with the same normalized
+-- name can coexist — only same-kind collisions are rejected.
 create unique index if not exists locations_unique_active_name
-  on public.locations (organization_id, warehouse_id, lower(name))
+  on public.locations (organization_id, warehouse_id, lower(name), kind)
   where deleted_at is null and kind in ('rack', 'crate');

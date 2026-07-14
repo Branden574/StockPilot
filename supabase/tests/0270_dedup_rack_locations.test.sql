@@ -5,7 +5,9 @@
 -- merge shapes (an item already on the canonical row + items only ever on
 -- duplicates), across a 3-way duplicate group (canonical + 2 dups) so the
 -- aggregate-before-upsert fix (a naive UPDATE...FROM would silently drop
--- one of two matching duplicate rows) is actually exercised.
+-- one of two matching duplicate rows) is actually exercised. Also proves
+-- `kind` is part of the merge key: a rack and a crate sharing a normalized
+-- name in the same warehouse must NOT be merged into each other.
 --
 -- The real unique index (locations_unique_active_name, created by 0270) is
 -- already in place from the migration run — we temporarily drop it here so
@@ -17,7 +19,7 @@
 
 begin;
 
-select plan(15);
+select plan(16);
 
 -- Seed intentional duplicates for this test — drop the real constraint
 -- first or the inserts below would fail immediately.
@@ -29,6 +31,8 @@ drop index if exists public.locations_unique_active_name;
 \set dup1    '\'b0270000-0000-0000-0000-000000000011\''
 \set dup2    '\'b0270000-0000-0000-0000-000000000012\''
 \set child   '\'b0270000-0000-0000-0000-000000000020\''
+\set rack_x  '\'b0270000-0000-0000-0000-000000000030\''
+\set crate_x '\'b0270000-0000-0000-0000-000000000031\''
 \set item_a  '\'b0270000-0000-0000-0000-0000000000a0\''
 \set item_b  '\'b0270000-0000-0000-0000-0000000000b0\''
 \set item_c  '\'b0270000-0000-0000-0000-0000000000c0\''
@@ -57,6 +61,20 @@ insert into public.locations (id, organization_id, warehouse_id, name, type, kin
 -- (locations.parent_id) gets repointed too, not just sibling rack rows.
 insert into public.locations (id, organization_id, warehouse_id, parent_id, name, type, kind)
   values (:child, :org, :wh, :dup1, '2-C Sub-bin', 'bin', 'area')
+  on conflict (id) do nothing;
+
+-- A rack and a crate sharing a normalized name in the SAME warehouse —
+-- rackNumber/crateNumber are free text up to 64 chars, so a rack number
+-- containing " #" can collide with a crate name like "Blue #42". Proves
+-- `kind` is part of the merge key (and the unique index): these must NOT be
+-- treated as duplicates of each other, even though (organization_id,
+-- warehouse_id, lower(name)) matches. Different CASE ('Blue #42' vs
+-- 'blue #42') also proves the case-insensitive match is still scoped to
+-- kind, not loosened by it.
+insert into public.locations (id, organization_id, warehouse_id, name, type, kind, created_at)
+  values
+    (:rack_x,  :org, :wh, 'Blue #42', 'shelf', 'rack',  now() - interval '1 day'),
+    (:crate_x, :org, :wh, 'blue #42', 'bin',   'crate', now())
   on conflict (id) do nothing;
 
 -- NOTE: primary_location_id is left NULL here on purpose. The
@@ -121,7 +139,16 @@ insert into public.recurring_po_templates
 select is(
   public._dedup_rack_locations(),
   2,
-  'first call reports 2 duplicate rows merged (dup1 + dup2)'
+  'first call reports 2 duplicate rows merged (dup1 + dup2) — the rack/crate '
+  || 'same-name pair (:rack_x/:crate_x) is correctly NOT counted'
+);
+
+-- Cross-kind collision: both rows must still be active (neither merged into
+-- the other) — this is the case the kind-scoped partition key exists for.
+select is(
+  (select count(*)::int from public.locations where id in (:rack_x, :crate_x) and deleted_at is null),
+  2,
+  'rack and crate sharing a normalized name are NOT merged into each other — both survive'
 );
 
 select is(
@@ -207,13 +234,17 @@ select is(
 );
 
 -- ════════════════════════════════════════════════════════════════════════════
--- The unique index would now hold — recreate it and prove it succeeds
+-- The unique index would now hold — recreate it and prove it succeeds. This
+-- ALSO proves the rack/crate same-name pair (:rack_x/:crate_x) genuinely
+-- coexists under the real index: if `kind` weren't part of the index key,
+-- this create would fail with a duplicate-key violation against that pair.
 -- ════════════════════════════════════════════════════════════════════════════
 select lives_ok(
   $$ create unique index locations_unique_active_name
-       on public.locations (organization_id, warehouse_id, lower(name))
+       on public.locations (organization_id, warehouse_id, lower(name), kind)
        where deleted_at is null and kind in ('rack', 'crate') $$,
-  'unique index creation succeeds post-merge (no active dup names remain)'
+  'unique index (now kind-scoped) creation succeeds post-merge — no active dup names remain, '
+  || 'and the rack/crate same-name pair coexists'
 );
 
 select * from finish();
