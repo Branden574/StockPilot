@@ -77,10 +77,11 @@ export default async function InventoryCleanupSettingsPage() {
 
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Archived item cleanup</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">Inventory cleanup</h1>
       <p className="text-muted-foreground mt-1 text-sm">
-        Keep your Items list tidy by automatically removing items that have stayed archived for a
-        long time. It&apos;s off by default and only ever soft-deletes — nothing is lost permanently.
+        Automate what happens to inactive inventory: archive items that stay out of stock, and (for
+        admins) remove items that have been archived for a long time. Archiving is reversible;
+        deletion only ever soft-deletes, so nothing is lost permanently.
       </p>
       <div className="mt-8 space-y-6">
         {canDelete && settings ? (
