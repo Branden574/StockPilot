@@ -18,7 +18,7 @@
 
 begin;
 
-select plan(6);
+select plan(7);
 
 insert into public.organizations (id, name, slug)
   values ('00000000-0000-0000-0000-0000000000a1', 'pgtap-org', 'pgtap-auto-archive-org')
@@ -47,6 +47,8 @@ select is((select auto_archived from public.inventory_items where id='00000000-0
   'restore clears auto_archived');
 select is((select zero_since from public.inventory_items where id='00000000-0000-0000-0000-0000000000b1'), null,
   'restock clears zero_since');
+select is((select archived_at from public.inventory_items where id='00000000-0000-0000-0000-0000000000b1'), null,
+  'restock auto-restore clears archived_at (0184 trigger)');
 
 -- 4. A MANUALLY archived item (auto_archived=false) is NOT restored on restock.
 update public.inventory_items set quantity_on_hand=0 where id='00000000-0000-0000-0000-0000000000b1';
