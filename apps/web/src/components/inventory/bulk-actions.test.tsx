@@ -235,6 +235,46 @@ describe('BulkActions', () => {
     expect(onClear).toHaveBeenCalledTimes(1);
   });
 
+  it('Set rack dialog shows no split warning by default', async () => {
+    const user = userEvent.setup();
+    render(
+      <BulkActions
+        selectedIds={['a']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Set rack/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Set rack on 1 item/i)).toBeInTheDocument();
+    expect(screen.queryByText(/split across multiple racks/i)).not.toBeInTheDocument();
+  });
+
+  it('Set rack dialog warns when the selection includes a split-placement item', async () => {
+    const user = userEvent.setup();
+    render(
+      <BulkActions
+        selectedIds={['a', 'b']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+        hasSplitRackSelection
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Set rack/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText(/stock split across multiple racks/i),
+    ).toBeInTheDocument();
+  });
+
   // The bar swaps in over the toolbar when rows are selected, so this
   // leading checked box sits right where the user's attention is after a
   // select-all. It mirrors the table header's select-all: one click

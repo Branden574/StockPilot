@@ -1497,6 +1497,13 @@ export function InventoryTable({
             hasArchivedSelection={(effectiveInstant?.items ?? items).some(
               (i) => selectedItemIdSet.has(i.id) && i.status === 'archived',
             )}
+            // A "split" item (stock on >1 distinct rack/crate) is the one
+            // case bulk Set rack does NOT physically move — moving it would
+            // be a guess (the bulk op carries no fromLocationId). Warn in
+            // the dialog so the user reaches for Transfer instead.
+            hasSplitRackSelection={(effectiveInstant?.items ?? items).some(
+              (i) => selectedItemIdSet.has(i.id) && (i.placed_racks?.length ?? 0) > 1,
+            )}
             onCycleCount={() => {
               // Books tab and Items tab share this table; infer the pick
               // type from the base path so the confirm screen can group
