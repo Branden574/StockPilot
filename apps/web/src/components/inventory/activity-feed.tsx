@@ -12,7 +12,11 @@ import {
   Trash2,
   type LucideIcon,
 } from 'lucide-react';
+import Link from 'next/link';
 
+import { MetadataDiff } from '@/components/audit/metadata-diff';
+import { referenceHref, referenceTypeLabel } from '@/lib/activity-references';
+import { formatAuditEvent } from '@/lib/audit/format';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
 
 import type { ActivityEvent } from '@/server/services/activity';
@@ -67,7 +71,12 @@ function specFor(e: ActivityEvent): VisualSpec {
     case 'item.tracking_type.changed':
       return { Icon: RefreshCcw, label: 'Tracking changed', tone: 'neutral' };
     default:
-      return { Icon: History, label: e.type.replace(/\./g, ' '), tone: 'neutral' };
+      // Ported from the (now-removed) item-detail AuditTimeline: every
+      // audit event type gets the same "Subject · Action" formatting
+      // (e.g. "Category · Updated") instead of a raw dot/underscore string,
+      // for every audit event type this feed doesn't have a bespoke
+      // icon/label for.
+      return { Icon: History, label: formatAuditEvent(e.type), tone: 'neutral' };
   }
 }
 
@@ -90,11 +99,38 @@ export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
         // for them. Show the physical qty moved instead (moved_quantity,
         // mig 0231); pre-0231 rows have none → show no number, never "0".
         const isTransfer = e.kind === 'movement' && e.type === 'transfer';
+        // From/to location context isn't transfer-only: receive_po only sets
+        // to_location_id, a removal only sets from_location_id, and a
+        // transfer sets both. Render whichever side(s) resolve to a name
+        // rather than requiring both (which used to hide the route entirely
+        // for every non-transfer movement type).
         const fromName =
-          isTransfer && e.fromLocationId ? locationNames?.[e.fromLocationId] : undefined;
+          e.kind === 'movement' && e.fromLocationId
+            ? locationNames?.[e.fromLocationId]
+            : undefined;
         const toName =
-          isTransfer && e.toLocationId ? locationNames?.[e.toLocationId] : undefined;
-        const route = fromName && toName ? `${fromName} → ${toName}` : null;
+          e.kind === 'movement' && e.toLocationId ? locationNames?.[e.toLocationId] : undefined;
+        const route =
+          fromName && toName
+            ? `${fromName} → ${toName}`
+            : toName
+              ? `→ ${toName}`
+              : fromName
+                ? `${fromName} →`
+                : null;
+        // Clickable source link (order_request, purchase_order, cycle_count,
+        // return, bundle, rental, …). referenceHref returns null for any
+        // reference_type it doesn't recognize — that's the graceful-degrade
+        // signal to render a plain label instead of a link, never a broken
+        // href. referenceLabel is the server-resolved display number (order
+        // #, PO #, return #, bundle name); falls back to a generic type
+        // label when there's no cheap number for the type.
+        const referenceLink =
+          e.kind === 'movement' ? referenceHref(e.referenceType, e.referenceId) : null;
+        const referenceDisplayLabel =
+          e.kind === 'movement' && e.referenceType
+            ? (e.referenceLabel ?? referenceTypeLabel(e.referenceType))
+            : null;
         return (
           <li key={e.id} className="relative flex gap-3 pl-2 pr-1">
             {!isLast && (
@@ -138,29 +174,76 @@ export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
                     </span>
                   )
                 )}
-                {e.quantityAfter !== null && (
-                  <span className="text-muted-foreground text-[11px]">
-                    → {formatNumber(e.quantityAfter)} on hand
+                {e.kind === 'movement' && e.previousQuantity !== null && e.quantityAfter !== null ? (
+                  <span className="text-muted-foreground text-[11px] tabular-nums">
+                    {formatNumber(e.previousQuantity)} → {formatNumber(e.quantityAfter)} on hand
                   </span>
+                ) : (
+                  e.quantityAfter !== null && (
+                    <span className="text-muted-foreground text-[11px]">
+                      → {formatNumber(e.quantityAfter)} on hand
+                    </span>
+                  )
                 )}
               </div>
               <div className="text-muted-foreground mt-0.5 text-xs">
                 <span>{e.actor}</span>
+                {/* Ported from the (now-removed) item-detail AuditTimeline:
+                    show the actor's email alongside their name, but only
+                    when it's a real second fact (skip when the "name" IS
+                    the email — e.g. a profile with no full_name set — so we
+                    never render "jane@x.com (jane@x.com)"). */}
+                {e.actorEmail && e.actorEmail !== e.actor && (
+                  <span className="ml-1 text-[11px]">({e.actorEmail})</span>
+                )}
                 <span className="mx-1.5">·</span>
-                <span>{formatRelative(e.createdAt)}</span>
+                {/* time+title (ported from AuditTimeline) gives an exact
+                    absolute timestamp on hover, same as the removed
+                    item-detail audit timeline had. */}
+                <time
+                  dateTime={e.createdAt}
+                  title={new Date(e.createdAt).toLocaleString()}
+                >
+                  {formatRelative(e.createdAt)}
+                </time>
                 {route && (
                   <>
                     <span className="mx-1.5">·</span>
                     <span>{route}</span>
                   </>
                 )}
-                {e.summary && (
+                {referenceDisplayLabel && (
                   <>
                     <span className="mx-1.5">·</span>
-                    <span className="italic">{e.summary}</span>
+                    {referenceLink ? (
+                      <Link
+                        href={referenceLink}
+                        className="underline underline-offset-2 hover:text-foreground"
+                      >
+                        {referenceDisplayLabel}
+                      </Link>
+                    ) : (
+                      <span>{referenceDisplayLabel}</span>
+                    )}
+                  </>
+                )}
+                {e.reason && (
+                  <>
+                    <span className="mx-1.5">·</span>
+                    <span className="italic">{e.reason}</span>
+                  </>
+                )}
+                {e.notes && (
+                  <>
+                    <span className="mx-1.5">·</span>
+                    <span className="italic">&ldquo;{e.notes}&rdquo;</span>
                   </>
                 )}
               </div>
+              {/* Before/after diff drawer + changed_keys chip — audit rows
+                  only (movements carry no such metadata). Shared with
+                  AuditTimeline and the global audit log page. */}
+              {e.kind === 'audit' && <MetadataDiff metadata={e.metadata} />}
             </div>
           </li>
         );

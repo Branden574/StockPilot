@@ -1,7 +1,9 @@
 import { ScrollText } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { Fragment } from 'react';
 
+import { diffMetadataFields, MetadataDiff } from '@/components/audit/metadata-diff';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -250,58 +252,75 @@ export default async function AuditLogPage({
                 const entityId = (meta.entity_id as string | null | undefined) ?? null;
                 const actorName =
                   row.actor?.fullName ?? row.actor?.email ?? (row.actor ? 'Unknown' : 'System');
+                // Precomputed (rather than letting <MetadataDiff> decide
+                // internally) so we know whether to render the extra diff
+                // row at all — an always-rendered empty row would leave
+                // stray padding on every event with no before/after or
+                // changed_keys (most create-only events).
+                const hasDiffContent =
+                  diffMetadataFields(meta.before, meta.after).length > 0 ||
+                  (Array.isArray(meta.changed_keys) && meta.changed_keys.length > 0);
                 return (
-                  <TableRow key={row.id}>
-                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                      <time
-                        dateTime={row.createdAt}
-                        title={new Date(row.createdAt).toLocaleString()}
-                      >
-                        {formatRelative(row.createdAt)}
-                      </time>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Avatar className="h-7 w-7">
-                          {row.actor?.avatarUrl ? (
-                            <AvatarImage src={row.actor.avatarUrl} alt={actorName} />
-                          ) : null}
-                          <AvatarFallback>
-                            {actorInitials(row.actor?.fullName ?? null, row.actor?.email ?? null)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium">{actorName}</div>
-                          {row.actor?.email && row.actor.fullName ? (
-                            <div className="truncate text-[11px] text-muted-foreground">
-                              {row.actor.email}
-                            </div>
-                          ) : null}
+                  <Fragment key={row.id}>
+                    <TableRow className={hasDiffContent ? 'border-b-0' : undefined}>
+                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                        <time
+                          dateTime={row.createdAt}
+                          title={new Date(row.createdAt).toLocaleString()}
+                        >
+                          {formatRelative(row.createdAt)}
+                        </time>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Avatar className="h-7 w-7">
+                            {row.actor?.avatarUrl ? (
+                              <AvatarImage src={row.actor.avatarUrl} alt={actorName} />
+                            ) : null}
+                            <AvatarFallback>
+                              {actorInitials(row.actor?.fullName ?? null, row.actor?.email ?? null)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium">{actorName}</div>
+                            {row.actor?.email && row.actor.fullName ? (
+                              <div className="truncate text-[11px] text-muted-foreground">
+                                {row.actor.email}
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-sm">{formatAuditEvent(row.event)}</TableCell>
-                    <TableCell className="text-xs">
-                      {entityType ? (
-                        <div className="space-y-0.5">
-                          <div className="font-medium">{formatEntityType(entityType)}</div>
-                          {entityId ? (
-                            <code
-                              className="font-mono text-[11px] text-muted-foreground"
-                              title={entityId}
-                            >
-                              {shortId(entityId)}
-                            </code>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-mono text-[11px] text-muted-foreground">
-                      {row.ip ?? '—'}
-                    </TableCell>
-                  </TableRow>
+                      </TableCell>
+                      <TableCell className="text-sm">{formatAuditEvent(row.event)}</TableCell>
+                      <TableCell className="text-xs">
+                        {entityType ? (
+                          <div className="space-y-0.5">
+                            <div className="font-medium">{formatEntityType(entityType)}</div>
+                            {entityId ? (
+                              <code
+                                className="font-mono text-[11px] text-muted-foreground"
+                                title={entityId}
+                              >
+                                {shortId(entityId)}
+                              </code>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-mono text-[11px] text-muted-foreground">
+                        {row.ip ?? '—'}
+                      </TableCell>
+                    </TableRow>
+                    {hasDiffContent && (
+                      <TableRow>
+                        <TableCell colSpan={5} className="pt-0">
+                          <MetadataDiff metadata={meta} />
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
                 );
               })}
             </TableBody>

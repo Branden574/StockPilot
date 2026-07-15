@@ -1,5 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import {
   ArrowLeftRight,
   ArrowUpRight,
@@ -22,12 +22,13 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Text,
   TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { can, getCrateColor, type Role } from '@stockpilot/core';
+import { can, formatOrderNumber, getCrateColor, type Role } from '@stockpilot/core';
 
 import { MoveStockModal } from '@/components/move-stock-modal';
 import { Button } from '@/components/ui/button';
@@ -40,7 +41,18 @@ import { api } from '@/lib/api';
 import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
-import { movementAmount, movementReasonLabel } from '@/lib/movement-display';
+import {
+  movementAmount,
+  movementNotesForDisplay,
+  movementReasonLabel,
+} from '@/lib/movement-display';
+import {
+  attachReferenceLabels,
+  collectReferenceIdsByType,
+  mergeReferenceLabelMaps,
+  referenceRoute,
+  referenceTypeLabel,
+} from '@/lib/movement-references';
 import {
   SERIAL_STATUSES,
   SERIAL_STATUS_LABELS,
@@ -105,8 +117,32 @@ interface MovementRow {
       null on pre-0231 rows and non-transfer movements. */
   moved_quantity: number | null;
   reason: string | null;
+  /** User-entered free-text notes (web parity: rendered as its OWN line,
+   *  never silently dropped in favor of `reason`). Pre-0231 'receipt_line'
+   *  rows stash an internal receipt uuid here — not real user text — but
+   *  those rows are historical only; see movement-display.ts. */
+  notes: string | null;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
+  /**
+   * The kind of record that CAUSED this movement (order_request |
+   * cycle_count | return | bundle — the only values any writer ever sets on
+   * stock_movements, per Unit 1's verification). null for movements with no
+   * source record (manual adjust/remove/transfer). Feeds the
+   * reference_type → route/label resolver in `@/lib/movement-references`.
+   */
+  reference_type: string | null;
+  reference_id: string | null;
+  from_location_id: string | null;
+  to_location_id: string | null;
+  /**
+   * Server-resolved human label for `reference_id` (order number, return
+   * number, bundle name) — resolved in loadMovements via one batched query
+   * per type, mirroring the web's ActivityService.forItem resolvers. null
+   * when there's no cheap number for the type (cycle_count has none) or the
+   * lookup found nothing — the card then falls back to referenceTypeLabel().
+   */
+  reference_label: string | null;
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -123,6 +159,65 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 type TabId = 'overview' | 'movements';
+
+// Reference-label batch resolvers (Unit 3, mirrors web's
+// ActivityService.forItem: resolveOrderNumbers / resolveReturnNumbers /
+// resolveBundleNames). Mobile has no server "service" layer — these run
+// directly against the Supabase client, same convention as every other read
+// in this screen. cycle_count is intentionally NOT queried: the table
+// carries no display field, so those events always fall back to the
+// generic `referenceTypeLabel('cycle_count')` while still being tappable
+// via `referenceRoute`.
+//
+// The merge (combine the 3 maps below into one) and attach (stitch the
+// merged map onto each movement row) steps are deliberately NOT done here —
+// they're pure and dependency-injected in `@/lib/movement-references`
+// (`mergeReferenceLabelMaps` / `attachReferenceLabels`) so they're unit
+// tested without mocking Supabase. Only the actual `.in()` network calls
+// stay in this screen.
+
+async function resolveOrderNumbers(orgId: string, ids: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (ids.length === 0) return map;
+  const { data } = await supabase
+    .from('order_requests')
+    .select('id, order_number')
+    .eq('organization_id', orgId)
+    .in('id', ids);
+  for (const r of (data ?? []) as { id: string; order_number: number | null }[]) {
+    const n = formatOrderNumber(r.order_number);
+    if (n) map.set(r.id, n);
+  }
+  return map;
+}
+
+async function resolveReturnNumbers(orgId: string, ids: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (ids.length === 0) return map;
+  const { data } = await supabase
+    .from('returns')
+    .select('id, return_number')
+    .eq('organization_id', orgId)
+    .in('id', ids);
+  for (const r of (data ?? []) as { id: string; return_number: string | null }[]) {
+    if (r.return_number) map.set(r.id, r.return_number);
+  }
+  return map;
+}
+
+async function resolveBundleNames(orgId: string, ids: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (ids.length === 0) return map;
+  const { data } = await supabase
+    .from('bundles')
+    .select('id, name')
+    .eq('organization_id', orgId)
+    .in('id', ids);
+  for (const r of (data ?? []) as { id: string; name: string | null }[]) {
+    if (r.name) map.set(r.id, r.name);
+  }
+  return map;
+}
 
 function mimeForExt(ext: string): string {
   const e = ext.toLowerCase();
@@ -318,30 +413,67 @@ export default function ItemDetail() {
       .from('stock_movements')
       .select(
         `id, movement_type, quantity_change, previous_quantity, new_quantity,
-         moved_quantity, reason, created_at,
+         moved_quantity, reason, notes, created_at,
+         reference_type, reference_id, from_location_id, to_location_id,
          actor:user_profiles!user_id (full_name, email)`,
       )
       .eq('organization_id', orgId)
       .eq('item_id', id)
       .order('created_at', { ascending: false })
       .limit(50);
-    setMovements(
-      (data ?? []).map((row) => {
+    const rows = data ?? [];
+
+    // Clickable/labeled source references (Unit 3): group this page's
+    // reference ids by type so each resolver below runs ONE batched query
+    // rather than N+1, same pattern as the web's ActivityService.forItem.
+    const idsByType = collectReferenceIdsByType(
+      rows.map((row) => {
         const r = row as Record<string, unknown>;
-        const actor = r.actor as MovementRow['actor'] | MovementRow['actor'][] | null;
         return {
-          id: r.id as string,
-          movement_type: r.movement_type as string,
-          quantity_change: Number(r.quantity_change) || 0,
-          previous_quantity: Number(r.previous_quantity) || 0,
-          new_quantity: Number(r.new_quantity) || 0,
-          moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
-          reason: (r.reason as string | null) ?? null,
-          created_at: r.created_at as string,
-          actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
+          reference_type: (r.reference_type as string | null) ?? null,
+          reference_id: (r.reference_id as string | null) ?? null,
         };
       }),
     );
+    // Each resolver runs its own batched `.in()` query (or no-ops on an
+    // empty id list); errors degrade to `data ?? []` → an empty map, so a
+    // failed lookup falls back to the generic type label rather than
+    // breaking the tab. The merge itself is the pure, unit-tested
+    // `mergeReferenceLabelMaps` — no network I/O beyond the three awaits.
+    const [orderLabels, returnLabels, bundleLabels] = await Promise.all([
+      resolveOrderNumbers(orgId, idsByType.order_request ?? []),
+      resolveReturnNumbers(orgId, idsByType.return ?? []),
+      resolveBundleNames(orgId, idsByType.bundle ?? []),
+    ]);
+    const referenceLabelById = mergeReferenceLabelMaps([orderLabels, returnLabels, bundleLabels]);
+
+    const mapped = rows.map((row) => {
+      const r = row as Record<string, unknown>;
+      const actor = r.actor as MovementRow['actor'] | MovementRow['actor'][] | null;
+      return {
+        id: r.id as string,
+        movement_type: r.movement_type as string,
+        quantity_change: Number(r.quantity_change) || 0,
+        previous_quantity: Number(r.previous_quantity) || 0,
+        new_quantity: Number(r.new_quantity) || 0,
+        moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
+        reason: (r.reason as string | null) ?? null,
+        notes: movementNotesForDisplay(
+          (r.reason as string | null) ?? null,
+          (r.notes as string | null) ?? null,
+        ),
+        created_at: r.created_at as string,
+        actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
+        reference_type: (r.reference_type as string | null) ?? null,
+        reference_id: (r.reference_id as string | null) ?? null,
+        from_location_id: (r.from_location_id as string | null) ?? null,
+        to_location_id: (r.to_location_id as string | null) ?? null,
+      };
+    });
+    // Attach step (pure, unit-tested) — stitches referenceLabelById onto
+    // each row, degrading to null for rows with no reference_id or whose
+    // reference_id has no entry in the merged map.
+    setMovements(attachReferenceLabels(mapped, referenceLabelById));
     setMovementsLoading(false);
   }, [id, orgId]);
 
@@ -480,7 +612,7 @@ export default function ItemDetail() {
         .from('item_images')
         .select('id, storage_path')
         .eq('item_id', item.id);
-      const oldPaths = ((oldRows ?? []) as Array<{ storage_path: string | null }>)
+      const oldPaths = ((oldRows ?? []) as { storage_path: string | null }[])
         .map((r) => r.storage_path)
         .filter((p): p is string => !!p);
       if (oldPaths.length > 0) {
@@ -777,7 +909,7 @@ export default function ItemDetail() {
                 its "Location & storage" section. */}
             {(() => {
               const isBookView = item.item_type === 'book';
-              const rows: Array<{ label: string; value: string; dot?: string | null }> = [];
+              const rows: { label: string; value: string; dot?: string | null }[] = [];
               if (item.warehouse_name)
                 rows.push({ label: 'WAREHOUSE', value: item.warehouse_name });
               if (item.charter_name) rows.push({ label: 'CHARTER', value: item.charter_name });
@@ -1022,6 +1154,7 @@ function MetaRow({ label, value, dot }: { label: string; value: string; dot?: st
 
 function MovementCard({ movement }: { movement: MovementRow }) {
   const { c } = useTheme();
+  const router = useRouter();
   const isAdd = movement.quantity_change > 0;
   // Display mapping lives in src/lib/movement-display.ts (unit-tested):
   //  - transfers show moved_quantity (net-zero delta is always 0); pre-0231
@@ -1034,6 +1167,15 @@ function MovementCard({ movement }: { movement: MovementRow }) {
   const pipColor = isAdd ? ACCENT.mint : movement.quantity_change < 0 ? ACCENT.crit : ACCENT.warn;
   const verb = TYPE_LABEL[movement.movement_type] ?? movement.movement_type;
   const actor = movement.actor?.full_name ?? movement.actor?.email ?? 'system';
+  // Source reference (Unit 3, web parity): what CAUSED this movement — an
+  // order, cycle count, return, or bundle. referenceHref is null whenever
+  // the type is unrecognized OR has no native detail screen (currently:
+  // `return`) — that's the graceful-degrade signal to render a plain label
+  // instead of a broken navigation, never a dead link/route.
+  const referenceHref = referenceRoute(movement.reference_type, movement.reference_id);
+  const referenceDisplayLabel = movement.reference_type
+    ? (movement.reference_label ?? referenceTypeLabel(movement.reference_type))
+    : null;
   return (
     <Card padding={12}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -1076,7 +1218,26 @@ function MovementCard({ movement }: { movement: MovementRow }) {
               hour: 'numeric',
               minute: '2-digit',
             })}
+            {referenceDisplayLabel ? (
+              <Text
+                onPress={referenceHref ? () => router.push(referenceHref as Href) : undefined}
+                style={referenceHref ? { textDecorationLine: 'underline', color: c.ink } : undefined}
+              >
+                {' · '}
+                {referenceDisplayLabel}
+              </Text>
+            ) : null}
           </Mono>
+          {movement.notes ? (
+            <Body
+              size={12.5}
+              muted
+              numberOfLines={2}
+              style={{ marginTop: 3, fontStyle: 'italic' }}
+            >
+              “{movement.notes}”
+            </Body>
+          ) : null}
         </View>
         <View style={{ alignItems: 'flex-end' }}>
           {amount.kind !== 'none' && (

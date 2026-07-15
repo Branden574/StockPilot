@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { movementAmount, movementReasonLabel } from './movement-display';
+import { movementAmount, movementNotesForDisplay, movementReasonLabel } from './movement-display';
 
 describe('movementAmount', () => {
   it('NEW transfer row: shows moved_quantity neutrally (never the 0 delta)', () => {
@@ -46,5 +46,19 @@ describe('movementReasonLabel', () => {
   it('passes ordinary reasons and null through unchanged', () => {
     expect(movementReasonLabel('Damaged in transit')).toBe('Damaged in transit');
     expect(movementReasonLabel(null)).toBeNull();
+  });
+});
+
+describe('movementNotesForDisplay', () => {
+  it("OLD receipt row: masks the internal receipt uuid stashed in notes", () => {
+    expect(movementNotesForDisplay('receipt_line', 'a1b2c3d4-...')).toBeNull();
+  });
+
+  it('ordinary reasons pass notes through verbatim', () => {
+    expect(movementNotesForDisplay('PO PO-2026-014', 'Handled with care')).toBe(
+      'Handled with care',
+    );
+    expect(movementNotesForDisplay('Damaged in transit', null)).toBeNull();
+    expect(movementNotesForDisplay(null, 'Free-text note')).toBe('Free-text note');
   });
 });
