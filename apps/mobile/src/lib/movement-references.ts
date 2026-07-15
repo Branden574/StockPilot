@@ -12,6 +12,13 @@
  * "service" layer, so screen-local batched queries are the existing
  * convention (see the file's other Supabase reads).
  *
+ * `mergeReferenceLabelMaps` + `attachReferenceLabels` below are the
+ * dependency-injected merge/attach half of that pipeline: the screen still
+ * owns the three `.in()` fetches, but hands the results (already-fetched
+ * maps) to these pure functions to combine and stitch onto the movement
+ * rows — the piece that used to be private, unexported, network-entangled
+ * logic in `resolveReferenceLabels` with zero test coverage.
+ *
  * Only order_request | cycle_count | return | bundle are ever written to
  * `stock_movements.reference_type` (verified in Unit 1 against every
  * writer) — purchase_order and rental never appear there. Unlike the web
@@ -83,4 +90,50 @@ export function collectReferenceIdsByType(
     }
   }
   return byType;
+}
+
+/**
+ * Merges N already-fetched "id → label" maps (one per reference type — the
+ * results of the screen's batched order_requests/returns/bundles queries)
+ * into a single map, later entries winning on a (theoretically impossible,
+ * since ids are UUIDs from disjoint tables) collision. Pure: takes maps, not
+ * ids or a Supabase client, so it needs no network mock to test. This is the
+ * "merge" half of the batch-fetch → merge → attach pipeline (Unit 3) that
+ * previously had zero coverage because it lived inline in
+ * `resolveReferenceLabels` in app/item/[id].tsx, entangled with the fetches
+ * themselves.
+ */
+export function mergeReferenceLabelMaps(
+  maps: readonly (Map<string, string> | null | undefined)[],
+): Map<string, string> {
+  const merged = new Map<string, string>();
+  for (const m of maps) {
+    if (!m) continue;
+    for (const [id, label] of m) merged.set(id, label);
+  }
+  return merged;
+}
+
+/**
+ * The "attach" half of the pipeline: given the raw movement rows (only
+ * `reference_id` is read; `reference_type` rides along unused today but is
+ * kept on the input/output shape for callers that need it downstream) and
+ * the merged label map from `mergeReferenceLabelMaps`, returns the same rows
+ * with `reference_label` attached. Pure and dependency-injected — the
+ * screen fetches the maps, this function never touches Supabase.
+ *
+ * Degrades safely in two cases that must never crash or produce a broken
+ * card: a row with no `reference_id` (no source event) gets `null`; a row
+ * whose `reference_id` IS set but is missing from `labelById` (e.g. the
+ * order/return/bundle it pointed to was later deleted, or its type has no
+ * cheap display field like cycle_count) also gets `null` rather than
+ * throwing — the card then falls back to the generic `referenceTypeLabel()`.
+ */
+export function attachReferenceLabels<
+  T extends { reference_type: string | null; reference_id: string | null },
+>(rows: T[], labelById: Map<string, string>): (T & { reference_label: string | null })[] {
+  return rows.map((row) => ({
+    ...row,
+    reference_label: row.reference_id ? (labelById.get(row.reference_id) ?? null) : null,
+  }));
 }

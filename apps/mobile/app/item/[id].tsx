@@ -47,7 +47,9 @@ import {
   movementReasonLabel,
 } from '@/lib/movement-display';
 import {
+  attachReferenceLabels,
   collectReferenceIdsByType,
+  mergeReferenceLabelMaps,
   referenceRoute,
   referenceTypeLabel,
 } from '@/lib/movement-references';
@@ -166,6 +168,13 @@ type TabId = 'overview' | 'movements';
 // carries no display field, so those events always fall back to the
 // generic `referenceTypeLabel('cycle_count')` while still being tappable
 // via `referenceRoute`.
+//
+// The merge (combine the 3 maps below into one) and attach (stitch the
+// merged map onto each movement row) steps are deliberately NOT done here —
+// they're pure and dependency-injected in `@/lib/movement-references`
+// (`mergeReferenceLabelMaps` / `attachReferenceLabels`) so they're unit
+// tested without mocking Supabase. Only the actual `.in()` network calls
+// stay in this screen.
 
 async function resolveOrderNumbers(orgId: string, ids: string[]): Promise<Map<string, string>> {
   const map = new Map<string, string>();
@@ -208,30 +217,6 @@ async function resolveBundleNames(orgId: string, ids: string[]): Promise<Map<str
     if (r.name) map.set(r.id, r.name);
   }
   return map;
-}
-
-/**
- * Runs the three reference-label batch resolvers in parallel and merges
- * them into one id → label map. Each resolver already no-ops (no query) on
- * an empty id list, so reference types absent from this page's movements
- * cost nothing. Errors degrade gracefully — `data ?? []` above means a
- * failed lookup just yields an empty map, so the card falls back to the
- * generic type label rather than breaking the tab.
- */
-async function resolveReferenceLabels(
-  orgId: string,
-  idsByType: Record<string, string[]>,
-): Promise<Map<string, string>> {
-  const [order, ret, bundle] = await Promise.all([
-    resolveOrderNumbers(orgId, idsByType.order_request ?? []),
-    resolveReturnNumbers(orgId, idsByType.return ?? []),
-    resolveBundleNames(orgId, idsByType.bundle ?? []),
-  ]);
-  const merged = new Map<string, string>();
-  for (const m of [order, ret, bundle]) {
-    for (const [id, label] of m) merged.set(id, label);
-  }
-  return merged;
 }
 
 function mimeForExt(ext: string): string {
@@ -450,35 +435,45 @@ export default function ItemDetail() {
         };
       }),
     );
-    const referenceLabelById = await resolveReferenceLabels(orgId, idsByType);
+    // Each resolver runs its own batched `.in()` query (or no-ops on an
+    // empty id list); errors degrade to `data ?? []` → an empty map, so a
+    // failed lookup falls back to the generic type label rather than
+    // breaking the tab. The merge itself is the pure, unit-tested
+    // `mergeReferenceLabelMaps` — no network I/O beyond the three awaits.
+    const [orderLabels, returnLabels, bundleLabels] = await Promise.all([
+      resolveOrderNumbers(orgId, idsByType.order_request ?? []),
+      resolveReturnNumbers(orgId, idsByType.return ?? []),
+      resolveBundleNames(orgId, idsByType.bundle ?? []),
+    ]);
+    const referenceLabelById = mergeReferenceLabelMaps([orderLabels, returnLabels, bundleLabels]);
 
-    setMovements(
-      rows.map((row) => {
-        const r = row as Record<string, unknown>;
-        const actor = r.actor as MovementRow['actor'] | MovementRow['actor'][] | null;
-        const referenceId = (r.reference_id as string | null) ?? null;
-        return {
-          id: r.id as string,
-          movement_type: r.movement_type as string,
-          quantity_change: Number(r.quantity_change) || 0,
-          previous_quantity: Number(r.previous_quantity) || 0,
-          new_quantity: Number(r.new_quantity) || 0,
-          moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
-          reason: (r.reason as string | null) ?? null,
-          notes: movementNotesForDisplay(
-            (r.reason as string | null) ?? null,
-            (r.notes as string | null) ?? null,
-          ),
-          created_at: r.created_at as string,
-          actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
-          reference_type: (r.reference_type as string | null) ?? null,
-          reference_id: referenceId,
-          from_location_id: (r.from_location_id as string | null) ?? null,
-          to_location_id: (r.to_location_id as string | null) ?? null,
-          reference_label: referenceId ? (referenceLabelById.get(referenceId) ?? null) : null,
-        };
-      }),
-    );
+    const mapped = rows.map((row) => {
+      const r = row as Record<string, unknown>;
+      const actor = r.actor as MovementRow['actor'] | MovementRow['actor'][] | null;
+      return {
+        id: r.id as string,
+        movement_type: r.movement_type as string,
+        quantity_change: Number(r.quantity_change) || 0,
+        previous_quantity: Number(r.previous_quantity) || 0,
+        new_quantity: Number(r.new_quantity) || 0,
+        moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
+        reason: (r.reason as string | null) ?? null,
+        notes: movementNotesForDisplay(
+          (r.reason as string | null) ?? null,
+          (r.notes as string | null) ?? null,
+        ),
+        created_at: r.created_at as string,
+        actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
+        reference_type: (r.reference_type as string | null) ?? null,
+        reference_id: (r.reference_id as string | null) ?? null,
+        from_location_id: (r.from_location_id as string | null) ?? null,
+        to_location_id: (r.to_location_id as string | null) ?? null,
+      };
+    });
+    // Attach step (pure, unit-tested) — stitches referenceLabelById onto
+    // each row, degrading to null for rows with no reference_id or whose
+    // reference_id has no entry in the merged map.
+    setMovements(attachReferenceLabels(mapped, referenceLabelById));
     setMovementsLoading(false);
   }, [id, orgId]);
 
