@@ -14,7 +14,9 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 
+import { MetadataDiff } from '@/components/audit/metadata-diff';
 import { referenceHref, referenceTypeLabel } from '@/lib/activity-references';
+import { formatAuditEvent } from '@/lib/audit/format';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
 
 import type { ActivityEvent } from '@/server/services/activity';
@@ -69,7 +71,12 @@ function specFor(e: ActivityEvent): VisualSpec {
     case 'item.tracking_type.changed':
       return { Icon: RefreshCcw, label: 'Tracking changed', tone: 'neutral' };
     default:
-      return { Icon: History, label: e.type.replace(/\./g, ' '), tone: 'neutral' };
+      // Ported from the (now-removed) item-detail AuditTimeline: every
+      // audit event type gets the same "Subject · Action" formatting
+      // (e.g. "Category · Updated") instead of a raw dot/underscore string,
+      // for every audit event type this feed doesn't have a bespoke
+      // icon/label for.
+      return { Icon: History, label: formatAuditEvent(e.type), tone: 'neutral' };
   }
 }
 
@@ -181,8 +188,24 @@ export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
               </div>
               <div className="text-muted-foreground mt-0.5 text-xs">
                 <span>{e.actor}</span>
+                {/* Ported from the (now-removed) item-detail AuditTimeline:
+                    show the actor's email alongside their name, but only
+                    when it's a real second fact (skip when the "name" IS
+                    the email — e.g. a profile with no full_name set — so we
+                    never render "jane@x.com (jane@x.com)"). */}
+                {e.actorEmail && e.actorEmail !== e.actor && (
+                  <span className="ml-1 text-[11px]">({e.actorEmail})</span>
+                )}
                 <span className="mx-1.5">·</span>
-                <span>{formatRelative(e.createdAt)}</span>
+                {/* time+title (ported from AuditTimeline) gives an exact
+                    absolute timestamp on hover, same as the removed
+                    item-detail audit timeline had. */}
+                <time
+                  dateTime={e.createdAt}
+                  title={new Date(e.createdAt).toLocaleString()}
+                >
+                  {formatRelative(e.createdAt)}
+                </time>
                 {route && (
                   <>
                     <span className="mx-1.5">·</span>
@@ -217,6 +240,10 @@ export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
                   </>
                 )}
               </div>
+              {/* Before/after diff drawer + changed_keys chip — audit rows
+                  only (movements carry no such metadata). Shared with
+                  AuditTimeline and the global audit log page. */}
+              {e.kind === 'audit' && <MetadataDiff metadata={e.metadata} />}
             </div>
           </li>
         );

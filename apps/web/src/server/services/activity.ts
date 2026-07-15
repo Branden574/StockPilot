@@ -63,6 +63,14 @@ export interface ActivityEvent {
   /** Display name of the actor (or "System") if attribution missing. */
   actor: string;
   actorEmail: string | null;
+  /**
+   * Audit rows only: the raw audit_logs.metadata object (entity_type,
+   * entity_id, before, after, changed_keys, reason, …) passed through
+   * verbatim so the feed can render the before/after diff drawer /
+   * changed-keys chip (@/components/audit/metadata-diff — MetadataDiff).
+   * Movement: always null (stock_movements has no such jsonb column).
+   */
+  metadata: Record<string, unknown> | null;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -416,6 +424,7 @@ export class ActivityService {
         notes,
         actor: a.name,
         actorEmail: a.email,
+        metadata: null,
       };
     });
 
@@ -441,6 +450,7 @@ export class ActivityService {
         notes: null,
         actor: a.name,
         actorEmail: a.email,
+        metadata: meta,
       };
     });
 

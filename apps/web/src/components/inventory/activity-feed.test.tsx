@@ -24,6 +24,7 @@ function makeEvent(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
     notes: overrides.notes ?? null,
     actor: overrides.actor ?? 'Jane Doe',
     actorEmail: overrides.actorEmail ?? null,
+    metadata: overrides.metadata ?? null,
   };
 }
 
@@ -311,5 +312,110 @@ describe('ActivityFeed', () => {
     render(<ActivityFeed events={events} />);
     expect(screen.getByText('Ai shelf scan')).toBeInTheDocument();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  // ── Unit 2: before/after diff drawer + changed_keys chip ─────────────────
+  // (ported into item-detail's Activity tab now that it's the sole renderer
+  // of audit rows there — see the removed item-detail AuditTimeline mount)
+
+  it('renders a before/after diff drawer for an audit row that carries metadata.before/after', () => {
+    const events = [
+      makeEvent({
+        id: 'a10',
+        kind: 'audit',
+        type: 'item.public_visibility_changed',
+        metadata: {
+          before: { public_visibility: 'internal_only' },
+          after: { public_visibility: 'public' },
+        },
+      }),
+    ];
+    render(<ActivityFeed events={events} />);
+    expect(screen.getByText('Show 1 field change')).toBeInTheDocument();
+    expect(screen.getByText('internal_only')).toBeInTheDocument();
+    expect(screen.getByText('public')).toBeInTheDocument();
+  });
+
+  it('renders a changed_keys chip for an audit row with no before/after', () => {
+    const events = [
+      makeEvent({
+        id: 'a11',
+        kind: 'audit',
+        type: 'inventory.item.updated',
+        metadata: { changed_keys: ['name', 'reorder_point'] },
+      }),
+    ];
+    render(<ActivityFeed events={events} />);
+    expect(screen.getByText('Fields changed: Name, Reorder point')).toBeInTheDocument();
+  });
+
+  it('never renders the diff drawer or chip for a movement row, even if metadata were somehow set', () => {
+    const events = [
+      makeEvent({
+        id: 'm17',
+        kind: 'movement',
+        type: 'adjustment',
+        delta: 2,
+        // Movements never actually carry metadata (always null from
+        // ActivityService), but the guard is `e.kind === 'audit'` — this
+        // proves the movement branch is never evaluated even defensively.
+        metadata: { before: { a: 1 }, after: { a: 2 } },
+      }),
+    ];
+    render(<ActivityFeed events={events} />);
+    expect(screen.queryByText(/Show \d+ field change/)).not.toBeInTheDocument();
+  });
+
+  // ── Unit 2 de-dupe: parity ported from the removed item-detail
+  // AuditTimeline (verifying no info was lost) ─────────────────────────────
+
+  it('formats an audit event with no bespoke icon/label mapping as "Subject · Action" (ported from AuditTimeline), not a raw dotted string', () => {
+    const events = [
+      makeEvent({ id: 'a12', kind: 'audit', type: 'category.updated' }),
+    ];
+    render(<ActivityFeed events={events} />);
+    expect(screen.getByText('Category · Updated')).toBeInTheDocument();
+    expect(screen.queryByText('category updated')).not.toBeInTheDocument();
+  });
+
+  it('shows the actor email in parens alongside the name (ported from AuditTimeline)', () => {
+    const events = [
+      makeEvent({
+        id: 'a13',
+        kind: 'audit',
+        type: 'inventory.item.updated',
+        actor: 'Jane Smith',
+        actorEmail: 'jane@example.com',
+      }),
+    ];
+    render(<ActivityFeed events={events} />);
+    expect(screen.getByText('Jane Smith')).toBeInTheDocument();
+    expect(screen.getByText('(jane@example.com)')).toBeInTheDocument();
+  });
+
+  it('does not duplicate the email when the actor name IS the email (no full_name on the profile)', () => {
+    const events = [
+      makeEvent({
+        id: 'a14',
+        kind: 'audit',
+        type: 'inventory.item.updated',
+        actor: 'jane@example.com',
+        actorEmail: 'jane@example.com',
+      }),
+    ];
+    render(<ActivityFeed events={events} />);
+    expect(screen.queryByText('(jane@example.com)')).not.toBeInTheDocument();
+  });
+
+  it('exposes an exact absolute timestamp on hover via a <time title> tooltip (ported from AuditTimeline)', () => {
+    const iso = new Date(Date.now() - 5 * 60_000).toISOString();
+    const events = [
+      makeEvent({ id: 'a15', kind: 'audit', type: 'inventory.item.updated', createdAt: iso }),
+    ];
+    const { container } = render(<ActivityFeed events={events} />);
+    const timeEl = container.querySelector('time');
+    expect(timeEl).not.toBeNull();
+    expect(timeEl!.getAttribute('dateTime')).toBe(iso);
+    expect(timeEl!.getAttribute('title')).toBe(new Date(iso).toLocaleString());
   });
 });
