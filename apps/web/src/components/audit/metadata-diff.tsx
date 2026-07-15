@@ -7,8 +7,8 @@
  * category update, notification-preferences — see those call sites). Until
  * this component existed, both were captured at write time and rendered
  * NOWHERE — this is the one place that turns that jsonb into something a
- * human can read, shared by the global audit log page, `AuditTimeline`, and
- * `ActivityFeed`'s audit rows.
+ * human can read, shared by the global audit log page and `ActivityFeed`'s
+ * audit rows.
  *
  * Contract: never throws on weird/arbitrary jsonb. `before`/`after` are
  * `unknown` end to end (Postgres jsonb has no static shape), so every branch
@@ -139,9 +139,8 @@ function isStringArray(value: unknown): value is string[] {
  *  3. Nothing, when neither is present (most create-only / no-diff events).
  *
  * Plain `<details>/<summary>` — no client-side state needed, so this stays a
- * Server Component and drops straight into the two async server components
- * that render it (AuditTimeline, the global audit page) as well as the
- * (also-server) ActivityFeed.
+ * Server Component and drops straight into the (also-server) global audit
+ * page as well as `ActivityFeed`.
  */
 export function MetadataDiff({
   metadata,
