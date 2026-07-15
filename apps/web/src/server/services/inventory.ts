@@ -13,6 +13,7 @@ import type {
   AdjustStockInput,
   CreateItemInput,
   DuplicateItemInput,
+  MovementType,
   TransferStockInput,
   UpdateItemInput,
 } from '@stockpilot/core';
@@ -20,7 +21,7 @@ import { RESERVED_CUSTOM_FIELD_KEYS, validateCustomFields } from '@stockpilot/co
 
 import { assertModuleEnabled, assertPermission, assertPlanLimit, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRows } from './lib/paginate';
-import { audit } from './audit';
+import { audit, type AuditEvent } from './audit';
 import { dispatchEvent } from './integration-events';
 import { CustomFieldsService } from './custom-fields';
 import { LocationsService } from './locations';
@@ -36,6 +37,26 @@ export function deriveAgeDays(receivedAtIso: string | null, nowMs: number): numb
   const then = new Date(receivedAtIso).getTime();
   if (Number.isNaN(then)) return null;
   return Math.max(0, Math.floor((nowMs - then) / 86_400_000));
+}
+
+/**
+ * Maps an adjustStock movement_type to the closest existing AuditEvent so
+ * the resulting audit row groups sensibly on the global audit page. Only
+ * ever returns members of the AuditEvent union (audit.ts) — no new event
+ * strings are introduced here (would require a migration-free but still
+ * out-of-scope union change). Exported so tests can assert the mapping
+ * directly without exercising the whole adjustStock RPC path.
+ */
+export function mapMovementTypeToAuditEvent(movementType: MovementType): AuditEvent {
+  switch (movementType) {
+    case 'receive_po':
+      return 'stock.received';
+    case 'remove':
+    case 'damage':
+      return 'stock.removed';
+    default:
+      return 'stock.adjusted';
+  }
 }
 
 // Charter ids arrive from a user-controlled URL param (?charter=) via
@@ -1981,12 +2002,20 @@ export class InventoryService {
     // Drop the cosmetic `updated_by` from the changed-keys list so the
     // audit row reflects what the caller actually edited.
     const changedKeys = Object.keys(updates).filter((k) => k !== 'updated_by');
+    // before/after for the P1 diff drawer — restricted to the CHANGED keys
+    // on the TARGET row only (current = pre-patch, data = post-patch).
+    // Deliberately does NOT reach into the Model-B sibling fan-out above —
+    // that's a separate set of rows this audit event isn't about.
+    const beforeRow = current as Record<string, unknown>;
+    const afterRow = data as Record<string, unknown>;
     void audit(
       {
         event: 'inventory.item.updated',
         entityType: 'inventory_item',
         entityId: id,
         warehouseId: (data as { warehouse_id?: string | null }).warehouse_id ?? null,
+        before: Object.fromEntries(changedKeys.map((k) => [k, beforeRow[k]])),
+        after: Object.fromEntries(changedKeys.map((k) => [k, afterRow[k]])),
         extra: {
           changed_keys: changedKeys,
           ...(propagatedToSku ? { propagated_to_sku: propagatedToSku } : {}),
@@ -2141,6 +2170,20 @@ export class InventoryService {
       const row = input.op.rackRow?.trim().toUpperCase() || null;
       const composedBin = num ? (row ? `${num}-${row}` : num) : null;
 
+      // Batch-read the OLD rack label before the RPC overwrites it, so the
+      // per-item audit rows below can carry a real before→after diff
+      // instead of just the new value.
+      const { data: oldRackRows } = await this.ctx.supabase
+        .from('inventory_items')
+        .select('id, bin_location')
+        .in('id', allowedIds);
+      const oldBinById = new Map(
+        ((oldRackRows ?? []) as Array<{ id: string; bin_location: string | null }>).map((r) => [
+          r.id,
+          r.bin_location ?? null,
+        ]),
+      );
+
       const { data: updatedCount, error } = await this.ctx.supabase.rpc(
         'inventory_set_rack',
         {
@@ -2163,7 +2206,14 @@ export class InventoryService {
             event: 'inventory.item.updated',
             entityType: 'inventory_item',
             entityId: id,
-            extra: { bulk_op: 'set_rack', rack_number: num, rack_row: row },
+            before: { bin_location: oldBinById.get(id) ?? null },
+            after: { bin_location: composedBin },
+            extra: {
+              bulk_op: 'set_rack',
+              rack_number: num,
+              rack_row: row,
+              changed_keys: ['bin_location'],
+            },
           },
           this.ctx,
         );
@@ -2233,6 +2283,22 @@ export class InventoryService {
         break;
     }
 
+    // Drop the cosmetic `updated_by` from the changed-keys list, same as
+    // the single-item update() path — this is both the column set to
+    // batch-read the OLD values for, and what lands in `extra.changed_keys`.
+    const changedKeys = Object.keys(update).filter((k) => k !== 'updated_by');
+
+    // Batch-read old values BEFORE the update so the per-item audit rows
+    // below can carry a real before→after diff. One query covers every
+    // affected item — no N+1.
+    const { data: oldRows } = await this.ctx.supabase
+      .from('inventory_items')
+      .select(['id', ...changedKeys].join(', '))
+      .in('id', allowedIds);
+    const oldById = new Map<string, Record<string, unknown>>(
+      ((oldRows ?? []) as unknown as Array<Record<string, unknown>>).map((r) => [String(r.id), r]),
+    );
+
     const { error } = await this.ctx.supabase
       .from('inventory_items')
       .update(update)
@@ -2254,12 +2320,15 @@ export class InventoryService {
           ? ('inventory.item.restored' as const)
           : ('inventory.item.updated' as const);
     for (const id of allowedIds) {
+      const oldRow = oldById.get(id) ?? {};
       void audit(
         {
           event: bulkEvent,
           entityType: 'inventory_item',
           entityId: id,
-          extra: { bulk_op: input.op.kind },
+          before: Object.fromEntries(changedKeys.map((k) => [k, oldRow[k] ?? null])),
+          after: Object.fromEntries(changedKeys.map((k) => [k, update[k]])),
+          extra: { bulk_op: input.op.kind, changed_keys: changedKeys },
         },
         this.ctx,
       );
@@ -2409,24 +2478,50 @@ export class InventoryService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+    // adjust_stock is atomic and RETURNS the authoritative updated row (see
+    // 0004_phase2_helpers.sql — `returns public.inventory_items`). Derive the
+    // new qty from that returned row, not the pre-RPC read, so concurrent
+    // adjustments don't make the crossing detection / audit before-value
+    // miss/double-fire. `prev` is reconstructed as new - delta (the RPC
+    // computed new = prev + delta).
+    const it = item as {
+      quantity_on_hand?: number;
+      reorder_point?: number;
+      name?: string;
+      sku?: string;
+    };
+    const ret = (data ?? {}) as { quantity_on_hand?: number; reorder_point?: number };
+    const next = Number(ret.quantity_on_hand ?? it.quantity_on_hand ?? 0);
+    const prev = next - Number(input.quantityChange);
+
+    // Capture-gap fix (Movement/Activity P2 Task 1c): adjustStock used to
+    // emit NO audit row at all, so the P1 before/after diff drawer had
+    // nothing to render for manual stock adjustments. This event is
+    // SUPPRESSED from the item Activity feed (Task 2, activity.ts forItem)
+    // because the stock_movements row already represents it there — it
+    // still surfaces on the global audit pages with full before/after.
+    void audit(
+      {
+        event: mapMovementTypeToAuditEvent(input.movementType),
+        entityType: 'inventory_item',
+        entityId: input.itemId,
+        warehouseId: wh,
+        before: { quantity_on_hand: prev },
+        after: { quantity_on_hand: next },
+        reason: input.reason ?? undefined,
+        extra: {
+          quantity_change: input.quantityChange,
+          movement_type: input.movementType,
+          location_id: locationId,
+        },
+      },
+      this.ctx,
+    );
+
     // Low-stock alert — fire to webhooks/Slack/Teams only when this adjustment
     // crosses the item BELOW its reorder point (prev > rp, new <= rp), so it
     // alerts once on the crossing rather than on every subsequent pick.
     try {
-      const it = item as {
-        quantity_on_hand?: number;
-        reorder_point?: number;
-        name?: string;
-        sku?: string;
-      };
-      // adjust_stock is atomic and RETURNS the authoritative updated row
-      // (see 0004_phase2_helpers.sql — `returns public.inventory_items`). Derive
-      // the new qty from that returned row, not the pre-RPC read, so concurrent
-      // adjustments don't make the crossing detection miss/double-fire. `prev`
-      // is reconstructed as new - delta (the RPC computed new = prev + delta).
-      const ret = (data ?? {}) as { quantity_on_hand?: number; reorder_point?: number };
-      const next = Number(ret.quantity_on_hand ?? it.quantity_on_hand ?? 0);
-      const prev = next - Number(input.quantityChange);
       const rp = Number(ret.reorder_point ?? it.reorder_point ?? 0);
       if (rp > 0 && next <= rp && prev > rp) {
         void dispatchEvent(this.ctx.organizationId, 'stock.low', {
@@ -2453,6 +2548,29 @@ export class InventoryService {
       p_notes: input.notes ?? null,
     });
     if (error) throw new ServiceError('internal_error', error.message);
+
+    // Capture-gap fix (Task 1d): same rationale as adjustStock above — this
+    // event is suppressed from the item feed (Task 2) since the movement
+    // row already shows it there, but drives the global audit page's
+    // before/after diff. No extra query for location NAMES here — ids are
+    // acceptable per the plan; the service layer shouldn't pay for a lookup
+    // the caller may not need.
+    void audit(
+      {
+        event: 'stock.transferred',
+        entityType: 'inventory_item',
+        entityId: input.itemId,
+        before: { location_id: input.fromLocationId },
+        after: { location_id: input.toLocationId },
+        extra: {
+          quantity: input.quantity,
+          from_location_id: input.fromLocationId,
+          to_location_id: input.toLocationId,
+        },
+      },
+      this.ctx,
+    );
+
     return data;
   }
 

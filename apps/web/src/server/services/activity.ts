@@ -76,6 +76,34 @@ export interface ActivityEvent {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Display-duplication rule (Movement/Activity P2 Task 2): `InventoryService`
+ * now emits an `audit_logs` row for every adjust/transfer/receive/remove
+ * (`stock.adjusted` / `stock.transferred` / `stock.received` /
+ * `stock.removed`) so the GLOBAL audit page (`/dashboard/admin/audit`,
+ * `/dashboard/settings/audit` — which query `audit_logs` directly, NOT this
+ * method) gets full before/after attribution for stock changes. But every
+ * one of those mutations ALSO already writes a `stock_movements` row, and
+ * `forItem` is the ONE feed that merges both sources for the item's
+ * Activity tab — the movement row is the canonical, richer representation
+ * there (it renders `prev → after` quantity and `from → to` location
+ * inline; the audit row would just repeat the same fact with a plainer
+ * summary). Showing both would double-render every adjust/transfer on the
+ * item feed, regressing the P1 crowd-out fix. So these four events are
+ * suppressed HERE ONLY (not from `audit_logs` itself, not from the global
+ * audit page). Every other audit event — item edits, archive/restore/
+ * delete/duplicate, serial add/update/remove, tag apply/remove, image
+ * capture, … — has no movement-row counterpart and is left untouched;
+ * those are exactly what drives the before/after diff drawer on the item
+ * feed.
+ */
+const MOVEMENT_SHADOWED_AUDIT_EVENTS: readonly string[] = [
+  'stock.adjusted',
+  'stock.transferred',
+  'stock.received',
+  'stock.removed',
+];
+
+/**
  * Display-layer mapping for pre-0231 receipt movements: rows written by the
  * old post_receipt_v2 carry the internal reason 'receipt_line' with the
  * receipt id in notes. Given a resolver map (receipt id → po_number), returns
@@ -323,6 +351,11 @@ export class ActivityService {
         // forced a sequential scan because @> can't use a BTREE on
         // the extracted text path.
         .eq('metadata->>entity_id', itemId)
+        // Movement-shadowing stock.* events (see MOVEMENT_SHADOWED_AUDIT_EVENTS
+        // above) are excluded at the query layer so `auditLimit` caps real,
+        // kept audit rows for the item feed — not slots that get thrown away
+        // below. Same `.not(col, 'in', '(...)')` shape as po-imports.ts.
+        .not('event', 'in', `(${MOVEMENT_SHADOWED_AUDIT_EVENTS.join(',')})`)
         .order('created_at', { ascending: false })
         .limit(auditLimit),
     ]);
@@ -331,7 +364,16 @@ export class ActivityService {
     // the query layer, but slicing here again keeps the separate-caps
     // guarantee explicit regardless of the query layer's behavior.
     const movementRows = (movementsRes.data ?? []).slice(0, movementLimit);
-    const auditRows = (auditRes.data ?? []).slice(0, auditLimit);
+    // Belt-and-suspenders for the `.not(...)` filter above: filter out any
+    // movement-shadowed stock.* row BEFORE slicing to auditLimit, so a
+    // shadowed row can never occupy one of the slots meant for a real audit
+    // event even if the query-layer filter is ever bypassed (e.g. a future
+    // refactor of this query, or a test harness that doesn't evaluate
+    // `.not()`). Filtering after the slice would let shadowed rows silently
+    // crowd out real ones, under-filling the cap.
+    const auditRows = (auditRes.data ?? [])
+      .filter((a) => !MOVEMENT_SHADOWED_AUDIT_EVENTS.includes(a.event as string))
+      .slice(0, auditLimit);
 
     const userIds = new Set<string>();
     for (const m of movementRows) {

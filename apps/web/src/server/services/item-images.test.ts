@@ -23,6 +23,14 @@ vi.mock('./context', () => ({
   ServiceError: class ServiceError extends Error {},
 }));
 
+// record()/remove() used to have ZERO audit capture (Movement/Activity P2
+// Task 1e) — mock the writer so the new tests below can assert entityId +
+// the changed_keys/image_added shape without a real audit_logs write.
+vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
+
+import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+
+import { audit } from './audit';
 import type { ServiceContext } from './context';
 
 import { ItemImagesService } from './item-images';
@@ -144,5 +152,70 @@ describe('ItemImagesService.signedUrls (batched signing)', () => {
     const map = await svc().signedUrls([]);
     expect(map.size).toBe(0);
     expect(createSignedUrlsMock).not.toHaveBeenCalled();
+  });
+});
+
+// Movement/Activity P2 Task 1e: record()/remove() had ZERO audit capture —
+// a photo add/remove never showed up anywhere in the item's history. Both
+// now emit 'inventory.item.updated' (no new AuditEvent — this phase is
+// migration-free) with entityId=itemId so it surfaces in the item's
+// Activity feed.
+describe('ItemImagesService.record — audit capture', () => {
+  it('emits inventory.item.updated with entityId=itemId and image_added:true', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: { id: 'item-1' }, error: null },
+      'item_images.insert': {
+        data: { id: 'img-1', storage_path: 'org-1/items/item-1/x.jpg', sort_order: 0, is_primary: true },
+        error: null,
+      },
+    });
+    const svc = new ItemImagesService(makeServiceContext(stub.client, { organizationId: 'org-1' }));
+
+    await svc.record('item-1', 'org-1/items/item-1/x.jpg', true);
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'inventory.item.updated',
+        entityType: 'inventory_item',
+        entityId: 'item-1',
+        extra: { changed_keys: ['images'], image_added: true },
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('does NOT audit when the insert fails', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: { id: 'item-1' }, error: null },
+      'item_images.insert': { data: null, error: { message: 'boom' } },
+    });
+    const svc = new ItemImagesService(makeServiceContext(stub.client, { organizationId: 'org-1' }));
+
+    await expect(
+      svc.record('item-1', 'org-1/items/item-1/x.jpg', true),
+    ).rejects.toThrow();
+    expect(audit).not.toHaveBeenCalled();
+  });
+});
+
+describe('ItemImagesService.remove — audit capture', () => {
+  it('emits inventory.item.updated with entityId=itemId (resolved from the deleted row) and image_added:false', async () => {
+    const stub = makeSupabaseStub({
+      'item_images.select': { data: { storage_path: 'org-1/items/item-1/x.jpg', item_id: 'item-1' }, error: null },
+      'item_images.delete': { data: null, error: null },
+    });
+    const svc = new ItemImagesService(makeServiceContext(stub.client, { organizationId: 'org-1' }));
+
+    await svc.remove('img-1');
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'inventory.item.updated',
+        entityType: 'inventory_item',
+        entityId: 'item-1',
+        extra: { changed_keys: ['images'], image_added: false },
+      }),
+      expect.anything(),
+    );
   });
 });

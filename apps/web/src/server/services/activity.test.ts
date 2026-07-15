@@ -375,6 +375,234 @@ describe('ActivityService.forItem', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Movement/Activity P2 Task 2: movement-shadowing stock.* audit events
+// (stock.adjusted/transferred/received/removed) are suppressed from the item
+// feed — the movement row already represents the same change with a richer
+// prev→after / from→to display (P1). Every other audit event is untouched.
+// See MOVEMENT_SHADOWED_AUDIT_EVENTS in activity.ts for the full rationale.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('ActivityService.forItem suppresses movement-shadowing audit events', () => {
+  it('returns the movement row and drops its paired stock.adjusted audit row', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm-adj',
+            movement_type: 'adjust',
+            quantity_change: -5,
+            previous_quantity: 20,
+            new_quantity: 15,
+            reason: 'cycle count correction',
+            notes: null,
+            created_at: '2025-04-01T00:00:00.000Z',
+            user_id: 'u1',
+          },
+        ],
+        error: null,
+      },
+      'audit_logs.select': {
+        data: [
+          {
+            id: 'a-adj',
+            event: 'stock.adjusted',
+            metadata: {
+              entity_id: 'item-1',
+              before: { quantity_on_hand: 20 },
+              after: { quantity_on_hand: 15 },
+            },
+            created_at: '2025-04-01T00:00:00.001Z',
+            user_id: 'u1',
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events).toHaveLength(1);
+    expect(events[0]!.id).toBe('m:m-adj');
+    expect(events[0]!.kind).toBe('movement');
+    expect(events.some((e) => e.id === 'a:a-adj')).toBe(false);
+  });
+
+  it('still returns a non-shadowed audit event (inventory.item.updated) with metadata before/after intact', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null },
+      'audit_logs.select': {
+        data: [
+          {
+            id: 'a-upd',
+            event: 'inventory.item.updated',
+            metadata: {
+              entity_id: 'item-1',
+              before: { name: 'Old Name' },
+              after: { name: 'New Name' },
+              changed_keys: ['name'],
+            },
+            created_at: '2025-04-02T00:00:00.000Z',
+            user_id: 'u1',
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events).toHaveLength(1);
+    expect(events[0]!.id).toBe('a:a-upd');
+    expect(events[0]!.kind).toBe('audit');
+    expect(events[0]!.metadata).toEqual({
+      entity_id: 'item-1',
+      before: { name: 'Old Name' },
+      after: { name: 'New Name' },
+      changed_keys: ['name'],
+    });
+  });
+
+  it('suppresses a stock.transferred audit row even when no movement row exists for it', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null },
+      'audit_logs.select': {
+        data: [
+          {
+            id: 'a-tx',
+            event: 'stock.transferred',
+            metadata: {
+              entity_id: 'item-1',
+              before: { location_id: 'loc-a' },
+              after: { location_id: 'loc-b' },
+            },
+            created_at: '2025-04-03T00:00:00.000Z',
+            user_id: 'u1',
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events).toHaveLength(0);
+  });
+
+  it('suppresses stock.received and stock.removed alongside stock.adjusted/transferred', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null },
+      'audit_logs.select': {
+        data: [
+          {
+            id: 'a-rcv',
+            event: 'stock.received',
+            metadata: {},
+            created_at: '2025-04-04T00:00:00.000Z',
+            user_id: null,
+          },
+          {
+            id: 'a-rem',
+            event: 'stock.removed',
+            metadata: {},
+            created_at: '2025-04-04T00:01:00.000Z',
+            user_id: null,
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events).toHaveLength(0);
+  });
+
+  it("pushes the exclusion down to the query ('.not(event, in, ...)') alongside the org/entity filters", async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    await svc.forItem('item-1');
+
+    const chain = stub.chains.get('audit_logs.select') ?? [];
+    const args = stub.chainArgs.get('audit_logs.select') ?? [];
+    const notIdx = chain.indexOf('not');
+    expect(notIdx).toBeGreaterThan(-1);
+    expect(args[notIdx]).toEqual([
+      'event',
+      'in',
+      '(stock.adjusted,stock.transferred,stock.received,stock.removed)',
+    ]);
+  });
+
+  it('per-kind caps still hold: shadowed audit rows never crowd out real audit rows within auditLimit, and movements are unaffected', async () => {
+    const stub = makeSupabaseStub({
+      // 4 real movements — movementLimit should return all 4, untouched by
+      // anything happening on the audit side.
+      'stock_movements.select': {
+        data: Array.from({ length: 4 }, (_, i) => ({
+          id: `m${i}`,
+          movement_type: 'adjust',
+          quantity_change: 1,
+          previous_quantity: i,
+          new_quantity: i + 1,
+          reason: null,
+          notes: null,
+          created_at: new Date(2025, 0, 1, 0, i).toISOString(),
+          user_id: null,
+        })),
+        error: null,
+      },
+      // 4 shadowed stock.* rows + 4 real item-updated rows. A real DB would
+      // never return the shadowed rows at all (the `.not()` filter excludes
+      // them before LIMIT is applied) — this test models the JS-level
+      // defensive filter by including them in the mocked "raw" query result
+      // anyway, the same way this in-memory mock doesn't evaluate `.not()`
+      // semantics. limit=6 -> auditLimit=ceil(6/2)=3.
+      'audit_logs.select': {
+        data: [
+          ...Array.from({ length: 4 }, (_, i) => ({
+            id: `shadow${i}`,
+            event: 'stock.adjusted',
+            metadata: {},
+            created_at: new Date(2025, 2, 1, 0, i).toISOString(),
+            user_id: null,
+          })),
+          ...Array.from({ length: 4 }, (_, i) => ({
+            id: `real${i}`,
+            event: 'inventory.item.updated',
+            metadata: {},
+            created_at: new Date(2025, 1, 1, 0, i).toISOString(),
+            user_id: null,
+          })),
+        ],
+        error: null,
+      },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1', 6);
+    const movementEvents = events.filter((e) => e.kind === 'movement');
+    const auditEvents = events.filter((e) => e.kind === 'audit');
+
+    // Movements: full movementLimit (4, all that exist) survives untouched —
+    // shadowed audit volume never affects the movement side of the cap.
+    expect(movementEvents).toHaveLength(4);
+    expect(movementEvents.map((e) => e.id).sort()).toEqual(
+      ['m:m0', 'm:m1', 'm:m2', 'm:m3'].sort(),
+    );
+
+    // Audits: auditLimit=3 real rows — none of the 4 shadowed rows survive,
+    // and all 3 kept rows are real (non-shadowed) events, not wasted slots.
+    expect(auditEvents).toHaveLength(3);
+    expect(auditEvents.every((e) => e.id.startsWith('a:real'))).toBe(true);
+    expect(auditEvents.some((e) => e.id.startsWith('a:shadow'))).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Issues 3 + 4 display mapping (migration 0231): transfers surface
 // moved_quantity + location ids; pre-0231 receipt rows ('receipt_line') are
 // batch-resolved to 'PO {number}' with a 'PO receipt' fallback.
