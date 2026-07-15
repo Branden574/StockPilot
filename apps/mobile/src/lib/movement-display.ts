@@ -46,3 +46,15 @@ export function movementAmount(m: MovementAmountInput): MovementAmount {
 export function movementReasonLabel(reason: string | null): string | null {
   return reason === 'receipt_line' ? 'PO receipt' : reason;
 }
+
+/**
+ * Masks the internal receipt uuid stashed in `notes` on pre-0231
+ * 'receipt_line' rows — it's an implementation detail (already consumed by
+ * `movementReasonLabel` to produce 'PO receipt'), never real user text.
+ * Every other reason passes `notes` through verbatim. Mirrors the web's
+ * reason/notes split in `ActivityService.forItem` (notes is never silently
+ * dropped EXCEPT for this one legacy sentinel case).
+ */
+export function movementNotesForDisplay(reason: string | null, notes: string | null): string | null {
+  return reason === 'receipt_line' ? null : notes;
+}
