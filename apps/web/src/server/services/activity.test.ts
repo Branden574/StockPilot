@@ -28,7 +28,11 @@ import {
   ActivityService,
   collectReceiptLineIds,
   receiptLineSummary,
+  resolveBundleNames,
+  resolveOrderNumbers,
+  resolvePurchaseOrderNumbers,
   resolveReceiptPoNumbers,
+  resolveReturnNumbers,
 } from './activity';
 
 beforeEach(() => {
@@ -242,28 +246,69 @@ describe('ActivityService.forItem', () => {
     expect(events[0]!.actorEmail).toBeNull();
   });
 
-  it('caps total events at the requested limit', async () => {
+  it('passes the FULL requested limit to movements and a separate (smaller) limit to audit', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    // limit=30 ⇒ movementLimit=30 (the full ask), auditLimit=ceil(30/2)=15 —
+    // NOT the old shared halfLimit=ceil(30/1.5)=20 for both. Movements never
+    // get less than the caller asked for just because audit rows exist.
+    await svc.forItem('item-1', 30);
+
+    const movChain = stub.chains.get('stock_movements.select') ?? [];
+    const movArgs = stub.chainArgs.get('stock_movements.select') ?? [];
+    const movLimitIdx = movChain.indexOf('limit');
+    expect(movArgs[movLimitIdx]![0]).toBe(30);
+
+    const auditChain = stub.chains.get('audit_logs.select') ?? [];
+    const auditArgs = stub.chainArgs.get('audit_logs.select') ?? [];
+    const auditLimitIdx = auditChain.indexOf('limit');
+    expect(auditArgs[auditLimitIdx]![0]).toBe(15);
+  });
+
+  // ── Real bug (Issue 6): audit rows must never crowd movements out ───────
+  //
+  // The old implementation queried movements + audit at the SAME halved
+  // limit, merged them, sorted by recency, then sliced the COMBINED list
+  // down to `limit` total. If audit rows happened to be more numerous or
+  // more recent than movements, that final slice could — and did — throw
+  // away legitimately-fetched movement rows. The Movements tab (item-detail
+  // filters this feed to kind==='movement') would then show FEWER than
+  // `limit` real movements even though more existed and were fetched.
+  //
+  // This test is the RED→GREEN case: against the old code (shared halved
+  // limit + final combined slice), with 8 movements older than 8 audit
+  // rows and limit=6, the merged-then-sliced top 6 are ALL audit rows —
+  // zero movements survive. Against the fixed code (separate caps, no
+  // final combined slice), all `movementLimit` movements always come
+  // through untouched by audit volume/recency.
+  it('never crowds movements out of the feed with newer/more-numerous audit rows (regression)', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': {
-        data: Array.from({ length: 20 }, (_, i) => ({
+        data: Array.from({ length: 8 }, (_, i) => ({
           id: `m${i}`,
           movement_type: 'adjust',
           quantity_change: 1,
-          new_quantity: 1,
+          previous_quantity: i,
+          new_quantity: i + 1,
           reason: null,
           notes: null,
-          // Newer first so they win the sort.
+          // All older than every audit row below.
           created_at: new Date(2025, 0, 1, 0, i).toISOString(),
           user_id: null,
         })),
         error: null,
       },
       'audit_logs.select': {
-        data: Array.from({ length: 20 }, (_, i) => ({
+        data: Array.from({ length: 8 }, (_, i) => ({
           id: `a${i}`,
           event: 'item.updated',
           metadata: {},
-          created_at: new Date(2024, 0, 1, 0, i).toISOString(),
+          // All newer than every movement row above.
+          created_at: new Date(2025, 2, 1, 0, i).toISOString(),
           user_id: null,
         })),
         error: null,
@@ -272,28 +317,30 @@ describe('ActivityService.forItem', () => {
     const svc = makeService(stub.client);
 
     const events = await svc.forItem('item-1', 6);
-    expect(events).toHaveLength(6);
+    const movementEvents = events.filter((e) => e.kind === 'movement');
+    // movementLimit === the requested limit (6) — every fetched movement
+    // row survives regardless of how many newer audit rows exist.
+    expect(movementEvents).toHaveLength(6);
   });
 
-  it('passes ceil(limit / 1.5) as the per-source limit', async () => {
+  it('caps audit rows at their own (smaller) limit, independently of movement volume', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': { data: [], error: null },
-      'audit_logs.select': { data: [], error: null },
+      'audit_logs.select': {
+        data: Array.from({ length: 8 }, (_, i) => ({
+          id: `a${i}`,
+          event: 'item.updated',
+          metadata: {},
+          created_at: new Date(2025, 0, 1, 0, i).toISOString(),
+          user_id: null,
+        })),
+        error: null,
+      },
     });
     const svc = makeService(stub.client);
 
-    // limit=30 ⇒ halfLimit = ceil(30 / 1.5) = 20
-    await svc.forItem('item-1', 30);
-
-    const movChain = stub.chains.get('stock_movements.select') ?? [];
-    const movArgs = stub.chainArgs.get('stock_movements.select') ?? [];
-    const movLimitIdx = movChain.indexOf('limit');
-    expect(movArgs[movLimitIdx]![0]).toBe(20);
-
-    const auditChain = stub.chains.get('audit_logs.select') ?? [];
-    const auditArgs = stub.chainArgs.get('audit_logs.select') ?? [];
-    const auditLimitIdx = auditChain.indexOf('limit');
-    expect(auditArgs[auditLimitIdx]![0]).toBe(20);
+    const events = await svc.forItem('item-1', 6); // auditLimit = ceil(6/2) = 3
+    expect(events).toHaveLength(3);
   });
 
   it('uses metadata.reason as audit summary when present', async () => {
@@ -316,9 +363,14 @@ describe('ActivityService.forItem', () => {
 
     const events = await svc.forItem('item-1');
     expect(events[0]!.kind).toBe('audit');
-    expect(events[0]!.summary).toBe('EOL product');
+    expect(events[0]!.reason).toBe('EOL product');
     expect(events[0]!.delta).toBeNull();
     expect(events[0]!.quantityAfter).toBeNull();
+    expect(events[0]!.previousQuantity).toBeNull();
+    expect(events[0]!.referenceType).toBeNull();
+    expect(events[0]!.referenceId).toBeNull();
+    expect(events[0]!.referenceLabel).toBeNull();
+    expect(events[0]!.notes).toBeNull();
   });
 });
 
@@ -335,11 +387,14 @@ function movementRow(overrides: Record<string, unknown> = {}) {
     id: 'm1',
     movement_type: 'adjust',
     quantity_change: 1,
+    previous_quantity: 9,
     new_quantity: 10,
     moved_quantity: null,
     from_location_id: null,
     to_location_id: null,
     reason: null,
+    reference_type: null,
+    reference_id: null,
     notes: null,
     created_at: '2025-01-01T00:00:00.000Z',
     user_id: null,
@@ -396,6 +451,84 @@ describe('receipt_line display helpers', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue 4: clickable source links — the four reference-label batch resolvers.
+// Each mirrors resolveReceiptPoNumbers's contract: one batched query, skips
+// the query entirely on an empty id list, and degrades to an empty map on
+// error (never throws, never breaks the feed).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('reference-label resolvers', () => {
+  it('resolveOrderNumbers formats order_number via formatOrderNumber and skips unresolved rows', async () => {
+    const stub = makeSupabaseStub({
+      'order_requests.select': {
+        data: [
+          { id: 'req-1', order_number: 49 },
+          { id: 'req-2', order_number: null },
+        ],
+        error: null,
+      },
+    });
+    const map = await resolveOrderNumbers(makeServiceContext(stub.client), ['req-1', 'req-2']);
+    expect(map.get('req-1')).toBe('SO-000049');
+    expect(map.has('req-2')).toBe(false);
+  });
+
+  it('resolveOrderNumbers skips the query entirely on an empty id list', async () => {
+    const stub = makeSupabaseStub();
+    const map = await resolveOrderNumbers(makeServiceContext(stub.client), []);
+    expect(map.size).toBe(0);
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('resolveOrderNumbers degrades to an empty map on a query error', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const stub = makeSupabaseStub({
+      'order_requests.select': { data: null, error: { message: 'boom' } },
+    });
+    const map = await resolveOrderNumbers(makeServiceContext(stub.client), ['req-1']);
+    expect(map.size).toBe(0);
+    spy.mockRestore();
+  });
+
+  it('resolveReturnNumbers resolves return_number and skips unresolved rows', async () => {
+    const stub = makeSupabaseStub({
+      'returns.select': {
+        data: [
+          { id: 'ret-1', return_number: 'RMA-1029' },
+          { id: 'ret-2', return_number: null },
+        ],
+        error: null,
+      },
+    });
+    const map = await resolveReturnNumbers(makeServiceContext(stub.client), ['ret-1', 'ret-2']);
+    expect(map.get('ret-1')).toBe('RMA-1029');
+    expect(map.has('ret-2')).toBe(false);
+  });
+
+  it('resolveBundleNames resolves the bundle name', async () => {
+    const stub = makeSupabaseStub({
+      'bundles.select': {
+        data: [{ id: 'bun-1', name: 'Back-to-School Kit' }],
+        error: null,
+      },
+    });
+    const map = await resolveBundleNames(makeServiceContext(stub.client), ['bun-1']);
+    expect(map.get('bun-1')).toBe('Back-to-School Kit');
+  });
+
+  it('resolvePurchaseOrderNumbers resolves po_number for a direct purchase_order reference', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_orders.select': {
+        data: [{ id: 'po-1', po_number: 'PO-2026-014' }],
+        error: null,
+      },
+    });
+    const map = await resolvePurchaseOrderNumbers(makeServiceContext(stub.client), ['po-1']);
+    expect(map.get('po-1')).toBe('PO-2026-014');
+  });
+});
+
 describe('ActivityService.forItem display mapping (0231)', () => {
   it("maps an OLD receipt row (reason='receipt_line', notes=receipt id) to 'PO {number}'", async () => {
     const stub = makeSupabaseStub({
@@ -420,8 +553,12 @@ describe('ActivityService.forItem display mapping (0231)', () => {
     const svc = makeService(stub.client);
 
     const events = await svc.forItem('item-1');
-    expect(events[0]!.summary).toBe('PO PO-2026-014');
+    expect(events[0]!.reason).toBe('PO PO-2026-014');
     expect(events[0]!.type).toBe('receive_po');
+    // The receipt uuid living in `notes` is an internal implementation
+    // detail (already consumed to produce the human reason above) — never
+    // surfaced to the user as if it were their own free-text note.
+    expect(events[0]!.notes).toBeNull();
   });
 
   it("falls back to 'PO receipt' for an unresolvable old receipt row", async () => {
@@ -443,7 +580,7 @@ describe('ActivityService.forItem display mapping (0231)', () => {
     const svc = makeService(stub.client);
 
     const events = await svc.forItem('item-1');
-    expect(events[0]!.summary).toBe('PO receipt');
+    expect(events[0]!.reason).toBe('PO receipt');
   });
 
   it("passes a NEW receipt row's 'PO {n}' reason through with no receipts lookup", async () => {
@@ -464,7 +601,7 @@ describe('ActivityService.forItem display mapping (0231)', () => {
     const svc = makeService(stub.client);
 
     const events = await svc.forItem('item-1');
-    expect(events[0]!.summary).toBe('PO PO-88');
+    expect(events[0]!.reason).toBe('PO PO-88');
     // No receipt_line rows → the extra receipts query never fires.
     expect(stub.fromCalls).not.toContain('receipts');
   });
@@ -496,7 +633,123 @@ describe('ActivityService.forItem display mapping (0231)', () => {
     expect(e.movedQuantity).toBe(250);
     expect(e.fromLocationId).toBe('loc-a');
     expect(e.toLocationId).toBe('loc-b');
-    expect(e.summary).toBe('restock front rack');
+    // Issue 3: reason (empty here) and notes are two SEPARATE fields now —
+    // notes is never used to fill in a missing reason (that conflation was
+    // exactly the bug: it made reason+notes indistinguishable downstream).
+    expect(e.reason).toBeNull();
+    expect(e.notes).toBe('restock front rack');
+  });
+
+  // ── Issue 1: previous_quantity threaded onto the event ───────────────────
+
+  it('threads previous_quantity onto the event alongside new_quantity', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [movementRow({ id: 'm-pq', previous_quantity: 250, new_quantity: 235 })],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events[0]!.previousQuantity).toBe(250);
+    expect(events[0]!.quantityAfter).toBe(235);
+  });
+
+  // ── Issue 3: reason AND notes both survive when BOTH are set ─────────────
+
+  it('carries BOTH reason and notes through when the row has both (previously notes was dropped)', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          movementRow({
+            id: 'm-both',
+            reason: 'Damaged in transit',
+            notes: 'Box was crushed, 3 units unsellable',
+          }),
+        ],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events[0]!.reason).toBe('Damaged in transit');
+    expect(events[0]!.notes).toBe('Box was crushed, 3 units unsellable');
+  });
+
+  // ── Issue 4: reference_type/reference_id + resolved display label ───────
+
+  it('threads reference_type/reference_id onto the event and resolves a display label (order_request)', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          movementRow({
+            id: 'm-ref',
+            movement_type: 'remove',
+            reference_type: 'order_request',
+            reference_id: 'req-1',
+          }),
+        ],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+      'order_requests.select': {
+        data: [{ id: 'req-1', order_number: 49 }],
+        error: null,
+      },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events[0]!.referenceType).toBe('order_request');
+    expect(events[0]!.referenceId).toBe('req-1');
+    expect(events[0]!.referenceLabel).toBe('SO-000049');
+  });
+
+  it('leaves referenceLabel null for a known type with no cheap number (cycle_count) — still routable', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          movementRow({
+            id: 'm-cc',
+            movement_type: 'adjust',
+            reference_type: 'cycle_count',
+            reference_id: 'cc-1',
+          }),
+        ],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events[0]!.referenceType).toBe('cycle_count');
+    expect(events[0]!.referenceId).toBe('cc-1');
+    expect(events[0]!.referenceLabel).toBeNull();
+    // No display number for cycle counts → no extra lookup query fires.
+    expect(stub.fromCalls).not.toContain('order_requests');
+    expect(stub.fromCalls).not.toContain('returns');
+    expect(stub.fromCalls).not.toContain('bundles');
+  });
+
+  it('skips every reference-label query when no movement row has a reference', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [movementRow({ id: 'm-none' })], error: null },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events[0]!.referenceType).toBeNull();
+    expect(events[0]!.referenceLabel).toBeNull();
+    expect(stub.fromCalls).not.toContain('order_requests');
+    expect(stub.fromCalls).not.toContain('returns');
+    expect(stub.fromCalls).not.toContain('bundles');
+    expect(stub.fromCalls).not.toContain('purchase_orders');
   });
 
   it('keeps movedQuantity null on OLD transfer rows (display shows no number, not 0)', async () => {
