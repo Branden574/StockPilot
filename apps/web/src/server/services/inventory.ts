@@ -2056,29 +2056,14 @@ export class InventoryService {
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
 
-    // Emit a stock_movements row so the dashboard's on-hand-count math
-    // doesn't silently lose qty when an item with stock is archived.
-    // movement_type enum doesn't have 'archived' (see migration 0040 — valid
-    // values: add/remove/adjust/transfer/receive_po/return/damage/loss/
-    // correction/initial/bundle_*), so we use 'adjust' and stash the
-    // lifecycle hint in `reason`. Best-effort: failure does NOT roll back
-    // the archive — same pattern as bulkCreate.
-    const onHand = Number((current as { quantity_on_hand?: number }).quantity_on_hand ?? 0);
-    if (onHand > 0) {
-      const { error: mvErr } = await this.ctx.supabase.from('stock_movements').insert({
-        organization_id: this.ctx.organizationId,
-        item_id: id,
-        movement_type: 'adjust',
-        quantity_change: -onHand,
-        previous_quantity: onHand,
-        new_quantity: 0,
-        user_id: this.ctx.userId,
-        reason: 'item_archived',
-      });
-      if (mvErr) {
-        console.warn('[archive] stock_movements writeback failed:', mvErr.message);
-      }
-    }
+    // Movement/Activity P3 Task 1: archiving an item deliberately PRESERVES
+    // quantity_on_hand (no stock physically moves), so no stock_movements
+    // row is written here. A previous version emitted a fictional
+    // `adjust`/`reason:'item_archived'` row driving on-hand to 0 — nothing
+    // ever reversed it on restore, which double-counted historical qty in
+    // the dashboard-history reconstruction (currentQty − SUM(future Δ))
+    // once the item re-entered scope. See migration 0271 for the one-time
+    // cleanup of rows written by the old code.
 
     void audit(
       {
@@ -2353,26 +2338,9 @@ export class InventoryService {
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
 
-    // Same rationale as archive() — emit a movement row so the dashboard's
-    // on-hand-count math reflects the qty going to zero. 'deleted' isn't a
-    // valid movement_type (see migration 0040); use 'adjust' with the
-    // lifecycle reason. Best-effort.
-    const onHand = Number((current as { quantity_on_hand?: number }).quantity_on_hand ?? 0);
-    if (onHand > 0) {
-      const { error: mvErr } = await this.ctx.supabase.from('stock_movements').insert({
-        organization_id: this.ctx.organizationId,
-        item_id: id,
-        movement_type: 'adjust',
-        quantity_change: -onHand,
-        previous_quantity: onHand,
-        new_quantity: 0,
-        user_id: this.ctx.userId,
-        reason: 'item_deleted',
-      });
-      if (mvErr) {
-        console.warn('[softDelete] stock_movements writeback failed:', mvErr.message);
-      }
-    }
+    // Movement/Activity P3 Task 1: same rationale as archive() — soft-delete
+    // deliberately PRESERVES quantity_on_hand, so no stock_movements row is
+    // written here. See the comment in archive() and migration 0271.
 
     void audit(
       {

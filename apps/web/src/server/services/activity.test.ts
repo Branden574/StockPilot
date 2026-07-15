@@ -603,6 +603,109 @@ describe('ActivityService.forItem suppresses movement-shadowing audit events', (
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Movement/Activity P3 Task 1 defense: InventoryService.archive()/
+// softDelete() used to insert a FICTIONAL stock_movements row
+// (movement_type='adjust', reason='item_archived'/'item_deleted') that never
+// corresponded to a real stock change. The insert has been removed at the
+// source and a one-time migration (0271) purges any rows it already wrote,
+// but `forItem` also filters LIFECYCLE_REASON_MOVEMENTS as a defensive
+// backstop for any org whose cleanup hasn't run (or a future accidental
+// write) — mirroring the MOVEMENT_SHADOWED_AUDIT_EVENTS pattern above.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('ActivityService.forItem filters legacy lifecycle-reason movements', () => {
+  it('drops a legacy item_archived movement row while keeping a real movement', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm-real',
+            movement_type: 'adjust',
+            quantity_change: -5,
+            previous_quantity: 20,
+            new_quantity: 15,
+            reason: 'cycle count correction',
+            notes: null,
+            created_at: '2025-05-01T00:00:00.000Z',
+            user_id: 'u1',
+          },
+          {
+            id: 'm-fictional',
+            movement_type: 'adjust',
+            quantity_change: -20,
+            previous_quantity: 20,
+            new_quantity: 0,
+            reason: 'item_archived',
+            notes: null,
+            created_at: '2025-05-02T00:00:00.000Z',
+            user_id: 'u1',
+          },
+        ],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      id: 'm:m-real',
+      kind: 'movement',
+      type: 'adjust',
+      delta: -5,
+      previousQuantity: 20,
+      quantityAfter: 15,
+      reason: 'cycle count correction',
+    });
+    expect(events.some((e) => e.id === 'm:m-fictional')).toBe(false);
+  });
+
+  it('drops a legacy item_deleted movement row too', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm-fictional-del',
+            movement_type: 'adjust',
+            quantity_change: -8,
+            previous_quantity: 8,
+            new_quantity: 0,
+            reason: 'item_deleted',
+            notes: null,
+            created_at: '2025-05-03T00:00:00.000Z',
+            user_id: 'u1',
+          },
+        ],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events).toHaveLength(0);
+  });
+
+  it("pushes the lifecycle-reason exclusion down to the stock_movements query ('.not(reason, in, ...)')", async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    await svc.forItem('item-1');
+
+    const chain = stub.chains.get('stock_movements.select') ?? [];
+    const args = stub.chainArgs.get('stock_movements.select') ?? [];
+    const notIdx = chain.indexOf('not');
+    expect(notIdx).toBeGreaterThan(-1);
+    expect(args[notIdx]).toEqual(['reason', 'in', '(item_archived,item_deleted)']);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Issues 3 + 4 display mapping (migration 0231): transfers surface
 // moved_quantity + location ids; pre-0231 receipt rows ('receipt_line') are
 // batch-resolved to 'PO {number}' with a 'PO receipt' fallback.

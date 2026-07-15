@@ -674,3 +674,95 @@ describe('InventoryService.transferStock — audit capture', () => {
     );
   });
 });
+
+// Movement/Activity P3 Task 1: archive() and softDelete() deliberately
+// PRESERVE quantity_on_hand — no stock physically moves — but a previous
+// version ALSO inserted a fictional `stock_movements` row
+// (movement_type='adjust', reason='item_archived'/'item_deleted') driving
+// on-hand to 0 whenever the item had stock. Nothing ever reversed that row
+// on restore, which double-counted historical qty in the dashboard-history
+// reconstruction. These tests prove the insert is gone while the audit
+// event (the correct way to record the lifecycle transition) still fires.
+describe('InventoryService.archive / softDelete — no fictional stock_movements row', () => {
+  const ITEM_WITH_STOCK = {
+    id: 'itm-stock',
+    organization_id: 'org-test',
+    warehouse_id: 'wh-a',
+    status: 'active',
+    quantity_on_hand: 42,
+  };
+
+  it('archive() on an item WITH stock on hand writes NO stock_movements row and still emits inventory.item.archived', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: ITEM_WITH_STOCK, error: null },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.archive('itm-stock');
+
+    // No insert (or any query at all) against stock_movements.
+    expect(stub.fromCalls).not.toContain('stock_movements');
+    expect(stub.chains.has('stock_movements.insert')).toBe(false);
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'inventory.item.archived',
+        entityType: 'inventory_item',
+        entityId: 'itm-stock',
+        warehouseId: 'wh-a',
+      }),
+      expect.anything(),
+    );
+
+    // The status update still fires with the real payload — archive/delete
+    // must keep preserving quantity_on_hand (it's absent from the payload).
+    const updateArgs = stub.chainArgs.get('inventory_items.update') ?? [];
+    const payload = updateArgs[0]![0] as Record<string, unknown>;
+    expect(payload.status).toBe('archived');
+    expect(payload).not.toHaveProperty('quantity_on_hand');
+  });
+
+  it('softDelete() on an item WITH stock on hand writes NO stock_movements row and still emits inventory.item.deleted', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: ITEM_WITH_STOCK, error: null },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.softDelete('itm-stock');
+
+    expect(stub.fromCalls).not.toContain('stock_movements');
+    expect(stub.chains.has('stock_movements.insert')).toBe(false);
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'inventory.item.deleted',
+        entityType: 'inventory_item',
+        entityId: 'itm-stock',
+        warehouseId: 'wh-a',
+      }),
+      expect.anything(),
+    );
+
+    const updateArgs = stub.chainArgs.get('inventory_items.update') ?? [];
+    const payload = updateArgs[0]![0] as Record<string, unknown>;
+    expect(payload).toHaveProperty('deleted_at');
+    expect(payload).not.toHaveProperty('quantity_on_hand');
+  });
+
+  it('archive() on an item with ZERO stock also writes no stock_movements row (unchanged behavior)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: { ...ITEM_WITH_STOCK, quantity_on_hand: 0 },
+        error: null,
+      },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.archive('itm-stock');
+
+    expect(stub.fromCalls).not.toContain('stock_movements');
+  });
+});
