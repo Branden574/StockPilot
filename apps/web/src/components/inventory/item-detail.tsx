@@ -5,7 +5,6 @@ import { notFound } from 'next/navigation';
 
 import { ActivityFeed } from '@/components/inventory/activity-feed';
 import { PlacementsBreakdown } from '@/components/inventory/placements-breakdown';
-import { AuditTimeline } from '@/components/audit/audit-timeline';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
 import { DuplicateItemDialog } from '@/components/inventory/duplicate-item-dialog';
 // ImageUploader is heavy (canvas resize/transcode + lazy-loaded
@@ -815,20 +814,6 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               <ActivityFeed events={activity} locationNames={locationNames} />
             </CardContent>
           </Card>
-
-          {/* AuditTimeline renders null when there are no rows, so this
-              block disappears on items with no recorded metadata edits.
-              Lives inside the Activity tab so a deep link to
-              ?tab=activity shows both the merged feed AND the
-              admin-facing audit log together. */}
-          <div className="mt-6">
-            <AuditTimeline
-              entityType="inventory_item"
-              entityId={id}
-              limit={20}
-              wrapperTitle="Recent activity"
-            />
-          </div>
         </div>
       )}
 
