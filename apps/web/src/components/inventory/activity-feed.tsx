@@ -12,7 +12,9 @@ import {
   Trash2,
   type LucideIcon,
 } from 'lucide-react';
+import Link from 'next/link';
 
+import { referenceHref, referenceTypeLabel } from '@/lib/activity-references';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
 
 import type { ActivityEvent } from '@/server/services/activity';
@@ -90,11 +92,38 @@ export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
         // for them. Show the physical qty moved instead (moved_quantity,
         // mig 0231); pre-0231 rows have none → show no number, never "0".
         const isTransfer = e.kind === 'movement' && e.type === 'transfer';
+        // From/to location context isn't transfer-only: receive_po only sets
+        // to_location_id, a removal only sets from_location_id, and a
+        // transfer sets both. Render whichever side(s) resolve to a name
+        // rather than requiring both (which used to hide the route entirely
+        // for every non-transfer movement type).
         const fromName =
-          isTransfer && e.fromLocationId ? locationNames?.[e.fromLocationId] : undefined;
+          e.kind === 'movement' && e.fromLocationId
+            ? locationNames?.[e.fromLocationId]
+            : undefined;
         const toName =
-          isTransfer && e.toLocationId ? locationNames?.[e.toLocationId] : undefined;
-        const route = fromName && toName ? `${fromName} → ${toName}` : null;
+          e.kind === 'movement' && e.toLocationId ? locationNames?.[e.toLocationId] : undefined;
+        const route =
+          fromName && toName
+            ? `${fromName} → ${toName}`
+            : toName
+              ? `→ ${toName}`
+              : fromName
+                ? `${fromName} →`
+                : null;
+        // Clickable source link (order_request, purchase_order, cycle_count,
+        // return, bundle, rental, …). referenceHref returns null for any
+        // reference_type it doesn't recognize — that's the graceful-degrade
+        // signal to render a plain label instead of a link, never a broken
+        // href. referenceLabel is the server-resolved display number (order
+        // #, PO #, return #, bundle name); falls back to a generic type
+        // label when there's no cheap number for the type.
+        const referenceLink =
+          e.kind === 'movement' ? referenceHref(e.referenceType, e.referenceId) : null;
+        const referenceDisplayLabel =
+          e.kind === 'movement' && e.referenceType
+            ? (e.referenceLabel ?? referenceTypeLabel(e.referenceType))
+            : null;
         return (
           <li key={e.id} className="relative flex gap-3 pl-2 pr-1">
             {!isLast && (
@@ -138,10 +167,16 @@ export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
                     </span>
                   )
                 )}
-                {e.quantityAfter !== null && (
-                  <span className="text-muted-foreground text-[11px]">
-                    → {formatNumber(e.quantityAfter)} on hand
+                {e.kind === 'movement' && e.previousQuantity !== null && e.quantityAfter !== null ? (
+                  <span className="text-muted-foreground text-[11px] tabular-nums">
+                    {formatNumber(e.previousQuantity)} → {formatNumber(e.quantityAfter)} on hand
                   </span>
+                ) : (
+                  e.quantityAfter !== null && (
+                    <span className="text-muted-foreground text-[11px]">
+                      → {formatNumber(e.quantityAfter)} on hand
+                    </span>
+                  )
                 )}
               </div>
               <div className="text-muted-foreground mt-0.5 text-xs">
@@ -154,10 +189,31 @@ export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
                     <span>{route}</span>
                   </>
                 )}
-                {e.summary && (
+                {referenceDisplayLabel && (
                   <>
                     <span className="mx-1.5">·</span>
-                    <span className="italic">{e.summary}</span>
+                    {referenceLink ? (
+                      <Link
+                        href={referenceLink}
+                        className="underline underline-offset-2 hover:text-foreground"
+                      >
+                        {referenceDisplayLabel}
+                      </Link>
+                    ) : (
+                      <span>{referenceDisplayLabel}</span>
+                    )}
+                  </>
+                )}
+                {e.reason && (
+                  <>
+                    <span className="mx-1.5">·</span>
+                    <span className="italic">{e.reason}</span>
+                  </>
+                )}
+                {e.notes && (
+                  <>
+                    <span className="mx-1.5">·</span>
+                    <span className="italic">&ldquo;{e.notes}&rdquo;</span>
                   </>
                 )}
               </div>

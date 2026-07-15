@@ -12,11 +12,16 @@ function makeEvent(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
     type: overrides.type ?? 'adjustment',
     createdAt: overrides.createdAt ?? new Date(Date.now() - 60_000).toISOString(),
     delta: overrides.delta ?? null,
+    previousQuantity: overrides.previousQuantity ?? null,
     quantityAfter: overrides.quantityAfter ?? null,
     movedQuantity: overrides.movedQuantity ?? null,
     fromLocationId: overrides.fromLocationId ?? null,
     toLocationId: overrides.toLocationId ?? null,
-    summary: overrides.summary ?? null,
+    referenceType: overrides.referenceType ?? null,
+    referenceId: overrides.referenceId ?? null,
+    referenceLabel: overrides.referenceLabel ?? null,
+    reason: overrides.reason ?? null,
+    notes: overrides.notes ?? null,
     actor: overrides.actor ?? 'Jane Doe',
     actorEmail: overrides.actorEmail ?? null,
   };
@@ -83,14 +88,42 @@ describe('ActivityFeed', () => {
     expect(screen.getByText(/ago|minute|now/i)).toBeInTheDocument();
   });
 
-  it('renders the summary as italic text when present', () => {
+  it('renders the reason as italic text when present', () => {
     const events = [
-      makeEvent({ id: 'a3', kind: 'audit', type: 'inventory.item.updated', summary: 'Renamed item' }),
+      makeEvent({ id: 'a3', kind: 'audit', type: 'inventory.item.updated', reason: 'Renamed item' }),
     ];
     render(<ActivityFeed events={events} />);
     const italic = screen.getByText('Renamed item');
     expect(italic).toBeInTheDocument();
     expect(italic).toHaveClass('italic');
+  });
+
+  // ── Issue 3: notes must never be dropped ────────────────────────────────
+
+  it('renders BOTH reason and notes for a movement — notes is never dropped when reason is also set', () => {
+    const events = [
+      makeEvent({
+        id: 'm9',
+        kind: 'movement',
+        type: 'adjustment',
+        delta: -5,
+        reason: 'Damaged in transit',
+        notes: 'Box was crushed on the top shelf, 3 units unsellable',
+      }),
+    ];
+    render(<ActivityFeed events={events} />);
+    expect(screen.getByText('Damaged in transit')).toBeInTheDocument();
+    expect(
+      screen.getByText('“Box was crushed on the top shelf, 3 units unsellable”'),
+    ).toBeInTheDocument();
+  });
+
+  it('renders notes alone when there is no reason', () => {
+    const events = [
+      makeEvent({ id: 'm10', kind: 'movement', type: 'adjustment', delta: 2, notes: 'Found in back room' }),
+    ];
+    render(<ActivityFeed events={events} />);
+    expect(screen.getByText('“Found in back room”')).toBeInTheDocument();
   });
 
   // ── Issue 3: "Stock transferred 0" ──────────────────────────────────────
@@ -168,15 +201,115 @@ describe('ActivityFeed', () => {
     expect(screen.queryByText(/→ Rack/)).not.toBeInTheDocument();
   });
 
+  // ── Issue 5: from→to context for non-transfer movement types ────────────
+
+  it('renders a "→ B" destination for a receive_po movement (to_location_id only, no from)', () => {
+    const events = [
+      makeEvent({
+        id: 'm11',
+        kind: 'movement',
+        type: 'receive_po',
+        delta: 10,
+        toLocationId: 'loc-b',
+      }),
+    ];
+    render(<ActivityFeed events={events} locationNames={{ 'loc-b': 'Rack B2' }} />);
+    expect(screen.getByText('→ Rack B2')).toBeInTheDocument();
+  });
+
+  it('renders an "A →" source for a removal movement (from_location_id only, no to)', () => {
+    const events = [
+      makeEvent({
+        id: 'm12',
+        kind: 'movement',
+        type: 'remove',
+        delta: -4,
+        fromLocationId: 'loc-a',
+      }),
+    ];
+    render(<ActivityFeed events={events} locationNames={{ 'loc-a': 'Rack A1' }} />);
+    expect(screen.getByText('Rack A1 →')).toBeInTheDocument();
+  });
+
+  // ── Issue 2: previous_quantity → new_quantity ────────────────────────────
+
+  it('renders "previous → after" instead of just the after value', () => {
+    const events = [
+      makeEvent({
+        id: 'm13',
+        kind: 'movement',
+        type: 'adjustment',
+        delta: -15,
+        previousQuantity: 250,
+        quantityAfter: 235,
+      }),
+    ];
+    render(<ActivityFeed events={events} />);
+    expect(screen.getByText('250 → 235 on hand')).toBeInTheDocument();
+  });
+
   // ── Issue 4: receipt movements ──────────────────────────────────────────
 
   it("labels receive_po movements 'Stock received' (the writer's type — 'receipt' was a dead branch)", () => {
     const events = [
       // delta deliberately 0 so the label can only come from the type match.
-      makeEvent({ id: 'm8', kind: 'movement', type: 'receive_po', delta: 0, summary: 'PO PO-77' }),
+      makeEvent({ id: 'm8', kind: 'movement', type: 'receive_po', delta: 0, reason: 'PO PO-77' }),
     ];
     render(<ActivityFeed events={events} />);
     expect(screen.getByText('Stock received')).toBeInTheDocument();
     expect(screen.getByText('PO PO-77')).toBeInTheDocument();
+  });
+
+  // ── Issue 4: clickable source links ──────────────────────────────────────
+
+  it('renders a clickable link for a movement with a resolvable reference route + label', () => {
+    const events = [
+      makeEvent({
+        id: 'm14',
+        kind: 'movement',
+        type: 'remove',
+        delta: -2,
+        referenceType: 'order_request',
+        referenceId: 'req-123',
+        referenceLabel: 'SO-000049',
+      }),
+    ];
+    render(<ActivityFeed events={events} />);
+    const link = screen.getByRole('link', { name: 'SO-000049' });
+    expect(link).toHaveAttribute('href', '/dashboard/orders/req-123');
+  });
+
+  it('renders a known-route reference with NO resolved label using a generic type label, still linked', () => {
+    const events = [
+      makeEvent({
+        id: 'm15',
+        kind: 'movement',
+        type: 'adjust',
+        delta: 3,
+        referenceType: 'cycle_count',
+        referenceId: 'cc-1',
+        referenceLabel: null,
+      }),
+    ];
+    render(<ActivityFeed events={events} />);
+    const link = screen.getByRole('link', { name: 'Cycle count' });
+    expect(link).toHaveAttribute('href', '/dashboard/cycle-counts/cc-1');
+  });
+
+  it('degrades an UNKNOWN reference_type to a plain label — never a broken link', () => {
+    const events = [
+      makeEvent({
+        id: 'm16',
+        kind: 'movement',
+        type: 'adjust',
+        delta: 1,
+        referenceType: 'ai_shelf_scan',
+        referenceId: 'scan-9',
+        referenceLabel: null,
+      }),
+    ];
+    render(<ActivityFeed events={events} />);
+    expect(screen.getByText('Ai shelf scan')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 });
