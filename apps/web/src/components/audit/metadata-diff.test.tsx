@@ -122,6 +122,17 @@ describe('humanizeFieldName', () => {
   it('converts camelCase to a capitalized phrase', () => {
     expect(humanizeFieldName('charterIds')).toBe('Charter ids');
   });
+
+  it('uppercases known acronyms instead of title-casing them', () => {
+    expect(humanizeFieldName('po_number')).toBe('PO number');
+    expect(humanizeFieldName('sku')).toBe('SKU');
+    expect(humanizeFieldName('poNumber')).toBe('PO number');
+  });
+
+  it('does not uppercase words that merely contain an acronym as a substring', () => {
+    expect(humanizeFieldName('unit_of_measure')).toBe('Unit of measure');
+    expect(humanizeFieldName('reorder_point')).toBe('Reorder point');
+  });
 });
 
 describe('MetadataDiff', () => {
@@ -150,7 +161,7 @@ describe('MetadataDiff', () => {
         }}
       />,
     );
-    expect(screen.getByText('Fields changed: Name, Sku')).toBeInTheDocument();
+    expect(screen.getByText('Fields changed: Name, SKU')).toBeInTheDocument();
   });
 
   it('prefers the before/after drawer over the changed_keys chip when both are present', () => {

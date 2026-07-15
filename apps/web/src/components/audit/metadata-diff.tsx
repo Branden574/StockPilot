@@ -114,14 +114,43 @@ export function diffMetadataFields(before: unknown, after: unknown): MetadataDif
   return rows;
 }
 
-/** "public_display_name" / "charterIds" -> "Public display name" / "Charter ids". */
+/**
+ * Common acronyms that should render fully uppercase instead of
+ * title-cased (e.g. "Po number" -> "PO number"). Matched case-insensitively
+ * against whole words only, so "charterIds" ("ids", plural) is unaffected.
+ */
+const ACRONYMS = new Set([
+  'po',
+  'sku',
+  'id',
+  'uom',
+  'url',
+  'api',
+  'mfa',
+  'rls',
+  'ai',
+  'isbn',
+  'upc',
+  'qbo',
+  'gps',
+]);
+
+/**
+ * "public_display_name" / "charterIds" -> "Public display name" / "Charter ids".
+ * "po_number" -> "PO number", "sku" -> "SKU" (see ACRONYMS above).
+ */
 export function humanizeFieldName(key: string): string {
   const spaced = key
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/[_-]+/g, ' ')
     .toLowerCase()
     .trim();
-  return spaced.length > 0 ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : key;
+  if (spaced.length === 0) return key;
+  const words = spaced
+    .split(' ')
+    .map((word) => (ACRONYMS.has(word) ? word.toUpperCase() : word));
+  const result = words.join(' ');
+  return result.charAt(0).toUpperCase() + result.slice(1);
 }
 
 function isStringArray(value: unknown): value is string[] {
