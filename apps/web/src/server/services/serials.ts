@@ -346,12 +346,16 @@ export class SerialsService {
     await audit(
       {
         event: 'item.serial.updated',
-        entityType: 'serial_registry',
-        entityId: id,
+        // entityType/entityId point at the ITEM (not the serial_registry
+        // row) so this edit surfaces in the item's Activity feed
+        // (ActivityService.forItem filters on entity_id = item id). The
+        // serial's own id still rides along in `extra.serial_id`.
+        entityType: 'inventory_item',
+        entityId: before.item_id,
         before: { serialNumber: before.serial_number, status: before.current_status },
         after: { serialNumber: after.serial_number, status: after.current_status },
         extra: {
-          item_id: before.item_id,
+          serial_id: id,
           from: before.serial_number,
           to: after.serial_number,
           receipt_captured: before.receipt_line_id !== null,
@@ -417,10 +421,12 @@ export class SerialsService {
     await audit(
       {
         event: 'item.serial.deleted',
-        entityType: 'serial_registry',
-        entityId: id,
+        // Same entityId rationale as updateSerial above — points at the
+        // ITEM so this deletion surfaces in the item's Activity feed.
+        entityType: 'inventory_item',
+        entityId: row.item_id,
         before: { serialNumber: row.serial_number },
-        extra: { item_id: row.item_id },
+        extra: { serial_id: id },
       },
       this.ctx,
     );

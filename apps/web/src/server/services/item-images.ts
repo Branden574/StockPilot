@@ -4,6 +4,7 @@ import { unstable_cache } from 'next/cache';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 
+import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 
 /**
@@ -626,6 +627,21 @@ export class ItemImagesService {
       .select('id, storage_path, sort_order, is_primary')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
+
+    // Capture-gap fix (Movement/Activity P2 Task 1e): image add/remove had
+    // ZERO audit capture before this. Reuses 'inventory.item.updated' (no
+    // new AuditEvent — this phase is migration-free) with `images` in
+    // changed_keys so the item's Activity feed shows "photo added".
+    void audit(
+      {
+        event: 'inventory.item.updated',
+        entityType: 'inventory_item',
+        entityId: itemId,
+        extra: { changed_keys: ['images'], image_added: true },
+      },
+      this.ctx,
+    );
+
     return data;
   }
 
@@ -633,7 +649,7 @@ export class ItemImagesService {
     assertPermission(this.ctx, 'items:update');
     const { data: img } = await this.ctx.supabase
       .from('item_images')
-      .select('storage_path')
+      .select('storage_path, item_id')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', imageId)
       .maybeSingle();
@@ -646,6 +662,17 @@ export class ItemImagesService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', imageId);
     if (error) throw new ServiceError('internal_error', error.message);
+
+    // Same rationale as record() above — the removal side of the gap.
+    void audit(
+      {
+        event: 'inventory.item.updated',
+        entityType: 'inventory_item',
+        entityId: img.item_id as string,
+        extra: { changed_keys: ['images'], image_added: false },
+      },
+      this.ctx,
+    );
   }
 
   /**

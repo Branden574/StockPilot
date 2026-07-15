@@ -313,18 +313,25 @@ export class TagsService {
       .upsert(rows, { onConflict: 'item_id,tag_id', ignoreDuplicates: true });
     if (error) throw new ServiceError('internal_error', error.message);
 
-    void audit(
-      {
-        event: 'tag.applied',
-        entityType: 'inventory_item',
-        extra: {
-          bulk: true,
-          item_count: itemIds.length,
-          tag_ids: safeTags,
+    // One audit row PER item (not one row for the whole batch) so each
+    // affected item's own Activity feed / "View history" link actually
+    // shows the tag change — a single entityId-less row was invisible
+    // everywhere except a raw audit_logs query.
+    for (const itemId of new Set(itemIds)) {
+      void audit(
+        {
+          event: 'tag.applied',
+          entityType: 'inventory_item',
+          entityId: itemId,
+          extra: {
+            bulk: true,
+            item_count: itemIds.length,
+            tag_ids: safeTags,
+          },
         },
-      },
-      this.ctx,
-    );
+        this.ctx,
+      );
+    }
   }
 
   /** Mirror of bulkAddToItems but DELETEs every (item, tag) pair in the cross product. */
@@ -373,17 +380,21 @@ export class TagsService {
       .in('tag_id', tagIds);
     if (error) throw new ServiceError('internal_error', error.message);
 
-    void audit(
-      {
-        event: 'tag.removed',
-        entityType: 'inventory_item',
-        extra: {
-          bulk: true,
-          item_count: itemIds.length,
-          tag_ids: tagIds,
+    // One audit row per item — same rationale as bulkAddToItems above.
+    for (const itemId of new Set(itemIds)) {
+      void audit(
+        {
+          event: 'tag.removed',
+          entityType: 'inventory_item',
+          entityId: itemId,
+          extra: {
+            bulk: true,
+            item_count: itemIds.length,
+            tag_ids: tagIds,
+          },
         },
-      },
-      this.ctx,
-    );
+        this.ctx,
+      );
+    }
   }
 }

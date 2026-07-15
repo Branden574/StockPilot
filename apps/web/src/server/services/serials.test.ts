@@ -212,11 +212,22 @@ describe('SerialsService.updateSerial', () => {
     const updateArgs = stub.chainArgs.get('serial_registry.update');
     expect(updateArgs![0]![0]).toEqual({ serial_number: 'SN-NEW', current_status: 'damaged' });
 
+    // entityId MUST be the ITEM id (not the serial_registry row id) — that's
+    // what ActivityService.forItem filters on to surface this edit in the
+    // item's Activity feed. The serial's own id still travels in extra.
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'item.serial.updated',
-        entityId: SERIAL_ID,
-        extra: expect.objectContaining({ from: 'SN-OLD', to: 'SN-NEW', receipt_captured: true }),
+        entityType: 'inventory_item',
+        entityId: ITEM_ID,
+        before: { serialNumber: 'SN-OLD', status: 'available' },
+        after: { serialNumber: 'SN-NEW', status: 'damaged' },
+        extra: expect.objectContaining({
+          serial_id: SERIAL_ID,
+          from: 'SN-OLD',
+          to: 'SN-NEW',
+          receipt_captured: true,
+        }),
       }),
       expect.anything(),
     );
@@ -265,8 +276,14 @@ describe('SerialsService.remove', () => {
 
     await expect(svc.remove(SERIAL_ID)).resolves.toEqual({ itemId: ITEM_ID });
     expect(stub.chains.get('serial_registry.delete')).toBeDefined();
+    // Same entityId=item rationale as updateSerial above.
     expect(audit).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'item.serial.deleted', entityId: SERIAL_ID }),
+      expect.objectContaining({
+        event: 'item.serial.deleted',
+        entityType: 'inventory_item',
+        entityId: ITEM_ID,
+        extra: { serial_id: SERIAL_ID },
+      }),
       expect.anything(),
     );
   });
