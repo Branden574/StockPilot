@@ -37,7 +37,7 @@ vi.mock('./audit', () => ({
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { audit } from './audit';
-import { InventoryService } from './inventory';
+import { InventoryService, mapMovementTypeToAuditEvent } from './inventory';
 import { ServiceError } from './context';
 
 beforeEach(() => {
@@ -442,5 +442,235 @@ describe('InventoryService.bulkUpdate', () => {
     await expect(
       svc.bulkUpdate({ ids: ['item-1'], op: { kind: 'archive' } }),
     ).rejects.toBeInstanceOf(ServiceError);
+  });
+});
+
+// Movement/Activity P2 Task 1: the P1 before/after diff drawer
+// (metadata-diff.tsx) renders from audit_logs.metadata.before/after — these
+// tests prove update()/bulkUpdate() actually populate that data, restricted
+// to the CHANGED columns only (never heavy/derived columns like embedding
+// or search_vector, even when the full row carries them).
+describe('InventoryService.update — audit before/after capture', () => {
+  const ITEM_BEFORE = {
+    id: 'itm-1',
+    organization_id: 'org-test',
+    name: 'Old Name',
+    sku: 'SKU-1',
+    barcode: null,
+    warehouse_id: 'wh-a',
+    bin_location: 'B-1',
+    charter_id: null,
+    custom_fields: {},
+    status: 'active',
+    item_type: 'product',
+    tracking_type: 'none',
+    quantity_on_hand: 5,
+    // Heavy/derived columns that a naive "spread the whole row" bug would
+    // otherwise leak into the audit metadata.
+    embedding: [0.1, 0.2, 0.3],
+    search_vector: 'old tsvector data',
+  };
+  const ITEM_AFTER = {
+    ...ITEM_BEFORE,
+    bin_location: 'B-2',
+    status: 'discontinued',
+    embedding: [0.9, 0.9, 0.9],
+    search_vector: 'new tsvector data',
+  };
+
+  it('passes before/after restricted to the CHANGED keys only, excluding heavy columns', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: ITEM_BEFORE, error: null },
+      'inventory_items.update': { data: ITEM_AFTER, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    // bin_location + status are PER-PLACEMENT fields (not in
+    // SHARED_ITEM_FIELDS), so this patch never triggers the Model-B
+    // sibling fan-out — keeps this test focused on the target-row diff.
+    await svc.update('itm-1', { binLocation: 'B-2', status: 'discontinued' });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'inventory.item.updated',
+        entityType: 'inventory_item',
+        entityId: 'itm-1',
+        before: { bin_location: 'B-1', status: 'active' },
+        after: { bin_location: 'B-2', status: 'discontinued' },
+        extra: expect.objectContaining({ changed_keys: ['bin_location', 'status'] }),
+      }),
+      expect.anything(),
+    );
+
+    const [payload] = vi.mocked(audit).mock.calls[0]!;
+    expect(payload.before).not.toHaveProperty('embedding');
+    expect(payload.before).not.toHaveProperty('search_vector');
+    expect(payload.after).not.toHaveProperty('embedding');
+    expect(payload.after).not.toHaveProperty('search_vector');
+  });
+});
+
+describe('InventoryService.bulkUpdate — audit before/after capture', () => {
+  it('generic branch (set_category): before/after + changed_keys reflect the OLD vs NEW column value', async () => {
+    let selectCalls = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': () => {
+        selectCalls += 1;
+        // Call 1 is the warehouse-access load; call 2 is the new
+        // old-values batch read this task adds.
+        return selectCalls === 1
+          ? { data: [{ id: 'item-1', warehouse_id: 'wh-a' }], error: null }
+          : { data: [{ id: 'item-1', category_id: 'cat-old' }], error: null };
+      },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.bulkUpdate({
+      ids: ['item-1'],
+      op: { kind: 'set_category', categoryId: 'cat-new' },
+    });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'inventory.item.updated',
+        entityType: 'inventory_item',
+        entityId: 'item-1',
+        before: { category_id: 'cat-old' },
+        after: { category_id: 'cat-new' },
+        extra: { bulk_op: 'set_category', changed_keys: ['category_id'] },
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('set_rack branch: before/after carry the OLD vs NEW bin_location label', async () => {
+    let selectCalls = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': () => {
+        selectCalls += 1;
+        return selectCalls === 1
+          ? { data: [{ id: 'item-1', warehouse_id: 'wh-a' }], error: null }
+          : { data: [{ id: 'item-1', bin_location: 'OLD-1' }], error: null };
+      },
+      'rpc:inventory_set_rack': { data: 1, error: null },
+      // Empty holdings so placeItemsOntoRackByName (called after the label
+      // write) finds nothing to physically move — irrelevant to this test.
+      'item_stock_levels.select': { data: [], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.bulkUpdate({
+      ids: ['item-1'],
+      op: { kind: 'set_rack', rackNumber: '2', rackRow: 'B' },
+    });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'inventory.item.updated',
+        entityType: 'inventory_item',
+        entityId: 'item-1',
+        before: { bin_location: 'OLD-1' },
+        after: { bin_location: '2-B' },
+        extra: expect.objectContaining({
+          bulk_op: 'set_rack',
+          changed_keys: ['bin_location'],
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+});
+
+describe('mapMovementTypeToAuditEvent', () => {
+  it.each([
+    ['receive_po', 'stock.received'],
+    ['remove', 'stock.removed'],
+    ['damage', 'stock.removed'],
+    ['add', 'stock.adjusted'],
+    ['adjust', 'stock.adjusted'],
+    ['transfer', 'stock.adjusted'],
+    ['return', 'stock.adjusted'],
+    ['loss', 'stock.adjusted'],
+    ['correction', 'stock.adjusted'],
+    ['initial', 'stock.adjusted'],
+  ] as const)('%s -> %s', (movementType, expected) => {
+    expect(mapMovementTypeToAuditEvent(movementType)).toBe(expected);
+  });
+});
+
+describe('InventoryService.adjustStock — audit capture', () => {
+  const ITEM = {
+    id: 'itm-1',
+    organization_id: 'org-test',
+    warehouse_id: 'wh-a',
+    status: 'active',
+    quantity_on_hand: 10,
+    reorder_point: 2,
+    name: 'Widget',
+    sku: 'W-1',
+  };
+
+  it('emits an audit row with entityId=itemId + before/after quantity_on_hand + the mapped event', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: ITEM, error: null },
+      'item_stock_levels.select': { data: [], error: null },
+      'rpc:adjust_stock': { data: { quantity_on_hand: 15, reorder_point: 2 }, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.adjustStock({
+      itemId: 'itm-1',
+      quantityChange: 5,
+      movementType: 'receive_po',
+      locationId: 'loc-1',
+      reason: 'PO receipt',
+    });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'stock.received',
+        entityType: 'inventory_item',
+        entityId: 'itm-1',
+        warehouseId: 'wh-a',
+        before: { quantity_on_hand: 10 },
+        after: { quantity_on_hand: 15 },
+        reason: 'PO receipt',
+        extra: {
+          quantity_change: 5,
+          movement_type: 'receive_po',
+          location_id: 'loc-1',
+        },
+      }),
+      expect.anything(),
+    );
+  });
+});
+
+describe('InventoryService.transferStock — audit capture', () => {
+  it('emits stock.transferred with entityId=itemId + before/after location_id', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:transfer_stock': { data: { ok: true }, error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.transferStock({
+      itemId: 'itm-1',
+      fromLocationId: 'loc-a',
+      toLocationId: 'loc-b',
+      quantity: 3,
+    });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'stock.transferred',
+        entityType: 'inventory_item',
+        entityId: 'itm-1',
+        before: { location_id: 'loc-a' },
+        after: { location_id: 'loc-b' },
+        extra: { quantity: 3, from_location_id: 'loc-a', to_location_id: 'loc-b' },
+      }),
+      expect.anything(),
+    );
   });
 });
