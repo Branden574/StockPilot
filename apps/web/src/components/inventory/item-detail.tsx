@@ -40,7 +40,7 @@ import { StockTransferDialog } from '@/components/inventory/stock-transfer-dialo
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { ActivityService } from '@/server/services/activity';
+import { ActivityService, type ActivityEvent } from '@/server/services/activity';
 import { ServiceError, withContext } from '@/server/services/context';
 import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
@@ -148,7 +148,15 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
       // Per-location stock levels for the transfer dialog — keeps the dialog's
       // source list accurate after mig 0192 moved stock out of primary_location_id.
       inventorySvc.placements(id),
-      activitySvc.forItem(id, 50),
+      // Deferred to the Movements/Activity tabs: ActivityService.forItem runs
+      // two base queries plus several batched lookups (profiles, receipt→PO,
+      // reference labels) — real cost the Overview tab was paying on every
+      // load even though it never renders the feed. Mirrors mobile's
+      // item/[id].tsx, which only calls loadMovements() when its Movements
+      // tab is active.
+      activeTab === 'movements' || activeTab === 'activity'
+        ? activitySvc.forItem(id, 50)
+        : Promise.resolve<ActivityEvent[]>([]),
       imagesSvc.list(id),
       // Per-supplier unit-cost trend from our own PO + receipt data. Fanned
       // out alongside the other detail fetches; rendered as a lazy Recharts
