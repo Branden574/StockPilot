@@ -222,20 +222,37 @@ select ok(has_function_privilege('service_role',
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- LIVE PRIVILEGE PROBES (3) — representative function.
+--
+-- PROD/CI ONLY (0230 pattern): the macOS local stack segfaults the backend
+-- when throws_ok trips an EXECUTE denial on a function (known class — see
+-- 0230's refresh_org_daily_stats probe for the full note). The property is
+-- already pinned statically above (the anon/authenticated has_function_privilege
+-- checks for each of the six functions). Opt in where the stack is verified
+-- safe with:  set stockpilot.pgtap_live_denial_probes = 'on';
 -- ═════════════════════════════════════════════════════════════════════════════
 
 set local "request.jwt.claim.role" to 'anon';
 set local role to 'anon';
-select throws_ok(
-  $$ select * from public.report_movement_type_summary('ac022500-0000-0000-0000-000000000001'::uuid, now() - interval '30 days') $$,
-  '42501', null, 'anon cannot execute report_movement_type_summary');
+select case
+  when coalesce(current_setting('stockpilot.pgtap_live_denial_probes', true), '') = 'on' then
+    throws_ok(
+      $$ select * from public.report_movement_type_summary('ac022500-0000-0000-0000-000000000001'::uuid, now() - interval '30 days') $$,
+      '42501', null, 'anon cannot execute report_movement_type_summary')
+  else
+    skip('prod-only: live fn-EXECUTE-denial probe (segfaults this local stack; EXECUTE grants asserted statically above)', 1)
+end;
 reset role;
 
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
-select throws_ok(
-  $$ select * from public.report_movement_type_summary('ac022500-0000-0000-0000-000000000001'::uuid, now() - interval '30 days') $$,
-  '42501', null, 'authenticated cannot execute report_movement_type_summary (not even for its own org)');
+select case
+  when coalesce(current_setting('stockpilot.pgtap_live_denial_probes', true), '') = 'on' then
+    throws_ok(
+      $$ select * from public.report_movement_type_summary('ac022500-0000-0000-0000-000000000001'::uuid, now() - interval '30 days') $$,
+      '42501', null, 'authenticated cannot execute report_movement_type_summary (not even for its own org)')
+  else
+    skip('prod-only: live fn-EXECUTE-denial probe (segfaults this local stack; EXECUTE grants asserted statically above)', 1)
+end;
 reset role;
 
 set local role to 'service_role';
@@ -254,8 +271,8 @@ select results_eq(
   $$ select movement_type, movement_count, total_qty
        from public.report_movement_type_summary('ac022500-0000-0000-0000-000000000001'::uuid, now() - interval '30 days')
       order by movement_type $$,
-  $$ values ('adjust', 2::bigint, 9::numeric),
-            ('add',    2::bigint, 35::numeric),
+  $$ values ('add',    2::bigint, 35::numeric),
+            ('adjust', 2::bigint, 9::numeric),
             ('remove', 1::bigint, 10::numeric) $$,
   'movement_type_summary: per-type count + sum(abs(qty)), window + org scoped');
 

@@ -165,15 +165,27 @@ select ok(
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 11. anon cannot execute (live 42501).
+--
+--     PROD/CI ONLY (0230 pattern): the macOS local stack segfaults the
+--     backend when throws_ok trips an EXECUTE denial on a function (known
+--     class — see 0230's refresh_org_daily_stats probe for the full note).
+--     The property is already pinned statically above (test 7: no EXECUTE
+--     for anon). Opt in where the stack is verified safe with:
+--     set stockpilot.pgtap_live_denial_probes = 'on';
 -- ─────────────────────────────────────────────────────────────────────────────
 
 set local "request.jwt.claim.role" to 'anon';
 set local role to 'anon';
-select throws_ok(
-  $$ select * from public.dashboard_history_series('ac022400-0000-0000-0000-000000000001'::uuid, null, 3) $$,
-  '42501', null,
-  'anon cannot execute dashboard_history_series'
-);
+select case
+  when coalesce(current_setting('stockpilot.pgtap_live_denial_probes', true), '') = 'on' then
+    throws_ok(
+      $$ select * from public.dashboard_history_series('ac022400-0000-0000-0000-000000000001'::uuid, null, 3) $$,
+      '42501', null,
+      'anon cannot execute dashboard_history_series'
+    )
+  else
+    skip('prod-only: live fn-EXECUTE-denial probe (segfaults this local stack; EXECUTE grants asserted statically above)', 1)
+end;
 reset role;
 
 -- ─────────────────────────────────────────────────────────────────────────────
