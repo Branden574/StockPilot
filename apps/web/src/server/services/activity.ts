@@ -73,7 +73,44 @@ export interface ActivityEvent {
   metadata: Record<string, unknown> | null;
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * One kind's "Load older" keyset boundary — the (created_at, id) of the
+ * OLDEST row of that kind already fetched. Pairing `id` alongside
+ * `createdAt` (not `createdAt` alone) is what makes the boundary exact at a
+ * tie: several rows can legitimately share the identical `created_at` (a
+ * bulk operation, or plain second-resolution clustering), and a page's
+ * `.limit()` can cut such a tie group in half. A created_at-only boundary
+ * then either skips the rows on the wrong side of the cut (`.lt`, the
+ * original bug — see below) or re-returns the whole tie group forever
+ * (`.lte`). Paired with `ORDER BY created_at DESC, id DESC` (see `forItem`),
+ * `(created_at, id)` is a total, deterministic order with no ties at all —
+ * "strictly before this exact row" is always well-defined.
+ */
+export interface ActivityKindCursor {
+  createdAt: string;
+  /** RAW `stock_movements.id` / `audit_logs.id` — NOT the kind-prefixed
+   * (`m:`/`a:`) composite `ActivityEvent.id` used for display/de-dupe. */
+  id: string;
+}
+
+/**
+ * `forItem`'s "Load older" cursor — one boundary PER KIND, never a single
+ * shared value. Movements and audits are two independent underlying
+ * queries/tables with independently-sized caps (`movementLimit` vs.
+ * `auditLimit`), so whichever kind's cap is reached first has nothing to do
+ * with where the OTHER kind's next page should start — sharing one boundary
+ * across both (the original design) either skipped tied-boundary rows
+ * (Blocker: created_at-only ordering) or forced re-fetching the other kind's
+ * already-seen rows (the old "later of two boundaries" trade-off). See
+ * `nextActivityCursor` in `lib/activity-pagination.ts` for how this is
+ * derived from a page's events.
+ */
+export interface ActivityCursor {
+  movement?: ActivityKindCursor;
+  audit?: ActivityKindCursor;
+}
 
 /**
  * Display-duplication rule (Movement/Activity P2 Task 2): `InventoryService`
@@ -128,6 +165,19 @@ const MOVEMENT_SHADOWED_AUDIT_EVENTS: readonly string[] = [
  * NOT NULL, so `event = ANY(...)` is always TRUE or FALSE there, never NULL.
  */
 const LIFECYCLE_REASON_MOVEMENTS: readonly string[] = ['item_archived', 'item_deleted'];
+
+/**
+ * Movement/Activity P4 Task 2: the audit half of `forItem`'s per-kind cap —
+ * `auditLimit = ceil(limit / 2)`. Pulled out to its own function (was an
+ * inline expression in `forItem`) so the "Load older" pagination surfaces
+ * (the server action + item-detail's initial-page exhaustion check) can
+ * compute the SAME cap without duplicating the formula. `Math.max(1, …)`
+ * matches the original inline behavior: a limit of 1 still asks for at
+ * least one audit row rather than zero.
+ */
+export function auditLimitFor(limit: number): number {
+  return Math.max(1, Math.ceil(limit / 2));
+}
 
 /**
  * Display-layer mapping for pre-0231 receipt movements: rows written by the
@@ -353,38 +403,81 @@ export class ActivityService {
    * source independently — and never re-slicing the merge — guarantees the
    * Movements tab always gets up to its full requested limit of real rows.
    */
-  async forItem(itemId: string, limit = 30): Promise<ActivityEvent[]> {
+  async forItem(
+    itemId: string,
+    limit = 30,
+    opts: { before?: ActivityCursor } = {},
+  ): Promise<ActivityEvent[]> {
     const movementLimit = limit;
-    const auditLimit = Math.max(1, Math.ceil(limit / 2));
+    const auditLimit = auditLimitFor(limit);
+    const { before } = opts;
 
-    const [movementsRes, auditRes] = await Promise.all([
-      this.ctx.supabase
-        .from('stock_movements')
-        .select(
-          'id, movement_type, quantity_change, previous_quantity, new_quantity, moved_quantity, from_location_id, to_location_id, reason, reference_type, reference_id, notes, created_at, user_id',
-        )
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('item_id', itemId)
-        .order('created_at', { ascending: false })
-        .limit(movementLimit),
-      this.ctx.supabase
-        .from('audit_logs')
-        .select('id, event, metadata, created_at, user_id')
-        .eq('organization_id', this.ctx.organizationId)
-        // Extracted-text equality so Postgres can use the
-        // audit_logs_org_entity_created_idx expression index added in
-        // migration 0135. The previous `.contains(metadata, …)` form
-        // forced a sequential scan because @> can't use a BTREE on
-        // the extracted text path.
-        .eq('metadata->>entity_id', itemId)
-        // Movement-shadowing stock.* events (see MOVEMENT_SHADOWED_AUDIT_EVENTS
-        // above) are excluded at the query layer so `auditLimit` caps real,
-        // kept audit rows for the item feed — not slots that get thrown away
-        // below. Same `.not(col, 'in', '(...)')` shape as po-imports.ts.
-        .not('event', 'in', `(${MOVEMENT_SHADOWED_AUDIT_EVENTS.join(',')})`)
-        .order('created_at', { ascending: false })
-        .limit(auditLimit),
-    ]);
+    // "Load older" pagination (Movement/Activity P4 Task 2, composite keyset
+    // per the P4 review fix): each kind gets its OWN `(created_at, id)`
+    // boundary — never a single shared `created_at` — because movements and
+    // audits are two independent queries with independently-sized caps
+    // (movementLimit/auditLimit are otherwise untouched, so an older page
+    // still guarantees up to the full movementLimit of movements regardless
+    // of audit volume, same P1 invariant as the first page). The keyset
+    // predicate is PostgREST's `.or(a,and(b,c))` form: "strictly before this
+    // row in (created_at DESC, id DESC) order" — `created_at < X` covers
+    // every row on a strictly older timestamp, `created_at = X AND id < Y`
+    // covers the remaining rows AT that exact timestamp that sort after this
+    // one. This is deliberately NOT `.lte('created_at', X)`: a page that's
+    // ENTIRELY one timestamp (e.g. a bulk op) would then never advance —
+    // every row would re-match forever. Building each query as a mutable
+    // variable (rather than one long inline chain) so the filter can be
+    // inserted conditionally without duplicating the rest of the chain.
+    let movementsQuery = this.ctx.supabase
+      .from('stock_movements')
+      .select(
+        'id, movement_type, quantity_change, previous_quantity, new_quantity, moved_quantity, from_location_id, to_location_id, reason, reference_type, reference_id, notes, created_at, user_id',
+      )
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('item_id', itemId);
+    if (before?.movement) {
+      const { createdAt, id } = before.movement;
+      movementsQuery = movementsQuery.or(
+        `created_at.lt.${createdAt},and(created_at.eq.${createdAt},id.lt.${id})`,
+      );
+    }
+    // Secondary `.order('id', …)` makes the ordering a total order — without
+    // it, rows sharing the exact same `created_at` come back in a
+    // DB-implementation-defined (nondeterministic) order, which is exactly
+    // what let the keyset boundary above skip/duplicate rows in the first
+    // place. Same reasoning on the audit query below.
+    movementsQuery = movementsQuery
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(movementLimit);
+
+    let auditQuery = this.ctx.supabase
+      .from('audit_logs')
+      .select('id, event, metadata, created_at, user_id')
+      .eq('organization_id', this.ctx.organizationId)
+      // Extracted-text equality so Postgres can use the
+      // audit_logs_org_entity_created_idx expression index added in
+      // migration 0135. The previous `.contains(metadata, …)` form
+      // forced a sequential scan because @> can't use a BTREE on
+      // the extracted text path.
+      .eq('metadata->>entity_id', itemId);
+    if (before?.audit) {
+      const { createdAt, id } = before.audit;
+      auditQuery = auditQuery.or(
+        `created_at.lt.${createdAt},and(created_at.eq.${createdAt},id.lt.${id})`,
+      );
+    }
+    auditQuery = auditQuery
+      // Movement-shadowing stock.* events (see MOVEMENT_SHADOWED_AUDIT_EVENTS
+      // above) are excluded at the query layer so `auditLimit` caps real,
+      // kept audit rows for the item feed — not slots that get thrown away
+      // below. Same `.not(col, 'in', '(...)')` shape as po-imports.ts.
+      .not('event', 'in', `(${MOVEMENT_SHADOWED_AUDIT_EVENTS.join(',')})`)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(auditLimit);
+
+    const [movementsRes, auditRes] = await Promise.all([movementsQuery, auditQuery]);
 
     // Defensive re-cap in JS: `.limit()` above already bounds each result at
     // the query layer, but slicing here again keeps the separate-caps

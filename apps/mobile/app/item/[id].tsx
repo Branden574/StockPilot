@@ -7,6 +7,7 @@ import {
   Camera,
   ChevronLeft,
   Edit3,
+  History,
   Minus,
   Plus,
   RotateCcw,
@@ -20,6 +21,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -42,9 +44,20 @@ import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
 import {
+  MOVEMENT_SHADOWED_AUDIT_EVENTS,
+  auditCapFor,
+  formatRelativeTime,
+  humanizeFieldName,
+  mergeItemActivity,
+  type ActivityEntry,
+  type AuditCardModel,
+} from '@/lib/item-activity';
+import {
+  collectReceiptLineIds,
   movementAmount,
   movementNotesForDisplay,
   movementReasonLabel,
+  receiptLineSummary,
 } from '@/lib/movement-display';
 import {
   attachReferenceLabels,
@@ -116,6 +129,12 @@ interface MovementRow {
       ALWAYS 0 for transfers (ledger sums to on-hand) — render THIS for them.
       null on pre-0231 rows and non-transfer movements. */
   moved_quantity: number | null;
+  /** Movement/Activity P5: pre-0231 'receipt_line' rows are pre-resolved here
+   *  (in `fetchMovementsPage`, via the receipt→PO batched lookup) to
+   *  'PO {number}' when resolvable, else the masked 'PO receipt' fallback —
+   *  the raw 'receipt_line' sentinel and the receipt uuid never reach this
+   *  field. Every other row carries its raw `stock_movements.reason`
+   *  verbatim (new receipt rows already write 'PO {number}' directly). */
   reason: string | null;
   /** User-entered free-text notes (web parity: rendered as its OWN line,
    *  never silently dropped in favor of `reason`). Pre-0231 'receipt_line'
@@ -145,6 +164,21 @@ interface MovementRow {
   reference_label: string | null;
 }
 
+/**
+ * Raw `audit_logs` row for the Activity tab (Movement/Activity P4). Actor is
+ * embedded via the same `user_profiles!user_id` FK join used everywhere else
+ * in this screen (stock_movements' actor, admin/audit.tsx) rather than a
+ * separate profile-batch lookup — audit_logs.user_id points at the same
+ * table, so one query gets both the event and its actor.
+ */
+interface AuditRow {
+  id: string;
+  event: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+  actor: { full_name: string | null; email: string | null } | null;
+}
+
 const TYPE_LABEL: Record<string, string> = {
   add: 'Added',
   remove: 'Removed',
@@ -158,7 +192,20 @@ const TYPE_LABEL: Record<string, string> = {
   initial: 'Initialized',
 };
 
-type TabId = 'overview' | 'movements';
+type TabId = 'overview' | 'movements' | 'activity';
+
+/** Page size for the Movements tab's own paginated `stock_movements` query
+ *  (SerialsCard "Load more" pattern) — preserves the tab's original
+ *  first-load size of 50 rows. */
+const MOVEMENTS_PAGE_SIZE = 50;
+
+/** Page size for the Activity tab's movements half — mirrors forItem's
+ *  default `limit=30`. The audits half uses `auditCapFor(30)` (=15), the
+ *  SAME ratio ActivityService.forItem derives server-side, so accumulating
+ *  pages via "Load more" preserves the "movements never starved by audits"
+ *  guarantee even as a fetch window rather than a one-shot limit. */
+const ACTIVITY_MOVEMENTS_PAGE_SIZE = 30;
+const ACTIVITY_AUDITS_PAGE_SIZE = auditCapFor(ACTIVITY_MOVEMENTS_PAGE_SIZE);
 
 // Reference-label batch resolvers (Unit 3, mirrors web's
 // ActivityService.forItem: resolveOrderNumbers / resolveReturnNumbers /
@@ -219,6 +266,45 @@ async function resolveBundleNames(orgId: string, ids: string[]): Promise<Map<str
   return map;
 }
 
+/**
+ * Movement/Activity P5 (mobile web-parity gap): batch-resolves pre-0231
+ * 'receipt_line' rows' receipt ids → their PO's `po_number`, mirroring the
+ * web's `resolveReceiptPoNumbers` in activity.ts EXACTLY — same table join
+ * (`receipts` → embedded `purchase_orders(po_number)`), same org scope, same
+ * one-batched-`.in()`-query shape as the other resolvers above.
+ *
+ * RLS verified: `receipts_select` (mig 0012) and `purchase_orders_select`
+ * (mig 0003/0140) both grant SELECT to any accepted org member — NOT
+ * manager+-gated like `audit_logs` — so this runs for every role including
+ * staff/viewer under their own JWT (this file's plain `supabase` client,
+ * never the service role). Errors (network, unexpected RLS change, etc.)
+ * degrade to an empty map exactly like every other resolver in this file —
+ * `receiptLineSummary` then falls back to the masked 'PO receipt' label,
+ * never the raw uuid.
+ */
+async function resolveReceiptPoNumbers(
+  orgId: string,
+  receiptIds: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (receiptIds.length === 0) return map;
+  const { data, error } = await supabase
+    .from('receipts')
+    .select('id, purchase_orders(po_number)')
+    .eq('organization_id', orgId)
+    .in('id', receiptIds);
+  if (error) return map;
+  for (const r of (data ?? []) as Record<string, unknown>[]) {
+    const poField = r.purchase_orders as
+      | { po_number?: string | null }
+      | { po_number?: string | null }[]
+      | null;
+    const po = Array.isArray(poField) ? poField[0] : poField;
+    if (po?.po_number) map.set(r.id as string, po.po_number);
+  }
+  return map;
+}
+
 function mimeForExt(ext: string): string {
   const e = ext.toLowerCase();
   if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
@@ -236,7 +322,22 @@ export default function ItemDetail() {
   const { role } = useRole();
   const [item, setItem] = React.useState<Item | null>(null);
   const [movements, setMovements] = React.useState<MovementRow[]>([]);
+  const [movementsTotal, setMovementsTotal] = React.useState(0);
   const [movementsLoading, setMovementsLoading] = React.useState(true);
+  const [movementsLoadingMore, setMovementsLoadingMore] = React.useState(false);
+  const [movementsError, setMovementsError] = React.useState<string | null>(null);
+  // Movement/Activity P4 Task 1 — merged Activity tab state. Movements and
+  // audits are fetched (and paginated) as TWO independent queries, exactly
+  // like ActivityService.forItem — see mergeItemActivity's doc-comment for
+  // why they're never combined before capping.
+  const [activityMovements, setActivityMovements] = React.useState<MovementRow[]>([]);
+  const [activityMovementsTotal, setActivityMovementsTotal] = React.useState(0);
+  const [activityAudits, setActivityAudits] = React.useState<AuditRow[]>([]);
+  const [activityAuditsTotal, setActivityAuditsTotal] = React.useState(0);
+  const [activityLoading, setActivityLoading] = React.useState(true);
+  const [activityLoadingMore, setActivityLoadingMore] = React.useState(false);
+  const [activityError, setActivityError] = React.useState<string | null>(null);
+  const [refreshing, setRefreshing] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [tab, setTab] = React.useState<TabId>('overview');
   const [adjustOpen, setAdjustOpen] = React.useState(false);
@@ -406,76 +507,303 @@ export default function ItemDetail() {
     });
   }, [id, router]);
 
-  const loadMovements = React.useCallback(async () => {
-    if (!id || !orgId) return;
-    setMovementsLoading(true);
-    const { data } = await supabase
-      .from('stock_movements')
-      .select(
-        `id, movement_type, quantity_change, previous_quantity, new_quantity,
-         moved_quantity, reason, notes, created_at,
-         reference_type, reference_id, from_location_id, to_location_id,
-         actor:user_profiles!user_id (full_name, email)`,
-      )
-      .eq('organization_id', orgId)
-      .eq('item_id', id)
-      .order('created_at', { ascending: false })
-      .limit(50);
-    const rows = data ?? [];
+  /**
+   * Fetches ONE page of `stock_movements` (SerialsCard "Load more" pattern:
+   * `{count:'exact'}` + stable `.order(created_at desc).order(id)` tiebreak +
+   * `.range()`), resolving and attaching this page's reference labels fresh
+   * — the batched order/return/bundle resolvers run on EVERY page, initial
+   * or "load more", exactly like ActivityService.forItem's per-call
+   * resolvers; nothing is cached/skipped across pages. Shared by the
+   * Movements tab and the Activity tab's movements half so both stay in
+   * lockstep with the web merge semantics. Returns a discriminated result so
+   * callers can surface a real error INLINE instead of silently defaulting
+   * to `data ?? []`.
+   *
+   * `.range()` offset pagination can skip a row if one is deleted between
+   * page fetches — accepted, since stock_movements is an append-only ledger
+   * in normal operation (no UPDATE/DELETE path).
+   */
+  const fetchMovementsPage = React.useCallback(
+    async (
+      offset: number,
+      pageSize: number,
+    ): Promise<
+      { ok: true; rows: MovementRow[]; count: number } | { ok: false; error: string }
+    > => {
+      if (!id || !orgId) return { ok: true, rows: [], count: 0 };
+      const {
+        data,
+        count,
+        error,
+      } = await supabase
+        .from('stock_movements')
+        .select(
+          `id, movement_type, quantity_change, previous_quantity, new_quantity,
+           moved_quantity, reason, notes, created_at,
+           reference_type, reference_id, from_location_id, to_location_id,
+           actor:user_profiles!user_id (full_name, email)`,
+          { count: 'exact' },
+        )
+        .eq('organization_id', orgId)
+        .eq('item_id', id)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (error) return { ok: false, error: error.message };
+      const rows = data ?? [];
 
-    // Clickable/labeled source references (Unit 3): group this page's
-    // reference ids by type so each resolver below runs ONE batched query
-    // rather than N+1, same pattern as the web's ActivityService.forItem.
-    const idsByType = collectReferenceIdsByType(
-      rows.map((row) => {
+      // Clickable/labeled source references (Unit 3): group THIS PAGE's
+      // reference ids by type so each resolver below runs ONE batched query
+      // rather than N+1, same pattern as the web's ActivityService.forItem.
+      const idsByType = collectReferenceIdsByType(
+        rows.map((row) => {
+          const r = row as Record<string, unknown>;
+          return {
+            reference_type: (r.reference_type as string | null) ?? null,
+            reference_id: (r.reference_id as string | null) ?? null,
+          };
+        }),
+      );
+      // Pre-0231 receipt rows (reason='receipt_line', notes=receipt uuid):
+      // collect THIS PAGE's receipt ids so they can be resolved to PO
+      // numbers in one extra batched query (Movement/Activity P5) — mirrors
+      // the web's ActivityService.forItem, which runs `receiptIdsPromise`
+      // alongside its reference-label resolvers. Runs in the same
+      // Promise.all as the 3 resolvers below.
+      const receiptLineIds = collectReceiptLineIds(
+        rows.map((row) => {
+          const r = row as Record<string, unknown>;
+          return {
+            reason: (r.reason as string | null) ?? null,
+            notes: (r.notes as string | null) ?? null,
+          };
+        }),
+      );
+
+      // Each resolver runs its own batched `.in()` query (or no-ops on an
+      // empty id list); errors degrade to `data ?? []` → an empty map, so a
+      // failed lookup falls back to the generic type label rather than
+      // breaking the page. mergeReferenceLabelMaps merges this page's 3
+      // maps into one before attach — no network I/O beyond the 4 awaits.
+      const [orderLabels, returnLabels, bundleLabels, poNumberByReceipt] = await Promise.all([
+        resolveOrderNumbers(orgId, idsByType.order_request ?? []),
+        resolveReturnNumbers(orgId, idsByType.return ?? []),
+        resolveBundleNames(orgId, idsByType.bundle ?? []),
+        resolveReceiptPoNumbers(orgId, receiptLineIds),
+      ]);
+      const pageLabelMap = mergeReferenceLabelMaps([orderLabels, returnLabels, bundleLabels]);
+
+      const mapped = rows.map((row) => {
         const r = row as Record<string, unknown>;
+        const actor = r.actor as MovementRow['actor'] | MovementRow['actor'][] | null;
+        const rawReason = (r.reason as string | null) ?? null;
+        const rawNotes = (r.notes as string | null) ?? null;
+        // Issue 3/P5 parity: `reason` resolves pre-0231 'receipt_line' rows
+        // to 'PO {number}' (or the masked 'PO receipt' fallback) HERE, before
+        // `notes` is masked below — mirrors activity.ts's movementEvents
+        // mapping exactly (reason computed from the raw notes uuid, then
+        // notes itself masked to null for the same row).
+        const isReceiptLine = rawReason === 'receipt_line';
         return {
+          id: r.id as string,
+          movement_type: r.movement_type as string,
+          quantity_change: Number(r.quantity_change) || 0,
+          previous_quantity: Number(r.previous_quantity) || 0,
+          new_quantity: Number(r.new_quantity) || 0,
+          moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
+          reason: isReceiptLine ? receiptLineSummary(rawNotes, poNumberByReceipt) : rawReason,
+          notes: movementNotesForDisplay(rawReason, rawNotes),
+          created_at: r.created_at as string,
+          actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
           reference_type: (r.reference_type as string | null) ?? null,
           reference_id: (r.reference_id as string | null) ?? null,
+          from_location_id: (r.from_location_id as string | null) ?? null,
+          to_location_id: (r.to_location_id as string | null) ?? null,
         };
-      }),
-    );
-    // Each resolver runs its own batched `.in()` query (or no-ops on an
-    // empty id list); errors degrade to `data ?? []` → an empty map, so a
-    // failed lookup falls back to the generic type label rather than
-    // breaking the tab. The merge itself is the pure, unit-tested
-    // `mergeReferenceLabelMaps` — no network I/O beyond the three awaits.
-    const [orderLabels, returnLabels, bundleLabels] = await Promise.all([
-      resolveOrderNumbers(orgId, idsByType.order_request ?? []),
-      resolveReturnNumbers(orgId, idsByType.return ?? []),
-      resolveBundleNames(orgId, idsByType.bundle ?? []),
-    ]);
-    const referenceLabelById = mergeReferenceLabelMaps([orderLabels, returnLabels, bundleLabels]);
+      });
+      // Attach step (pure, unit-tested) — stitches pageLabelMap onto each
+      // row, degrading to null for rows with no reference_id or whose
+      // reference_id has no entry in the merged map.
+      return { ok: true, rows: attachReferenceLabels(mapped, pageLabelMap), count: count ?? 0 };
+    },
+    [id, orgId],
+  );
 
-    const mapped = rows.map((row) => {
-      const r = row as Record<string, unknown>;
-      const actor = r.actor as MovementRow['actor'] | MovementRow['actor'][] | null;
-      return {
-        id: r.id as string,
-        movement_type: r.movement_type as string,
-        quantity_change: Number(r.quantity_change) || 0,
-        previous_quantity: Number(r.previous_quantity) || 0,
-        new_quantity: Number(r.new_quantity) || 0,
-        moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
-        reason: (r.reason as string | null) ?? null,
-        notes: movementNotesForDisplay(
-          (r.reason as string | null) ?? null,
-          (r.notes as string | null) ?? null,
-        ),
-        created_at: r.created_at as string,
-        actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
-        reference_type: (r.reference_type as string | null) ?? null,
-        reference_id: (r.reference_id as string | null) ?? null,
-        from_location_id: (r.from_location_id as string | null) ?? null,
-        to_location_id: (r.to_location_id as string | null) ?? null,
-      };
-    });
-    // Attach step (pure, unit-tested) — stitches referenceLabelById onto
-    // each row, degrading to null for rows with no reference_id or whose
-    // reference_id has no entry in the merged map.
-    setMovements(attachReferenceLabels(mapped, referenceLabelById));
+  const loadMovements = React.useCallback(async () => {
+    setMovementsLoading(true);
+    setMovementsError(null);
+    const res = await fetchMovementsPage(0, MOVEMENTS_PAGE_SIZE);
+    if (!res.ok) {
+      setMovementsError(res.error);
+      setMovements([]);
+      setMovementsTotal(0);
+      setMovementsLoading(false);
+      return;
+    }
+    setMovements(res.rows);
+    setMovementsTotal(res.count);
     setMovementsLoading(false);
-  }, [id, orgId]);
+  }, [fetchMovementsPage]);
+
+  async function loadMoreMovements() {
+    if (movementsLoadingMore || movementsLoading) return;
+    setMovementsLoadingMore(true);
+    setMovementsError(null);
+    const res = await fetchMovementsPage(movements.length, MOVEMENTS_PAGE_SIZE);
+    if (!res.ok) {
+      setMovementsError(res.error);
+      setMovementsLoadingMore(false);
+      return;
+    }
+    setMovements((prev) => {
+      // Dedupe by id — concurrent inserts can shift offset pages (same
+      // rationale as SerialsCard's loadMore).
+      const known = new Set(prev.map((m) => m.id));
+      return [...prev, ...res.rows.filter((m) => !known.has(m.id))];
+    });
+    setMovementsTotal(res.count);
+    setMovementsLoadingMore(false);
+  }
+
+  /**
+   * Fetches ONE page of `audit_logs` scoped to this item via
+   * `metadata->>entity_id` (expr index mig 0135 — extracted-text equality so
+   * the index applies, same as web's forItem). Actor is embedded via the
+   * `user_profiles!user_id` FK join (same convention as admin/audit.tsx and
+   * the movements query above), so no separate profile-batch lookup is
+   * needed. RLS scopes this to manager+ — staff/viewer legitimately get zero
+   * rows here, matching web parity exactly (NOT worked around).
+   *
+   * Movement-shadowing stock.* events (see `MOVEMENT_SHADOWED_AUDIT_EVENTS`)
+   * are excluded HERE, at the query layer, mirroring web's `forItem`
+   * (activity.ts) — safe here because `audit_logs.event` is NOT NULL, so
+   * `.not('event','in',…)` is always TRUE/FALSE, never the NULL-swallows-the-
+   * row trap that keeps the equivalent `stock_movements.reason` filter
+   * JS-only (see `mergeItemActivity`'s doc-comment / LIFECYCLE_REASON_
+   * MOVEMENTS). Filtering here (not just in `mergeItemActivity`, which stays
+   * as a belt-and-suspenders safety net) means `count: 'exact'` — and the
+   * "Load more (N remaining)" footer it drives — reflects only rows that
+   * actually render, instead of counting shadowed rows the UI throws away.
+   *
+   * `.range()` offset pagination can skip a row if one is deleted between
+   * page fetches — accepted, since audit_logs/stock_movements are
+   * append-only ledgers in normal operation (no UPDATE/DELETE path).
+   */
+  const fetchAuditsPage = React.useCallback(
+    async (
+      offset: number,
+      pageSize: number,
+    ): Promise<{ ok: true; rows: AuditRow[]; count: number } | { ok: false; error: string }> => {
+      if (!id || !orgId) return { ok: true, rows: [], count: 0 };
+      const {
+        data,
+        count,
+        error,
+      } = await supabase
+        .from('audit_logs')
+        .select(
+          `id, event, metadata, created_at,
+           actor:user_profiles!user_id (full_name, email)`,
+          { count: 'exact' },
+        )
+        .eq('organization_id', orgId)
+        .eq('metadata->>entity_id', id)
+        .not('event', 'in', `(${MOVEMENT_SHADOWED_AUDIT_EVENTS.join(',')})`)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (error) return { ok: false, error: error.message };
+      const mapped = (data ?? []).map((row) => {
+        const r = row as Record<string, unknown>;
+        const actor = r.actor as AuditRow['actor'] | AuditRow['actor'][] | null;
+        return {
+          id: r.id as string,
+          event: r.event as string,
+          metadata: (r.metadata as Record<string, unknown> | null) ?? null,
+          created_at: r.created_at as string,
+          actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
+        };
+      });
+      return { ok: true, rows: mapped, count: count ?? 0 };
+    },
+    [id, orgId],
+  );
+
+  const loadActivity = React.useCallback(async () => {
+    setActivityLoading(true);
+    setActivityError(null);
+    const [movRes, audRes] = await Promise.all([
+      fetchMovementsPage(0, ACTIVITY_MOVEMENTS_PAGE_SIZE),
+      fetchAuditsPage(0, ACTIVITY_AUDITS_PAGE_SIZE),
+    ]);
+    if (!movRes.ok) {
+      setActivityError(movRes.error);
+      setActivityLoading(false);
+      return;
+    }
+    if (!audRes.ok) {
+      setActivityError(audRes.error);
+      setActivityLoading(false);
+      return;
+    }
+    setActivityMovements(movRes.rows);
+    setActivityMovementsTotal(movRes.count);
+    setActivityAudits(audRes.rows);
+    setActivityAuditsTotal(audRes.count);
+    setActivityLoading(false);
+  }, [fetchMovementsPage, fetchAuditsPage]);
+
+  async function loadMoreActivity() {
+    if (activityLoadingMore || activityLoading) return;
+    setActivityLoadingMore(true);
+    setActivityError(null);
+    const [movRes, audRes] = await Promise.all([
+      fetchMovementsPage(activityMovements.length, ACTIVITY_MOVEMENTS_PAGE_SIZE),
+      fetchAuditsPage(activityAudits.length, ACTIVITY_AUDITS_PAGE_SIZE),
+    ]);
+    if (!movRes.ok) {
+      setActivityError(movRes.error);
+      setActivityLoadingMore(false);
+      return;
+    }
+    if (!audRes.ok) {
+      setActivityError(audRes.error);
+      setActivityLoadingMore(false);
+      return;
+    }
+    setActivityMovements((prev) => {
+      const known = new Set(prev.map((m) => m.id));
+      return [...prev, ...movRes.rows.filter((m) => !known.has(m.id))];
+    });
+    setActivityMovementsTotal(movRes.count);
+    setActivityAudits((prev) => {
+      const known = new Set(prev.map((a) => a.id));
+      return [...prev, ...audRes.rows.filter((a) => !known.has(a.id))];
+    });
+    setActivityAuditsTotal(audRes.count);
+    setActivityLoadingMore(false);
+  }
+
+  // Pure merge (Movement/Activity P4): separate per-kind caps derived from
+  // whatever's been paginated so far (movementLimit/auditLimit = current
+  // array lengths — the "cap" protection lives in the FIXED per-page ratio
+  // ACTIVITY_MOVEMENTS_PAGE_SIZE : ACTIVITY_AUDITS_PAGE_SIZE, never in a
+  // combined-then-sliced merge here). Applies the JS-only shadowed-event and
+  // lifecycle-reason filters, then sorts desc.
+  const activityEntries: ActivityEntry[] = React.useMemo(
+    () =>
+      mergeItemActivity({
+        movements: activityMovements,
+        audits: activityAudits,
+        movementLimit: activityMovements.length,
+        auditLimit: activityAudits.length,
+      }),
+    [activityMovements, activityAudits],
+  );
+  const activityMovementsRemaining = Math.max(0, activityMovementsTotal - activityMovements.length);
+  const activityAuditsRemaining = Math.max(0, activityAuditsTotal - activityAudits.length);
+  const activityRemaining = activityMovementsRemaining + activityAuditsRemaining;
+  const movementsRemaining = Math.max(0, movementsTotal - movements.length);
 
   React.useEffect(() => {
     void load();
@@ -483,7 +811,20 @@ export default function ItemDetail() {
 
   React.useEffect(() => {
     if (tab === 'movements') void loadMovements();
-  }, [tab, loadMovements]);
+    if (tab === 'activity') void loadActivity();
+  }, [tab, loadMovements, loadActivity]);
+
+  /** Pull-to-refresh: re-runs the item load plus whichever tab is active. */
+  async function onRefresh() {
+    setRefreshing(true);
+    try {
+      await load();
+      if (tab === 'movements') await loadMovements();
+      if (tab === 'activity') await loadActivity();
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function adjust(delta: number, reason = 'Mobile detail') {
     if (!item) return;
@@ -503,6 +844,7 @@ export default function ItemDetail() {
     }
     setItem({ ...item, quantity_on_hand: item.quantity_on_hand + delta });
     if (tab === 'movements') void loadMovements();
+    if (tab === 'activity') void loadActivity();
   }
 
   // T12 — REST parity for web's restore action. Goes through the Bearer
@@ -665,7 +1007,12 @@ export default function ItemDetail() {
         </View>
       </SafeAreaView>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 40 }}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} tintColor={c.ink} />
+        }
+      >
         {/* Hero */}
         <View style={styles.hero}>
           <Mono size={9.5} tracking={0.2} upper color={c.ink4}>
@@ -813,6 +1160,11 @@ export default function ItemDetail() {
             label="Movements"
             active={tab === 'movements'}
             onPress={() => setTab('movements')}
+          />
+          <TabButton
+            label="Activity"
+            active={tab === 'activity'}
+            onPress={() => setTab('activity')}
           />
         </View>
 
@@ -992,29 +1344,84 @@ export default function ItemDetail() {
               </View>
             </Pressable>
           </View>
-        ) : (
+        ) : null}
+
+        {tab === 'movements' ? (
           <View style={{ paddingHorizontal: 20 }}>
+            {movementsError ? (
+              <Body size={12.5} color={ACCENT.crit} style={{ marginBottom: 12 }}>
+                {movementsError}
+              </Body>
+            ) : null}
             {movementsLoading ? (
               <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
             ) : movements.length === 0 ? (
-              <View style={{ padding: 32, alignItems: 'center' }}>
-                <ArrowLeftRight size={32} color={c.ink4} strokeWidth={1.3} />
-                <Display size={18} style={{ marginTop: 12 }}>
-                  No movements <Em>yet.</Em>
-                </Display>
-                <Body muted style={{ marginTop: 6, textAlign: 'center', maxWidth: 280 }}>
-                  Adjustments, receipts, and counts will appear here as you work.
-                </Body>
-              </View>
+              movementsError ? null : (
+                <View style={{ padding: 32, alignItems: 'center' }}>
+                  <ArrowLeftRight size={32} color={c.ink4} strokeWidth={1.3} />
+                  <Display size={18} style={{ marginTop: 12 }}>
+                    No movements <Em>yet.</Em>
+                  </Display>
+                  <Body muted style={{ marginTop: 6, textAlign: 'center', maxWidth: 280 }}>
+                    Adjustments, receipts, and counts will appear here as you work.
+                  </Body>
+                </View>
+              )
             ) : (
               <View style={{ gap: 8 }}>
                 {movements.map((m) => (
                   <MovementCard key={m.id} movement={m} />
                 ))}
+                <LoadMoreFooter
+                  remaining={movementsRemaining}
+                  loading={movementsLoadingMore}
+                  onPress={() => void loadMoreMovements()}
+                />
               </View>
             )}
           </View>
-        )}
+        ) : null}
+
+        {tab === 'activity' ? (
+          <View style={{ paddingHorizontal: 20 }}>
+            {activityError ? (
+              <Body size={12.5} color={ACCENT.crit} style={{ marginBottom: 12 }}>
+                {activityError}
+              </Body>
+            ) : null}
+            {activityLoading ? (
+              <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
+            ) : activityEntries.length === 0 ? (
+              activityError ? null : (
+                <View style={{ padding: 32, alignItems: 'center' }}>
+                  <History size={32} color={c.ink4} strokeWidth={1.3} />
+                  <Display size={18} style={{ marginTop: 12 }}>
+                    No activity <Em>yet.</Em>
+                  </Display>
+                  <Body muted style={{ marginTop: 6, textAlign: 'center', maxWidth: 280 }}>
+                    Edits, archive/restore, serials, tags, and stock changes will appear here as
+                    you work.
+                  </Body>
+                </View>
+              )
+            ) : (
+              <View style={{ gap: 8 }}>
+                {activityEntries.map((entry) =>
+                  entry.kind === 'movement' ? (
+                    <MovementCard key={entry.id} movement={entry.movement} />
+                  ) : (
+                    <AuditCard key={entry.id} audit={entry.audit} />
+                  ),
+                )}
+                <LoadMoreFooter
+                  remaining={activityRemaining}
+                  loading={activityLoadingMore}
+                  onPress={() => void loadMoreActivity()}
+                />
+              </View>
+            )}
+          </View>
+        ) : null}
       </ScrollView>
 
       <AdjustModal
@@ -1039,6 +1446,7 @@ export default function ItemDetail() {
         onMoved={() => {
           void load();
           if (tab === 'movements') void loadMovements();
+          if (tab === 'activity') void loadActivity();
         }}
       />
     </View>
@@ -1261,6 +1669,127 @@ function MovementCard({ movement }: { movement: MovementRow }) {
           <Mono size={9.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
             {movement.previous_quantity} → {movement.new_quantity}
           </Mono>
+        </View>
+      </View>
+    </Card>
+  );
+}
+
+/**
+ * "Load more (N remaining)" footer — the SerialsCard load-more affordance
+ * (see SerialsCard below), extracted so both the Movements tab and the
+ * Activity tab share one implementation. Renders nothing once `remaining`
+ * hits 0 (fully paginated).
+ */
+function LoadMoreFooter({
+  remaining,
+  loading,
+  onPress,
+}: {
+  remaining: number;
+  loading: boolean;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  if (remaining <= 0) return null;
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={loading}
+      style={({ pressed }) => ({
+        alignItems: 'center',
+        paddingVertical: 13,
+        opacity: loading ? 0.5 : pressed ? 0.7 : 1,
+      })}
+    >
+      {loading ? (
+        <ActivityIndicator color={c.ink} size="small" />
+      ) : (
+        <Mono size={11} tracking={0.12} upper color={c.ink}>
+          Load more ({remaining} remaining)
+        </Mono>
+      )}
+    </Pressable>
+  );
+}
+
+/**
+ * Audit event card for the Activity tab (Movement/Activity P4 Task 1) —
+ * same Card/Body/Mono shell as MovementCard for visual consistency, no new
+ * design system. `audit` is already a fully-formed, crash-safe
+ * `AuditCardModel` built by `buildAuditCardModel` (item-activity.ts) — this
+ * component only renders it, no metadata parsing here.
+ */
+function AuditCard({ audit }: { audit: AuditCardModel }) {
+  const { c } = useTheme();
+  const absolute = new Date(audit.createdAt).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  const relative = formatRelativeTime(audit.createdAt);
+  return (
+    <Card padding={12}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+        <View
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: c.hair,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: c.card,
+          }}
+        >
+          <Edit3 size={14} color={c.ink} strokeWidth={1.6} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
+            {audit.eventLabel}
+          </Body>
+          <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 3 }}>
+            {audit.actorName}
+            {relative ? ` · ${relative}` : ''} · {absolute}
+          </Mono>
+          {audit.reason ? (
+            <Body
+              size={12.5}
+              muted
+              numberOfLines={2}
+              style={{ marginTop: 3, fontStyle: 'italic' }}
+            >
+              “{audit.reason}”
+            </Body>
+          ) : null}
+          {/* changed_keys chip — independent of the diff rows below (both can
+              render together; mirrors the plan's "chip line + diff rows" as
+              two separate elements rather than web's either/or fallback). */}
+          {audit.changedKeys && audit.changedKeys.length > 0 ? (
+            <Mono size={10} tracking={0.02} color={c.ink4} style={{ marginTop: 6 }}>
+              Fields changed: {audit.changedKeys.map(humanizeFieldName).join(', ')}
+            </Mono>
+          ) : null}
+          {/* Compact before → after rows, capped at AUDIT_DIFF_ROW_CAP with a
+              "+N more" tail — metadata is untrusted jsonb, but everything
+              here (diffRows/diffMoreCount) was already built crash-safely by
+              buildAuditCardModel, so this is pure rendering. */}
+          {audit.diffRows.length > 0 ? (
+            <View style={{ marginTop: 6, gap: 3 }}>
+              {audit.diffRows.map((row) => (
+                <Mono key={row.field} size={10.5} tracking={0.02} color={c.ink4}>
+                  {humanizeFieldName(row.field)}: {row.before} → {row.after}
+                </Mono>
+              ))}
+              {audit.diffMoreCount > 0 ? (
+                <Mono size={9.5} tracking={0.04} color={c.ink5}>
+                  +{audit.diffMoreCount} more
+                </Mono>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       </View>
     </Card>
