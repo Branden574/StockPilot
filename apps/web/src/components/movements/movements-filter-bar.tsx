@@ -144,13 +144,16 @@ export function MovementsFilterBar({
         </SelectContent>
       </Select>
 
+      {/* [color-scheme:…] keeps the NATIVE date-picker chrome (calendar
+          icon + popup) in sync with the app theme — without it the browser
+          renders light-scheme widgets inside the dark UI. */}
       <Input
         type="date"
         value={from}
         onChange={(e) => updateFrom(e.target.value)}
         max={to || undefined}
         aria-label="From date"
-        className="h-9 w-[140px] text-[13px]"
+        className="h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]"
       />
       <span className="text-muted-foreground text-xs" aria-hidden>
         –
@@ -161,7 +164,7 @@ export function MovementsFilterBar({
         onChange={(e) => updateTo(e.target.value)}
         min={from || undefined}
         aria-label="To date"
-        className="h-9 w-[140px] text-[13px]"
+        className="h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]"
       />
 
       {hasFilters && (

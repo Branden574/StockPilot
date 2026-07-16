@@ -9,7 +9,7 @@ import {
   parseMovementTypeParam,
   parseToDateParam,
 } from '@/lib/movements-filters';
-import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import { ServiceError } from '@/server/services/context';
 import { MovementsService } from '@/server/services/movements';
 
@@ -59,10 +59,12 @@ export async function GET(request: Request) {
     const type = parseMovementTypeParam(params.get('type'));
     const since = parseFromDateParam(params.get('from'));
     const until = parseToDateParam(params.get('to'));
-    // Same warehouse-filter cookie the page reads via getActiveWarehouseFilter
-    // — resolved server-side so the export can't be pointed at a warehouse
-    // the caller doesn't have via a forged query param.
-    const warehouseId = (await getActiveWarehouseFilter()) ?? undefined;
+    // Same warehouse-filter cookie the page reads — resolved server-side so
+    // the export can't be pointed at a warehouse the caller doesn't have via
+    // a forged query param. MUST be the ctx-accepting variant: the zero-arg
+    // getActiveWarehouseFilter() resolves auth via requireOrgContext(), which
+    // throws NEXT_REDIRECT in route handlers (this 500'd in prod, 2026-07-15).
+    const warehouseId = (await getActiveWarehouseFilterFor(ctx)) ?? undefined;
 
     const { rows, total } = await new MovementsService(ctx).exportRows({
       warehouseId,

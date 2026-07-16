@@ -26,6 +26,7 @@ import {
 } from '@/lib/movements-filters';
 import { MovementsService } from '@/server/services/movements';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { LocalDateTime } from '@/components/ui/local-datetime';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
 import { can } from '@stockpilot/core';
@@ -250,7 +251,11 @@ export default async function MovementsPage({
                 return (
                   <TableRow key={m.id as string}>
                     <TableCell className="text-xs text-muted-foreground">
-                      {formatRelative(m.created_at as string)}
+                      <div>{formatRelative(m.created_at as string)}</div>
+                      <LocalDateTime
+                        iso={m.created_at as string}
+                        className="text-[11px] opacity-80"
+                      />
                     </TableCell>
                     <TableCell className="font-medium">{itemName ?? '—'}</TableCell>
                     <TableCell className="text-xs uppercase tracking-wider text-muted-foreground">

@@ -407,7 +407,7 @@ describe('ActivityFeed', () => {
     expect(screen.queryByText('(jane@example.com)')).not.toBeInTheDocument();
   });
 
-  it('exposes an exact absolute timestamp on hover via a <time title> tooltip (ported from AuditTimeline)', () => {
+  it('renders the exact absolute local date+time VISIBLY next to the relative time (owner ask 2026-07-15 — was hover-only)', () => {
     const iso = new Date(Date.now() - 5 * 60_000).toISOString();
     const events = [
       makeEvent({ id: 'a15', kind: 'audit', type: 'inventory.item.updated', createdAt: iso }),
@@ -416,6 +416,13 @@ describe('ActivityFeed', () => {
     const timeEl = container.querySelector('time');
     expect(timeEl).not.toBeNull();
     expect(timeEl!.getAttribute('dateTime')).toBe(iso);
-    expect(timeEl!.getAttribute('title')).toBe(new Date(iso).toLocaleString());
+    const absolute = new Date(iso).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+    expect(container.textContent).toContain(absolute);
   });
 });

@@ -15,6 +15,7 @@ import {
 import Link from 'next/link';
 
 import { MetadataDiff } from '@/components/audit/metadata-diff';
+import { LocalDateTime } from '@/components/ui/local-datetime';
 import { referenceHref, referenceTypeLabel } from '@/lib/activity-references';
 import { formatAuditEvent } from '@/lib/audit/format';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
@@ -197,15 +198,11 @@ export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
                   <span className="ml-1 text-[11px]">({e.actorEmail})</span>
                 )}
                 <span className="mx-1.5">·</span>
-                {/* time+title (ported from AuditTimeline) gives an exact
-                    absolute timestamp on hover, same as the removed
-                    item-detail audit timeline had. */}
-                <time
-                  dateTime={e.createdAt}
-                  title={new Date(e.createdAt).toLocaleString()}
-                >
-                  {formatRelative(e.createdAt)}
-                </time>
+                {/* Relative for scanability + exact viewer-local date/time
+                    always visible (owner ask 2026-07-15: every movement must
+                    carry its accurate date+time, not just "2 months ago"). */}
+                <time dateTime={e.createdAt}>{formatRelative(e.createdAt)}</time>
+                <LocalDateTime iso={e.createdAt} prefix=" · " />
                 {route && (
                   <>
                     <span className="mx-1.5">·</span>

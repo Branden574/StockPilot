@@ -14,6 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { LocalDateTime } from '@/components/ui/local-datetime';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { buildMovementsQueryString, type MovementsFilterQuery } from '@/lib/movements-filters';
 
@@ -138,7 +139,8 @@ export function MovementsInstantTable({ rows }: { rows: MovementDisplayRow[] }) 
                 return (
                   <TableRow key={m.id}>
                     <TableCell className="text-muted-foreground text-xs">
-                      {formatRelative(m.createdAt)}
+                      <div>{formatRelative(m.createdAt)}</div>
+                      <LocalDateTime iso={m.createdAt} className="text-[11px] opacity-80" />
                     </TableCell>
                     <TableCell className="font-medium">{m.itemName ?? '—'}</TableCell>
                     <TableCell className="text-muted-foreground text-xs uppercase tracking-wider">

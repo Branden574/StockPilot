@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import { ServiceError } from '@/server/services/context';
 import { MovementsService, type MovementExportRow } from '@/server/services/movements';
 import { makeSupabaseStub } from '@/test/supabase-mock';
@@ -28,11 +28,15 @@ vi.mock('@/lib/export-rate-limit', () => ({
   exportRateLimited: vi.fn().mockResolvedValue(null),
 }));
 
-// getActiveWarehouseFilter reads next/headers cookies() — real request scope
-// only. Mock it so the route's warehouse-filter resolution is deterministic
-// in tests, same as it would be via the cookie in a real request.
+// The warehouse-filter helper reads next/headers cookies() — real request
+// scope only — so it's mocked for determinism. NOTE: the route must use the
+// ctx-accepting getActiveWarehouseFilterFor; the zero-arg variant resolves
+// auth via requireOrgContext(), which throws NEXT_REDIRECT in route handlers
+// (this exact mock previously hid that prod 500 — hence the ONLY export
+// here is the ctx variant, so a regression to the zero-arg import fails to
+// resolve at test time instead of passing silently).
 vi.mock('@/lib/warehouse-filter', () => ({
-  getActiveWarehouseFilter: vi.fn().mockResolvedValue(null),
+  getActiveWarehouseFilterFor: vi.fn().mockResolvedValue(null),
 }));
 
 function buildCtx(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer') {
@@ -83,7 +87,7 @@ function stubExportRows(rows: MovementExportRow[], total?: number) {
 describe('GET /api/movements/export.csv', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getActiveWarehouseFilter).mockResolvedValue(null);
+    vi.mocked(getActiveWarehouseFilterFor).mockResolvedValue(null);
   });
 
   it('401s without an auth context', async () => {
@@ -128,7 +132,7 @@ describe('GET /api/movements/export.csv', () => {
 
   it('passes q/type/from/to filters + the active warehouse filter through to the service', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('manager'));
-    vi.mocked(getActiveWarehouseFilter).mockResolvedValueOnce('wh-9');
+    vi.mocked(getActiveWarehouseFilterFor).mockResolvedValueOnce('wh-9');
     const exportRows = stubExportRows([]);
 
     await GET(buildRequest('?q=widget&type=adjust&from=2026-01-01&to=2026-01-31'));
@@ -157,7 +161,7 @@ describe('GET /api/movements/export.csv', () => {
 
   it('omits warehouseId when no active warehouse filter cookie is set', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('manager'));
-    vi.mocked(getActiveWarehouseFilter).mockResolvedValueOnce(null);
+    vi.mocked(getActiveWarehouseFilterFor).mockResolvedValueOnce(null);
     const exportRows = stubExportRows([]);
 
     await GET(buildRequest());

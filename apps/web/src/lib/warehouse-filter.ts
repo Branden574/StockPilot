@@ -28,4 +28,27 @@ export const getActiveWarehouseFilter = cache(async (): Promise<string | null> =
   return raw;
 });
 
+/**
+ * Route-handler variant. `getActiveWarehouseFilter()` resolves auth via the
+ * zero-arg `getWarehouseAccess()`, whose `requireOrgContext()` fallback
+ * throws NEXT_REDIRECT outside a page render (no x-pathname header) — a
+ * route handler that calls it 500s. API routes already hold a ctx from
+ * `withApiContext`; passing it here skips that fallback entirely. Bearer
+ * callers carry no cookies, so they simply resolve to null (no filter).
+ */
+export async function getActiveWarehouseFilterFor(ctx: {
+  organizationId: string;
+  userId: string;
+  role: string;
+}): Promise<string | null> {
+  const access = await getWarehouseAccess(ctx as Parameters<typeof getWarehouseAccess>[0]);
+  if (!access.hasAllAccess) return null;
+
+  const c = await cookies();
+  const raw = c.get(COOKIE_NAME)?.value;
+  if (!raw) return null;
+  if (!access.readableIds.includes(raw)) return null;
+  return raw;
+}
+
 export const WAREHOUSE_FILTER_COOKIE = COOKIE_NAME;
