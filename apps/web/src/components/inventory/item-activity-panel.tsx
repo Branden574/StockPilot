@@ -85,7 +85,21 @@ export function ItemActivityPanel({
     // re-render mid-call, so reading it directly (rather than via a
     // setState updater) is safe.
     setCursor(nextActivityCursor(page, cursor));
-    setExhausted(res.data.exhausted);
+    // Per-kind exhaustion (final-review residual on the P4 ship): the action
+    // reports `movementsExhausted`/`auditsExhausted` separately rather than
+    // one combined flag. The Movements tab (`kindFilter='movement'`) must
+    // hide its button based on movements ALONE — adopting a combined
+    // `movements AND audits` flag here reintroduces the original bug: audits
+    // still having more to page through kept the button visible on the
+    // Movements tab even after movements themselves were exhausted, and
+    // clicking it re-fetched a page whose movement rows were filtered out
+    // by `display` above, appending zero visible rows. The merged Activity
+    // tab (no `kindFilter`) still needs both kinds exhausted before hiding.
+    setExhausted(
+      kindFilter === 'movement'
+        ? res.data.movementsExhausted
+        : res.data.movementsExhausted && res.data.auditsExhausted,
+    );
   }
 
   return (

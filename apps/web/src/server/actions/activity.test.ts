@@ -218,7 +218,7 @@ describe('loadOlderItemActivityAction', () => {
     ]);
   });
 
-  it('returns exhausted=true when the page comes up short of BOTH per-kind caps (50 movements / 25 audits)', async () => {
+  it('returns movementsExhausted=true and auditsExhausted=true when the page comes up short of BOTH per-kind caps (50 movements / 25 audits)', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': { data: [movementRow()], error: null },
       'audit_logs.select': { data: [], error: null },
@@ -227,10 +227,13 @@ describe('loadOlderItemActivityAction', () => {
 
     const result = await loadOlderItemActivityAction({ itemId: ITEM_ID, before: BEFORE });
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data.exhausted).toBe(true);
+    if (result.ok) {
+      expect(result.data.movementsExhausted).toBe(true);
+      expect(result.data.auditsExhausted).toBe(true);
+    }
   });
 
-  it('returns exhausted=false when movements alone still fill the full page cap (50), even with zero audits', async () => {
+  it('returns movementsExhausted=false, auditsExhausted=true when movements alone still fill the full page cap (50), even with zero audits', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: Array.from({ length: 50 }, (_, i) =>
@@ -244,7 +247,41 @@ describe('loadOlderItemActivityAction', () => {
 
     const result = await loadOlderItemActivityAction({ itemId: ITEM_ID, before: BEFORE });
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data.exhausted).toBe(false);
+    if (result.ok) {
+      expect(result.data.movementsExhausted).toBe(false);
+      expect(result.data.auditsExhausted).toBe(true);
+    }
+  });
+
+  // Movement/Activity P4 final-review residual: movements dry (fewer than
+  // the 50 cap) while audits alone still fill their own (smaller, 25) cap —
+  // the exact "Movements tab button reappears and no-ops" regression this
+  // fix addresses. `movementsExhausted` must be true and INDEPENDENT of
+  // `auditsExhausted` being false, so the Movements tab (which consumes
+  // `movementsExhausted` alone) can hide its button even though the merged
+  // Activity tab (which ANDs both) still shows one.
+  it('returns movementsExhausted=true, auditsExhausted=false when movements are dry but audits alone still fill their (25) cap', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [movementRow()], error: null },
+      'audit_logs.select': {
+        data: Array.from({ length: 25 }, (_, i) => ({
+          id: `a${i}`,
+          event: 'item.updated',
+          metadata: { entity_id: ITEM_ID },
+          created_at: new Date(2025, 0, 1, 0, i).toISOString(),
+          user_id: null,
+        })),
+        error: null,
+      },
+    });
+    stubHolder.stub = stub;
+
+    const result = await loadOlderItemActivityAction({ itemId: ITEM_ID, before: BEFORE });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.movementsExhausted).toBe(true);
+      expect(result.data.auditsExhausted).toBe(false);
+    }
   });
 
   it('resolves locationNames for ONLY the location ids referenced by this page', async () => {
