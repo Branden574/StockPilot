@@ -125,24 +125,41 @@ select ok(
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 7-8. Live probes: user-facing roles hit 42501 even with a valid org id
 --      (no cross-org aggregate oracle).
+--
+--      PROD/CI ONLY (0230 pattern): the macOS local stack segfaults the
+--      backend when throws_ok trips an EXECUTE denial on a function (known
+--      class — see 0230's refresh_org_daily_stats probe for the full note).
+--      The property is already pinned statically above (tests 4-5: no
+--      EXECUTE for anon/authenticated). Opt in where the stack is verified
+--      safe with:  set stockpilot.pgtap_live_denial_probes = 'on';
 -- ─────────────────────────────────────────────────────────────────────────────
 
 set local "request.jwt.claim.role" to 'anon';
 set local role to 'anon';
-select throws_ok(
-  $$ select * from public.inventory_trend_buckets('ac022300-0000-0000-0000-000000000001'::uuid, 14) $$,
-  '42501', null,
-  'anon cannot execute inventory_trend_buckets'
-);
+select case
+  when coalesce(current_setting('stockpilot.pgtap_live_denial_probes', true), '') = 'on' then
+    throws_ok(
+      $$ select * from public.inventory_trend_buckets('ac022300-0000-0000-0000-000000000001'::uuid, 14) $$,
+      '42501', null,
+      'anon cannot execute inventory_trend_buckets'
+    )
+  else
+    skip('prod-only: live fn-EXECUTE-denial probe (segfaults this local stack; EXECUTE grants asserted statically above)', 1)
+end;
 reset role;
 
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
-select throws_ok(
-  $$ select * from public.inventory_trend_buckets('ac022300-0000-0000-0000-000000000001'::uuid, 14) $$,
-  '42501', null,
-  'authenticated cannot execute inventory_trend_buckets (not even for an org it belongs to)'
-);
+select case
+  when coalesce(current_setting('stockpilot.pgtap_live_denial_probes', true), '') = 'on' then
+    throws_ok(
+      $$ select * from public.inventory_trend_buckets('ac022300-0000-0000-0000-000000000001'::uuid, 14) $$,
+      '42501', null,
+      'authenticated cannot execute inventory_trend_buckets (not even for an org it belongs to)'
+    )
+  else
+    skip('prod-only: live fn-EXECUTE-denial probe (segfaults this local stack; EXECUTE grants asserted statically above)', 1)
+end;
 reset role;
 
 -- ─────────────────────────────────────────────────────────────────────────────
