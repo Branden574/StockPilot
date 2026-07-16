@@ -67,6 +67,10 @@ export default async function MovementsPage({
   const rawType = typeFilter ?? '';
   const rawFrom = since ? (params.from ?? '') : '';
   const rawTo = until ? (params.to ?? '') : '';
+  // Any of the four filter dimensions actually parsed to something active.
+  // Drives whether a zero result should read as "ledger's empty" vs "no
+  // match for these filters" — see the empty-state branching below.
+  const hasActiveFilters = Boolean(search || typeFilter || since || until);
 
   const [movementsSvc, warehouseFilter] = await Promise.all([
     MovementsService.forCurrentUser(),
@@ -153,7 +157,7 @@ export default async function MovementsPage({
             Every quantity change, audited. The ledger is append-only.
           </p>
         </div>
-        {!instant && total !== 0 && (
+        {!instant && (total !== 0 || hasActiveFilters) && (
           <div className="flex flex-wrap items-center gap-3">
             <MovementsFilterBar mode="server" initial={activeFilters} />
             <Button asChild variant="outline" size="sm">
@@ -174,7 +178,18 @@ export default async function MovementsPage({
         )}
       </div>
 
-      {total === 0 ? (
+      {!instant && total === 0 && hasActiveFilters ? (
+        // Server mode, filtered count is 0: a no-match filter must stay
+        // visible (and clearable), not get swallowed by the "ledger's
+        // truly empty" state below — otherwise the user can't tell why
+        // nothing showed up or how to get back to an unfiltered view.
+        <EmptyState
+          icon={ArrowLeftRight}
+          title="No movements match"
+          description="Nothing found for the current filters. Try a different search, type, or date range."
+          cta={{ label: 'Clear filters', href: '/dashboard/movements' }}
+        />
+      ) : total === 0 ? (
         <EmptyState
           icon={ArrowLeftRight}
           title="No movements yet"
@@ -184,7 +199,7 @@ export default async function MovementsPage({
       ) : instant ? (
         <MovementsInstantTable rows={instantRows} />
       ) : visible.length === 0 ? (
-        search || typeFilter || since || until ? (
+        hasActiveFilters ? (
           <EmptyState
             icon={ArrowLeftRight}
             title="No movements match"
