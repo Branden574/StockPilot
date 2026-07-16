@@ -102,6 +102,7 @@ describe('GET /api/v1/items/lookup', () => {
         charterName: 'Charter A',
         placementLabel: 'Rack A-1',
         quantityOnHand: 4,
+        rackHoldings: [],
       },
       {
         id: 'item-b',
@@ -112,7 +113,49 @@ describe('GET /api/v1/items/lookup', () => {
         charterName: 'Charter B',
         placementLabel: 'Rack B-2',
         quantityOnHand: 9,
+        rackHoldings: [],
       },
+    ]);
+  });
+
+  it('populates rackHoldings for a split item (>1 rack/crate holding)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          {
+            id: 'item-split',
+            sku: 'SKU-2',
+            name: 'Split Widget',
+            barcode: null,
+            quantity_on_hand: 25,
+            charter_id: null,
+            bin_location: 'Rack 1-A',
+            charter: null,
+          },
+        ],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [
+          { item_id: 'item-split', quantity: 20, locations: { name: '2-C', kind: 'rack', warehouse_id: 'wh-1' } },
+          { item_id: 'item-split', quantity: 5, locations: { name: '5-A', kind: 'rack', warehouse_id: 'wh-1' } },
+        ],
+        error: null,
+      },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub.client));
+
+    const res = await GET(req('SKU-2'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.matches).toHaveLength(1);
+    // placementLabel still carries the (now potentially misleading) label —
+    // additive field, existing consumers reading only placementLabel are
+    // unaffected — but rackHoldings tells a caller the whole truth.
+    expect(body.matches[0].placementLabel).toBe('Rack 1-A');
+    expect(body.matches[0].rackHoldings).toEqual([
+      { name: '2-C', quantity: 20 },
+      { name: '5-A', quantity: 5 },
     ]);
   });
 
