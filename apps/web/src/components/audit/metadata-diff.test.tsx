@@ -161,7 +161,7 @@ describe('MetadataDiff', () => {
         }}
       />,
     );
-    expect(screen.getByText('Fields changed: Name, SKU')).toBeInTheDocument();
+    expect(screen.getByText('Fields on the edit (exact changes not recorded for this entry): Name, SKU')).toBeInTheDocument();
   });
 
   it('prefers the before/after drawer over the changed_keys chip when both are present', () => {
@@ -175,7 +175,7 @@ describe('MetadataDiff', () => {
       />,
     );
     expect(screen.getByText('Show 1 field change')).toBeInTheDocument();
-    expect(screen.queryByText(/Fields changed:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Fields on the edit/)).not.toBeInTheDocument();
   });
 
   it('renders nothing for an empty diff and no changed_keys', () => {

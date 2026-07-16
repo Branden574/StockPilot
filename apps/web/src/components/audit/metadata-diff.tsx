@@ -201,11 +201,18 @@ export function MetadataDiff({
     );
   }
 
+  // Chip fallback. With the value-diffed writer (2026-07-15) a new row
+  // either has a real before/after diff (drawer above) or an empty
+  // changed_keys (renders nothing) — so this branch now fires only for
+  // LEGACY rows written before before/after capture, whose changed_keys
+  // recorded every SUBMITTED field. Label it for what it is instead of
+  // overclaiming "changed".
   const changedKeys = isStringArray(meta.changed_keys) ? meta.changed_keys : null;
   if (changedKeys && changedKeys.length > 0) {
     return (
       <p className="mt-1.5 text-[11px] text-muted-foreground">
-        Fields changed: {changedKeys.map(humanizeFieldName).join(', ')}
+        Fields on the edit (exact changes not recorded for this entry):{' '}
+        {changedKeys.map(humanizeFieldName).join(', ')}
       </p>
     );
   }

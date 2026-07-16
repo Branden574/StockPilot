@@ -346,7 +346,7 @@ describe('ActivityFeed', () => {
       }),
     ];
     render(<ActivityFeed events={events} />);
-    expect(screen.getByText('Fields changed: Name, Reorder point')).toBeInTheDocument();
+    expect(screen.getByText('Fields on the edit (exact changes not recorded for this entry): Name, Reorder point')).toBeInTheDocument();
   });
 
   it('never renders the diff drawer or chip for a movement row, even if metadata were somehow set', () => {

@@ -275,6 +275,39 @@ describe('InventoryService.update — shared-field propagation by SKU', () => {
     );
   });
 
+  // Owner report 2026-07-15: the edit form submits the FULL patch, so
+  // changed_keys built from submitted keys made every save read as
+  // "Fields changed: <all 19 fields>". changed_keys must reflect VALUE
+  // changes only.
+  it('audit changed_keys lists only keys whose VALUE actually changed — not every submitted key', async () => {
+    const { svc } = harness({ targetSku: 'SP-X' });
+    // name actually changes; status is submitted with its unchanged value.
+    await svc.update('row-a', { name: 'Chromebook 2', status: 'active' });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extra: expect.objectContaining({ changed_keys: ['name'] }),
+        before: { name: 'Chromebook' },
+        after: { name: 'Chromebook 2' },
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('a no-op save (submitted values identical to the row) audits EMPTY changed_keys and no before/after wall', async () => {
+    const { svc } = harness({ targetSku: 'SP-X' });
+    await svc.update('row-a', { name: 'Chromebook', status: 'active' });
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extra: expect.objectContaining({ changed_keys: [] }),
+        before: {},
+        after: {},
+      }),
+      expect.anything(),
+    );
+  });
+
   it('a sibling-update 23505 (re-keying into a colliding group) surfaces as a friendly conflict', async () => {
     const { svc } = harness({ targetSku: 'SP-X', siblingFails23505: true });
     const err = await svc.update('row-a', { unitCost: 1 }).catch((e: unknown) => e);

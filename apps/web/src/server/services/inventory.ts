@@ -1999,15 +1999,23 @@ export class InventoryService {
       propagatedToSku = (sharedUpdates.sku as string | undefined) ?? originalSku;
     }
 
-    // Drop the cosmetic `updated_by` from the changed-keys list so the
-    // audit row reflects what the caller actually edited.
-    const changedKeys = Object.keys(updates).filter((k) => k !== 'updated_by');
     // before/after for the P1 diff drawer — restricted to the CHANGED keys
     // on the TARGET row only (current = pre-patch, data = post-patch).
     // Deliberately does NOT reach into the Model-B sibling fan-out above —
     // that's a separate set of rows this audit event isn't about.
     const beforeRow = current as Record<string, unknown>;
     const afterRow = data as Record<string, unknown>;
+    // Record only keys whose VALUE actually changed. The edit form submits
+    // the full patch, so submitted keys alone made every save read as
+    // "Fields changed: <all 19 fields>" (owner report 2026-07-15). Both
+    // sides are DB rows (same type representation); jsonb columns compare
+    // via stringify (Postgres normalizes jsonb key order, so it's stable).
+    // `updated_by` stays excluded as cosmetic.
+    const jsonEq = (a: unknown, b: unknown) =>
+      a === b || JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    const changedKeys = Object.keys(updates)
+      .filter((k) => k !== 'updated_by')
+      .filter((k) => !jsonEq(beforeRow[k], afterRow[k]));
     void audit(
       {
         event: 'inventory.item.updated',
