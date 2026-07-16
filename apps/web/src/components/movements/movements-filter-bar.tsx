@@ -144,28 +144,33 @@ export function MovementsFilterBar({
         </SelectContent>
       </Select>
 
-      {/* [color-scheme:…] keeps the NATIVE date-picker chrome (calendar
-          icon + popup) in sync with the app theme — without it the browser
-          renders light-scheme widgets inside the dark UI. */}
-      <Input
-        type="date"
-        value={from}
-        onChange={(e) => updateFrom(e.target.value)}
-        max={to || undefined}
-        aria-label="From date"
-        className="h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]"
-      />
-      <span className="text-muted-foreground text-xs" aria-hidden>
-        –
-      </span>
-      <Input
-        type="date"
-        value={to}
-        onChange={(e) => updateTo(e.target.value)}
-        min={from || undefined}
-        aria-label="To date"
-        className="h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]"
-      />
+      {/* The from–to pair is ONE flex group so a wrapping filter bar never
+          splits the range across rows (dangling dash / orphaned second date
+          — owner report 2026-07-15). [color-scheme:…] keeps the NATIVE
+          date-picker chrome (calendar icon + popup) in sync with the app
+          theme — without it the browser renders light-scheme widgets inside
+          the dark UI. */}
+      <div className="flex shrink-0 items-center gap-2">
+        <Input
+          type="date"
+          value={from}
+          onChange={(e) => updateFrom(e.target.value)}
+          max={to || undefined}
+          aria-label="From date"
+          className="h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]"
+        />
+        <span className="text-muted-foreground text-xs" aria-hidden>
+          –
+        </span>
+        <Input
+          type="date"
+          value={to}
+          onChange={(e) => updateTo(e.target.value)}
+          min={from || undefined}
+          aria-label="To date"
+          className="h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]"
+        />
+      </div>
 
       {hasFilters && (
         <button
