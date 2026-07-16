@@ -1,4 +1,4 @@
-import { formatOrderNumber } from '@stockpilot/core';
+import { formatOrderNumber, formatRackHoldings, type RackHoldingLike } from '@stockpilot/core';
 import {
   Image as PdfImage,
   Path,
@@ -614,14 +614,42 @@ export interface LinesTableOptions {
   showLocation?: boolean;
   /** Map of item.id → signed image URL for thumbnails. */
   imageUrlByItemId?: Map<string, string>;
+  /** Rack/crate HOLDINGS (item_stock_levels), keyed by inventory_items.id
+   *  — batch-fetched by the route (fetchRackHoldingsByItem), scoped to
+   *  the order's warehouse. Drives the LOCATION column's split-item
+   *  breakdown in `locationFor`; omitted/empty falls back to the label. */
+  rackHoldingsByItemId?: Map<string, RackHoldingLike[]>;
 }
 
-function locationFor(line: OrderRequestLineWithItem): {
+/** Exported for direct unit testing — @react-pdf's rendered output isn't
+ *  text-extractable in this test suite (existing tests only assert on
+ *  buffer size / the %PDF magic header), so the split-vs-single-vs-label
+ *  decision is covered by calling this function directly instead. Mirrors
+ *  `locationFor` in lib/pdf/pick-slip.tsx — kept as a separate copy (not a
+ *  shared import) because the two files already diverge in their other
+ *  location-column concerns and neither depends on the other. */
+export function locationFor(
+  line: OrderRequestLineWithItem,
+  rackHoldingsByItemId?: Map<string, RackHoldingLike[]>,
+): {
   primary: string | null;
   secondary: string | null;
 } {
   const item = line.item;
   if (!item) return { primary: null, secondary: null };
+
+  // Stock split across >1 rack/crate HOLDING makes the single free-text
+  // label misleading — it points at one rack while stock actually sits on
+  // several, and it can also go stale. When holdings say the item is
+  // split, print the full breakdown ("2-C ×20 · 5-A ×5") so the packer
+  // finds ALL of it instead of walking to just the one rack the label
+  // remembers. Single-holding (or holdings-unavailable) items fall
+  // through to the label exactly as before.
+  const holdings = rackHoldingsByItemId?.get(item.id) ?? [];
+  if (holdings.length > 1) {
+    return { primary: formatRackHoldings(holdings), secondary: null };
+  }
+
   const cf = (item.custom_fields ?? {}) as Record<string, unknown>;
   if (item.item_type === 'book') {
     const info = readBookStorage(cf);
@@ -644,7 +672,11 @@ export function LinesTable({
   lines: OrderRequestLineWithItem[];
   options: LinesTableOptions;
 }) {
-  const { showLocation = false, imageUrlByItemId = new Map() } = options;
+  const {
+    showLocation = false,
+    imageUrlByItemId = new Map(),
+    rackHoldingsByItemId,
+  } = options;
   let totalQty = 0;
   let totalBO = 0;
   for (const l of lines) {
@@ -671,7 +703,7 @@ export function LinesTable({
         const requested = Number(l.quantity_requested) || 0;
         const bo = Math.max(0, requested - picked);
         const imgUrl = l.item ? imageUrlByItemId.get(l.item.id) : undefined;
-        const loc = locationFor(l);
+        const loc = locationFor(l, rackHoldingsByItemId);
         const cf = (l.item?.custom_fields ?? {}) as Record<string, unknown>;
         const author = typeof cf.book_author === 'string' ? cf.book_author : null;
         return (

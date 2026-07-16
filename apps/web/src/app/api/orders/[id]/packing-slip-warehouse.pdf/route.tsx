@@ -10,6 +10,7 @@ import { renderWarehousePackingSlipPdf } from '@/lib/pdf/packing-slip-warehouse'
 import type { WarehouseInfo } from '@/lib/pdf/packing-slip-shared';
 import { ItemImagesService } from '@/server/services/item-images';
 import { OrderRequestsService } from '@/server/services/order-requests';
+import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -138,6 +139,19 @@ export async function GET(
       if (dataUri) imageUrlByItemId.set(itemId, dataUri);
     }
 
+    // Rack/crate HOLDINGS for every line item, scoped to THIS order's
+    // warehouse — mirrors the pick-slip PDF route. Split items (>1
+    // holding) get the full breakdown in the LOCATION column instead of
+    // a single (possibly stale/misleading) bin_location label — see
+    // locationFor in lib/pdf/packing-slip-shared.tsx. A fetch failure
+    // degrades to the label (fetchRackHoldingsByItem reports + returns
+    // whatever it has rather than throwing), never a broken PDF.
+    const rackHoldingsByItemId = await fetchRackHoldingsByItem(
+      ctx,
+      itemIds,
+      detail.request.warehouse_id,
+    );
+
     const orgTimezone = await getCachedOrgTimezone(ctx.organizationId);
     const pdf = await renderWarehousePackingSlipPdf({
       detail,
@@ -146,6 +160,7 @@ export async function GET(
       imageUrlByItemId,
       qrDataUrl,
       orgTimezone,
+      rackHoldingsByItemId,
     });
     const bytes = new Uint8Array(pdf);
     return new NextResponse(bytes, {
