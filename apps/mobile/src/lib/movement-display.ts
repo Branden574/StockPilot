@@ -117,3 +117,22 @@ export function collectReceiptLineIds(
 export function movementNotesForDisplay(reason: string | null, notes: string | null): string | null {
   return reason === 'receipt_line' ? null : notes;
 }
+
+/**
+ * Web parity (Movement/Activity P1 review follow-up): renders a movement's
+ * from/to location route the SAME way the web feed does (`ActivityFeed`'s
+ * inline route logic in `activity-feed.tsx`) — both names resolved → "A → B";
+ * only the destination resolved (receives) → "→ B"; only the source resolved
+ * (removals) → "A →"; neither resolved (no location on the row, or a
+ * resolved-but-deleted/unknown id) → null, meaning the caller MUST omit the
+ * line entirely — never a dangling arrow or a raw uuid. `fromName`/`toName`
+ * are already-resolved display names (see `resolveLocationNames` in
+ * app/item/[id].tsx), not ids — this function does no lookup itself so it's
+ * pure and unit-testable without a Supabase mock.
+ */
+export function formatMovementRoute(fromName: string | null, toName: string | null): string | null {
+  if (fromName && toName) return `${fromName} → ${toName}`;
+  if (toName) return `→ ${toName}`;
+  if (fromName) return `${fromName} →`;
+  return null;
+}

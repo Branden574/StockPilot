@@ -29,11 +29,12 @@ export interface ActivityEvent {
   /** Movement: destination location id (transfers/receipts). Audit: null. */
   toLocationId: string | null;
   /**
-   * Movement: the kind of record that caused this movement
-   * (order_request | purchase_order | cycle_count | return | bundle | rental
-   * | …). Audit: null. Feeds the reference_type → route resolver in
-   * `@/lib/activity-references` — an unrecognized value there degrades to a
-   * plain label, never a broken link.
+   * Movement: the kind of record that caused this movement — order_request |
+   * cycle_count | return | bundle, the only values any writer sets on
+   * stock_movements (verified in Movement/Activity P1). Audit: null. Feeds
+   * the reference_type → route resolver in `@/lib/activity-references` — an
+   * unrecognized value there (a future type, or truly unknown data) degrades
+   * to a plain label, never a broken link.
    */
   referenceType: string | null;
   /** Movement: id of the referenced record (stock_movements.reference_id). Audit: null. */
@@ -326,56 +327,30 @@ export async function resolveBundleNames(
 }
 
 /**
- * Batch-resolves purchase_order ids → po_number for movements referencing a
- * PO DIRECTLY (reference_type='purchase_order', reference_id=PO id) — distinct
- * from `resolveReceiptPoNumbers`, which maps the pre-0231 receipt-id-in-notes
- * indirection. No current writer sets reference_type='purchase_order' on
- * stock_movements, but the route/label resolver supports it so a future
- * writer degrades to a real PO number instead of a generic label. Exported
- * for unit tests.
- */
-export async function resolvePurchaseOrderNumbers(
-  ctx: ServiceContext,
-  purchaseOrderIds: string[],
-): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
-  if (purchaseOrderIds.length === 0) return map;
-  const { data, error } = await ctx.supabase
-    .from('purchase_orders')
-    .select('id, po_number')
-    .eq('organization_id', ctx.organizationId)
-    .in('id', purchaseOrderIds);
-  if (error) {
-    console.error('activity: purchase_order number lookup failed', { error: error.message });
-    return map;
-  }
-  for (const r of (data ?? []) as Array<{ id: string; po_number: string | null }>) {
-    if (r.po_number) map.set(r.id, r.po_number);
-  }
-  return map;
-}
-
-/**
- * Runs all four reference-label batch resolvers in parallel and merges them
+ * Runs all three reference-label batch resolvers in parallel and merges them
  * into one id → label map. Each resolver already no-ops (no query) on an
  * empty id list, so types absent from this page's movements cost nothing.
  * cycle_count has no cheap display number (the table carries no display
- * field) and rental never appears on stock_movements today — both are
- * intentionally NOT queried here; their events fall back to the generic
- * type label in the UI while still linking to a known route.
+ * field) — it's intentionally NOT queried here; those events fall back to
+ * the generic type label in the UI while still linking to a known route.
+ * purchase_order/rental resolvers were removed (Movement/Activity P1 review
+ * follow-up): no writer ever sets those reference_types on stock_movements,
+ * so the equivalent purchase_order resolver here only ever received an empty
+ * id list — dead weight, not forward-compat. See the doc-comment on
+ * `@/lib/activity-references` for the "unrecognized type degrades to a
+ * title-cased label" contract a future type would hit the same way.
  */
 async function resolveReferenceLabels(
   ctx: ServiceContext,
   idsByType: Record<string, string[]>,
 ): Promise<Map<string, string>> {
-  const [po, order, ret, bundle] = await Promise.all([
-    resolvePurchaseOrderNumbers(ctx, idsByType.purchase_order ?? []),
+  const [order, ret, bundle] = await Promise.all([
     resolveOrderNumbers(ctx, idsByType.order_request ?? []),
     resolveReturnNumbers(ctx, idsByType.return ?? []),
     resolveBundleNames(ctx, idsByType.bundle ?? []),
   ]);
   const merged = new Map<string, string>();
-  for (const m of [po, order, ret, bundle]) {
+  for (const m of [order, ret, bundle]) {
     for (const [id, label] of m) merged.set(id, label);
   }
   return merged;

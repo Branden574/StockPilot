@@ -35,6 +35,8 @@ function movement(overrides: Partial<ActivityMovementInput> & { id: string }): A
     reference_label: null,
     from_location_id: null,
     to_location_id: null,
+    from_location_name: null,
+    to_location_name: null,
     ...overrides,
   };
 }
