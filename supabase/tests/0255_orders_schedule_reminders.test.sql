@@ -31,8 +31,10 @@ select columns_are(
         'order_request_id','assigned_user_id','reminded_24h_at','reminded_1h_at'],
   'P2: schedule_events carries the four new columns');
 
-insert into public.order_requests (id, organization_id, warehouse_id, status, fulfillment_type, requester_name, needed_by)
-  values (:ord, :org, :wh, 'pending_approval', 'pickup', 'Sched Tester', now() + interval '2 days');
+-- source defaults to 'internal', which requires requester_user_id or
+-- requester_email (order_requests_identity_chk, 0116/0251).
+insert into public.order_requests (id, organization_id, warehouse_id, status, fulfillment_type, requester_name, requester_user_id, needed_by)
+  values (:ord, :org, :wh, 'pending_approval', 'pickup', 'Sched Tester', :usr, now() + interval '2 days');
 
 insert into public.schedule_events (organization_id, title, starts_at, status, order_request_id, created_by)
   values (:org, 'SO-000001 pickup', now() + interval '2 days', 'scheduled', :ord, :usr);
