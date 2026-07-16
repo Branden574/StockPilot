@@ -13,6 +13,11 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { TEMPLATES, type Template } from '@/components/inventory/label-templates';
+import {
+  buildPhomemoFilename,
+  computeLabelPx,
+  formatLabelPx,
+} from '@/lib/labels/phomemo-png';
 
 interface BarcodeDisplayProps {
   itemId: string;
@@ -58,6 +63,30 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
     | { status: 'error'; message: string }
   >({ status: 'idle' });
   const blobUrlRef = React.useRef<string | null>(null);
+  // "Download PNG (Phomemo)" — the M120's macOS driver misrotates thermal
+  // output, so this renders the label at the printer's EXACT native pixel
+  // size (203 DPI) client-side and hands the owner a PNG to print from the
+  // Phomemo app instead, which handles orientation correctly. Needs a known
+  // physical size, so it's only available once a template/custom size is
+  // picked (same gating as the rotate toggle below — 'auto' has no mm size).
+  const [phomemoBusy, setPhomemoBusy] = React.useState(false);
+  const [phomemoError, setPhomemoError] = React.useState<string | null>(null);
+
+  // Resolve the selected label's physical size in mm — null for 'auto'
+  // (no known physical dimensions, so the Phomemo PNG can't be sized).
+  const labelMm = React.useMemo((): { widthMm: number; heightMm: number } | null => {
+    if (size === 'custom') {
+      return { widthMm: clampMm(customW, 50), heightMm: clampMm(customH, 30) };
+    }
+    if (size === 'auto') return null;
+    const tpl = TEMPLATES[size];
+    return { widthMm: tpl.widthIn * 25.4, heightMm: tpl.heightIn * 25.4 };
+  }, [size, customW, customH]);
+
+  const labelPx = React.useMemo(
+    () => (labelMm ? computeLabelPx(labelMm.widthMm, labelMm.heightMm) : null),
+    [labelMm],
+  );
 
   // Per-render cache buster so toggling between Barcode / QR and re-
   // opening the dialog always hits a fresh request (browsers can cache
@@ -208,6 +237,118 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
+  // Renders the label onto an offscreen canvas at the EXACT device-pixel
+  // size for the printer's native 203 DPI (see phomemo-png.ts) and downloads
+  // it as a PNG — bypassing the macOS print driver entirely so the owner can
+  // print it from the Phomemo app, which handles orientation correctly.
+  // Draws client-side with JsBarcode/qrcode directly (rather than reusing
+  // the server-rendered preview PNG above) so the pixel dimensions are
+  // exact and deterministic, matching label-sheet.tsx's bulk-print approach.
+  async function downloadPhomemoPng() {
+    if (!labelMm || !labelPx) return;
+    setPhomemoError(null);
+    setPhomemoBusy(true);
+    try {
+      const { widthPx, heightPx } = labelPx;
+      const canvas = document.createElement('canvas');
+      canvas.width = widthPx;
+      canvas.height = heightPx;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas 2D context unavailable in this browser');
+      // Nearest-neighbor scaling for the barcode/QR drawImage below — keeps
+      // bars/modules crisp instead of anti-aliased fuzz at thermal DPI.
+      ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, widthPx, heightPx);
+      ctx.fillStyle = '#000';
+      ctx.textAlign = 'center';
+
+      // Same "small label" threshold as printIt() above (1.4in = 35.56mm):
+      // the name is dropped so the barcode/QR gets the space instead.
+      const isSmall = Math.min(labelMm.widthMm, labelMm.heightMm) < 35.56;
+      const padPx = Math.max(2, Math.round(widthPx * 0.03));
+      const skuText = barcode?.trim() || sku;
+
+      let cursorY = padPx;
+      if (!isSmall) {
+        const nameFontPx = Math.max(8, Math.round(heightPx * 0.11));
+        ctx.font = `700 ${nameFontPx}px system-ui, -apple-system, sans-serif`;
+        cursorY += nameFontPx;
+        ctx.fillText(
+          fitCanvasText(ctx, itemName, widthPx - padPx * 2),
+          widthPx / 2,
+          cursorY,
+          widthPx - padPx * 2,
+        );
+        cursorY += Math.round(nameFontPx * 0.4);
+      }
+
+      const skuFontPx = Math.max(7, Math.round(heightPx * (isSmall ? 0.14 : 0.08)));
+      const bottomReserved = skuFontPx + Math.round(skuFontPx * 0.6);
+      const codeAreaTop = cursorY;
+      const codeAreaWidth = widthPx - padPx * 2;
+      const codeAreaHeight = Math.max(1, heightPx - padPx - bottomReserved - cursorY);
+
+      if (type === 'qr') {
+        const origin = window.location.origin;
+        const itemUrl = `${origin}/p/items/${itemId}`;
+        const { default: QRCode } = await import('qrcode');
+        const sizePx = Math.max(1, Math.round(Math.min(codeAreaWidth, codeAreaHeight)));
+        // Render larger than the target box then downscale — sharper edges
+        // once imageSmoothingEnabled=false snaps them back to hard pixels.
+        const dataUrl = await QRCode.toDataURL(itemUrl, {
+          margin: 1,
+          width: Math.max(128, sizePx * 4),
+          errorCorrectionLevel: 'M',
+        });
+        const img = await loadImageElement(dataUrl);
+        const dx = Math.round((widthPx - sizePx) / 2);
+        const dy = Math.round(codeAreaTop + (codeAreaHeight - sizePx) / 2);
+        ctx.drawImage(img, dx, dy, sizePx, sizePx);
+      } else {
+        const { default: JsBarcode } = await import('jsbarcode');
+        const barcodeCanvas = document.createElement('canvas');
+        // Integer bar-module width so bars land on whole device pixels
+        // instead of sub-pixel widths that blur on a 1-bit thermal head.
+        const moduleWidthPx = Math.max(1, Math.round(widthPx / 220));
+        JsBarcode(barcodeCanvas, skuText, {
+          format: 'CODE128',
+          displayValue: false,
+          margin: 0,
+          width: moduleWidthPx,
+          height: Math.max(20, codeAreaHeight),
+        });
+        const scale = Math.min(
+          codeAreaWidth / barcodeCanvas.width,
+          codeAreaHeight / barcodeCanvas.height,
+          1,
+        );
+        const drawW = Math.max(1, Math.round(barcodeCanvas.width * scale));
+        const drawH = Math.max(1, Math.round(barcodeCanvas.height * scale));
+        const dx = Math.round((widthPx - drawW) / 2);
+        const dy = Math.round(codeAreaTop + (codeAreaHeight - drawH) / 2);
+        ctx.drawImage(barcodeCanvas, dx, dy, drawW, drawH);
+      }
+
+      ctx.font = `400 ${skuFontPx}px ui-monospace, Menlo, Consolas, monospace`;
+      ctx.fillText(skuText, widthPx / 2, heightPx - padPx, widthPx - padPx * 2);
+
+      const pngUrl = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = pngUrl;
+      a.download = buildPhomemoFilename({
+        sku,
+        widthMm: labelMm.widthMm,
+        heightMm: labelMm.heightMm,
+      });
+      a.click();
+    } catch (e) {
+      setPhomemoError(e instanceof Error ? e.message : 'Could not render the PNG');
+    } finally {
+      setPhomemoBusy(false);
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -337,6 +478,36 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
               toggle above instead of the dialog&rsquo;s Landscape option.
             </p>
           )}
+          {size !== 'auto' && labelPx && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/30 p-3">
+              <div>
+                <p className="text-sm font-medium">Phomemo printer app</p>
+                <p className="text-muted-foreground text-[11px] leading-snug">
+                  If the M120&rsquo;s macOS driver misrotates this label, download it as a PNG at
+                  the printer&rsquo;s exact size and print it from the Phomemo app instead —{' '}
+                  {formatLabelPx(labelPx)}.
+                </p>
+                {phomemoError && (
+                  <p role="alert" className="text-destructive mt-1 text-[11px] font-medium">
+                    {phomemoError}
+                  </p>
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={downloadPhomemoPng}
+                disabled={phomemoBusy}
+              >
+                {phomemoBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="h-4 w-4" />
+                )}
+                Download PNG (Phomemo)
+              </Button>
+            </div>
+          )}
           <div className="flex justify-end gap-2">
             <Button
               variant="outline"
@@ -366,4 +537,33 @@ export function BarcodeDisplay({ itemId, itemName, sku, barcode }: BarcodeDispla
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Truncate `text` with an ellipsis so it fits within `maxWidth` canvas
+ *  px, using the context's current font. Canvas text never wraps on its
+ *  own, so the name line needs this to avoid spilling off the label. */
+function fitCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  const ellipsis = '…';
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (ctx.measureText(text.slice(0, mid) + ellipsis).width <= maxWidth) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return text.slice(0, lo) + ellipsis;
+}
+
+/** Promise wrapper so a data-URL image can be awaited before drawImage. */
+function loadImageElement(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Failed to decode QR image'));
+    img.src = src;
+  });
 }

@@ -293,7 +293,15 @@ export interface AuditCardModel {
   actorName: string;
   /** metadata.reason, when present and a string. Distinct from `notes`, which audit rows never carry. */
   reason: string | null;
-  /** metadata.changed_keys, when present and a string array. Rendered as its own chip line. */
+  /**
+   * metadata.changed_keys, when present and a string array — but ONLY when
+   * `diffRows` is empty. Mirrors web's `MetadataDiff` either/or fallback
+   * (apps/web/src/components/audit/metadata-diff.tsx): a real before/after
+   * diff is authoritative, so `changed_keys` (which lists every SUBMITTED
+   * field, not every field whose value actually changed) is null whenever
+   * diffRows is non-empty — never rendered alongside the rows. Non-null only
+   * as a legacy fallback for rows written before before/after capture.
+   */
   changedKeys: string[] | null;
   /** Field-level before→after rows, capped at AUDIT_DIFF_ROW_CAP. */
   diffRows: MetadataDiffField[];
@@ -309,8 +317,15 @@ export interface AuditCardModel {
 export function buildAuditCardModel(row: ActivityAuditInput): AuditCardModel {
   const meta = isPlainObject(row.metadata) ? row.metadata : {};
   const reason = typeof meta.reason === 'string' ? meta.reason : null;
-  const changedKeys = isStringArray(meta.changed_keys) ? meta.changed_keys : null;
+  const rawChangedKeys = isStringArray(meta.changed_keys) ? meta.changed_keys : null;
   const allDiffRows = diffMetadataFields(meta.before, meta.after);
+  // Web parity (metadata-diff.tsx's MetadataDiff): the chip is a legacy
+  // fallback for rows written before before/after capture. The current
+  // writer emits value-diffed changed_keys alongside every SUBMITTED field,
+  // so a card with both would show e.g. 19 "changed" fields above a 1-row
+  // real diff — the chip and rows disagree. Rows win; the chip only shows
+  // when there's no real diff to display.
+  const changedKeys = allDiffRows.length > 0 ? null : rawChangedKeys;
   return {
     id: row.id,
     event: row.event,

@@ -1,4 +1,4 @@
-import { formatOrderNumber } from '@stockpilot/core';
+import { formatOrderNumber, formatRackHoldings, type RackHoldingLike } from '@stockpilot/core';
 import {
   renderToStream,
   Document,
@@ -479,12 +479,32 @@ const styles = StyleSheet.create({
 
 const PADLEFT_2 = (n: number) => String(n).padStart(2, '0');
 
-function locationFor(line: OrderRequestLineWithItem): {
+/** Exported for direct unit testing — @react-pdf's rendered output isn't
+ *  text-extractable in this test suite (existing tests only assert on
+ *  buffer size / the %PDF magic header), so the split-vs-single-vs-label
+ *  decision is covered by calling this function directly instead. */
+export function locationFor(
+  line: OrderRequestLineWithItem,
+  rackHoldingsByItemId?: Map<string, RackHoldingLike[]>,
+): {
   primary: string | null;
   secondary: string | null;
 } {
   const item = line.item;
   if (!item) return { primary: null, secondary: null };
+
+  // Stock split across >1 rack/crate HOLDING makes the single free-text
+  // label misleading — it points at one rack while stock actually sits on
+  // several, and it can also go stale. When holdings say the item is
+  // split, print the full breakdown ("2-C ×20 · 5-A ×5") so the picker
+  // finds ALL of it instead of walking to just the one rack the label
+  // remembers. Single-holding (or holdings-unavailable) items fall
+  // through to the label exactly as before.
+  const holdings = rackHoldingsByItemId?.get(item.id) ?? [];
+  if (holdings.length > 1) {
+    return { primary: formatRackHoldings(holdings), secondary: null };
+  }
+
   const cf = (item.custom_fields ?? {}) as Record<string, unknown>;
   if (item.item_type === 'book') {
     const info = readBookStorage(cf);
@@ -582,6 +602,11 @@ export interface RenderPickSlipOptions {
    *  pick_slip_generated_at in the org's local time. Defaults to
    *  'UTC' if the caller can't resolve it. */
   orgTimezone?: string;
+  /** Rack/crate HOLDINGS (item_stock_levels), keyed by inventory_items.id
+   *  — batch-fetched by the route (fetchRackHoldingsByItem), scoped to
+   *  the order's warehouse. Drives the LOCATION column's split-item
+   *  breakdown in `locationFor`; omitted/empty falls back to the label. */
+  rackHoldingsByItemId?: Map<string, RackHoldingLike[]>;
 }
 
 export async function renderPickSlipPdf(
@@ -590,6 +615,7 @@ export async function renderPickSlipPdf(
 ): Promise<Buffer> {
   const { request, lines, warehouseName } = detail;
   const imageUrlByItemId = opts.imageUrlByItemId ?? new Map<string, string>();
+  const rackHoldingsByItemId = opts.rackHoldingsByItemId;
 
   const totalLines = lines.length;
   const totalUnits = lines.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
@@ -719,7 +745,7 @@ export async function renderPickSlipPdf(
               (rawImgUrl.startsWith('data:image/') || rawImgUrl.startsWith('https://'))
                 ? rawImgUrl
                 : undefined;
-            const loc = locationFor(l);
+            const loc = locationFor(l, rackHoldingsByItemId);
             const isLast = i === lines.length - 1;
             return (
               <View

@@ -17,6 +17,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { formatRackHoldings, type RackHoldingLike } from '@stockpilot/core';
+
 import { AddBookCard, type IsbnLookupResult } from '@/components/AddBookCard';
 import { AddItemCard, type UpcLookupResult } from '@/components/AddItemCard';
 import { SignaturePadModal } from '@/components/signature-pad-modal';
@@ -43,6 +45,11 @@ interface FoundItem {
   bin_location: string | null;
   custom_fields: Record<string, unknown> | null;
   image_url: string | null;
+  /** Rack/crate HOLDINGS (item_stock_levels, qty > 0) this item's stock
+   *  actually sits on. When there's more than one, `bin_location` above
+   *  is potentially misleading (it names one rack while stock sits on
+   *  several) — the location box prefers this breakdown in that case. */
+  rackHoldings: RackHoldingLike[];
 }
 
 /**
@@ -191,6 +198,30 @@ export default function Scan() {
       imageUrl = await signItemImage(imgRow.storage_path as string);
     }
 
+    // Rack/crate HOLDINGS for this item (item_stock_levels, qty > 0) — a
+    // scanned item's stock can be split across more than one rack, which
+    // makes the single bin_location label above potentially misleading
+    // (it names one rack while stock sits on several, and can go stale).
+    // No single-warehouse context on this screen (staff scan from
+    // anywhere) — list every holding wherever it physically sits, same
+    // as the web scanner/lookup API (apps/web/src/app/api/v1/items/lookup).
+    const { data: holdingRows } = await supabase
+      .from('item_stock_levels')
+      .select('quantity, locations!inner(name, kind)')
+      .eq('organization_id', orgId)
+      .eq('item_id', id)
+      .in('locations.kind', ['rack', 'crate'])
+      .gt('quantity', 0);
+    const rackHoldings: RackHoldingLike[] = ((holdingRows ?? []) as unknown as {
+      quantity: number;
+      locations: { name: string; kind: string } | { name: string; kind: string }[] | null;
+    }[])
+      .map((h) => {
+        const l = Array.isArray(h.locations) ? h.locations[0] : h.locations;
+        return l?.name ? { name: l.name, quantity: Number(h.quantity) || 0 } : null;
+      })
+      .filter((h): h is RackHoldingLike => h !== null);
+
     const r = row as Record<string, unknown>;
     const loc = r.primary_location as { name?: string } | { name?: string }[] | null;
     const locName = Array.isArray(loc) ? loc[0]?.name : loc?.name;
@@ -207,6 +238,7 @@ export default function Scan() {
       bin_location: (r.bin_location as string | null) ?? null,
       custom_fields: (r.custom_fields as Record<string, unknown> | null) ?? null,
       image_url: imageUrl,
+      rackHoldings,
     };
   }
 
@@ -785,6 +817,7 @@ export default function Scan() {
 
             {(item.primary_location_name ||
               item.bin_location ||
+              item.rackHoldings.length > 1 ||
               storage?.rackLabel ||
               storage?.crateNumber ||
               storage?.grade) && (
@@ -792,8 +825,19 @@ export default function Scan() {
                 {item.primary_location_name && (
                   <LocRow label="Location" value={item.primary_location_name} />
                 )}
-                {item.bin_location && (
-                  <LocRow label="Bin/shelf" value={item.bin_location} />
+                {item.rackHoldings.length > 1 ? (
+                  // Stock is SPLIT across more than one rack/crate — the
+                  // single bin_location label would only point at one of
+                  // them, so show the full breakdown instead (mirrors the
+                  // web pick-slip / count-sheet PDFs' locationFor).
+                  <LocRow
+                    label="Split stock"
+                    value={formatRackHoldings(item.rackHoldings) ?? ''}
+                  />
+                ) : (
+                  item.bin_location && (
+                    <LocRow label="Bin/shelf" value={item.bin_location} />
+                  )
                 )}
                 {storage?.rackLabel && (
                   <LocRow label="Rack" value={storage.rackLabel} mono />

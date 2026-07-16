@@ -9,6 +9,7 @@ import { CycleCountSheetPdf, type CycleCountPdfLine } from '@/lib/pdf/cycle-coun
 import { audit } from '@/server/services/audit';
 import { assertPermission, ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
+import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
 import { WarehousesService } from '@/server/services/warehouses';
 
 export const runtime = 'nodejs';
@@ -94,6 +95,19 @@ export async function GET(
         return (data ?? []) as LookupRow[];
       }),
     );
+
+    // Rack/crate HOLDINGS for every item on the sheet — scoped to the
+    // count's warehouse when it has one (a per-warehouse count only ever
+    // walks that warehouse); an org-wide count (header.warehouse_id null)
+    // passes no scope, so a holding is reported wherever it physically
+    // sits. Split items (>1 holding) get the full breakdown instead of a
+    // single (possibly stale/misleading) label — see countSheetLocationLabel.
+    const rackHoldingsByItemId = await fetchRackHoldingsByItem(
+      ctx,
+      itemIds,
+      header.warehouse_id,
+    );
+
     for (const row of chunkResults.flat()) {
       const locField = row.locations;
       const loc = Array.isArray(locField) ? locField[0] : locField;
@@ -102,6 +116,7 @@ export async function GET(
         custom_fields: row.custom_fields,
         bin_location: row.bin_location,
         primaryLocationName: loc?.name ?? null,
+        rackHoldings: rackHoldingsByItemId.get(row.id),
       });
       binByItem.set(row.id, label);
     }

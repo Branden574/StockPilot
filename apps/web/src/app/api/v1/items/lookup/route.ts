@@ -1,7 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import type { RackHoldingLike } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,6 +18,16 @@ export interface ItemLookupMatch {
   charterName: string | null;
   placementLabel: string | null;
   quantityOnHand: number;
+  /**
+   * Rack/crate HOLDINGS (item_stock_levels) this item's stock actually
+   * sits on, when it's split across more than one — empty when unsplit
+   * or unplaced. `placementLabel` (bin_location) can be misleading for a
+   * split item (it names one rack while stock sits on several, and can
+   * go stale); a caller that wants to walk a picker to ALL of the stock
+   * should prefer this when it has length > 1. Additive field — existing
+   * consumers reading only `placementLabel` are unaffected.
+   */
+  rackHoldings: RackHoldingLike[];
 }
 
 type LookupRow = {
@@ -86,6 +99,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
   }
 
+  // No single-warehouse context for a bare code lookup (unlike a pick
+  // slip, which is scoped to one order's warehouse) — list every holding
+  // wherever it physically sits.
+  const rackHoldingsByItemId = await fetchRackHoldingsByItem(
+    ctx,
+    finalRows.map((r) => r.id),
+  );
+
   const matches: ItemLookupMatch[] = finalRows.map((row) => ({
     id: row.id,
     sku: row.sku,
@@ -95,6 +116,7 @@ export async function GET(req: NextRequest) {
     charterName: embedCharterName(row.charter),
     placementLabel: (row.bin_location ?? '').trim() || null,
     quantityOnHand: Number(row.quantity_on_hand) || 0,
+    rackHoldings: rackHoldingsByItemId.get(row.id) ?? [],
   }));
 
   return NextResponse.json({ matches });

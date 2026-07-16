@@ -320,7 +320,7 @@ describe('formatRelativeTime', () => {
 // ─── audit card model ───────────────────────────────────────────────────────
 
 describe('buildAuditCardModel', () => {
-  it('builds a full model from realistic item.update metadata', () => {
+  it('builds a full model from realistic item.update metadata — diff rows win over the changed_keys chip (web parity)', () => {
     const row = auditRow({
       id: 'a1',
       event: 'inventory.item.updated',
@@ -334,12 +334,49 @@ describe('buildAuditCardModel', () => {
     const model = buildAuditCardModel(row);
     expect(model.eventLabel).toBe('Inventory Item · Updated');
     expect(model.actorName).toBe('Ada Lovelace');
-    expect(model.changedKeys).toEqual(['name', 'unit_cost']);
+    // Rows > 0 -> chip is suppressed even though changed_keys is present and
+    // non-empty (this is the exact live scenario reported: a card that used
+    // to show "Fields changed: <19 fields>" above a 1-row real diff).
+    expect(model.changedKeys).toBeNull();
     expect(model.diffRows).toEqual([
       { field: 'name', before: 'Old Widget', after: 'New Widget' },
       { field: 'unit_cost', before: '4.5', after: '5' },
     ]);
     expect(model.diffMoreCount).toBe(0);
+  });
+
+  it('changed_keys AND before/after both present -> diffRows populated, chip omitted entirely', () => {
+    // Same shape as the live bug report: a legacy-style changed_keys listing
+    // every submitted field (19 of them) alongside a real before/after diff
+    // that only actually changed one field.
+    const submittedKeys = ['name', 'unit_cost', 'reorder_point', 'bin_location'];
+    const row = auditRow({
+      id: 'a1b',
+      event: 'inventory.item.updated',
+      metadata: {
+        changed_keys: submittedKeys,
+        before: { reorder_point: 5 },
+        after: { reorder_point: 10 },
+      },
+    });
+    const model = buildAuditCardModel(row);
+    expect(model.diffRows).toEqual([{ field: 'reorder_point', before: '5', after: '10' }]);
+    expect(model.diffRows.length).toBeGreaterThan(0);
+    expect(model.changedKeys).toBeNull();
+  });
+
+  it('changed_keys only, no before/after -> chip present with the legacy honest-label copy', () => {
+    // No `before`/`after` on this row at all (legacy pre-capture write), so
+    // diffMetadataFields(undefined, undefined) yields zero rows and the chip
+    // is the only signal available.
+    const row = auditRow({
+      id: 'a1c',
+      event: 'inventory.item.updated',
+      metadata: { changed_keys: ['name', 'reorder_point'] },
+    });
+    const model = buildAuditCardModel(row);
+    expect(model.diffRows).toEqual([]);
+    expect(model.changedKeys).toEqual(['name', 'reorder_point']);
   });
 
   it('caps diff rows at AUDIT_DIFF_ROW_CAP and reports the remainder as diffMoreCount', () => {

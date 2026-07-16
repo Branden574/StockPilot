@@ -1770,12 +1770,13 @@ function AuditCard({ audit }: { audit: AuditCardModel }) {
               “{audit.reason}”
             </Body>
           ) : null}
-          {/* changed_keys chip — independent of the diff rows below (both can
-              render together; mirrors the plan's "chip line + diff rows" as
-              two separate elements rather than web's either/or fallback). */}
+          {/* changed_keys chip — web parity (metadata-diff.tsx): buildAuditCardModel
+              already nulls this out whenever diffRows is non-empty, so this only
+              ever renders for LEGACY rows written before before/after capture. */}
           {audit.changedKeys && audit.changedKeys.length > 0 ? (
             <Mono size={10} tracking={0.02} color={c.ink4} style={{ marginTop: 6 }}>
-              Fields changed: {audit.changedKeys.map(humanizeFieldName).join(', ')}
+              Fields on the edit (exact changes not recorded for this entry):{' '}
+              {audit.changedKeys.map(humanizeFieldName).join(', ')}
             </Mono>
           ) : null}
           {/* Compact before → after rows, capped at AUDIT_DIFF_ROW_CAP with a
