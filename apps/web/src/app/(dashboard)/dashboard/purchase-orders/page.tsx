@@ -35,33 +35,15 @@ import {
 import { SuppliersService } from '@/server/services/suppliers';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { formatCurrency, formatDateShort } from '@/lib/utils';
+import {
+  isPoTab,
+  statusesForTab,
+  TAB_LABELS,
+  TAB_ORDER,
+  type PoTab,
+} from '@/lib/purchase-orders/tabs';
 
 export const metadata = { title: 'Purchase orders' };
-
-// ── Status grouping ────────────────────────────────────────────────────────
-// The DB has 6 statuses; we partition them into mutually-exclusive filter tabs
-// (every status lands in exactly one tab) so the pills echo the design mockup
-// while staying faithful to the real data model.
-type PoTab = 'all' | 'draft' | 'ordered' | 'in_transit' | 'received' | 'cancelled';
-
-const TAB_ORDER: PoTab[] = ['all', 'draft', 'ordered', 'in_transit', 'received', 'cancelled'];
-
-const TAB_LABELS: Record<PoTab, string> = {
-  all: 'All',
-  draft: 'Draft',
-  ordered: 'Ordered',
-  in_transit: 'In transit',
-  received: 'Received',
-  cancelled: 'Cancelled',
-};
-
-const TAB_STATUSES: Record<Exclude<PoTab, 'all'>, string[]> = {
-  draft: ['draft'],
-  ordered: ['ordered'],
-  in_transit: ['expected_inbound', 'partially_received'],
-  received: ['received'],
-  cancelled: ['cancelled'],
-};
 
 /**
  * Rows per page. The table is paginated SERVER-SIDE (searchParams-driven,
@@ -79,10 +61,6 @@ const PAGE_SIZE = 30;
  * (the mig-0227 scale path) stays in force.
  */
 const PO_INSTANT_CAP = 800;
-
-function isPoTab(value: string | undefined): value is PoTab {
-  return TAB_ORDER.includes(value as PoTab);
-}
 
 export default async function PurchaseOrdersPage({
   searchParams,
@@ -164,7 +142,13 @@ export default async function PurchaseOrdersPage({
     instant = rawStats.totalCount <= PO_INSTANT_CAP;
     const poPage = await poSvc.listPage({
       warehouseId: warehouseFilter ?? undefined,
-      statuses: tab === 'all' ? null : TAB_STATUSES[tab],
+      // All = all NON-cancelled statuses (owner request 2026-07-16) — a
+      // cancelled PO is void/mostly test noise and stays reachable via its
+      // own Cancelled tab instead. statusesForTab() always returns an
+      // explicit array now (never null), so this applies identically in
+      // BOTH the instant (client-filtered) and server-paginated branches
+      // below — they both flow through this same listPage() call.
+      statuses: statusesForTab(tab),
       // Instant mode filters client-side, so it loads the tab unfiltered.
       q: instant ? '' : q,
       page: instant ? 1 : page,
