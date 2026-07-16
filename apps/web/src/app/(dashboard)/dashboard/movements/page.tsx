@@ -83,8 +83,20 @@ export default async function MovementsPage({
   // load it all and let the client filter + page with zero latency (like
   // Items/Books). Decided on the UNFILTERED count since instant mode ignores
   // the server ?q/?type/?from/?to (those are applied client-side there).
-  const totalAll = await movementsSvc.count({ warehouseId }).catch(() => null);
-  const instant = totalAll != null && totalAll <= MOVEMENTS_INSTANT_CAP;
+  //
+  // The count and the SPECULATIVE instant page run in ONE Promise.all — the
+  // old serial count→list added a full extra DB round trip to every visit
+  // (2026-07-16 perf sweep). Orgs over the cap discard the speculative page
+  // and pay the server-mode pair below; everyone else (the common case)
+  // renders one round trip sooner.
+  const [totalAll, speculativeAll] = await Promise.all([
+    movementsSvc.count({ warehouseId }).catch(() => null),
+    movementsSvc
+      .list({ limit: MOVEMENTS_INSTANT_CAP, offset: 0, warehouseId })
+      .catch(() => null),
+  ]);
+  const instant =
+    totalAll != null && totalAll <= MOVEMENTS_INSTANT_CAP && speculativeAll != null;
 
   let instantRows: MovementDisplayRow[] = [];
   let visible: Awaited<ReturnType<typeof movementsSvc.list>> = [];
@@ -93,7 +105,7 @@ export default async function MovementsPage({
   let totalPages: number | undefined;
 
   if (instant) {
-    const all = await movementsSvc.list({ limit: MOVEMENTS_INSTANT_CAP, offset: 0, warehouseId });
+    const all = speculativeAll;
     instantRows = all.map((m) => ({
       id: m.id as string,
       movementType: m.movement_type as string,

@@ -160,8 +160,27 @@ export class PoImportsService {
    * migration) to stay cheap at any scale, which the ask explicitly said not
    * to do speculatively.
    */
-  private async searchOrFilter(q: string): Promise<string | null> {
-    const trimmed = q.trim();
+  /**
+   * Memoized per (instance, q): the imports page calls list() and count()
+   * concurrently with the SAME q, and each needs the resolved filter —
+   * caching the PROMISE (not the value) means the second caller reuses the
+   * in-flight resolution instead of re-running both lookups (2026-07-16
+   * perf sweep: a searched render paid 4 lookup queries instead of 2).
+   * Instances are per-request (forCurrentUser), so no staleness.
+   */
+  private searchOrFilterCache = new Map<string, Promise<string | null>>();
+
+  private searchOrFilter(q: string): Promise<string | null> {
+    const key = q.trim();
+    let p = this.searchOrFilterCache.get(key);
+    if (!p) {
+      p = this.resolveSearchOrFilter(key);
+      this.searchOrFilterCache.set(key, p);
+    }
+    return p;
+  }
+
+  private async resolveSearchOrFilter(trimmed: string): Promise<string | null> {
     if (!trimmed) return null;
     // Strip PostgREST .or()-structural metacharacters (,()%*) BEFORE the
     // wildcard escape — a comma/paren in the term ("Smith, Inc") otherwise
@@ -172,21 +191,23 @@ export class PoImportsService {
     if (!esc) return null;
     const orParts = [`file_name.ilike.%${esc}%`];
 
-    const { data: suppliers } = await this.ctx.supabase
-      .from('suppliers')
-      .select('id')
-      .eq('organization_id', this.ctx.organizationId)
-      .ilike('name', `%${esc}%`);
+    // Both id-lookups are independent — resolve them in parallel.
+    const [{ data: suppliers }, { data: pos }] = await Promise.all([
+      this.ctx.supabase
+        .from('suppliers')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .ilike('name', `%${esc}%`),
+      this.ctx.supabase
+        .from('purchase_orders')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .ilike('po_number', `%${esc}%`),
+    ]);
     const supplierIds = ((suppliers ?? []) as Array<{ id: string }>).map((s) => s.id);
     if (supplierIds.length > 0) {
       orParts.push(`vendor_id.in.(${supplierIds.join(',')})`);
     }
-
-    const { data: pos } = await this.ctx.supabase
-      .from('purchase_orders')
-      .select('id')
-      .eq('organization_id', this.ctx.organizationId)
-      .ilike('po_number', `%${esc}%`);
     const poIds = ((pos ?? []) as Array<{ id: string }>).map((p) => p.id);
     if (poIds.length > 0) {
       orParts.push(`approved_po_id.in.(${poIds.join(',')})`);
