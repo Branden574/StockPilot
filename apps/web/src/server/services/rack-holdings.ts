@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { reportError } from '@/lib/error-reporter';
+
 import type { RackHoldingLike } from '@stockpilot/core';
 
 import type { ServiceContext } from './context';
@@ -61,7 +63,16 @@ export async function fetchRackHoldingsByItem(
         .in('locations.kind', ['rack', 'crate'])
         .gt('quantity', 0);
       if (warehouseId) q = q.eq('locations.warehouse_id', warehouseId);
-      const { data } = await q;
+      const { data, error } = await q;
+      // Graceful degradation is deliberate (consumers fall back to the
+      // stale label) — but never silently: a persistent failure here would
+      // otherwise hide split stock from pickers with zero telemetry.
+      if (error) {
+        void reportError(new Error(`rack-holdings fetch: ${error.message}`), {
+          tag: 'rack-holdings.fetch',
+          level: 'warning',
+        });
+      }
       // `locations` is a to-one embed → a single object at runtime; the
       // generated PostgREST types model it as an array (same convention
       // as the other holdings reads in InventoryService).

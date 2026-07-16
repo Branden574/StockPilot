@@ -29,8 +29,10 @@ interface ItemActivityPanelProps {
    * through.
    */
   initialCursor: ActivityCursor | null;
-  /** Whether the first page already hit BOTH per-kind caps (see the
-   * server action's `exhausted` doc) — hides the button from the very
+  /** Whether the first page was already exhausted for THIS panel's view
+   * (movements-only for kindFilter='movement', both kinds for the merged
+   * feed — mirroring how later pages derive it from the action's
+   * movementsExhausted/auditsExhausted) — hides the button from the very
    * first render when there's nothing more to load. */
   initialExhausted: boolean;
   /**
