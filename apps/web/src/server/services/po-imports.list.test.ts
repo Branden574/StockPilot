@@ -68,7 +68,7 @@ describe('PoImportsService.list', () => {
     expect(chain).not.toContain('in');
   });
 
-  it('searches the file name via escaped ILIKE (pattern #16 — %/_/\\ are literal)', async () => {
+  it('searches the file name via escaped ILIKE — LIKE wildcards escaped, %/*/,/() stripped like every other .or() search', async () => {
     const stub = makeSupabaseStub({
       'po_imports.select': { data: [], error: null },
       'suppliers.select': { data: [], error: null },
@@ -82,7 +82,28 @@ describe('PoImportsService.list', () => {
     const args = stub.chainArgs.get('po_imports.select') ?? [];
     const orIdx = chain.indexOf('or');
     expect(orIdx).toBeGreaterThan(-1);
-    expect(args[orIdx]![0]).toBe('file_name.ilike.%100\\%\\_off%');
+    expect(args[orIdx]![0]).toBe('file_name.ilike.%100 \\_off%');
+  });
+
+  it('strips .or()-structural metacharacters (,()) from the term — "Smith, Inc (test)" cannot malform the filter tree', async () => {
+    const stub = makeSupabaseStub({
+      'po_imports.select': { data: [], error: null },
+      'suppliers.select': { data: [], error: null },
+      'purchase_orders.select': { data: [], error: null },
+    });
+    const svc = new PoImportsService(makeServiceContext(stub.client) as never);
+
+    await svc.list({ q: 'Smith, Inc (test)' });
+
+    const chain = stub.chains.get('po_imports.select') ?? [];
+    const args = stub.chainArgs.get('po_imports.select') ?? [];
+    const orIdx = chain.indexOf('or');
+    expect(orIdx).toBeGreaterThan(-1);
+    // Commas/parens from the TERM are stripped (collapsed to spaces), so the
+    // only structural chars left are the .or() clause's own. A raw comma here
+    // would split the ilike into a bogus extra predicate → PostgREST 400 →
+    // the whole imports list replaced by the retry banner.
+    expect(args[orIdx]![0]).toBe('file_name.ilike.%Smith  Inc  test%');
   });
 
   it('adds a supplier-name match (vendor_id IN (...)) when the search resolves suppliers — org-scoped lookup', async () => {

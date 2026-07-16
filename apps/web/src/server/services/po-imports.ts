@@ -163,7 +163,13 @@ export class PoImportsService {
   private async searchOrFilter(q: string): Promise<string | null> {
     const trimmed = q.trim();
     if (!trimmed) return null;
-    const esc = escapeIlike(trimmed);
+    // Strip PostgREST .or()-structural metacharacters (,()%*) BEFORE the
+    // wildcard escape — a comma/paren in the term ("Smith, Inc") otherwise
+    // malforms the .or() logic tree → PostgREST 400 → the whole list page
+    // shows the retry banner. Mirrors BundlesService.list / InventoryService
+    // .list (audit 2026-06-09). escapeIlike alone only covers LIKE wildcards.
+    const esc = escapeIlike(trimmed.slice(0, 120).replace(/[,()%*]/g, ' ').trim());
+    if (!esc) return null;
     const orParts = [`file_name.ilike.%${esc}%`];
 
     const { data: suppliers } = await this.ctx.supabase
