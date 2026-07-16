@@ -315,7 +315,7 @@ function mimeForExt(ext: string): string {
 }
 
 export default function ItemDetail() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, tab: tabParam } = useLocalSearchParams<{ id: string; tab?: string }>();
   const router = useRouter();
   const { c } = useTheme();
   const { orgId } = useOrg();
@@ -339,7 +339,13 @@ export default function ItemDetail() {
   const [activityError, setActivityError] = React.useState<string | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
-  const [tab, setTab] = React.useState<TabId>('overview');
+  // Web parity: /dashboard/inventory/[id]?tab=movements|activity deep-links
+  // straight to a tab — mobile honors the same param (notification links,
+  // in-app pushes, and tests can land directly on a tab). Unknown values
+  // fall back to overview.
+  const [tab, setTab] = React.useState<TabId>(() =>
+    tabParam === 'movements' || tabParam === 'activity' ? tabParam : 'overview',
+  );
   const [adjustOpen, setAdjustOpen] = React.useState(false);
   const [moveOpen, setMoveOpen] = React.useState(false);
   const [photoBusy, setPhotoBusy] = React.useState(false);
