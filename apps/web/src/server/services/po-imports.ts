@@ -86,9 +86,26 @@ export class PoImportsService {
     return new PoImportsService(await withContext());
   }
 
-  async list(): Promise<PoImportRow[]> {
+  /**
+   * Lists imports for the imports index page: optional tab-status filter,
+   * free-text search, and pagination. Mirrors MovementsService's list()/
+   * count() split (same filters, two separate queries) rather than a
+   * purpose-built RPC like the purchase-orders page's — po_imports is a
+   * desktop-upload workflow (nowhere near PO-ledger scale), so a plain
+   * filtered Supabase query is enough and needs no migration.
+   */
+  async list(
+    params: {
+      /** Tab statuses (e.g. the Active/Approved/Cancelled partition). Omitted/empty = no status filter. */
+      statuses?: PoImportStatus[] | null;
+      /** Free-text search — see searchOrFilter() for exactly what it matches. */
+      q?: string;
+      limit?: number;
+      offset?: number;
+    } = {},
+  ): Promise<PoImportRow[]> {
     assertModuleEnabled(this.ctx, 'po_imports');
-    const { data, error } = await this.ctx.supabase
+    let query = this.ctx.supabase
       .from('po_imports')
       .select(
         `id, organization_id, uploaded_by, source_type, vendor_id, warehouse_id,
@@ -96,10 +113,86 @@ export class PoImportsService {
          parse_error, approved_po_id, created_at, updated_at,
          extraction_confidence, extraction_model`,
       )
-      .eq('organization_id', this.ctx.organizationId)
-      .order('created_at', { ascending: false });
+      .eq('organization_id', this.ctx.organizationId);
+    if (params.statuses && params.statuses.length > 0) {
+      query = query.in('status', params.statuses);
+    }
+    const orFilter = await this.searchOrFilter(params.q ?? '');
+    if (orFilter) query = query.or(orFilter);
+    query = query.order('created_at', { ascending: false });
+    if (params.limit != null) {
+      const offset = Math.max(0, params.offset ?? 0);
+      query = query.range(offset, offset + Math.max(1, params.limit) - 1);
+    }
+    const { data, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return (data ?? []) as PoImportRow[];
+  }
+
+  /**
+   * Total count for the SAME statuses/q filters `list()` uses — powers the
+   * imports page's numbered pagination and per-tab pill counts. Head-only
+   * (no rows).
+   */
+  async count(params: { statuses?: PoImportStatus[] | null; q?: string } = {}): Promise<number> {
+    assertModuleEnabled(this.ctx, 'po_imports');
+    let query = this.ctx.supabase
+      .from('po_imports')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId);
+    if (params.statuses && params.statuses.length > 0) {
+      query = query.in('status', params.statuses);
+    }
+    const orFilter = await this.searchOrFilter(params.q ?? '');
+    if (orFilter) query = query.or(orFilter);
+    const { count, error } = await query;
+    if (error) throw new ServiceError('internal_error', error.message);
+    return count ?? 0;
+  }
+
+  /**
+   * Builds the `.or()` filter string for a search term: always the file name
+   * (ilike, escaped). Plus two CHEAP supplementary lookups for the "supplier/
+   * PO-number metadata" the owner asked for — both are plain FK columns
+   * already on po_imports (vendor_id, approved_po_id), each resolved via one
+   * small id lookup on a normally-sized, indexed table. Deliberately does
+   * NOT search parsed_json (jsonb) — that would need a GIN index (a
+   * migration) to stay cheap at any scale, which the ask explicitly said not
+   * to do speculatively.
+   */
+  private async searchOrFilter(q: string): Promise<string | null> {
+    const trimmed = q.trim();
+    if (!trimmed) return null;
+    // Strip PostgREST .or()-structural metacharacters (,()%*) BEFORE the
+    // wildcard escape — a comma/paren in the term ("Smith, Inc") otherwise
+    // malforms the .or() logic tree → PostgREST 400 → the whole list page
+    // shows the retry banner. Mirrors BundlesService.list / InventoryService
+    // .list (audit 2026-06-09). escapeIlike alone only covers LIKE wildcards.
+    const esc = escapeIlike(trimmed.slice(0, 120).replace(/[,()%*]/g, ' ').trim());
+    if (!esc) return null;
+    const orParts = [`file_name.ilike.%${esc}%`];
+
+    const { data: suppliers } = await this.ctx.supabase
+      .from('suppliers')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .ilike('name', `%${esc}%`);
+    const supplierIds = ((suppliers ?? []) as Array<{ id: string }>).map((s) => s.id);
+    if (supplierIds.length > 0) {
+      orParts.push(`vendor_id.in.(${supplierIds.join(',')})`);
+    }
+
+    const { data: pos } = await this.ctx.supabase
+      .from('purchase_orders')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .ilike('po_number', `%${esc}%`);
+    const poIds = ((pos ?? []) as Array<{ id: string }>).map((p) => p.id);
+    if (poIds.length > 0) {
+      orParts.push(`approved_po_id.in.(${poIds.join(',')})`);
+    }
+
+    return orParts.join(',');
   }
 
   async get(id: string): Promise<{ header: PoImportRow; lines: PoImportLineRow[] }> {
@@ -1018,4 +1111,9 @@ export class PoImportsService {
       );
     }
   }
+}
+
+/** Escape ILIKE wildcards so a user's %/_/\ in search is literal (pattern #16). */
+function escapeIlike(q: string): string {
+  return q.replace(/[\\%_]/g, (m) => `\\${m}`);
 }

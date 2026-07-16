@@ -1,3 +1,4 @@
+import type { RackHoldingLike } from '@stockpilot/core';
 import {
   renderToStream,
   Document,
@@ -30,6 +31,13 @@ export interface WarehousePackingSlipInput extends PackingSlipInputCore {
   /** PNG data URL of the signature-collection QR. Null when the order
    *  has no signature_token (legacy rows or odd state). */
   qrDataUrl: string | null;
+  /** Rack/crate HOLDINGS (item_stock_levels), keyed by inventory_items.id
+   *  — batch-fetched by the route (fetchRackHoldingsByItem), scoped to
+   *  the order's warehouse. Drives the LOCATION column's split-item
+   *  breakdown (see `locationFor` in packing-slip-shared.tsx); the
+   *  customer-facing slip never shows the Location column so it has no
+   *  equivalent field. */
+  rackHoldingsByItemId?: Map<string, RackHoldingLike[]>;
 }
 
 /**
@@ -44,7 +52,15 @@ export interface WarehousePackingSlipInput extends PackingSlipInputCore {
 export async function renderWarehousePackingSlipPdf(
   input: WarehousePackingSlipInput,
 ): Promise<Buffer> {
-  const { detail, warehouse, charterName, imageUrlByItemId, qrDataUrl, orgTimezone } = input;
+  const {
+    detail,
+    warehouse,
+    charterName,
+    imageUrlByItemId,
+    qrDataUrl,
+    orgTimezone,
+    rackHoldingsByItemId,
+  } = input;
   const tz = orgTimezone ?? 'UTC';
   const { request, lines } = detail;
   const isPickup = request.fulfillment_type === 'pickup';
@@ -118,7 +134,7 @@ export async function renderWarehousePackingSlipPdf(
 
         <LinesTable
           lines={lines}
-          options={{ showLocation: true, imageUrlByItemId }}
+          options={{ showLocation: true, imageUrlByItemId, rackHoldingsByItemId }}
         />
 
         {/* Manual signature block — fallback for when the QR/digital

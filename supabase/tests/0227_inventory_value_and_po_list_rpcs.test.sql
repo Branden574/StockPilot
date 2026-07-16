@@ -200,23 +200,45 @@ select ok(has_function_privilege('authenticated',
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- LIVE PRIVILEGE / ISOLATION PROBES (5)
+--
+-- PROD/CI ONLY (0230 pattern): the macOS local stack segfaults the backend
+-- when throws_ok trips an EXECUTE denial on a function (known class — see
+-- 0230's refresh_org_daily_stats probe for the full note). The property is
+-- already pinned statically above (the anon/authenticated has_function_privilege
+-- checks). Opt in where the stack is verified safe with:
+-- set stockpilot.pgtap_live_denial_probes = 'on';
 -- ═════════════════════════════════════════════════════════════════════════════
 
 set local "request.jwt.claim.role" to 'anon';
 set local role to 'anon';
-select throws_ok(
-  $$ select public.inventory_value_on_hand('ac022700-0000-0000-0000-000000000001'::uuid, 'product', null) $$,
-  '42501', null, 'anon cannot execute inventory_value_on_hand');
-select throws_ok(
-  $$ select * from public.purchase_orders_stats('ac022700-0000-0000-0000-000000000001'::uuid, null) $$,
-  '42501', null, 'anon cannot execute purchase_orders_stats');
+select case
+  when coalesce(current_setting('stockpilot.pgtap_live_denial_probes', true), '') = 'on' then
+    throws_ok(
+      $$ select public.inventory_value_on_hand('ac022700-0000-0000-0000-000000000001'::uuid, 'product', null) $$,
+      '42501', null, 'anon cannot execute inventory_value_on_hand')
+  else
+    skip('prod-only: live fn-EXECUTE-denial probe (segfaults this local stack; EXECUTE grants asserted statically above)', 1)
+end;
+select case
+  when coalesce(current_setting('stockpilot.pgtap_live_denial_probes', true), '') = 'on' then
+    throws_ok(
+      $$ select * from public.purchase_orders_stats('ac022700-0000-0000-0000-000000000001'::uuid, null) $$,
+      '42501', null, 'anon cannot execute purchase_orders_stats')
+  else
+    skip('prod-only: live fn-EXECUTE-denial probe (segfaults this local stack; EXECUTE grants asserted statically above)', 1)
+end;
 reset role;
 
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
-select throws_ok(
-  $$ select public.inventory_value_on_hand('ac022700-0000-0000-0000-000000000001'::uuid, 'product', null) $$,
-  '42501', null, 'authenticated cannot execute inventory_value_on_hand (not even for its own org)');
+select case
+  when coalesce(current_setting('stockpilot.pgtap_live_denial_probes', true), '') = 'on' then
+    throws_ok(
+      $$ select public.inventory_value_on_hand('ac022700-0000-0000-0000-000000000001'::uuid, 'product', null) $$,
+      '42501', null, 'authenticated cannot execute inventory_value_on_hand (not even for its own org)')
+  else
+    skip('prod-only: live fn-EXECUTE-denial probe (segfaults this local stack; EXECUTE grants asserted statically above)', 1)
+end;
 reset role;
 
 set local role to 'service_role';
@@ -270,7 +292,10 @@ select results_eq(
   $$ select total_count, total_value, open_count, committed_value,
             open_supplier_count, inbound_count, next_eta_po_number, avg_lead_days
        from public.purchase_orders_stats('ac022700-0000-0000-0000-000000000001'::uuid, null) $$,
-  $$ values (8::bigint, 2080::numeric, 4::bigint, 750::numeric,
+  -- total_value = 1180 (100+200+50+400+300+60+70), excluding the cancelled
+  -- PO-1008's 900 — migration 0232 fixed total_value to exclude cancelled
+  -- orders; total_count (8) still counts every row, cancelled included.
+  $$ values (8::bigint, 1180::numeric, 4::bigint, 750::numeric,
              2::bigint, 3::bigint, 'PO-1003'::text, 7::numeric) $$,
   'stats (no scope): totals/open/committed/suppliers/inbound/next-ETA/avg-lead all hand-computed');
 

@@ -49,7 +49,12 @@ describe('GET /auth/confirm', () => {
   });
 
   it('redirects invalid types to signin without rendering a form', async () => {
-    const res = await GET(getReq('token_hash=abc&type=magiclink&next=%2Fdashboard'));
+    // 'magiclink' used to be the invalid-type example here, but dd83437c
+    // (2026-07-09, B2B portal adversarial review) added it to ALLOWED_TYPES
+    // as the existing-user re-invite fallback — it now legitimately renders
+    // the click-through form (see the test above). Use a type this route
+    // genuinely never allowlists instead.
+    const res = await GET(getReq('token_hash=abc&type=email_change&next=%2Fdashboard'));
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe(`${BASE}/signin?error=auth_callback_failed`);
     expect(verifyOtp).not.toHaveBeenCalled();

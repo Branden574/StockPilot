@@ -2,7 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
-vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), updateTag: vi.fn() }));
+// a534b31e (2026-07-10, "updateTag requires cacheComponents — use
+// revalidateTag everywhere") swapped setOrgLogoUrlAction's cache
+// invalidation from updateTag('dashboard-org') to
+// revalidateTag('dashboard-org', 'max'), but this mock kept stubbing the
+// old export and never added the new one. Vitest's mock-module guard
+// throws on the unstubbed call, which the action's catch-all turned into
+// a silent internal_error (test saw `result.ok === false`).
+vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
 
 // Force a stable Supabase URL so the avatar prefix validation is
 // deterministic across local + CI environments.
@@ -73,7 +80,7 @@ vi.mock('@/server/services/context', async () => {
   };
 });
 
-import { revalidatePath } from 'next/cache';
+import { revalidatePath, revalidateTag } from 'next/cache';
 
 import { audit } from '@/server/services/audit';
 
@@ -217,6 +224,7 @@ describe('setOrgLogoUrlAction', () => {
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'organization.updated' }),
     );
+    expect(revalidateTag).toHaveBeenCalledWith('dashboard-org', 'max');
     expect(revalidatePath).toHaveBeenCalledWith('/dashboard', 'layout');
   });
 

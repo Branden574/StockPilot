@@ -118,11 +118,19 @@ update public.order_requests
       signature_token_expires_at = now() + interval '1 day'
   where id = :ord_a;
 
+-- confirm_order_signature is service_role-only (0112/0120 — the public sign
+-- page hashes the token via a service-role admin client; never callable by
+-- 'authenticated'). Drop the role for this call, then restore it — matching
+-- the 0230 pattern of running service-role-only calls outside the role switch.
+reset role;
 do $$
 begin
   perform public.confirm_order_signature('b0244000-0000-0000-0000-0000000000a1'::uuid,
     'tok-a-0244', 'Jane Signer', 'jane@example.com', 'data:image/png;base64,AAAA');
 end $$;
+set local "request.jwt.claim.sub" to 'b0244000-0000-0000-0000-000000000002';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
 
 select is(
   (select quantity_fulfilled from public.order_request_lines where id = :line_a),
@@ -147,11 +155,15 @@ update public.order_requests
       signature_token = 'tok-c-0244',
       signature_token_expires_at = now() + interval '1 day'
   where id = :ord_c;
+reset role;
 do $$
 begin
   perform public.confirm_order_signature('b0244000-0000-0000-0000-0000000000c1'::uuid,
     'tok-c-0244', 'Carl Signer', 'carl@example.com', 'data:image/png;base64,BBBB');
 end $$;
+set local "request.jwt.claim.sub" to 'b0244000-0000-0000-0000-000000000002';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
 
 select is(
   (select quantity_fulfilled from public.order_request_lines where id = :line_c),

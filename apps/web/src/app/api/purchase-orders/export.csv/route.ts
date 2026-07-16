@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+import { isPoTab, statusesForTab } from '@/lib/purchase-orders/tabs';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { csvFilename, toCsv } from '@/lib/csv';
@@ -11,16 +13,6 @@ import { can } from '@stockpilot/core';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Mirror of the list page's tab → status-set mapping so the Export button
-// exports exactly the tab the user is viewing. Kept here (not imported from the
-// page) to avoid coupling the route to the page's render module.
-const TAB_STATUSES: Record<string, string[]> = {
-  draft: ['draft'],
-  ordered: ['ordered'],
-  in_transit: ['expected_inbound', 'partially_received'],
-  received: ['received'],
-  cancelled: ['cancelled'],
-};
 
 const HEADERS = [
   'po_number',
@@ -79,7 +71,11 @@ export async function GET(request: Request) {
     const supplierMap = new Map(suppliers.map((s) => [s.id as string, s.name as string]));
     const supplierName = (id: string | null) => (id ? (supplierMap.get(id) ?? '') : '');
 
-    const statuses = tab in TAB_STATUSES ? TAB_STATUSES[tab] : null;
+    // Same tab → status mapping as the list page (shared lib, not a local
+    // copy — a drifting copy shipped 'All exports cancelled' after the page
+    // made All = non-cancelled, owner request 2026-07-16). 'all' now excludes
+    // cancelled in BOTH the view and the export.
+    const statuses = isPoTab(tab) ? statusesForTab(tab) : statusesForTab('all');
     const filtered = pos.filter((p) => {
       if (statuses && !statuses.includes(p.status)) return false;
       if (!q) return true;
