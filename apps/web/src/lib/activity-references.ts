@@ -14,6 +14,18 @@
  * no cheap number for the type (cycle counts have none) or the lookup found
  * nothing — callers should fall back to `referenceTypeLabel()`.
  *
+ * The maps below cover ONLY the reference_type values a writer actually sets
+ * on stock_movements today (order_request | cycle_count | return | bundle —
+ * verified in Movement/Activity P1 against every writer; mobile's
+ * `movement-references.ts` mirrors the same set). `purchase_order` and
+ * `rental` were removed here (P1 review follow-up) since nothing ever writes
+ * them — keeping unreachable entries around implied a coverage that didn't
+ * exist. This is safe by construction, not just today: any reference_type
+ * NOT in these maps — a genuinely unrecognized value, or a future type before
+ * its route/label is added — degrades to `referenceTypeLabel()`'s
+ * title-cased fallback below, exactly what a real entry would look like
+ * anyway, just not clickable yet.
+ *
  * GRACEFUL DEGRADE (required): `referenceHref` returns null for any
  * reference_type not in the map below. Callers MUST render a plain label in
  * that case, never a broken link.
@@ -21,20 +33,16 @@
 
 const REFERENCE_ROUTES: Record<string, (id: string) => string> = {
   order_request: (id) => `/dashboard/orders/${id}`,
-  purchase_order: (id) => `/dashboard/purchase-orders/${id}`,
   cycle_count: (id) => `/dashboard/cycle-counts/${id}`,
   return: (id) => `/dashboard/returns/${id}`,
   bundle: (id) => `/dashboard/bundles/${id}`,
-  rental: (id) => `/dashboard/rentals/${id}`,
 };
 
 const REFERENCE_TYPE_LABELS: Record<string, string> = {
   order_request: 'Order',
-  purchase_order: 'Purchase order',
   cycle_count: 'Cycle count',
   return: 'Return',
   bundle: 'Bundle',
-  rental: 'Rental',
 };
 
 /**

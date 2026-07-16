@@ -25,9 +25,19 @@ insert into public.warehouses (id, organization_id, name, code, status) values
 
 select has_column('public', 'order_requests', 'order_number', 'P1: order_number exists');
 
-insert into public.order_requests (organization_id, warehouse_id, status, fulfillment_type, requester_name)
-  values (:orga, :wha, 'pending_approval', 'pickup', 'Test A1'),
-         (:orga, :wha, 'pending_approval', 'pickup', 'Test A2');
+-- source defaults to 'internal', which requires requester_user_id or
+-- requester_email (order_requests_identity_chk, 0116/0251).
+--
+-- Explicit ids (a1 < a2) below: created_at defaults to now(), which is FROZEN
+-- for the whole transaction (transaction_timestamp()), so both rows in this
+-- batch get an identical created_at. The verifying SELECT needs a stable
+-- tiebreak that matches insertion order — a bare `id` tiebreak would sort on
+-- gen_random_uuid() and made this assertion flaky (passed standalone, failed
+-- in the full suite depending on random draw). Pinning ids keeps `order by
+-- created_at, id` deterministic without touching what's being asserted.
+insert into public.order_requests (id, organization_id, warehouse_id, status, fulfillment_type, requester_name, requester_email)
+  values ('ab025400-0000-0000-0000-0000000000c1', :orga, :wha, 'pending_approval', 'pickup', 'Test A1', 'a1@ordernum-0254.test'),
+         ('ab025400-0000-0000-0000-0000000000c2', :orga, :wha, 'pending_approval', 'pickup', 'Test A2', 'a2@ordernum-0254.test');
 
 select results_eq(
   format($q$ select order_number from public.order_requests
@@ -35,8 +45,8 @@ select results_eq(
   $$values (1::bigint), (2::bigint)$$,
   'P2: sequential per-org assignment starting at 1');
 
-insert into public.order_requests (organization_id, warehouse_id, status, fulfillment_type, requester_name)
-  values (:orgb, :whb, 'pending_approval', 'pickup', 'Test B1');
+insert into public.order_requests (organization_id, warehouse_id, status, fulfillment_type, requester_name, requester_email)
+  values (:orgb, :whb, 'pending_approval', 'pickup', 'Test B1', 'b1@ordernum-0254.test');
 
 select is(
   (select order_number from public.order_requests where organization_id = :orgb),

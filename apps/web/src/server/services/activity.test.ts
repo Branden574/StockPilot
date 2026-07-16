@@ -33,7 +33,6 @@ import {
   receiptLineSummary,
   resolveBundleNames,
   resolveOrderNumbers,
-  resolvePurchaseOrderNumbers,
   resolveReceiptPoNumbers,
   resolveReturnNumbers,
 } from './activity';
@@ -1145,16 +1144,6 @@ describe('reference-label resolvers', () => {
     expect(map.get('bun-1')).toBe('Back-to-School Kit');
   });
 
-  it('resolvePurchaseOrderNumbers resolves po_number for a direct purchase_order reference', async () => {
-    const stub = makeSupabaseStub({
-      'purchase_orders.select': {
-        data: [{ id: 'po-1', po_number: 'PO-2026-014' }],
-        error: null,
-      },
-    });
-    const map = await resolvePurchaseOrderNumbers(makeServiceContext(stub.client), ['po-1']);
-    expect(map.get('po-1')).toBe('PO-2026-014');
-  });
 });
 
 describe('ActivityService.forItem display mapping (0231)', () => {
@@ -1377,7 +1366,6 @@ describe('ActivityService.forItem display mapping (0231)', () => {
     expect(stub.fromCalls).not.toContain('order_requests');
     expect(stub.fromCalls).not.toContain('returns');
     expect(stub.fromCalls).not.toContain('bundles');
-    expect(stub.fromCalls).not.toContain('purchase_orders');
   });
 
   it('keeps movedQuantity null on OLD transfer rows (display shows no number, not 0)', async () => {

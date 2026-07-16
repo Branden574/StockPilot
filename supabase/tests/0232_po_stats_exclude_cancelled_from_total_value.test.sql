@@ -4,8 +4,8 @@ select plan(4);
 
 -- Minimal, self-contained org + POs. purchase_orders_stats is SECURITY INVOKER;
 -- running as the test superuser bypasses RLS so it aggregates the seeded rows.
-insert into public.organizations (id, name)
-values ('00000000-0000-0000-0000-0000000000aa', 'PGTAP PO Stats Org');
+insert into public.organizations (id, name, slug)
+values ('00000000-0000-0000-0000-0000000000aa', 'PGTAP PO Stats Org', 'pgtap-po-stats-org');
 
 -- Three POs: one draft ($50), one received ($30), one cancelled ($100).
 -- Correct total_value = 50 + 30 = 80 (cancelled excluded). committed_value = 50
@@ -35,8 +35,8 @@ select is(
 );
 
 -- An org whose only PO is cancelled reports total_value 0, not the PO total.
-insert into public.organizations (id, name)
-values ('00000000-0000-0000-0000-0000000000cc', 'PGTAP All-Cancelled Org');
+insert into public.organizations (id, name, slug)
+values ('00000000-0000-0000-0000-0000000000cc', 'PGTAP All-Cancelled Org', 'pgtap-all-cancelled-org');
 insert into public.purchase_orders (id, organization_id, po_number, status, total)
 values ('00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-0000000000cc', 'PO-ONLY-CANCEL', 'cancelled', 999);
 

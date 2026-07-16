@@ -119,13 +119,13 @@ export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
               : fromName
                 ? `${fromName} →`
                 : null;
-        // Clickable source link (order_request, purchase_order, cycle_count,
-        // return, bundle, rental, …). referenceHref returns null for any
-        // reference_type it doesn't recognize — that's the graceful-degrade
-        // signal to render a plain label instead of a link, never a broken
-        // href. referenceLabel is the server-resolved display number (order
-        // #, PO #, return #, bundle name); falls back to a generic type
-        // label when there's no cheap number for the type.
+        // Clickable source link (order_request, cycle_count, return, bundle —
+        // the only reference_types any writer sets). referenceHref returns
+        // null for any reference_type it doesn't recognize — that's the
+        // graceful-degrade signal to render a plain label instead of a link,
+        // never a broken href. referenceLabel is the server-resolved display
+        // number (order #, return #, bundle name); falls back to a generic
+        // type label when there's no cheap number for the type.
         const referenceLink =
           e.kind === 'movement' ? referenceHref(e.referenceType, e.referenceId) : null;
         const referenceDisplayLabel =

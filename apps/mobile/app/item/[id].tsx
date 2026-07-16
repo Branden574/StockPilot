@@ -54,6 +54,7 @@ import {
 } from '@/lib/item-activity';
 import {
   collectReceiptLineIds,
+  formatMovementRoute,
   movementAmount,
   movementNotesForDisplay,
   movementReasonLabel,
@@ -162,6 +163,18 @@ interface MovementRow {
    * lookup found nothing — the card then falls back to referenceTypeLabel().
    */
   reference_label: string | null;
+  /**
+   * Movement/Activity P1 review follow-up (web parity): display names for
+   * `from_location_id`/`to_location_id`, resolved in `fetchMovementsPage` via
+   * one batched `.in()` query on `locations` (same pattern as the other
+   * reference resolvers below). null whenever the row has no location on
+   * that side, OR the id didn't resolve (location since deleted/unknown) —
+   * `formatMovementRoute` (movement-display.ts) turns these into the "A → B"
+   * / "→ B" / "A →" route line and MovementCard omits the line entirely when
+   * both are null, mirroring the web's `ActivityFeed` route logic exactly.
+   */
+  from_location_name: string | null;
+  to_location_name: string | null;
 }
 
 /**
@@ -260,6 +273,35 @@ async function resolveBundleNames(orgId: string, ids: string[]): Promise<Map<str
     .select('id, name')
     .eq('organization_id', orgId)
     .in('id', ids);
+  for (const r of (data ?? []) as { id: string; name: string | null }[]) {
+    if (r.name) map.set(r.id, r.name);
+  }
+  return map;
+}
+
+/**
+ * Movement/Activity P1 review follow-up (web parity): batch-resolves
+ * `from_location_id`/`to_location_id` → the location's display name, one
+ * org-scoped `.in('id', ids)` query per fetched page — same shape as
+ * `resolveOrderNumbers`/`resolveReturnNumbers`/`resolveBundleNames` above.
+ * Mirrors the web's `LocationsService.list()`-backed `locationNames` map in
+ * `item-detail.tsx`, just scoped to this page's ids instead of the whole org
+ * (same narrowing the web's own "Load older" server action does — see
+ * `loadOlderItemActivityAction` in `server/actions/activity.ts`). Not
+ * filtered by `deleted_at`: a movement can reference a location that's since
+ * been archived, and the historical row should still show its name. Errors/
+ * missing rows degrade to an empty map, same as every other resolver here —
+ * `formatMovementRoute` then omits the line rather than showing a raw uuid.
+ */
+async function resolveLocationNames(orgId: string, ids: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (ids.length === 0) return map;
+  const { data, error } = await supabase
+    .from('locations')
+    .select('id, name')
+    .eq('organization_id', orgId)
+    .in('id', ids);
+  if (error) return map;
   for (const r of (data ?? []) as { id: string; name: string | null }[]) {
     if (r.name) map.set(r.id, r.name);
   }
@@ -585,18 +627,36 @@ export default function ItemDetail() {
           };
         }),
       );
+      // Web parity (Movement/Activity P1 review follow-up): collect THIS
+      // PAGE's from/to location ids so they resolve in one extra batched
+      // query, same convention as the resolvers above/below — never N+1.
+      const locationIds = [
+        ...new Set(
+          rows.flatMap((row) => {
+            const r = row as Record<string, unknown>;
+            return [r.from_location_id, r.to_location_id].filter(
+              (v): v is string => typeof v === 'string',
+            );
+          }),
+        ),
+      ];
 
       // Each resolver runs its own batched `.in()` query (or no-ops on an
       // empty id list); errors degrade to `data ?? []` → an empty map, so a
       // failed lookup falls back to the generic type label rather than
       // breaking the page. mergeReferenceLabelMaps merges this page's 3
-      // maps into one before attach — no network I/O beyond the 4 awaits.
-      const [orderLabels, returnLabels, bundleLabels, poNumberByReceipt] = await Promise.all([
-        resolveOrderNumbers(orgId, idsByType.order_request ?? []),
-        resolveReturnNumbers(orgId, idsByType.return ?? []),
-        resolveBundleNames(orgId, idsByType.bundle ?? []),
-        resolveReceiptPoNumbers(orgId, receiptLineIds),
-      ]);
+      // reference-label maps into one before attach — no network I/O beyond
+      // the 5 awaits. locationNameById is kept separate (not merged into
+      // pageLabelMap) since a location id could theoretically collide with a
+      // reference id in that shared map's key space.
+      const [orderLabels, returnLabels, bundleLabels, poNumberByReceipt, locationNameById] =
+        await Promise.all([
+          resolveOrderNumbers(orgId, idsByType.order_request ?? []),
+          resolveReturnNumbers(orgId, idsByType.return ?? []),
+          resolveBundleNames(orgId, idsByType.bundle ?? []),
+          resolveReceiptPoNumbers(orgId, receiptLineIds),
+          resolveLocationNames(orgId, locationIds),
+        ]);
       const pageLabelMap = mergeReferenceLabelMaps([orderLabels, returnLabels, bundleLabels]);
 
       const mapped = rows.map((row) => {
@@ -610,6 +670,8 @@ export default function ItemDetail() {
         // mapping exactly (reason computed from the raw notes uuid, then
         // notes itself masked to null for the same row).
         const isReceiptLine = rawReason === 'receipt_line';
+        const fromLocationId = (r.from_location_id as string | null) ?? null;
+        const toLocationId = (r.to_location_id as string | null) ?? null;
         return {
           id: r.id as string,
           movement_type: r.movement_type as string,
@@ -623,8 +685,10 @@ export default function ItemDetail() {
           actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
           reference_type: (r.reference_type as string | null) ?? null,
           reference_id: (r.reference_id as string | null) ?? null,
-          from_location_id: (r.from_location_id as string | null) ?? null,
-          to_location_id: (r.to_location_id as string | null) ?? null,
+          from_location_id: fromLocationId,
+          to_location_id: toLocationId,
+          from_location_name: fromLocationId ? (locationNameById.get(fromLocationId) ?? null) : null,
+          to_location_name: toLocationId ? (locationNameById.get(toLocationId) ?? null) : null,
         };
       });
       // Attach step (pure, unit-tested) — stitches pageLabelMap onto each
@@ -1590,6 +1654,12 @@ function MovementCard({ movement }: { movement: MovementRow }) {
   const referenceDisplayLabel = movement.reference_type
     ? (movement.reference_label ?? referenceTypeLabel(movement.reference_type))
     : null;
+  // Web parity (Movement/Activity P1 review follow-up): from/to location
+  // route line, e.g. "Rack A1 → Rack B2" for a transfer, "→ Rack B2" for a
+  // receive, "Rack A1 →" for a removal. null whenever neither side resolved
+  // to a name — formatMovementRoute (movement-display.ts) is the single
+  // source of truth for this four-case logic, unit-tested there.
+  const route = formatMovementRoute(movement.from_location_name, movement.to_location_name);
   return (
     <Card padding={12}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -1642,6 +1712,11 @@ function MovementCard({ movement }: { movement: MovementRow }) {
               </Text>
             ) : null}
           </Mono>
+          {route ? (
+            <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+              {route}
+            </Mono>
+          ) : null}
           {movement.notes ? (
             <Body
               size={12.5}

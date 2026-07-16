@@ -50,6 +50,13 @@ insert into public.charters (id, organization_id, name, code)
          (:chB, :org, 'Charter B 0234', 'CH-B-0234')
   on conflict (id) do nothing;
 
+-- inventory_items_warehouse_charter_fk (0008) requires a non-null charter_id
+-- to be a (warehouse, charter) pair already serviced per warehouse_charters.
+insert into public.warehouse_charters (organization_id, warehouse_id, charter_id)
+  values (:org, :wh, :chA),
+         (:org, :wh, :chB)
+  on conflict do nothing;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 1-2. The index swap happened.
 -- ─────────────────────────────────────────────────────────────────────────────

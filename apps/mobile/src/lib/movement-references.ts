@@ -21,11 +21,13 @@
  *
  * Only order_request | cycle_count | return | bundle are ever written to
  * `stock_movements.reference_type` (verified in Unit 1 against every
- * writer) — purchase_order and rental never appear there. Unlike the web
- * resolver's route table (which keeps purchase_order/rental for forward
- * compat with web-only dashboard routes), this module only maps the types
- * that actually occur, plus keeps route entries ONLY for types with a
- * native detail screen today.
+ * writer) — purchase_order and rental never appear there. The web's
+ * `activity-references.ts` LABEL/ROUTE maps were trimmed to this same set
+ * (Movement/Activity P1 review follow-up — the purchase_order/rental entries
+ * there were dead, forward-compat-only weight for types no writer produces),
+ * so both platforms' maps now cover exactly the written set. This module
+ * additionally keeps route entries ONLY for types with a native detail
+ * screen today (narrower than the label map, see below).
  *
  * GRACEFUL DEGRADE (required): `referenceRoute` returns null whenever the
  * type/id is missing OR there is no native screen for that type (currently:
