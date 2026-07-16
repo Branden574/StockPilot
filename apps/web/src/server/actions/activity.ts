@@ -79,13 +79,24 @@ export interface LoadOlderItemActivityData {
    */
   locationNames: Record<string, string>;
   /**
-   * True when this fetch returned FEWER than the full per-kind cap for
-   * BOTH movements and audits — i.e. neither kind has any more rows to
-   * page through, so the "Load older" button should hide. A kind that DID
-   * hit its cap might still have more rows even if the other kind is
-   * exhausted, so this is an AND, never an OR, across kinds.
+   * True when this fetch returned FEWER movements than the full per-kind
+   * cap (`ITEM_ACTIVITY_PAGE_SIZE`) — i.e. movements have no more rows to
+   * page through. Reported PER KIND (not combined) because the two tabs
+   * consume this differently: the Movements tab (`kindFilter='movement'`)
+   * only ever displays movement events, so ITS "Load older" button must
+   * hide based on this flag alone — the combined `movements AND audits`
+   * check used before this fix would keep the button visible (and its
+   * clicks silently no-op, appending zero visible rows) whenever audits
+   * still had more to page through but movements didn't. The merged
+   * Activity tab still ANDs this with `auditsExhausted` client-side.
    */
-  exhausted: boolean;
+  movementsExhausted: boolean;
+  /**
+   * Same as `movementsExhausted`, for the audit half of the page (capped at
+   * `auditLimitFor(ITEM_ACTIVITY_PAGE_SIZE)`, i.e. half the movement cap —
+   * see `auditLimitFor`).
+   */
+  auditsExhausted: boolean;
 }
 
 export async function loadOlderItemActivityAction(input: {
@@ -112,8 +123,8 @@ export async function loadOlderItemActivityAction(input: {
 
     const movementCount = events.filter((e) => e.kind === 'movement').length;
     const auditCount = events.filter((e) => e.kind === 'audit').length;
-    const exhausted =
-      movementCount < ITEM_ACTIVITY_PAGE_SIZE && auditCount < auditLimitFor(ITEM_ACTIVITY_PAGE_SIZE);
+    const movementsExhausted = movementCount < ITEM_ACTIVITY_PAGE_SIZE;
+    const auditsExhausted = auditCount < auditLimitFor(ITEM_ACTIVITY_PAGE_SIZE);
 
     const referencedLocationIds = new Set<string>();
     for (const e of events) {
@@ -131,7 +142,7 @@ export async function loadOlderItemActivityAction(input: {
       );
     }
 
-    return ok({ events, locationNames, exhausted });
+    return ok({ events, locationNames, movementsExhausted, auditsExhausted });
   } catch (e) {
     return toResult(e);
   }
