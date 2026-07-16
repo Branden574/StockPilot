@@ -1,0 +1,53 @@
+-- 0271_purge_fictional_lifecycle_movements.sql
+--
+-- Movement/Activity P3 Task 1 — one-time cleanup of fictional archive/delete
+-- movement rows (org-agnostic, every org, not scoped to one tenant).
+--
+-- Root cause (triple-confirmed by 3 independent discovery lenses):
+-- `InventoryService.archive()` and `softDelete()`
+-- (apps/web/src/server/services/inventory.ts) UPDATE only
+-- `inventory_items.status`/`deleted_at` — quantity_on_hand is DELIBERATELY
+-- preserved, no stock physically moves. But when the item had stock on
+-- hand, both methods ALSO inserted a `stock_movements` row:
+--   movement_type = 'adjust', quantity_change = -onHand,
+--   previous_quantity = onHand, new_quantity = 0,
+--   reason = 'item_archived' (archive) / 'item_deleted' (softDelete)
+-- That row is FICTIONAL — no physical depletion ever happened. Nothing ever
+-- reversed it: no restore path (bulkUpdate unarchive, POST
+-- /api/v1/items/[id]/restore, receiving.ts maybeAutoUnarchive, the
+-- _auto_restock_restore trigger) writes a compensating +onHand row.
+--
+-- Effects of leaving these rows in place:
+--   1. The item's Activity feed shows a stock depletion that never
+--      happened.
+--   2. The per-item stock_movements ledger sum diverges from the item's
+--      actual quantity_on_hand.
+--   3. RESTORE PHANTOM: once a restored item re-enters dashboard scope
+--      (0228 scope_items = status='active' AND deleted_at IS NULL), the
+--      dashboard-history RPC reconstructs past quantity as
+--      currentQty − SUM(future Δ). The dangling −N row makes that
+--      reconstruction read N − (−N) = 2N for the pre-archive quantity —
+--      DOUBLING historical inventory value and injecting phantom
+--      drawdowns into inventory_trend_buckets (0223) and
+--      dashboard_movement_metrics (0230).
+--
+-- The app-code fix (same commit) removes the INSERT at the source in both
+-- archive() and softDelete() — bulkUpdate's archive path already wrote no
+-- such row, so this also removes the single-vs-bulk asymmetry. This
+-- migration is the one-time data cleanup for rows the OLD code already
+-- wrote before that fix shipped.
+--
+-- Why the DELETE below is safe and tightly scoped: `reason IN
+-- ('item_archived','item_deleted')` on `movement_type='adjust'` rows is
+-- written ONLY by the two removed inserts (grep-verified — no other writer
+-- in the codebase ever sets these reason strings on stock_movements) and
+-- read by NOTHING (grep-verified — no query filters or joins on these
+-- values). Real stock adjustments never carry these reasons: 'adjust' rows
+-- from adjustStock()/adjust_stock RPC always carry a user-supplied or
+-- system reason distinct from these two lifecycle markers. No schema
+-- change; pure data cleanup. Idempotent — re-running finds nothing left to
+-- delete.
+
+delete from public.stock_movements
+where movement_type = 'adjust'
+  and reason in ('item_archived', 'item_deleted');

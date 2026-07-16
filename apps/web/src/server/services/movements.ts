@@ -48,6 +48,29 @@ export interface MovementWithItem {
   actor: { id: string; fullName: string | null; email: string | null } | null;
 }
 
+/** One flattened row for the Movements CSV export — see
+ *  MovementsService.exportRows(). from/toLocation are resolved NAMES (batch
+ *  looked up), not the raw location ids. */
+export interface MovementExportRow {
+  id: string;
+  createdAt: string;
+  itemSku: string | null;
+  itemName: string | null;
+  movementType: string;
+  quantityChange: number;
+  previousQuantity: number;
+  newQuantity: number;
+  fromLocation: string | null;
+  toLocation: string | null;
+  referenceType: string | null;
+  referenceId: string | null;
+  /** Display reason — pre-0231 receipt rows resolved to 'PO {number}', same
+   *  mapping list() applies. */
+  reason: string | null;
+  notes: string | null;
+  actorEmail: string | null;
+}
+
 export class MovementsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -226,6 +249,171 @@ export class MovementsService {
     const { count, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return count ?? 0;
+  }
+
+  /**
+   * Flattened rows for CSV export (`/api/movements/export.csv`). Org-scoped
+   * (RLS-bound client + explicit organization_id filter) and warehouse-access
+   * scoped exactly like `list()`/`count()`. Unlike `list()` this is NOT
+   * capped at one PostgREST page — it paginates in <=1000-row windows (the
+   * `[api] max_rows` ceiling) up to `cap`, mirroring
+   * `OrderRequestsService.exportRows()`, so a filtered export can capture
+   * more than the single-page limit the on-screen ledger uses. The caller
+   * (the export.csv route) clamps `cap` and reports truncation when it's hit.
+   *
+   * From/to location ids are resolved to names in ONE extra batched query
+   * (not per-row) — same shape as the receipt-PO-number batch resolution
+   * below and the id→name maps `buildInventoryExportRows` builds for its
+   * export. A location that can't be resolved (rare: hard-deleted row) just
+   * renders blank rather than failing the whole export.
+   */
+  async exportRows(
+    params: {
+      warehouseId?: string;
+      since?: string;
+      until?: string;
+      types?: string[];
+      search?: string;
+      cap?: number;
+    } = {},
+  ): Promise<{ rows: MovementExportRow[]; total: number }> {
+    const cap = Math.min(Math.max(1, params.cap ?? 10_000), 50_000);
+    const access = await getWarehouseAccess(this.ctx);
+    if (!access.hasAllAccess && access.readableIds.length === 0) {
+      return { rows: [], total: 0 };
+    }
+
+    const itemEmbed =
+      'item:inventory_items!item_id!inner (id, name, sku, warehouse_id, deleted_at)';
+    // PostgREST clamps any single response to `[api] max_rows` (1000); page in
+    // that size, looping until the exact count (read on the first page) is
+    // satisfied or `cap` is reached.
+    const PAGE_SIZE = 1000;
+
+    const rawRows: Record<string, unknown>[] = [];
+    let total = 0;
+    let offset = 0;
+    while (offset < cap) {
+      const pageEnd = Math.min(offset + PAGE_SIZE, cap) - 1;
+      let q = this.ctx.supabase
+        .from('stock_movements')
+        .select(
+          `
+          id, movement_type, quantity_change, previous_quantity, new_quantity,
+          from_location_id, to_location_id, reference_type, reference_id,
+          reason, notes, created_at, item_id, user_id,
+          ${itemEmbed},
+          actor:user_profiles!user_id (id, full_name, email)
+        `,
+          offset === 0 ? { count: 'exact' } : undefined,
+        )
+        .eq('organization_id', this.ctx.organizationId)
+        .is('item.deleted_at', null)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false });
+
+      if (!access.hasAllAccess) {
+        q = q.in('item.warehouse_id', access.readableIds);
+      } else if (params.warehouseId) {
+        q = q.eq('item.warehouse_id', params.warehouseId);
+      }
+      if (params.since) q = q.gte('created_at', params.since);
+      if (params.until) q = q.lt('created_at', params.until);
+      if (params.types && params.types.length > 0) q = q.in('movement_type', params.types);
+      const search = params.search?.trim();
+      if (search) {
+        const esc = escapeIlike(search);
+        q = q.or(`name.ilike.%${esc}%,sku.ilike.%${esc}%`, { referencedTable: 'item' });
+      }
+
+      q = q.range(offset, pageEnd);
+      const { data, error, count } = await q;
+      if (error) throw new ServiceError('internal_error', error.message);
+      if (offset === 0) total = count ?? 0;
+
+      const page = (data ?? []) as Record<string, unknown>[];
+      for (const r of page) rawRows.push(r);
+
+      // Stop on a short page (no more rows) or once we've pulled everything
+      // the exact count promised, whichever comes first.
+      if (page.length < pageEnd - offset + 1) break;
+      if (total > 0 && rawRows.length >= Math.min(total, cap)) break;
+      offset += PAGE_SIZE;
+    }
+
+    const poNumberByReceipt = await resolveReceiptPoNumbers(
+      this.ctx,
+      collectReceiptLineIds(
+        rawRows.map((r) => ({
+          reason: (r.reason as string | null) ?? null,
+          notes: (r.notes as string | null) ?? null,
+        })),
+      ),
+    );
+
+    const locationIds = new Set<string>();
+    for (const r of rawRows) {
+      const from = r.from_location_id as string | null;
+      const to = r.to_location_id as string | null;
+      if (from) locationIds.add(from);
+      if (to) locationIds.add(to);
+    }
+    let locationNameById = new Map<string, string>();
+    if (locationIds.size > 0) {
+      const { data: locs, error: locErr } = await this.ctx.supabase
+        .from('locations')
+        .select('id, name')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('id', [...locationIds]);
+      if (!locErr) {
+        locationNameById = new Map(
+          ((locs ?? []) as Array<{ id: string; name: string }>).map((l) => [l.id, l.name]),
+        );
+      }
+      // A lookup error degrades to blank location cells rather than failing
+      // the whole export — same fail-open posture as buildInventoryExportRows.
+    }
+
+    const rows: MovementExportRow[] = rawRows.map((row) => {
+      const r = row;
+      const reason =
+        r.reason === 'receipt_line'
+          ? receiptLineSummary((r.notes as string | null) ?? null, poNumberByReceipt)
+          : ((r.reason as string | null) ?? null);
+      const itemField = r.item as
+        | { id: string; name: string; sku: string }
+        | { id: string; name: string; sku: string }[]
+        | null
+        | undefined;
+      const item = Array.isArray(itemField) ? (itemField[0] ?? null) : (itemField ?? null);
+      const actorField = r.actor as
+        | { id: string; full_name: string | null; email: string | null }
+        | { id: string; full_name: string | null; email: string | null }[]
+        | null
+        | undefined;
+      const actorRaw = Array.isArray(actorField) ? (actorField[0] ?? null) : (actorField ?? null);
+      const fromLocationId = r.from_location_id as string | null;
+      const toLocationId = r.to_location_id as string | null;
+      return {
+        id: r.id as string,
+        createdAt: r.created_at as string,
+        itemSku: item?.sku ?? null,
+        itemName: item?.name ?? null,
+        movementType: r.movement_type as string,
+        quantityChange: Number(r.quantity_change),
+        previousQuantity: Number(r.previous_quantity),
+        newQuantity: Number(r.new_quantity),
+        fromLocation: fromLocationId ? (locationNameById.get(fromLocationId) ?? null) : null,
+        toLocation: toLocationId ? (locationNameById.get(toLocationId) ?? null) : null,
+        referenceType: (r.reference_type as string | null) ?? null,
+        referenceId: (r.reference_id as string | null) ?? null,
+        reason,
+        notes: (r.notes as string | null) ?? null,
+        actorEmail: actorRaw?.email ?? null,
+      };
+    });
+
+    return { rows, total };
   }
 }
 

@@ -292,6 +292,259 @@ describe('MovementsService.list', () => {
     const rows = await svc.list();
     expect(rows[0]!.reason).toBe('PO receipt');
   });
+
+  // ── P3 Task 2: movement_type + date-range filters (Movements page) ──
+
+  it('applies since/until/types filters onto the query', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    await svc.list({
+      since: '2026-01-01T00:00:00.000Z',
+      until: '2026-02-01T00:00:00.000Z',
+      types: ['adjust', 'transfer'],
+    });
+
+    const chain = stub.chains.get('stock_movements.select') ?? [];
+    const args = stub.chainArgs.get('stock_movements.select') ?? [];
+    const calls = chain.map((m, i) => ({ m, args: args[i] }));
+    expect(calls).toContainEqual({ m: 'gte', args: ['created_at', '2026-01-01T00:00:00.000Z'] });
+    expect(calls).toContainEqual({ m: 'lt', args: ['created_at', '2026-02-01T00:00:00.000Z'] });
+    expect(calls).toContainEqual({ m: 'in', args: ['movement_type', ['adjust', 'transfer']] });
+  });
+
+  it('omits since/until/types filters when unset', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    await svc.list();
+
+    const chain = stub.chains.get('stock_movements.select') ?? [];
+    expect(chain).not.toContain('gte');
+    expect(chain).not.toContain('lt');
+    // 'in' is also used for warehouse scoping, but this ctx has all-access
+    // and no warehouseId, so no 'in' call of any kind should appear.
+    expect(chain).not.toContain('in');
+  });
+});
+
+describe('MovementsService.count — type/date filters', () => {
+  it('applies since/until/types filters onto the query', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: null, error: null, count: 0 },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    await svc.count({
+      since: '2026-01-01T00:00:00.000Z',
+      until: '2026-02-01T00:00:00.000Z',
+      types: ['damage'],
+    });
+
+    const chain = stub.chains.get('stock_movements.select') ?? [];
+    const args = stub.chainArgs.get('stock_movements.select') ?? [];
+    const calls = chain.map((m, i) => ({ m, args: args[i] }));
+    expect(calls).toContainEqual({ m: 'gte', args: ['created_at', '2026-01-01T00:00:00.000Z'] });
+    expect(calls).toContainEqual({ m: 'lt', args: ['created_at', '2026-02-01T00:00:00.000Z'] });
+    expect(calls).toContainEqual({ m: 'in', args: ['movement_type', ['damage']] });
+  });
+});
+
+describe('MovementsService.exportRows', () => {
+  it('maps a row with resolved from/to location names, reference fields, and actor email', async () => {
+    const fromLocId = '11111111-1111-1111-1111-111111111111';
+    const toLocId = '22222222-2222-2222-2222-222222222222';
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm1',
+            movement_type: 'transfer',
+            quantity_change: 0,
+            previous_quantity: 10,
+            new_quantity: 10,
+            from_location_id: fromLocId,
+            to_location_id: toLocId,
+            reference_type: 'order_request',
+            reference_id: 'ref-1',
+            reason: null,
+            notes: null,
+            created_at: '2026-05-01T00:00:00.000Z',
+            item_id: 'item-1',
+            user_id: 'user-1',
+            item: { id: 'item-1', name: 'Widget', sku: 'W1' },
+            actor: { id: 'user-1', full_name: 'Alice', email: 'alice@x.com' },
+          },
+        ],
+        error: null,
+        count: 1,
+      },
+      'locations.select': {
+        data: [
+          { id: fromLocId, name: 'Rack A' },
+          { id: toLocId, name: 'Rack B' },
+        ],
+        error: null,
+      },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const { rows, total } = await svc.exportRows();
+    expect(total).toBe(1);
+    expect(rows).toEqual([
+      {
+        id: 'm1',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        itemSku: 'W1',
+        itemName: 'Widget',
+        movementType: 'transfer',
+        quantityChange: 0,
+        previousQuantity: 10,
+        newQuantity: 10,
+        fromLocation: 'Rack A',
+        toLocation: 'Rack B',
+        referenceType: 'order_request',
+        referenceId: 'ref-1',
+        reason: null,
+        notes: null,
+        actorEmail: 'alice@x.com',
+      },
+    ]);
+  });
+
+  it('flattens item + actor arrays and skips the locations query when no location ids are present', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm3',
+            movement_type: 'adjust',
+            quantity_change: -2,
+            previous_quantity: 5,
+            new_quantity: 3,
+            from_location_id: null,
+            to_location_id: null,
+            reference_type: null,
+            reference_id: null,
+            reason: 'Shrinkage',
+            notes: null,
+            created_at: '2026-05-03T00:00:00.000Z',
+            item_id: 'item-3',
+            user_id: 'user-3',
+            item: [{ id: 'item-3', name: 'Gadget', sku: 'G1' }],
+            actor: [{ id: 'user-3', full_name: null, email: 'c@x.com' }],
+          },
+        ],
+        error: null,
+        count: 1,
+      },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const { rows } = await svc.exportRows();
+    expect(rows[0]!.itemSku).toBe('G1');
+    expect(rows[0]!.itemName).toBe('Gadget');
+    expect(rows[0]!.actorEmail).toBe('c@x.com');
+    expect(rows[0]!.fromLocation).toBeNull();
+    expect(rows[0]!.toLocation).toBeNull();
+    expect(stub.fromCalls).not.toContain('locations');
+  });
+
+  it("resolves a legacy 'receipt_line' reason to 'PO {number}' via the same batched receipts lookup as list()", async () => {
+    const receiptId = '33333333-3333-3333-3333-333333333333';
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm2',
+            movement_type: 'receive_po',
+            quantity_change: 5,
+            previous_quantity: 0,
+            new_quantity: 5,
+            from_location_id: null,
+            to_location_id: null,
+            reference_type: null,
+            reference_id: null,
+            reason: 'receipt_line',
+            notes: receiptId,
+            created_at: '2026-05-02T00:00:00.000Z',
+            item_id: 'item-2',
+            user_id: null,
+            item: null,
+            actor: null,
+          },
+        ],
+        error: null,
+        count: 1,
+      },
+      'receipts.select': {
+        data: [{ id: receiptId, purchase_orders: { po_number: 'PO-77' } }],
+        error: null,
+      },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const { rows } = await svc.exportRows();
+    expect(rows[0]!.reason).toBe('PO PO-77');
+  });
+
+  it('returns rows: [] total: 0 when a warehouse-scoped user has no readable warehouses (no leak)', async () => {
+    vi.mocked(getWarehouseAccess).mockResolvedValueOnce({
+      readableIds: [],
+      writableIds: [],
+      hasAllAccess: false,
+      primaryWarehouseId: null,
+    });
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [{ id: 'leak' }], error: null, count: 1 },
+    });
+    const svc = new MovementsService(
+      makeServiceContext(stub.client, { role: 'staff' }),
+    );
+
+    const result = await svc.exportRows();
+    expect(result).toEqual({ rows: [], total: 0 });
+  });
+
+  it('applies since/until/types/search filters onto the query', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null, count: 0 },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    await svc.exportRows({
+      since: '2026-01-01T00:00:00.000Z',
+      until: '2026-02-01T00:00:00.000Z',
+      types: ['adjust'],
+      search: 'wid',
+    });
+
+    const chain = stub.chains.get('stock_movements.select') ?? [];
+    const args = stub.chainArgs.get('stock_movements.select') ?? [];
+    const calls = chain.map((m, i) => ({ m, args: args[i] }));
+    expect(calls).toContainEqual({ m: 'gte', args: ['created_at', '2026-01-01T00:00:00.000Z'] });
+    expect(calls).toContainEqual({ m: 'lt', args: ['created_at', '2026-02-01T00:00:00.000Z'] });
+    expect(calls).toContainEqual({ m: 'in', args: ['movement_type', ['adjust']] });
+  });
+
+  it('reports the true total even when cap clips the returned rows (truncation sentinel)', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [{ id: 'm1', item: null, actor: null }],
+        error: null,
+        count: 9_999,
+      },
+    });
+    const svc = new MovementsService(makeServiceContext(stub.client));
+
+    const { rows, total } = await svc.exportRows({ cap: 1 });
+    expect(total).toBe(9_999);
+    expect(rows).toHaveLength(1);
+  });
 });
 
 describe('getDashboardSummary', () => {

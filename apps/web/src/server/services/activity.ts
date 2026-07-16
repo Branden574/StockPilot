@@ -104,6 +104,32 @@ const MOVEMENT_SHADOWED_AUDIT_EVENTS: readonly string[] = [
 ];
 
 /**
+ * Movement/Activity P3 Task 1 defense: `InventoryService.archive()` /
+ * `softDelete()` used to write a FICTIONAL `stock_movements` row
+ * (`movement_type='adjust'`, `reason='item_archived'|'item_deleted'`)
+ * driving on-hand to 0 even though archive/delete deliberately PRESERVE
+ * quantity_on_hand — no stock ever physically moved. That insert has been
+ * removed at the source (see `inventory.ts` archive()/softDelete()) and a
+ * one-time cleanup (migration 0271) deletes any rows it already wrote. This
+ * denylist keeps any LEGACY row that slipped through the cleanup (or a
+ * future accidental write) from ever rendering as a real stock event on the
+ * item feed.
+ *
+ * Filtered in JS ONLY (see the `.filter()` below) — deliberately NOT at the
+ * query layer, unlike `MOVEMENT_SHADOWED_AUDIT_EVENTS`. `reason` on
+ * stock_movements is NULLABLE (most 'initial' rows and many 'add'/'transfer'
+ * rows carry `reason: null`), and PostgREST's `.not(col, 'in', (...))`
+ * compiles to `NOT (col = ANY(...))`, which is NULL — not TRUE — for a NULL
+ * `col`. Postgres then drops the row instead of keeping it, so a query-layer
+ * `.not('reason', 'in', ...)` here would silently discard every movement
+ * with a null reason (verified against prod: 499/818 = 61% of movements),
+ * gutting the item Activity feed. The audit-side `.not('event', 'in', ...)`
+ * a few lines below does NOT have this problem: `audit_logs.event` is
+ * NOT NULL, so `event = ANY(...)` is always TRUE or FALSE there, never NULL.
+ */
+const LIFECYCLE_REASON_MOVEMENTS: readonly string[] = ['item_archived', 'item_deleted'];
+
+/**
  * Display-layer mapping for pre-0231 receipt movements: rows written by the
  * old post_receipt_v2 carry the internal reason 'receipt_line' with the
  * receipt id in notes. Given a resolver map (receipt id → po_number), returns
@@ -363,7 +389,16 @@ export class ActivityService {
     // Defensive re-cap in JS: `.limit()` above already bounds each result at
     // the query layer, but slicing here again keeps the separate-caps
     // guarantee explicit regardless of the query layer's behavior.
-    const movementRows = (movementsRes.data ?? []).slice(0, movementLimit);
+    // This is also the ONLY place legacy lifecycle-reason rows (see
+    // LIFECYCLE_REASON_MOVEMENTS) get filtered out — deliberately not at the
+    // query layer, since `reason` is nullable and a `.not(col, 'in', ...)`
+    // there would silently drop every null-reason movement too (see the
+    // comment on LIFECYCLE_REASON_MOVEMENTS above). Filtering BEFORE slicing
+    // to movementLimit ensures a legacy row can never occupy one of the
+    // slots meant for a real movement.
+    const movementRows = (movementsRes.data ?? [])
+      .filter((m) => !LIFECYCLE_REASON_MOVEMENTS.includes(m.reason as string))
+      .slice(0, movementLimit);
     // Belt-and-suspenders for the `.not(...)` filter above: filter out any
     // movement-shadowed stock.* row BEFORE slicing to auditLimit, so a
     // shadowed row can never occupy one of the slots meant for a real audit
