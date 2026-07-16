@@ -151,16 +151,19 @@ export default async function MovementsPage({
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Stock movements</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Every quantity change, audited. The ledger is append-only.
-          </p>
-        </div>
-        {!instant && (total !== 0 || hasActiveFilters) && (
-          <div className="flex flex-wrap items-center gap-3">
-            <MovementsFilterBar mode="server" initial={activeFilters} />
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold tracking-tight">Stock movements</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Every quantity change, audited. The ledger is append-only.
+        </p>
+      </div>
+      {/* Controls get their own full-width row (filter bar left, export +
+          pager right) so they never fight the heading for space — the same
+          layout MovementsInstantTable renders in instant mode. */}
+      {!instant && (total !== 0 || hasActiveFilters) && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <MovementsFilterBar mode="server" initial={activeFilters} />
+          <div className="flex items-center gap-3">
             <Button asChild variant="outline" size="sm">
               <a href={exportHref} download aria-label="Export movements to CSV">
                 <Download className="mr-1.5 h-3.5 w-3.5" />
@@ -176,8 +179,8 @@ export default async function MovementsPage({
               hrefForPage={hrefForPage}
             />
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {!instant && total === 0 && hasActiveFilters ? (
         // Server mode, filtered count is 0: a no-match filter must stay
