@@ -3,7 +3,7 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { ActivityFeed } from '@/components/inventory/activity-feed';
+import { ItemActivityPanel } from '@/components/inventory/item-activity-panel';
 import { PlacementsBreakdown } from '@/components/inventory/placements-breakdown';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
 import { DuplicateItemDialog } from '@/components/inventory/duplicate-item-dialog';
@@ -39,7 +39,7 @@ import { StockTransferDialog } from '@/components/inventory/stock-transfer-dialo
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { ActivityService, type ActivityEvent } from '@/server/services/activity';
+import { ActivityService, auditLimitFor, type ActivityEvent } from '@/server/services/activity';
 import { ServiceError, withContext } from '@/server/services/context';
 import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
@@ -49,6 +49,7 @@ import { PriceTrackingService } from '@/server/services/price-tracking';
 import { ReportsService } from '@/server/services/reports';
 import { SerialsService } from '@/server/services/serials';
 import { WarehousesService } from '@/server/services/warehouses';
+import { ITEM_ACTIVITY_PAGE_SIZE, nextActivityCursor } from '@/lib/activity-pagination';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
@@ -154,7 +155,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
       // item/[id].tsx, which only calls loadMovements() when its Movements
       // tab is active.
       activeTab === 'movements' || activeTab === 'activity'
-        ? activitySvc.forItem(id, 50)
+        ? activitySvc.forItem(id, ITEM_ACTIVITY_PAGE_SIZE)
         : Promise.resolve<ActivityEvent[]>([]),
       imagesSvc.list(id),
       // Per-supplier unit-cost trend from our own PO + receipt data. Fanned
@@ -225,6 +226,19 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // Filter for the Movements tab — kind === 'movement' from the unified
   // ActivityService feed is exactly the stock_movements rows.
   const movementEvents = activity.filter((e) => e.kind === 'movement');
+  const auditEventsCount = activity.length - movementEvents.length;
+
+  // "Load older" pagination (Movement/Activity P4 Task 2): both tabs share
+  // one initial cursor + exhaustion check, derived from the SAME first-page
+  // `activity` array — the client wrapper's `kindFilter` prop handles the
+  // display-only difference between the two tabs. `nextActivityCursor`
+  // returns null when `activity` is empty (e.g. the Overview tab, which
+  // never fetches activity at all), so the button correctly starts hidden
+  // there too.
+  const activityInitialCursor = nextActivityCursor(activity);
+  const activityInitialExhausted =
+    movementEvents.length < ITEM_ACTIVITY_PAGE_SIZE &&
+    auditEventsCount < auditLimitFor(ITEM_ACTIVITY_PAGE_SIZE);
 
   // Location id → name map for the activity feed's transfer route line
   // ("A → B"). Free: the full location list is already fetched above for
@@ -792,7 +806,14 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ActivityFeed events={movementEvents} locationNames={locationNames} />
+              <ItemActivityPanel
+                itemId={id}
+                initialEvents={movementEvents}
+                initialLocationNames={locationNames}
+                initialCursor={activityInitialCursor}
+                initialExhausted={activityInitialExhausted}
+                kindFilter="movement"
+              />
             </CardContent>
           </Card>
         </div>
@@ -811,7 +832,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ActivityFeed events={activity} locationNames={locationNames} />
+              <ItemActivityPanel
+                itemId={id}
+                initialEvents={activity}
+                initialLocationNames={locationNames}
+                initialCursor={activityInitialCursor}
+                initialExhausted={activityInitialExhausted}
+              />
             </CardContent>
           </Card>
         </div>

@@ -26,6 +26,7 @@ vi.mock('@/lib/auth/session', () => ({
 
 import {
   ActivityService,
+  auditLimitFor,
   collectReceiptLineIds,
   receiptLineSummary,
   resolveBundleNames,
@@ -48,6 +49,15 @@ function makeService(client: unknown): ActivityService {
    
   return new (ActivityService as any)(makeServiceContext(client));
 }
+
+describe('auditLimitFor', () => {
+  it('halves the limit, rounding up, with a floor of 1', () => {
+    expect(auditLimitFor(30)).toBe(15);
+    expect(auditLimitFor(6)).toBe(3);
+    expect(auditLimitFor(1)).toBe(1);
+    expect(auditLimitFor(50)).toBe(25);
+  });
+});
 
 describe('ActivityService.forItem', () => {
   it('merges movement + audit events and sorts by createdAt desc', async () => {
@@ -341,6 +351,83 @@ describe('ActivityService.forItem', () => {
 
     const events = await svc.forItem('item-1', 6); // auditLimit = ceil(6/2) = 3
     expect(events).toHaveLength(3);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Movement/Activity P4 Task 2: "Load older" cursor. `before` narrows BOTH
+  // the movements and audit queries via `.lt('created_at', before)`,
+  // per-kind caps (movementLimit/auditLimit) otherwise unchanged.
+  // ─────────────────────────────────────────────────────────────────────
+
+  it('applies `.lt(created_at, before)` to BOTH queries when a cursor is passed', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    await svc.forItem('item-1', 30, { before: '2025-06-01T00:00:00.000Z' });
+
+    const movChain = stub.chains.get('stock_movements.select') ?? [];
+    const movArgs = stub.chainArgs.get('stock_movements.select') ?? [];
+    const movLtIdx = movChain.indexOf('lt');
+    expect(movLtIdx).toBeGreaterThan(-1);
+    expect(movArgs[movLtIdx]).toEqual(['created_at', '2025-06-01T00:00:00.000Z']);
+
+    const auditChain = stub.chains.get('audit_logs.select') ?? [];
+    const auditArgs = stub.chainArgs.get('audit_logs.select') ?? [];
+    const auditLtIdx = auditChain.indexOf('lt');
+    expect(auditLtIdx).toBeGreaterThan(-1);
+    expect(auditArgs[auditLtIdx]).toEqual(['created_at', '2025-06-01T00:00:00.000Z']);
+  });
+
+  it('omits `.lt` entirely on both queries when no cursor is passed (byte-identical to before this feature)', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    await svc.forItem('item-1');
+
+    expect(stub.chains.get('stock_movements.select') ?? []).not.toContain('lt');
+    expect(stub.chains.get('audit_logs.select') ?? []).not.toContain('lt');
+  });
+
+  it('keeps the separate per-kind caps intact when paging with a cursor (no combined slice)', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: Array.from({ length: 8 }, (_, i) => ({
+          id: `m${i}`,
+          movement_type: 'adjust',
+          quantity_change: 1,
+          previous_quantity: i,
+          new_quantity: i + 1,
+          reason: null,
+          notes: null,
+          created_at: new Date(2025, 0, 1, 0, i).toISOString(),
+          user_id: null,
+        })),
+        error: null,
+      },
+      'audit_logs.select': {
+        data: Array.from({ length: 8 }, (_, i) => ({
+          id: `a${i}`,
+          event: 'item.updated',
+          metadata: {},
+          created_at: new Date(2025, 0, 1, 0, i).toISOString(),
+          user_id: null,
+        })),
+        error: null,
+      },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1', 6, { before: '2025-06-01T00:00:00.000Z' });
+    const movementEvents = events.filter((e) => e.kind === 'movement');
+    const auditEvents = events.filter((e) => e.kind === 'audit');
+    expect(movementEvents).toHaveLength(6); // movementLimit === the requested limit
+    expect(auditEvents).toHaveLength(3); // auditLimit === ceil(6/2)
   });
 
   it('uses metadata.reason as audit summary when present', async () => {
