@@ -292,6 +292,16 @@ export function ItemForm({
       ? String(cfDefault.book_rack_row ?? '')
       : String(cfDefault.rack_row ?? ''),
   );
+  // Snapshot of the rack-number input's value at mount (this session's
+  // starting point). Rack number/row are plain useState, not registered
+  // react-hook-form fields, so RHF's dirtyFields can't tell us whether they
+  // were touched — we track it ourselves. Needed at submit time to
+  // distinguish "rack was cleared this session" (must still clear the
+  // derived bin_location) from "rack was never set" (must NOT touch
+  // bin_location — see the non-book merge below). React.useRef only honors
+  // its constructor argument on the very first render, so this stays
+  // pinned to the original value even as rackNumber changes while typing.
+  const initialRackNumberRef = React.useRef(rackNumber);
   const [crateColor, setCrateColor] = React.useState<string>(
     isBook ? String(cfDefault.book_crate_color ?? '') : '',
   );
@@ -711,9 +721,20 @@ export function ItemForm({
           // out binLocation so the change can propagate — previously
           // the `?? values.binLocation` fallback prevented clearing.
           const composedBin = num ? (row ? `${num}-${row}` : num) : null;
+          // Only touch bin_location when the rack subsystem is actually in
+          // play this session: rack number is set now, OR it started set
+          // and the user just cleared it. If rack was never set (the
+          // common case for items whose bin_location was set manually, by
+          // CSV import, or by put-away stamping — there's no visible bin
+          // input for non-book items, only rack number/row), leave
+          // binLocation OUT of the patch entirely so an unrelated edit
+          // (e.g. reorder point) can't silently wipe an existing label.
+          // Data-loss bug fixed in Movement/Activity P3 task 3.
+          const rackEngaged = num !== '' || initialRackNumberRef.current.trim() !== '';
+          const { binLocation: _droppedBinLocation, ...valuesSansBin } = values;
           return {
-            ...values,
-            binLocation: composedBin,
+            ...valuesSansBin,
+            ...(rackEngaged ? { binLocation: composedBin } : {}),
             customFields: {
               ...baseCf,
               ...customFieldValues,
