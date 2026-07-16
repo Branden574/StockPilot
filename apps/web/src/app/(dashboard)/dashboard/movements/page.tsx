@@ -1,8 +1,9 @@
-import { ArrowLeftRight } from 'lucide-react';
+import { ArrowLeftRight, Download } from 'lucide-react';
 import { redirect } from 'next/navigation';
 
+import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
-import { MovementsSearch } from '@/components/movements/movements-search';
+import { MovementsFilterBar } from '@/components/movements/movements-filter-bar';
 import {
   MovementsInstantTable,
   type MovementDisplayRow,
@@ -17,6 +18,12 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { requireOrgContext } from '@/lib/auth/session';
+import {
+  buildMovementsQueryString,
+  parseFromDateParam,
+  parseMovementTypeParam,
+  parseToDateParam,
+} from '@/lib/movements-filters';
 import { MovementsService } from '@/server/services/movements';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { formatNumber, formatRelative } from '@/lib/utils';
@@ -36,7 +43,7 @@ const MOVEMENTS_INSTANT_CAP = 1000;
 export default async function MovementsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ page?: string; q?: string }>;
+  searchParams: Promise<{ page?: string; q?: string; type?: string; from?: string; to?: string }>;
 }) {
   // Movements is the org-wide stock_movements ledger — viewer doesn't
   // have activity_logs:read, so they get bounced back to the dashboard
@@ -50,6 +57,16 @@ export default async function MovementsPage({
   const page = clampPage(params.page);
   const offset = (page - 1) * PAGE_SIZE;
   const search = (params.q ?? '').trim();
+  // Garbage type/date params are dropped (undefined) rather than thrown —
+  // see lib/movements-filters. `rawType`/`rawFrom`/`rawTo` keep only the
+  // values that actually parsed, so a mangled param never round-trips into
+  // the filter bar or the export link.
+  const typeFilter = parseMovementTypeParam(params.type);
+  const since = parseFromDateParam(params.from);
+  const until = parseToDateParam(params.to);
+  const rawType = typeFilter ?? '';
+  const rawFrom = since ? (params.from ?? '') : '';
+  const rawTo = until ? (params.to ?? '') : '';
 
   const [movementsSvc, warehouseFilter] = await Promise.all([
     MovementsService.forCurrentUser(),
@@ -60,7 +77,7 @@ export default async function MovementsPage({
   // Instant mode: when the whole warehouse-scoped ledger fits under the cap,
   // load it all and let the client filter + page with zero latency (like
   // Items/Books). Decided on the UNFILTERED count since instant mode ignores
-  // the server ?q.
+  // the server ?q/?type/?from/?to (those are applied client-side there).
   const totalAll = await movementsSvc.count({ warehouseId }).catch(() => null);
   const instant = totalAll != null && totalAll <= MOVEMENTS_INSTANT_CAP;
 
@@ -87,15 +104,26 @@ export default async function MovementsPage({
     }));
   } else {
     // One extra row detects a next page even if the count is unavailable; the
-    // count drives the numbered pager. Server-side search here.
+    // count drives the numbered pager. Server-side search + type/date here.
     const [movements, cnt] = await Promise.all([
       movementsSvc.list({
         limit: PAGE_SIZE + 1,
         offset,
         warehouseId,
         search: search || undefined,
+        types: typeFilter ? [typeFilter] : undefined,
+        since,
+        until,
       }),
-      movementsSvc.count({ warehouseId, search: search || undefined }).catch(() => null),
+      movementsSvc
+        .count({
+          warehouseId,
+          search: search || undefined,
+          types: typeFilter ? [typeFilter] : undefined,
+          since,
+          until,
+        })
+        .catch(() => null),
     ]);
     hasNext = movements.length > PAGE_SIZE;
     visible = hasNext ? movements.slice(0, PAGE_SIZE) : movements;
@@ -103,14 +131,18 @@ export default async function MovementsPage({
     totalPages = cnt != null ? Math.max(1, Math.ceil(cnt / PAGE_SIZE)) : undefined;
   }
 
-  // Preserve the active search across (server-mode) page links.
+  const activeFilters = { q: search, type: rawType, from: rawFrom, to: rawTo };
+
+  // Preserve the active filters across (server-mode) page links.
   const hrefForPage = (n: number) => {
-    const sp = new URLSearchParams();
-    if (search) sp.set('q', search);
+    const sp = new URLSearchParams(buildMovementsQueryString(activeFilters));
     if (n > 1) sp.set('page', String(n));
     const qs = sp.toString();
     return qs ? `/dashboard/movements?${qs}` : '/dashboard/movements';
   };
+
+  const exportQs = buildMovementsQueryString(activeFilters);
+  const exportHref = exportQs ? `/api/movements/export.csv?${exportQs}` : '/api/movements/export.csv';
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -123,7 +155,13 @@ export default async function MovementsPage({
         </div>
         {!instant && total !== 0 && (
           <div className="flex flex-wrap items-center gap-3">
-            <MovementsSearch initialQuery={search} />
+            <MovementsFilterBar mode="server" initial={activeFilters} />
+            <Button asChild variant="outline" size="sm">
+              <a href={exportHref} download aria-label="Export movements to CSV">
+                <Download className="mr-1.5 h-3.5 w-3.5" />
+                Export CSV
+              </a>
+            </Button>
             <Pagination
               page={page}
               pageSize={PAGE_SIZE}
@@ -146,12 +184,12 @@ export default async function MovementsPage({
       ) : instant ? (
         <MovementsInstantTable rows={instantRows} />
       ) : visible.length === 0 ? (
-        search ? (
+        search || typeFilter || since || until ? (
           <EmptyState
             icon={ArrowLeftRight}
             title="No movements match"
-            description={`Nothing found for "${search}". Try a different item name or SKU, or clear the search.`}
-            cta={{ label: 'Clear search', href: '/dashboard/movements' }}
+            description="Nothing found for the current filters. Try a different search, type, or date range."
+            cta={{ label: 'Clear filters', href: '/dashboard/movements' }}
           />
         ) : page === 1 ? (
           <EmptyState

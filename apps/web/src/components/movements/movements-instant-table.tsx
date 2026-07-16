@@ -1,10 +1,10 @@
 'use client';
 
-import { ArrowLeftRight, Search, X } from 'lucide-react';
+import { ArrowLeftRight, Download } from 'lucide-react';
 import * as React from 'react';
 
+import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
-import { Input } from '@/components/ui/input';
 import { Pagination } from '@/components/ui/pagination';
 import {
   Table,
@@ -15,6 +15,9 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatNumber, formatRelative } from '@/lib/utils';
+import { buildMovementsQueryString, type MovementsFilterQuery } from '@/lib/movements-filters';
+
+import { MovementsFilterBar } from './movements-filter-bar';
 
 export interface MovementDisplayRow {
   id: string;
@@ -31,74 +34,88 @@ export interface MovementDisplayRow {
 }
 
 const PAGE_SIZE = 50;
+const EMPTY_FILTERS: MovementsFilterQuery = { q: '', type: '', from: '', to: '' };
 
 /**
- * Instant, zero-latency movements ledger — the Items/Books pattern. The server
- * hands us the whole (warehouse-scoped) ledger when it's small enough (see the
- * page's MOVEMENTS_INSTANT_CAP); this filters by item name/SKU as you type AND
- * paginates entirely client-side, so both search and page changes are instant.
+ * Instant, zero-latency movements ledger — the Items/Books pattern. The
+ * server hands us the whole (warehouse-scoped) ledger when it's small enough
+ * (see the page's MOVEMENTS_INSTANT_CAP); this filters by item name/SKU,
+ * movement type, and date range as the user picks them, plus paginates,
+ * entirely client-side, so every change is instant. The CSV export link
+ * still re-queries the server with the SAME filter values (via
+ * buildMovementsQueryString) rather than dumping what's already in memory,
+ * so a single export code path (the route + MovementsService.exportRows)
+ * stays the source of truth for both page modes.
  */
 export function MovementsInstantTable({ rows }: { rows: MovementDisplayRow[] }) {
-  const [q, setQ] = React.useState('');
+  const [filters, setFilters] = React.useState<MovementsFilterQuery>(EMPTY_FILTERS);
   const [page, setPage] = React.useState(1);
 
   const filtered = React.useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter(
-      (m) =>
-        (m.itemName ?? '').toLowerCase().includes(needle) ||
-        (m.itemSku ?? '').toLowerCase().includes(needle),
-    );
-  }, [q, rows]);
+    const needle = filters.q.trim().toLowerCase();
+    const type = filters.type || null;
+    // Same inclusive-of-whole-day semantics as the server path
+    // (lib/movements-filters parseFromDateParam/parseToDateParam).
+    const sinceMs = filters.from ? Date.parse(`${filters.from}T00:00:00.000Z`) : null;
+    const untilMs = filters.to
+      ? Date.parse(`${filters.to}T00:00:00.000Z`) + 24 * 60 * 60 * 1000
+      : null;
+    return rows.filter((m) => {
+      if (
+        needle &&
+        !(m.itemName ?? '').toLowerCase().includes(needle) &&
+        !(m.itemSku ?? '').toLowerCase().includes(needle)
+      ) {
+        return false;
+      }
+      if (type && m.movementType !== type) return false;
+      if (sinceMs != null || untilMs != null) {
+        const createdMs = Date.parse(m.createdAt);
+        if (sinceMs != null && createdMs < sinceMs) return false;
+        if (untilMs != null && createdMs >= untilMs) return false;
+      }
+      return true;
+    });
+  }, [filters, rows]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const visible = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-  // Reset to page 1 on any query change (done in the handlers, not an effect).
-  const setQuery = (value: string) => {
-    setQ(value);
+  // Reset to page 1 on any filter change.
+  function updateFilters(next: MovementsFilterQuery) {
+    setFilters(next);
     setPage(1);
-  };
+  }
+
+  const exportQs = buildMovementsQueryString(filters);
+  const exportHref = exportQs ? `/api/movements/export.csv?${exportQs}` : '/api/movements/export.csv';
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center justify-end gap-3">
-        <div className="relative min-w-[220px] max-w-xs flex-1 sm:flex-none">
-          <Search className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
-          <Input
-            type="search"
-            value={q}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by item name or SKU…"
-            aria-label="Search stock movements"
-            className="h-9 pl-8 pr-8 text-[13px]"
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <MovementsFilterBar mode="client" initial={EMPTY_FILTERS} onChange={updateFilters} />
+        <div className="flex items-center gap-3">
+          <Button asChild variant="outline" size="sm">
+            <a href={exportHref} download aria-label="Export movements to CSV">
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+              Export CSV
+            </a>
+          </Button>
+          <Pagination
+            page={safePage}
+            pageSize={PAGE_SIZE}
+            total={filtered.length}
+            onPageChange={setPage}
           />
-          {q && (
-            <button
-              type="button"
-              onClick={() => setQuery('')}
-              aria-label="Clear search"
-              className="text-muted-foreground hover:text-foreground absolute right-2 top-1/2 -translate-y-1/2"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
         </div>
-        <Pagination
-          page={safePage}
-          pageSize={PAGE_SIZE}
-          total={filtered.length}
-          onPageChange={setPage}
-        />
       </div>
 
       {visible.length === 0 ? (
         <EmptyState
           icon={ArrowLeftRight}
           title="No movements match"
-          description={`Nothing found for "${q}". Try a different item name or SKU.`}
+          description="Nothing found for the current filters. Try a different search, type, or date range."
         />
       ) : (
         <div className="overflow-x-auto rounded-xl border bg-card">
