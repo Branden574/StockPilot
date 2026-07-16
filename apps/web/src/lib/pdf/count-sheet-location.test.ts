@@ -86,4 +86,59 @@ describe('countSheetLocationLabel', () => {
       }),
     ).toBeNull();
   });
+
+  // RACK Unit C: stock split across >1 rack/crate HOLDING makes the
+  // structured/bin_location/site label misleading — it names one rack
+  // while stock actually sits on several. The breakdown must win whenever
+  // more than one holding is present, even when the item ALSO has a
+  // structured rack label set.
+  it('prefers the holdings breakdown over the structured rack label when split (>1 holding)', () => {
+    expect(
+      countSheetLocationLabel({
+        item_type: 'product',
+        custom_fields: { rack_number: '38', rack_row: 'A' },
+        bin_location: null,
+        primaryLocationName: 'DC4',
+        rackHoldings: [
+          { name: '5-A', quantity: 5 },
+          { name: '2-C', quantity: 20 },
+        ],
+      }),
+    ).toBe('2-C ×20 · 5-A ×5');
+  });
+
+  it('falls back to the structured rack label when only one holding is present (not split)', () => {
+    expect(
+      countSheetLocationLabel({
+        item_type: 'product',
+        custom_fields: { rack_number: '38', rack_row: 'A' },
+        bin_location: null,
+        primaryLocationName: 'DC4',
+        rackHoldings: [{ name: '38-A', quantity: 12 }],
+      }),
+    ).toBe('Rack 38-A');
+  });
+
+  it('falls back to the structured rack label when rackHoldings is empty', () => {
+    expect(
+      countSheetLocationLabel({
+        item_type: 'product',
+        custom_fields: { rack_number: '38', rack_row: 'A' },
+        bin_location: null,
+        primaryLocationName: 'DC4',
+        rackHoldings: [],
+      }),
+    ).toBe('Rack 38-A');
+  });
+
+  it('falls back to the structured rack label when rackHoldings is omitted (caller has no holdings data)', () => {
+    expect(
+      countSheetLocationLabel({
+        item_type: 'product',
+        custom_fields: { rack_number: '38', rack_row: 'A' },
+        bin_location: null,
+        primaryLocationName: 'DC4',
+      }),
+    ).toBe('Rack 38-A');
+  });
 });

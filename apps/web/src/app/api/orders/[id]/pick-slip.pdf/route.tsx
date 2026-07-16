@@ -7,6 +7,7 @@ import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import { renderPickSlipPdf } from '@/lib/pdf/pick-slip';
 import { ItemImagesService } from '@/server/services/item-images';
 import { OrderRequestsService } from '@/server/services/order-requests';
+import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
 
 // @react-pdf/renderer needs Node APIs (Buffer, fs-style streams) — Edge
 // runtime is a non-starter. `force-dynamic` keeps Vercel from trying to
@@ -80,8 +81,25 @@ export async function GET(
       if (dataUri) imageUrlByItemId.set(itemId, dataUri);
     }
 
+    // Rack/crate HOLDINGS for every line item, scoped to THIS order's
+    // warehouse — mirrors how stock_reservations already scope to
+    // request.warehouse_id, so a pick slip for warehouse X only ever
+    // lists holdings physically in X. Split items (>1 holding) get the
+    // full breakdown in the LOCATION column instead of a single
+    // (possibly stale/misleading) bin_location label — see locationFor
+    // in lib/pdf/pick-slip.tsx.
+    const rackHoldingsByItemId = await fetchRackHoldingsByItem(
+      ctx,
+      itemIds,
+      detail.request.warehouse_id,
+    );
+
     const orgTimezone = await getCachedOrgTimezone(ctx.organizationId);
-    const pdf = await renderPickSlipPdf(detail, { imageUrlByItemId, orgTimezone });
+    const pdf = await renderPickSlipPdf(detail, {
+      imageUrlByItemId,
+      orgTimezone,
+      rackHoldingsByItemId,
+    });
     const body = new Uint8Array(pdf.byteLength);
     body.set(pdf);
     return new NextResponse(body, {
