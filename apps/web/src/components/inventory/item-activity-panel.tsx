@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { mergeOlderActivityEvents, nextActivityCursor } from '@/lib/activity-pagination';
 import { loadOlderItemActivityAction } from '@/server/actions/activity';
 
-import type { ActivityEvent } from '@/server/services/activity';
+import type { ActivityCursor, ActivityEvent } from '@/server/services/activity';
 
 interface ItemActivityPanelProps {
   itemId: string;
@@ -23,11 +23,12 @@ interface ItemActivityPanelProps {
   /**
    * `nextActivityCursor` applied to the FULL first page (both kinds, not
    * the display-filtered `initialEvents`) — item-detail computes this once
-   * from the same `activity` array it derives both tabs from. `null` means
-   * the first page already returned nothing, so there's nothing to page
+   * from the same `activity` array it derives both tabs from. A per-kind
+   * composite cursor (see `ActivityCursor`) — `null` means the first page
+   * already returned nothing for EITHER kind, so there's nothing to page
    * through.
    */
-  initialCursor: string | null;
+  initialCursor: ActivityCursor | null;
   /** Whether the first page already hit BOTH per-kind caps (see the
    * server action's `exhausted` doc) — hides the button from the very
    * first render when there's nothing more to load. */
@@ -51,7 +52,7 @@ export function ItemActivityPanel({
 }: ItemActivityPanelProps) {
   const [events, setEvents] = React.useState<ActivityEvent[]>(initialEvents);
   const [locationNames, setLocationNames] = React.useState(initialLocationNames);
-  const [cursor, setCursor] = React.useState<string | null>(initialCursor);
+  const [cursor, setCursor] = React.useState<ActivityCursor | null>(initialCursor);
   const [exhausted, setExhausted] = React.useState(initialExhausted || initialCursor === null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -77,7 +78,13 @@ export function ItemActivityPanel({
     // Cursor advances from the FULL fetched page (both kinds), never the
     // display-filtered subset — otherwise a Movements-tab fetch would never
     // advance past whatever audit rows happened to sit between movements.
-    setCursor(nextActivityCursor(page));
+    // Passing the CURRENT cursor as `previous` lets a kind that returned
+    // nothing new this page (already exhausted) carry its boundary forward
+    // instead of resetting to "unfiltered" on the next call. `cursor` here
+    // is the same value just used for `before` above — this function can't
+    // re-render mid-call, so reading it directly (rather than via a
+    // setState updater) is safe.
+    setCursor(nextActivityCursor(page, cursor));
     setExhausted(res.data.exhausted);
   }
 

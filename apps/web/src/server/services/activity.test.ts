@@ -24,6 +24,8 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 
+import { nextActivityCursor } from '@/lib/activity-pagination';
+
 import {
   ActivityService,
   auditLimitFor,
@@ -354,34 +356,85 @@ describe('ActivityService.forItem', () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────
-  // Movement/Activity P4 Task 2: "Load older" cursor. `before` narrows BOTH
-  // the movements and audit queries via `.lt('created_at', before)`,
-  // per-kind caps (movementLimit/auditLimit) otherwise unchanged.
+  // Movement/Activity P4 (review fix): "Load older" composite keyset cursor.
+  // `before` is a PER-KIND `{ createdAt, id }` boundary applied via
+  // PostgREST's `.or(a,and(b,c))` predicate — "created_at < X OR (created_at
+  // = X AND id < Y)" — paired with a secondary `.order('id', …)` sort so
+  // `(created_at, id)` is a total, tie-free order. Per-kind caps
+  // (movementLimit/auditLimit) are otherwise unchanged.
   // ─────────────────────────────────────────────────────────────────────
 
-  it('applies `.lt(created_at, before)` to BOTH queries when a cursor is passed', async () => {
+  const CURSOR_ID_MOV = '99999999-9999-9999-9999-999999999999';
+  const CURSOR_ID_AUD = '88888888-8888-8888-8888-888888888888';
+
+  /** Pulls out every `.order(...)` call's args, in call order, from a
+   *  recorded chain — `chain`/`args` are parallel arrays (see supabase-mock). */
+  function orderCalls(chain: string[], args: unknown[][]): unknown[][] {
+    return chain.reduce<unknown[][]>((acc, method, i) => {
+      if (method === 'order') acc.push(args[i]!);
+      return acc;
+    }, []);
+  }
+
+  it('applies the composite (created_at, id) keyset predicate to BOTH queries when a per-kind cursor is passed', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': { data: [], error: null },
       'audit_logs.select': { data: [], error: null },
     });
     const svc = makeService(stub.client);
 
-    await svc.forItem('item-1', 30, { before: '2025-06-01T00:00:00.000Z' });
+    await svc.forItem('item-1', 30, {
+      before: {
+        movement: { createdAt: '2025-06-01T00:00:00.000Z', id: CURSOR_ID_MOV },
+        audit: { createdAt: '2025-05-01T00:00:00.000Z', id: CURSOR_ID_AUD },
+      },
+    });
 
     const movChain = stub.chains.get('stock_movements.select') ?? [];
     const movArgs = stub.chainArgs.get('stock_movements.select') ?? [];
-    const movLtIdx = movChain.indexOf('lt');
-    expect(movLtIdx).toBeGreaterThan(-1);
-    expect(movArgs[movLtIdx]).toEqual(['created_at', '2025-06-01T00:00:00.000Z']);
+    const movOrIdx = movChain.indexOf('or');
+    expect(movOrIdx).toBeGreaterThan(-1);
+    expect(movArgs[movOrIdx]).toEqual([
+      `created_at.lt.2025-06-01T00:00:00.000Z,and(created_at.eq.2025-06-01T00:00:00.000Z,id.lt.${CURSOR_ID_MOV})`,
+    ]);
+    // Secondary sort by id makes the ordering deterministic at a tie —
+    // required for the keyset predicate above to be correct.
+    expect(orderCalls(movChain, movArgs)).toEqual([
+      ['created_at', { ascending: false }],
+      ['id', { ascending: false }],
+    ]);
 
     const auditChain = stub.chains.get('audit_logs.select') ?? [];
     const auditArgs = stub.chainArgs.get('audit_logs.select') ?? [];
-    const auditLtIdx = auditChain.indexOf('lt');
-    expect(auditLtIdx).toBeGreaterThan(-1);
-    expect(auditArgs[auditLtIdx]).toEqual(['created_at', '2025-06-01T00:00:00.000Z']);
+    const auditOrIdx = auditChain.indexOf('or');
+    expect(auditOrIdx).toBeGreaterThan(-1);
+    expect(auditArgs[auditOrIdx]).toEqual([
+      `created_at.lt.2025-05-01T00:00:00.000Z,and(created_at.eq.2025-05-01T00:00:00.000Z,id.lt.${CURSOR_ID_AUD})`,
+    ]);
+    expect(orderCalls(auditChain, auditArgs)).toEqual([
+      ['created_at', { ascending: false }],
+      ['id', { ascending: false }],
+    ]);
   });
 
-  it('omits `.lt` entirely on both queries when no cursor is passed (byte-identical to before this feature)', async () => {
+  it('applies the cursor to only the kind that has one — the other kind\'s query stays unfiltered', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: [], error: null },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    // Movements exhausted already (no cursor for it); audits still paging.
+    await svc.forItem('item-1', 30, {
+      before: { audit: { createdAt: '2025-05-01T00:00:00.000Z', id: CURSOR_ID_AUD } },
+    });
+
+    expect(stub.chains.get('stock_movements.select') ?? []).not.toContain('or');
+    const auditChain = stub.chains.get('audit_logs.select') ?? [];
+    expect(auditChain).toContain('or');
+  });
+
+  it('omits the keyset predicate entirely on both queries when no cursor is passed (byte-identical to before this feature)', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': { data: [], error: null },
       'audit_logs.select': { data: [], error: null },
@@ -390,6 +443,7 @@ describe('ActivityService.forItem', () => {
 
     await svc.forItem('item-1');
 
+    expect(stub.chains.get('stock_movements.select') ?? []).not.toContain('or');
     expect(stub.chains.get('stock_movements.select') ?? []).not.toContain('lt');
     expect(stub.chains.get('audit_logs.select') ?? []).not.toContain('lt');
   });
@@ -423,11 +477,109 @@ describe('ActivityService.forItem', () => {
     });
     const svc = makeService(stub.client);
 
-    const events = await svc.forItem('item-1', 6, { before: '2025-06-01T00:00:00.000Z' });
+    const events = await svc.forItem('item-1', 6, {
+      before: {
+        movement: { createdAt: '2025-06-01T00:00:00.000Z', id: CURSOR_ID_MOV },
+        audit: { createdAt: '2025-06-01T00:00:00.000Z', id: CURSOR_ID_AUD },
+      },
+    });
     const movementEvents = events.filter((e) => e.kind === 'movement');
     const auditEvents = events.filter((e) => e.kind === 'audit');
     expect(movementEvents).toHaveLength(6); // movementLimit === the requested limit
     expect(auditEvents).toHaveLength(3); // auditLimit === ceil(6/2)
+  });
+
+  // ── REQUIRED regression (Blocker 1): a same-`created_at` tie straddling
+  // the cap boundary must survive to the next page. This models what a REAL
+  // Postgres does under the fixed keyset predicate: page 1's `.limit()` cuts
+  // a tie group in half (kept: the row whose id sorts higher under `ORDER
+  // BY created_at DESC, id DESC`); page 2, seeded with the composite cursor
+  // `nextActivityCursor` computed from page 1, must return the sibling row
+  // the cap cut off.
+  //
+  // Why this is the case the OLD tests missed: every prior cursor test used
+  // rows with DISTINCT timestamps, so a bare `created_at` boundary was
+  // indistinguishable from a composite one — both would work. Two rows
+  // sharing the EXACT SAME `created_at` is the only shape that exposes the
+  // bug: the OLD `nextActivityCursor` returned the bare string
+  // '2025-04-01T00:00:00.000Z' for this page, and old `forItem` would apply
+  // `.lt('created_at', '2025-04-01T00:00:00.000Z')` on page 2 — which a real
+  // Postgres evaluates as `created_at < X`, excluding BOTH tied rows
+  // (including `m-tie-1` below, forever). Verified directly: reverting
+  // `nextActivityCursor`/`forItem` to the pre-fix (string-cursor, `.lt`-only)
+  // implementation and re-running this exact test fails the final
+  // assertion — page 2 comes back with zero movements instead of
+  // `m-tie-1` (see the P4 review fix-up's verification notes).
+  // ─────────────────────────────────────────────────────────────────────
+
+  it('a tie at the cap boundary: the row cut off by page 1 is returned on page 2, not skipped', async () => {
+    const TIE_CREATED_AT = new Date(2025, 3, 1, 0, 0).toISOString();
+    const NEWER_CREATED_AT = new Date(2025, 4, 1, 0, 0).toISOString();
+
+    function tieMovementRow(id: string, createdAt: string) {
+      return {
+        id,
+        movement_type: 'adjust',
+        quantity_change: 1,
+        previous_quantity: 0,
+        new_quantity: 1,
+        reason: null,
+        notes: null,
+        created_at: createdAt,
+        user_id: null,
+      };
+    }
+
+    // Page 1: a real Postgres running
+    //   ORDER BY created_at DESC, id DESC LIMIT 2
+    // over {m-newer (NEWER), m-tie-2 (TIE), m-tie-1 (TIE)} keeps m-newer and
+    // m-tie-2 ('m-tie-2' > 'm-tie-1' lexicographically, so it sorts first
+    // among the tied pair) — m-tie-1 is cut off by the limit.
+    const page1Stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          tieMovementRow('m-newer', NEWER_CREATED_AT),
+          tieMovementRow('m-tie-2', TIE_CREATED_AT),
+        ],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc1 = makeService(page1Stub.client);
+    const page1Events = await svc1.forItem('item-1', 2);
+
+    expect(page1Events.map((e) => e.id)).toEqual(['m:m-newer', 'm:m-tie-2']);
+
+    const cursor = nextActivityCursor(page1Events);
+    // The composite boundary pins BOTH the tied timestamp AND the exact row
+    // id that made the cut — not just the bare timestamp.
+    expect(cursor).toEqual({ movement: { createdAt: TIE_CREATED_AT, id: 'm-tie-2' } });
+
+    // Page 2: a real Postgres running the SAME query with the keyset
+    // predicate `created_at < TIE_CREATED_AT OR (created_at = TIE_CREATED_AT
+    // AND id < 'm-tie-2')` correctly matches m-tie-1 ('m-tie-1' < 'm-tie-2'
+    // AND created_at is equal) — nothing else remains.
+    const page2Stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [tieMovementRow('m-tie-1', TIE_CREATED_AT)],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc2 = makeService(page2Stub.client);
+    const page2Events = await svc2.forItem('item-1', 2, { before: cursor! });
+
+    // Plumbing check: the SAME cursor value computed above is exactly what
+    // reached the query as the `.or()` predicate.
+    const movChain = page2Stub.chains.get('stock_movements.select') ?? [];
+    const movArgs = page2Stub.chainArgs.get('stock_movements.select') ?? [];
+    const orIdx = movChain.indexOf('or');
+    expect(movArgs[orIdx]).toEqual([
+      `created_at.lt.${TIE_CREATED_AT},and(created_at.eq.${TIE_CREATED_AT},id.lt.m-tie-2)`,
+    ]);
+
+    // The crux: the tied row page 1's cap cut off is NOT lost.
+    expect(page2Events.map((e) => e.id)).toEqual(['m:m-tie-1']);
   });
 
   it('uses metadata.reason as audit summary when present', async () => {

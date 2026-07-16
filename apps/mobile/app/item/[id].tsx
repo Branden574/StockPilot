@@ -44,6 +44,7 @@ import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
 import {
+  MOVEMENT_SHADOWED_AUDIT_EVENTS,
   auditCapFor,
   formatRelativeTime,
   humanizeFieldName,
@@ -470,6 +471,10 @@ export default function ItemDetail() {
    * lockstep with the web merge semantics. Returns a discriminated result so
    * callers can surface a real error INLINE instead of silently defaulting
    * to `data ?? []`.
+   *
+   * `.range()` offset pagination can skip a row if one is deleted between
+   * page fetches — accepted, since stock_movements is an append-only ledger
+   * in normal operation (no UPDATE/DELETE path).
    */
   const fetchMovementsPage = React.useCallback(
     async (
@@ -599,6 +604,21 @@ export default function ItemDetail() {
    * the movements query above), so no separate profile-batch lookup is
    * needed. RLS scopes this to manager+ — staff/viewer legitimately get zero
    * rows here, matching web parity exactly (NOT worked around).
+   *
+   * Movement-shadowing stock.* events (see `MOVEMENT_SHADOWED_AUDIT_EVENTS`)
+   * are excluded HERE, at the query layer, mirroring web's `forItem`
+   * (activity.ts) — safe here because `audit_logs.event` is NOT NULL, so
+   * `.not('event','in',…)` is always TRUE/FALSE, never the NULL-swallows-the-
+   * row trap that keeps the equivalent `stock_movements.reason` filter
+   * JS-only (see `mergeItemActivity`'s doc-comment / LIFECYCLE_REASON_
+   * MOVEMENTS). Filtering here (not just in `mergeItemActivity`, which stays
+   * as a belt-and-suspenders safety net) means `count: 'exact'` — and the
+   * "Load more (N remaining)" footer it drives — reflects only rows that
+   * actually render, instead of counting shadowed rows the UI throws away.
+   *
+   * `.range()` offset pagination can skip a row if one is deleted between
+   * page fetches — accepted, since audit_logs/stock_movements are
+   * append-only ledgers in normal operation (no UPDATE/DELETE path).
    */
   const fetchAuditsPage = React.useCallback(
     async (
@@ -619,6 +639,7 @@ export default function ItemDetail() {
         )
         .eq('organization_id', orgId)
         .eq('metadata->>entity_id', id)
+        .not('event', 'in', `(${MOVEMENT_SHADOWED_AUDIT_EVENTS.join(',')})`)
         .order('created_at', { ascending: false })
         .order('id', { ascending: true })
         .range(offset, offset + pageSize - 1);

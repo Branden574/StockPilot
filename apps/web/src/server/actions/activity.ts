@@ -3,7 +3,13 @@
 import { z } from 'zod';
 
 import { ITEM_ACTIVITY_PAGE_SIZE } from '@/lib/activity-pagination';
-import { ActivityService, auditLimitFor, type ActivityEvent } from '@/server/services/activity';
+import {
+  ActivityService,
+  UUID_RE,
+  auditLimitFor,
+  type ActivityCursor,
+  type ActivityEvent,
+} from '@/server/services/activity';
 import { ServiceError } from '@/server/services/context';
 import { LocationsService } from '@/server/services/locations';
 
@@ -19,15 +25,46 @@ function toResult<T>(error: unknown): ActionResult<T> {
   return err('internal_error', 'Something went wrong. Please try again.');
 }
 
+// Strict character whitelist (digits, `T`, `:`, `.`, `+`, `-`, `Z` only) —
+// this string is interpolated directly into a raw PostgREST `.or()` filter
+// string (ActivityService.forItem's composite keyset predicate), so beyond
+// being date-shaped it must never contain `,` `(` `)` `'` or anything else
+// that could break out of that filter's syntax. This is the injection
+// defense; the `Date.parse` refinement below is the separate semantic
+// (is-this-really-a-timestamp) check.
+const ISO_TIMESTAMP_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+Z-]+$/;
+
+const kindCursorSchema = z.object({
+  createdAt: z
+    .string()
+    .regex(ISO_TIMESTAMP_RE, 'createdAt must be an ISO timestamp')
+    .refine((s) => !Number.isNaN(Date.parse(s)), {
+      message: 'createdAt must be a valid ISO timestamp',
+    }),
+  // The RAW stock_movements.id / audit_logs.id (see ActivityKindCursor in
+  // server/services/activity.ts) — both columns are `uuid primary key
+  // default gen_random_uuid()`. A strict uuid shape both validates the
+  // input and, like `createdAt` above, keeps this value safe to interpolate
+  // into the raw `.or()` filter string `forItem` builds from it.
+  id: z.string().regex(UUID_RE, 'id must be a uuid'),
+});
+
 const loadOlderSchema = z.object({
   itemId: z.string().uuid(),
-  // ISO timestamp cursor — the createdAt of the oldest event the caller
-  // already has. `nextActivityCursor` (lib/activity-pagination) is the
-  // pure function both item-detail (initial page) and this action's
-  // caller (client wrapper, after each fetch) use to derive it.
-  before: z.string().refine((s) => !Number.isNaN(Date.parse(s)), {
-    message: 'before must be a valid ISO timestamp',
-  }),
+  // Per-kind composite keyset cursor (Movement/Activity P4 review Blocker
+  // 1 — see ActivityCursor). `nextActivityCursor` (lib/activity-pagination)
+  // is the pure function both item-detail (initial page) and this action's
+  // caller (the client wrapper, after each fetch) use to derive it. At
+  // least one kind must be present — an empty `{}` means the caller
+  // already knows there's nothing left to page through.
+  before: z
+    .object({
+      movement: kindCursorSchema.optional(),
+      audit: kindCursorSchema.optional(),
+    })
+    .refine((b) => b.movement !== undefined || b.audit !== undefined, {
+      message: 'before must include at least one kind cursor',
+    }),
 });
 
 export interface LoadOlderItemActivityData {
@@ -53,7 +90,7 @@ export interface LoadOlderItemActivityData {
 
 export async function loadOlderItemActivityAction(input: {
   itemId: string;
-  before: string;
+  before: ActivityCursor;
 }): Promise<ActionResult<LoadOlderItemActivityData>> {
   const parsed = loadOlderSchema.safeParse(input);
   if (!parsed.success) {

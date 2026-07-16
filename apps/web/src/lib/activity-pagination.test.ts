@@ -41,14 +41,11 @@ describe('mergeOlderActivityEvents', () => {
     expect(merged.map((e) => e.id)).toEqual(['m:2', 'm:1', 'a:1', 'm:0']);
   });
 
-  it('de-dupes by id when the older page re-fetches a row already present', () => {
+  it('de-dupes by id when the older page re-fetches a row already present (double-click / retry safety net)', () => {
     const existing = [
       makeEvent({ id: 'm:2', createdAt: '2025-03-01T00:00:00.000Z' }),
       makeEvent({ id: 'm:1', createdAt: '2025-02-01T00:00:00.000Z' }),
     ];
-    // The MAX-cursor strategy (see nextActivityCursor) can legitimately
-    // re-request a row the caller already has — e.g. when the audit cursor
-    // trails the movement cursor. `m:1` shows up again here.
     const older = [
       makeEvent({ id: 'm:1', createdAt: '2025-02-01T00:00:00.000Z' }),
       makeEvent({ id: 'm:0', createdAt: '2025-01-01T00:00:00.000Z' }),
@@ -73,44 +70,104 @@ describe('mergeOlderActivityEvents', () => {
 });
 
 describe('nextActivityCursor', () => {
-  it('returns null when the page has no events', () => {
+  it('returns null when the page has no events and there is no previous cursor', () => {
     expect(nextActivityCursor([])).toBeNull();
   });
 
-  it('returns the single kind\'s oldest createdAt when only one kind is present', () => {
+  it('returns a per-kind cursor with only the present kind populated', () => {
     const page = [
       makeEvent({ id: 'm:2', createdAt: '2025-03-01T00:00:00.000Z' }),
       makeEvent({ id: 'm:1', createdAt: '2025-01-01T00:00:00.000Z' }),
     ];
-    expect(nextActivityCursor(page)).toBe('2025-01-01T00:00:00.000Z');
+    expect(nextActivityCursor(page)).toEqual({
+      movement: { createdAt: '2025-01-01T00:00:00.000Z', id: '1' },
+    });
   });
 
-  // ── The core correctness property: the LATER (more recent) of the two
-  // per-kind boundaries wins, never the earlier one. ────────────────────
-
-  it('picks the LATER per-kind boundary when movements go further back than audits', () => {
+  it('computes an independent boundary per kind — never a shared/later-wins value', () => {
     const page = [
       makeEvent({ id: 'm:2', createdAt: '2025-06-01T00:00:00.000Z' }),
       makeEvent({ id: 'a:2', kind: 'audit', createdAt: '2025-05-01T00:00:00.000Z' }),
-      // Audits' oldest fetched row (cap not fully spent — few audit rows
-      // exist) is more recent than movements' oldest fetched row.
+      // Audits' oldest fetched row (cap not fully spent) is far more recent
+      // than movements' oldest fetched row — under the OLD shared-cursor
+      // design this would have forced picking movements' boundary for
+      // BOTH kinds. The per-kind design just reports each independently.
       makeEvent({ id: 'a:1', kind: 'audit', createdAt: '2025-04-01T00:00:00.000Z' }),
       makeEvent({ id: 'm:1', createdAt: '2025-01-01T00:00:00.000Z' }),
     ];
-    // Movements' boundary = 2025-01-01, audits' boundary = 2025-04-01.
-    // The LATER one (2025-04-01) must win — using 2025-01-01 would skip
-    // any as-yet-unfetched audit rows between 2025-01-01 and 2025-04-01.
-    expect(nextActivityCursor(page)).toBe('2025-04-01T00:00:00.000Z');
+    expect(nextActivityCursor(page)).toEqual({
+      movement: { createdAt: '2025-01-01T00:00:00.000Z', id: '1' },
+      audit: { createdAt: '2025-04-01T00:00:00.000Z', id: '1' },
+    });
   });
 
-  it('picks the LATER per-kind boundary when audits go further back than movements', () => {
+  it('strips the kind prefix (m:/a:) to recover the RAW row id for the keyset predicate', () => {
     const page = [
-      makeEvent({ id: 'm:1', createdAt: '2025-03-01T00:00:00.000Z' }),
-      makeEvent({ id: 'a:2', kind: 'audit', createdAt: '2025-02-01T00:00:00.000Z' }),
-      makeEvent({ id: 'a:1', kind: 'audit', createdAt: '2025-01-01T00:00:00.000Z' }),
+      makeEvent({
+        id: 'a:11111111-2222-3333-4444-555555555555',
+        kind: 'audit',
+        createdAt: '2025-02-01T00:00:00.000Z',
+      }),
     ];
-    // Movements' boundary = 2025-03-01, audits' boundary = 2025-01-01.
-    // The LATER one (2025-03-01) wins.
-    expect(nextActivityCursor(page)).toBe('2025-03-01T00:00:00.000Z');
+    expect(nextActivityCursor(page)).toEqual({
+      audit: {
+        createdAt: '2025-02-01T00:00:00.000Z',
+        id: '11111111-2222-3333-4444-555555555555',
+      },
+    });
+  });
+
+  // ── The Blocker 1 regression: a same-`created_at` tie at the cap boundary
+  // must never be lost. `id` is the tiebreaker; the row with the LARGER raw
+  // id (the one `ORDER BY created_at DESC, id DESC` places first, i.e. the
+  // one that actually made it into this page) becomes the cursor — never
+  // the bare, ambiguous `createdAt` timestamp the pre-fix code returned. ──
+
+  it('at a tie, the cursor pins BOTH createdAt AND the exact row id — not just the shared timestamp', () => {
+    const tiedCreatedAt = '2025-04-01T00:00:00.000Z';
+    const page = [
+      makeEvent({ id: 'm:newer', createdAt: '2025-05-01T00:00:00.000Z' }),
+      // The row that "won" the tie and made it into this page (its id sorts
+      // last among the kept rows, i.e. this is the true page boundary).
+      makeEvent({ id: 'm:tie-winner-b', createdAt: tiedCreatedAt }),
+    ];
+    const cursor = nextActivityCursor(page);
+    // The OLD implementation returned a bare string ('2025-04-01T...') here
+    // — a `.lt('created_at', boundary)` built from that would exclude EVERY
+    // row sharing `tiedCreatedAt`, including any sibling tie row cut off by
+    // this page's `.limit()` (see activity.test.ts's full keyset-page test
+    // for the end-to-end version of this). Asserting the shape here proves
+    // the id survives all the way out of this pure function.
+    expect(cursor).toEqual({ movement: { createdAt: tiedCreatedAt, id: 'tie-winner-b' } });
+  });
+
+  it('carries a kind\'s PREVIOUS boundary forward when this page returned none of that kind', () => {
+    const previous = {
+      movement: { createdAt: '2025-03-01T00:00:00.000Z', id: 'm-prev' },
+      audit: { createdAt: '2025-03-01T00:00:00.000Z', id: 'a-prev' },
+    };
+    // This page's audit query — bounded by `previous.audit` — came back
+    // empty (audits are exhausted); movements had one more row.
+    const page = [makeEvent({ id: 'm:new', createdAt: '2025-02-01T00:00:00.000Z' })];
+    expect(nextActivityCursor(page, previous)).toEqual({
+      movement: { createdAt: '2025-02-01T00:00:00.000Z', id: 'new' },
+      // Carried forward UNCHANGED — NOT dropped. Dropping it would make the
+      // next "Load older" call issue an unfiltered audits query, silently
+      // re-fetching the newest audit rows from scratch instead of staying
+      // bounded at the already-established exhaustion point.
+      audit: previous.audit,
+    });
+  });
+
+  it('drops a kind entirely (undefined) when it has never had any rows and there is no previous cursor for it', () => {
+    const page = [makeEvent({ id: 'm:1', createdAt: '2025-01-01T00:00:00.000Z' })];
+    const cursor = nextActivityCursor(page, null);
+    expect(cursor?.movement).toBeDefined();
+    expect(cursor?.audit).toBeUndefined();
+  });
+
+  it('returns null only when NEITHER kind has a boundary from this page or the previous one', () => {
+    expect(nextActivityCursor([], null)).toBeNull();
+    expect(nextActivityCursor([], {})).toBeNull();
   });
 });

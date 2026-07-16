@@ -41,7 +41,16 @@ vi.mock('@/server/services/context', async () => {
 import { loadOlderItemActivityAction } from './activity';
 
 const ITEM_ID = '11111111-1111-1111-1111-111111111111';
-const BEFORE = '2025-06-01T00:00:00.000Z';
+const CURSOR_TS = '2025-06-01T00:00:00.000Z';
+const CURSOR_ID_MOV = '99999999-9999-9999-9999-999999999999';
+const CURSOR_ID_AUD = '88888888-8888-8888-8888-888888888888';
+// Per-kind composite cursor (Movement/Activity P4 review Blocker 1) — the
+// shape `loadOlderItemActivityAction` now validates and threads through to
+// `ActivityService.forItem`.
+const BEFORE = {
+  movement: { createdAt: CURSOR_TS, id: CURSOR_ID_MOV },
+  audit: { createdAt: CURSOR_TS, id: CURSOR_ID_AUD },
+};
 
 function movementRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -81,11 +90,72 @@ describe('loadOlderItemActivityAction', () => {
     expect(stub.fromCalls).toEqual([]);
   });
 
-  it('rejects a non-ISO `before` value as validation_error, no query issued', async () => {
+  it('rejects a non-object `before` value as validation_error, no query issued', async () => {
     const stub = makeSupabaseStub();
     stubHolder.stub = stub;
 
-    const result = await loadOlderItemActivityAction({ itemId: ITEM_ID, before: 'not-a-date' });
+    const result = await loadOlderItemActivityAction({
+      itemId: ITEM_ID,
+      before: 'not-a-cursor' as unknown as typeof BEFORE,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('rejects a `before` with neither kind present as validation_error, no query issued', async () => {
+    const stub = makeSupabaseStub();
+    stubHolder.stub = stub;
+
+    const result = await loadOlderItemActivityAction({ itemId: ITEM_ID, before: {} });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('rejects a non-ISO `createdAt` on a kind cursor as validation_error, no query issued', async () => {
+    const stub = makeSupabaseStub();
+    stubHolder.stub = stub;
+
+    const result = await loadOlderItemActivityAction({
+      itemId: ITEM_ID,
+      before: { movement: { createdAt: 'not-a-date', id: CURSOR_ID_MOV } },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  // Defense-in-depth: `createdAt`/`id` are interpolated directly into a raw
+  // PostgREST `.or()` filter string in ActivityService.forItem — reject
+  // anything that could break out of that filter's syntax (comma/paren
+  // injection) BEFORE it ever reaches a query.
+  it('rejects a `createdAt` containing filter-breaking characters (comma/paren injection) as validation_error', async () => {
+    const stub = makeSupabaseStub();
+    stubHolder.stub = stub;
+
+    const result = await loadOlderItemActivityAction({
+      itemId: ITEM_ID,
+      before: {
+        movement: {
+          createdAt: `${CURSOR_TS},or(organization_id.neq.00000000-0000-0000-0000-000000000000)`,
+          id: CURSOR_ID_MOV,
+        },
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('validation_error');
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('rejects a non-uuid `id` on a kind cursor as validation_error, no query issued', async () => {
+    const stub = makeSupabaseStub();
+    stubHolder.stub = stub;
+
+    const result = await loadOlderItemActivityAction({
+      itemId: ITEM_ID,
+      before: { movement: { createdAt: CURSOR_TS, id: 'not-a-uuid' } },
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('validation_error');
     expect(stub.fromCalls).toEqual([]);
@@ -122,7 +192,7 @@ describe('loadOlderItemActivityAction', () => {
     expect(auditArgs[auditOrgIdx]).toEqual(['organization_id', 'org-caller']);
   });
 
-  it('threads `before` through to ActivityService.forItem as a `.lt(created_at, before)` bound on BOTH queries', async () => {
+  it('threads `before` through to ActivityService.forItem as a composite (created_at, id) keyset bound on BOTH queries', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': { data: [], error: null },
       'audit_logs.select': { data: [], error: null },
@@ -133,15 +203,19 @@ describe('loadOlderItemActivityAction', () => {
 
     const movChain = stub.chains.get('stock_movements.select') ?? [];
     const movArgs = stub.chainArgs.get('stock_movements.select') ?? [];
-    const movLtIdx = movChain.indexOf('lt');
-    expect(movLtIdx).toBeGreaterThan(-1);
-    expect(movArgs[movLtIdx]).toEqual(['created_at', BEFORE]);
+    const movOrIdx = movChain.indexOf('or');
+    expect(movOrIdx).toBeGreaterThan(-1);
+    expect(movArgs[movOrIdx]).toEqual([
+      `created_at.lt.${CURSOR_TS},and(created_at.eq.${CURSOR_TS},id.lt.${CURSOR_ID_MOV})`,
+    ]);
 
     const auditChain = stub.chains.get('audit_logs.select') ?? [];
     const auditArgs = stub.chainArgs.get('audit_logs.select') ?? [];
-    const auditLtIdx = auditChain.indexOf('lt');
-    expect(auditLtIdx).toBeGreaterThan(-1);
-    expect(auditArgs[auditLtIdx]).toEqual(['created_at', BEFORE]);
+    const auditOrIdx = auditChain.indexOf('or');
+    expect(auditOrIdx).toBeGreaterThan(-1);
+    expect(auditArgs[auditOrIdx]).toEqual([
+      `created_at.lt.${CURSOR_TS},and(created_at.eq.${CURSOR_TS},id.lt.${CURSOR_ID_AUD})`,
+    ]);
   });
 
   it('returns exhausted=true when the page comes up short of BOTH per-kind caps (50 movements / 25 audits)', async () => {

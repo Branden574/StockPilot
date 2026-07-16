@@ -229,16 +229,28 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   const auditEventsCount = activity.length - movementEvents.length;
 
   // "Load older" pagination (Movement/Activity P4 Task 2): both tabs share
-  // one initial cursor + exhaustion check, derived from the SAME first-page
-  // `activity` array — the client wrapper's `kindFilter` prop handles the
-  // display-only difference between the two tabs. `nextActivityCursor`
-  // returns null when `activity` is empty (e.g. the Overview tab, which
-  // never fetches activity at all), so the button correctly starts hidden
-  // there too.
+  // one initial cursor, derived from the SAME first-page `activity` array —
+  // the client wrapper's `kindFilter` prop handles the display-only
+  // difference between the two tabs. `nextActivityCursor` returns null when
+  // `activity` is empty (e.g. the Overview tab, which never fetches
+  // activity at all), so the button correctly starts hidden there too.
   const activityInitialCursor = nextActivityCursor(activity);
-  const activityInitialExhausted =
-    movementEvents.length < ITEM_ACTIVITY_PAGE_SIZE &&
-    auditEventsCount < auditLimitFor(ITEM_ACTIVITY_PAGE_SIZE);
+
+  // Per-kind initial exhaustion (P4 review fix): the Movements tab only
+  // ever displays movement events, so ITS "Load older" button must hide
+  // based on whether MOVEMENTS under-filled their own cap — not the merged
+  // tab's AND-across-both-kinds check. Passing the combined
+  // `activityInitialExhausted` to the Movements panel was a bug: audits
+  // hitting their (smaller) cap while movements still had room would keep
+  // the combined flag `false` (correctly, for the Activity tab) but the
+  // Movements-only panel would inherit that same `false` and show a "Load
+  // older" button that fetches a page containing zero new movements
+  // forever, since movements were ALREADY exhausted on their own.
+  const movementsInitialExhausted = movementEvents.length < ITEM_ACTIVITY_PAGE_SIZE;
+  const auditsInitialExhausted = auditEventsCount < auditLimitFor(ITEM_ACTIVITY_PAGE_SIZE);
+  // The merged Activity tab shows BOTH kinds, so it still needs the AND —
+  // more of either kind means the tab has more to load.
+  const activityInitialExhausted = movementsInitialExhausted && auditsInitialExhausted;
 
   // Location id → name map for the activity feed's transfer route line
   // ("A → B"). Free: the full location list is already fetched above for
@@ -811,7 +823,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                 initialEvents={movementEvents}
                 initialLocationNames={locationNames}
                 initialCursor={activityInitialCursor}
-                initialExhausted={activityInitialExhausted}
+                initialExhausted={movementsInitialExhausted}
                 kindFilter="movement"
               />
             </CardContent>
