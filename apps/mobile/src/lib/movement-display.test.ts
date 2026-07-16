@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   collectReceiptLineIds,
+  formatMovementRoute,
   movementAmount,
   movementNotesForDisplay,
   movementReasonLabel,
@@ -116,5 +117,26 @@ describe('receiptLineSummary', () => {
   it('trims notes before lookup, same as collectReceiptLineIds', () => {
     const map = new Map([[RECEIPT_ID, 'PO-2026-014']]);
     expect(receiptLineSummary(` ${RECEIPT_ID} `, map)).toBe('PO PO-2026-014');
+  });
+});
+
+// Movement/Activity P1 review follow-up: web parity for the from/to location
+// route line (mirrors ActivityFeed's inline `fromName && toName ? ... :`
+// logic in activity-feed.tsx byte-for-byte).
+describe('formatMovementRoute', () => {
+  it('both names known: "A → B" (transfer)', () => {
+    expect(formatMovementRoute('Rack A1', 'Rack B2')).toBe('Rack A1 → Rack B2');
+  });
+
+  it('only the destination known: "→ B" (receive)', () => {
+    expect(formatMovementRoute(null, 'Rack B2')).toBe('→ Rack B2');
+  });
+
+  it('only the source known: "A →" (removal)', () => {
+    expect(formatMovementRoute('Rack A1', null)).toBe('Rack A1 →');
+  });
+
+  it('neither known: omit the line entirely (null, never a dangling arrow)', () => {
+    expect(formatMovementRoute(null, null)).toBeNull();
   });
 });

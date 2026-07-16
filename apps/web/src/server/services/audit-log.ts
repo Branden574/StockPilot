@@ -132,34 +132,4 @@ export class AuditLogService {
     const rows = ((data ?? []) as unknown as RawAuditRow[]).map(toRow);
     return { rows, total: count ?? rows.length };
   }
-
-  /**
-   * Per-entity history. Not role-gated at the service level — RLS on
-   * audit_logs is admin-only so non-admins will simply get an empty
-   * list. That matches the read access model for v1.
-   */
-  async forEntity(
-    entityType: string,
-    entityId: string,
-    limit = 30,
-  ): Promise<AuditLogRow[]> {
-    const cap = Math.min(Math.max(1, limit), 200);
-
-    const { data, error } = await this.ctx.supabase
-      .from('audit_logs')
-      .select(SELECT_COLUMNS)
-      .eq('organization_id', this.ctx.organizationId)
-      .filter('metadata->>entity_type', 'eq', entityType)
-      .filter('metadata->>entity_id', 'eq', entityId)
-      .order('created_at', { ascending: false })
-      .limit(cap);
-
-    if (error) {
-      // forEntity is rendered inline on detail pages — surface as empty
-      // rather than crashing the parent page. The error reporter on the
-      // writer side covers diagnosis.
-      return [];
-    }
-    return ((data ?? []) as unknown as RawAuditRow[]).map(toRow);
-  }
 }

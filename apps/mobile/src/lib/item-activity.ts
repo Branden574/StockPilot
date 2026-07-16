@@ -83,6 +83,12 @@ export interface ActivityMovementInput {
   reference_label: string | null;
   from_location_id: string | null;
   to_location_id: string | null;
+  /** Web parity (Movement/Activity P1 review follow-up): resolved display
+   *  names for from_location_id/to_location_id — see MovementRow in
+   *  app/item/[id].tsx for the full doc-comment. Rides through untouched;
+   *  mergeItemActivity only sorts/caps/filters, never inspects these. */
+  from_location_name: string | null;
+  to_location_name: string | null;
 }
 
 export interface ActivityAuditInput {
