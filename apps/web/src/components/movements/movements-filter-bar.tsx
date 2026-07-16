@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import {
   Select,
   SelectContent,
@@ -148,8 +149,11 @@ export function MovementsFilterBar({
           splits the range across rows (dangling dash / orphaned second date
           — owner report 2026-07-15). [color-scheme:…] keeps the NATIVE
           date-picker chrome (calendar icon + popup) in sync with the app
-          theme — without it the browser renders light-scheme widgets inside
-          the dark UI. */}
+          theme. An EMPTY native date input paints its mm/dd/yyyy segment
+          text in the normal text color (it is not a ::placeholder), which
+          reads as bright typed text next to the muted search placeholder —
+          so tint the whole control muted until a date is actually set
+          (owner report 2026-07-15). */}
       <div className="flex shrink-0 items-center gap-2">
         <Input
           type="date"
@@ -157,7 +161,10 @@ export function MovementsFilterBar({
           onChange={(e) => updateFrom(e.target.value)}
           max={to || undefined}
           aria-label="From date"
-          className="h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]"
+          className={cn(
+            'h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]',
+            !from && 'text-muted-foreground',
+          )}
         />
         <span className="text-muted-foreground text-xs" aria-hidden>
           –
@@ -168,7 +175,10 @@ export function MovementsFilterBar({
           onChange={(e) => updateTo(e.target.value)}
           min={from || undefined}
           aria-label="To date"
-          className="h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]"
+          className={cn(
+            'h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]',
+            !to && 'text-muted-foreground',
+          )}
         />
       </div>
 
