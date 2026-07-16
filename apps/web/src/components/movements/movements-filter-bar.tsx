@@ -162,7 +162,7 @@ export function MovementsFilterBar({
           max={to || undefined}
           aria-label="From date"
           className={cn(
-            'h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]',
+            'h-9 w-[170px] text-[13px] sm:text-[13px] [color-scheme:light] dark:[color-scheme:dark]',
             !from && 'text-muted-foreground',
           )}
         />
@@ -176,7 +176,7 @@ export function MovementsFilterBar({
           min={from || undefined}
           aria-label="To date"
           className={cn(
-            'h-9 w-[140px] text-[13px] [color-scheme:light] dark:[color-scheme:dark]',
+            'h-9 w-[170px] text-[13px] sm:text-[13px] [color-scheme:light] dark:[color-scheme:dark]',
             !to && 'text-muted-foreground',
           )}
         />
