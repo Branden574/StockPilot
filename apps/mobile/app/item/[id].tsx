@@ -53,9 +53,11 @@ import {
   type AuditCardModel,
 } from '@/lib/item-activity';
 import {
+  collectReceiptLineIds,
   movementAmount,
   movementNotesForDisplay,
   movementReasonLabel,
+  receiptLineSummary,
 } from '@/lib/movement-display';
 import {
   attachReferenceLabels,
@@ -127,6 +129,12 @@ interface MovementRow {
       ALWAYS 0 for transfers (ledger sums to on-hand) — render THIS for them.
       null on pre-0231 rows and non-transfer movements. */
   moved_quantity: number | null;
+  /** Movement/Activity P5: pre-0231 'receipt_line' rows are pre-resolved here
+   *  (in `fetchMovementsPage`, via the receipt→PO batched lookup) to
+   *  'PO {number}' when resolvable, else the masked 'PO receipt' fallback —
+   *  the raw 'receipt_line' sentinel and the receipt uuid never reach this
+   *  field. Every other row carries its raw `stock_movements.reason`
+   *  verbatim (new receipt rows already write 'PO {number}' directly). */
   reason: string | null;
   /** User-entered free-text notes (web parity: rendered as its OWN line,
    *  never silently dropped in favor of `reason`). Pre-0231 'receipt_line'
@@ -254,6 +262,45 @@ async function resolveBundleNames(orgId: string, ids: string[]): Promise<Map<str
     .in('id', ids);
   for (const r of (data ?? []) as { id: string; name: string | null }[]) {
     if (r.name) map.set(r.id, r.name);
+  }
+  return map;
+}
+
+/**
+ * Movement/Activity P5 (mobile web-parity gap): batch-resolves pre-0231
+ * 'receipt_line' rows' receipt ids → their PO's `po_number`, mirroring the
+ * web's `resolveReceiptPoNumbers` in activity.ts EXACTLY — same table join
+ * (`receipts` → embedded `purchase_orders(po_number)`), same org scope, same
+ * one-batched-`.in()`-query shape as the other resolvers above.
+ *
+ * RLS verified: `receipts_select` (mig 0012) and `purchase_orders_select`
+ * (mig 0003/0140) both grant SELECT to any accepted org member — NOT
+ * manager+-gated like `audit_logs` — so this runs for every role including
+ * staff/viewer under their own JWT (this file's plain `supabase` client,
+ * never the service role). Errors (network, unexpected RLS change, etc.)
+ * degrade to an empty map exactly like every other resolver in this file —
+ * `receiptLineSummary` then falls back to the masked 'PO receipt' label,
+ * never the raw uuid.
+ */
+async function resolveReceiptPoNumbers(
+  orgId: string,
+  receiptIds: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (receiptIds.length === 0) return map;
+  const { data, error } = await supabase
+    .from('receipts')
+    .select('id, purchase_orders(po_number)')
+    .eq('organization_id', orgId)
+    .in('id', receiptIds);
+  if (error) return map;
+  for (const r of (data ?? []) as Record<string, unknown>[]) {
+    const poField = r.purchase_orders as
+      | { po_number?: string | null }
+      | { po_number?: string | null }[]
+      | null;
+    const po = Array.isArray(poField) ? poField[0] : poField;
+    if (po?.po_number) map.set(r.id as string, po.po_number);
   }
   return map;
 }
@@ -517,21 +564,46 @@ export default function ItemDetail() {
           };
         }),
       );
+      // Pre-0231 receipt rows (reason='receipt_line', notes=receipt uuid):
+      // collect THIS PAGE's receipt ids so they can be resolved to PO
+      // numbers in one extra batched query (Movement/Activity P5) — mirrors
+      // the web's ActivityService.forItem, which runs `receiptIdsPromise`
+      // alongside its reference-label resolvers. Runs in the same
+      // Promise.all as the 3 resolvers below.
+      const receiptLineIds = collectReceiptLineIds(
+        rows.map((row) => {
+          const r = row as Record<string, unknown>;
+          return {
+            reason: (r.reason as string | null) ?? null,
+            notes: (r.notes as string | null) ?? null,
+          };
+        }),
+      );
+
       // Each resolver runs its own batched `.in()` query (or no-ops on an
       // empty id list); errors degrade to `data ?? []` → an empty map, so a
       // failed lookup falls back to the generic type label rather than
       // breaking the page. mergeReferenceLabelMaps merges this page's 3
-      // maps into one before attach — no network I/O beyond the 3 awaits.
-      const [orderLabels, returnLabels, bundleLabels] = await Promise.all([
+      // maps into one before attach — no network I/O beyond the 4 awaits.
+      const [orderLabels, returnLabels, bundleLabels, poNumberByReceipt] = await Promise.all([
         resolveOrderNumbers(orgId, idsByType.order_request ?? []),
         resolveReturnNumbers(orgId, idsByType.return ?? []),
         resolveBundleNames(orgId, idsByType.bundle ?? []),
+        resolveReceiptPoNumbers(orgId, receiptLineIds),
       ]);
       const pageLabelMap = mergeReferenceLabelMaps([orderLabels, returnLabels, bundleLabels]);
 
       const mapped = rows.map((row) => {
         const r = row as Record<string, unknown>;
         const actor = r.actor as MovementRow['actor'] | MovementRow['actor'][] | null;
+        const rawReason = (r.reason as string | null) ?? null;
+        const rawNotes = (r.notes as string | null) ?? null;
+        // Issue 3/P5 parity: `reason` resolves pre-0231 'receipt_line' rows
+        // to 'PO {number}' (or the masked 'PO receipt' fallback) HERE, before
+        // `notes` is masked below — mirrors activity.ts's movementEvents
+        // mapping exactly (reason computed from the raw notes uuid, then
+        // notes itself masked to null for the same row).
+        const isReceiptLine = rawReason === 'receipt_line';
         return {
           id: r.id as string,
           movement_type: r.movement_type as string,
@@ -539,11 +611,8 @@ export default function ItemDetail() {
           previous_quantity: Number(r.previous_quantity) || 0,
           new_quantity: Number(r.new_quantity) || 0,
           moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
-          reason: (r.reason as string | null) ?? null,
-          notes: movementNotesForDisplay(
-            (r.reason as string | null) ?? null,
-            (r.notes as string | null) ?? null,
-          ),
+          reason: isReceiptLine ? receiptLineSummary(rawNotes, poNumberByReceipt) : rawReason,
+          notes: movementNotesForDisplay(rawReason, rawNotes),
           created_at: r.created_at as string,
           actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
           reference_type: (r.reference_type as string | null) ?? null,

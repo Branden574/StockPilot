@@ -10,7 +10,10 @@
  *    null on rows written before 0231 — those show NO number, never "0".
  *  - Receipts written before migration 0231 carry the internal reason
  *    'receipt_line' (their notes column holds the receipt id). New rows carry
- *    'PO {po_number}'. Old rows map to the generic 'PO receipt' label.
+ *    'PO {po_number}'. Old rows resolve to 'PO {po_number}' too when the
+ *    screen's batched receipt→PO lookup succeeds (Movement/Activity P5,
+ *    `receiptLineSummary`); otherwise (map empty/unresolved) they fall back
+ *    to the generic 'PO receipt' label — never the raw uuid.
  */
 
 export interface MovementAmountInput {
@@ -42,9 +45,65 @@ export function movementAmount(m: MovementAmountInput): MovementAmount {
 }
 
 /** Maps the pre-0231 internal 'receipt_line' reason to a human label; every
- *  other reason (including the new 'PO {number}') passes through verbatim. */
+ *  other reason (including the new 'PO {number}') passes through verbatim.
+ *  Superseded by `receiptLineSummary` for rows where a resolver map is
+ *  available (Movement/Activity P5) — kept as the unconditional fallback
+ *  used when no map was fetched at all, and as the literal string
+ *  `receiptLineSummary` itself falls back to when a row is unresolvable. */
 export function movementReasonLabel(reason: string | null): string | null {
   return reason === 'receipt_line' ? 'PO receipt' : reason;
+}
+
+/**
+ * Matches a bare (unbraced) UUID — mirrors the web's `UUID_RE` in
+ * `apps/web/src/server/services/activity.ts` exactly. Pre-0231
+ * 'receipt_line' rows stash a receipt id (as text) in `notes`; this guards
+ * `collectReceiptLineIds` against ever batching a malformed/non-uuid value
+ * into the `.in()` resolver query.
+ */
+export const RECEIPT_LINE_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Movement/Activity P5 (mobile web-parity gap): pre-0231 rows written by the
+ * old post_receipt_v2 carry the internal reason 'receipt_line' with the
+ * receipt id in notes. Given a resolver map (receipt id → po_number, fetched
+ * by the screen via a batched `.in()` query — see resolveReceiptPoNumbers in
+ * app/item/[id].tsx), returns the human summary: 'PO {number}', or the
+ * existing masked fallback 'PO receipt' when unresolvable (map empty, RLS
+ * degraded, receipt/PO deleted, or notes isn't a recognized uuid). Mirrors
+ * `receiptLineSummary` in the web's activity.ts EXACTLY — same signature,
+ * same fallback string, same trim-then-lookup semantics. Never leaks the raw
+ * uuid: every branch returns a human string. Exported for unit tests.
+ */
+export function receiptLineSummary(
+  notes: string | null,
+  poNumberByReceipt: Map<string, string>,
+): string {
+  const rid = (notes ?? '').trim();
+  const po = poNumberByReceipt.get(rid);
+  return po ? `PO ${po}` : 'PO receipt';
+}
+
+/**
+ * Collects the receipt ids referenced by pre-0231 'receipt_line' rows on
+ * THIS page so they can be resolved to PO numbers in one batched query (same
+ * pattern as `collectReferenceIdsByType` in movement-references.ts). Mirrors
+ * the web's `collectReceiptLineIds` in activity.ts exactly. Exported for unit
+ * tests; the actual `.in()` query lives in app/item/[id].tsx.
+ */
+export function collectReceiptLineIds(
+  rows: { reason: string | null; notes: string | null }[],
+): string[] {
+  return [
+    ...new Set(
+      rows
+        .filter(
+          (m) => m.reason === 'receipt_line' && RECEIPT_LINE_UUID_RE.test((m.notes ?? '').trim()),
+        )
+        .map((m) => (m.notes as string).trim()),
+    ),
+  ];
 }
 
 /**
