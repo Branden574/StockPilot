@@ -51,8 +51,11 @@ insert into public.inventory_items
   values (:item, :org, :whA, 'SKU-0237', 'Claim Item 0237', 100, 'active', 'none')
   on conflict (id) do nothing;
 
-insert into public.order_requests (id, organization_id, warehouse_id, status, fulfillment_type)
-  values (:ordr, :org, :whA, 'pick_slip_generated', 'pickup') on conflict (id) do nothing;
+-- source defaults to 'internal', which requires requester_user_id or
+-- requester_email (order_requests_identity_chk, 0116/0251).
+insert into public.order_requests
+  (id, organization_id, warehouse_id, status, fulfillment_type, requester_user_id)
+  values (:ordr, :org, :whA, 'pick_slip_generated', 'pickup', :mgr) on conflict (id) do nothing;
 insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested)
   values (:line, :ordr, :item, 5) on conflict (id) do nothing;
 

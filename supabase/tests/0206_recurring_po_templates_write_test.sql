@@ -18,6 +18,21 @@
 --
 -- Namespace: fc020600 — distinct from all other test files.
 -- Wrapped in begin/rollback — nothing leaks.
+--
+-- ⚠ REAL BUG (found 2026-07-16, NOT fixture drift — left failing on purpose):
+-- migration 0249_recurring_po_templates_has_permission.sql used
+-- `alter policy ... with check (...)` on recurring_po_templates_insert/_update
+-- to OR-in a has_permission() escape hatch. `alter policy` REPLACES the whole
+-- WITH CHECK expression rather than extending it, so it silently dropped the
+-- location_in_org()/supplier_in_org() FK-org-consistency guards 0206 added.
+-- Confirmed live in pg_policies: current insert/update WITH CHECK is only
+-- `has_org_role(...) OR has_permission(...)` — no FK guard at all. Net effect:
+-- any manager (or any user granted purchase_orders:manage) can attach a
+-- cross-org supplier_id or destination_location_id to a recurring PO
+-- template — a live multi-tenant FK leak. Tests 3, 4, 6, 9 below fail against
+-- this regression and MUST NOT be "fixed" by loosening the assertions — the
+-- fix belongs in a new migration that recreates the WITH CHECK combining
+-- (has_org_role OR has_permission) AND location_in_org AND supplier_in_org.
 
 begin;
 

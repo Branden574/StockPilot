@@ -29,10 +29,14 @@ insert into public.warehouses (id, organization_id, name, code) values
   (:wh, :orgA, 'OAtt WH', 'OATT');
 -- 'completed' is an ATTACHABLE status (0143 insert policy requires one).
 -- The transition guard is BEFORE UPDATE only, so a direct seed insert is fine.
+-- fulfillment_type defaults to 'delivery', which requires delivery_charter_id
+-- (order_requests_delivery_target_chk, added 0110/0254); this test doesn't
+-- care about delivery vs pickup, so pin 'pickup' to keep delivery_charter_id
+-- null.
 insert into public.order_requests
-  (id, organization_id, warehouse_id, status, source, requester_user_id)
+  (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type)
 values
-  (:ord, :orgA, :wh, 'completed', 'internal', :mgr);
+  (:ord, :orgA, :wh, 'completed', 'internal', :mgr, 'pickup');
 
 -- ── Manager can attach (org + attachable-status + path-prefix binds pass) ───
 set local "request.jwt.claim.sub" to 'd0000000-0000-0000-0000-0000000000d1'; -- mgr
