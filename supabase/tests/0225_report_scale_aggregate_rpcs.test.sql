@@ -271,8 +271,8 @@ select results_eq(
   $$ select movement_type, movement_count, total_qty
        from public.report_movement_type_summary('ac022500-0000-0000-0000-000000000001'::uuid, now() - interval '30 days')
       order by movement_type $$,
-  $$ values ('adjust', 2::bigint, 9::numeric),
-            ('add',    2::bigint, 35::numeric),
+  $$ values ('add',    2::bigint, 35::numeric),
+            ('adjust', 2::bigint, 9::numeric),
             ('remove', 1::bigint, 10::numeric) $$,
   'movement_type_summary: per-type count + sum(abs(qty)), window + org scoped');
 

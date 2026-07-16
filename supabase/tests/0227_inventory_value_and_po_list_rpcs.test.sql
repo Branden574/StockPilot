@@ -292,7 +292,10 @@ select results_eq(
   $$ select total_count, total_value, open_count, committed_value,
             open_supplier_count, inbound_count, next_eta_po_number, avg_lead_days
        from public.purchase_orders_stats('ac022700-0000-0000-0000-000000000001'::uuid, null) $$,
-  $$ values (8::bigint, 2080::numeric, 4::bigint, 750::numeric,
+  -- total_value = 1180 (100+200+50+400+300+60+70), excluding the cancelled
+  -- PO-1008's 900 — migration 0232 fixed total_value to exclude cancelled
+  -- orders; total_count (8) still counts every row, cancelled included.
+  $$ values (8::bigint, 1180::numeric, 4::bigint, 750::numeric,
              2::bigint, 3::bigint, 'PO-1003'::text, 7::numeric) $$,
   'stats (no scope): totals/open/committed/suppliers/inbound/next-ETA/avg-lead all hand-computed');
 
