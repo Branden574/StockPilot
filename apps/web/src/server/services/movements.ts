@@ -821,11 +821,14 @@ export async function getDashboardValueComparison(options: {
     };
   }
 
-  // mode === 'locations'. Dynamic import avoids any static import cycle between
-  // the services (warehouses.ts ↔ movements.ts) — same pattern warehouses.ts
-  // uses for WarehouseChartersService.
-  const { WarehousesService } = await import('./warehouses');
-  const warehouses = (await new WarehousesService(ctx).listNames()).slice(
+  // mode === 'locations'. Use the SAME warehouse set the card's location
+  // picker renders (getWarehousesForRequest → non-archived: active + inactive)
+  // so a warehouse offered in the picker always also appears as a by-location
+  // line — no "picked it, but it's missing from the overlay" gap. It's the
+  // request-cached list the dashboard already fetched, so this adds no query.
+  // (Dynamic import keeps movements.ts free of a static dashboard dependency.)
+  const { getWarehousesForRequest } = await import('@/lib/dashboard/request-cache');
+  const warehouses = (await getWarehousesForRequest(ctx.organizationId)).slice(
     0,
     VALUE_COMPARISON_LOCATION_CAP,
   );
