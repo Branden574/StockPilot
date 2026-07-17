@@ -30,8 +30,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
-import { groupBySizeRun } from '@stockpilot/core';
-
 import {
   ActiveFilterPill,
   FILTER_GENERIC_CHARTER_ID,
@@ -52,6 +50,10 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
 import { signItemImages, THUMB_TRANSFORM } from '@/lib/image-cache';
+import {
+  buildGroupedRows,
+  type GroupedRow as InventoryGroupedRow,
+} from '@/lib/inventory-grouping';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -81,18 +83,11 @@ interface Item {
 
 const PIPS = [ACCENT.pipOrange, ACCENT.pipAmber, ACCENT.pipTeal, undefined, undefined, undefined];
 
-/** One FlatList entry: a size-run group header, or a plain item row (either a
- *  standalone item or a member of an expanded run). */
-type GroupedRow =
-  | {
-      kind: 'header';
-      key: string;
-      styleKey: string;
-      baseName: string;
-      total: number;
-      sizeCount: number;
-    }
-  | { kind: 'row'; key: string; item: Item };
+/** One FlatList entry: a size-run header, a same-SKU collapse header (Model B),
+ *  or a plain item row (a standalone item, an expanded size-run member, or an
+ *  expanded SKU-group placement). Shared shape + composition live in
+ *  lib/inventory-grouping.ts so this list matches the web table exactly. */
+type GroupedRow = InventoryGroupedRow<Item>;
 
 // Stable, module-scoped helpers so the FlatList doesn't see a new
 // keyExtractor / header element on every render — both are common
@@ -126,6 +121,11 @@ export default function Inventory() {
   // by default. (Grouping is per loaded page here — the web run-aware pagination
   // is a heavier client-load refactor; PAGE_SIZE 50 keeps splits rare.)
   const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(new Set());
+  // Model B: a single SKU can be MULTIPLE inventory_items rows (one per
+  // charter/bin/warehouse placement — migration 0234). Collapse those into one
+  // header row on this page, matching the web Items table. Tracks the expanded
+  // SKUs; separate from the size-run set above so their keys never collide.
+  const [expandedSkuGroups, setExpandedSkuGroups] = React.useState<Set<string>>(new Set());
   const listRef = React.useRef<FlatList<GroupedRow> | null>(null);
   const [filter, setFilter] = React.useState<FilterState>(EMPTY_FILTER_STATE);
   const [sheetOpen, setSheetOpen] = React.useState(false);
@@ -453,36 +453,41 @@ export default function Inventory() {
     });
   }, []);
 
-  // Group this page's items into size runs (2+ same-base sized items), then
-  // flatten to a FlatList render list — a header per run, its member rows only
-  // when expanded, and standalone items as plain rows.
-  const groupedRows = React.useMemo<GroupedRow[]>(() => {
-    const grouped = groupBySizeRun<Item>(items, (it) => ({
-      key: it.id,
-      name: it.name,
-      quantity: Number(it.quantity_on_hand) || 0,
-      groupable: true,
-    }));
-    const out: GroupedRow[] = [];
-    for (const g of grouped) {
-      if (g.kind === 'single') {
-        out.push({ kind: 'row', key: g.entry.id, item: g.entry });
-      } else {
-        out.push({
-          kind: 'header',
-          key: `g:${g.group.styleKey}`,
-          styleKey: g.group.styleKey,
-          baseName: g.group.baseName,
-          total: g.group.total,
-          sizeCount: g.group.sizeCount,
-        });
-        if (expandedGroups.has(g.group.styleKey)) {
-          for (const m of g.group.members) out.push({ kind: 'row', key: m.id, item: m });
-        }
-      }
-    }
-    return out;
-  }, [items, expandedGroups]);
+  const toggleSkuGroup = React.useCallback((sku: string) => {
+    setExpandedSkuGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(sku)) next.delete(sku);
+      else next.add(sku);
+      return next;
+    });
+  }, []);
+
+  // Secondary line for an expanded SKU-group placement — a charter or location
+  // label so same-SKU placements read distinctly (the SKU itself is shared and
+  // would be redundant). Placement bins aren't in this list's select, so this
+  // uses the best available differentiator; null falls back to the SKU.
+  const placementLabelFor = React.useCallback(
+    (it: Item): string | null => {
+      const charter = it.charter_id ? charterMap.get(it.charter_id) : null;
+      const loc = it.primary_location_id ? locationMap.get(it.primary_location_id) : null;
+      return charter ?? loc ?? null;
+    },
+    [charterMap, locationMap],
+  );
+
+  // Two-level display grouping (mobile twin of the web inventory table): first
+  // collapse same-SKU placements into one header (Model B), then apply apparel
+  // size-run grouping on top of the remaining singles. Pure + tested in
+  // lib/inventory-grouping.ts.
+  const groupedRows = React.useMemo<GroupedRow[]>(
+    () =>
+      buildGroupedRows<Item>(items, {
+        expandedSizeRuns: expandedGroups,
+        expandedSkuGroups,
+        placementLabelFor,
+      }),
+    [items, expandedGroups, expandedSkuGroups, placementLabelFor],
+  );
 
   const renderItem = React.useCallback(
     ({ item: row, index }: { item: GroupedRow; index: number }) => {
@@ -499,9 +504,25 @@ export default function Inventory() {
           />
         );
       }
+      if (row.kind === 'sku-header') {
+        return (
+          <SkuGroupHeaderRow
+            name={row.name}
+            total={row.total}
+            reorderPoint={row.reorderPoint}
+            placementCount={row.placementCount}
+            lifecycle={row.status}
+            expanded={expandedSkuGroups.has(row.sku)}
+            onToggle={() => toggleSkuGroup(row.sku)}
+            index={index}
+            isLast={index === groupedRows.length - 1}
+          />
+        );
+      }
       const itemRow = (
         <ItemRow
           item={row.item}
+          placementLabel={row.placementLabel}
           isLast={index === groupedRows.length - 1}
           index={index}
           onItemPress={onItemPress}
@@ -516,7 +537,16 @@ export default function Inventory() {
         itemRow
       );
     },
-    [groupedRows.length, expandedGroups, toggleGroup, onItemPress, selectMode, onToggleSelect],
+    [
+      groupedRows.length,
+      expandedGroups,
+      toggleGroup,
+      expandedSkuGroups,
+      toggleSkuGroup,
+      onItemPress,
+      selectMode,
+      onToggleSelect,
+    ],
   );
 
   return (
@@ -732,8 +762,110 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
   );
 });
 
+/**
+ * Collapsed status for a SKU-group header — mirrors the web StockStatusBadge
+ * precedence: a non-active lifecycle (archived/discontinued) wins over stock,
+ * otherwise OUT/LOW/OK derives from the SUMMED total vs the representative
+ * reorder point (see stock-status-badge.tsx + group-by-sku's rollupStatus).
+ */
+function skuHeaderStatus(
+  total: number,
+  reorderPoint: number,
+  lifecycle: 'active' | 'archived' | 'discontinued',
+): { status: 'ok' | 'warn' | 'crit' | 'default'; label: string } {
+  if (lifecycle === 'archived') return { status: 'default', label: 'ARCHIVED' };
+  if (lifecycle === 'discontinued') return { status: 'crit', label: 'DISC' };
+  if (total <= 0) return { status: 'crit', label: 'OUT' };
+  if (reorderPoint > 0 && total <= reorderPoint) return { status: 'warn', label: 'LOW' };
+  return { status: 'ok', label: 'OK' };
+}
+
+/**
+ * Collapsible SKU-group header row — one per SKU that has MORE than one
+ * placement (Model B: a single SKU can be several inventory_items rows, one per
+ * charter/bin/warehouse). Shows the SKU's SUMMED on-hand and rolled-up status;
+ * tapping expands the individual placement rows (each opens its own item).
+ * DISPLAY ONLY — `total` is a read-time sum, never a written record.
+ */
+const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
+  name,
+  total,
+  reorderPoint,
+  placementCount,
+  lifecycle,
+  expanded,
+  onToggle,
+  index,
+  isLast,
+}: {
+  name: string;
+  total: number;
+  reorderPoint: number;
+  placementCount: number;
+  lifecycle: 'active' | 'archived' | 'discontinued';
+  expanded: boolean;
+  onToggle: () => void;
+  index: number;
+  isLast: boolean;
+}) {
+  const { c } = useTheme();
+  const badge = skuHeaderStatus(total, reorderPoint, lifecycle);
+  return (
+    <Pressable
+      onPress={onToggle}
+      accessibilityRole="button"
+      accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${name}, ${placementCount} placements`}
+      style={({ pressed }) => ({
+        backgroundColor: c.paper2,
+        borderTopWidth: index === 0 ? 1 : 0,
+        borderBottomWidth: 1,
+        borderLeftWidth: 1,
+        borderRightWidth: 1,
+        borderColor: c.hair,
+        borderTopLeftRadius: index === 0 ? 10 : 0,
+        borderTopRightRadius: index === 0 ? 10 : 0,
+        borderBottomLeftRadius: isLast ? 10 : 0,
+        borderBottomRightRadius: isLast ? 10 : 0,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        paddingVertical: 15,
+        paddingHorizontal: 14,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <ChevronRight
+        size={18}
+        color={c.ink4}
+        strokeWidth={2}
+        style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
+      />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Mono
+          color={c.ink}
+          size={15.5}
+          numberOfLines={1}
+          style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
+        >
+          {name}
+        </Mono>
+        <Mono size={11} color={c.ink4} tracking={0.04} style={{ marginTop: 4 }}>
+          {placementCount} placement{placementCount === 1 ? '' : 's'}
+        </Mono>
+      </View>
+      <View style={{ alignItems: 'flex-end', gap: 6 }}>
+        <Mono size={17} color={c.ink} style={{ fontFamily: FONT.display, letterSpacing: -0.31 }}>
+          {total}
+        </Mono>
+        <Pill status={badge.status}>{badge.label}</Pill>
+      </View>
+    </Pressable>
+  );
+});
+
 const ItemRow = React.memo(function ItemRow({
   item,
+  placementLabel,
   isLast,
   index,
   onItemPress,
@@ -741,6 +873,9 @@ const ItemRow = React.memo(function ItemRow({
   onToggleSelect,
 }: {
   item: Item;
+  /** When set (an expanded SKU-group placement), replaces the SKU secondary
+   *  line with a charter/location label so same-SKU placements read apart. */
+  placementLabel?: string | null;
   isLast: boolean;
   index: number;
   onItemPress: (id: string) => void;
@@ -788,7 +923,7 @@ const ItemRow = React.memo(function ItemRow({
             {item.name}
           </Mono>
           <Mono size={11} color={c.ink4} tracking={0.04} numberOfLines={1} style={{ marginTop: 4 }}>
-            {item.sku}
+            {placementLabel ?? item.sku}
           </Mono>
         </View>
         <View style={{ alignItems: 'flex-end', gap: 6 }}>
