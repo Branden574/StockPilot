@@ -154,6 +154,39 @@ describe('ValueChartInteractive', () => {
     expect(url).toContain('mode=previous');
   });
 
+  it('keeps the last-fetched line dimmed while the next selection loads (no snap to seed)', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    let resolveSecond!: (r: Response) => void;
+    fetchMock
+      .mockResolvedValueOnce(okJson(previousPayload('retail', 4000, 3000))) // Retail toggle
+      .mockImplementationOnce(
+        () => new Promise<Response>((res) => (resolveSecond = res)), // location change → left pending
+      );
+    renderCard();
+
+    // Retail toggle resolves → primary line at 4000.
+    await user.click(screen.getByRole('button', { name: 'Retail' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('big-chart')).toHaveAttribute('data-first', '4000'),
+    );
+
+    // Change location → second fetch stays in flight.
+    await user.click(screen.getByRole('button', { name: 'All locations' }));
+    await user.click(await screen.findByText('Main Warehouse'));
+
+    // While loading: the 4000 line is RETAINED (not the SSR seed's 100) and the
+    // chart is marked busy so it reads as updating rather than final.
+    const chart = screen.getByTestId('big-chart');
+    expect(chart).toHaveAttribute('data-first', '4000');
+    expect(chart.closest('[aria-busy="true"]')).not.toBeNull();
+
+    // Resolve → updates to the new selection's line.
+    resolveSecond(okJson(previousPayload('retail', 6000, 5500)));
+    await waitFor(() =>
+      expect(screen.getByTestId('big-chart')).toHaveAttribute('data-first', '6000'),
+    );
+  });
+
   it('location filter refetches the primary line scoped to the chosen warehouse', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     fetchMock.mockResolvedValue(okJson(previousPayload('cost', 5000, 4500)));

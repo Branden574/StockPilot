@@ -37,7 +37,14 @@ vi.mock('./context', async () => {
   };
 });
 
+// The 'locations' compare mode sources warehouses from the request-cached
+// dashboard helper (same set as the card's picker), not ctx.supabase — mock it.
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getWarehousesForRequest: vi.fn(async () => []),
+}));
+
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import {
   MovementsService,
   getDashboardHistory,
@@ -876,10 +883,10 @@ describe('getDashboardValueComparison', () => {
       id: `wh-${i + 1}`,
       name: `WH${i + 1}`,
     }));
-    const stub = makeSupabaseStub({
-      'warehouses.select': { data: warehouses, error: null },
-      // Unconfigured rpc → null data → a length-`days` all-zero array.
-    });
+    // Warehouses come from the request-cached picker source (non-archived),
+    // not ctx.supabase; the RPC (unconfigured) still yields all-zero series.
+    vi.mocked(getWarehousesForRequest).mockResolvedValue(warehouses);
+    const stub = makeSupabaseStub({});
     const ctx = makeServiceContext(stub.client);
 
     const result = await getDashboardValueComparison({

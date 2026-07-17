@@ -206,12 +206,13 @@ export function ValueChartInteractive({
     };
   }, [basis, warehouseId, compareMode, initialWarehouseId, isDefault]);
 
-  // Derived single line: the SSR seed unless a fetched primary matches the
-  // current (basis, warehouse). Returning to the default therefore always shows
-  // the seed without re-fetching, and a stale fetch for a different selection is
-  // ignored (its key won't match).
-  const singleUrl = buildUrl('previous', basis, warehouseId);
-  const singlePoints = single && single.key === singleUrl ? single.points : initialPoints;
+  // Derived single line. At the default view we always show the SSR seed
+  // (no re-fetch). Off-default we prefer the last fetched primary line and
+  // KEEP it while the next selection loads — rather than snapping back to the
+  // cost/all-locations seed under a now-mismatched subtitle (the brief flash
+  // the review flagged). The chart dims (below) whenever a fetch is in flight,
+  // so a retained line reads as "updating", not final.
+  const singlePoints = isDefault ? initialPoints : (single?.points ?? initialPoints);
 
   // Show the overlay only once THIS mode's data has arrived (guards against a
   // stale response from a previously-selected mode flashing in).
@@ -351,11 +352,19 @@ export function ValueChartInteractive({
   return (
     <Card className={className}>
       <CardHead title="Inventory value · 30 days" subtitle={subtitle} action={controls} />
-      {chartSeries ? (
-        <BigChart series={chartSeries} height={300} />
-      ) : (
-        <BigChart data={singlePoints} height={300} />
-      )}
+      <div
+        className={cn(
+          'transition-opacity duration-200',
+          displayLoading && 'opacity-50',
+        )}
+        aria-busy={displayLoading}
+      >
+        {chartSeries ? (
+          <BigChart series={chartSeries} height={300} />
+        ) : (
+          <BigChart data={singlePoints} height={300} />
+        )}
+      </div>
       {displayError ? (
         <div className="px-5 pb-3.5 pt-1 text-[12px] text-[hsl(var(--destructive))]" role="alert">
           {displayError}
