@@ -41,10 +41,17 @@ export async function broadcastOrderChanged(
   await broadcastToChannel(`orders:${organizationId}`, 'changed', { orderId });
 }
 
-/** Permission-change ping (mig 0207+). See reference_realtime_permission_push_broadcast. */
+/**
+ * Permission-change ping (mig 0207+). See reference_realtime_permission_push_broadcast.
+ * `permission` + `granted` are OPTIONAL routing labels so the affected user's
+ * toast can name the exact permission ("You were granted …") instead of a
+ * generic message; a permission KEY is a static app concept, not sensitive
+ * data, so it's safe on this public channel. Omitting them (older callers)
+ * degrades cleanly to the generic toast on the client.
+ */
 export async function broadcastPermissionsChanged(
   organizationId: string,
-  target: { role?: string; userId?: string },
+  target: { role?: string; userId?: string; permission?: string; granted?: boolean | null },
 ): Promise<void> {
   await broadcastToChannel(`perms:${organizationId}`, 'changed', target);
 }

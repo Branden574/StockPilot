@@ -123,7 +123,7 @@ export async function setRolePermissionOverrideAction(input: {
       },
       ctx,
     );
-    await broadcastPermissionsChanged(ctx.organizationId, { role });
+    await broadcastPermissionsChanged(ctx.organizationId, { role, permission, granted });
     revalidatePath('/dashboard/settings/roles');
     return ok(null);
   } catch (e) {
@@ -194,7 +194,7 @@ export async function setUserPermissionOverrideAction(input: {
       },
       ctx,
     );
-    await broadcastPermissionsChanged(ctx.organizationId, { userId });
+    await broadcastPermissionsChanged(ctx.organizationId, { userId, permission, granted });
     revalidatePath('/dashboard/settings/roles');
     return ok(null);
   } catch (e) {
