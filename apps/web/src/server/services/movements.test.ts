@@ -42,6 +42,7 @@ import {
   MovementsService,
   getDashboardHistory,
   getDashboardSummary,
+  getDashboardValueComparison,
   getThirtyDayMetrics,
 } from './movements';
 import { ServiceError } from './context';
@@ -790,5 +791,126 @@ describe('getDashboardHistory', () => {
     mockedCtx.value = makeServiceContext(stub.client);
 
     await expect(getDashboardHistory()).rejects.toBeInstanceOf(ServiceError);
+  });
+});
+
+describe('getDashboardValueComparison', () => {
+  // On-demand comparison series behind the value card's Compare menu. Every
+  // mode reads the dashboard_value_series RPC (migration 0275) via ctx.supabase.
+  it("'previous' fetches a days*2 window and splits it older/newer", async () => {
+    // day_index 0 = oldest. 10 lands in the previous half (index 0), 20 at the
+    // start of the current half (index 30), 99 at the newest edge (index 59).
+    const stub = makeSupabaseStub({
+      'rpc:dashboard_value_series': {
+        data: [
+          { day_index: 0, value: 10 },
+          { day_index: 30, value: 20 },
+          { day_index: 59, value: '99.0000' },
+        ],
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client);
+
+    const result = await getDashboardValueComparison({
+      ctx,
+      days: 30,
+      basis: 'cost',
+      mode: 'previous',
+    });
+
+    // One RPC call for the double window.
+    expect(stub.rpcCalls).toEqual([
+      {
+        name: 'dashboard_value_series',
+        args: {
+          p_organization_id: 'org-test',
+          p_warehouse_id: null,
+          p_days: 60,
+          p_basis: 'cost',
+        },
+      },
+    ]);
+    expect(result.mode).toBe('previous');
+    expect(result.days).toBe(30);
+    expect(result.series.map((s) => s.label)).toEqual([
+      'Previous period',
+      'Current period',
+    ]);
+    expect(result.series[0]?.data).toHaveLength(30);
+    expect(result.series[1]?.data).toHaveLength(30);
+    expect(result.series[0]?.data[0]).toBe(10);
+    expect(result.series[1]?.data[0]).toBe(20);
+    // numeric-string coercion at the newest edge of the current half.
+    expect(result.series[1]?.data[29]).toBe(99);
+  });
+
+  it("'retail_vs_cost' fetches the same window on both bases", async () => {
+    const stub = makeSupabaseStub({
+      'rpc:dashboard_value_series': {
+        data: [{ day_index: 0, value: 5 }],
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client);
+
+    const result = await getDashboardValueComparison({
+      ctx,
+      warehouseId: 'wh-7',
+      days: 30,
+      basis: 'cost',
+      mode: 'retail_vs_cost',
+    });
+
+    expect(result.series.map((s) => s.label)).toEqual(['Cost', 'Retail (approx.)']);
+    expect(result.series[0]?.data).toHaveLength(30);
+    expect(result.series[1]?.data).toHaveLength(30);
+    // Two RPC calls, same window/warehouse, one per basis.
+    expect(stub.rpcCalls).toHaveLength(2);
+    expect(stub.rpcCalls[0]?.args).toMatchObject({ p_days: 30, p_warehouse_id: 'wh-7', p_basis: 'cost' });
+    expect(stub.rpcCalls[1]?.args).toMatchObject({ p_days: 30, p_warehouse_id: 'wh-7', p_basis: 'retail' });
+  });
+
+  it("'locations' lists warehouses, caps at 6, one series per warehouse", async () => {
+    const warehouses = Array.from({ length: 8 }, (_, i) => ({
+      id: `wh-${i + 1}`,
+      name: `WH${i + 1}`,
+    }));
+    const stub = makeSupabaseStub({
+      'warehouses.select': { data: warehouses, error: null },
+      // Unconfigured rpc → null data → a length-`days` all-zero array.
+    });
+    const ctx = makeServiceContext(stub.client);
+
+    const result = await getDashboardValueComparison({
+      ctx,
+      days: 90,
+      basis: 'retail',
+      mode: 'locations',
+    });
+
+    // Capped at VALUE_COMPARISON_LOCATION_CAP (6).
+    expect(result.series).toHaveLength(6);
+    expect(result.series.map((s) => s.label)).toEqual([
+      'WH1', 'WH2', 'WH3', 'WH4', 'WH5', 'WH6',
+    ]);
+    expect(result.series[0]?.data).toHaveLength(90);
+    // One RPC per rendered warehouse, each scoped to that warehouse id.
+    expect(stub.rpcCalls).toHaveLength(6);
+    expect(stub.rpcCalls.map((c) => (c.args as { p_warehouse_id: string }).p_warehouse_id)).toEqual([
+      'wh-1', 'wh-2', 'wh-3', 'wh-4', 'wh-5', 'wh-6',
+    ]);
+    expect(stub.rpcCalls.every((c) => (c.args as { p_basis: string }).p_basis === 'retail')).toBe(true);
+  });
+
+  it('throws ServiceError when the value RPC errors', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:dashboard_value_series': { data: null, error: { message: 'boom' } },
+    });
+    const ctx = makeServiceContext(stub.client);
+
+    await expect(
+      getDashboardValueComparison({ ctx, days: 30, basis: 'cost', mode: 'previous' }),
+    ).rejects.toBeInstanceOf(ServiceError);
   });
 });

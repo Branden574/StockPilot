@@ -1,31 +1,28 @@
-import { BigChart } from '@/components/dashboard/big-chart';
-
-import { Card, CardHead } from './shared';
+import { ValueChartInteractive } from './value-chart-interactive';
 import type { DashboardWidgetProps } from './types';
 
 /**
- * Inventory-value-over-30-days line chart. Renders the bare Card (left 9 of 12
- * cols on lg); the page composes it into the shared chart-row grid alongside
- * the movements-breakdown card so the default layout is pixel-identical. When
- * the per-org layout hides/moves it the page falls back to a single-column
- * grid for whichever chart-row widget survives.
+ * Inventory-value line chart. Now a thin server wrapper (Unit C): it hands the
+ * server-rendered default series + the already-fetched warehouse list to the
+ * interactive client island, which owns the Card chrome, controls (location /
+ * basis / compare), and all on-demand fetching. The default view still renders
+ * from the SSR seed with ZERO extra fetches on dashboard load — the island only
+ * fetches when the operator changes a control.
+ *
+ * The page composes this into the shared chart-row grid via the `lg:col-span-9`
+ * class forwarded to the island's Card, so the default layout is pixel-identical.
  */
-export function ValueChartWidget({ valueSeries }: DashboardWidgetProps) {
+export function ValueChartWidget({
+  valueSeries,
+  warehouses,
+  warehouseFilter,
+}: DashboardWidgetProps) {
   return (
-    <Card className="lg:col-span-9">
-      <CardHead
-        title="Inventory value · 30 days"
-        subtitle="USD · cost basis · all locations"
-        chips={['All locations', 'Cost basis', '+ Compare']}
-      />
-      <BigChart data={valueSeries} height={300} />
-      <div className="flex justify-between px-5 pb-3.5 font-mono text-[11px] text-[var(--ed-ink-4)]">
-        <span>30 days ago</span>
-        <span>3 weeks ago</span>
-        <span>2 weeks ago</span>
-        <span>1 week ago</span>
-        <span>Today</span>
-      </div>
-    </Card>
+    <ValueChartInteractive
+      className="lg:col-span-9"
+      initialSeries={valueSeries}
+      warehouses={warehouses}
+      initialWarehouseId={warehouseFilter}
+    />
   );
 }

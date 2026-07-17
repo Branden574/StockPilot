@@ -695,6 +695,149 @@ export async function getDashboardHistory(
   return mapHistorySeries((data ?? []) as HistorySeriesRow[], rangeDays);
 }
 
+/** Basis for the on-demand value series: cost (unit_cost) or retail
+ *  (retail_price). Retail is APPROXIMATE — price held constant across past
+ *  days, reconstructed-only (see migration 0275 / dashboard_value_series). */
+export type ValueBasis = 'cost' | 'retail';
+
+/** Comparison modes the dashboard value card's Compare menu offers. */
+export type ValueComparisonMode = 'previous' | 'locations' | 'retail_vs_cost';
+
+/** One labeled line for the multi-series BigChart. `data` is oldest→newest,
+ *  each element a day's inventory value; length equals the requested window
+ *  `days` (for 'previous' each of the two lines is `days` long — split from a
+ *  days*2 fetch). */
+export interface ValueComparisonSeries {
+  label: string;
+  data: number[];
+}
+
+export interface ValueComparison {
+  mode: ValueComparisonMode;
+  /** Window length (in days) of each returned series line — 30 or 90. */
+  days: number;
+  basis: ValueBasis;
+  series: ValueComparisonSeries[];
+}
+
+/** Max per-warehouse lines the 'locations' comparison renders — keeps the
+ *  overlay legible and caps the parallel RPC fan-out. */
+export const VALUE_COMPARISON_LOCATION_CAP = 6;
+
+/** One row of dashboard_value_series (migration 0275). value is numeric → may
+ *  arrive as a number or a numeric string, so the mapper coerces with Number(). */
+interface ValueSeriesRow {
+  day_index: number;
+  value: number | string | null;
+}
+
+/** Fills a length-`days` array (oldest→newest, index = day_index) from
+ *  dashboard_value_series rows. The RPC emits one row per day_index 0..days-1;
+ *  the bounds guard is defensive. */
+function mapValueSeriesRows(rows: ValueSeriesRow[], days: number): number[] {
+  const out = new Array<number>(days).fill(0);
+  for (const r of rows) {
+    const d = r.day_index;
+    if (d < 0 || d >= days) continue;
+    const v = Number(r.value);
+    out[d] = Number.isFinite(v) ? v : 0;
+  }
+  return out;
+}
+
+/** One dashboard_value_series RPC call → a length-`days` value array. Called via
+ *  the caller's user client (SECURITY INVOKER RPC), so RLS scopes every row. */
+async function fetchValueSeries(
+  ctx: ServiceContext,
+  opts: { warehouseId?: string | null; days: number; basis: ValueBasis },
+): Promise<number[]> {
+  const { data, error } = await ctx.supabase.rpc('dashboard_value_series', {
+    p_organization_id: ctx.organizationId,
+    p_warehouse_id: opts.warehouseId ?? null,
+    p_days: opts.days,
+    p_basis: opts.basis,
+  });
+  if (error) throw new ServiceError('internal_error', error.message);
+  return mapValueSeriesRows((data ?? []) as ValueSeriesRow[], opts.days);
+}
+
+/**
+ * On-demand comparison/overlay series for the dashboard value card's Compare
+ * menu + basis toggle. NOT called on the eager dashboard render — only when the
+ * user interacts (via GET /api/dashboard/value-series). Every mode reads
+ * dashboard_value_series (0275), the reconstructed value path, so the whole
+ * card is internally consistent (and the retail line is APPROXIMATE — see 0275).
+ *
+ *   • 'previous'       — fetch a window twice as long (days*2) and split at the
+ *                        midpoint: [0, days) = previous period, [days, 2·days) =
+ *                        current period (day_index 0 = oldest). Uses the RPC
+ *                        directly (getDashboardHistory only accepts 30/90, and
+ *                        2·90 also exceeds the snapshot depth 0230 backfilled).
+ *   • 'locations'      — one line per ACTIVE warehouse (RLS-scoped list), capped
+ *                        at VALUE_COMPARISON_LOCATION_CAP, one parallel RPC each.
+ *                        `warehouseId` is ignored — this mode IS the breakdown.
+ *   • 'retail_vs_cost' — same window, two lines (cost + retail).
+ *
+ * Pure-ish: takes ctx (falls back to withContext()); all DB access is the
+ * caller's user client, so org-scope + RLS are enforced inside.
+ */
+export async function getDashboardValueComparison(options: {
+  ctx?: ServiceContext;
+  warehouseId?: string | null;
+  days: number;
+  basis: ValueBasis;
+  mode: ValueComparisonMode;
+}): Promise<ValueComparison> {
+  const ctx = options.ctx ?? (await withContext());
+  const { days, basis, mode } = options;
+  const warehouseId = options.warehouseId ?? null;
+
+  if (mode === 'previous') {
+    const full = await fetchValueSeries(ctx, { warehouseId, days: days * 2, basis });
+    return {
+      mode,
+      days,
+      basis,
+      series: [
+        { label: 'Previous period', data: full.slice(0, days) },
+        { label: 'Current period', data: full.slice(days, days * 2) },
+      ],
+    };
+  }
+
+  if (mode === 'retail_vs_cost') {
+    const [cost, retail] = await Promise.all([
+      fetchValueSeries(ctx, { warehouseId, days, basis: 'cost' }),
+      fetchValueSeries(ctx, { warehouseId, days, basis: 'retail' }),
+    ]);
+    return {
+      mode,
+      days,
+      basis,
+      series: [
+        { label: 'Cost', data: cost },
+        { label: 'Retail (approx.)', data: retail },
+      ],
+    };
+  }
+
+  // mode === 'locations'. Dynamic import avoids any static import cycle between
+  // the services (warehouses.ts ↔ movements.ts) — same pattern warehouses.ts
+  // uses for WarehouseChartersService.
+  const { WarehousesService } = await import('./warehouses');
+  const warehouses = (await new WarehousesService(ctx).listNames()).slice(
+    0,
+    VALUE_COMPARISON_LOCATION_CAP,
+  );
+  const series = await Promise.all(
+    warehouses.map(async (wh) => ({
+      label: wh.name,
+      data: await fetchValueSeries(ctx, { warehouseId: wh.id, days, basis }),
+    })),
+  );
+  return { mode, days, basis, series };
+}
+
 /**
  * Per-item 14-day trend series for the inventory + books list rows.
  * Replaces the synthetic-noise sparklines that `inventory-table.tsx`
