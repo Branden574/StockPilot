@@ -94,6 +94,12 @@ export interface DashboardWidgetProps {
 
   // value-chart
   valueSeries: Array<{ value: number; label: string }>;
+  /**
+   * Org warehouses for the value card's interactive location filter. Sourced
+   * from the page's ALREADY-FETCHED, request-cached warehouse list (getWarehouses
+   * ForRequest) — passing it here adds ZERO round-trips to the dashboard load.
+   */
+  warehouses: Array<{ id: string; name: string }>;
 
   // movements-breakdown
   barValues: number[];

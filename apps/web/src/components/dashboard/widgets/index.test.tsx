@@ -69,6 +69,7 @@ function makeProps(overrides: Partial<DashboardWidgetProps> = {}): DashboardWidg
     movementsDelta: delta,
     warehouseFilter: null,
     valueSeries: Array.from({ length: 30 }, (_, i) => ({ value: 100 + i, label: `D-${30 - i}` })),
+    warehouses: [],
     barValues: Array(30).fill(1),
     breakdownRows: [{ label: 'Receive', share: 0.5, val: 10 }],
     analytics: { valueSeries: {}, byCategory: [], byWarehouse: [], movementBars: [] },

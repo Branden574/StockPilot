@@ -575,6 +575,9 @@ async function DashboardBody({
     },
     warehouseFilter,
     valueSeries,
+    // Already-fetched (request-cached) warehouse list — feeds the value card's
+    // interactive location filter without any extra round-trip.
+    warehouses: warehousesList,
     barValues,
     breakdownRows,
     analytics: {
