@@ -15,6 +15,7 @@ import {
 import Link from 'next/link';
 
 import { MetadataDiff } from '@/components/audit/metadata-diff';
+import { EditableMovementNote } from '@/components/movements/editable-movement-note';
 import { LocalDateTime } from '@/components/ui/local-datetime';
 import { referenceHref, referenceTypeLabel } from '@/lib/activity-references';
 import { formatAuditEvent } from '@/lib/audit/format';
@@ -30,6 +31,12 @@ interface ActivityFeedProps {
    * the org's full location list for the transfer dialog, so the map is free.
    */
   locationNames?: Record<string, string>;
+  /**
+   * When true, movement rows expose an add/edit-note affordance (the
+   * EditableMovementNote client island). Audit rows are never editable.
+   * Gated on `movements:edit_notes`; the server action + RPC re-check.
+   */
+  canEditNotes?: boolean;
 }
 
 interface VisualSpec {
@@ -81,7 +88,7 @@ function specFor(e: ActivityEvent): VisualSpec {
   }
 }
 
-export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
+export function ActivityFeed({ events, locationNames, canEditNotes = false }: ActivityFeedProps) {
   if (events.length === 0) {
     return (
       <div className="text-muted-foreground py-10 text-center text-sm">
@@ -230,11 +237,28 @@ export function ActivityFeed({ events, locationNames }: ActivityFeedProps) {
                     <span className="italic">{e.reason}</span>
                   </>
                 )}
-                {e.notes && (
+                {e.kind === 'movement' && canEditNotes && e.noteEditable ? (
                   <>
                     <span className="mx-1.5">·</span>
-                    <span className="italic">&ldquo;{e.notes}&rdquo;</span>
+                    {/* Small client island — the ONLY editable surface on a
+                        movement row. `e.id` is `m:<uuid>`; the RPC needs the
+                        raw uuid. Audit rows AND system-managed 'receipt_line'
+                        rows (noteEditable=false) fall through to the static
+                        branch below (never editable). */}
+                    <EditableMovementNote
+                      variant="inline"
+                      movementId={e.id.replace(/^m:/, '')}
+                      note={e.notes}
+                      canEdit
+                    />
                   </>
+                ) : (
+                  e.notes && (
+                    <>
+                      <span className="mx-1.5">·</span>
+                      <span className="italic">&ldquo;{e.notes}&rdquo;</span>
+                    </>
+                  )
                 )}
               </div>
               {/* Before/after diff drawer + changed_keys chip — audit rows

@@ -61,6 +61,14 @@ export interface ActivityEvent {
    * holds an internal receipt id, not user text. Audit: always null.
    */
   notes: string | null;
+  /**
+   * Whether this event's note is user-editable (drives the item feed's
+   * add/edit-note affordance, alongside the caller's `movements:edit_notes`
+   * permission). False for audit rows (never editable) AND for pre-0231
+   * 'receipt_line' movements, whose `notes` column holds a machine receipt
+   * reference the RPC refuses to overwrite (errcode 22023).
+   */
+  noteEditable: boolean;
   /** Display name of the actor (or "System") if attribution missing. */
   actor: string;
   actorEmail: string | null;
@@ -567,6 +575,9 @@ export class ActivityService {
         referenceLabel,
         reason,
         notes,
+        // receipt_line rows carry a system-managed note (machine receipt
+        // reference) — the RPC rejects edits, so never offer the affordance.
+        noteEditable: !isReceiptLine,
         actor: a.name,
         actorEmail: a.email,
         metadata: null,
@@ -593,6 +604,8 @@ export class ActivityService {
         referenceLabel: null,
         reason,
         notes: null,
+        // Audit rows never carry an editable movement note.
+        noteEditable: false,
         actor: a.name,
         actorEmail: a.email,
         metadata: meta,

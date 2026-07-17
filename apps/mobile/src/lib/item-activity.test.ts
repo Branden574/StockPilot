@@ -28,6 +28,7 @@ function movement(overrides: Partial<ActivityMovementInput> & { id: string }): A
     moved_quantity: null,
     reason: null,
     notes: null,
+    note_editable: true,
     created_at: '2026-07-10T00:00:00.000Z',
     actor: { full_name: 'Ada Lovelace', email: 'ada@example.com' },
     reference_type: null,

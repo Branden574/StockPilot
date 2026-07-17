@@ -76,6 +76,10 @@ export interface ActivityMovementInput {
   moved_quantity: number | null;
   reason: string | null;
   notes: string | null;
+  /** Whether this row's note is user-editable — false for system-managed
+   *  'receipt_line' rows. See MovementRow in app/item/[id].tsx. Rides through
+   *  untouched; mergeItemActivity never inspects it. */
+  note_editable: boolean;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
   reference_type: string | null;

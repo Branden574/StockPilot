@@ -56,6 +56,7 @@ import {
   collectReceiptLineIds,
   formatMovementRoute,
   movementAmount,
+  movementNoteEditable,
   movementNotesForDisplay,
   movementReasonLabel,
   receiptLineSummary,
@@ -67,6 +68,11 @@ import {
   referenceRoute,
   referenceTypeLabel,
 } from '@/lib/movement-references';
+import {
+  MOVEMENT_NOTE_MAX,
+  applyNoteToMovements,
+  normalizeMovementNote,
+} from '@/lib/movement-note';
 import {
   SERIAL_STATUSES,
   SERIAL_STATUS_LABELS,
@@ -142,6 +148,14 @@ interface MovementRow {
    *  rows stash an internal receipt uuid here — not real user text — but
    *  those rows are historical only; see movement-display.ts. */
   notes: string | null;
+  /**
+   * Whether this row's note is user-editable. false for pre-0231
+   * 'receipt_line' rows — their `notes` holds a machine receipt reference the
+   * RPC refuses to overwrite (errcode 22023). Computed from the RAW reason in
+   * `fetchMovementsPage` before it's resolved to a 'PO {number}' display
+   * string; mirrors the web's per-event `noteEditable`.
+   */
+  note_editable: boolean;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
   /**
@@ -413,6 +427,21 @@ export default function ItemDetail() {
   // items:update inside InventoryService.bulkUpdate.
   const canRestore =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'items:update'));
+  // Movement-note edit gate — mirrors the additive RLS/RPC gate exactly:
+  // manager-or-above OR the grantable 'movements:edit_notes' permission
+  // (mig 0274). Cosmetic only; PATCH /api/v1/movements/[id]/note re-asserts
+  // the same gate (and the SECURITY DEFINER RPC asserts it a third time), so a
+  // briefly over-shown control just 403s on save rather than leaking anything.
+  const canEditNotes =
+    isManager || (role !== null && can({ role: role as Role, permissions }, 'movements:edit_notes'));
+
+  // Optimistic reflect of a saved note edit across BOTH movement lists (the
+  // Movements tab and the Activity tab keep independent arrays, and the same
+  // row can appear in either). Pure helper is unit-tested in movement-note.ts.
+  const handleNoteSaved = React.useCallback((movementId: string, note: string | null) => {
+    setMovements((prev) => applyNoteToMovements(prev, movementId, note));
+    setActivityMovements((prev) => applyNoteToMovements(prev, movementId, note));
+  }, []);
 
   const load = React.useCallback(async () => {
     if (!id) return;
@@ -681,6 +710,10 @@ export default function ItemDetail() {
           moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
           reason: isReceiptLine ? receiptLineSummary(rawNotes, poNumberByReceipt) : rawReason,
           notes: movementNotesForDisplay(rawReason, rawNotes),
+          // Compute from the RAW reason (isReceiptLine) BEFORE it's resolved to
+          // a 'PO {number}' display string above — receipt_line notes are
+          // system-managed (RPC rejects edits, errcode 22023).
+          note_editable: movementNoteEditable(rawReason),
           created_at: r.created_at as string,
           actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
           reference_type: (r.reference_type as string | null) ?? null,
@@ -1440,7 +1473,12 @@ export default function ItemDetail() {
             ) : (
               <View style={{ gap: 8 }}>
                 {movements.map((m) => (
-                  <MovementCard key={m.id} movement={m} />
+                  <MovementCard
+                    key={m.id}
+                    movement={m}
+                    canEditNotes={canEditNotes}
+                    onNoteSaved={handleNoteSaved}
+                  />
                 ))}
                 <LoadMoreFooter
                   remaining={movementsRemaining}
@@ -1478,7 +1516,12 @@ export default function ItemDetail() {
               <View style={{ gap: 8 }}>
                 {activityEntries.map((entry) =>
                   entry.kind === 'movement' ? (
-                    <MovementCard key={entry.id} movement={entry.movement} />
+                    <MovementCard
+                      key={entry.id}
+                      movement={entry.movement}
+                      canEditNotes={canEditNotes}
+                      onNoteSaved={handleNoteSaved}
+                    />
                   ) : (
                     <AuditCard key={entry.id} audit={entry.audit} />
                   ),
@@ -1630,9 +1673,21 @@ function MetaRow({ label, value, dot }: { label: string; value: string; dot?: st
   );
 }
 
-function MovementCard({ movement }: { movement: MovementRow }) {
+function MovementCard({
+  movement,
+  canEditNotes = false,
+  onNoteSaved,
+}: {
+  movement: MovementRow;
+  /** Cosmetic gate — manager+ or the granted 'movements:edit_notes' perm.
+   *  The PATCH endpoint + RPC re-assert it, so this only hides the affordance. */
+  canEditNotes?: boolean;
+  /** Optimistic hook: parent updates its movement list(s) with the saved note. */
+  onNoteSaved?: (movementId: string, note: string | null) => void;
+}) {
   const { c } = useTheme();
   const router = useRouter();
+  const [noteOpen, setNoteOpen] = React.useState(false);
   const isAdd = movement.quantity_change > 0;
   // Display mapping lives in src/lib/movement-display.ts (unit-tested):
   //  - transfers show moved_quantity (net-zero delta is always 0); pre-0231
@@ -1752,7 +1807,204 @@ function MovementCard({ movement }: { movement: MovementRow }) {
           </Mono>
         </View>
       </View>
+
+      {/* Add/Edit note affordance — visible only to a caller who can edit
+          notes (manager+ or granted 'movements:edit_notes') AND on a row whose
+          note isn't system-managed. Pre-0231 'receipt_line' rows
+          (note_editable=false) stash a machine receipt reference in notes that
+          the RPC refuses to overwrite — never show the affordance for them.
+          Opens the inline sheet below, which PATCHes /api/v1/movements/[id]/note. */}
+      {canEditNotes && movement.note_editable ? (
+        <Pressable
+          onPress={() => setNoteOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel={movement.notes ? 'Edit note' : 'Add note'}
+          style={({ pressed }) => ({
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 5,
+            alignSelf: 'flex-start',
+            marginTop: 8,
+            opacity: pressed ? 0.6 : 1,
+          })}
+        >
+          <Edit3 size={11} color={c.ink4} strokeWidth={1.6} />
+          <Mono size={9.5} tracking={0.12} upper color={c.ink4}>
+            {movement.notes ? 'Edit note' : 'Add note'}
+          </Mono>
+        </Pressable>
+      ) : null}
+
+      <MovementNoteModal
+        visible={noteOpen}
+        movementId={movement.id}
+        initialNote={movement.notes}
+        onClose={() => setNoteOpen(false)}
+        onSaved={(note) => {
+          onNoteSaved?.(movement.id, note);
+          setNoteOpen(false);
+        }}
+      />
     </Card>
+  );
+}
+
+/**
+ * Add/edit-note bottom sheet — same sheet scaffolding as AdjustModal, no new
+ * UI lib. Saves via the Bearer endpoint `PATCH /api/v1/movements/[id]/note`,
+ * which drives the SECURITY DEFINER `edit_movement_note` RPC (the only
+ * sanctioned write into the append-only ledger — mig 0274). Errors surface
+ * INLINE and persist until the next attempt (project modal-error rule); the
+ * server response's normalized `note` is echoed back so the optimistic card
+ * update matches exactly what was stored (empty/whitespace → cleared).
+ */
+function MovementNoteModal({
+  visible,
+  movementId,
+  initialNote,
+  onClose,
+  onSaved,
+}: {
+  visible: boolean;
+  movementId: string;
+  initialNote: string | null;
+  onClose: () => void;
+  onSaved: (note: string | null) => void;
+}) {
+  const { c, mode } = useTheme();
+  const [text, setText] = React.useState(initialNote ?? '');
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (visible) {
+      setText(initialNote ?? '');
+      setError(null);
+      setBusy(false);
+    }
+  }, [visible, initialNote]);
+
+  const hadNote = normalizeMovementNote(initialNote) !== null;
+  // Nothing to save when the normalized draft equals the current note (incl.
+  // both being empty) — mirrors "no-op edit" so we never round-trip needlessly.
+  const nextNote = normalizeMovementNote(text);
+  const isDirty = nextNote !== normalizeMovementNote(initialNote);
+
+  async function submit() {
+    if (busy || !isDirty) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<{ ok: boolean; note: string | null }>(
+        `/api/v1/movements/${movementId}/note`,
+        { method: 'PATCH', body: { note: text } },
+      );
+      onSaved(res.note ?? null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save the note. Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1 }}
+      >
+        <Pressable
+          onPress={onClose}
+          style={{
+            flex: 1,
+            justifyContent: 'flex-end',
+            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
+          }}
+        >
+          <Pressable
+            onPress={() => undefined}
+            style={[
+              {
+                backgroundColor: c.card,
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                paddingTop: 12,
+                paddingBottom: 36,
+                paddingHorizontal: 22,
+              },
+              SHADOW.sheet,
+            ]}
+          >
+            <View style={{ alignItems: 'center', marginBottom: 18 }}>
+              <View
+                style={{
+                  width: 36,
+                  height: 5,
+                  borderRadius: 100,
+                  backgroundColor: mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
+                }}
+              />
+            </View>
+            <Eyebrow>{hadNote ? 'EDIT NOTE' : 'ADD NOTE'}</Eyebrow>
+            <Body muted size={11.5} style={{ marginTop: 6 }}>
+              Notes are the only editable field on a movement — every change is recorded in the
+              audit log.
+            </Body>
+
+            <View style={{ marginTop: 16, gap: 6 }}>
+              <TextInput
+                value={text}
+                onChangeText={setText}
+                placeholder="Add context for this movement…"
+                placeholderTextColor={c.ink5}
+                multiline
+                maxLength={MOVEMENT_NOTE_MAX}
+                autoFocus
+                style={{
+                  fontFamily: FONT.displayRegular,
+                  fontSize: 15,
+                  minHeight: 90,
+                  maxHeight: 180,
+                  paddingHorizontal: 14,
+                  paddingTop: 12,
+                  paddingBottom: 12,
+                  borderWidth: 1,
+                  borderColor: c.hair,
+                  borderRadius: 8,
+                  color: c.ink,
+                  backgroundColor: c.paper2,
+                  textAlignVertical: 'top',
+                }}
+              />
+              {error ? (
+                <Body size={12.5} color={ACCENT.crit}>
+                  {error}
+                </Body>
+              ) : null}
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 18 }}>
+              <View style={{ flex: 1 }}>
+                <Button block variant="ghost" onPress={onClose}>
+                  Cancel
+                </Button>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Button block onPress={() => void submit()} disabled={busy || !isDirty}>
+                  {busy ? 'Saving…' : 'Save'}
+                </Button>
+              </View>
+            </View>
+          </Pressable>
+        </Pressable>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }
 

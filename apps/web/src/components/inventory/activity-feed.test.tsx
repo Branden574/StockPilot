@@ -1,5 +1,16 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// The inline note editor (EditableMovementNote) reaches for the Next router +
+// the action + sonner. Stub them so the feed's movement rows can render the
+// editable affordance under the test DOM (same mocks the island's own test uses).
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn(), back: vi.fn() }),
+}));
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('@/server/actions/movements', () => ({
+  editMovementNoteAction: vi.fn(async () => ({ ok: true as const, data: { note: null } })),
+}));
 
 import { ActivityFeed } from './activity-feed';
 
@@ -22,6 +33,7 @@ function makeEvent(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
     referenceLabel: overrides.referenceLabel ?? null,
     reason: overrides.reason ?? null,
     notes: overrides.notes ?? null,
+    noteEditable: overrides.noteEditable ?? (overrides.kind === 'audit' ? false : true),
     actor: overrides.actor ?? 'Jane Doe',
     actorEmail: overrides.actorEmail ?? null,
     metadata: overrides.metadata ?? null,
@@ -312,6 +324,37 @@ describe('ActivityFeed', () => {
     render(<ActivityFeed events={events} />);
     expect(screen.getByText('Ai shelf scan')).toBeInTheDocument();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  // ── Review fix: receipt_line notes are system-managed (not editable) ─────
+
+  it('shows the add-note affordance for an editable movement when canEditNotes is set', () => {
+    const events = [
+      makeEvent({ id: 'm18', kind: 'movement', type: 'adjustment', delta: 2, noteEditable: true }),
+    ];
+    render(<ActivityFeed events={events} canEditNotes />);
+    expect(screen.getByRole('button', { name: /add note/i })).toBeInTheDocument();
+  });
+
+  it('HIDES the note affordance on a system-managed receipt_line row even with canEditNotes', () => {
+    const events = [
+      makeEvent({
+        id: 'm19',
+        kind: 'movement',
+        type: 'receive_po',
+        delta: 3,
+        // Resolved PO reason still shows; notes is masked to null for these
+        // rows and the note is system-managed → never editable.
+        reason: 'PO PO-77',
+        notes: null,
+        noteEditable: false,
+      }),
+    ];
+    render(<ActivityFeed events={events} canEditNotes />);
+    // The resolved reason still renders…
+    expect(screen.getByText('PO PO-77')).toBeInTheDocument();
+    // …but the editor affordance must NOT appear for the receipt_line row.
+    expect(screen.queryByRole('button', { name: /add note|edit note|save note/i })).toBeNull();
   });
 
   // ── Unit 2: before/after diff drawer + changed_keys chip ─────────────────

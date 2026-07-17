@@ -21,6 +21,7 @@ function makeEvent(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
     referenceLabel: overrides.referenceLabel ?? null,
     reason: overrides.reason ?? null,
     notes: overrides.notes ?? null,
+    noteEditable: overrides.noteEditable ?? (overrides.kind === 'audit' ? false : true),
     actor: overrides.actor ?? 'System',
     actorEmail: overrides.actorEmail ?? null,
     metadata: overrides.metadata ?? null,

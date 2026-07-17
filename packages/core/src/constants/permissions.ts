@@ -19,6 +19,13 @@ export const PERMISSIONS = [
   'items:export',
   'stock:adjust',
   'stock:transfer',
+  // Movement notes: managers+ (or a granted staff/viewer) can ADD or EDIT the
+  // free-text note on an existing stock_movement. The ledger stays append-only —
+  // the edit path is a SECURITY DEFINER RPC (mig 0274) that touches ONLY the
+  // notes column; quantity/type/actor/timestamp are never mutated. Every edit
+  // is audited. Grantable so an admin can hand a specific staff/viewer temporary
+  // note-correction rights and revoke later.
+  'movements:edit_notes',
   'locations:read',
   'locations:manage',
   'categories:read',
@@ -106,6 +113,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'items:export',
     'stock:adjust',
     'stock:transfer',
+    'movements:edit_notes',
     'locations:read',
     'locations:manage',
     'categories:read',
@@ -274,6 +282,9 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   'items:update',
   'items:delete',
   'stock:adjust',
+  // Movement note editing — the write path is a has_permission-gated SECURITY
+  // DEFINER RPC (mig 0274), so a grant is fully effective end-to-end.
+  'movements:edit_notes',
   'locations:manage',
   'categories:manage',
   'suppliers:manage',
@@ -383,6 +394,12 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
     group: 'Stock',
     label: 'Transfer stock',
     description: 'Move stock between locations or warehouses.',
+  },
+  'movements:edit_notes': {
+    group: 'Stock',
+    label: 'Edit movement notes',
+    description:
+      'Add or change the note on a stock movement. Every change is recorded in the audit log.',
   },
 
   'locations:read': {

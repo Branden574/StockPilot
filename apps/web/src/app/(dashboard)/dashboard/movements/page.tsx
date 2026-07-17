@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { EditableMovementNote } from '@/components/movements/editable-movement-note';
 import { MovementsFilterBar } from '@/components/movements/movements-filter-bar';
 import {
   MovementsInstantTable,
@@ -41,6 +42,33 @@ const PAGE_SIZE = 50;
  */
 const MOVEMENTS_INSTANT_CAP = 1000;
 
+// Pre-0231 receipt rows stash an internal receipt UUID in `notes` (the service
+// deliberately keeps it raw there for stagedWorklist — see MovementsService.
+// list). It's a sentinel, NOT user text: the old cell rendered `reason ?? notes`
+// so the resolved 'PO {n}' reason always won and the UUID never showed. Now that
+// the cell edits `notes`, mask a bare-UUID sentinel so it's never displayed or
+// pre-filled into the editor — the resolved reason still shows as the read-only
+// fallback. Mirrors the identical masking activity.ts applies to the item feed.
+const RECEIPT_NOTE_SENTINEL_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function userNote(rawNotes: unknown): string | null {
+  const n = (rawNotes as string | null) ?? null;
+  if (n && RECEIPT_NOTE_SENTINEL_RE.test(n.trim())) return null;
+  return n;
+}
+
+// A pre-0231 'receipt_line' movement stores a receipt-line UUID in `notes` —
+// a MACHINE reference (the ONLY link to its PO number), never a user note. Its
+// note is system-managed and NOT editable: the RPC rejects the edit (errcode
+// 22023) and the item feed / mobile mask it anyway. `list()` resolves the raw
+// 'receipt_line' reason to a 'PO {n}' display string, so `reason` no longer
+// carries the sentinel here — the reliable per-row signal on this surface is
+// the bare-UUID sentinel in the raw notes column.
+function isReceiptLineNote(rawNotes: unknown): boolean {
+  const n = (rawNotes as string | null) ?? null;
+  return !!n && RECEIPT_NOTE_SENTINEL_RE.test(n.trim());
+}
+
 export default async function MovementsPage({
   searchParams,
 }: {
@@ -53,6 +81,11 @@ export default async function MovementsPage({
   if (!can(ctx, 'activity_logs:read')) {
     redirect('/dashboard');
   }
+  // Managers+ (or anyone granted the FULLY_GRANTABLE `movements:edit_notes`)
+  // may add/edit the free-text note on a movement; everyone else sees the
+  // note read-only. Override-aware (per-user grants take effect); the server
+  // action + the SECURITY DEFINER RPC re-gate regardless.
+  const canEditNotes = can(ctx, 'movements:edit_notes');
 
   const params = await searchParams;
   const page = clampPage(params.page);
@@ -112,7 +145,14 @@ export default async function MovementsPage({
       quantityChange: Number(m.quantity_change),
       newQuantity: Number(m.new_quantity),
       movedQuantity: m.moved_quantity == null ? null : Number(m.moved_quantity),
-      reason: (m.reason as string | null) ?? (m.notes as string | null) ?? null,
+      // reason (read-only "why") and note (editable free text) are carried as
+      // TWO fields now — the note cell edits `note` and falls back to showing
+      // `reason` when there's no note (see EditableMovementNote).
+      reason: (m.reason as string | null) ?? null,
+      note: userNote(m.notes),
+      // receipt_line rows carry a system-managed note (the RPC rejects edits)
+      // — never expose the add/edit affordance on them.
+      noteEditable: !isReceiptLineNote(m.notes),
       createdAt: m.created_at as string,
       itemName: m.item?.name ?? null,
       itemSku: m.item?.sku ?? null,
@@ -213,7 +253,7 @@ export default async function MovementsPage({
           cta={{ label: 'Go to inventory', href: '/dashboard/inventory' }}
         />
       ) : instant ? (
-        <MovementsInstantTable rows={instantRows} />
+        <MovementsInstantTable rows={instantRows} canEditNotes={canEditNotes} />
       ) : visible.length === 0 ? (
         hasActiveFilters ? (
           <EmptyState
@@ -313,7 +353,14 @@ export default async function MovementsPage({
                       )}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {(m.reason as string | null) ?? (m.notes as string | null) ?? '—'}
+                      <EditableMovementNote
+                        movementId={m.id as string}
+                        note={userNote(m.notes)}
+                        reason={(m.reason as string | null) ?? null}
+                        // receipt_line rows are system-managed (RPC rejects the
+                        // edit) — read-only regardless of the caller's perm.
+                        canEdit={canEditNotes && !isReceiptLineNote(m.notes)}
+                      />
                     </TableCell>
                   </TableRow>
                 );

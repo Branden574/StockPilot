@@ -4,6 +4,7 @@ import {
   collectReceiptLineIds,
   formatMovementRoute,
   movementAmount,
+  movementNoteEditable,
   movementNotesForDisplay,
   movementReasonLabel,
   receiptLineSummary,
@@ -69,6 +70,18 @@ describe('movementNotesForDisplay', () => {
     );
     expect(movementNotesForDisplay('Damaged in transit', null)).toBeNull();
     expect(movementNotesForDisplay(null, 'Free-text note')).toBe('Free-text note');
+  });
+});
+
+describe('movementNoteEditable', () => {
+  it("OLD receipt row: 'receipt_line' notes are system-managed → not editable", () => {
+    expect(movementNoteEditable('receipt_line')).toBe(false);
+  });
+
+  it('every other reason (including resolved PO + null) is editable', () => {
+    expect(movementNoteEditable('PO PO-2026-014')).toBe(true);
+    expect(movementNoteEditable('Damaged in transit')).toBe(true);
+    expect(movementNoteEditable(null)).toBe(true);
   });
 });
 
