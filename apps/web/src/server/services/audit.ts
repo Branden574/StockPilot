@@ -34,6 +34,10 @@ export type AuditEvent =
   | 'stock.received'
   | 'stock.transferred'
   | 'stock.removed'
+  // Movement note edited (mig 0274). The append-only ledger's ONLY mutable
+  // column is notes; this records old→new note, who, and when so a
+  // note correction is fully traceable on the item Activity feed + audit log.
+  | 'stock_movement.note_edited'
   | 'warehouse.created'
   | 'warehouse.updated'
   | 'warehouse.archived'

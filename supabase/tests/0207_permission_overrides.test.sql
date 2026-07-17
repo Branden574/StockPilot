@@ -40,8 +40,8 @@ insert into public.organization_members (organization_id, user_id, role, accepte
 -- ── Parity-ish guard: seed populated for the four non-owner roles ──────────
 select is(
   (select count(*)::int from public.role_default_permissions),
-  94,
-  'role_default_permissions seeded with 94 rows (admin/manager/staff/viewer flatten; +2 customers:manage rows from 0250; +1 public_links:manage row from 0261)'
+  96,
+  'role_default_permissions seeded with 96 rows (admin/manager/staff/viewer flatten; +2 customers:manage rows from 0250; +1 public_links:manage row from 0261; +2 movements:edit_notes rows from 0274)'
 );
 
 select ok(

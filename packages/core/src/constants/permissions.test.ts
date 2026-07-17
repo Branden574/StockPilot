@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   effectivePermissions,
   FULLY_GRANTABLE_PERMISSIONS,
+  hasPermission,
   PERMISSIONS,
   ROLE_PERMISSIONS,
   type Permission,
@@ -84,5 +85,24 @@ describe('FULLY_GRANTABLE_PERMISSIONS', () => {
 
   it('includes purchase_orders:manage (RLS migrated) so the auditor PO-import grant is end-to-end', () => {
     expect(FULLY_GRANTABLE_PERMISSIONS.has('purchase_orders:manage')).toBe(true);
+  });
+
+  it('includes movements:edit_notes (RPC gate is has_permission) so a grant is end-to-end', () => {
+    expect(FULLY_GRANTABLE_PERMISSIONS.has('movements:edit_notes')).toBe(true);
+  });
+});
+
+describe('movements:edit_notes defaults', () => {
+  it('manager has it by default', () => {
+    expect(hasPermission('manager', 'movements:edit_notes')).toBe(true);
+  });
+
+  it('admin has it by default (all-except-billing:manage)', () => {
+    expect(hasPermission('admin', 'movements:edit_notes')).toBe(true);
+  });
+
+  it('viewer and staff do NOT have it by default', () => {
+    expect(hasPermission('viewer', 'movements:edit_notes')).toBe(false);
+    expect(hasPermission('staff', 'movements:edit_notes')).toBe(false);
   });
 });
