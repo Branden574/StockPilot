@@ -1,5 +1,6 @@
 'use client';
 
+import { PERMISSION_META, type Permission } from '@stockpilot/core';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -11,6 +12,39 @@ interface Props {
   userId: string;
   /** The viewer's role token — used to ignore role-override events for OTHER roles. */
   role: string;
+}
+
+export interface PermissionToast {
+  title: string;
+  description: string;
+}
+
+/**
+ * Builds the live toast for a permission-change ping. When the broadcast names
+ * the exact permission (+ granted flag), the toast says which one and how it
+ * moved; without them (older pings, or a payload we don't recognize) it falls
+ * back to the generic message. `granted`: true = granted, false = revoked,
+ * null = the override was cleared (reset to the role default). Exported for
+ * unit tests.
+ */
+export function permissionChangeMessage(
+  permission?: string,
+  granted?: boolean | null,
+): PermissionToast {
+  const label = permission
+    ? PERMISSION_META[permission as Permission]?.label
+    : undefined;
+  if (!label) {
+    return { title: 'Your access was updated', description: 'Your permissions changed — refreshing.' };
+  }
+  if (granted === true) {
+    return { title: 'Access granted', description: `You were granted "${label}" — refreshing.` };
+  }
+  if (granted === false) {
+    return { title: 'Access updated', description: `"${label}" was revoked — refreshing.` };
+  }
+  // granted === null → the per-user/role override row was removed
+  return { title: 'Access updated', description: `"${label}" was reset to your role default — refreshing.` };
 }
 
 /**
@@ -47,26 +81,33 @@ export function PermissionsRealtime({ organizationId, userId, role }: Props) {
   // once, not once per event.
   const lastRefreshRef = React.useRef(0);
   const pendingRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const announce = React.useCallback(() => {
-    const now = Date.now();
-    const fire = () => {
-      lastRefreshRef.current = Date.now();
-      toast.message('Your access was updated', {
-        description: 'Your permissions changed — refreshing.',
-      });
-      router.refresh();
-    };
-    const since = now - lastRefreshRef.current;
-    if (since >= 800) {
-      fire();
-      return;
-    }
-    if (pendingRef.current) return;
-    pendingRef.current = setTimeout(() => {
-      pendingRef.current = null;
-      fire();
-    }, 800 - since);
-  }, [router]);
+  // Latest-wins message across a debounced burst: several quick toggles collapse
+  // to one refresh, and the toast names the most recent change.
+  const pendingMsgRef = React.useRef<PermissionToast | null>(null);
+  const announce = React.useCallback(
+    (msg: PermissionToast) => {
+      pendingMsgRef.current = msg;
+      const now = Date.now();
+      const fire = () => {
+        lastRefreshRef.current = Date.now();
+        const m = pendingMsgRef.current ?? msg;
+        pendingMsgRef.current = null;
+        toast.message(m.title, { description: m.description });
+        router.refresh();
+      };
+      const since = now - lastRefreshRef.current;
+      if (since >= 800) {
+        fire();
+        return;
+      }
+      if (pendingRef.current) return;
+      pendingRef.current = setTimeout(() => {
+        pendingRef.current = null;
+        fire();
+      }, 800 - since);
+    },
+    [router],
+  );
 
   React.useEffect(() => {
     const supabase = supabaseRef.current;
@@ -78,8 +119,15 @@ export function PermissionsRealtime({ organizationId, userId, role }: Props) {
       // fragility. React only when the ping targets this user's role or them.
       channel = supabase.channel(`perms:${organizationId}`);
       channel.on('broadcast', { event: 'changed' }, ({ payload }) => {
-        const p = (payload ?? {}) as { role?: string; userId?: string };
-        if (p.userId === userId || (!!p.role && p.role === role)) announce();
+        const p = (payload ?? {}) as {
+          role?: string;
+          userId?: string;
+          permission?: string;
+          granted?: boolean | null;
+        };
+        if (p.userId === userId || (!!p.role && p.role === role)) {
+          announce(permissionChangeMessage(p.permission, p.granted));
+        }
       });
       channel.subscribe();
     } catch {
