@@ -42,6 +42,12 @@ interface ItemActivityPanelProps {
    * hood. The Activity tab omits this and keeps everything.
    */
   kindFilter?: 'movement';
+  /**
+   * Managers+/granted users get the add/edit-note affordance on movement
+   * rows in the feed. Threaded straight through to ActivityFeed; the server
+   * action + RPC re-gate on `movements:edit_notes`.
+   */
+  canEditNotes?: boolean;
 }
 
 export function ItemActivityPanel({
@@ -51,6 +57,7 @@ export function ItemActivityPanel({
   initialCursor,
   initialExhausted,
   kindFilter,
+  canEditNotes = false,
 }: ItemActivityPanelProps) {
   const [events, setEvents] = React.useState<ActivityEvent[]>(initialEvents);
   const [locationNames, setLocationNames] = React.useState(initialLocationNames);
@@ -106,7 +113,7 @@ export function ItemActivityPanel({
 
   return (
     <>
-      <ActivityFeed events={events} locationNames={locationNames} />
+      <ActivityFeed events={events} locationNames={locationNames} canEditNotes={canEditNotes} />
       {!exhausted && (
         <div className="mt-4 flex justify-center">
           <Button

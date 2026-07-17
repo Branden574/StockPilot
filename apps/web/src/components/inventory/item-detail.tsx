@@ -267,6 +267,10 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   const canDuplicateItem = can(ctx, 'items:create');
   const canAdjustStock = can(ctx, 'stock:adjust');
   const canTransferStock = can(ctx, 'stock:transfer');
+  // Add/edit the free-text note on a movement row in the Movements/Activity
+  // feed (managers+, or anyone granted the FULLY_GRANTABLE permission). The
+  // server action + SECURITY DEFINER RPC re-gate; this only shows the affordance.
+  const canEditNotes = can(ctx, 'movements:edit_notes');
   // Gates the transfer dialog's inline "New location…" destination — the
   // server re-asserts 'locations:manage' (+ the locations plan limit) inside
   // LocationsService.create, so this only hides the UI affordance.
@@ -825,6 +829,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                 initialCursor={activityInitialCursor}
                 initialExhausted={movementsInitialExhausted}
                 kindFilter="movement"
+                canEditNotes={canEditNotes}
               />
             </CardContent>
           </Card>
@@ -850,6 +855,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                 initialLocationNames={locationNames}
                 initialCursor={activityInitialCursor}
                 initialExhausted={activityInitialExhausted}
+                canEditNotes={canEditNotes}
               />
             </CardContent>
           </Card>

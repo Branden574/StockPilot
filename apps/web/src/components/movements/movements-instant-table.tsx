@@ -18,6 +18,7 @@ import { LocalDateTime } from '@/components/ui/local-datetime';
 import { formatNumber, formatRelative } from '@/lib/utils';
 import { buildMovementsQueryString, type MovementsFilterQuery } from '@/lib/movements-filters';
 
+import { EditableMovementNote } from './editable-movement-note';
 import { MovementsFilterBar } from './movements-filter-bar';
 
 export interface MovementDisplayRow {
@@ -26,7 +27,10 @@ export interface MovementDisplayRow {
   quantityChange: number;
   newQuantity: number;
   movedQuantity: number | null;
+  /** Read-only "why" (stock_movements.reason), shown as the note fallback. */
   reason: string | null;
+  /** Editable free-text note (stock_movements.notes). null when unset. */
+  note: string | null;
   createdAt: string;
   itemName: string | null;
   itemSku: string | null;
@@ -48,7 +52,14 @@ const EMPTY_FILTERS: MovementsFilterQuery = { q: '', type: '', from: '', to: '' 
  * so a single export code path (the route + MovementsService.exportRows)
  * stays the source of truth for both page modes.
  */
-export function MovementsInstantTable({ rows }: { rows: MovementDisplayRow[] }) {
+export function MovementsInstantTable({
+  rows,
+  canEditNotes = false,
+}: {
+  rows: MovementDisplayRow[];
+  /** Managers+/granted users get the add/edit-note affordance on each row. */
+  canEditNotes?: boolean;
+}) {
   const [filters, setFilters] = React.useState<MovementsFilterQuery>(EMPTY_FILTERS);
   const [page, setPage] = React.useState(1);
 
@@ -170,7 +181,14 @@ export function MovementsInstantTable({ rows }: { rows: MovementDisplayRow[] }) 
                         <div className="text-muted-foreground text-[11px]">{m.actorEmail}</div>
                       )}
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">{m.reason ?? '—'}</TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      <EditableMovementNote
+                        movementId={m.id}
+                        note={m.note}
+                        reason={m.reason}
+                        canEdit={canEditNotes}
+                      />
+                    </TableCell>
                   </TableRow>
                 );
               })}
