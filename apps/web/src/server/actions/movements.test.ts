@@ -139,6 +139,23 @@ describe('editMovementNoteAction', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
+  it('maps the RPC 22023 (system-managed receipt_line note) to a validation_error and does not audit', async () => {
+    stubWith({
+      data: null,
+      error: { code: '22023', message: 'movement note is system-managed and cannot be edited' },
+    });
+    const res = await editMovementNoteAction({ movementId: MOVEMENT_ID, note: 'overwrite' });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('validation_error');
+      expect(res.error.message).toMatch(/managed by the system/i);
+    }
+    // RPC WAS attempted (app gate passed for the manager) but no audit on failure.
+    expect(stubHolder.stub!.rpcCalls).toHaveLength(1);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it('rejects a malformed movementId as validation_error before any RPC', async () => {
     const res = await editMovementNoteAction({ movementId: 'not-a-uuid', note: 'x' });
 

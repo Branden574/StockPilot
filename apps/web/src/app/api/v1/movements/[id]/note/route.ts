@@ -34,7 +34,14 @@ export const dynamic = 'force-dynamic';
  * the RPC's `nullif(btrim(...), '')`.
  */
 const bodySchema = z.object({
-  note: z.string().max(2000).nullable().optional(),
+  // Length is checked on the TRIMMED value so it aligns with the RPC's
+  // `length(btrim(...)) > 2000` — a value that's ≤2000 after trimming isn't
+  // rejected upstream while the RPC would accept it.
+  note: z
+    .string()
+    .refine((s) => s.trim().length <= 2000, 'Note is too long (max 2000 characters).')
+    .nullable()
+    .optional(),
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -97,6 +104,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           { status: 403 },
         );
       }
+      // 22023 = the RPC's system-managed guard: a pre-0231 'receipt_line'
+      // row's note holds the receipt UUID that resolves its PO number — a
+      // machine reference that must never be overwritten. Surface a clean
+      // 422 rather than a 500.
+      if (error.code === '22023') {
+        return NextResponse.json(
+          {
+            error: 'validation_error',
+            message: "This movement's note is managed by the system and can't be edited.",
+          },
+          { status: 422 },
+        );
+      }
       const msg = (error.message ?? '').toLowerCase();
       // The RPC raises a bare 'movement not found' (P0001) for an unknown id.
       if (msg.includes('not found')) {
@@ -127,19 +147,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     // Route the audit at the ITEM (entityType inventory_item / entityId item_id)
     // so it surfaces on the item Activity feed + global audit log, exactly like
     // the web action (Unit 2). Bearer/API caller MUST pass ctx or audit()'s
-    // withContext() fallback throws NEXT_REDIRECT and drops the row.
-    await audit(
-      {
-        event: 'stock_movement.note_edited',
-        entityType: 'inventory_item',
-        entityId: itemId,
-        before: { notes: oldNote },
-        after: { notes: normalized },
-        reason: 'movement_note_edited',
-        extra: { movement_id: id },
-      },
-      ctx,
-    );
+    // withContext() fallback throws NEXT_REDIRECT and drops the row. Only audit
+    // when the RPC returned an item_id — a null entityId would write a useless,
+    // unroutable audit row (matches the web action's `if (itemId)` guard).
+    if (itemId) {
+      await audit(
+        {
+          event: 'stock_movement.note_edited',
+          entityType: 'inventory_item',
+          entityId: itemId,
+          before: { notes: oldNote },
+          after: { notes: normalized },
+          reason: 'movement_note_edited',
+          extra: { movement_id: id },
+        },
+        ctx,
+      );
+    }
 
     return NextResponse.json({ ok: true, note: normalized });
   } catch (e) {

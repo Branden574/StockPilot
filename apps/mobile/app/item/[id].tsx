@@ -56,6 +56,7 @@ import {
   collectReceiptLineIds,
   formatMovementRoute,
   movementAmount,
+  movementNoteEditable,
   movementNotesForDisplay,
   movementReasonLabel,
   receiptLineSummary,
@@ -147,6 +148,14 @@ interface MovementRow {
    *  rows stash an internal receipt uuid here — not real user text — but
    *  those rows are historical only; see movement-display.ts. */
   notes: string | null;
+  /**
+   * Whether this row's note is user-editable. false for pre-0231
+   * 'receipt_line' rows — their `notes` holds a machine receipt reference the
+   * RPC refuses to overwrite (errcode 22023). Computed from the RAW reason in
+   * `fetchMovementsPage` before it's resolved to a 'PO {number}' display
+   * string; mirrors the web's per-event `noteEditable`.
+   */
+  note_editable: boolean;
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
   /**
@@ -701,6 +710,10 @@ export default function ItemDetail() {
           moved_quantity: r.moved_quantity == null ? null : Number(r.moved_quantity),
           reason: isReceiptLine ? receiptLineSummary(rawNotes, poNumberByReceipt) : rawReason,
           notes: movementNotesForDisplay(rawReason, rawNotes),
+          // Compute from the RAW reason (isReceiptLine) BEFORE it's resolved to
+          // a 'PO {number}' display string above — receipt_line notes are
+          // system-managed (RPC rejects edits, errcode 22023).
+          note_editable: movementNoteEditable(rawReason),
           created_at: r.created_at as string,
           actor: Array.isArray(actor) ? (actor[0] ?? null) : actor,
           reference_type: (r.reference_type as string | null) ?? null,
@@ -1796,9 +1809,12 @@ function MovementCard({
       </View>
 
       {/* Add/Edit note affordance — visible only to a caller who can edit
-          notes (manager+ or granted 'movements:edit_notes'). Opens the inline
-          sheet below, which PATCHes /api/v1/movements/[id]/note. */}
-      {canEditNotes ? (
+          notes (manager+ or granted 'movements:edit_notes') AND on a row whose
+          note isn't system-managed. Pre-0231 'receipt_line' rows
+          (note_editable=false) stash a machine receipt reference in notes that
+          the RPC refuses to overwrite — never show the affordance for them.
+          Opens the inline sheet below, which PATCHes /api/v1/movements/[id]/note. */}
+      {canEditNotes && movement.note_editable ? (
         <Pressable
           onPress={() => setNoteOpen(true)}
           accessibilityRole="button"

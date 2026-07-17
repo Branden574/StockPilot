@@ -164,6 +164,23 @@ describe('PATCH /api/v1/movements/[id]/note', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
+  it('maps the RPC 22023 (system-managed receipt_line note) to 422 without auditing', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:edit_movement_note': {
+        data: null,
+        error: { code: '22023', message: 'movement note is system-managed and cannot be edited' },
+      },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('manager', stub));
+
+    const res = await PATCH(buildRequest({ note: 'overwrite' }), buildParams());
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).message).toMatch(/managed by the system/i);
+    expect(stub.rpcCalls).toHaveLength(1);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it('maps the RPC "movement not found" to 404', async () => {
     const stub = makeSupabaseStub({
       'rpc:edit_movement_note': {

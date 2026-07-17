@@ -31,6 +31,12 @@ export interface MovementDisplayRow {
   reason: string | null;
   /** Editable free-text note (stock_movements.notes). null when unset. */
   note: string | null;
+  /**
+   * Per-row gate: false for pre-0231 'receipt_line' rows whose note is a
+   * system-managed machine reference (the RPC rejects editing it). Combined
+   * with the table-wide `canEditNotes` permission to decide the affordance.
+   */
+  noteEditable: boolean;
   createdAt: string;
   itemName: string | null;
   itemSku: string | null;
@@ -186,7 +192,9 @@ export function MovementsInstantTable({
                         movementId={m.id}
                         note={m.note}
                         reason={m.reason}
-                        canEdit={canEditNotes}
+                        // receipt_line rows are system-managed (RPC rejects the
+                        // edit) — read-only regardless of the caller's perm.
+                        canEdit={canEditNotes && m.noteEditable}
                       />
                     </TableCell>
                   </TableRow>

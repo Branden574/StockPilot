@@ -43,10 +43,13 @@ declare
   v_org     uuid;
   v_item_id uuid;
   v_old     text;
+  v_reason  text;
 begin
-  -- Resolve the movement's org + item + current note (definer bypasses RLS).
-  select sm.organization_id, sm.item_id, sm.notes
-    into v_org, v_item_id, v_old
+  -- Resolve the movement's org + item + current note + reason (definer bypasses
+  -- RLS). `reason` is loaded so the system-managed guard below can reject edits
+  -- to pre-0231 'receipt_line' rows.
+  select sm.organization_id, sm.item_id, sm.notes, sm.reason
+    into v_org, v_item_id, v_old, v_reason
     from public.stock_movements sm
    where sm.id = p_movement_id;
 
@@ -54,19 +57,32 @@ begin
     raise exception 'movement not found';
   end if;
 
-  -- Cap the note length (free text, but bounded).
-  if length(btrim(coalesce(p_note, ''))) > 2000 then
-    raise exception 'note too long';
-  end if;
-
   -- Additive permission gate — manager role OR the grantable permission. A
   -- caller who is not a member/manager of the movement's org (e.g. a cross-org
-  -- movement id) fails both terms and is denied here.
+  -- movement id) fails both terms and is denied here. Checked BEFORE the
+  -- system-managed guard so a non-permitted caller always gets 42501 first
+  -- (never a hint that the row is a receipt_line).
   if not (
     public.has_org_role(v_org, 'manager')
     or public.has_permission(v_org, 'movements:edit_notes')
   ) then
     raise exception 'insufficient privilege' using errcode = '42501';
+  end if;
+
+  -- System-managed guard: pre-0231 'receipt_line' rows stash a receipt-line
+  -- UUID in `notes` — a MACHINE reference that is the ONLY link back to the
+  -- PO number (parsed by activity.ts/movements.ts/mobile movement-display).
+  -- Overwriting it would permanently destroy PO-number resolution AND the
+  -- typed note would be invisible (item feed + mobile mask notes for these
+  -- rows). So the note on a receipt_line movement is not editable at all.
+  if v_reason = 'receipt_line' then
+    raise exception 'movement note is system-managed and cannot be edited'
+      using errcode = '22023';
+  end if;
+
+  -- Cap the note length (free text, but bounded).
+  if length(btrim(coalesce(p_note, ''))) > 2000 then
+    raise exception 'note too long';
   end if;
 
   -- The ONLY write into the append-only ledger: the notes column, nothing else.

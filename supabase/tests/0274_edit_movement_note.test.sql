@@ -10,6 +10,9 @@
 --       previous_quantity / new_quantity / quantity_change / movement_type /
 --       user_id / created_at are all UNCHANGED — only notes moved;
 --   (d) a cross-org movement (org1 manager reaching into org2) is denied.
+--   (e) a manager editing a system-managed 'receipt_line' movement is denied
+--       (errcode 22023) and the machine receipt reference in notes is left
+--       untouched — protecting PO-number resolution.
 --
 -- Run via `supabase test db`. Users are "become"d via request.jwt.claim.sub so
 -- auth.uid() resolves inside the SECURITY DEFINER RPC + has_permission().
@@ -17,7 +20,7 @@
 
 begin;
 
-select plan(8);
+select plan(10);
 
 \set org1     '\'fe000000-0000-0000-0000-0000000000f1\''
 \set org2     '\'fe000000-0000-0000-0000-0000000000f2\''
@@ -28,6 +31,8 @@ select plan(8);
 \set item2    '\'fe000000-0000-0000-0000-000000000012\''
 \set mov1     '\'fe000000-0000-0000-0000-0000000000a1\''
 \set mov2     '\'fe000000-0000-0000-0000-0000000000a2\''
+\set mov3     '\'fe000000-0000-0000-0000-0000000000a3\''
+\set receipt  '\'fe000000-0000-0000-0000-0000000000b1\''
 
 -- ── Fixtures (seeded as superuser — RLS bypassed) ──────────────────────────
 -- auth.users insert fires on_auth_user_created → creates user_profiles rows
@@ -66,6 +71,15 @@ insert into public.stock_movements
    previous_quantity, new_quantity, notes)
 values
   (:mov2, :org2, :item2, 'add', 1, 0, 1, 'other org note');
+
+-- Pre-0231 'receipt_line' movement (org1): `notes` holds a receipt-line UUID —
+-- a MACHINE reference (the only link to the PO number), NOT a user note. Its
+-- note must be non-editable even for a manager (case (e)).
+insert into public.stock_movements
+  (id, organization_id, item_id, movement_type, quantity_change,
+   previous_quantity, new_quantity, reason, notes)
+values
+  (:mov3, :org1, :item1, 'receive_po', 3, 15, 18, 'receipt_line', :receipt);
 
 -- Grant the movements:edit_notes permission to the granted viewer (user-level).
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted)
@@ -146,6 +160,27 @@ select is(
   (select notes from public.stock_movements where id = :mov2),
   'other org note',
   'cross-org denial left the other org''s movement note unchanged'
+);
+
+-- ── (e) System-managed 'receipt_line' movement → denied (22023) ────────────
+-- Even a manager (who passes the permission gate) cannot edit a receipt_line
+-- note: the RPC raises 22023 AFTER the permission check, BEFORE any write.
+set local "request.jwt.claim.sub" to 'fe000000-0000-0000-0000-0000000000c1'; -- manager
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+select throws_ok(
+  $$ select public.edit_movement_note('fe000000-0000-0000-0000-0000000000a3', 'overwrite the receipt ref') $$,
+  '22023', null,
+  'receipt_line movement note is system-managed and cannot be edited (22023)'
+);
+reset role;
+
+-- The machine receipt reference in notes is intact — PO-number resolution is
+-- preserved.
+select is(
+  (select notes from public.stock_movements where id = :mov3),
+  'fe000000-0000-0000-0000-0000000000b1',
+  'receipt_line denial left the machine receipt reference in notes UNCHANGED'
 );
 
 select * from finish();

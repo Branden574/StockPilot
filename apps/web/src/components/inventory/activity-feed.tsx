@@ -237,13 +237,14 @@ export function ActivityFeed({ events, locationNames, canEditNotes = false }: Ac
                     <span className="italic">{e.reason}</span>
                   </>
                 )}
-                {e.kind === 'movement' && canEditNotes ? (
+                {e.kind === 'movement' && canEditNotes && e.noteEditable ? (
                   <>
                     <span className="mx-1.5">·</span>
                     {/* Small client island — the ONLY editable surface on a
                         movement row. `e.id` is `m:<uuid>`; the RPC needs the
-                        raw uuid. Audit rows fall through to the static branch
-                        below (never editable). */}
+                        raw uuid. Audit rows AND system-managed 'receipt_line'
+                        rows (noteEditable=false) fall through to the static
+                        branch below (never editable). */}
                     <EditableMovementNote
                       variant="inline"
                       movementId={e.id.replace(/^m:/, '')}

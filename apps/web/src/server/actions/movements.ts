@@ -25,7 +25,12 @@ const editMovementNoteSchema = z.object({
   // The RPC also caps length (<=2000) and trims/nullifies; validate here too
   // so an oversized payload never reaches the DB. Empty string is allowed —
   // it clears the note (the RPC stores NULL for a blank/whitespace note).
-  note: z.string().max(2000),
+  // Length is checked on the TRIMMED value so it aligns with the RPC's
+  // `length(btrim(...)) > 2000` — a value that's ≤2000 after trimming isn't
+  // rejected upstream while the RPC would accept it.
+  note: z
+    .string()
+    .refine((s) => s.trim().length <= 2000, 'Note is too long (max 2000 characters).'),
 });
 
 export type EditMovementNoteInput = z.infer<typeof editMovementNoteSchema>;
@@ -58,6 +63,16 @@ export async function editMovementNoteAction(
       // rejects — surface it as a clean forbidden rather than a 500.
       if ((error as { code?: string }).code === '42501') {
         return err('forbidden', 'You do not have permission to edit movement notes.');
+      }
+      // 22023 = the RPC's system-managed guard: the note on a pre-0231
+      // 'receipt_line' row holds a machine reference (the receipt UUID that
+      // resolves the PO number), so it can never be overwritten. Surface a
+      // clean validation error, not a 500.
+      if ((error as { code?: string }).code === '22023') {
+        return err(
+          'validation_error',
+          "This movement's note is managed by the system and can't be edited.",
+        );
       }
       // Never leak raw DB text (S13 boundary) — log server-side, return generic.
       console.error(error);

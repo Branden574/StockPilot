@@ -57,6 +57,18 @@ function userNote(rawNotes: unknown): string | null {
   return n;
 }
 
+// A pre-0231 'receipt_line' movement stores a receipt-line UUID in `notes` —
+// a MACHINE reference (the ONLY link to its PO number), never a user note. Its
+// note is system-managed and NOT editable: the RPC rejects the edit (errcode
+// 22023) and the item feed / mobile mask it anyway. `list()` resolves the raw
+// 'receipt_line' reason to a 'PO {n}' display string, so `reason` no longer
+// carries the sentinel here — the reliable per-row signal on this surface is
+// the bare-UUID sentinel in the raw notes column.
+function isReceiptLineNote(rawNotes: unknown): boolean {
+  const n = (rawNotes as string | null) ?? null;
+  return !!n && RECEIPT_NOTE_SENTINEL_RE.test(n.trim());
+}
+
 export default async function MovementsPage({
   searchParams,
 }: {
@@ -138,6 +150,9 @@ export default async function MovementsPage({
       // `reason` when there's no note (see EditableMovementNote).
       reason: (m.reason as string | null) ?? null,
       note: userNote(m.notes),
+      // receipt_line rows carry a system-managed note (the RPC rejects edits)
+      // — never expose the add/edit affordance on them.
+      noteEditable: !isReceiptLineNote(m.notes),
       createdAt: m.created_at as string,
       itemName: m.item?.name ?? null,
       itemSku: m.item?.sku ?? null,
@@ -342,7 +357,9 @@ export default async function MovementsPage({
                         movementId={m.id as string}
                         note={userNote(m.notes)}
                         reason={(m.reason as string | null) ?? null}
-                        canEdit={canEditNotes}
+                        // receipt_line rows are system-managed (RPC rejects the
+                        // edit) — read-only regardless of the caller's perm.
+                        canEdit={canEditNotes && !isReceiptLineNote(m.notes)}
                       />
                     </TableCell>
                   </TableRow>

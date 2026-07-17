@@ -119,6 +119,19 @@ export function movementNotesForDisplay(reason: string | null, notes: string | n
 }
 
 /**
+ * Whether a movement's note is user-editable. False for pre-0231
+ * 'receipt_line' rows: their `notes` column holds a machine receipt reference
+ * (the ONLY link to the PO number), so the SECURITY DEFINER `edit_movement_note`
+ * RPC refuses to overwrite it (errcode 22023). Computed from the RAW
+ * `stock_movements.reason` — call it BEFORE that reason is resolved to a
+ * 'PO {number}' display string. Mirrors the web's `noteEditable` field on
+ * `ActivityService.forItem` events exactly. Pure — unit-tested here.
+ */
+export function movementNoteEditable(reason: string | null): boolean {
+  return reason !== 'receipt_line';
+}
+
+/**
  * Web parity (Movement/Activity P1 review follow-up): renders a movement's
  * from/to location route the SAME way the web feed does (`ActivityFeed`'s
  * inline route logic in `activity-feed.tsx`) — both names resolved → "A → B";
