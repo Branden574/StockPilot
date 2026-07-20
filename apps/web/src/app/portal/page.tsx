@@ -1,7 +1,12 @@
 import Link from 'next/link';
 
 import { PortalShop } from '@/components/portal/portal-shop';
-import { portalCatalog, portalOrders, resolvePortalContext } from '@/server/services/portal';
+import {
+  portalCatalog,
+  portalOrders,
+  portalReturnsEnabled,
+  resolvePortalContext,
+} from '@/server/services/portal';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,7 +37,11 @@ export default async function PortalPage() {
     );
   }
 
-  const [catalog, orders] = await Promise.all([portalCatalog(ctx), portalOrders(ctx)]);
+  const [catalog, orders, returnsEnabled] = await Promise.all([
+    portalCatalog(ctx),
+    portalOrders(ctx),
+    portalReturnsEnabled(ctx),
+  ]);
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
@@ -49,7 +58,7 @@ export default async function PortalPage() {
         </div>
       </header>
 
-      <PortalShop catalog={catalog} orders={orders} />
+      <PortalShop catalog={catalog} orders={orders} returnsEnabled={returnsEnabled} />
     </main>
   );
 }

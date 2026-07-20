@@ -6,6 +6,7 @@ import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { broadcastOrderChanged } from '@/lib/realtime/broadcast';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { reportError as reportSrvError } from '@/lib/error-reporter';
+import { maybeSendReturnPrompt } from '@/server/email/return-prompt';
 import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
@@ -99,6 +100,11 @@ export interface OrderRequestRow {
   signed_at: string | null;
   completed_at: string | null;
   completed_by: string | null;
+  /** Per-order requester-return-portal token (mig 0156). NULL until minted
+   *  on completion (returns module on). Drives /returns/request/[token]. */
+  return_token: string | null;
+  /** One-time return-prompt email marker (mig 0278). NULL = never sent. */
+  return_prompt_sent_at: string | null;
 }
 
 export interface OrderRequestLineRow {
@@ -1389,6 +1395,18 @@ export class OrderRequestsService {
       orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),
       closedPartial: true,
     });
+    // Return-prompt email (returns-access Unit A): close-partial reaches the
+    // terminal 'completed' state WITHOUT any signature, so the requester
+    // would otherwise never get the self-service return link the sign route
+    // sends. The units from the earlier partial hand-over are returnable.
+    // Best-effort + marker-deduped (0278) — never fails the close.
+    try {
+      await maybeSendReturnPrompt(createAdminClient(), id, {
+        appUrl: process.env.NEXT_PUBLIC_APP_URL ?? 'https://stockpilotusa.com',
+      });
+    } catch {
+      /* best-effort — the order is closed regardless */
+    }
     void broadcastOrderChanged(this.ctx.organizationId, id);
     return row;
   }
@@ -1400,9 +1418,9 @@ export class OrderRequestsService {
    * hand-over-status guards, and runs the exact same partial-fulfillment fork
    * as the digital path (owed > 0 → backordered, else completed). This method
    * then fires the same requester notifications/events the sign route does,
-   * so the customer experience is identical however the pen met paper.
-   * NOTE: unlike the digital path, no self-service return link is minted —
-   * a paper hand-over is in person; returns can be started from the dashboard.
+   * so the customer experience is identical however the pen met paper —
+   * including (returns-access Unit A) the one-time self-service return-link
+   * email, deduped against the digital path via the 0278 marker.
    */
   async confirmPhysicalSignature(id: string, signerName: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
@@ -1521,6 +1539,11 @@ export class OrderRequestsService {
         // Completion receipt to the requester (notifyEmail honors prefs +
         // public-link tokens itself).
         void this.notifyEmail(row, 'completed');
+        // Return-prompt email (returns-access Unit A): a paper hand-over
+        // completes the order without the sign route, so send the same
+        // one-time self-service return link from here. Marker-deduped
+        // (0278) + best-effort inside this try — never fails the signature.
+        await maybeSendReturnPrompt(createAdminClient(), id, { appUrl });
         void dispatchEvent(this.ctx.organizationId, 'order.completed', {
           id,
           orderNumber: formatOrderNumber(row.order_number) ?? id.slice(0, 8).toUpperCase(),

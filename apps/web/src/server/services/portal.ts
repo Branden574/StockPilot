@@ -8,6 +8,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { reportError } from '@/lib/error-reporter';
 import { dispatchEvent } from '@/server/services/integration-events';
+import { pendingReturnQuantitiesByLine } from '@/server/services/returns';
 
 /**
  * Paginate an admin-client select to exhaustion in 1000-row windows. Portal
@@ -66,7 +67,26 @@ export interface PortalOrder {
   status: string;
   created_at: string;
   total: number;
-  lines: Array<{ itemId: string; name: string; quantity: number; unitPrice: number }>;
+  lines: Array<{
+    orderRequestLineId: string;
+    itemId: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    /** Shipped units on this line — the base of the durable return budget. */
+    quantityFulfilled: number;
+    /** Units already APPLIED against this line (durable counter, mig 0153). */
+    quantityReturned: number;
+    /** Units on live PENDING (unapplied, not cancelled/denied) return
+     *  requests — the DB cap trigger counts these too, so the portal's
+     *  returnable calc must subtract them (fulfilled − returned − pending). */
+    quantityPendingReturn: number;
+  }>;
+  /**
+   * The customer's OWN return requests on this order — status + date ONLY
+   * (portal-safe projection; never staff fields like approver/denial reason).
+   */
+  returns: Array<{ id: string; status: string; created_at: string }>;
 }
 
 /**
@@ -348,23 +368,72 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
   const { data } = await admin
     .from('order_requests')
     .select(
-      'id, status, created_at, lines:order_request_lines(item_id, quantity_requested, unit_price_at_request, item:inventory_items(name))',
+      'id, status, created_at, lines:order_request_lines(id, item_id, quantity_requested, quantity_fulfilled, returned_quantity, unit_price_at_request, item:inventory_items(name))',
     )
     .eq('organization_id', ctx.organizationId)
     .eq('customer_id', ctx.customerId)
     .order('created_at', { ascending: false })
     .limit(50);
 
-  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+
+  // The customer's own return requests on these orders — SAFE projection only
+  // (status + date; the id keys React rows). Never approver/denial/staff data.
+  // source='requester' only: staff-created internal returns (including
+  // denied/cancelled ones) are org-internal workflow and must never surface
+  // on the customer's portal card.
+  const orderIds = rows.map((r) => r.id as string);
+  const returnsByOrder = new Map<string, PortalOrder['returns']>();
+  if (orderIds.length > 0) {
+    const { data: returnRows } = await admin
+      .from('returns')
+      .select('id, order_request_id, status, created_at')
+      .eq('organization_id', ctx.organizationId)
+      .eq('source', 'requester')
+      .in('order_request_id', orderIds)
+      .order('created_at', { ascending: false });
+    for (const ret of (returnRows ?? []) as Array<Record<string, unknown>>) {
+      const key = ret.order_request_id as string;
+      const list = returnsByOrder.get(key) ?? [];
+      list.push({
+        id: ret.id as string,
+        status: ret.status as string,
+        created_at: ret.created_at as string,
+      });
+      returnsByOrder.set(key, list);
+    }
+  }
+
+  // Live pending return demand per line (unapplied lines on not-cancelled/
+  // denied returns) — the DB cap trigger counts it, so the portal's
+  // returnable calc (fulfilled − returned − pending) must too. Best-effort:
+  // on a read failure fall back to zero pending (the create path re-validates
+  // server-side and the DB trigger is the authoritative backstop), matching
+  // this reader's lenient posture on the returns list above.
+  let pendingByLine = new Map<string, number>();
+  try {
+    const allLineIds = rows.flatMap((r) =>
+      (((r.lines as Array<Record<string, unknown>>) ?? []).map((l) => l.id as string)),
+    );
+    pendingByLine = await pendingReturnQuantitiesByLine(admin, ctx.organizationId, allLineIds);
+  } catch {
+    pendingByLine = new Map<string, number>();
+  }
+
+  return rows.map((r) => {
     const lines = ((r.lines as Array<Record<string, unknown>>) ?? []).map((l) => {
       const item = l.item as { name: string | null } | { name: string | null }[] | null;
       const itemObj = Array.isArray(item) ? item[0] : item;
       return {
+        orderRequestLineId: l.id as string,
         itemId: l.item_id as string,
         name: itemObj?.name ?? 'Item',
         quantity: Number(l.quantity_requested) || 0,
         // SELL price the customer paid — never the cost snapshot.
         unitPrice: Number(l.unit_price_at_request) || 0,
+        quantityFulfilled: Number(l.quantity_fulfilled) || 0,
+        quantityReturned: Number(l.returned_quantity) || 0,
+        quantityPendingReturn: pendingByLine.get(l.id as string) ?? 0,
       };
     });
     return {
@@ -373,6 +442,25 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
       created_at: r.created_at as string,
       total: lines.reduce((s, l) => s + l.quantity * l.unitPrice, 0),
       lines,
+      returns: returnsByOrder.get(r.id as string) ?? [],
     };
   });
+}
+
+/**
+ * Whether the supplier org has the `returns` module enabled — drives the
+ * portal's "Request a return" affordance. UI-gating only: the create path
+ * re-checks the module server-side (loadPortalReturnContext), so flipping
+ * the flag client-side buys nothing.
+ */
+export async function portalReturnsEnabled(ctx: PortalContext): Promise<boolean> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from('organization_modules')
+    .select('module_id')
+    .eq('organization_id', ctx.organizationId)
+    .eq('module_id', 'returns')
+    .eq('enabled', true)
+    .maybeSingle();
+  return Boolean(data);
 }

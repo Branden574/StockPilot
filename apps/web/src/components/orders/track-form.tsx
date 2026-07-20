@@ -30,6 +30,10 @@ interface TrackResult {
   cancelledAt: string | null;
   deniedReason: string | null;
   notes: string | null;
+  /** Self-service return-portal path (`/returns/request/<token>`) — present
+   *  only on a completed order with fulfilled items whose org has the
+   *  returns module enabled. */
+  returnPath?: string | null;
 }
 
 interface Props {
@@ -264,6 +268,21 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
           <div className="text-muted-foreground mt-5 text-sm">
             This request was cancelled
             {result.cancelledAt ? ` on ${formatDate(result.cancelledAt)}` : ''}.
+          </div>
+        ) : null}
+
+        {/* Returns-access Unit A: a delivered order with fulfilled items
+            links straight into the self-service return portal. The API only
+            sends returnPath when the order is completed, something was
+            fulfilled, and the org's returns module is on. */}
+        {result.returnPath ? (
+          <div className="border-border mt-5 border-t pt-4">
+            <p className="text-muted-foreground text-sm">
+              Need to send something back?
+            </p>
+            <Button asChild variant="outline" className="mt-2">
+              <a href={result.returnPath}>Request a return</a>
+            </Button>
           </div>
         ) : null}
       </div>

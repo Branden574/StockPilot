@@ -1,4 +1,5 @@
 import { api } from './api';
+import type { CreateReturnBody } from './order-returns';
 
 /**
  * Typed wrapper over the mobile `api()` client for ADVANCING an order through
@@ -66,6 +67,25 @@ export async function releasePicking(orderId: string): Promise<void> {
 /** Manager assign/reassign of the picker to a specific org member. */
 export async function assignPicking(orderId: string, pickerUserId: string): Promise<void> {
   await transitionOrder(orderId, { action: 'assign_picking', pickerUserId });
+}
+
+/**
+ * Staff "Create return" on a completed/delivered order (mobile parity for the
+ * web CreateReturnDialog → createReturnFromOrderAction). The server reuses
+ * RMAService.createFromOrder verbatim: returns module + returns:manage gates,
+ * durable per-line budget, status gate — a 4xx throws with the server message.
+ * The created return lands in the web approval queue (no inventory movement
+ * until approve → receive → close).
+ */
+export async function createOrderReturn(
+  orderId: string,
+  body: CreateReturnBody,
+): Promise<{ id: string }> {
+  const res = await api<{ ok: true; return: { id: string } }>(
+    `/api/v1/orders/${orderId}/returns`,
+    { method: 'POST', body },
+  );
+  return { id: res.return.id };
 }
 
 /** Candidate drivers for the assign-delivery step. Requires orders:assign_delivery. */

@@ -13,6 +13,14 @@ vi.mock('@/server/services/audit', () => ({
   audit: vi.fn(async () => undefined),
 }));
 
+// The orphan-header rollback runs on the service-role client (returns RLS
+// deliberately denies DELETE for user-authed clients). Hand tests a swappable
+// stub so they can assert the rollback delete.
+const adminStubHolder = vi.hoisted(() => ({ current: null as unknown as { client: unknown } }));
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => adminStubHolder.current.client,
+}));
+
 import { RMAService } from './returns';
 import { ServiceError } from './context';
 
@@ -92,6 +100,9 @@ const VALID_INPUT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Fresh admin stub per test; individual tests re-assign when they need to
+  // assert against it (the rollback path is the only consumer).
+  adminStubHolder.current = makeSupabaseStub({});
 });
 
 afterEach(() => {
@@ -224,16 +235,30 @@ describe('RMAService.createFromOrder', () => {
     expect(secondStub.fromCalls).not.toContain('returns');
   });
 
-  it('the cap reads the DURABLE returned_quantity — NOT a SUM over the return_lines table', async () => {
+  it('the cap BASE is the DURABLE returned_quantity — a cancelled/denied return frees nothing', async () => {
     // Defends the status-flip/delete exploit: a cancelled/denied/deleted return
-    // header must not free budget. We prove the service computes remaining from
-    // order_request_lines.returned_quantity by checking it NEVER queries
-    // return_lines to build the cap (no SUM over mutable return rows). Here the
-    // line is fully consumed durably (returned 10 of 10) so even a return of 1
-    // is rejected, regardless of how many return rows exist.
+    // header must not free budget. The BASE of remaining is
+    // order_request_lines.returned_quantity (durable, apply-time); the
+    // return_lines read only SUBTRACTS live pending demand on top — cancelled/
+    // denied rows are excluded from pending, so they can never ADD budget back.
+    // Here the line is fully consumed durably (returned 10 of 10) so even a
+    // return of 1 is rejected, and a graveyard of cancelled return rows
+    // changes nothing.
     const stub = makeCreateStub({
       'order_request_lines.select': {
         data: [{ ...ORDER_LINE, returned_quantity: 10 }],
+        error: null,
+      },
+      // A cancelled prior return with unapplied lines — must free NOTHING.
+      'return_lines.select': {
+        data: [
+          {
+            order_request_line_id: OLINE_ID,
+            quantity: 10,
+            applied: false,
+            return: { status: 'cancelled' },
+          },
+        ],
         error: null,
       },
     });
@@ -246,11 +271,110 @@ describe('RMAService.createFromOrder', () => {
         lines: [{ orderRequestLineId: OLINE_ID, quantity: 1, disposition: 'restock' }],
       }),
     ).rejects.toMatchObject({ code: 'validation_error' });
-    // The over-return validation must NOT depend on a return_lines SELECT — the
-    // cap is the durable budget on the source line. (return_lines is only
-    // touched on a successful INSERT, which never happens for a rejected create.)
-    expect(stub.fromCalls).not.toContain('return_lines');
+    // Nothing was inserted for a rejected create.
     expect(stub.fromCalls).not.toContain('returns');
+  });
+
+  it('PENDING (unapplied, live) return lines consume remaining — mirrors the DB cap trigger', async () => {
+    // Fulfilled 10, durably returned 0, but 8 units sit on a live 'requested'
+    // return that has not been applied yet. The DB trigger counts that pending
+    // demand (returned + pending > fulfilled rejects), so the early validation
+    // must too: a new return of 3 (8 + 3 > 10) is rejected BEFORE the insert
+    // the trigger would refuse.
+    const stub = makeCreateStub({
+      'return_lines.select': {
+        data: [
+          {
+            order_request_line_id: OLINE_ID,
+            quantity: 8,
+            applied: false,
+            return: { status: 'requested' },
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(stub.fromCalls).not.toContain('returns');
+  });
+
+  it('cancelled/denied pending rows do NOT consume remaining (only live returns count)', async () => {
+    // The same 8 pending units, but on cancelled + denied headers — both are
+    // excluded from pending (exactly the DB trigger's status filter), so a
+    // return of 3 against the untouched budget of 10 succeeds.
+    const stub = makeCreateStub({
+      'return_lines.select': {
+        data: [
+          {
+            order_request_line_id: OLINE_ID,
+            quantity: 8,
+            applied: false,
+            return: { status: 'cancelled' },
+          },
+          {
+            order_request_line_id: OLINE_ID,
+            quantity: 8,
+            applied: false,
+            return: { status: 'denied' },
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).resolves.toMatchObject({
+      status: 'requested',
+    });
+  });
+
+  it('rejects a fractional quantity (whole units only)', async () => {
+    const stub = makeCreateStub();
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    await expect(
+      svc.createFromOrder(ORDER_ID, {
+        lines: [{ orderRequestLineId: OLINE_ID, quantity: 1.5, disposition: 'restock' }],
+      }),
+    ).rejects.toThrow(); // zod .int() reject
+    expect(stub.fromCalls).not.toContain('returns');
+  });
+
+  it('rolls back the orphan header (via the admin client) if the lines insert fails', async () => {
+    // The lines insert fails after the header insert. The header must not be
+    // stranded as a lineless 'requested' return — and because returns RLS
+    // denies DELETE to user-authed clients, the rollback must go through the
+    // service-role client.
+    const adminStub = makeSupabaseStub({});
+    adminStubHolder.current = adminStub;
+    const stub = makeCreateStub({
+      'return_lines.insert': { data: null, error: { message: 'some db error' } },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    await expect(svc.createFromOrder(ORDER_ID, VALID_INPUT)).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+
+    // The rollback delete ran on the ADMIN client, scoped by id AND org.
+    const deleteArgs = adminStub.chainArgs.get('returns.delete') ?? [];
+    expect(adminStub.chains.get('returns.delete')).toBeDefined();
+    expect(deleteArgs).toContainEqual(['id', 'ret-1']);
+    expect(deleteArgs).toContainEqual(['organization_id', 'org-test']);
+    // The user-authed client issued NO delete (RLS would silently drop it).
+    expect(stub.chains.get('returns.delete')).toBeUndefined();
   });
 
   it('cross-item: a return line whose item != the source line item is rejected', async () => {
@@ -530,9 +654,10 @@ describe('RMAService module + permission gating', () => {
 });
 
 describe('RMAService.returnableLinesForOrder (durable budget)', () => {
-  it('reports remaining = quantity_fulfilled - returned_quantity (durable, not a SUM)', async () => {
-    // Fulfilled 10, durably returned 4 → remaining 6. Read straight off the
-    // source line; no return_lines SUM is involved.
+  it('reports remaining = quantity_fulfilled - returned_quantity (durable base)', async () => {
+    // Fulfilled 10, durably returned 4, no pending demand → remaining 6. The
+    // base is read straight off the source line (never a SUM over prior
+    // return headers, which a cancel could deflate).
     const stub = makeSupabaseStub({
       'order_requests.select': { data: [COMPLETED_ORDER], error: null },
       'order_request_lines.select': {
@@ -560,8 +685,86 @@ describe('RMAService.returnableLinesForOrder (durable budget)', () => {
       quantityFulfilled: 10,
       quantityRemaining: 6,
     });
-    // The remaining budget must NOT be derived from a return_lines SUM.
-    expect(stub.fromCalls).not.toContain('return_lines');
+  });
+
+  it('subtracts live PENDING return demand from remaining (matches the DB cap trigger)', async () => {
+    // Fulfilled 10, durably returned 4, plus 3 units pending on a live
+    // 'approved' (unapplied) return → offer only 3. A cancelled row's 5 units
+    // are excluded — cancelling a pending return releases exactly its own
+    // demand, never applied budget.
+    const stub = makeSupabaseStub({
+      'order_requests.select': { data: [COMPLETED_ORDER], error: null },
+      'order_request_lines.select': {
+        data: [
+          {
+            id: OLINE_ID,
+            item_id: ITEM_ID,
+            quantity_fulfilled: 10,
+            returned_quantity: 4,
+            item: { id: ITEM_ID, name: 'Widget', sku: 'W-1' },
+          },
+        ],
+        error: null,
+      },
+      'return_lines.select': {
+        data: [
+          {
+            order_request_line_id: OLINE_ID,
+            quantity: 3,
+            applied: false,
+            return: { status: 'approved' },
+          },
+          {
+            order_request_line_id: OLINE_ID,
+            quantity: 5,
+            applied: false,
+            return: { status: 'cancelled' },
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    const lines = await svc.returnableLinesForOrder(ORDER_ID);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ quantityFulfilled: 10, quantityRemaining: 3 });
+  });
+
+  it('omits a line whose budget is fully consumed by PENDING demand', async () => {
+    const stub = makeSupabaseStub({
+      'order_requests.select': { data: [COMPLETED_ORDER], error: null },
+      'order_request_lines.select': {
+        data: [
+          {
+            id: OLINE_ID,
+            item_id: ITEM_ID,
+            quantity_fulfilled: 10,
+            returned_quantity: 0,
+            item: { id: ITEM_ID, name: 'Widget', sku: 'W-1' },
+          },
+        ],
+        error: null,
+      },
+      'return_lines.select': {
+        data: [
+          {
+            order_request_line_id: OLINE_ID,
+            quantity: 10,
+            applied: false,
+            return: { status: 'requested' },
+          },
+        ],
+        error: null,
+      },
+    });
+    const svc = new RMAService(
+      makeServiceContext(stub.client, { role: 'manager', enabledModules: RETURNS_MODULES }),
+    );
+
+    await expect(svc.returnableLinesForOrder(ORDER_ID)).resolves.toEqual([]);
   });
 
   it('omits a line whose durable budget is fully consumed (returned_quantity == fulfilled)', async () => {
