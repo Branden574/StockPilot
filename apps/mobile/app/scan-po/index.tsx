@@ -38,9 +38,9 @@ const MAX_FRAMES = 5;
  * existing photos / a PDF), and we POST them all to /api/po-imports/scan
  * which runs Gemini Flash extraction and creates a po_imports row.
  *
- * On success we deep-link to the existing review page on the web —
- * we don't try to render the line-by-line review on mobile (the form
- * is dense and works much better on desktop).
+ * On success we route to the NATIVE review screen (app/po-import/[id]) —
+ * parse retry, per-line matching, and the full approve flow all run on
+ * device now; the web review page remains available via "Open in browser".
  */
 export default function ScanPo() {
   const router = useRouter();
@@ -232,18 +232,26 @@ export default function ScanPo() {
         duration: 250,
         useNativeDriver: false,
       }).start();
-      const reviewUrl = `${API_BASE}/dashboard/purchase-orders/imports/${json.id}`;
+      // Native review screen exists now (app/po-import/[id]) — land there by
+      // default; the web review page stays one tap away for desk work.
+      const importId = String(json.id);
+      const reviewUrl = `${API_BASE}/dashboard/purchase-orders/imports/${importId}`;
       Alert.alert(
         'Extracted',
         json.lowConfidenceLines > 0
-          ? `${json.lowConfidenceLines} line${json.lowConfidenceLines === 1 ? '' : 's'} need a quick review on the web.`
-          : 'Looks clean. Review and approve on the web.',
+          ? `${json.lowConfidenceLines} line${json.lowConfidenceLines === 1 ? '' : 's'} need a quick review.`
+          : 'Looks clean. Review and approve the import.',
         [
+          {
+            text: 'Review now',
+            onPress: () =>
+              router.replace({ pathname: '/po-import/[id]', params: { id: importId } }),
+          },
           {
             text: 'Open in browser',
             onPress: () => Linking.openURL(reviewUrl),
           },
-          { text: 'OK', style: 'cancel' },
+          { text: 'Later', style: 'cancel' },
         ],
       );
       setFrames([]);
@@ -305,8 +313,8 @@ export default function ScanPo() {
         <Text style={styles.title}>Scan a PO</Text>
         <Text style={styles.subtitle}>
           Take a photo of a printed purchase order. Up to {MAX_FRAMES} pages —
-          we extract vendor, line items, and totals automatically. Review and
-          approve on the web.
+          we extract vendor, line items, and totals automatically, then you
+          review and approve right here.
         </Text>
 
         <View style={styles.actionRow}>
