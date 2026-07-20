@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { audit } from '@/server/services/audit';
+import { AUDITOR_PRESET_PERMISSIONS } from '@/lib/auditor-preset';
 import { broadcastPermissionsChanged } from '@/lib/realtime/broadcast';
 import { ServiceError, withContext } from '@/server/services/context';
 
@@ -129,6 +130,59 @@ export async function setRolePermissionOverrideAction(input: {
   } catch (e) {
     if (e instanceof ServiceError) return err(e.code, e.message);
     return err('internal_error', e instanceof Error ? e.message : 'Failed to update permission');
+  }
+}
+
+/**
+ * Bulk-grants the Auditor preset to the viewer role: role-level GRANT
+ * overrides for every read/reporting surface in AUDITOR_PRESET_PERMISSIONS.
+ * Same gates as the single-toggle siblings (admin/owner + org MFA policy +
+ * the anti-escalation guard per permission), and the same persistence shape —
+ * an upsert on (organization_id, role, permission) with granted=true, so
+ * applying it twice is a no-op and individual toggles can still flip any of
+ * the granted permissions afterward.
+ */
+export async function applyAuditorPresetAction(): Promise<ActionResult<null>> {
+  try {
+    const ctx = await requireConfigurer();
+    // Anti-escalation: every grant in the preset must be one the actor holds
+    // themselves (matches assertCanGrant on the single-toggle path). Checked
+    // for the WHOLE set before any write so a partial apply can't happen.
+    for (const permission of AUDITOR_PRESET_PERMISSIONS) {
+      assertCanGrant(ctx, permission, true);
+    }
+
+    const updatedAt = new Date().toISOString();
+    const { error } = await ctx.supabase.from('role_permission_overrides').upsert(
+      AUDITOR_PRESET_PERMISSIONS.map((permission) => ({
+        organization_id: ctx.organizationId,
+        role: 'viewer',
+        permission,
+        granted: true,
+        updated_by: ctx.userId,
+        updated_at: updatedAt,
+      })),
+      { onConflict: 'organization_id,role,permission' },
+    );
+    if (error) throw new ServiceError('internal_error', error.message);
+
+    await audit(
+      {
+        event: 'permissions.auditor_preset',
+        entityType: 'role_permission_override',
+        entityId: 'viewer',
+        extra: { role: 'viewer', granted: true, permissions: [...AUDITOR_PRESET_PERMISSIONS] },
+      },
+      ctx,
+    );
+    // One generic ping (no single permission key) — affected viewers get the
+    // generic "your permissions changed" toast + a nav refresh.
+    await broadcastPermissionsChanged(ctx.organizationId, { role: 'viewer', granted: true });
+    revalidatePath('/dashboard/settings/roles');
+    return ok(null);
+  } catch (e) {
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    return err('internal_error', e instanceof Error ? e.message : 'Failed to apply preset');
   }
 }
 
