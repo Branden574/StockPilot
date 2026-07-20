@@ -44,6 +44,7 @@ import { BookListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
+import { listStatusPredicate, stockPillFor } from '@/lib/expected-items';
 import { signItemImages, THUMB_TRANSFORM } from '@/lib/image-cache';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
@@ -68,6 +69,12 @@ interface BookRow {
    *  (migration 0266) — drives the item detail "Auto-archived" badge.
    *  Meaningless unless status === 'archived'. */
   auto_archived: boolean;
+  /** True while a PO-created book is awaiting its FIRST receipt
+   *  (migration 0277; a DB trigger clears it when stock arrives). Flagged
+   *  rows are hidden from the default catalog and only surface under the
+   *  filter sheet's Expected option, where they wear an EXPECTED pill
+   *  instead of the misleading OUT. */
+  awaiting_first_receipt: boolean;
 }
 
 const bookKeyExtractor = (b: BookRow): string => b.id;
@@ -167,12 +174,13 @@ export default function BooksScreen() {
       };
       const ord = sortMap[f.sort];
       const isLow = f.status === 'low';
-      // Same Archived toggle as Items (FilterSheet's STOCK section) — flips
-      // this screen from active books to archived ones. This ALSO fixes a
-      // gap where this query had no status filter at all, so an
-      // auto-archived (zero-stock) book kept showing up mixed into the
-      // main catalog instead of only in the new Archived view.
-      const isArchived = f.status === 'archived';
+      // Same STOCK radio as Items (FilterSheet): Archived flips this screen
+      // from active books to archived ones, and Expected (mig 0277) shows
+      // PO-created phantoms awaiting their first receipt. Every default view
+      // carries awaiting_first_receipt=false so a never-received book can't
+      // read as "Out of stock". listStatusPredicate (pure, tested) owns the
+      // mapping — identical to the Items list so the tabs never drift.
+      const pred = listStatusPredicate(f.status);
 
       // Match web: books are identified by `item_type='book'` directly.
       // The previous category-name LIKE '%book%' filter missed every
@@ -183,14 +191,18 @@ export default function BooksScreen() {
         .from('inventory_items')
         .select(
           `id, name, sku, barcode, quantity_on_hand, reorder_point, custom_fields,
-           category_id, primary_location_id, charter_id, warehouse_id, updated_at, auto_archived`,
+           category_id, primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
+           awaiting_first_receipt`,
           { count: 'exact' },
         )
         .eq('organization_id', orgId)
         .eq('item_type', 'book')
-        .eq('status', isArchived ? 'archived' : 'active')
+        .eq('awaiting_first_receipt', pred.awaitingFirstReceipt)
         .is('deleted_at', null)
         .order(ord.col, { ascending: ord.asc });
+      if (pred.lifecycle) {
+        req = req.eq('status', pred.lifecycle);
+      }
 
       if (isLow) {
         // 'low' is a per-row client filter; widen the window and skip
@@ -259,6 +271,7 @@ export default function BooksScreen() {
           imageUrl: null,
           grade: (cf?.book_grade as string | undefined) ?? null,
           auto_archived: Boolean(r.auto_archived),
+          awaiting_first_receipt: Boolean(r.awaiting_first_receipt),
         };
       });
 
@@ -513,9 +526,10 @@ const BookCard = React.memo(function BookCard({
     ?? (book.custom_fields?.author as string | undefined)
     ?? null;
   const isbn = book.barcode ?? (book.custom_fields?.isbn as string | undefined) ?? null;
-  const lowStock = book.reorder_point > 0 && book.quantity_on_hand <= book.reorder_point;
-  const status: 'ok' | 'warn' | 'crit' =
-    book.quantity_on_hand <= 0 ? 'crit' : lowStock ? 'warn' : 'ok';
+  // EXPECTED (awaiting first receipt) replaces OUT for PO-created phantoms —
+  // never delivered, so "Out of stock" would be the exact misreading this
+  // feature prevents. Pure + tested in lib/expected-items.ts.
+  const pill = stockPillFor(book);
   return (
     <Pressable
       onPress={() => (selectMode ? onToggleSelect(book) : onBookPress(book.id))}
@@ -549,9 +563,7 @@ const BookCard = React.memo(function BookCard({
             <Mono size={17} tracking={-0.018} color={c.ink} style={{ fontFamily: FONT.display }}>
               {book.quantity_on_hand}
             </Mono>
-            {status === 'ok' ? <Pill status="ok">OK</Pill> : null}
-            {status === 'warn' ? <Pill status="warn">LOW</Pill> : null}
-            {status === 'crit' ? <Pill status="crit">OUT</Pill> : null}
+            <Pill status={pill.status}>{pill.label}</Pill>
           </View>
           {selectMode ? (
             <View style={{ marginLeft: 2 }}>

@@ -111,6 +111,12 @@ interface Item {
    *  (migration 0266), as opposed to a human archiving it — drives the
    *  "Auto-archived" badge shown alongside the Archived badge. */
   auto_archived: boolean;
+  /** True while a PO-created item is awaiting its FIRST receipt (migration
+   *  0277; a DB trigger clears it the moment any stock arrives). Such items
+   *  are hidden from the default Items/Books lists — this detail screen is
+   *  reachable via the Expected filter, scan, or search, so it shows an
+   *  "Expected — awaiting first receipt" badge for instant context. */
+  awaiting_first_receipt: boolean;
   category_id: string | null;
   category_name: string | null;
   supplier_name: string | null;
@@ -450,7 +456,8 @@ export default function ItemDetail() {
       .select(
         `id, organization_id, name, sku, barcode, description, quantity_on_hand,
          reorder_point, reorder_quantity, unit_cost, retail_price,
-         unit_of_measure, status, auto_archived, category_id, item_type, bin_location,
+         unit_of_measure, status, auto_archived, awaiting_first_receipt,
+         category_id, item_type, bin_location,
          warehouse_id, charter_id, custom_fields, tracking_type,
          category:categories!category_id (name),
          supplier:suppliers!supplier_id (name),
@@ -568,6 +575,7 @@ export default function ItemDetail() {
       unit_of_measure: (r.unit_of_measure as string) ?? 'EA',
       status: r.status as string,
       auto_archived: Boolean(r.auto_archived),
+      awaiting_first_receipt: Boolean(r.awaiting_first_receipt),
       category_id: (r.category_id as string | null) ?? null,
       category_name: Array.isArray(cat) ? (cat[0]?.name ?? null) : (cat?.name ?? null),
       supplier_name: Array.isArray(sup) ? (sup[0]?.name ?? null) : (sup?.name ?? null),
@@ -1129,17 +1137,36 @@ export default function ItemDetail() {
               {[item.category_name, item.barcode].filter(Boolean).join(' · ')}
             </Mono>
           ) : null}
-          {/* Archived / Auto-archived badges — mirrors the web detail's
-              stock-status-badge.tsx. Auto-archived is meaningless on an
-              active item, so it only ever renders alongside Archived. */}
-          {item.status === 'archived' ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
-              <Pill status="default" dot={false}>
-                ARCHIVED
-              </Pill>
-              {item.auto_archived ? (
+          {/* Archived / Auto-archived / Expected badges — mirrors the web
+              detail's stock-status-badge.tsx. Auto-archived is meaningless on
+              an active item, so it only ever renders alongside Archived.
+              Expected (mig 0277) marks a PO-created item awaiting its FIRST
+              receipt — hidden from the default lists, so when someone lands
+              here via the Expected filter, scan, or search the badge makes
+              the "why is this at zero" context instant. */}
+          {item.status === 'archived' || item.awaiting_first_receipt ? (
+            <View
+              style={{
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 8,
+                marginTop: 10,
+              }}
+            >
+              {item.status === 'archived' ? (
+                <Pill status="default" dot={false}>
+                  ARCHIVED
+                </Pill>
+              ) : null}
+              {item.status === 'archived' && item.auto_archived ? (
                 <Pill status="warn" dot={false}>
                   AUTO-ARCHIVED
+                </Pill>
+              ) : null}
+              {item.awaiting_first_receipt ? (
+                <Pill status="warn" dot={false}>
+                  EXPECTED — AWAITING FIRST RECEIPT
                 </Pill>
               ) : null}
             </View>
@@ -1148,6 +1175,12 @@ export default function ItemDetail() {
             <Body muted size={11} style={{ marginTop: 8 }}>
               The system archived this item automatically after it sat at zero stock past the
               configured dwell window.
+            </Body>
+          ) : null}
+          {item.awaiting_first_receipt ? (
+            <Body muted size={11} style={{ marginTop: 8 }}>
+              Created from a purchase order — hidden from the default Items list until the first
+              units are received. It appears automatically the moment any stock arrives.
             </Body>
           ) : null}
           {/* T12: restore action, now wired to POST /api/v1/items/[id]/restore
