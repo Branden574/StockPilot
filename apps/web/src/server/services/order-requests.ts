@@ -820,17 +820,27 @@ export class OrderRequestsService {
     const itemIds = [...new Set(input.lines.map((l) => l.itemId))];
     const { data: items, error: iErr } = await this.ctx.supabase
       .from('inventory_items')
-      .select('id, warehouse_id, unit_cost')
+      .select('id, name, warehouse_id, unit_cost, awaiting_first_receipt')
       .eq('organization_id', this.ctx.organizationId)
       .in('id', itemIds);
     if (iErr) throw new ServiceError('internal_error', iErr.message);
-    const itemMap = new Map<string, { warehouse_id: string | null; unit_cost: number }>();
+    const itemMap = new Map<
+      string,
+      { name: string; warehouse_id: string | null; unit_cost: number; awaiting: boolean }
+    >();
     for (const row of (items ?? []) as Array<{
       id: string;
+      name: string;
       warehouse_id: string | null;
       unit_cost: number;
+      awaiting_first_receipt: boolean;
     }>) {
-      itemMap.set(row.id, { warehouse_id: row.warehouse_id, unit_cost: Number(row.unit_cost) || 0 });
+      itemMap.set(row.id, {
+        name: row.name,
+        warehouse_id: row.warehouse_id,
+        unit_cost: Number(row.unit_cost) || 0,
+        awaiting: row.awaiting_first_receipt === true,
+      });
     }
     for (const line of input.lines) {
       const it = itemMap.get(line.itemId);
@@ -839,6 +849,16 @@ export class OrderRequestsService {
         throw new ServiceError(
           'validation_error',
           'Every line must be at the chosen warehouse',
+        );
+      }
+      // Expected-items guard (mig 0277): an item auto-created from an
+      // inbound PO that has never received stock is NOT orderable. The
+      // pickers/catalogs already exclude flagged items — this is the
+      // authoritative server-side gate a crafted payload can't skip.
+      if (it.awaiting) {
+        throw new ServiceError(
+          'validation_error',
+          `This item hasn't been received yet: ${it.name}. It can be ordered once its first stock arrives.`,
         );
       }
     }

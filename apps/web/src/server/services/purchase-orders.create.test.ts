@@ -193,6 +193,10 @@ describe('PurchaseOrdersService.create — custom line items', () => {
     // Warehouse must be org-scoped (from getWarehouseAccess primary, since no
     // destination location was provided).
     expect(invArg.warehouseId).toBe(WH_UUID);
+    // PO-born custom items are awaitingFirstReceipt (mig 0277) — hidden
+    // as "Expected" until the receive flow clears the flag.
+    const invOpts = (mockInvCreate.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    expect(invOpts).toEqual({ awaitingFirstReceipt: true });
 
     // The PO line insert must carry the new item's id, not a newItemName.
     // chainArgs layout: chainArgs.get(key) = [ [insertCallArgs...], ... ]

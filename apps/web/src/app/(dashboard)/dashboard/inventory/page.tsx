@@ -95,6 +95,10 @@ type InventorySearchParams = {
   /** '1' narrows the Archived view to system-archived rows only (Task 8's
    *  "Auto-archived only" filter chip). */
   auto?: string;
+  /** '1' = the "Expected" chip view (mig 0277): ONLY items auto-created
+   *  from inbound POs that have never received stock. The default view
+   *  excludes those rows entirely. */
+  expected?: string;
   type?: string;
   page?: string;
   sort?: string;
@@ -232,6 +236,9 @@ type SectionData = {
   charters: Array<{ id: string; name: string; code: string | null }>;
   trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
   placementMap: Map<string, InventoryPlacementLine[]>;
+  /** ACTIVE items awaiting first receipt (mig 0277) — the "Expected"
+   *  chip's count badge (server mode; instant mode derives locally). */
+  expectedCount: number;
 };
 
 /**
@@ -501,6 +508,7 @@ async function InventoryTableSection({
         charters: payload.charters,
         trends: new Map(Object.entries(payload.trends)),
         placementMap: new Map(Object.entries(payload.placement)),
+        expectedCount: payload.expectedCount,
       };
     } catch (err) {
       console.warn('[inventory page] cached default view unavailable, using live path:', err);
@@ -560,7 +568,7 @@ async function InventoryTableSection({
       };
     };
 
-    const [inventory, lookups, trendBuckets] = await Promise.all([
+    const [inventory, expectedCountLive, lookups, trendBuckets] = await Promise.all([
       tagged(
         'inventorySvc.list',
         inventorySvc.list({
@@ -569,6 +577,7 @@ async function InventoryTableSection({
           lowStock: params.stock === 'low',
           outOfStock: params.stock === 'out',
           autoArchived: params.auto === '1',
+          expected: params.expected === '1',
           itemType,
           warehouseId: warehouseFilter,
           categoryIds,
@@ -580,6 +589,13 @@ async function InventoryTableSection({
           offset: (page - 1) * PAGE_SIZE,
         }),
       ),
+      // Expected-chip badge count (mig 0277) — one HEAD count on the
+      // 0277 partial index, in parallel with the rows query. NEVER
+      // fails the page: the chip degrades to hidden on error.
+      tagged(
+        'inventorySvc.countExpected',
+        inventorySvc.countExpected({ itemType, warehouseId: warehouseFilter }),
+      ).catch(() => 0),
       useSharedCaches
         ? loadInventoryLookups(sessionCtx.organizationId).catch((err: unknown) => {
             console.warn('[inventory page] cached lookups unavailable, using live path:', err);
@@ -652,6 +668,7 @@ async function InventoryTableSection({
       ...lookups,
       trends,
       placementMap,
+      expectedCount: expectedCountLive,
     };
   }
 
@@ -747,6 +764,7 @@ async function InventoryTableSection({
       activeWarehouseId={warehouseFilter}
       currentUserId={sessionCtx.userId}
       instantPromise={instantPromise}
+      expectedCount={data.expectedCount}
     />
   );
 }
@@ -771,6 +789,19 @@ function inventoryEmptyState({
   canCreate: boolean;
 }) {
   if (total !== 0) return null;
+  // Expected chip view (mig 0277) with zero rows: everything that was
+  // awaiting a first receipt has arrived (or none ever existed). Its own
+  // branch so the generic "No items yet" CTA never fires here.
+  if (params.expected === '1' && !params.q && !params.stock) {
+    return (
+      <EmptyState
+        icon={Boxes}
+        title="No expected items"
+        description="Items created from purchase orders appear here until their first stock is received."
+        cta={{ label: 'Back to all items', href: '/dashboard/inventory' }}
+      />
+    );
+  }
   // Excludes ?auto=1 (the "Auto-archived only" chip): a zero result there
   // just means none of the archived items were system-archived, which is
   // NOT the same as "nothing archived at all" — fall through to the

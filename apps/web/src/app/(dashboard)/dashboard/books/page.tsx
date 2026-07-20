@@ -93,6 +93,10 @@ type BooksSearchParams = {
   /** '1' narrows the Archived view to system-archived rows only (Task 8's
    *  "Auto-archived only" filter chip). */
   auto?: string;
+  /** '1' = the "Expected" chip view (mig 0277): ONLY books auto-created
+   *  from inbound POs that have never received stock. The default view
+   *  excludes those rows entirely. */
+  expected?: string;
   page?: string;
   sort?: string;
   cat?: string | string[];
@@ -205,6 +209,9 @@ type SectionData = {
   tags: Array<{ id: string; name: string; color: string | null }>;
   charters: Array<{ id: string; name: string; code: string | null }>;
   trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
+  /** ACTIVE books awaiting first receipt (mig 0277) — the "Expected"
+   *  chip's count badge (server mode; instant mode derives locally). */
+  expectedCount: number;
 };
 
 async function BooksTableSection({
@@ -362,6 +369,7 @@ async function BooksTableSection({
         tags: payload.tags,
         charters: payload.charters,
         trends: new Map(Object.entries(payload.trends)),
+        expectedCount: payload.expectedCount,
       };
     } catch (err) {
       console.warn('[books page] cached default view unavailable, using live path:', err);
@@ -418,13 +426,14 @@ async function BooksTableSection({
       };
     };
 
-    const [inventory, lookups, trendBuckets] = await Promise.all([
+    const [inventory, expectedCountLive, lookups, trendBuckets] = await Promise.all([
       inventorySvc.list({
         q: params.q,
         status: lifecycleStatus,
         lowStock: params.stock === 'low',
         outOfStock: params.stock === 'out',
         autoArchived: params.auto === '1',
+        expected: params.expected === '1',
         warehouseId: warehouseFilter,
         itemType: 'book',
         categoryIds,
@@ -435,6 +444,12 @@ async function BooksTableSection({
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
       }),
+      // Expected-chip badge count (mig 0277) — one HEAD count on the
+      // 0277 partial index, in parallel with the rows query. NEVER
+      // fails the page: the chip degrades to hidden on error.
+      inventorySvc
+        .countExpected({ itemType: 'book', warehouseId: warehouseFilter })
+        .catch(() => 0),
       useSharedCaches
         ? loadInventoryLookups(sessionCtx.organizationId).catch((err: unknown) => {
             console.warn('[books page] cached lookups unavailable, using live path:', err);
@@ -488,6 +503,7 @@ async function BooksTableSection({
       valueOnHand: inventory.valueOnHand,
       ...lookups,
       trends,
+      expectedCount: expectedCountLive,
     };
   }
 
@@ -536,6 +552,7 @@ async function BooksTableSection({
       savedViewScope="books"
       activeWarehouseId={warehouseFilter}
       currentUserId={sessionCtx.userId}
+      expectedCount={data.expectedCount}
     />
   );
 }
@@ -557,6 +574,18 @@ function booksEmptyState({
   canCreate: boolean;
 }) {
   if (total !== 0) return null;
+  // Expected chip view (mig 0277) with zero rows — same dedicated branch
+  // as the Items page so the generic "No books yet" CTA never fires here.
+  if (params.expected === '1' && !params.q && !params.stock) {
+    return (
+      <EmptyState
+        icon={BookOpen}
+        title="No expected books"
+        description="Books created from purchase orders appear here until their first stock is received."
+        cta={{ label: 'Back to all books', href: '/dashboard/books' }}
+      />
+    );
+  }
   // Excludes ?auto=1 (the "Auto-archived only" chip) — same rationale as
   // the Items page: a zero result there just means none of the archived
   // books were system-archived, not that nothing is archived at all.

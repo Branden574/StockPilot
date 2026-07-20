@@ -96,6 +96,9 @@ describe('GET /api/items/search', () => {
       status: 'active',
       lowStock: true,
       outOfStock: false,
+      // Expected-items visibility (mig 0277): absent ?expected=1 the
+      // endpoint mirrors the list pages and excludes flagged rows.
+      expected: false,
       sort: 'name_asc',
       categoryIds: ['c1', 'c2'],
       locationIds: ['l1'],
@@ -107,6 +110,17 @@ describe('GET /api/items/search', () => {
     expect(body.items).toHaveLength(1);
     expect(body.items[0].id).toBe('i1');
     expect(body.total).toBe(1);
+  });
+
+  it('?expected=1 forwards expected:true (in-view search inside the Expected chip view, mig 0277)', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+
+    const res = await GET(makeReq('q=lanyard&expected=1'));
+
+    expect(res.status).toBe(200);
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ q: 'lanyard', expected: true }),
+    );
   });
 
   it('attaches signed image URLs', async () => {

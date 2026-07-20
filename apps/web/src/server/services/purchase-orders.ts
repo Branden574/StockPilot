@@ -573,7 +573,10 @@ export class PurchaseOrdersService {
           quantityOnHand: 0,
           warehouseId: customItemWarehouseId,
         });
-        const newItem = await invSvc.create(itemInput);
+        // awaitingFirstReceipt: a custom item is born FROM this PO at qty
+        // 0 — hidden ("Expected", migration 0277) until the receive flow
+        // raises its quantity and the DB trigger clears the flag.
+        const newItem = await invSvc.create(itemInput, { awaitingFirstReceipt: true });
         customItemIds.push(newItem.id as string);
         resolvedLines.push({
           itemId: newItem.id as string,
@@ -803,7 +806,9 @@ export class PurchaseOrdersService {
           quantityOnHand: 0,
           warehouseId: customItemWarehouseId,
         });
-        const newItem = await invSvc.create(itemInput);
+        // Same as create(): PO-born custom item → hidden ("Expected",
+        // migration 0277) until its first receipt clears the flag.
+        const newItem = await invSvc.create(itemInput, { awaitingFirstReceipt: true });
         customItemIds.push(newItem.id as string);
         resolvedLines.push({
           itemId: newItem.id as string,
