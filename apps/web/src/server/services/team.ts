@@ -31,7 +31,7 @@ export class TeamService {
       .from('organization_members')
       .select(
         `
-        id, role, invited_at, accepted_at, created_at, user_id, is_delivery_driver,
+        id, role, invited_at, accepted_at, created_at, user_id, is_delivery_driver, all_warehouses,
         user:user_id (id, email, full_name, avatar_url)
       `,
       )
@@ -50,6 +50,10 @@ export class TeamService {
         created_at: m.created_at as string,
         user_id: m.user_id as string,
         is_delivery_driver: Boolean(m.is_delivery_driver),
+        // May access every warehouse in the org (0280). When true, the
+        // per-warehouse assignment rows below are a materialization detail —
+        // the Team UI shows "All warehouses" instead of the primary one.
+        all_warehouses: Boolean(m.all_warehouses),
         user:
           userObj && typeof userObj === 'object'
             ? {
@@ -150,24 +154,42 @@ export class TeamService {
      */
     charterIds?: string[];
     warehouseId?: string | null;
+    /**
+     * All-warehouse access: on accept, the member gets
+     * organization_members.all_warehouses=true plus one assignment row per
+     * current warehouse (future warehouses are covered by the 0280 trigger).
+     * Takes precedence over warehouseId/charter scoping — both are nulled
+     * when set, since charter scoping is warehouse-scoped.
+     */
+    allWarehouses?: boolean;
     message?: string;
   }) {
     assertPermission(this.ctx, 'members:invite');
 
     const normalizedEmail = params.email.toLowerCase().trim();
+    const allWarehouses = params.allWarehouses === true;
+    const warehouseId = allWarehouses ? null : (params.warehouseId ?? null);
 
     // Normalize the charter list: prefer the explicit multi list, else
     // fall back to the single charterId (back-compat), else empty (= all
-    // charters). filter(Boolean) drops nulls/empties.
-    const charterIds = (
-      params.charterIds ?? (params.charterId ? [params.charterId] : [])
-    ).filter(Boolean) as string[];
+    // charters). filter(Boolean) drops nulls/empties. All-warehouse invites
+    // ignore charter scoping entirely (charters are warehouse-scoped).
+    const charterIds = allWarehouses
+      ? []
+      : ((
+          params.charterIds ?? (params.charterId ? [params.charterId] : [])
+        ).filter(Boolean) as string[]);
 
-    // For warehouse-scoped roles (staff/viewer), warehouse_id is required.
-    if ((params.role === 'staff' || params.role === 'viewer') && !params.warehouseId) {
+    // For warehouse-scoped roles (staff/viewer), either a specific warehouse
+    // or all-warehouse access is required.
+    if (
+      (params.role === 'staff' || params.role === 'viewer') &&
+      !warehouseId &&
+      !allWarehouses
+    ) {
       throw new ServiceError(
         'validation_error',
-        'A warehouse must be assigned for Warehouse User and Read-Only Auditor roles.',
+        'Assign a warehouse (or all warehouses) for Warehouse User and Read-Only Auditor roles.',
       );
     }
 
@@ -218,7 +240,11 @@ export class TeamService {
         token,
         expires_at: expiresAt,
         invited_by: this.ctx.userId,
-        warehouse_id: params.warehouseId ?? null,
+        warehouse_id: warehouseId,
+        // All-warehouse access (0280): accept sets the member flag + one
+        // assignment row per current warehouse. warehouse_id/charters stay
+        // null on such invites.
+        all_warehouses: allWarehouses,
         // Multi-charter list (preferred) + single charter_id (back-compat
         // for older accept paths / readers). charter_ids takes precedence
         // on accept when set.
@@ -681,6 +707,211 @@ export class TeamService {
       this.ctx,
     );
   }
+
+  /**
+   * Sets an existing member's warehouse access (Team page "Warehouse
+   * access" editor). Two modes:
+   *
+   *   - allWarehouses=true: flips organization_members.all_warehouses on and
+   *     inserts a null-charter assignment row for every CURRENT warehouse the
+   *     member doesn't already cover (future warehouses are handled by the
+   *     0280 warehouse-insert trigger). Existing rows — including
+   *     charter-scoped ones — are left untouched.
+   *   - allWarehouses=false + warehouseId: flips the flag off and reconciles
+   *     `user_warehouse_assignments` to exactly that warehouse: rows at every
+   *     OTHER warehouse are deleted (this intentionally re-scopes charter
+   *     assignments made elsewhere), and the target warehouse keeps its
+   *     existing rows or gains a null-charter one.
+   *
+   * Either way exactly one surviving row ends up flagged is_primary.
+   * Gated on `members:invite`, mirroring setMemberCharterAssignments — same
+   * admin+ floor as the uwa_admin_write RLS policy, so the user-scoped (ctx)
+   * client writes with RLS as defense-in-depth.
+   */
+  async setMemberWarehouseAccess(params: {
+    userId: string;
+    allWarehouses: boolean;
+    warehouseId?: string | null;
+  }): Promise<void> {
+    assertPermission(this.ctx, 'members:invite');
+
+    if (!params.allWarehouses && !params.warehouseId) {
+      throw new ServiceError(
+        'validation_error',
+        'Pick a warehouse or choose all warehouses.',
+      );
+    }
+
+    // Defense in depth: confirm the target is a member of THIS org and grab
+    // the current flag for the audit diff.
+    const { data: member } = await this.ctx.supabase
+      .from('organization_members')
+      .select('id, user_id, all_warehouses')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('user_id', params.userId)
+      .maybeSingle();
+    if (!member) {
+      throw new ServiceError('not_found', 'User is not a member of this organization.');
+    }
+    const before = { allWarehouses: Boolean(member.all_warehouses) };
+
+    if (params.allWarehouses) {
+      // Flag first — fail closed on 0-row updates (.select().maybeSingle()
+      // so an RLS-filtered write surfaces instead of silently no-oping).
+      const { data: flagged, error: flagErr } = await this.ctx.supabase
+        .from('organization_members')
+        .update({ all_warehouses: true })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('user_id', params.userId)
+        .select('id')
+        .maybeSingle();
+      if (flagErr) throw new ServiceError('internal_error', flagErr.message);
+      if (!flagged) {
+        throw new ServiceError('conflict', 'Member not found or already changed.');
+      }
+
+      // Every warehouse in the org vs the member's existing coverage.
+      const { data: whRows, error: whErr } = await this.ctx.supabase
+        .from('warehouses')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId);
+      if (whErr) throw new ServiceError('internal_error', whErr.message);
+      const warehouseIds = ((whRows ?? []) as Array<{ id: string }>).map((w) => w.id);
+
+      const { data: existingRows, error: readErr } = await this.ctx.supabase
+        .from('user_warehouse_assignments')
+        .select('id, warehouse_id, is_primary')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('user_id', params.userId);
+      if (readErr) throw new ServiceError('internal_error', readErr.message);
+      const existing = (existingRows ?? []) as Array<{
+        id: string;
+        warehouse_id: string;
+        is_primary: boolean | null;
+      }>;
+      const covered = new Set(existing.map((r) => r.warehouse_id));
+      const hasPrimary = existing.some((r) => r.is_primary);
+
+      // Insert a null-charter row only for warehouses with NO coverage —
+      // keeps charter scoping at already-assigned warehouses intact. The
+      // pre-read makes this conflict-safe; the 0008 partial unique index is
+      // the belt-and-braces backstop.
+      const missing = warehouseIds.filter((id) => !covered.has(id));
+      if (missing.length > 0) {
+        const now = new Date().toISOString();
+        const { error: insErr } = await this.ctx.supabase
+          .from('user_warehouse_assignments')
+          .insert(
+            missing.map((warehouseId, idx) => ({
+              organization_id: this.ctx.organizationId,
+              user_id: params.userId,
+              warehouse_id: warehouseId,
+              charter_id: null,
+              is_primary: !hasPrimary && idx === 0,
+              assigned_by: this.ctx.userId,
+              assigned_at: now,
+            })),
+          );
+        if (insErr) throw new ServiceError('internal_error', insErr.message);
+      }
+
+      await audit(
+        {
+          event: 'user.warehouse.changed',
+          entityType: 'user',
+          entityId: params.userId,
+          before,
+          after: { allWarehouses: true, warehouseIds },
+        },
+        this.ctx,
+      );
+      return;
+    }
+
+    // Single-warehouse mode. Confirm the warehouse belongs to THIS org.
+    const warehouseId = params.warehouseId as string;
+    const { data: warehouse } = await this.ctx.supabase
+      .from('warehouses')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', warehouseId)
+      .maybeSingle();
+    if (!warehouse) {
+      throw new ServiceError('not_found', 'Warehouse not found in this organization.');
+    }
+
+    const { data: cleared, error: clearErr } = await this.ctx.supabase
+      .from('organization_members')
+      .update({ all_warehouses: false })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('user_id', params.userId)
+      .select('id')
+      .maybeSingle();
+    if (clearErr) throw new ServiceError('internal_error', clearErr.message);
+    if (!cleared) {
+      throw new ServiceError('conflict', 'Member not found or already changed.');
+    }
+
+    // Reconcile: drop every assignment at OTHER warehouses. This re-scopes
+    // charter assignments made elsewhere — by design: the member is now
+    // locked to a single warehouse.
+    const { error: delErr } = await this.ctx.supabase
+      .from('user_warehouse_assignments')
+      .delete()
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('user_id', params.userId)
+      .neq('warehouse_id', warehouseId);
+    if (delErr) throw new ServiceError('internal_error', delErr.message);
+
+    // Keep/insert the target row and ensure exactly one primary.
+    const { data: targetRows, error: readErr } = await this.ctx.supabase
+      .from('user_warehouse_assignments')
+      .select('id, is_primary')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('user_id', params.userId)
+      .eq('warehouse_id', warehouseId)
+      .order('assigned_at', { ascending: true });
+    if (readErr) throw new ServiceError('internal_error', readErr.message);
+    const surviving = (targetRows ?? []) as Array<{
+      id: string;
+      is_primary: boolean | null;
+    }>;
+
+    const firstSurvivor = surviving[0];
+    if (!firstSurvivor) {
+      const { error: insErr } = await this.ctx.supabase
+        .from('user_warehouse_assignments')
+        .insert({
+          organization_id: this.ctx.organizationId,
+          user_id: params.userId,
+          warehouse_id: warehouseId,
+          charter_id: null,
+          is_primary: true,
+          assigned_by: this.ctx.userId,
+          assigned_at: new Date().toISOString(),
+        });
+      if (insErr) throw new ServiceError('internal_error', insErr.message);
+    } else if (!surviving.some((r) => r.is_primary)) {
+      const { error: primErr } = await this.ctx.supabase
+        .from('user_warehouse_assignments')
+        .update({ is_primary: true })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', firstSurvivor.id);
+      if (primErr) throw new ServiceError('internal_error', primErr.message);
+    }
+
+    await audit(
+      {
+        event: 'user.warehouse.changed',
+        entityType: 'user',
+        entityId: params.userId,
+        warehouseId,
+        before,
+        after: { allWarehouses: false, warehouseId },
+      },
+      this.ctx,
+    );
+  }
 }
 
 /**
@@ -694,7 +925,7 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   const { data: invite, error: inviteErr } = await admin
     .from('organization_invites')
     .select(
-      'id, organization_id, email, role, expires_at, accepted_at, warehouse_id, charter_id, charter_ids, invited_by',
+      'id, organization_id, email, role, expires_at, accepted_at, warehouse_id, charter_id, charter_ids, all_warehouses, invited_by',
     )
     .eq('token', token)
     .maybeSingle();
@@ -720,6 +951,7 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   const role = invite.role as Role;
   const warehouseId = (invite.warehouse_id as string | null) ?? null;
   const charterId = (invite.charter_id as string | null) ?? null;
+  const allWarehouses = invite.all_warehouses === true;
   const now = new Date().toISOString();
 
   // Charters to assign: prefer the multi list (charter_ids) if present;
@@ -731,7 +963,9 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   const charters: Array<string | null> =
     inviteCharterIds.length > 0 ? inviteCharterIds : [charterId];
 
-  // Create membership (idempotent on unique constraint).
+  // Create membership (idempotent on unique constraint). all_warehouses is
+  // only included when TRUE so a (theoretical) re-accept of a plain invite
+  // by an existing member never clears a previously granted flag.
   const { error: memberErr } = await admin
     .from('organization_members')
     .upsert(
@@ -741,6 +975,7 @@ export async function acceptInviteWithToken(token: string, userId: string) {
         role,
         invited_by: invite.invited_by as string | null,
         accepted_at: now,
+        ...(allWarehouses ? { all_warehouses: true } : {}),
       },
       { onConflict: 'organization_id,user_id' },
     );
@@ -753,7 +988,59 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   // Migration 0008 dropped the (user, warehouse) unique constraint and added
   // partial uniques per charter. If the exact (user, warehouse, charter) row
   // already exists we treat the invite as a no-op assignment.
-  if (warehouseId) {
+  if (allWarehouses) {
+    // All-warehouse invite (0280): one null-charter assignment row per
+    // CURRENT warehouse. Future warehouses are covered by the
+    // trg_warehouses_all_warehouse_access trigger reading the member flag
+    // set above. Same select-then-insert idempotency + best-effort error
+    // posture as the single-warehouse branch below.
+    const { data: orgWarehouses } = await admin
+      .from('warehouses')
+      .select('id')
+      .eq('organization_id', orgId)
+      .order('created_at', { ascending: true });
+    const warehouseIds = ((orgWarehouses ?? []) as Array<{ id: string }>).map(
+      (w) => w.id,
+    );
+
+    let primaryAssigned = false;
+    for (const whId of warehouseIds) {
+      const { data: existing } = await admin
+        .from('user_warehouse_assignments')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('warehouse_id', whId)
+        .is('charter_id', null)
+        .maybeSingle();
+      if (existing) continue;
+
+      const { error: assignErr } = await admin
+        .from('user_warehouse_assignments')
+        .insert({
+          organization_id: orgId,
+          user_id: userId,
+          warehouse_id: whId,
+          charter_id: null,
+          is_primary: !primaryAssigned,
+          assigned_by: invite.invited_by as string | null,
+          assigned_at: now,
+        });
+      if (assignErr) {
+        console.error('[acceptInvite] failed to create warehouse assignment', assignErr);
+        // Non-fatal — membership + flag exist; the admin can repair, and the
+        // 0280 trigger keeps future warehouses covered regardless.
+      } else {
+        primaryAssigned = true;
+      }
+    }
+
+    await audit({
+      event: 'user.warehouse.changed',
+      entityType: 'user',
+      entityId: userId,
+      after: { allWarehouses: true, warehouseIds },
+    });
+  } else if (warehouseId) {
     // One assignment row per charter. is_primary is set true only on the
     // FIRST row we actually create (rest false). Best-effort per charter:
     // a single insert failure is logged and skipped (membership already
@@ -826,6 +1113,7 @@ export async function acceptInviteWithToken(token: string, userId: string) {
       warehouse_id: warehouseId,
       charter_id: charterId,
       charter_ids: charters,
+      all_warehouses: allWarehouses,
     },
   });
 
