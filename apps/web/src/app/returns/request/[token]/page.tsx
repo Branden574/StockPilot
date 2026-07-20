@@ -1,4 +1,3 @@
-import { notFound } from 'next/navigation';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { loadRequesterReturnContext } from '@/server/services/returns';
@@ -38,11 +37,16 @@ export default async function RequesterReturnPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  if (!token) notFound();
+  if (!token) return <ReturnLinkInvalid />;
 
   const admin = createAdminClient();
   const ctx = await loadRequesterReturnContext(admin, token);
-  if (!ctx) notFound();
+  // Unknown, expired, non-returnable, and module-off all render the SAME
+  // return-branded dead-end (owner report 2026-07-20: the generic global 404
+  // is too blunt for a page people reach from an email link). Deliberately
+  // ONE message for every failure mode — no oracle about whether a token
+  // ever existed. notFound() is not used so the copy can be return-specific.
+  if (!ctx) return <ReturnLinkInvalid />;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -78,6 +82,41 @@ export default async function RequesterReturnPage({
           />
         )}
 
+        <p className="text-muted-foreground mt-10 text-center text-[11px]">
+          Powered by StockPilot
+        </p>
+      </main>
+    </div>
+  );
+}
+
+/**
+ * Return-branded dead-end for an unusable link (unknown/expired token,
+ * returns module off). Matches the live page's chrome so the requester
+ * knows they reached the right SYSTEM, just with a dead link — and tells
+ * them what to actually do next (contact whoever sent the order), which
+ * the generic global 404 didn't.
+ */
+function ReturnLinkInvalid() {
+  return (
+    <div className="min-h-screen bg-background text-foreground">
+      <main className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
+        <header className="border-border mb-8 border-b pb-6">
+          <div className="text-primary mb-3 font-mono text-[11px] uppercase tracking-[0.18em]">
+            Return request
+          </div>
+          <h1 className="font-display text-3xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[34px]">
+            This return link isn&apos;t active
+          </h1>
+        </header>
+        <div className="border-border bg-card rounded-2xl border p-6 text-center">
+          <p className="text-muted-foreground mx-auto max-w-[52ch] text-sm leading-relaxed">
+            The link may have been mistyped, or it&apos;s no longer available.
+            If you received it by email and think this is a mistake, reply to
+            that email or contact the team that fulfilled your order — they can
+            start the return for you.
+          </p>
+        </div>
         <p className="text-muted-foreground mt-10 text-center text-[11px]">
           Powered by StockPilot
         </p>
