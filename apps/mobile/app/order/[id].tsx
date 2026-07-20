@@ -28,12 +28,23 @@ import { resizeForUpload } from '@/lib/image-resize';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import {
   claimPicking,
+  createOrderReturn,
   listOrderDrivers,
   releasePicking,
   transitionOrder,
   type OrderAction,
   type OrderDriver,
 } from '@/lib/orders-api';
+import {
+  buildReturnPayload,
+  initialReturnDraft,
+  RETURN_REASONS,
+  returnableLines,
+  type ReturnDraftLine,
+  type ReturnReasonCode,
+} from '@/lib/order-returns';
+import { extractApiErrorMessage } from '@/lib/po-import-approve';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   availableOrderActions,
   can,
@@ -119,15 +130,19 @@ interface OrderHeader {
   /** Whether any still-owed line has available stock (gates "Resume fulfillment"). */
   hasFulfillableStock: boolean;
   /** What's being ordered — name/sku/requested (+fulfilled once shipping starts). */
-  lines: Array<{
+  lines: {
+    /** order_request_lines.id — the return payload keys on it. */
+    orderRequestLineId: string | null;
     name: string;
     sku: string | null;
     requested: number;
     fulfilled: number;
+    /** Units already applied against prior returns (durable budget, 0153). */
+    returned: number;
     /** Item-ownership charter — which site this stock is earmarked for. */
     charterName: string | null;
     charterCode: string | null;
-  }>;
+  }[];
 }
 
 interface Attachment {
@@ -164,6 +179,14 @@ export default function OrderDetail() {
   const [viewerUrl, setViewerUrl] = React.useState<string | null>(null);
   const [shipment, setShipment] = React.useState<OrderShipment | null>(null);
 
+  // Create-return sheet state (staff parity with the web CreateReturnDialog).
+  const [returnOpen, setReturnOpen] = React.useState(false);
+  const [returnDraft, setReturnDraft] = React.useState<Record<string, ReturnDraftLine>>({});
+  const [returnReason, setReturnReason] = React.useState<ReturnReasonCode | null>(null);
+  const [returnNotes, setReturnNotes] = React.useState('');
+  const [returnSubmitting, setReturnSubmitting] = React.useState(false);
+  const [returnError, setReturnError] = React.useState<string | null>(null);
+
   // Pipeline-action state (manager parity with the web ManagerActionsPanel).
   const [acting, setActing] = React.useState<string | null>(null);
   const [denyOpen, setDenyOpen] = React.useState(false);
@@ -185,6 +208,92 @@ export default function OrderDetail() {
   // staffer sees pick affordances immediately and a viewer never does.
   const viewerCanPick =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'items:update'));
+
+  // Returns (RMA) — staff "Create return" parity with the web order page. The
+  // affordance shows only when the viewer holds returns:manage (effective set,
+  // static role fallback while loading), the org's `returns` module is on, the
+  // order is completed (or legacy delivered) AND at least one line still has
+  // returnable budget (fulfilled − returned > 0, mirroring web's
+  // returnableLines). All of it is cosmetic — the server route re-asserts
+  // module + permission + status + the durable budget on submit.
+  const enabledModules = useEnabledModules();
+  const canManageReturns =
+    role !== null && can({ role: role as Role, permissions }, 'returns:manage');
+  const orderReturnable = React.useMemo(
+    () =>
+      order
+        ? returnableLines(
+            order.status,
+            order.lines.map((l) => ({
+              orderRequestLineId: l.orderRequestLineId,
+              name: l.name,
+              sku: l.sku,
+              quantityFulfilled: l.fulfilled,
+              returnedQuantity: l.returned,
+            })),
+          )
+        : [],
+    [order],
+  );
+  const showCreateReturn =
+    canManageReturns && enabledModules.has('returns') && orderReturnable.length > 0;
+
+  function openReturnSheet() {
+    setReturnDraft(initialReturnDraft(orderReturnable));
+    setReturnReason(null);
+    setReturnNotes('');
+    setReturnError(null);
+    setReturnOpen(true);
+  }
+
+  /** Step one line's return quantity, clamped to [0, remaining]. */
+  function stepReturnQty(lineId: string, delta: number, max: number) {
+    setReturnDraft((prev) => {
+      const existing = prev[lineId] ?? { quantity: 0, disposition: 'restock' as const };
+      const next = Math.min(max, Math.max(0, existing.quantity + delta));
+      return { ...prev, [lineId]: { ...existing, quantity: next } };
+    });
+    setReturnError(null);
+  }
+
+  function setReturnDisposition(lineId: string, disposition: ReturnDraftLine['disposition']) {
+    setReturnDraft((prev) => {
+      const existing = prev[lineId] ?? { quantity: 0, disposition: 'restock' as const };
+      return { ...prev, [lineId]: { ...existing, disposition } };
+    });
+  }
+
+  async function submitReturn() {
+    // Double-submit guard: the button is disabled while submitting, and this
+    // re-check covers a queued second tap racing the state update.
+    if (!id || returnSubmitting) return;
+    const payload = buildReturnPayload({
+      lines: orderReturnable,
+      draft: returnDraft,
+      reasonCode: returnReason,
+      notes: returnNotes,
+    });
+    if (!payload.ok) {
+      setReturnError(payload.error);
+      return;
+    }
+    setReturnSubmitting(true);
+    setReturnError(null);
+    try {
+      await createOrderReturn(id, payload.body);
+      setReturnOpen(false);
+      Alert.alert('Return created', 'Return created — pending approval.');
+      await load();
+    } catch (e) {
+      // 4xx (over-budget, module off, permission revoked mid-session…) —
+      // surface the server's message inline in the sheet, not a dead toast.
+      setReturnError(
+        extractApiErrorMessage(e, 'Could not create the return. Please try again.'),
+      );
+    } finally {
+      setReturnSubmitting(false);
+    }
+  }
 
 
   const loadAttachments = React.useCallback(async () => {
@@ -247,7 +356,7 @@ export default function OrderDetail() {
     const { data: lineRows } = await supabase
       .from('order_request_lines')
       .select(
-        'item_id, quantity_requested, quantity_fulfilled, item:inventory_items(name, sku, charter_id, charter:charters!charter_id(name, code))',
+        'id, item_id, quantity_requested, quantity_fulfilled, returned_quantity, item:inventory_items(name, sku, charter_id, charter:charters!charter_id(name, code))',
       )
       .eq('order_request_id', id);
     type LineItemEmbed = {
@@ -257,9 +366,11 @@ export default function OrderDetail() {
       charter?: { name: string | null; code: string | null } | { name: string | null; code: string | null }[] | null;
     };
     const rows = (lineRows ?? []) as {
+      id: string | null;
       item_id: string | null;
       quantity_requested: number | null;
       quantity_fulfilled: number | null;
+      returned_quantity: number | null;
       item: LineItemEmbed | LineItemEmbed[] | null;
     }[];
     const totalRequested = rows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
@@ -352,10 +463,12 @@ export default function OrderDetail() {
             ? itemObj?.charter[0]
             : itemObj?.charter;
           return {
+            orderRequestLineId: l.id ?? null,
             name: itemObj?.name ?? 'Unknown item',
             sku: itemObj?.sku ?? null,
             requested: Number(l.quantity_requested) || 0,
             fulfilled: Number(l.quantity_fulfilled) || 0,
+            returned: Number(l.returned_quantity) || 0,
             charterName: charterObj?.name ?? null,
             charterCode: charterObj?.code ?? null,
           };
@@ -1068,6 +1181,17 @@ export default function OrderDetail() {
             </View>
           ) : null}
 
+          {showCreateReturn ? (
+            <View style={{ gap: 8 }}>
+              <Eyebrow>RETURNS</Eyebrow>
+              {actionBtn('Create return', 'create-return', openReturnSheet)}
+              <Mono size={10.5} color={c.ink4}>
+                Goes to the returns approval queue — stock moves only after it is approved and
+                received.
+              </Mono>
+            </View>
+          ) : null}
+
           {order.hasSignature ? (
             <Pressable onPress={() => setSigOpen(true)}>
               <Card padding={14}>
@@ -1360,6 +1484,198 @@ export default function OrderDetail() {
                 <Mono size={13} color="#fff">Deny</Mono>
               </Pressable>
             </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Create-return sheet (staff parity with web's CreateReturnDialog):
+          per-line qty steppers capped at the remaining budget, per-line
+          Restock/Scrap disposition, optional reason + notes. Submits to
+          POST /api/v1/orders/[id]/returns; 4xx messages surface inline. */}
+      <Modal
+        visible={returnOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          if (!returnSubmitting) setReturnOpen(false);
+        }}
+      >
+        <Pressable
+          onPress={() => {
+            if (!returnSubmitting) setReturnOpen(false);
+          }}
+          style={{
+            flex: 1,
+            justifyContent: 'flex-end',
+            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
+          }}
+        >
+          <Pressable
+            onPress={() => undefined}
+            style={{
+              backgroundColor: c.card,
+              borderTopLeftRadius: 18,
+              borderTopRightRadius: 18,
+              padding: 18,
+              gap: 12,
+            }}
+          >
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Create return</Body>
+              <Pressable
+                onPress={() => {
+                  if (!returnSubmitting) setReturnOpen(false);
+                }}
+                hitSlop={8}
+              >
+                <X size={18} color={c.ink4} />
+              </Pressable>
+            </View>
+            <Mono size={11} color={c.ink4}>
+              Pick how many of each item is coming back. Restock adds it to inventory once the
+              return is received; Scrap writes it off.
+            </Mono>
+
+            <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={{ gap: 12 }}>
+              {orderReturnable.map((l) => {
+                const d = returnDraft[l.orderRequestLineId] ?? {
+                  quantity: 0,
+                  disposition: 'restock' as const,
+                };
+                const stepBtn = (label: string, delta: number, disabled: boolean) => (
+                  <Pressable
+                    onPress={() => stepReturnQty(l.orderRequestLineId, delta, l.quantityRemaining)}
+                    disabled={disabled}
+                    hitSlop={6}
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: c.hair,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      opacity: disabled ? 0.35 : 1,
+                    }}
+                  >
+                    <Mono size={15} color={c.ink}>{label}</Mono>
+                  </Pressable>
+                );
+                return (
+                  <View
+                    key={l.orderRequestLineId}
+                    style={{ gap: 8, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: c.hair }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Body size={14} color={c.ink} numberOfLines={2}>{l.name}</Body>
+                        <Mono size={10.5} color={c.ink4} style={{ marginTop: 2 }}>
+                          {`${l.sku ? `${l.sku} · ` : ''}${l.quantityRemaining} of ${l.quantityFulfilled} returnable`}
+                        </Mono>
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        {stepBtn('−', -1, d.quantity <= 0 || returnSubmitting)}
+                        <Mono size={15} color={c.ink} style={{ minWidth: 24, textAlign: 'center' }}>
+                          {d.quantity}
+                        </Mono>
+                        {stepBtn('+', 1, d.quantity >= l.quantityRemaining || returnSubmitting)}
+                      </View>
+                    </View>
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      {(['restock', 'scrap'] as const).map((disp) => {
+                        const on = d.disposition === disp;
+                        return (
+                          <Pressable
+                            key={disp}
+                            onPress={() => setReturnDisposition(l.orderRequestLineId, disp)}
+                            disabled={returnSubmitting}
+                            style={{
+                              paddingHorizontal: 10,
+                              paddingVertical: 5,
+                              borderRadius: 8,
+                              borderWidth: 1,
+                              borderColor: on ? c.ink : c.hair,
+                              backgroundColor: on ? c.ink : 'transparent',
+                            }}
+                          >
+                            <Mono size={10.5} color={on ? c.paper : c.ink3}>
+                              {disp === 'restock' ? 'Restock' : 'Scrap'}
+                            </Mono>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                );
+              })}
+
+              <View style={{ gap: 8 }}>
+                <Eyebrow>REASON</Eyebrow>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                  {RETURN_REASONS.map((r) => {
+                    const on = returnReason === r.value;
+                    return (
+                      <Pressable
+                        key={r.value}
+                        // Reason is optional server-side — tapping the active
+                        // chip again clears it.
+                        onPress={() => setReturnReason(on ? null : r.value)}
+                        disabled={returnSubmitting}
+                        style={{
+                          paddingHorizontal: 10,
+                          paddingVertical: 6,
+                          borderRadius: 8,
+                          borderWidth: 1,
+                          borderColor: on ? c.ink : c.hair,
+                          backgroundColor: on ? c.ink : 'transparent',
+                        }}
+                      >
+                        <Mono size={10.5} color={on ? c.paper : c.ink3}>{r.label}</Mono>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={{ gap: 8 }}>
+                <Eyebrow>NOTES</Eyebrow>
+                <TextInput
+                  value={returnNotes}
+                  onChangeText={setReturnNotes}
+                  placeholder="Optional notes for the approver"
+                  placeholderTextColor={c.ink4}
+                  multiline
+                  editable={!returnSubmitting}
+                  style={{
+                    minHeight: 60,
+                    borderWidth: 1,
+                    borderColor: c.hair,
+                    borderRadius: 10,
+                    padding: 10,
+                    color: c.ink,
+                    fontFamily: FONT.mono,
+                    fontSize: 13,
+                    textAlignVertical: 'top',
+                  }}
+                />
+              </View>
+            </ScrollView>
+
+            {returnError ? (
+              <Mono size={11} color="#b42318">{returnError}</Mono>
+            ) : null}
+
+            <Pressable
+              onPress={() => void submitReturn()}
+              disabled={returnSubmitting}
+              style={[styles.addBtn, { backgroundColor: c.ink, opacity: returnSubmitting ? 0.6 : 1 }]}
+            >
+              {returnSubmitting ? (
+                <ActivityIndicator color={c.paper} />
+              ) : (
+                <Mono size={13} color={c.paper}>Submit return</Mono>
+              )}
+            </Pressable>
           </Pressable>
         </Pressable>
       </Modal>
