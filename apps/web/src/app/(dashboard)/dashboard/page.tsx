@@ -42,6 +42,7 @@ import {
   getWarehousesForRequest,
 } from '@/lib/dashboard/request-cache';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { ScopedWarehouseNotice } from '@/components/dashboard/scoped-warehouse-notice';
 import { createClient } from '@/lib/supabase/server';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { DASHBOARD_TOUR } from '@/lib/onboarding/tours';
@@ -151,6 +152,10 @@ export default async function DashboardHome() {
             <h1 className="font-display text-[34px] font-medium leading-tight tracking-[-0.025em]">
               Good {greetingWord}, {firstName}.
             </h1>
+            {/* Warehouse-scoped users (staff/viewer): name the scope so the
+                narrowed dashboard reads as intentional. Null for managers+.
+                Request-cached from the layout render — no extra queries. */}
+            <ScopedWarehouseNotice className="mt-1.5 text-xs text-muted-foreground" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <PageTour tour={DASHBOARD_TOUR} />

@@ -8,6 +8,7 @@ import {
   refreshEffectivePermissions,
 } from './use-effective-permissions';
 import { listPending, markFailed, markOk, markSending } from './queue';
+import { WAREHOUSE_SCOPE_META_KEY, refreshWarehouseScope } from './warehouse-scope';
 
 /**
  * Two-direction sync engine.
@@ -38,6 +39,13 @@ interface SnapshotResponse {
    * static role permissions, today's behavior).
    */
   permissions?: string[];
+  /**
+   * The user's warehouse scoping (role + user_warehouse_assignments, computed
+   * server-side). Drives the Items screen's scoped-view banner. Absent in
+   * snapshots from servers pre-dating this field — readers must treat missing
+   * as "not loaded" (no banner), never as all-access or as zero warehouses.
+   */
+  warehouseScope?: { hasAllAccess: boolean; warehouseNames: string[] };
   warehouses: Array<{ id: string; name: string }>;
   items: Array<{
     id: string;
@@ -258,6 +266,24 @@ export async function pullSnapshot(
   await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, nextPermsJson);
   if (prevPermsJson !== nextPermsJson) {
     refreshEffectivePermissions();
+  }
+
+  // Warehouse scope (same persist+notify pattern) — drives the Items
+  // screen's scoped-view banner. Only written when the server actually sent
+  // it: an older server omitting the field must not clobber a previously
+  // persisted scope (and must never read as "no warehouses assigned").
+  if (snap.warehouseScope && typeof snap.warehouseScope.hasAllAccess === 'boolean') {
+    const nextScopeJson = JSON.stringify({
+      hasAllAccess: snap.warehouseScope.hasAllAccess,
+      warehouseNames: Array.isArray(snap.warehouseScope.warehouseNames)
+        ? snap.warehouseScope.warehouseNames.filter((n): n is string => typeof n === 'string')
+        : [],
+    });
+    const prevScopeJson = await getMeta(WAREHOUSE_SCOPE_META_KEY);
+    await setMeta(WAREHOUSE_SCOPE_META_KEY, nextScopeJson);
+    if (prevScopeJson !== nextScopeJson) {
+      refreshWarehouseScope();
+    }
   }
 
   return {
