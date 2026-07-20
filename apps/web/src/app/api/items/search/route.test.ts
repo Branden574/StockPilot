@@ -200,4 +200,49 @@ describe('GET /api/items/search', () => {
       expect.objectContaining({ itemType: undefined }),
     );
   });
+
+  // browse=1 backs the cycle-count embedded picker: it needs a default
+  // (empty-query) listing to render a checkable list on open. Only that
+  // flag relaxes the 2-char floor.
+  it('?browse=1 allows an empty q and forwards type (cycle-count picker browse mode)', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    const res = await GET(makeReq('browse=1&type=book&sort=name_asc&limit=50'));
+    expect(res.status).toBe(200);
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        q: '',
+        itemType: 'book',
+        sort: 'name_asc',
+        limit: 50,
+        // Default visibility still applies in browse mode: no status
+        // param → InventoryService.list serves active-only, and
+        // expected:false keeps awaiting-first-receipt phantoms out.
+        status: undefined,
+        expected: false,
+      }),
+    );
+  });
+
+  it('without browse=1 an empty q still short-circuits (instant-search guard intact)', async () => {
+    const res = await GET(makeReq('type=book'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ items: [], total: 0 });
+    expect(inventoryListMock).not.toHaveBeenCalled();
+  });
+
+  it('?wh forwards warehouseId to InventoryService.list', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=shir&wh=w-42'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ q: 'shir', warehouseId: 'w-42' }),
+    );
+  });
+
+  it('omits warehouseId when ?wh is absent', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=shir'));
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ warehouseId: undefined }),
+    );
+  });
 });

@@ -1,0 +1,186 @@
+// @vitest-environment happy-dom
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import * as React from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
+
+import { CountItemPicker } from './count-item-picker';
+
+vi.mock('next/link', () => ({
+  default: ({
+    href,
+    children,
+    ...rest
+  }: { href: string; children: React.ReactNode } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  ),
+}));
+
+type Row = {
+  id: string;
+  sku: string;
+  name: string;
+  quantity_on_hand: number;
+  item_type: string;
+  custom_fields: Record<string, unknown> | null;
+};
+
+function row(over: Partial<Row> & { id: string }): Row {
+  return {
+    sku: `SKU-${over.id}`,
+    name: `Item ${over.id}`,
+    quantity_on_hand: 3,
+    item_type: 'product',
+    custom_fields: null,
+    ...over,
+  };
+}
+
+function jsonResponse(items: Row[], total = items.length) {
+  return {
+    ok: true,
+    json: async () => ({ items, total }),
+  } as Response;
+}
+
+const WAREHOUSES = [{ id: 'w1', name: 'Main DC' }];
+
+describe('CountItemPicker', () => {
+  const fetchSpy = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useCountSelection.getState().clear();
+    vi.stubGlobal('fetch', fetchSpy);
+    fetchSpy.mockResolvedValue(jsonResponse([]));
+  });
+
+  function lastUrl(): URL {
+    const call = fetchSpy.mock.calls.at(-1)!;
+    return new URL(String(call[0]), 'https://example.com');
+  }
+
+  it('browse-fetches products on open (browse=1 + type=product, org scope enforced server-side by the API)', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Alpha Charger' })]));
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+
+    expect(await screen.findByText('Alpha Charger')).toBeInTheDocument();
+    const url = lastUrl();
+    expect(url.pathname).toBe('/api/items/search');
+    expect(url.searchParams.get('browse')).toBe('1');
+    expect(url.searchParams.get('type')).toBe('product');
+    expect(url.searchParams.get('limit')).toBe('50');
+    // No q param before the user types (browse mode, not a search).
+    expect(url.searchParams.get('q')).toBeNull();
+  });
+
+  it('Books tab refetches with type=book', async () => {
+    const user = userEvent.setup();
+    fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'b1', name: 'Algebra I', item_type: 'book' })]));
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    await screen.findByText('Algebra I');
+
+    await user.click(screen.getByRole('button', { name: 'Books' }));
+    await vi.waitFor(() => {
+      expect(lastUrl().searchParams.get('type')).toBe('book');
+    });
+  });
+
+  it('typing debounces into ONE server search carrying q', async () => {
+    const user = userEvent.setup();
+    fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Alpha Charger' })]));
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    await screen.findByText('Alpha Charger');
+    const callsBefore = fetchSpy.mock.calls.length;
+
+    await user.type(screen.getByRole('textbox', { name: /search items to count/i }), 'charg');
+    await vi.waitFor(() => {
+      expect(lastUrl().searchParams.get('q')).toBe('charg');
+    });
+    // 5 keystrokes inside the 250ms window collapse into a single fetch.
+    expect(fetchSpy.mock.calls.length).toBe(callsBefore + 1);
+  });
+
+  it('checking a row writes the SHARED count-selection store; unchecking removes it', async () => {
+    const user = userEvent.setup();
+    fetchSpy.mockResolvedValue(
+      jsonResponse([row({ id: 'a', name: 'Alpha Charger', sku: 'SP-A' })]),
+    );
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+
+    const box = await screen.findByRole('checkbox', { name: 'Select Alpha Charger' });
+    await user.click(box);
+    expect(useCountSelection.getState().picks['a']).toEqual({
+      id: 'a',
+      sku: 'SP-A',
+      name: 'Alpha Charger',
+      itemType: 'product',
+    });
+    expect(screen.getByTestId('picker-selected-bar')).toHaveTextContent('1 item selected');
+
+    await user.click(box);
+    expect(useCountSelection.getState().picks['a']).toBeUndefined();
+    expect(screen.getByTestId('picker-selected-bar')).toHaveTextContent('0 items selected');
+  });
+
+  it('rows already in the store (legacy Items-page select-mode path) render pre-checked', async () => {
+    useCountSelection
+      .getState()
+      .add([{ id: 'a', sku: 'SP-A', name: 'Alpha Charger', itemType: 'product' }]);
+    fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Alpha Charger' })]));
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+
+    const box = await screen.findByRole('checkbox', { name: 'Select Alpha Charger' });
+    expect(box).toBeChecked();
+  });
+
+  it('a checked Books-tab row is stored with itemType book (grouping downstream)', async () => {
+    const user = userEvent.setup();
+    fetchSpy.mockResolvedValue(
+      jsonResponse([row({ id: 'b1', name: 'Algebra I', sku: 'BK-1', item_type: 'book' })]),
+    );
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    await user.click(screen.getByRole('button', { name: 'Books' }));
+
+    await user.click(await screen.findByRole('checkbox', { name: 'Select Algebra I' }));
+    expect(useCountSelection.getState().picks['b1']?.itemType).toBe('book');
+  });
+
+  it('Clear in the selected bar empties the store', async () => {
+    useCountSelection
+      .getState()
+      .add([{ id: 'a', sku: 'SP-A', name: 'Alpha', itemType: 'product' }]);
+    const user = userEvent.setup();
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Clear' }));
+    expect(useCountSelection.getState().picks).toEqual({});
+  });
+
+  it('Load more appends the next offset page', async () => {
+    const user = userEvent.setup();
+    const first = Array.from({ length: 50 }, (_, i) => row({ id: `p${i}`, name: `Part ${i}` }));
+    fetchSpy.mockResolvedValue(jsonResponse(first, 60));
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    await screen.findByText('Part 0');
+
+    fetchSpy.mockResolvedValueOnce(
+      jsonResponse([row({ id: 'p50', name: 'Part 50' })], 60),
+    );
+    await user.click(screen.getByRole('button', { name: /load more/i }));
+
+    expect(await screen.findByText('Part 50')).toBeInTheDocument();
+    expect(screen.getByText('Part 0')).toBeInTheDocument();
+    expect(lastUrl().searchParams.get('offset')).toBe('50');
+  });
+
+  it('keeps an unobtrusive escape hatch to the full Inventory page', async () => {
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    const link = screen.getByRole('link', { name: /full inventory page/i });
+    expect(link).toHaveAttribute('href', '/dashboard/inventory');
+  });
+});

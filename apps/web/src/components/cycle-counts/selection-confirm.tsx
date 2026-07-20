@@ -1,11 +1,11 @@
 'use client';
 
-import { Loader2, Plus, X } from 'lucide-react';
-import Link from 'next/link';
+import { Loader2, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { CountItemPicker } from '@/components/cycle-counts/count-item-picker';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import {
@@ -31,17 +31,25 @@ export interface CountMember {
   email: string;
 }
 
+/**
+ * The "Selected items" scope: an embedded Inventory/Books picker (search,
+ * tick items in place — no round-trip through the list pages) followed by
+ * the confirm form. Selection lives in the shared count-selection store,
+ * so the legacy path (Items/Books select-mode → "Cycle count" action)
+ * lands here with its picks pre-checked and both paths converge.
+ */
 export function SelectionConfirm({
   members,
   canAssign,
+  warehouses,
 }: {
   members: CountMember[];
   canAssign: boolean;
+  warehouses: Array<{ id: string; name: string }>;
 }) {
   const router = useRouter();
   const picks = useCountPicks();
   const remove = useCountSelection((s) => s.remove);
-  const clear = useCountSelection((s) => s.clear);
   const [notes, setNotes] = React.useState('');
   const [assignee, setAssignee] = React.useState<string>(UNASSIGNED);
   const [busy, setBusy] = React.useState(false);
@@ -73,55 +81,24 @@ export function SelectionConfirm({
         `Cycle count started · ${r.data.lineCount} item${r.data.lineCount === 1 ? '' : 's'}.`,
       );
     }
-    clear();
+    useCountSelection.getState().clear();
     router.push(`/dashboard/cycle-counts/${r.data.id}`);
-  }
-
-  if (picks.length === 0) {
-    return (
-      <div className="space-y-4">
-        <p className="text-muted-foreground text-sm">
-          No items selected yet. Open Inventory or Books, tick the items you
-          want to count, and choose <span className="font-medium">Cycle count</span>{' '}
-          from the actions bar.
-        </p>
-        <div className="flex gap-2">
-          <Button asChild variant="outline">
-            <Link href="/dashboard/inventory">Go to Inventory</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/dashboard/books">Go to Books</Link>
-          </Button>
-        </div>
-      </div>
-    );
   }
 
   return (
     <div className="space-y-5">
-      <div className="space-y-3">
-        {products.length > 0 && (
-          <PickGroup title="Products" picks={products} onRemove={remove} />
-        )}
-        {books.length > 0 && (
-          <PickGroup title="Books" picks={books} onRemove={remove} />
-        )}
-      </div>
+      <CountItemPicker warehouses={warehouses} />
 
-      <div className="flex flex-wrap items-center gap-3 text-sm">
-        <Button asChild variant="ghost" size="sm">
-          <Link href="/dashboard/inventory">
-            <Plus className="mr-1 h-3.5 w-3.5" /> Add more items
-          </Link>
-        </Button>
-        <button
-          type="button"
-          onClick={clear}
-          className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
-        >
-          <X className="h-3.5 w-3.5" /> Clear all
-        </button>
-      </div>
+      {picks.length > 0 && (
+        <div className="space-y-3">
+          {products.length > 0 && (
+            <PickGroup title="Products" picks={products} onRemove={remove} />
+          )}
+          {books.length > 0 && (
+            <PickGroup title="Books" picks={books} onRemove={remove} />
+          )}
+        </div>
+      )}
 
       <div className="space-y-1.5">
         <Label>
@@ -162,11 +139,17 @@ export function SelectionConfirm({
         </div>
       )}
 
-      <div className="flex items-center justify-between">
-        <span className="text-muted-foreground text-sm tabular-nums">
-          {picks.length} item{picks.length === 1 ? '' : 's'} selected
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-muted-foreground text-sm">
+          {picks.length === 0 ? (
+            'Pick at least one item above to start a count.'
+          ) : (
+            <span className="tabular-nums">
+              {picks.length} item{picks.length === 1 ? '' : 's'} selected
+            </span>
+          )}
         </span>
-        <Button onClick={start} disabled={busy} variant="gradient">
+        <Button onClick={start} disabled={busy || picks.length === 0} variant="gradient">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Start count'}
         </Button>
       </div>

@@ -54,7 +54,13 @@ export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const params = url.searchParams;
   const raw = (params.get('q') ?? '').trim();
-  if (raw.length < 2) {
+  // Browse mode (`?browse=1`): the cycle-count embedded picker needs a
+  // paginated default listing BEFORE the user types anything, so it can
+  // render a checkable list on open. Only that flag relaxes the 2-char
+  // floor — the instant-search flow keeps its guard so a keystroke of
+  // "a" never triggers an unfiltered org-wide scan.
+  const browse = params.get('browse') === '1';
+  if (!browse && raw.length < 2) {
     return NextResponse.json({ items: [], total: 0 });
   }
 
@@ -90,6 +96,12 @@ export async function GET(req: Request): Promise<Response> {
   const locationIds = params.getAll('loc').filter(Boolean);
   const rack = params.get('rack') ?? undefined;
 
+  // Optional warehouse narrowing (`?wh=<id>`), used by the cycle-count
+  // picker's warehouse filter. InventoryService.list treats this as a
+  // manager/admin-only convenience filter — warehouse-scoped users are
+  // force-narrowed to their assignments regardless of what's passed.
+  const warehouseId = params.get('wh') || undefined;
+
   // Clamp ranges so a hostile caller can't request 1M-row pages or
   // skip to offset 10^9. InventoryService.list also clamps but we
   // catch obvious garbage at the boundary.
@@ -112,6 +124,7 @@ export async function GET(req: Request): Promise<Response> {
     categoryIds,
     locationIds,
     rack,
+    warehouseId,
     limit,
     offset,
   });
