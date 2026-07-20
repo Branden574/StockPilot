@@ -58,6 +58,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { useWarehouseScope, warehouseScopeMessage } from '@/lib/warehouse-scope';
 import { useWorkspace } from '@/lib/use-workspace';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
 import { useTourActive, useTourTarget } from '@/lib/tour-targets';
@@ -142,6 +143,11 @@ export default function Inventory() {
   // Cycle-count select mode: tapping a row toggles it into the shared
   // count-selection store instead of opening the item.
   const [selectMode, setSelectMode] = React.useState(false);
+  // Warehouse-scoped users (staff/viewer): the loaded snapshot's scope drives
+  // the same banner the web Items list shows, so a narrowed list reads as
+  // intentional. undefined (not synced yet) renders nothing.
+  const warehouseScope = useWarehouseScope();
+  const scopeMessage = warehouseScopeMessage(warehouseScope);
 
   // Lookup tables for the filter sheet + the active-filter pill summary
   const [categories, setCategories] = React.useState<FilterOption[]>([]);
@@ -639,6 +645,12 @@ export default function Inventory() {
             onClear={() => setFilter(EMPTY_FILTER_STATE)}
             lookups={{ categories: categoryMap, locations: locationMap, charters: charterMap }}
           />
+
+          {scopeMessage ? (
+            <Body muted size={11.5} style={{ marginTop: 8 }}>
+              {scopeMessage}
+            </Body>
+          ) : null}
         </View>
       </SafeAreaView>
 
