@@ -212,6 +212,11 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
     .eq('organization_id', ctx.organizationId)
     .in('id', ids)
     .eq('status', 'active')
+    // Expected items (mig 0277): never received — excluded from the
+    // customer catalog until first stock arrives. Checkout re-validates
+    // every line against THIS set (portalSubmitOrder), so the exclusion
+    // also rejects a crafted submit.
+    .eq('awaiting_first_receipt', false)
     .is('deleted_at', null);
 
   return ((items ?? []) as Array<Record<string, unknown>>).map((i) => ({

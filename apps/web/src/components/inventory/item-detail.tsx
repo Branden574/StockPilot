@@ -352,6 +352,12 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                 quantity={item.quantity_on_hand as number}
                 reorderPoint={item.reorder_point as number}
                 itemStatus={item.status as 'active' | 'archived' | 'discontinued'}
+                // Expected item (mig 0277) reached via search / direct
+                // link: the verbose pill gives the context inline.
+                awaitingFirstReceipt={
+                  (item as { awaiting_first_receipt?: boolean }).awaiting_first_receipt === true
+                }
+                expectedVerbose
               />
               <PageTour tour={ITEM_DETAIL_TOUR} />
             </div>
@@ -453,6 +459,9 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     quantity={item.quantity_on_hand as number}
                     reorderPoint={item.reorder_point as number}
                     itemStatus={item.status as 'active' | 'archived' | 'discontinued'}
+                    awaitingFirstReceipt={
+                      (item as { awaiting_first_receipt?: boolean }).awaiting_first_receipt === true
+                    }
                   />
                   <PlacementsBreakdown placements={holdings} />
                   {(() => {

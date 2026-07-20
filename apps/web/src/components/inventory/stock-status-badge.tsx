@@ -11,6 +11,20 @@ interface StockStatusBadgeProps {
    * an active row never carries this (the flag is cleared on restore).
    */
   autoArchived?: boolean;
+  /**
+   * True while an item auto-created from an inbound PO has never
+   * received any stock (inventory_items.awaiting_first_receipt,
+   * migration 0277). Replaces the misleading "Out of stock" pill with
+   * "Expected" — the item was never in stock to begin with. Cleared by
+   * a DB trigger the moment any stock arrives.
+   */
+  awaitingFirstReceipt?: boolean;
+  /**
+   * Renders the Expected pill with its long label ("Expected — awaiting
+   * first receipt") — used on the item DETAIL page where a search /
+   * direct-link visitor needs the context inline, not in a tooltip.
+   */
+  expectedVerbose?: boolean;
 }
 
 export function StockStatusBadge({
@@ -18,7 +32,19 @@ export function StockStatusBadge({
   reorderPoint,
   itemStatus = 'active',
   autoArchived = false,
+  awaitingFirstReceipt = false,
+  expectedVerbose = false,
 }: StockStatusBadgeProps) {
+  if (itemStatus === 'active' && awaitingFirstReceipt) {
+    return (
+      <Badge
+        variant="secondary"
+        title="Created from a purchase order — nothing has been received yet. It appears everywhere the moment the first stock arrives."
+      >
+        {expectedVerbose ? 'Expected — awaiting first receipt' : 'Expected'}
+      </Badge>
+    );
+  }
   if (itemStatus === 'archived') {
     return (
       // Badge renders a <div> — wrap in a <div> too (not <span>) so two

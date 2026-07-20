@@ -403,6 +403,11 @@ async function loadCatalogItemsUncached(
     // separate inventory class — they circulate via /dashboard/rentals,
     // not the order request flow. Never show them in the order picker.
     .eq('is_rental', false)
+    // Expected items (mig 0277): auto-created from an inbound PO and
+    // never received — not orderable until the first stock arrives
+    // (server-side line validation rejects them too, so a stale cached
+    // catalog can't sneak one through).
+    .eq('awaiting_first_receipt', false)
     .is('deleted_at', null)
     .or('is_bundle.is.null,is_bundle.eq.false')
     .order('name', { ascending: true })

@@ -198,6 +198,23 @@ export interface ItemListFilters {
    * status='archived'.
    */
   autoArchived?: boolean;
+  /**
+   * Expected-items visibility (migration 0277). `inventory_items.
+   * awaiting_first_receipt` marks items auto-created from an inbound PO
+   * that have never received any stock — "phantoms" that must not look
+   * like real out-of-stock inventory.
+   *
+   *   - undefined / false (EVERY existing caller): the list EXCLUDES
+   *     flagged rows — the default-hidden behavior for the Items/Books
+   *     lists, order pickers, AI search, exports, /api/items/search.
+   *   - true: the list returns ONLY flagged rows — backs the Items/Books
+   *     pages' "Expected" chip view (`?expected=1`).
+   *
+   * The column is NOT NULL DEFAULT false and is cleared by a DB trigger
+   * the moment any stock arrives, so `.eq()` on it is total. Established
+   * zero-stock items are never flagged and stay visible by default.
+   */
+  expected?: boolean;
 }
 
 const SORT_MAP: Record<ItemListSort, { col: string; asc: boolean }> = {
@@ -326,7 +343,7 @@ export class InventoryService {
     let query = this.ctx.supabase
       .from('inventory_items')
       .select(
-        'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, custom_fields, created_at, updated_at, created_by, updated_by',
+        'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, created_at, updated_at, created_by, updated_by',
         // Exact count: pagination needs precise totals so "Page X of Y"
         // math doesn't lie, and the empty-state heuristics
         // (`inventory.total === 0`) don't false-fire on stale
@@ -390,6 +407,10 @@ export class InventoryService {
     if (filters.autoArchived) {
       query = query.eq('auto_archived', true);
     }
+    // Expected-items visibility (mig 0277): default = hide phantoms
+    // awaiting their first receipt; expected=true = ONLY them (the
+    // "Expected" chip view). Column is NOT NULL so eq() is total.
+    query = query.eq('awaiting_first_receipt', filters.expected === true);
 
     if (filters.q && filters.q.trim()) {
       // PostgREST's .or() takes a raw filter string. Strip characters
@@ -576,6 +597,8 @@ export class InventoryService {
       if (filters.autoArchived) {
         sumQuery = sumQuery.eq('auto_archived', true);
       }
+      // Mirror the main query's expected-items predicate (mig 0277).
+      sumQuery = sumQuery.eq('awaiting_first_receipt', filters.expected === true);
       if (filters.q && filters.q.trim()) {
         const term = filters.q.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
         if (term) {
@@ -762,6 +785,10 @@ export class InventoryService {
          *  stock (migration 0266) — backs the Archived view's
          *  "Auto-archived" badge + filter chip. */
         auto_archived: boolean;
+        /** True while an item auto-created from an inbound PO has never
+         *  received any stock (migration 0277) — hidden from default
+         *  lists/ordering; shown under the "Expected" chip with a pill. */
+        awaiting_first_receipt: boolean;
         custom_fields: Record<string, unknown>;
         created_at: string;
         updated_at: string;
@@ -785,6 +812,48 @@ export class InventoryService {
        *  org-wide) instead of changing when the user paginates. */
       valueOnHand,
     };
+  }
+
+  /**
+   * HEAD count of ACTIVE items awaiting their first receipt (migration
+   * 0277) for one view — the badge on the Items/Books pages' "Expected"
+   * chip. Mirrors the Expected view's own predicate (org, not deleted,
+   * status='active', non-rental, item_type, optional warehouse) and the
+   * same warehouse-access scoping list() applies for staff/viewer, so
+   * the count always equals the rows the chip's view would list. Cheap:
+   * rides the 0277 partial index (`where awaiting_first_receipt`) over a
+   * tiny, transient row slice.
+   */
+  async countExpected(
+    opts: {
+      itemType?: 'product' | 'book' | 'asset' | 'consumable' | 'all';
+      warehouseId?: string | null;
+    } = {},
+  ): Promise<number> {
+    const access = await getWarehouseAccess(this.ctx);
+    let query = this.ctx.supabase
+      .from('inventory_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', this.ctx.organizationId)
+      .is('deleted_at', null)
+      .eq('status', 'active')
+      .eq('is_rental', false)
+      .eq('awaiting_first_receipt', true);
+    if (!access.hasAllAccess) {
+      if (access.readableIds.length === 0) return 0;
+      query = query.in('warehouse_id', access.readableIds);
+    } else if (opts.warehouseId) {
+      query = query.eq('warehouse_id', opts.warehouseId);
+    }
+    // Same item_type defaulting as list(): undefined → 'product'.
+    if (opts.itemType === undefined) {
+      query = query.eq('item_type', 'product');
+    } else if (opts.itemType !== 'all') {
+      query = query.eq('item_type', opts.itemType);
+    }
+    const { count, error } = await query;
+    if (error) throw new ServiceError('internal_error', error.message);
+    return count ?? 0;
   }
 
   /**
@@ -1155,7 +1224,19 @@ export class InventoryService {
     return out;
   }
 
-  async create(input: CreateItemInput) {
+  /**
+   * `opts.awaitingFirstReceipt` (migration 0277): PO-driven creation
+   * paths — createItemsFromPoLines (PO-import approve) and the custom
+   * `newItemName` lines on PurchaseOrdersService.create/update — pass
+   * true so the new item is born hidden ("Expected") until its first
+   * stock arrives (a DB trigger clears the flag the moment
+   * quantity_on_hand rises above 0). It is deliberately a SEPARATE
+   * options bag, NOT a CreateItemInput field: the item form / API
+   * schemas parse user payloads into CreateItemInput, and manual item
+   * creation (even at qty 0) and CSV import must never be able to set
+   * the flag.
+   */
+  async create(input: CreateItemInput, opts: { awaitingFirstReceipt?: boolean } = {}) {
     assertPermission(this.ctx, 'items:create');
 
     // Phase 5: lot/serial tracking + shelf-life/expiry are gated behind the
@@ -1252,6 +1333,13 @@ export class InventoryService {
         custom_fields: input.customFields,
         status: input.status,
         is_rental: input.isRental ?? false,
+        // Only PO-driven creation paths pass this (see the method doc);
+        // omit otherwise so the column's DB default (false) applies.
+        // Guarded on qty <= 0: the clearing trigger fires on UPDATE only,
+        // so an insert born WITH stock must never carry the flag.
+        ...(opts.awaitingFirstReceipt && !(input.quantityOnHand > 0)
+          ? { awaiting_first_receipt: true }
+          : {}),
         created_by: this.ctx.userId,
         updated_by: this.ctx.userId,
       })

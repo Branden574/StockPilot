@@ -76,6 +76,12 @@ export interface InstantModeRow {
    *  filter chip. Optional so any lighter caller of these pure
    *  functions doesn't have to carry it. */
   auto_archived?: boolean;
+  /** True while an item auto-created from an inbound PO has never
+   *  received any stock (migration 0277). Mirrors list()'s expected
+   *  predicate: hidden from every view unless state.expected is true,
+   *  which shows ONLY these rows (the "Expected" chip). Optional —
+   *  missing means unflagged, so lighter callers are unaffected. */
+  awaiting_first_receipt?: boolean;
 }
 
 /** One holding line, structurally identical to the loader's
@@ -126,6 +132,11 @@ export interface InstantModeState {
    *  only" filter chip); a no-op filter otherwise since active rows
    *  never carry auto_archived=true (cleared on restore). */
   autoArchived: boolean;
+  /** ?expected=1 — the "Expected" chip view: ONLY rows awaiting their
+   *  first receipt (migration 0277). Off (the default) EXCLUDES those
+   *  rows from every view — mirrors list()'s
+   *  `eq('awaiting_first_receipt', expected === true)` predicate. */
+  expected: boolean;
   cat: string[];
   loc: string[];
   charter: string[];
@@ -148,10 +159,12 @@ function coerceStock(value: unknown): InstantModeState['stock'] {
 
 /** Mirrors the ArchiveViewToggle-style boolean chips elsewhere: only the
  *  exact '1' string means "on"; anything else (missing, '0', garbage) is
- *  off. */
-function coerceAutoArchived(value: unknown): boolean {
+ *  off. Shared by the ?auto= (Auto-archived only) and ?expected=
+ *  (Expected) chips. */
+function coerceFlagParam(value: unknown): boolean {
   return value === '1';
 }
+const coerceAutoArchived = coerceFlagParam;
 
 function coerceSort(value: unknown): InstantModeSort {
   // Mirrors the pages' parseSort (unknown values → updated_desc).
@@ -177,6 +190,7 @@ export function instantStateFromPageParams(params: {
   status?: string;
   stock?: string;
   auto?: string;
+  expected?: string;
   page?: string;
   sort?: string;
   cat?: string | string[];
@@ -189,6 +203,7 @@ export function instantStateFromPageParams(params: {
     status: coerceStatus(params.status),
     stock: coerceStock(params.stock),
     autoArchived: coerceAutoArchived(params.auto),
+    expected: coerceFlagParam(params.expected),
     cat: parseIdList(params.cat),
     loc: parseIdList(params.loc),
     charter: parseIdList(params.charter),
@@ -209,6 +224,7 @@ export function instantStateFromSearchParams(params: {
     status: coerceStatus(params.get('status') ?? undefined),
     stock: coerceStock(params.get('stock') ?? undefined),
     autoArchived: coerceAutoArchived(params.get('auto') ?? undefined),
+    expected: coerceFlagParam(params.get('expected') ?? undefined),
     cat: params.getAll('cat').filter(Boolean),
     loc: params.getAll('loc').filter(Boolean),
     charter: params.getAll('charter').filter(Boolean),
@@ -333,6 +349,15 @@ export function filterInstantRows<T extends InstantModeRow>(
   const cats = state.cat.length > 0 ? new Set(state.cat) : null;
   const locs = state.loc.length > 0 ? new Set(state.loc) : null;
   return rows.filter((r) => {
+    // Expected-items visibility (mig 0277) — mirrors list()'s
+    // `eq('awaiting_first_receipt', expected === true)`: the default
+    // hides rows awaiting their first receipt; ?expected=1 shows ONLY
+    // them. A missing flag (lighter callers) means unflagged.
+    if (state.expected) {
+      if (r.awaiting_first_receipt !== true) return false;
+    } else if (r.awaiting_first_receipt === true) {
+      return false;
+    }
     // status: default/'active' → active only; 'all' → everything;
     // otherwise the exact status. Mirrors list()'s status block.
     if (state.status === 'active') {

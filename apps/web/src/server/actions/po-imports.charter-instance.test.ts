@@ -122,8 +122,12 @@ describe('createItemsFromPoLinesAction — charter-per-instance (advisory match)
     }
 
     // A new item is created under KVA — the CVW barcode match never auto-links.
+    // Second arg: PO-born items carry awaitingFirstReceipt (mig 0277).
     expect(mockCreate).toHaveBeenCalledTimes(1);
-    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ charterId: CHARTER_KVA }));
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ charterId: CHARTER_KVA }),
+      { awaitingFirstReceipt: true },
+    );
 
     // The line points at the NEW item, flagged item_created, with the CVW
     // item recorded only as a suggestion.
@@ -169,8 +173,15 @@ describe('createItemsFromPoLinesAction — charter-per-instance (advisory match)
     });
     expect(result2.ok).toBe(true);
 
-    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ charterId: CHARTER_KVA }));
-    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ charterId: CHARTER_DEF }));
+    // Both PO-born instances carry awaitingFirstReceipt (mig 0277).
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ charterId: CHARTER_KVA }),
+      { awaitingFirstReceipt: true },
+    );
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ charterId: CHARTER_DEF }),
+      { awaitingFirstReceipt: true },
+    );
     expect(mockCreate).toHaveBeenCalledTimes(2); // two separate instances, never merged
   });
 
@@ -261,9 +272,12 @@ describe('createItemsFromPoLinesAction — charter-per-instance (advisory match)
       expect(result.data.linked).toBe(0);
     }
     // A NEW item is created under KVA, copying the CVW item's SKU/name.
+    // Second arg: the PO-born sibling instance is also awaitingFirstReceipt
+    // (mig 0277) — it has never received stock under ITS charter.
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ charterId: CHARTER_KVA, sku: 'SKU-X', name: 'Chromebook' }),
+      { awaitingFirstReceipt: true },
     );
     const upd = stub.chainArgs.get('po_import_lines.update')?.[0]?.[0] as Record<string, unknown>;
     expect(upd.item_id).toBe('new-item-1'); // the created KVA sibling

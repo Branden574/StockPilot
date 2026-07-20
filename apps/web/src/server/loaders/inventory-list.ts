@@ -194,6 +194,9 @@ export interface InventoryListSearchParamsLike {
   loc?: string | string[];
   charter?: string | string[];
   rack?: string;
+  /** '1' = the "Expected" chip view (only items awaiting first receipt,
+   *  migration 0277). Any presence bypasses the cached default view. */
+  expected?: string;
 }
 
 function hasIdFilter(value: string | string[] | undefined): boolean {
@@ -228,6 +231,9 @@ export function isDefaultInventoryView(
   if (view === 'items' && params.type !== undefined && params.type !== 'product') return false;
   if (params.page !== undefined && params.page !== '1') return false;
   if (params.sort !== undefined && params.sort !== 'updated_desc') return false;
+  // Any ?expected= presence (the Expected chip view, or garbage) takes
+  // the live path — the cached default view only serves the unflagged set.
+  if (params.expected !== undefined) return false;
   if (hasIdFilter(params.cat) || hasIdFilter(params.loc) || hasIdFilter(params.charter)) {
     return false;
   }
@@ -273,6 +279,11 @@ interface InventoryListRowBase {
    *  (migration 0266) — backs the Archived view's "Auto-archived"
    *  badge + filter chip. */
   auto_archived: boolean;
+  /** True while an item auto-created from an inbound PO has never
+   *  received any stock (migration 0277). Default views exclude these
+   *  rows; the instant dataset carries them (with this flag) so the
+   *  client-side "Expected" chip view + count derive locally. */
+  awaiting_first_receipt: boolean;
   custom_fields: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
@@ -342,6 +353,10 @@ export interface InventoryListPayload extends InventoryListLookups {
   trends: Record<string, ItemTrend>;
   /** Serialized placementBreakdown — one line per non-empty holding. */
   placement: Record<string, InventoryPlacementLine[]>;
+  /** Count of ACTIVE items awaiting first receipt for this view — the
+   *  badge on the "Expected" chip (mirrors InventoryService.
+   *  countExpected; the 0277 partial index makes it ~free). */
+  expectedCount: number;
 }
 
 /** The filter-dependent slice cached per (org, warehouseKey, view). */
@@ -349,6 +364,8 @@ interface InventoryListRowsPayload {
   items: InventoryListCachedRow[];
   total: number;
   placement: Record<string, InventoryPlacementLine[]>;
+  /** See InventoryListPayload.expectedCount. */
+  expectedCount: number;
 }
 
 /* ---- loader (composition) ---------------------------------------------- */
@@ -392,6 +409,7 @@ export async function loadInventoryList(
     ...lookups,
     trends,
     placement: rows.placement,
+    expectedCount: rows.expectedCount,
   };
 }
 
@@ -401,12 +419,12 @@ async function loadInventoryRows(
   warehouseKey: string,
   view: InventoryListView,
 ): Promise<InventoryListRowsPayload> {
-  // v3: the cached fn now computes ONLY rows+placement — lookups, the
-  // value sum, and trends moved to their own sibling caches so filtered
-  // views can reuse them. (v2 bundled everything; bumped so a stale v2
-  // entry can't be read as the slimmer shape for a TTL. One-time cold
-  // recompute per org — the */30 prewarm cron covers hot orgs.)
-  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v3'], {
+  // v4: rows now EXCLUDE items awaiting first receipt (migration 0277)
+  // and the payload gained expectedCount — bumped so a stale v3 entry
+  // (flagged rows included, no count) can't serve for a TTL post-deploy.
+  // (v3: rows+placement split out of the bundled v2 payload.) One-time
+  // cold recompute per org — the */30 prewarm cron covers hot orgs.
+  const cached = unstable_cache(loadInventoryRowsUncached, ['inventory-list-v4'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
@@ -435,7 +453,7 @@ function adminReadContext(organizationId: string): ServiceContext {
 // Verbatim copy of InventoryService.list()'s select list so cached rows
 // carry exactly the columns the live path ships.
 const ITEM_SELECT_COLUMNS =
-  'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, custom_fields, created_at, updated_at, created_by, updated_by';
+  'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, created_at, updated_at, created_by, updated_by';
 
 async function loadInventoryRowsUncached(
   organizationId: string,
@@ -448,7 +466,9 @@ async function loadInventoryRowsUncached(
 
   // Default-view filters, mirroring InventoryService.list() with no
   // searchParams: active, non-rental, not deleted, item_type by view,
-  // updated_desc + stable id tiebreak, page 1 of 30, exact count.
+  // NOT awaiting first receipt (mig 0277 — phantoms from inbound POs are
+  // hidden until stock arrives), updated_desc + stable id tiebreak,
+  // page 1 of 30, exact count.
   let mainQuery = admin
     .from('inventory_items')
     .select(ITEM_SELECT_COLUMNS, { count: 'exact' })
@@ -457,15 +477,34 @@ async function loadInventoryRowsUncached(
     .eq('status', 'active')
     .eq('item_type', itemType)
     .eq('is_rental', false)
+    .eq('awaiting_first_receipt', false)
     .order('updated_at', { ascending: false })
     .order('id', { ascending: true })
     .range(0, DEFAULT_VIEW_PAGE_SIZE - 1);
   if (warehouseId) mainQuery = mainQuery.eq('warehouse_id', warehouseId);
 
-  const mainRes = await mainQuery;
+  // Expected-chip badge count: ACTIVE flagged rows for this view —
+  // mirrors InventoryService.countExpected exactly (the manager+ /
+  // all-access variant this cache serves). Rides the 0277 partial index.
+  let expectedQuery = admin
+    .from('inventory_items')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .is('deleted_at', null)
+    .eq('status', 'active')
+    .eq('item_type', itemType)
+    .eq('is_rental', false)
+    .eq('awaiting_first_receipt', true);
+  if (warehouseId) expectedQuery = expectedQuery.eq('warehouse_id', warehouseId);
+
+  const [mainRes, expectedRes] = await Promise.all([mainQuery, expectedQuery]);
 
   // Throw on ANY read error so a failed pass is never cached.
   if (mainRes.error) throw new Error(`inventory-list items query failed: ${mainRes.error.message}`);
+  if (expectedRes.error) {
+    throw new Error(`inventory-list expected count query failed: ${expectedRes.error.message}`);
+  }
+  const expectedCount = expectedRes.count ?? 0;
 
   const rows = (mainRes.data ?? []) as unknown as RawItemRow[];
   const total = mainRes.count ?? 0;
@@ -508,7 +547,7 @@ async function loadInventoryRowsUncached(
     (imageRowsRes.data ?? []) as unknown as PrimaryImageRow[],
   );
 
-  return { items, total, placement };
+  return { items, total, placement, expectedCount };
 }
 
 /** A main-query row before the derived placement/image fields land. */
@@ -684,7 +723,12 @@ export async function loadInventoryDataset(
   warehouseKey: string,
   view: InventoryListView,
 ): Promise<InventoryDatasetPayload | null> {
-  const cached = unstable_cache(loadInventoryDatasetUncached, ['inventory-dataset-v1'], {
+  // v2: rows now carry awaiting_first_receipt (migration 0277) — the
+  // client derivation hides flagged rows by default and serves the
+  // "Expected" chip view + count from them. Bumped so a stale v1 entry
+  // (rows without the flag → phantoms would leak into the default view)
+  // can't serve for a TTL post-deploy.
+  const cached = unstable_cache(loadInventoryDatasetUncached, ['inventory-dataset-v2'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
@@ -708,8 +752,11 @@ async function loadInventoryDatasetUncached(
   // The dataset filter = list()'s filter axes that are CONSTANT for the
   // view (org, not deleted, item_type, non-rental, optional warehouse).
   // Everything the user can change per request — status, q, stock,
-  // cat/loc/charter, rack, sort, page — deliberately stays OUT so the
-  // client derives it (lib/inventory/instant-mode.ts mirrors list()).
+  // cat/loc/charter, rack, sort, page, expected — deliberately stays OUT
+  // so the client derives it (lib/inventory/instant-mode.ts mirrors
+  // list()). Rows awaiting first receipt (mig 0277) are INCLUDED here,
+  // carrying their flag: filterInstantRows hides them by default and the
+  // "Expected" chip view + count derive from this same dataset.
   //
   // CAP FIRST, with a HEAD count — over-cap orgs pay one count query per
   // request (nothing cacheable exists for them), never the full fetch.
@@ -976,6 +1023,10 @@ async function loadInventoryValueOnHandUncached(
   // is_rental.) SECURITY: execute is revoked from anon/authenticated;
   // only this service-role client may call it, and the ORG SCOPE comes
   // from the loader's own cache key — never from user input.
+  // NOTE (mig 0277): the RPC does not carry the awaiting_first_receipt
+  // predicate the live sum now applies, but flagged rows sit at qty 0
+  // (the DB trigger clears the flag the moment qty rises), so their
+  // qty × cost contribution is exactly 0 — the figures stay equal.
   const { data, error } = await admin.rpc('inventory_value_on_hand', {
     p_organization_id: organizationId,
     p_item_type: itemType,

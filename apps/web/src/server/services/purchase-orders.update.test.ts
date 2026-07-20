@@ -253,6 +253,9 @@ describe('PurchaseOrdersService.update — newItemName lines', () => {
     expect(invArg.status).toBe('active');
     expect(invArg.quantityOnHand).toBe(0);
     expect(invArg.warehouseId).toBe(WH_UUID);
+    // PO-born custom items are awaitingFirstReceipt (mig 0277).
+    const invOpts = (mockInvCreate.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
+    expect(invOpts).toEqual({ awaitingFirstReceipt: true });
 
     // Lines insert must use the new item's id.
     const insertArgs = stub.chainArgs.get('purchase_order_items.insert');

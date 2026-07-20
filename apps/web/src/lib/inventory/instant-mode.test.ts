@@ -41,6 +41,7 @@ function state(over: Partial<InstantModeState> = {}): InstantModeState {
     status: 'active',
     stock: null,
     autoArchived: false,
+    expected: false,
     cat: [],
     loc: [],
     charter: [],
@@ -79,6 +80,7 @@ describe('state adapters', () => {
       status: 'archived',
       stock: 'low',
       autoArchived: false,
+      expected: false,
       page: 3,
       sort: 'name_asc',
       cat: ['c1'],
@@ -99,6 +101,14 @@ describe('state adapters', () => {
     expect(instantStateFromPageParams({ auto: 'true' }).autoArchived).toBe(false);
     expect(instantStateFromPageParams({}).autoArchived).toBe(false);
     expect(instantStateFromSearchParams(new URLSearchParams('auto=1')).autoArchived).toBe(true);
+  });
+
+  it('expected=1 coerces to expected:true; anything else (missing/"0"/garbage) is false', () => {
+    expect(instantStateFromPageParams({ expected: '1' }).expected).toBe(true);
+    expect(instantStateFromPageParams({ expected: '0' }).expected).toBe(false);
+    expect(instantStateFromPageParams({ expected: 'true' }).expected).toBe(false);
+    expect(instantStateFromPageParams({}).expected).toBe(false);
+    expect(instantStateFromSearchParams(new URLSearchParams('expected=1')).expected).toBe(true);
   });
 
   it('searchParams adapter produces the same state as the page adapter for the same URL', () => {
@@ -154,6 +164,46 @@ describe('autoArchived filter (Task 8 "Auto-archived only" chip)', () => {
         (r) => r.id,
       ),
     ).toEqual(['a']);
+  });
+});
+
+describe('expected filter (mig 0277 "Expected" chip — awaiting_first_receipt visibility)', () => {
+  const rows = [
+    // The phantom: auto-created from an inbound PO, never received.
+    row({ id: 'phantom', quantity_on_hand: 0, awaiting_first_receipt: true }),
+    // Established item merely OUT OF STOCK — must stay visible (owner
+    // report: Dell XPS class). Not flagged.
+    row({ id: 'zeroed', quantity_on_hand: 0, awaiting_first_receipt: false }),
+    // Lighter rows without the field at all — treated as unflagged.
+    row({ id: 'legacy', quantity_on_hand: 5 }),
+  ];
+
+  it('default view hides flagged rows and KEEPS the established zero-qty item', () => {
+    expect(filterInstantRows(rows, state(), 'items').map((r) => r.id)).toEqual([
+      'zeroed',
+      'legacy',
+    ]);
+  });
+
+  it('expected view shows ONLY flagged rows', () => {
+    expect(filterInstantRows(rows, state({ expected: true }), 'items').map((r) => r.id)).toEqual([
+      'phantom',
+    ]);
+  });
+
+  it('flagged rows stay hidden under every other view (status=all, stock=out) — they are not "out of stock"', () => {
+    expect(
+      filterInstantRows(rows, state({ status: 'all' }), 'items').map((r) => r.id),
+    ).toEqual(['zeroed', 'legacy']);
+    expect(
+      filterInstantRows(rows, state({ stock: 'out' }), 'items').map((r) => r.id),
+    ).toEqual(['zeroed']);
+  });
+
+  it('deriveInstantView under ?expected=1 counts only flagged rows (the chip badge/table total agree)', () => {
+    const derived = deriveInstantView(rows, state({ expected: true }), 'items', 30);
+    expect(derived.total).toBe(1);
+    expect(derived.pageItems.map((r) => r.id)).toEqual(['phantom']);
   });
 });
 

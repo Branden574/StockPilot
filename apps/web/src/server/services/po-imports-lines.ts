@@ -435,7 +435,8 @@ export async function createItemsFromPoLines(
           resolvedItemId = sibling.id as string;
           linked++;
         } else {
-          const siblingItem = await inventorySvc.create({
+          const siblingItem = await inventorySvc.create(
+            {
             name: existing.name as string,
             sku: existingSku,
             barcode: (existing.barcode as string | null) ?? undefined,
@@ -457,7 +458,11 @@ export async function createItemsFromPoLines(
               'product',
             customFields: {},
             status: 'active',
-          });
+            },
+            // Born from an inbound PO at qty 0 → hidden ("Expected") until
+            // the first receipt clears the flag (migration 0277 trigger).
+            { awaitingFirstReceipt: true },
+          );
           resolvedItemId = siblingItem.id as string;
           created++;
           didCreate = true;
@@ -479,7 +484,8 @@ export async function createItemsFromPoLines(
         overrideName && overrideName.length > 0 ? overrideName : cleanedName || description
       ).slice(0, 200);
 
-      const item = await inventorySvc.create({
+      const item = await inventorySvc.create(
+        {
         name: finalName,
         sku: generateSku(),
         // For books, store the ISBN as the barcode so a future book PO with
@@ -501,7 +507,11 @@ export async function createItemsFromPoLines(
         itemType: input.itemType ?? 'product',
         customFields: {},
         status: 'active',
-      });
+        },
+        // Born from an inbound PO at qty 0 → hidden ("Expected") until
+        // the first receipt clears the flag (migration 0277 trigger).
+        { awaitingFirstReceipt: true },
+      );
       created++;
       didCreate = true;
       resolvedItemId = item.id as string;
