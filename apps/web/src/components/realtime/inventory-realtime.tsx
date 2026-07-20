@@ -14,7 +14,9 @@ interface InventoryRealtimeProps {
    * pages that only care about a subset can pass a narrower list to keep
    * subscriptions cheap.
    */
-  tables?: Array<'inventory_items' | 'stock_movements' | 'purchase_orders' | 'rentals'>;
+  tables?: Array<
+    'inventory_items' | 'stock_movements' | 'purchase_orders' | 'rentals' | 'po_imports'
+  >;
 }
 
 /**
@@ -56,7 +58,10 @@ const THROTTLE_MS = 250;
 
 export function InventoryRealtime({
   organizationId,
-  tables = ['inventory_items', 'stock_movements', 'purchase_orders', 'rentals'],
+  // po_imports joined 2026-07-18 (mig 0276 published it): a MOBILE
+  // approve/cancel/re-parse via /api/v1/po-imports/[id]/* must live-refresh
+  // an open web imports/POs page, same as every other cross-surface write.
+  tables = ['inventory_items', 'stock_movements', 'purchase_orders', 'rentals', 'po_imports'],
 }: InventoryRealtimeProps) {
   const router = useRouter();
   const pathname = usePathname();
