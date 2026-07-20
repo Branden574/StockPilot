@@ -52,6 +52,7 @@ import {
   sendMemberPasswordResetAction,
   setMemberChartersAction,
   setMemberDriverAction,
+  setMemberWarehouseAccessAction,
   transferOwnershipAction,
   updateMemberRoleAction,
 } from '@/server/actions/team';
@@ -78,6 +79,10 @@ interface Member {
   /** charter_ids the member currently oversees at `warehouseId`. Empty = "all
    *  charters" at that warehouse. */
   charterIds: string[];
+  /** Member may access every warehouse in the org, including future ones
+   *  (organization_members.all_warehouses, 0280). When true, `warehouseId`
+   *  is just the primary of the materialized per-warehouse rows. */
+  allWarehouses: boolean;
   /** Marked delivery driver — only these members populate the
    *  Assign-delivery picker on orders. */
   isDriver: boolean;
@@ -142,6 +147,7 @@ export function TeamManager({
               <TableRow>
                 <TableHead>Person</TableHead>
                 <TableHead>Role</TableHead>
+                <TableHead>{warehouseSingular} access</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Joined</TableHead>
                 <TableHead className="w-12"></TableHead>
@@ -156,6 +162,7 @@ export function TeamManager({
                   allCategories={allCategories}
                   initiallyGranted={grantsByUser[m.userId] ?? []}
                   charters={charters}
+                  warehouses={warehouses}
                   warehouseCharters={warehouseCharters}
                   charterSingular={charterSingular}
                   warehouseSingular={warehouseSingular}
@@ -210,6 +217,7 @@ function MemberRow({
   allCategories,
   initiallyGranted,
   charters,
+  warehouses,
   warehouseCharters,
   charterSingular,
   warehouseSingular,
@@ -219,6 +227,7 @@ function MemberRow({
   allCategories: Array<{ id: string; name: string }>;
   initiallyGranted: string[];
   charters: Array<{ id: string; name: string }>;
+  warehouses: Array<{ id: string; name: string }>;
   warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
   charterSingular: string;
   warehouseSingular: string;
@@ -232,6 +241,7 @@ function MemberRow({
   const [transferBusy, setTransferBusy] = React.useState(false);
   const [categoryAccessOpen, setCategoryAccessOpen] = React.useState(false);
   const [chartersOpen, setChartersOpen] = React.useState(false);
+  const [warehouseAccessOpen, setWarehouseAccessOpen] = React.useState(false);
   const [resetOpen, setResetOpen] = React.useState(false);
   const [resetBusy, setResetBusy] = React.useState(false);
   const initials = (member.fullName || member.email)
@@ -249,7 +259,19 @@ function MemberRow({
   // member who actually has a warehouse assignment (staff/viewer/manager). Hide
   // for owners/admins with no warehouse.
   const canManageCharters = canManage && member.warehouseId !== null;
+  // Warehouse access editing only means something for warehouse-locked roles
+  // (staff/viewer). Manager/admin/owner bypass warehouse scoping entirely.
+  const isWarehouseScopedRole = member.role === 'staff' || member.role === 'viewer';
+  const canManageWarehouseAccess = canManage && isWarehouseScopedRole;
   const displayName = member.fullName ?? member.email;
+  // "Warehouse access" cell: All warehouses > assigned warehouse name > em
+  // dash (no assignment — e.g. admins, who aren't scoped anyway).
+  const assignedWarehouseName = member.warehouseId
+    ? (warehouses.find((w) => w.id === member.warehouseId)?.name ?? null)
+    : null;
+  const accessLabel = member.allWarehouses
+    ? `All ${warehouseSingular.toLowerCase()}s`
+    : (assignedWarehouseName ?? '—');
 
   async function changeRole(role: Role) {
     const res = await updateMemberRoleAction({ memberId: member.id, role });
@@ -354,6 +376,7 @@ function MemberRow({
           )}
         </div>
       </TableCell>
+      <TableCell className="text-xs text-muted-foreground">{accessLabel}</TableCell>
       <TableCell className="text-xs text-muted-foreground">
         {member.acceptedAt ? 'Active' : 'Invited'}
       </TableCell>
@@ -388,6 +411,11 @@ function MemberRow({
                 <DropdownMenuItem onClick={() => void toggleDriver()}>
                   <Truck className="mr-2 h-4 w-4" />
                   {member.isDriver ? 'Remove delivery driver' : 'Mark as delivery driver'}
+                </DropdownMenuItem>
+              )}
+              {canManageWarehouseAccess && (
+                <DropdownMenuItem onClick={() => setWarehouseAccessOpen(true)}>
+                  {warehouseSingular} access…
                 </DropdownMenuItem>
               )}
               {canManageCharters && (
@@ -440,6 +468,23 @@ function MemberRow({
           pending={resetBusy}
           onConfirm={confirmSendReset}
         />
+        {warehouseAccessOpen && (
+          // Mounted only while open + freshly keyed so its state initializer
+          // re-reads the member's current access each time (incl. after a
+          // save + router.refresh()).
+          <MemberWarehouseAccessDialog
+            key={`${member.id}-warehouse-access`}
+            open={warehouseAccessOpen}
+            onOpenChange={setWarehouseAccessOpen}
+            userId={member.userId}
+            displayName={displayName}
+            currentAllWarehouses={member.allWarehouses}
+            currentWarehouseId={member.warehouseId}
+            warehouses={warehouses}
+            warehouseSingular={warehouseSingular}
+            charterSingular={charterSingular}
+          />
+        )}
         {member.warehouseId && chartersOpen && (
           // Mounted only while open + freshly keyed so its state initializer
           // re-reads the member's current charters each time (incl. after a
@@ -807,6 +852,174 @@ function MemberChartersDialog({
   );
 }
 
+const NONE_VALUE = '__none';
+// Invite-dialog sentinel for "All warehouses" (0280). Submitted as
+// allWarehouses: true with warehouseId null.
+const ALL_VALUE = '__all';
+
+/**
+ * Per-member warehouse-access editor (staff/viewer only — other roles bypass
+ * warehouse scoping). Radio between "All warehouses" and "One warehouse"
+ * (+ a warehouse Select). Saves via setMemberWarehouseAccessAction:
+ * All = flag on + a row per current warehouse (future ones covered by
+ * trigger); One = flag off + assignments reconciled to exactly that
+ * warehouse (removing assignments — and charter scoping — elsewhere).
+ *
+ * No shared radio primitive exists in the repo, so each option is an
+ * accessible `<button role="radio" aria-checked>` mirroring the
+ * CharterChecklist checkbox pattern above.
+ */
+function MemberWarehouseAccessDialog({
+  open,
+  onOpenChange,
+  userId,
+  displayName,
+  currentAllWarehouses,
+  currentWarehouseId,
+  warehouses,
+  warehouseSingular,
+  charterSingular,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  userId: string;
+  displayName: string;
+  currentAllWarehouses: boolean;
+  currentWarehouseId: string | null;
+  warehouses: Array<{ id: string; name: string }>;
+  warehouseSingular: string;
+  charterSingular: string;
+}) {
+  const router = useRouter();
+  const whLower = warehouseSingular.toLowerCase();
+  const [mode, setMode] = React.useState<'all' | 'one'>(
+    currentAllWarehouses ? 'all' : 'one',
+  );
+  const [warehouseId, setWarehouseId] = React.useState<string>(
+    currentWarehouseId ?? '',
+  );
+  const [busy, setBusy] = React.useState(false);
+
+  async function save() {
+    if (mode === 'one' && !warehouseId) {
+      toast.error(`Pick a ${whLower}.`);
+      return;
+    }
+    setBusy(true);
+    const res = await setMemberWarehouseAccessAction({
+      userId,
+      allWarehouses: mode === 'all',
+      warehouseId: mode === 'one' ? warehouseId : null,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    toast.success(`${warehouseSingular} access updated for ${displayName}.`);
+    onOpenChange(false);
+    router.refresh();
+  }
+
+  const options: Array<{ value: 'all' | 'one'; label: string; hint: string }> = [
+    {
+      value: 'all',
+      label: `All ${whLower}s`,
+      hint: `They can work in every ${whLower}, including ones created later.`,
+    },
+    {
+      value: 'one',
+      label: `One ${whLower}`,
+      hint: `Access is limited to the selected ${whLower}.`,
+    },
+  ];
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => (busy ? null : onOpenChange(v))}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            {warehouseSingular} access — {displayName}
+          </DialogTitle>
+          <DialogDescription>
+            {`Choose which ${whLower}s this member can work in.`}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div role="radiogroup" aria-label={`${warehouseSingular} access`} className="overflow-hidden rounded-md border">
+            {options.map((opt) => {
+              const on = mode === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  disabled={busy}
+                  onClick={() => setMode(opt.value)}
+                  className="flex w-full items-start gap-2 px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                >
+                  <span
+                    aria-hidden
+                    className={
+                      on
+                        ? 'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-primary'
+                        : 'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-input bg-background'
+                    }
+                  >
+                    {on && <span className="h-2 w-2 rounded-full bg-primary" />}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block font-medium">{opt.label}</span>
+                    <span className="block text-[11px] text-muted-foreground">
+                      {opt.hint}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {mode === 'one' && (
+            <div className="space-y-1.5">
+              <Label>{warehouseSingular}</Label>
+              <Select
+                value={warehouseId || NONE_VALUE}
+                onValueChange={(v: string) =>
+                  setWarehouseId(v === NONE_VALUE ? '' : v)
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={`Pick a ${whLower}`} />
+                </SelectTrigger>
+                <SelectContent>
+                  {warehouses.map((w) => (
+                    <SelectItem key={w.id} value={w.id}>
+                      {w.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground">
+            {mode === 'all'
+              ? `${charterSingular} scoping does not apply with all-${whLower} access.`
+              : `Switching to one ${whLower} removes their assignments at every other ${whLower}, including ${charterSingular.toLowerCase()} scoping there.`}
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="gradient" onClick={save} disabled={busy}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 interface InviteFormValues {
   email: string;
   // Owner is never invitable — it can only be transferred from the
@@ -817,8 +1030,6 @@ interface InviteFormValues {
   warehouseId: string;
   message: string;
 }
-
-const NONE_VALUE = '__none';
 
 function InviteDialog({
   open,
@@ -855,6 +1066,10 @@ function InviteDialog({
   const charterIds = watch('charterIds');
   const warehouseId = watch('warehouseId');
   const warehouseRequired = role === 'staff' || role === 'viewer';
+  // "All warehouses" is a staff/viewer choice (0280): the sentinel lives in
+  // the same select as the concrete warehouses and submits allWarehouses
+  // instead of a warehouseId.
+  const allSelected = warehouseId === ALL_VALUE;
 
   // ALL warehouses are always pickable — the (warehouse, charter) pair just
   // has to be valid (or charter must be empty = "all charters at this warehouse").
@@ -880,13 +1095,22 @@ function InviteDialog({
   }, [open, reset]);
 
   // If the user changes warehouse, prune any selected charters that the new
-  // warehouse doesn't service so an invalid pair never gets submitted.
+  // warehouse doesn't service so an invalid pair never gets submitted. The
+  // ALL sentinel matches no warehouse_id, so chartersForWarehouse is empty
+  // and this same effect clears the charter selection when All is chosen.
   React.useEffect(() => {
     if (!warehouseId || charterIds.length === 0) return;
     const allowed = new Set(chartersForWarehouse.map((c) => c.id));
     const next = charterIds.filter((id) => allowed.has(id));
     if (next.length !== charterIds.length) setValue('charterIds', next);
   }, [warehouseId, charterIds, chartersForWarehouse, setValue]);
+
+  // The ALL sentinel is only offered to warehouse-scoped roles. If the role
+  // flips to manager/admin while All is selected, drop back to "no specific
+  // warehouse" so a stale sentinel never submits.
+  React.useEffect(() => {
+    if (!warehouseRequired && allSelected) setValue('warehouseId', '');
+  }, [warehouseRequired, allSelected, setValue]);
 
   const toggleCharter = (id: string) => {
     const next = charterIds.includes(id)
@@ -896,17 +1120,21 @@ function InviteDialog({
   };
 
   const onSubmit = handleSubmit(async (values) => {
+    const submitAll = values.warehouseId === ALL_VALUE;
     if (warehouseRequired && !values.warehouseId) {
       toast.error(
-        `Pick a ${warehouseSingular.toLowerCase()} for this role. The member will be locked to it.`,
+        `Pick a ${warehouseSingular.toLowerCase()} for this role (or choose all ${warehouseSingular.toLowerCase()}s).`,
       );
       return;
     }
     const res = await inviteMemberAction({
       email: values.email,
       role: values.role,
-      charterIds: values.charterIds,
-      warehouseId: values.warehouseId || null,
+      // All-warehouse invites carry no charter scoping (charters are
+      // warehouse-scoped) — the checklist is already cleared in the UI.
+      charterIds: submitAll ? [] : values.charterIds,
+      warehouseId: submitAll ? null : values.warehouseId || null,
+      allWarehouses: submitAll,
       message: values.message || undefined,
     });
     if (!res.ok) {
@@ -992,6 +1220,11 @@ function InviteDialog({
                       No specific {warehouseSingular.toLowerCase()}
                     </SelectItem>
                   )}
+                  {warehouseRequired && (
+                    <SelectItem value={ALL_VALUE}>
+                      All {warehouseSingular.toLowerCase()}s
+                    </SelectItem>
+                  )}
                   {warehouses.map((w) => (
                     <SelectItem key={w.id} value={w.id}>
                       {w.name}
@@ -1007,7 +1240,11 @@ function InviteDialog({
               {charterSingular}s
               <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
             </Label>
-            {!warehouseId ? (
+            {allSelected ? (
+              <div className="rounded-md border border-dashed bg-muted/30 px-3 py-3 text-[11px] text-muted-foreground">
+                {`All-${warehouseSingular.toLowerCase()} access includes every ${charterSingular.toLowerCase()}. To scope by ${charterSingular.toLowerCase()}, pick a single ${warehouseSingular.toLowerCase()} instead.`}
+              </div>
+            ) : !warehouseId ? (
               <div className="rounded-md border border-dashed bg-muted/30 px-3 py-3 text-[11px] text-muted-foreground">
                 {`Pick a ${warehouseSingular.toLowerCase()} above to see its ${charterSingular.toLowerCase()}s.`}
               </div>
@@ -1020,7 +1257,9 @@ function InviteDialog({
               />
             )}
             <p className="text-[11px] text-muted-foreground">
-              {!warehouseId
+              {allSelected
+                ? `They'll see every ${warehouseSingular.toLowerCase()}, including ones created later.`
+                : !warehouseId
                 ? `Pick a ${warehouseSingular.toLowerCase()} above to see its ${charterSingular.toLowerCase()}s.`
                 : chartersForWarehouse.length === 0
                 ? `Or invite without a ${charterSingular.toLowerCase()} (they'll see all stock at this ${warehouseSingular.toLowerCase()}).`
