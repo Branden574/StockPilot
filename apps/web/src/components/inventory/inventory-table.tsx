@@ -52,6 +52,7 @@ import {
 import {
   deriveInstantView,
   expandInstantPlacementRows,
+  filterInstantRows,
   instantStateFromSearchParams,
   type InstantModeState,
   type InstantPlacementLine,
@@ -788,16 +789,20 @@ export function InventoryTable({
   const autoArchivedOnly = params.get('auto') === '1';
   // Expected chip state (mig 0277): ?expected=1 shows ONLY items awaiting
   // their first receipt. The chip's count badge is server-computed in
-  // server mode (expectedCount prop) and derived from the full dataset in
-  // instant mode — same predicate as InventoryService.countExpected
-  // (flagged AND active), so both modes agree.
+  // server mode (expectedCount prop, countExpected with the page's active
+  // filters) and derived from the full dataset in instant mode — here via
+  // the EXACT view derivation (filterInstantRows with expected forced on:
+  // honors q/cat/loc/charter/rack/stock and spans lifecycles), so the
+  // badge N always equals the rows the chip's view would list.
   const expectedOnly = params.get('expected') === '1';
   const effectiveExpectedCount = React.useMemo(() => {
-    if (!effectiveInstant) return expectedCount;
-    return effectiveInstant.items.filter(
-      (r) => r.awaiting_first_receipt === true && r.status === 'active',
+    if (!effectiveInstant || !instantState) return expectedCount;
+    return filterInstantRows(
+      effectiveInstant.items,
+      { ...instantState, expected: true },
+      effectiveInstant.view,
     ).length;
-  }, [effectiveInstant, expectedCount]);
+  }, [effectiveInstant, instantState, expectedCount]);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   // Model B SKU grouping — which SKU-group headers are expanded, keyed
   // on the group's `sku` string (guaranteed non-blank: a blank/whitespace
@@ -2978,11 +2983,15 @@ function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: s
 
   const itemTypeArg = itemType as InventoryExportRequest['itemType'];
 
-  // "filtered" carries the active params (q, sort, cat[], loc[], stock, status).
+  // "filtered" carries the active params (q, sort, cat[], loc[], stock,
+  // status, expected). ?expected=1 (the Expected chip view, mig 0277) must
+  // ride along or exporting that view yields zero rows — the server's
+  // default list excludes flagged items.
   const filtersFromParams = (): InventoryExportRequest['filters'] => ({
     q: params.get('q') || undefined,
     status: (params.get('status') as 'active' | 'archived' | 'discontinued' | 'all') || undefined,
     stock: (params.get('stock') as 'low' | 'out') || null,
+    expected: params.get('expected') === '1' || undefined,
     sort: params.get('sort') || undefined,
     categoryIds: params.getAll('cat').filter(Boolean),
     locationIds: params.getAll('loc').filter(Boolean),

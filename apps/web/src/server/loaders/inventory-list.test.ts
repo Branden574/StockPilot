@@ -440,12 +440,16 @@ describe('loadInventoryList (cached payload shape)', () => {
     expect(itemBuilders[0]!.eq).toHaveBeenCalledWith('awaiting_first_receipt', false);
     expect(itemBuilders[0]!.eq).not.toHaveBeenCalledWith('awaiting_first_receipt', true);
     expect(itemBuilders[1]!.eq).toHaveBeenCalledWith('awaiting_first_receipt', true);
-    // Both stay scoped to the org + active + view type.
+    // Both stay scoped to the org + view type.
     for (const b of itemBuilders) {
       expect(b.eq).toHaveBeenCalledWith('organization_id', 'org-1');
-      expect(b.eq).toHaveBeenCalledWith('status', 'active');
       expect(b.eq).toHaveBeenCalledWith('item_type', 'product');
     }
+    // The rows query is the default (active) view; the Expected head
+    // count spans lifecycles (NO status filter — the Expected view shows
+    // a manually-archived flagged row, so the badge must count it).
+    expect(itemBuilders[0]!.eq).toHaveBeenCalledWith('status', 'active');
+    expect(itemBuilders[1]!.eq).not.toHaveBeenCalledWith('status', 'active');
   });
 });
 

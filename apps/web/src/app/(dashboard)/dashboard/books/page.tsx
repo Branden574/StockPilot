@@ -429,7 +429,11 @@ async function BooksTableSection({
     const [inventory, expectedCountLive, lookups, trendBuckets] = await Promise.all([
       inventorySvc.list({
         q: params.q,
-        status: lifecycleStatus,
+        // The Expected view spans lifecycles (mirrors mobile's
+        // listStatusPredicate lifecycle:null) so a flagged book someone
+        // manually archived is still reachable there — the Archived view
+        // keeps excluding flagged rows via the default predicate.
+        status: params.expected === '1' ? 'all' : lifecycleStatus,
         lowStock: params.stock === 'low',
         outOfStock: params.stock === 'out',
         autoArchived: params.auto === '1',
@@ -445,10 +449,20 @@ async function BooksTableSection({
         offset: (page - 1) * PAGE_SIZE,
       }),
       // Expected-chip badge count (mig 0277) — one HEAD count on the
-      // 0277 partial index, in parallel with the rows query. NEVER
-      // fails the page: the chip degrades to hidden on error.
+      // 0277 partial index, in parallel with the rows query. Carries the
+      // page's active q/cat/loc/charter/rack filters so the badge N
+      // matches the rows the chip's view would list. NEVER fails the
+      // page: the chip degrades to hidden on error.
       inventorySvc
-        .countExpected({ itemType: 'book', warehouseId: warehouseFilter })
+        .countExpected({
+          itemType: 'book',
+          warehouseId: warehouseFilter,
+          q: params.q,
+          categoryIds,
+          locationIds,
+          charterIds,
+          rack,
+        })
         .catch(() => 0),
       useSharedCaches
         ? loadInventoryLookups(sessionCtx.organizationId).catch((err: unknown) => {

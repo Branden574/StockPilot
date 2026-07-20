@@ -109,6 +109,35 @@ describe('buildInventoryExportRows', () => {
     expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ ids: ['i1', 'i2'] }));
   });
 
+  it("scope=selected uses expected:'any' so explicitly-selected flagged rows are NOT dropped (mig 0277)", async () => {
+    await buildInventoryExportRows(ctx, { scope: 'selected', itemType: 'all', ids: ['i1'] });
+    expect(listMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ids: ['i1'], status: 'all', expected: 'any' }),
+    );
+  });
+
+  it('scope=filtered forwards the page\'s ?expected=1 (the Expected chip view) and spans lifecycles', async () => {
+    await buildInventoryExportRows(ctx, {
+      scope: 'filtered',
+      itemType: 'product',
+      filters: { expected: true },
+    });
+    expect(listMock).toHaveBeenCalledWith(
+      expect.objectContaining({ expected: true, status: 'all' }),
+    );
+  });
+
+  it('scope=filtered WITHOUT expected keeps the default exclusion (expected:false) and the given status', async () => {
+    await buildInventoryExportRows(ctx, {
+      scope: 'filtered',
+      itemType: 'product',
+      filters: { status: 'archived' },
+    });
+    expect(listMock).toHaveBeenCalledWith(
+      expect.objectContaining({ expected: false, status: 'archived' }),
+    );
+  });
+
   it('marks truncated when total exceeds returned rows', async () => {
     listMock.mockResolvedValueOnce({ items: [sampleItem], total: 99999 });
     const res = await buildInventoryExportRows(ctx, { scope: 'all', itemType: 'all' });

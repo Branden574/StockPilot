@@ -205,6 +205,37 @@ describe('expected filter (mig 0277 "Expected" chip — awaiting_first_receipt v
     expect(derived.total).toBe(1);
     expect(derived.pageItems.map((r) => r.id)).toEqual(['phantom']);
   });
+
+  it('expected view SPANS lifecycles: a manually-archived flagged row still shows (status is ignored while on)', () => {
+    const withArchived = [
+      ...rows,
+      row({ id: 'phantom-archived', status: 'archived', quantity_on_hand: 0, awaiting_first_receipt: true }),
+    ];
+    // Mirrors mobile's listStatusPredicate lifecycle:null and the pages
+    // passing status:'all' to list() under ?expected=1 — the default
+    // status ('active') must NOT drop the archived phantom here.
+    expect(
+      filterInstantRows(withArchived, state({ expected: true }), 'items').map((r) => r.id),
+    ).toEqual(['phantom', 'phantom-archived']);
+    // Even an explicit status=archived in the URL doesn't narrow the
+    // Expected view — expected wins, exactly like mobile.
+    expect(
+      filterInstantRows(withArchived, state({ expected: true, status: 'archived' }), 'items').map(
+        (r) => r.id,
+      ),
+    ).toEqual(['phantom', 'phantom-archived']);
+  });
+
+  it('Archived view keeps EXCLUDING flagged rows (the archived phantom is only reachable via Expected)', () => {
+    const withArchived = [
+      ...rows,
+      row({ id: 'phantom-archived', status: 'archived', quantity_on_hand: 0, awaiting_first_receipt: true }),
+      row({ id: 'archived-real', status: 'archived', quantity_on_hand: 0 }),
+    ];
+    expect(
+      filterInstantRows(withArchived, state({ status: 'archived' }), 'items').map((r) => r.id),
+    ).toEqual(['archived-real']);
+  });
 });
 
 describe('stock filters (combined server pre-filter + JS post-filter semantics)', () => {

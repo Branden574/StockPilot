@@ -47,6 +47,11 @@ export interface InventoryExportFilters {
   locationIds?: string[];
   charterIds?: string[];
   warehouseId?: string | null;
+  /** True when the page's "Expected" chip view (?expected=1, mig 0277) is
+   *  active — the filtered export then returns ONLY items awaiting their
+   *  first receipt, matching what the user sees. Default (absent/false)
+   *  excludes them, exactly like the default list views. */
+  expected?: boolean;
 }
 
 export interface BuildExportArgs {
@@ -82,13 +87,22 @@ export async function buildInventoryExportRows(
     itemType: args.itemType,
     limit: ROW_CAP,
     ...(args.scope === 'selected'
-      ? { ids: args.ids ?? [], status: 'all' as const }
+      ? // expected:'any' (mig 0277): an explicitly-selected row must export
+        // whether or not it is still awaiting its first receipt — the ids
+        // narrowing IS the user's filter, so the default flagged-row
+        // exclusion would silently drop rows they checked.
+        { ids: args.ids ?? [], status: 'all' as const, expected: 'any' as const }
       : args.scope === 'filtered'
         ? {
             q: args.filters?.q,
-            status: args.filters?.status ?? 'active',
+            // The Expected view spans lifecycles (the pages pass
+            // status:'all' to list() when ?expected=1), so its export
+            // does too — otherwise an archived flagged row shows in the
+            // view but vanishes from its export.
+            status: args.filters?.expected ? ('all' as const) : (args.filters?.status ?? 'active'),
             lowStock: args.filters?.stock === 'low',
             outOfStock: args.filters?.stock === 'out',
+            expected: args.filters?.expected === true,
             sort: args.filters?.sort ?? 'updated_desc',
             categoryIds: args.filters?.categoryIds ?? [],
             locationIds: args.filters?.locationIds ?? [],

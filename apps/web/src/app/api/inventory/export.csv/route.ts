@@ -76,6 +76,9 @@ export async function GET(request: Request) {
                 : params.get('stock') === 'out'
                   ? 'out'
                   : null,
+            // Mig 0277: forward the page's ?expected=1 so exporting the
+            // Expected chip view exports the flagged rows it shows.
+            expected: params.get('expected') === '1',
             sort: VALID_SORTS.has(params.get('sort') as ItemListSort)
               ? (params.get('sort') as ItemListSort)
               : 'updated_desc',

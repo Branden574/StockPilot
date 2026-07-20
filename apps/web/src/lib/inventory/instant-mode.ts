@@ -133,9 +133,12 @@ export interface InstantModeState {
    *  never carry auto_archived=true (cleared on restore). */
   autoArchived: boolean;
   /** ?expected=1 — the "Expected" chip view: ONLY rows awaiting their
-   *  first receipt (migration 0277). Off (the default) EXCLUDES those
-   *  rows from every view — mirrors list()'s
-   *  `eq('awaiting_first_receipt', expected === true)` predicate. */
+   *  first receipt (migration 0277), ACROSS lifecycles (status is
+   *  ignored while on — mirrors mobile's listStatusPredicate
+   *  lifecycle:null and the pages passing status:'all' to list()).
+   *  Off (the default) EXCLUDES those rows from every view — mirrors
+   *  list()'s `eq('awaiting_first_receipt', expected === true)`
+   *  predicate. */
   expected: boolean;
   cat: string[];
   loc: string[];
@@ -359,11 +362,18 @@ export function filterInstantRows<T extends InstantModeRow>(
       return false;
     }
     // status: default/'active' → active only; 'all' → everything;
-    // otherwise the exact status. Mirrors list()'s status block.
-    if (state.status === 'active') {
-      if (r.status !== 'active') return false;
-    } else if (state.status !== 'all' && r.status !== state.status) {
-      return false;
+    // otherwise the exact status. Mirrors list()'s status block — EXCEPT
+    // in the Expected view, which spans lifecycles (the pages pass
+    // status:'all' to list() when ?expected=1, mirroring mobile's
+    // listStatusPredicate lifecycle:null): a flagged row someone
+    // manually archived is only reachable there, since the Archived
+    // view excludes flagged rows via the default branch above.
+    if (!state.expected) {
+      if (state.status === 'active') {
+        if (r.status !== 'active') return false;
+      } else if (state.status !== 'all' && r.status !== state.status) {
+        return false;
+      }
     }
     if (!rowMatchesInstantSearch(r, term)) return false;
     if (cats && (r.category_id === null || !cats.has(r.category_id))) return false;

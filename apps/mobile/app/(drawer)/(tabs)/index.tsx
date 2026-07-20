@@ -120,7 +120,7 @@ export default function Home() {
     const orgId = activeOrgId;
     setOrgName(activeOrgName ?? 'Workspace');
 
-    const [{ count: itemCount }, { count: outOfStockCount }, valueRpc, lowRpc, movements] = await Promise.all([
+    const [{ count: itemCount }, { count: outOfStockCount }, valueRpc, lowRpc, flaggedLow, movements] = await Promise.all([
       supabase
         .from('inventory_items')
         .select('id', { count: 'exact', head: true })
@@ -133,9 +133,27 @@ export default function Home() {
         .eq('organization_id', orgId)
         .eq('status', 'active')
         .lte('quantity_on_hand', 0)
+        // Expected-items visibility (mig 0277): a PO-created item awaiting
+        // its FIRST receipt was never in stock, so it must not count as
+        // "out of stock" (same predicate as inventory.tsx / reports.tsx).
+        .eq('awaiting_first_receipt', false)
         .is('deleted_at', null),
       supabase.rpc('inventory_value', { p_org_id: orgId }),
       supabase.rpc('low_stock_count', { p_org_id: orgId }),
+      // The low_stock_count RPC (0004) predates mig 0277 and can't exclude
+      // awaiting-first-receipt phantoms, so count the flagged slice that
+      // matches its predicate (active, not deleted, reorder_point > 0 —
+      // flagged rows always sit at qty 0 <= reorder_point) and subtract
+      // client-side. Mirrors the reports screen.
+      supabase
+        .from('inventory_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', orgId)
+        .eq('status', 'active')
+        .is('deleted_at', null)
+        .eq('awaiting_first_receipt', true)
+        .gt('reorder_point', 0)
+        .lte('quantity_on_hand', 0),
       supabase
         .from('stock_movements')
         .select(
@@ -150,7 +168,10 @@ export default function Home() {
       itemCount: itemCount ?? 0,
       outOfStockCount: outOfStockCount ?? 0,
       inventoryValue: typeof valueRpc.data === 'number' ? valueRpc.data : 0,
-      lowStockCount: typeof lowRpc.data === 'number' ? lowRpc.data : 0,
+      lowStockCount: Math.max(
+        0,
+        (typeof lowRpc.data === 'number' ? lowRpc.data : 0) - (flaggedLow.count ?? 0),
+      ),
     });
     setRecent(
       (movements.data ?? []).map((row) => {

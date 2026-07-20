@@ -972,32 +972,17 @@ export async function getLowStockItems(
   if (!options.warehouseId) {
     // Expected-items exclusion (mig 0277): the RPC (0004 — untouchable
     // without a migration) can't filter awaiting_first_receipt, so fetch
-    // the flagged ids first (tiny slice on the 0277 partial index; only
-    // rows with a reorder point can even qualify for the RPC), widen
-    // p_limit by that many, and drop flagged rows after — the result is
-    // still an exact top-`limit` of the unflagged set. Zero flagged ids
-    // (the overwhelmingly common case) keeps the call identical to
-    // before, and a lookup failure fails open to today's behavior.
-    const flaggedRes = await ctx.supabase
-      .from('inventory_items')
-      .select('id')
-      .eq('organization_id', ctx.organizationId)
-      .eq('awaiting_first_receipt', true)
-      .eq('status', 'active')
-      .is('deleted_at', null)
-      .gt('reorder_point', 0)
-      .limit(500);
-    // Fail open on a lookup error (flaggedRes.data null) — identical to
-    // today's un-filtered behavior rather than failing the dashboard.
-    const flaggedIds = new Set<string>(
-      ((flaggedRes.data ?? []) as Array<{ id: string }>).map((r) => r.id),
-    );
-    const { data, error } = await ctx.supabase.rpc('low_stock_items', {
-      p_org_id: ctx.organizationId,
-      p_limit: limit + flaggedIds.size,
-    });
-    if (error) throw new ServiceError('internal_error', error.message);
-    const rows = (data ?? []) as Array<{
+    // the flagged ids (tiny slice on the 0277 partial index; only rows
+    // with a reorder point can even qualify for the RPC) IN PARALLEL
+    // with the plain-limit RPC — the default dashboard path must not
+    // gain a serial round trip (dashboard perf is do-not-regress). Zero
+    // flagged ids (the overwhelmingly common case) means the parallel
+    // RPC result is already exact. Only when flagged rows exist does a
+    // second, widened RPC call run (p_limit + flagged count), so
+    // dropping flagged rows still yields an exact top-`limit` of the
+    // unflagged set. A flagged-lookup failure fails open to today's
+    // un-filtered behavior rather than failing the dashboard.
+    type LowStockRow = {
       id: string;
       name: string;
       sku: string;
@@ -1005,7 +990,35 @@ export async function getLowStockItems(
       reorder_point: number;
       reorder_quantity: number;
       primary_location: string | null;
-    }>;
+    };
+    const rpcArgsBase = { p_org_id: ctx.organizationId };
+    const [flaggedRes, firstRpc] = await Promise.all([
+      ctx.supabase
+        .from('inventory_items')
+        .select('id')
+        .eq('organization_id', ctx.organizationId)
+        .eq('awaiting_first_receipt', true)
+        .eq('status', 'active')
+        .is('deleted_at', null)
+        .gt('reorder_point', 0)
+        .limit(500),
+      ctx.supabase.rpc('low_stock_items', { ...rpcArgsBase, p_limit: limit }),
+    ]);
+    if (firstRpc.error) throw new ServiceError('internal_error', firstRpc.error.message);
+    const flaggedIds = new Set<string>(
+      ((flaggedRes.data ?? []) as Array<{ id: string }>).map((r) => r.id),
+    );
+    let rows = (firstRpc.data ?? []) as LowStockRow[];
+    if (flaggedIds.size > 0) {
+      // Rare path: widen so filtered-out flagged rows can't shrink the
+      // result below `limit`.
+      const { data, error } = await ctx.supabase.rpc('low_stock_items', {
+        ...rpcArgsBase,
+        p_limit: limit + flaggedIds.size,
+      });
+      if (error) throw new ServiceError('internal_error', error.message);
+      rows = (data ?? []) as LowStockRow[];
+    }
     return rows.filter((r) => !flaggedIds.has(r.id)).slice(0, limit);
   }
 

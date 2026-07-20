@@ -697,7 +697,7 @@ describe('getDashboardSummary', () => {
 });
 
 describe('getLowStockItems — expected-items exclusion (mig 0277)', () => {
-  it('RPC path: widens p_limit by the flagged-id count and drops flagged rows from the result', async () => {
+  it('RPC path with flagged rows: parallel plain-limit RPC first, then ONE widened re-fetch, flagged rows dropped', async () => {
     const stub = makeSupabaseStub({
       // The flagged-ids lookup (only rows with a reorder point qualify).
       'inventory_items.select': { data: [{ id: 'phantom-1' }], error: null },
@@ -714,12 +714,35 @@ describe('getLowStockItems — expected-items exclusion (mig 0277)', () => {
 
     const rows = await getLowStockItems(2);
 
-    // p_limit widened: 2 requested + 1 flagged id.
+    // First call runs IN PARALLEL with the flagged lookup at the plain
+    // limit; the rare flagged>0 path re-fetches once, widened by the
+    // flagged-id count (2 requested + 1 flagged).
     expect(stub.rpcCalls).toEqual([
+      { name: 'low_stock_items', args: { p_org_id: 'org-test', p_limit: 2 } },
       { name: 'low_stock_items', args: { p_org_id: 'org-test', p_limit: 3 } },
     ]);
     // The phantom is dropped; the top `limit` UNFLAGGED rows remain.
     expect(rows.map((r) => r.id)).toEqual(['real-1', 'real-2']);
+  });
+
+  it('RPC path with NO flagged rows (the common case): a single plain-limit RPC — no serial widen round trip', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [], error: null },
+      'rpc:low_stock_items': {
+        data: [
+          { id: 'real-1', name: 'Dell XPS', sku: 'S2', quantity_on_hand: 0, reorder_point: 2, reorder_quantity: 5, primary_location: null },
+        ],
+        error: null,
+      },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const rows = await getLowStockItems(10);
+
+    expect(stub.rpcCalls).toEqual([
+      { name: 'low_stock_items', args: { p_org_id: 'org-test', p_limit: 10 } },
+    ]);
+    expect(rows.map((r) => r.id)).toEqual(['real-1']);
   });
 
   it('warehouse path: the candidates query itself excludes flagged rows (eq awaiting_first_receipt=false)', async () => {

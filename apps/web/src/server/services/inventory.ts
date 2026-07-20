@@ -206,15 +206,22 @@ export interface ItemListFilters {
    *
    *   - undefined / false (EVERY existing caller): the list EXCLUDES
    *     flagged rows — the default-hidden behavior for the Items/Books
-   *     lists, order pickers, AI search, exports, /api/items/search.
+   *     lists, order pickers, exports, /api/items/search.
    *   - true: the list returns ONLY flagged rows — backs the Items/Books
    *     pages' "Expected" chip view (`?expected=1`).
+   *   - 'any': NO predicate — both populations. For surfaces that must
+   *     be able to reference a not-yet-received item: the PO create/edit/
+   *     recurring item pickers (re-ordering an expected SKU must reuse
+   *     the row, not invite a duplicate), vendor-mapping targets, the
+   *     ids-narrowed "export selected" path, and AI item search (which
+   *     annotates flagged rows). Ordering surfaces (orders catalog,
+   *     storefront) STAY on the default exclusion.
    *
    * The column is NOT NULL DEFAULT false and is cleared by a DB trigger
    * the moment any stock arrives, so `.eq()` on it is total. Established
    * zero-stock items are never flagged and stay visible by default.
    */
-  expected?: boolean;
+  expected?: boolean | 'any';
 }
 
 const SORT_MAP: Record<ItemListSort, { col: string; asc: boolean }> = {
@@ -409,8 +416,12 @@ export class InventoryService {
     }
     // Expected-items visibility (mig 0277): default = hide phantoms
     // awaiting their first receipt; expected=true = ONLY them (the
-    // "Expected" chip view). Column is NOT NULL so eq() is total.
-    query = query.eq('awaiting_first_receipt', filters.expected === true);
+    // "Expected" chip view); expected='any' = no predicate (PO pickers /
+    // ids-narrowed exports / AI search — see the ItemListFilters doc).
+    // Column is NOT NULL so eq() is total.
+    if (filters.expected !== 'any') {
+      query = query.eq('awaiting_first_receipt', filters.expected === true);
+    }
 
     if (filters.q && filters.q.trim()) {
       // PostgREST's .or() takes a raw filter string. Strip characters
@@ -597,8 +608,11 @@ export class InventoryService {
       if (filters.autoArchived) {
         sumQuery = sumQuery.eq('auto_archived', true);
       }
-      // Mirror the main query's expected-items predicate (mig 0277).
-      sumQuery = sumQuery.eq('awaiting_first_receipt', filters.expected === true);
+      // Mirror the main query's expected-items predicate (mig 0277),
+      // including the tri-state 'any' escape hatch (no predicate).
+      if (filters.expected !== 'any') {
+        sumQuery = sumQuery.eq('awaiting_first_receipt', filters.expected === true);
+      }
       if (filters.q && filters.q.trim()) {
         const term = filters.q.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
         if (term) {
@@ -815,19 +829,29 @@ export class InventoryService {
   }
 
   /**
-   * HEAD count of ACTIVE items awaiting their first receipt (migration
-   * 0277) for one view — the badge on the Items/Books pages' "Expected"
-   * chip. Mirrors the Expected view's own predicate (org, not deleted,
-   * status='active', non-rental, item_type, optional warehouse) and the
-   * same warehouse-access scoping list() applies for staff/viewer, so
-   * the count always equals the rows the chip's view would list. Cheap:
-   * rides the 0277 partial index (`where awaiting_first_receipt`) over a
-   * tiny, transient row slice.
+   * HEAD count of items awaiting their first receipt (migration 0277)
+   * for one view — the badge on the Items/Books pages' "Expected" chip.
+   * Mirrors the Expected view's own predicate (org, not deleted,
+   * non-rental, item_type, optional warehouse, plus whatever q/category/
+   * location/charter/rack filters are active on the page — the chip's
+   * VIEW applies them, so the badge must too or the N lies about the
+   * rows) and the same warehouse-access scoping list() applies for
+   * staff/viewer, so the count always equals the rows the chip's view
+   * would list. NO lifecycle filter: the Expected view spans lifecycles
+   * (mobile's listStatusPredicate returns lifecycle:null) so a flagged
+   * item someone manually archived is still reachable — and counted.
+   * Cheap: rides the 0277 partial index (`where awaiting_first_receipt`)
+   * over a tiny, transient row slice.
    */
   async countExpected(
     opts: {
       itemType?: 'product' | 'book' | 'asset' | 'consumable' | 'all';
       warehouseId?: string | null;
+      q?: string;
+      categoryIds?: string[];
+      locationIds?: string[];
+      charterIds?: string[];
+      rack?: string;
     } = {},
   ): Promise<number> {
     const access = await getWarehouseAccess(this.ctx);
@@ -836,7 +860,6 @@ export class InventoryService {
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
-      .eq('status', 'active')
       .eq('is_rental', false)
       .eq('awaiting_first_receipt', true);
     if (!access.hasAllAccess) {
@@ -850,6 +873,60 @@ export class InventoryService {
       query = query.eq('item_type', 'product');
     } else if (opts.itemType !== 'all') {
       query = query.eq('item_type', opts.itemType);
+    }
+    // The clauses below mirror list()'s q / rack / category / location /
+    // charter filters verbatim (same sanitization, same fail-open
+    // edges) — third copy alongside list()'s main + sum builders, the
+    // established mirroring pattern in this file.
+    if (opts.q && opts.q.trim()) {
+      const term = opts.q.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
+      if (term) {
+        query = query.or(
+          `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%,model_number.ilike.%${term}%`,
+        );
+      }
+    }
+    if (opts.rack && opts.rack.trim()) {
+      const sanitize = (s: string | undefined): string =>
+        (s ?? '').replace(/[^A-Za-z0-9]/g, '').slice(0, 40);
+      const [rawNum, rawRow] = opts.rack.trim().split('-', 2);
+      const num = sanitize(rawNum);
+      const row = sanitize(rawRow);
+      if (num) {
+        if (opts.itemType === 'book') {
+          query = query.filter('custom_fields->>book_rack_number', 'eq', num);
+          if (row) query = query.filter('custom_fields->>book_rack_row', 'eq', row);
+        } else if (opts.itemType === 'all') {
+          const bookClause = row
+            ? `and(item_type.eq.book,custom_fields->>book_rack_number.eq.${num},custom_fields->>book_rack_row.eq.${row})`
+            : `and(item_type.eq.book,custom_fields->>book_rack_number.eq.${num})`;
+          const itemClause = row
+            ? `and(item_type.neq.book,custom_fields->>rack_number.eq.${num},custom_fields->>rack_row.eq.${row})`
+            : `and(item_type.neq.book,custom_fields->>rack_number.eq.${num})`;
+          query = query.or(`${bookClause},${itemClause}`);
+        } else {
+          query = query.filter('custom_fields->>rack_number', 'eq', num);
+          if (row) query = query.filter('custom_fields->>rack_row', 'eq', row);
+        }
+      }
+    }
+    if (opts.categoryIds && opts.categoryIds.length > 0) {
+      query = query.in('category_id', opts.categoryIds);
+    }
+    if (opts.locationIds && opts.locationIds.length > 0) {
+      query = query.in('primary_location_id', opts.locationIds);
+    }
+    if (opts.charterIds && opts.charterIds.length > 0) {
+      const includesGeneric = opts.charterIds.includes('generic');
+      const realIds = opts.charterIds.filter((id) => id !== 'generic' && CHARTER_ID_RE.test(id));
+      if (includesGeneric && realIds.length > 0) {
+        const list = realIds.map((id) => `"${id}"`).join(',');
+        query = query.or(`charter_id.is.null,charter_id.in.(${list})`);
+      } else if (includesGeneric) {
+        query = query.is('charter_id', null);
+      } else if (realIds.length > 0) {
+        query = query.in('charter_id', realIds);
+      }
     }
     const { count, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);

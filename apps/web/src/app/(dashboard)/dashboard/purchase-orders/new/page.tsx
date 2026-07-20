@@ -26,7 +26,10 @@ export default async function NewPoPage() {
     ChartersService.forCurrentUser(),
   ]);
   const [inventory, suppliers, locations, charters] = await Promise.all([
-    inventorySvc.list({ limit: 1000 }),
+    // expected:'any' (mig 0277): the PO item picker must ALSO offer items
+    // still awaiting their first receipt — re-ordering an expected SKU has
+    // to reuse the existing row, or the picker invites a duplicate item.
+    inventorySvc.list({ limit: 1000, expected: 'any' }),
     suppliersSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
     chartersSvc.list(),

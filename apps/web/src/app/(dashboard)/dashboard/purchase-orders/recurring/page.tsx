@@ -58,7 +58,11 @@ export default async function RecurringPosPage() {
   );
 
   const [inventory, suppliers, locations] = await Promise.all([
-    inventorySvc.list({ limit: 1000 }),
+    // expected:'any' (mig 0277): recurring-PO templates are inbound
+    // ordering — the picker must offer items still awaiting their first
+    // receipt so a template can reference them instead of inviting a
+    // duplicate item (same rule as the PO create/edit pickers).
+    inventorySvc.list({ limit: 1000, expected: 'any' }),
     suppliersSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
   ]);

@@ -573,7 +573,12 @@ async function InventoryTableSection({
         'inventorySvc.list',
         inventorySvc.list({
           q: params.q,
-          status: lifecycleStatus,
+          // The Expected view spans lifecycles (mirrors mobile's
+          // listStatusPredicate lifecycle:null) so a flagged item someone
+          // manually archived is still reachable there — it is excluded
+          // from the Archived view by the awaiting_first_receipt=false
+          // default, which would otherwise make it unreachable anywhere.
+          status: params.expected === '1' ? 'all' : lifecycleStatus,
           lowStock: params.stock === 'low',
           outOfStock: params.stock === 'out',
           autoArchived: params.auto === '1',
@@ -590,11 +595,21 @@ async function InventoryTableSection({
         }),
       ),
       // Expected-chip badge count (mig 0277) — one HEAD count on the
-      // 0277 partial index, in parallel with the rows query. NEVER
-      // fails the page: the chip degrades to hidden on error.
+      // 0277 partial index, in parallel with the rows query. Carries the
+      // page's active q/cat/loc/charter/rack filters so the badge N
+      // matches the rows the chip's view would list. NEVER fails the
+      // page: the chip degrades to hidden on error.
       tagged(
         'inventorySvc.countExpected',
-        inventorySvc.countExpected({ itemType, warehouseId: warehouseFilter }),
+        inventorySvc.countExpected({
+          itemType,
+          warehouseId: warehouseFilter,
+          q: params.q,
+          categoryIds,
+          locationIds,
+          charterIds,
+          rack,
+        }),
       ).catch(() => 0),
       useSharedCaches
         ? loadInventoryLookups(sessionCtx.organizationId).catch((err: unknown) => {

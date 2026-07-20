@@ -483,15 +483,17 @@ async function loadInventoryRowsUncached(
     .range(0, DEFAULT_VIEW_PAGE_SIZE - 1);
   if (warehouseId) mainQuery = mainQuery.eq('warehouse_id', warehouseId);
 
-  // Expected-chip badge count: ACTIVE flagged rows for this view —
-  // mirrors InventoryService.countExpected exactly (the manager+ /
-  // all-access variant this cache serves). Rides the 0277 partial index.
+  // Expected-chip badge count: flagged rows for this view ACROSS
+  // lifecycles (no status filter — the Expected view spans them, same as
+  // mobile's listStatusPredicate lifecycle:null) — mirrors
+  // InventoryService.countExpected exactly (the manager+ / all-access,
+  // no-extra-filters variant this default-view cache serves). Rides the
+  // 0277 partial index.
   let expectedQuery = admin
     .from('inventory_items')
     .select('id', { count: 'exact', head: true })
     .eq('organization_id', organizationId)
     .is('deleted_at', null)
-    .eq('status', 'active')
     .eq('item_type', itemType)
     .eq('is_rental', false)
     .eq('awaiting_first_receipt', true);

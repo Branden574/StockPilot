@@ -100,7 +100,11 @@ export async function GET(req: Request): Promise<Response> {
   const result = await inventorySvc.list({
     q: raw,
     itemType,
-    status,
+    // The Expected view spans lifecycles (mobile's listStatusPredicate
+    // lifecycle:null; the Items/Books pages pass status:'all' the same
+    // way) — so searching inside the chip view also reaches a flagged
+    // item someone manually archived.
+    status: expected ? 'all' : status,
     lowStock,
     outOfStock,
     expected,
