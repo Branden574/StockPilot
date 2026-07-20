@@ -87,7 +87,7 @@ export async function GET(
       `id, status, requester_email, requester_name, notes, denied_reason,
        created_at, approved_at, packing_slip_generated_at, staged_at,
        in_transit_at, signed_at, completed_at, cancelled_at,
-       organization_id, warehouse_id, fulfillment_type`,
+       organization_id, warehouse_id, fulfillment_type, return_token`,
     )
     .eq('id', id)
     .eq('organization_id', orgId)
@@ -113,6 +113,7 @@ export async function GET(
     organization_id: string;
     warehouse_id: string;
     fulfillment_type: 'pickup' | 'delivery';
+    return_token: string | null;
   };
   if (!h.requester_email || h.requester_email.toLowerCase() !== email) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
@@ -167,6 +168,30 @@ export async function GET(
   const sanitizedDeniedReason =
     h.status === 'denied' ? 'Your request was not approved.' : null;
 
+  // Returns-access Unit A: surface the requester's own self-service return
+  // link on the tracking page. Only when the order is COMPLETED with at least
+  // one fulfilled unit, a return_token was minted (0156 — happens on
+  // completion when the returns module is on), AND the org still has the
+  // module enabled (the portal 404s without it — never render a dead link).
+  // Safe to expose here: the caller already proved the token+id+email triad,
+  // i.e. this is the requester's own order, and the return_token is exactly
+  // the credential the /returns/request/[token] portal hands that requester.
+  let returnPath: string | null = null;
+  if (
+    h.status === 'completed' &&
+    h.return_token &&
+    lines.some((l) => l.quantityFulfilled > 0)
+  ) {
+    const { data: returnsMod } = await admin
+      .from('organization_modules')
+      .select('module_id')
+      .eq('organization_id', orgId)
+      .eq('module_id', 'returns')
+      .eq('enabled', true)
+      .maybeSingle();
+    if (returnsMod) returnPath = `/returns/request/${h.return_token}`;
+  }
+
   // Same reasoning as denied_reason: the `notes` field is a
   // requester-typed message at submission time, but staff may
   // overwrite it from the manager panel with internal context
@@ -192,5 +217,6 @@ export async function GET(
     cancelledAt: h.cancelled_at,
     deniedReason: sanitizedDeniedReason,
     notes: null,
+    returnPath,
   });
 }

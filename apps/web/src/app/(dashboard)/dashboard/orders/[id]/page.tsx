@@ -14,6 +14,7 @@ import { OrderTimeline } from '@/components/orders/order-timeline';
 import { ShippingPanel } from '@/components/orders/shipping-panel';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -372,18 +373,41 @@ export default async function OrderDetailPage({
   const orderIsReturnable =
     request.status === 'completed' || (request.status as string) === 'delivered';
   let returnableLines: ReturnableLine[] = [];
-  if (can(ctx, 'returns:manage') && orderIsReturnable) {
+  let returnsModuleEnabled = false;
+  if (orderIsReturnable && (can(ctx, 'returns:manage') || isOwnRequest)) {
     const returnsAccess = await checkModuleAccess('returns');
-    if (returnsAccess.enabled) {
-      try {
-        const rmaSvc = await RMAService.forCurrentUser();
-        returnableLines = await rmaSvc.returnableLinesForOrder(id);
-      } catch {
-        returnableLines = [];
-      }
+    returnsModuleEnabled = returnsAccess.enabled;
+  }
+  if (can(ctx, 'returns:manage') && orderIsReturnable && returnsModuleEnabled) {
+    try {
+      const rmaSvc = await RMAService.forCurrentUser();
+      returnableLines = await rmaSvc.returnableLinesForOrder(id);
+    } catch {
+      returnableLines = [];
     }
   }
   const canCreateReturn = returnableLines.length > 0;
+
+  // Returns-access Unit A: the REQUESTER'S own self-service affordance. A
+  // requester without returns:manage never sees the staff CreateReturnDialog,
+  // so on their own completed order with fulfilled items we link the same
+  // public return portal their return-prompt email points at
+  // (/returns/request/<return_token>, minted at completion when the module is
+  // on). returns:manage viewers are excluded — they get the staff dialog, so
+  // there are never two return buttons.
+  const totalFulfilledForReturns = lines.reduce(
+    (sum, l) => sum + (Number(l.quantity_fulfilled) || 0),
+    0,
+  );
+  const requesterReturnPath =
+    isOwnRequest &&
+    !can(ctx, 'returns:manage') &&
+    orderIsReturnable &&
+    returnsModuleEnabled &&
+    request.return_token &&
+    totalFulfilledForReturns > 0
+      ? `/returns/request/${request.return_token}`
+      : null;
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -419,6 +443,11 @@ export default async function OrderDetailPage({
           </div>
           <div className="flex flex-wrap gap-2">
             {canCreateReturn && <CreateReturnDialog orderId={id} lines={returnableLines} />}
+            {requesterReturnPath && (
+              <Button asChild variant="outline">
+                <a href={requesterReturnPath}>Request a return</a>
+              </Button>
+            )}
             {(canApprove || isOwnRequest) && (
               <CancelOrderButton orderId={id} status={request.status} />
             )}
