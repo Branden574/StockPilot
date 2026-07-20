@@ -74,6 +74,10 @@ export default function ReportsScreen() {
           .eq('organization_id', orgId)
           .eq('status', 'active')
           .lte('quantity_on_hand', 0)
+          // Expected-items visibility (mig 0277): a PO-created item awaiting
+          // its FIRST receipt was never in stock, so it must not count as
+          // "out of stock" (web dashboard widgets apply the same predicate).
+          .eq('awaiting_first_receipt', false)
           .is('deleted_at', null),
         supabase.rpc('inventory_value', { p_org_id: orgId }),
         supabase.rpc('low_stock_count', { p_org_id: orgId }),
