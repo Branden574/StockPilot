@@ -74,6 +74,12 @@ export async function GET(req: Request): Promise<Response> {
   const lowStock = stock === 'low';
   const outOfStock = stock === 'out';
 
+  // Expected-items visibility (mig 0277): mirrors the list pages —
+  // '?expected=1' returns ONLY items awaiting their first receipt (the
+  // Expected chip view's in-view search); anything else excludes them,
+  // which InventoryService.list does by default.
+  const expected = params.get('expected') === '1';
+
   const rawSort = params.get('sort');
   const sort =
     rawSort && VALID_SORTS.has(rawSort as ItemListSort)
@@ -94,9 +100,14 @@ export async function GET(req: Request): Promise<Response> {
   const result = await inventorySvc.list({
     q: raw,
     itemType,
-    status,
+    // The Expected view spans lifecycles (mobile's listStatusPredicate
+    // lifecycle:null; the Items/Books pages pass status:'all' the same
+    // way) — so searching inside the chip view also reaches a flagged
+    // item someone manually archived.
+    status: expected ? 'all' : status,
     lowStock,
     outOfStock,
+    expected,
     sort,
     categoryIds,
     locationIds,
@@ -129,6 +140,9 @@ export async function GET(req: Request): Promise<Response> {
       unit_cost: Number(i.unit_cost) || 0,
       retail_price: Number(i.retail_price) || 0,
       status: i.status as 'active' | 'archived' | 'discontinued',
+      // Expected pill (mig 0277) on server-search rows — only ever true
+      // inside the ?expected=1 view (the default list excludes flagged).
+      awaiting_first_receipt: i.awaiting_first_receipt === true,
       category_id: (i as { category_id?: string | null }).category_id ?? null,
       primary_location_id:
         (i as { primary_location_id?: string | null }).primary_location_id ??

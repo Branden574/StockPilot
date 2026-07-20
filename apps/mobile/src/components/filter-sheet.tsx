@@ -12,7 +12,7 @@ export interface FilterOption {
   name: string;
 }
 
-export type StockStatus = 'all' | 'low' | 'out' | 'archived';
+export type StockStatus = 'all' | 'low' | 'out' | 'archived' | 'expected';
 export type SortKey =
   | 'updated_desc'
   | 'name_asc'
@@ -175,6 +175,16 @@ export function FilterSheet({
                 label="Archived"
                 active={state.status === 'archived'}
                 onPress={() => onChange({ ...state, status: 'archived' })}
+              />
+              {/* Expected-items visibility (mig 0277): items auto-created from
+                  inbound POs are hidden from the default lists until their
+                  FIRST receipt. This option flips the list to flagged-only —
+                  same radio-swap model as Archived (never combined with
+                  low/out: a phantom has no stock to be low or out OF). */}
+              <RadioRow
+                label="Expected (awaiting first receipt)"
+                active={state.status === 'expected'}
+                onPress={() => onChange({ ...state, status: 'expected' })}
               />
             </Section>
 
@@ -373,6 +383,7 @@ export function ActiveFilterPill({
   if (state.status === 'low') parts.push('Low + critical');
   if (state.status === 'out') parts.push('Out of stock');
   if (state.status === 'archived') parts.push('Archived');
+  if (state.status === 'expected') parts.push('Expected');
   if (state.sort !== 'updated_desc') parts.push(SORT_LABEL[state.sort]);
   for (const id of state.categoryIds) {
     const n = lookups.categories.get(id);

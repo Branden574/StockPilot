@@ -37,6 +37,9 @@ const bodySchema = z.object({
       q: z.string().optional(),
       status: z.enum(['active', 'archived', 'discontinued', 'all']).optional(),
       stock: z.enum(['low', 'out']).nullable().optional(),
+      // Mig 0277: true = the page's Expected chip view — export ONLY items
+      // awaiting their first receipt (matching the visible rows).
+      expected: z.boolean().optional(),
       sort: z.string().optional(),
       categoryIds: z.array(z.string()).optional(),
       locationIds: z.array(z.string()).optional(),
@@ -99,6 +102,7 @@ export async function POST(request: NextRequest) {
             q: parsed.data.filters?.q,
             status: parsed.data.filters?.status,
             stock: parsed.data.filters?.stock ?? null,
+            expected: parsed.data.filters?.expected,
             sort: parsed.data.filters?.sort as ItemListSort | undefined,
             categoryIds: parsed.data.filters?.categoryIds,
             locationIds: parsed.data.filters?.locationIds,

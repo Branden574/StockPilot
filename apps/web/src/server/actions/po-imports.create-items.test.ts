@@ -125,6 +125,29 @@ describe('createItemsFromPoLinesAction — charter + location + item_created (Fi
     expect(createArg.itemType).toBe('product');
   });
 
+  it('marks every PO-created item awaitingFirstReceipt (mig 0277 — hidden as "Expected" until stock arrives)', async () => {
+    installStub({ inventoryItems: [] });
+
+    const result = await createItemsFromPoLinesAction({
+      poImportId: PO_IMPORT_ID,
+      lineIds: [LINE_ID],
+      vendorId: VENDOR_ID,
+      warehouseId: WAREHOUSE_ID,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    // The options bag is a SECOND argument, deliberately outside
+    // CreateItemInput so form/API payloads can never set the flag.
+    const [createInput, createOpts] = mockCreate.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    expect(createOpts).toEqual({ awaitingFirstReceipt: true });
+    // And the item itself is born at zero stock, so the flag is valid.
+    expect(createInput.quantityOnHand).toBe(0);
+  });
+
   it('creates books (item_type=book) when itemType: "book" is chosen for the import', async () => {
     // No ISBN on the line → no auto-match → straight create as a book.
     installStub({ lines: [baseLine({ vendor_item_number: 'V1' })], inventoryItems: [] });

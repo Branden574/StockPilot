@@ -52,6 +52,7 @@ import {
 import {
   deriveInstantView,
   expandInstantPlacementRows,
+  filterInstantRows,
   instantStateFromSearchParams,
   type InstantModeState,
   type InstantPlacementLine,
@@ -130,6 +131,11 @@ interface Item {
    *  Archived pill and the Archived view's "Auto-archived only" filter
    *  chip. Optional so older callers without the column still render. */
   auto_archived?: boolean;
+  /** True while an item auto-created from an inbound PO has never
+   *  received any stock (migration 0277) — drives the "Expected" pill
+   *  (replacing "Out of stock") and the Expected chip's local count in
+   *  instant mode. Optional so older callers still render. */
+  awaiting_first_receipt?: boolean;
   // ── "One line per rack" split-row fields (Items inventory page only) ──
   /** Unique row key when one item is split into multiple placement rows
    *  (item id + location id). Falls back to `id` when absent. */
@@ -346,6 +352,12 @@ export interface InventoryTableProps {
       React.use() in <InstantDatasetAdopter> — NEVER a `.then().catch()`
       effect (pattern #15). */
   instantPromise?: Promise<InstantAdoptedPayload | null>;
+  /** Server-computed count of ACTIVE items awaiting their first receipt
+      (migration 0277) for this view — the badge on the "Expected" chip.
+      Instant mode ignores it and derives the count from the full
+      dataset (always fresh with realtime refreshes). Absent → 0, chip
+      hidden unless the Expected view is already active. */
+  expectedCount?: number;
 }
 
 interface SavedViewSummary {
@@ -579,6 +591,7 @@ export function InventoryTable({
   reservedByItem,
   instant,
   instantPromise,
+  expectedCount = 0,
 }: InventoryTableProps) {
   // ── Streamed-dataset adoption (React 19 use()) ──────────────────────
   // The default manager+ view mounts in server mode over the fast 30-row
@@ -774,6 +787,22 @@ export function InventoryTable({
   // when the URL is already scoped to the Archived tab.
   const isArchivedView = params.get('status') === 'archived';
   const autoArchivedOnly = params.get('auto') === '1';
+  // Expected chip state (mig 0277): ?expected=1 shows ONLY items awaiting
+  // their first receipt. The chip's count badge is server-computed in
+  // server mode (expectedCount prop, countExpected with the page's active
+  // filters) and derived from the full dataset in instant mode — here via
+  // the EXACT view derivation (filterInstantRows with expected forced on:
+  // honors q/cat/loc/charter/rack/stock and spans lifecycles), so the
+  // badge N always equals the rows the chip's view would list.
+  const expectedOnly = params.get('expected') === '1';
+  const effectiveExpectedCount = React.useMemo(() => {
+    if (!effectiveInstant || !instantState) return expectedCount;
+    return filterInstantRows(
+      effectiveInstant.items,
+      { ...instantState, expected: true },
+      effectiveInstant.view,
+    ).length;
+  }, [effectiveInstant, instantState, expectedCount]);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   // Model B SKU grouping — which SKU-group headers are expanded, keyed
   // on the group's `sku` string (guaranteed non-blank: a blank/whitespace
@@ -815,6 +844,19 @@ export function InventoryTable({
     const next = new URLSearchParams(params.toString());
     if (next.get('auto') === '1') next.delete('auto');
     else next.set('auto', '1');
+    next.delete('page');
+    const qs = next.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  }
+
+  // "Expected" chip toggle (mig 0277) — same Link + shallow-nav pattern
+  // as the Auto-archived chip above. Toggling on shows ONLY items
+  // awaiting their first receipt; toggling off returns to the default
+  // (which excludes them). Pagination resets across the flip.
+  function hrefForExpectedToggle(): string {
+    const next = new URLSearchParams(params.toString());
+    if (next.get('expected') === '1') next.delete('expected');
+    else next.set('expected', '1');
     next.delete('page');
     const qs = next.toString();
     return qs ? `${basePath}?${qs}` : basePath;
@@ -947,7 +989,10 @@ export function InventoryTable({
       try {
         const url = new URL('/api/items/search', window.location.origin);
         url.searchParams.set('q', needle);
-        for (const k of ['type', 'status', 'stock', 'sort', 'rack']) {
+        // 'expected' rides along so searching inside the Expected chip
+        // view (server mode) keeps returning ONLY flagged rows — the
+        // endpoint mirrors list()'s expected predicate.
+        for (const k of ['type', 'status', 'stock', 'sort', 'rack', 'expected']) {
           const v = params.get(k);
           if (v) url.searchParams.set(k, v);
         }
@@ -1317,6 +1362,41 @@ export function InventoryTable({
             )}
           >
             Auto-archived only
+          </Link>
+        )}
+        {(effectiveExpectedCount > 0 || expectedOnly) && (
+          // "Expected" chip (mig 0277): items auto-created from inbound
+          // POs, hidden from every default view until their first
+          // receipt. Rendered only when such items exist (or the view is
+          // already active, so it can be toggled off). The count badge
+          // mirrors exactly what the view lists.
+          <Link
+            href={hrefForExpectedToggle()}
+            scroll={false}
+            prefetch={false}
+            onClick={
+              instantMode
+                ? (e) => interceptShallowNav(e, hrefForExpectedToggle(), shallowPush)
+                : undefined
+            }
+            aria-pressed={expectedOnly}
+            title="Items created from purchase orders that haven't received any stock yet"
+            className={cn(
+              'inline-flex h-6 items-center gap-1 rounded-full border px-2.5 text-[11.5px] transition-colors',
+              expectedOnly
+                ? 'border-foreground bg-foreground text-background'
+                : 'border-border bg-background text-[var(--ed-ink-2)] hover:border-[var(--ed-line-strong)]',
+            )}
+          >
+            Expected
+            <span
+              className={cn(
+                'inline-flex min-w-[1.1rem] items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums',
+                expectedOnly ? 'bg-background/20 text-background' : 'bg-muted text-[var(--ed-ink-2)]',
+              )}
+            >
+              {effectiveExpectedCount}
+            </span>
           </Link>
         )}
         {savedViews.map((sv) => (
@@ -2054,6 +2134,7 @@ export function InventoryTable({
                       reorderPoint={item.reorder_point}
                       itemStatus={item.status}
                       autoArchived={item.auto_archived}
+                      awaitingFirstReceipt={item.awaiting_first_receipt === true}
                     />
                   </td>
                   <td
@@ -2902,11 +2983,15 @@ function ExportMenu({ params, itemType }: { params: URLSearchParams; itemType: s
 
   const itemTypeArg = itemType as InventoryExportRequest['itemType'];
 
-  // "filtered" carries the active params (q, sort, cat[], loc[], stock, status).
+  // "filtered" carries the active params (q, sort, cat[], loc[], stock,
+  // status, expected). ?expected=1 (the Expected chip view, mig 0277) must
+  // ride along or exporting that view yields zero rows — the server's
+  // default list excludes flagged items.
   const filtersFromParams = (): InventoryExportRequest['filters'] => ({
     q: params.get('q') || undefined,
     status: (params.get('status') as 'active' | 'archived' | 'discontinued' | 'all') || undefined,
     stock: (params.get('stock') as 'low' | 'out') || null,
+    expected: params.get('expected') === '1' || undefined,
     sort: params.get('sort') || undefined,
     categoryIds: params.getAll('cat').filter(Boolean),
     locationIds: params.getAll('loc').filter(Boolean),

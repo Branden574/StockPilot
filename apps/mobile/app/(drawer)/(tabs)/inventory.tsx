@@ -49,6 +49,7 @@ import { ItemListSkeleton } from '@/components/ui/skeleton';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
+import { listStatusPredicate, stockPillFor } from '@/lib/expected-items';
 import { signItemImages, THUMB_TRANSFORM } from '@/lib/image-cache';
 import {
   buildGroupedRows,
@@ -79,6 +80,12 @@ interface Item {
    *  (migration 0266) — drives the item detail "Auto-archived" badge.
    *  Meaningless unless status === 'archived'. */
   auto_archived: boolean;
+  /** True while a PO-created item is awaiting its FIRST receipt
+   *  (migration 0277; a DB trigger clears it when stock arrives). Flagged
+   *  rows are hidden from the default list and only surface under the
+   *  filter sheet's Expected option, where they wear an EXPECTED pill
+   *  instead of the misleading OUT. */
+  awaiting_first_receipt: boolean;
 }
 
 const PIPS = [ACCENT.pipOrange, ACCENT.pipAmber, ACCENT.pipTeal, undefined, undefined, undefined];
@@ -209,28 +216,35 @@ export default function Inventory() {
       // when it's selected we fetch a wider window and skip paging.
       const isLow = f.status === 'low';
 
-      // The Archived toggle (FilterSheet's STOCK section) swaps which
-      // status bucket this screen shows — active items by default, or
-      // everything the system/a human archived when it's on. Never both:
-      // an archived item is definitionally out of stock already, so
-      // combining with 'low'/'out' wouldn't add anything.
-      const isArchived = f.status === 'archived';
+      // The STOCK section's radio swaps which bucket this screen shows —
+      // active items by default, Archived for the archive, and Expected
+      // (mig 0277) for PO-created phantoms awaiting their first receipt.
+      // Never combined with 'low'/'out': an archived item is definitionally
+      // out of stock already, and a phantom has no stock to be low/out OF.
+      // listStatusPredicate (pure, tested) owns the mapping; every default
+      // view carries awaiting_first_receipt=false so phantoms never read
+      // as "Out of stock" before anything was delivered.
+      const pred = listStatusPredicate(f.status);
 
       let req = supabase
         .from('inventory_items')
         .select(
           `id, name, sku, quantity_on_hand, reorder_point, status, category_id,
            primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
+           awaiting_first_receipt,
            category:categories!category_id (name)`,
           { count: 'exact' },
         )
         .eq('organization_id', orgIdParam)
-        .eq('status', isArchived ? 'archived' : 'active')
+        .eq('awaiting_first_receipt', pred.awaitingFirstReceipt)
         // Match web: the Items tab is products only. Books live on
         // their own tab; mixing them was masking the per-tab counts.
         .neq('item_type', 'book')
         .is('deleted_at', null)
         .order(ord.col, { ascending: ord.asc });
+      if (pred.lifecycle) {
+        req = req.eq('status', pred.lifecycle);
+      }
 
       if (isLow) {
         req = req.limit(200);
@@ -323,6 +337,7 @@ export default function Inventory() {
           charter_id: (r.charter_id as string | null) ?? null,
           updated_at: (r.updated_at as string | null) ?? null,
           auto_archived: Boolean(r.auto_archived),
+          awaiting_first_receipt: Boolean(r.awaiting_first_receipt),
           imageUrl: null,
         } as Item;
       });
@@ -512,6 +527,10 @@ export default function Inventory() {
             reorderPoint={row.reorderPoint}
             placementCount={row.placementCount}
             lifecycle={row.status}
+            // In the Expected view every fetched row is flagged by
+            // construction (the query is awaiting_first_receipt = true),
+            // so the collapsed header inherits the EXPECTED badge.
+            expected={filter.status === 'expected'}
             expanded={expandedSkuGroups.has(row.sku)}
             onToggle={() => toggleSkuGroup(row.sku)}
             index={index}
@@ -543,6 +562,7 @@ export default function Inventory() {
       toggleGroup,
       expandedSkuGroups,
       toggleSkuGroup,
+      filter.status,
       onItemPress,
       selectMode,
       onToggleSelect,
@@ -676,12 +696,6 @@ export default function Inventory() {
   );
 }
 
-function statusFromItem(item: Item): 'ok' | 'warn' | 'crit' {
-  if (item.quantity_on_hand <= 0) return 'crit';
-  if (item.reorder_point > 0 && item.quantity_on_hand <= item.reorder_point) return 'warn';
-  return 'ok';
-}
-
 function glyphFromItem(item: Item): LucideIcon {
   const cat = (item.category_name ?? '').toLowerCase();
   if (cat.includes('book')) return BookMarked;
@@ -772,7 +786,12 @@ function skuHeaderStatus(
   total: number,
   reorderPoint: number,
   lifecycle: 'active' | 'archived' | 'discontinued',
+  /** True when the list is showing the Expected view (mig 0277) — every row
+   *  is then an awaiting-first-receipt phantom, so a collapsed header must
+   *  read EXPECTED, not OUT (its summed total is legitimately 0). */
+  expected = false,
 ): { status: 'ok' | 'warn' | 'crit' | 'default'; label: string } {
+  if (expected) return { status: 'warn', label: 'EXPECTED' };
   if (lifecycle === 'archived') return { status: 'default', label: 'ARCHIVED' };
   if (lifecycle === 'discontinued') return { status: 'crit', label: 'DISC' };
   if (total <= 0) return { status: 'crit', label: 'OUT' };
@@ -793,6 +812,7 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
   reorderPoint,
   placementCount,
   lifecycle,
+  expected,
   expanded,
   onToggle,
   index,
@@ -803,13 +823,15 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
   reorderPoint: number;
   placementCount: number;
   lifecycle: 'active' | 'archived' | 'discontinued';
+  /** Expected view (mig 0277): header pill reads EXPECTED instead of OUT. */
+  expected: boolean;
   expanded: boolean;
   onToggle: () => void;
   index: number;
   isLast: boolean;
 }) {
   const { c } = useTheme();
-  const badge = skuHeaderStatus(total, reorderPoint, lifecycle);
+  const badge = skuHeaderStatus(total, reorderPoint, lifecycle, expected);
   return (
     <Pressable
       onPress={onToggle}
@@ -884,7 +906,10 @@ const ItemRow = React.memo(function ItemRow({
 }) {
   const { c } = useTheme();
   const picked = useIsPicked(item.id);
-  const status = statusFromItem(item);
+  // EXPECTED (awaiting first receipt) replaces OUT for PO-created phantoms —
+  // they were never delivered, so "Out of stock" is the exact misreading this
+  // feature exists to prevent. Pure + tested in lib/expected-items.ts.
+  const pill = stockPillFor(item);
   const Icon = glyphFromItem(item);
   const pip = PIPS[index % PIPS.length];
   return (
@@ -934,9 +959,7 @@ const ItemRow = React.memo(function ItemRow({
           >
             {item.quantity_on_hand}
           </Mono>
-          {status === 'ok' ? <Pill status="ok">OK</Pill> : null}
-          {status === 'warn' ? <Pill status="warn">LOW</Pill> : null}
-          {status === 'crit' ? <Pill status="crit">OUT</Pill> : null}
+          <Pill status={pill.status}>{pill.label}</Pill>
         </View>
         {selectMode ? (
           <View style={{ marginLeft: 2 }}>

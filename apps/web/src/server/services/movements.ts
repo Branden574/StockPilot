@@ -441,18 +441,48 @@ export async function getDashboardSummary(
 ): Promise<DashboardSummary> {
   const ctx = options.ctx ?? (await withContext());
   if (!options.warehouseId) {
-    const { data, error } = await ctx.supabase.rpc('get_dashboard_summary', {
-      p_org_id: ctx.organizationId,
-    });
+    // Expected-items correction (mig 0277): items awaiting their first
+    // receipt are qty-0 ACTIVE rows, so the RPC (0006 — untouchable
+    // without a migration) counts every one as "out of stock" (and, if
+    // someone set a reorder point, as "low"). A phantom that was never
+    // received is NOT out of stock — fetch the flagged slice (tiny,
+    // rides the 0277 partial index; RLS applies the same visibility as
+    // the security-invoker RPC) and subtract per the RPC's own filters.
+    const [{ data, error }, flaggedRows] = await Promise.all([
+      ctx.supabase.rpc('get_dashboard_summary', {
+        p_org_id: ctx.organizationId,
+      }),
+      fetchAllRows<{ quantity_on_hand: number; reorder_point: number }>((from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('quantity_on_hand, reorder_point')
+          .eq('organization_id', ctx.organizationId)
+          .eq('awaiting_first_receipt', true)
+          .eq('status', 'active')
+          .is('deleted_at', null)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ).catch(() => [] as Array<{ quantity_on_hand: number; reorder_point: number }>),
+    ]);
     if (error) throw new ServiceError('internal_error', error.message);
     const row = (Array.isArray(data) ? data[0] : data) as
       | { item_count: number; out_of_stock_count: number; low_stock_count: number; inventory_value: number }
       | null
       | undefined;
+    // Mirror the RPC's filter predicates exactly (out: qty<=0; low:
+    // reorder_point>0 AND qty<=reorder_point — they can overlap).
+    let flaggedOut = 0;
+    let flaggedLow = 0;
+    for (const r of flaggedRows) {
+      const qty = Number(r.quantity_on_hand) || 0;
+      const rp = Number(r.reorder_point) || 0;
+      if (qty <= 0) flaggedOut += 1;
+      if (rp > 0 && qty <= rp) flaggedLow += 1;
+    }
     return {
       itemCount: row?.item_count ?? 0,
-      outOfStockCount: row?.out_of_stock_count ?? 0,
-      lowStockCount: row?.low_stock_count ?? 0,
+      outOfStockCount: Math.max(0, (row?.out_of_stock_count ?? 0) - flaggedOut),
+      lowStockCount: Math.max(0, (row?.low_stock_count ?? 0) - flaggedLow),
       inventoryValue: typeof row?.inventory_value === 'number' ? row.inventory_value : 0,
     };
   }
@@ -467,10 +497,11 @@ export async function getDashboardSummary(
     reorder_point: number;
     unit_cost: number;
     status: string;
+    awaiting_first_receipt: boolean;
   }>((from, to) =>
     ctx.supabase
       .from('inventory_items')
-      .select('quantity_on_hand, reorder_point, unit_cost, status')
+      .select('quantity_on_hand, reorder_point, unit_cost, status, awaiting_first_receipt')
       .eq('organization_id', ctx.organizationId)
       .eq('warehouse_id', options.warehouseId)
       .is('deleted_at', null)
@@ -485,6 +516,10 @@ export async function getDashboardSummary(
     if (r.status !== 'active') continue;
     itemCount += 1;
     inventoryValue += (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0);
+    // Expected items (mig 0277) are qty-0 phantoms from inbound POs —
+    // never count them as out-of-stock/low (mirrors the RPC-path
+    // correction above; itemCount/value stay untouched there too).
+    if (r.awaiting_first_receipt === true) continue;
     if (r.quantity_on_hand <= 0) outOfStockCount += 1;
     else if (r.reorder_point > 0 && r.quantity_on_hand <= r.reorder_point) lowStockCount += 1;
   }
@@ -935,12 +970,19 @@ export async function getLowStockItems(
 ) {
   const ctx = options.ctx ?? (await withContext());
   if (!options.warehouseId) {
-    const { data, error } = await ctx.supabase.rpc('low_stock_items', {
-      p_org_id: ctx.organizationId,
-      p_limit: limit,
-    });
-    if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []) as Array<{
+    // Expected-items exclusion (mig 0277): the RPC (0004 — untouchable
+    // without a migration) can't filter awaiting_first_receipt, so fetch
+    // the flagged ids (tiny slice on the 0277 partial index; only rows
+    // with a reorder point can even qualify for the RPC) IN PARALLEL
+    // with the plain-limit RPC — the default dashboard path must not
+    // gain a serial round trip (dashboard perf is do-not-regress). Zero
+    // flagged ids (the overwhelmingly common case) means the parallel
+    // RPC result is already exact. Only when flagged rows exist does a
+    // second, widened RPC call run (p_limit + flagged count), so
+    // dropping flagged rows still yields an exact top-`limit` of the
+    // unflagged set. A flagged-lookup failure fails open to today's
+    // un-filtered behavior rather than failing the dashboard.
+    type LowStockRow = {
       id: string;
       name: string;
       sku: string;
@@ -948,7 +990,36 @@ export async function getLowStockItems(
       reorder_point: number;
       reorder_quantity: number;
       primary_location: string | null;
-    }>;
+    };
+    const rpcArgsBase = { p_org_id: ctx.organizationId };
+    const [flaggedRes, firstRpc] = await Promise.all([
+      ctx.supabase
+        .from('inventory_items')
+        .select('id')
+        .eq('organization_id', ctx.organizationId)
+        .eq('awaiting_first_receipt', true)
+        .eq('status', 'active')
+        .is('deleted_at', null)
+        .gt('reorder_point', 0)
+        .limit(500),
+      ctx.supabase.rpc('low_stock_items', { ...rpcArgsBase, p_limit: limit }),
+    ]);
+    if (firstRpc.error) throw new ServiceError('internal_error', firstRpc.error.message);
+    const flaggedIds = new Set<string>(
+      ((flaggedRes.data ?? []) as Array<{ id: string }>).map((r) => r.id),
+    );
+    let rows = (firstRpc.data ?? []) as LowStockRow[];
+    if (flaggedIds.size > 0) {
+      // Rare path: widen so filtered-out flagged rows can't shrink the
+      // result below `limit`.
+      const { data, error } = await ctx.supabase.rpc('low_stock_items', {
+        ...rpcArgsBase,
+        p_limit: limit + flaggedIds.size,
+      });
+      if (error) throw new ServiceError('internal_error', error.message);
+      rows = (data ?? []) as LowStockRow[];
+    }
+    return rows.filter((r) => !flaggedIds.has(r.id)).slice(0, limit);
   }
 
   // Warehouse-scoped path. The RPC is org-wide; reproduce its
@@ -967,6 +1038,9 @@ export async function getLowStockItems(
     .eq('warehouse_id', options.warehouseId)
     .eq('status', 'active')
     .is('deleted_at', null)
+    // Expected items (mig 0277) are qty-0 phantoms from inbound POs —
+    // never "low stock" (mirrors the RPC path's exclusion above).
+    .eq('awaiting_first_receipt', false)
     .or('reorder_point.gt.0,quantity_on_hand.lte.0')
     .order('quantity_on_hand', { ascending: true })
     .limit(200);

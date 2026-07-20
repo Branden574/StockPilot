@@ -46,7 +46,11 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
   }
 
   const [inventory, suppliers, locations, charters] = await Promise.all([
-    inventorySvc.list({ limit: 1000 }),
+    // expected:'any' (mig 0277): the PO item picker must ALSO offer items
+    // still awaiting their first receipt — an existing draft line for an
+    // expected item must keep resolving, and re-ordering one must reuse
+    // the row instead of inviting a duplicate.
+    inventorySvc.list({ limit: 1000, expected: 'any' }),
     suppliersSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
     chartersSvc.list(),

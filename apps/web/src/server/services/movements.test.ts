@@ -50,6 +50,7 @@ import {
   getDashboardHistory,
   getDashboardSummary,
   getDashboardValueComparison,
+  getLowStockItems,
   getThirtyDayMetrics,
 } from './movements';
 import { ServiceError } from './context';
@@ -621,6 +622,150 @@ describe('getDashboardSummary', () => {
     mockedCtx.value = makeServiceContext(stub.client);
 
     await expect(getDashboardSummary()).rejects.toBeInstanceOf(ServiceError);
+  });
+
+  // Expected-items visibility (mig 0277): a phantom auto-created from an
+  // inbound PO sits ACTIVE at qty 0, so the 0006 RPC counts it as "out of
+  // stock" — the app layer must subtract the flagged slice.
+  it('RPC path: subtracts items awaiting first receipt from the out-of-stock / low-stock counts (mig 0277)', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:get_dashboard_summary': {
+        data: [
+          // 5 out-of-stock per the RPC, 3 low — but 2 of the "out" and 1
+          // of the "low" are phantoms awaiting their first receipt.
+          { item_count: 20, out_of_stock_count: 5, low_stock_count: 3, inventory_value: 100 },
+        ],
+        error: null,
+      },
+      // The flagged slice the correction query returns (org-wide,
+      // active): 3 phantoms, all qty 0 (flagged rows can never hold
+      // stock — the trigger clears the flag). One carries a reorder
+      // point, so per the RPC's own predicates flaggedOut=3, flaggedLow=1.
+      'inventory_items.select': {
+        data: [
+          { quantity_on_hand: 0, reorder_point: 0 }, // out only
+          { quantity_on_hand: 0, reorder_point: 4 }, // out AND low (RPC counts both)
+          { quantity_on_hand: 0, reorder_point: 0 }, // out only
+        ],
+        error: null,
+      },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const result = await getDashboardSummary();
+
+    expect(result.outOfStockCount).toBe(2); // 5 - 3 flagged
+    expect(result.lowStockCount).toBe(2); // 3 - 1 flagged (rp>0 && qty<=rp)
+    // itemCount / value are NOT corrected — a phantom still exists in the
+    // catalog; it just isn't "out of stock".
+    expect(result.itemCount).toBe(20);
+    expect(result.inventoryValue).toBe(100);
+  });
+
+  it('warehouse path: flagged rows are skipped for out/low counting but still count toward itemCount/value (mig 0277)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          // The phantom: active, qty 0, flagged — must NOT count as out.
+          {
+            quantity_on_hand: 0,
+            reorder_point: 0,
+            unit_cost: 4,
+            status: 'active',
+            awaiting_first_receipt: true,
+          },
+          // Established out-of-stock item — still counts.
+          {
+            quantity_on_hand: 0,
+            reorder_point: 5,
+            unit_cost: 2,
+            status: 'active',
+            awaiting_first_receipt: false,
+          },
+        ],
+        error: null,
+      },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const result = await getDashboardSummary({ warehouseId: 'wh-a' });
+
+    expect(result.outOfStockCount).toBe(1); // only the established item
+    expect(result.lowStockCount).toBe(0);
+    expect(result.itemCount).toBe(2); // both exist
+  });
+});
+
+describe('getLowStockItems — expected-items exclusion (mig 0277)', () => {
+  it('RPC path with flagged rows: parallel plain-limit RPC first, then ONE widened re-fetch, flagged rows dropped', async () => {
+    const stub = makeSupabaseStub({
+      // The flagged-ids lookup (only rows with a reorder point qualify).
+      'inventory_items.select': { data: [{ id: 'phantom-1' }], error: null },
+      'rpc:low_stock_items': {
+        data: [
+          { id: 'phantom-1', name: 'PD 8/7 Sticker', sku: 'S1', quantity_on_hand: 0, reorder_point: 3, reorder_quantity: 10, primary_location: null },
+          { id: 'real-1', name: 'Dell XPS', sku: 'S2', quantity_on_hand: 0, reorder_point: 2, reorder_quantity: 5, primary_location: null },
+          { id: 'real-2', name: 'Cable', sku: 'S3', quantity_on_hand: 1, reorder_point: 4, reorder_quantity: 8, primary_location: null },
+        ],
+        error: null,
+      },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const rows = await getLowStockItems(2);
+
+    // First call runs IN PARALLEL with the flagged lookup at the plain
+    // limit; the rare flagged>0 path re-fetches once, widened by the
+    // flagged-id count (2 requested + 1 flagged).
+    expect(stub.rpcCalls).toEqual([
+      { name: 'low_stock_items', args: { p_org_id: 'org-test', p_limit: 2 } },
+      { name: 'low_stock_items', args: { p_org_id: 'org-test', p_limit: 3 } },
+    ]);
+    // The phantom is dropped; the top `limit` UNFLAGGED rows remain.
+    expect(rows.map((r) => r.id)).toEqual(['real-1', 'real-2']);
+  });
+
+  it('RPC path with NO flagged rows (the common case): a single plain-limit RPC — no serial widen round trip', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [], error: null },
+      'rpc:low_stock_items': {
+        data: [
+          { id: 'real-1', name: 'Dell XPS', sku: 'S2', quantity_on_hand: 0, reorder_point: 2, reorder_quantity: 5, primary_location: null },
+        ],
+        error: null,
+      },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const rows = await getLowStockItems(10);
+
+    expect(stub.rpcCalls).toEqual([
+      { name: 'low_stock_items', args: { p_org_id: 'org-test', p_limit: 10 } },
+    ]);
+    expect(rows.map((r) => r.id)).toEqual(['real-1']);
+  });
+
+  it('warehouse path: the candidates query itself excludes flagged rows (eq awaiting_first_receipt=false)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          { id: 'real-1', name: 'Dell XPS', sku: 'S2', quantity_on_hand: 0, reorder_point: 2, reorder_quantity: 5, primary_location: null },
+        ],
+        error: null,
+      },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const rows = await getLowStockItems(5, { warehouseId: 'wh-a' });
+
+    expect(rows.map((r) => r.id)).toEqual(['real-1']);
+    const chainArgs = stub.chainArgs.get('inventory_items.select') ?? [];
+    const chain = stub.chains.get('inventory_items.select') ?? [];
+    const eqCalls = chain
+      .map((m, idx) => ({ m, args: chainArgs[idx] }))
+      .filter((c) => c.m === 'eq')
+      .map((c) => c.args);
+    expect(eqCalls).toContainEqual(['awaiting_first_receipt', false]);
   });
 });
 

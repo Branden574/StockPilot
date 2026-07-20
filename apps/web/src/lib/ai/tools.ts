@@ -72,10 +72,18 @@ function dataTag(value: unknown): unknown {
  * injection mitigation in the system prompt.
  */
 function compactItem(i: Record<string, unknown>) {
+  // Expected-items visibility (mig 0277): searchInventory includes rows
+  // still awaiting their first receipt (expected:'any') so "where is X"
+  // can be answered for a PO-created item — but they MUST be annotated,
+  // or onHand:0 reads as "delivered and out of stock". The suffix sits
+  // OUTSIDE the <data> wrapper so it can't be spoofed by item names.
+  const expected = i.awaiting_first_receipt === true;
   return {
     id: i.id,
     sku: i.sku,
-    name: dataTag(i.name),
+    name: expected
+      ? `${dataTag(i.name)} (expected — not yet received)`
+      : dataTag(i.name),
     onHand: i.quantity_on_hand,
     reorderPoint: i.reorder_point,
     status: i.status,
@@ -85,6 +93,13 @@ function compactItem(i: Record<string, unknown>) {
     charterId: i.charter_id,
     locationId: i.primary_location_id,
     itemType: i.item_type,
+    ...(expected
+      ? {
+          expected: true,
+          expectedNote:
+            'This item was created from an inbound purchase order and has not received any stock yet — it is NOT on the shelf.',
+        }
+      : {}),
   };
 }
 
@@ -206,6 +221,12 @@ const searchInventoryTool: ToolExecutor = {
           : null,
       sort,
       limit: Math.min(25, Math.max(1, Number(args.limit) || 10)),
+      // Mig 0277: INCLUDE items awaiting their first receipt so the
+      // assistant can answer "where is X" for a PO-created item instead
+      // of claiming it doesn't exist — compactItem annotates them
+      // "(expected — not yet received)" so the answer never implies the
+      // item is on the shelf.
+      expected: 'any' as const,
     };
     const rawQuery = (typeof args.query === 'string' ? args.query : '').trim();
 

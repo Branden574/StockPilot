@@ -14,6 +14,9 @@ export interface InventoryExportRequest {
     q?: string;
     status?: 'active' | 'archived' | 'discontinued' | 'all';
     stock?: 'low' | 'out' | null;
+    /** True when exporting the Expected chip view (?expected=1, mig 0277)
+     *  — export ONLY items awaiting their first receipt. */
+    expected?: boolean;
     sort?: string;
     categoryIds?: string[];
     locationIds?: string[];

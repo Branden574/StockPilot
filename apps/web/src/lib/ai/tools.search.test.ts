@@ -174,6 +174,35 @@ describe('searchInventory tool', () => {
     expect(res.queryVariantsTried).toEqual(['widget']);
   });
 
+  it("includes expected items (expected:'any') and annotates them so the answer never implies shelf stock (mig 0277)", async () => {
+    listMock.mockResolvedValue({
+      total: 2,
+      items: [
+        {
+          id: 'phantom-1',
+          name: 'PD 8/7 Sticker',
+          quantity_on_hand: 0,
+          awaiting_first_receipt: true,
+        },
+        { id: 'real-1', name: 'Dell XPS', quantity_on_hand: 4, awaiting_first_receipt: false },
+      ],
+    });
+    const tool = TOOL_CATALOG.searchInventory!;
+    const res = (await tool.execute({ query: 'sticker' }, fakeCtx)) as {
+      items: Array<{ id: string; name: string; expected?: boolean; expectedNote?: string }>;
+    };
+    // The service call must opt OUT of the default flagged-row exclusion.
+    expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ expected: 'any' }));
+    const phantom = res.items.find((i) => i.id === 'phantom-1')!;
+    const real = res.items.find((i) => i.id === 'real-1')!;
+    // Annotation sits OUTSIDE the <data> wrapper (not spoofable by names).
+    expect(phantom.name).toBe('<data>PD 8/7 Sticker</data> (expected — not yet received)');
+    expect(phantom.expected).toBe(true);
+    expect(phantom.expectedNote).toMatch(/not received any stock/i);
+    expect(real.name).toBe('<data>Dell XPS</data>');
+    expect(real.expected).toBeUndefined();
+  });
+
   it('drops generic words like "items" when retrying', async () => {
     // "chrome items" — joined would be "chromeitems" (won't match
     // anything sensible), generic-word-stripped is "chrome". That

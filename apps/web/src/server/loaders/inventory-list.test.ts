@@ -158,6 +158,12 @@ describe('isDefaultInventoryView', () => {
       expect(isDefaultInventoryView({ rack: '38-A' }, 'items')).toBe(false);
     });
 
+    it('bypasses on ANY ?expected= presence (the Expected chip view, mig 0277 — even garbage values)', () => {
+      expect(isDefaultInventoryView({ expected: '1' }, 'items')).toBe(false);
+      expect(isDefaultInventoryView({ expected: '0' }, 'items')).toBe(false);
+      expect(isDefaultInventoryView({ expected: '' }, 'books')).toBe(false);
+    });
+
     it('bypasses when a repeated param arrives as an array', () => {
       expect(
         isDefaultInventoryView({ q: ['a', 'b'] as unknown as string }, 'items'),
@@ -254,6 +260,7 @@ const baseItem = {
   tracking_type: 'none' as const,
   item_type: 'product' as const,
   auto_archived: false,
+  awaiting_first_receipt: false,
   custom_fields: null,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-02T00:00:00Z',
@@ -392,6 +399,57 @@ describe('loadInventoryList (cached payload shape)', () => {
     // location_id, which the server's rackHoldingsByItem grouping
     // (placeItemsOntoRackByName) also refuses to move.
     expect(row.rackHoldingsCount).toBe(2);
+  });
+
+  it('expected-items visibility (mig 0277): the rows query EXCLUDES flagged rows, a separate head count of flagged-only rows fills payload.expectedCount', async () => {
+    // Track the two inventory_items builders separately: the first is
+    // the paged rows query, the second the Expected head count (created
+    // synchronously in that order inside the loader's Promise.all).
+    const itemBuilders: Array<Record<string, ReturnType<typeof vi.fn>>> = [];
+    let itemCall = 0;
+    createAdminClientMock.mockReturnValue({
+      from: vi.fn((table: string) => {
+        if (table === 'inventory_items') {
+          const result =
+            itemCall === 0
+              ? { data: [baseItem], count: 1, error: null } // rows query
+              : { data: null, count: 4, error: null }; // head count
+          itemCall++;
+          const b = makeBuilder(result) as Record<string, ReturnType<typeof vi.fn>>;
+          itemBuilders.push(b);
+          return b;
+        }
+        if (table === 'organization_modules') {
+          return makeBuilder({ data: { enabled: false }, error: null });
+        }
+        if (table === 'organizations') {
+          return makeBuilder({ data: { all_modules_comp: false }, error: null });
+        }
+        return makeBuilder({ data: [], error: null });
+      }),
+      rpc: vi.fn(() => Promise.resolve({ data: [], error: null })),
+    });
+
+    const payload = await loadInventoryList('org-1', 'all', 'items');
+
+    // Payload carries the head count, NOT the rows count.
+    expect(payload.expectedCount).toBe(4);
+    expect(payload.total).toBe(1);
+    expect(itemBuilders).toHaveLength(2);
+    // Rows query hides flagged; head count selects ONLY flagged.
+    expect(itemBuilders[0]!.eq).toHaveBeenCalledWith('awaiting_first_receipt', false);
+    expect(itemBuilders[0]!.eq).not.toHaveBeenCalledWith('awaiting_first_receipt', true);
+    expect(itemBuilders[1]!.eq).toHaveBeenCalledWith('awaiting_first_receipt', true);
+    // Both stay scoped to the org + view type.
+    for (const b of itemBuilders) {
+      expect(b.eq).toHaveBeenCalledWith('organization_id', 'org-1');
+      expect(b.eq).toHaveBeenCalledWith('item_type', 'product');
+    }
+    // The rows query is the default (active) view; the Expected head
+    // count spans lifecycles (NO status filter — the Expected view shows
+    // a manually-archived flagged row, so the badge must count it).
+    expect(itemBuilders[0]!.eq).toHaveBeenCalledWith('status', 'active');
+    expect(itemBuilders[1]!.eq).not.toHaveBeenCalledWith('status', 'active');
   });
 });
 
@@ -938,7 +996,7 @@ describe('sub-loader cache wiring', () => {
     // Pin the version keys: a rename here silently orphans warm entries
     // (one-time cold recompute) — bump deliberately, never accidentally.
     expect(calls.map(([, keyParts]) => keyParts[0]).sort()).toEqual([
-      'inventory-list-v3',
+      'inventory-list-v4',
       'inventory-lookups-v1',
       // v2 = cold fill moved to the inventory_trend_buckets SQL
       // aggregate (mig 0223); provenance changed, so the key bumped.
@@ -1180,7 +1238,7 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
     // would be written into the shared entry and served for a TTL.
     const datasetCall = vi
       .mocked(unstable_cache)
-      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v1');
+      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v2');
     expect(datasetCall).toBeDefined();
     const cachedFn = datasetCall![0] as (o: string, w: string, v: string) => Promise<unknown>;
     await expect(cachedFn('org-1', 'all', 'items')).rejects.toThrow(/INSTANT_MODE_MAX_ROWS/);
@@ -1211,7 +1269,7 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
     );
   });
 
-  it('caches under the SAME org tag revalidateInventoryList expires, keyPart inventory-dataset-v1, 60s TTL (write-path invalidation covers instant mode with zero extra wiring)', async () => {
+  it('caches under the SAME org tag revalidateInventoryList expires, keyPart inventory-dataset-v2, 60s TTL (write-path invalidation covers instant mode with zero extra wiring)', async () => {
     fetchAllRowsInvokesBuildPage();
     createAdminClientMock.mockReturnValue(
       makeRecordingAdmin({
@@ -1223,7 +1281,7 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
 
     const call = vi
       .mocked(unstable_cache)
-      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v1') as
+      .mock.calls.find(([, keyParts]) => (keyParts as string[])[0] === 'inventory-dataset-v2') as
       | [unknown, string[], { revalidate: number; tags: string[] }]
       | undefined;
     expect(call).toBeDefined();

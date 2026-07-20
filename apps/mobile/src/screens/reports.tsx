@@ -60,7 +60,7 @@ export default function ReportsScreen() {
   const load = React.useCallback(async () => {
     if (!orgId) return;
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const [{ count: itemCount }, { count: outCount }, valueRpc, lowRpc, { count: moves }] =
+    const [{ count: itemCount }, { count: outCount }, valueRpc, lowRpc, flaggedLow, { count: moves }] =
       await Promise.all([
         supabase
           .from('inventory_items')
@@ -74,9 +74,28 @@ export default function ReportsScreen() {
           .eq('organization_id', orgId)
           .eq('status', 'active')
           .lte('quantity_on_hand', 0)
+          // Expected-items visibility (mig 0277): a PO-created item awaiting
+          // its FIRST receipt was never in stock, so it must not count as
+          // "out of stock" (web dashboard widgets apply the same predicate).
+          .eq('awaiting_first_receipt', false)
           .is('deleted_at', null),
         supabase.rpc('inventory_value', { p_org_id: orgId }),
         supabase.rpc('low_stock_count', { p_org_id: orgId }),
+        // The low_stock_count RPC (0004) predates mig 0277 and can't
+        // exclude awaiting-first-receipt phantoms, so count the flagged
+        // slice matching its predicate (active, not deleted,
+        // reorder_point > 0 — flagged rows always sit at qty 0 <=
+        // reorder_point) and subtract client-side, same as the sibling
+        // out-of-stock count above excludes them.
+        supabase
+          .from('inventory_items')
+          .select('id', { count: 'exact', head: true })
+          .eq('organization_id', orgId)
+          .eq('status', 'active')
+          .is('deleted_at', null)
+          .eq('awaiting_first_receipt', true)
+          .gt('reorder_point', 0)
+          .lte('quantity_on_hand', 0),
         supabase
           .from('stock_movements')
           .select('id', { count: 'exact', head: true })
@@ -87,7 +106,10 @@ export default function ReportsScreen() {
       itemCount: itemCount ?? 0,
       outOfStockCount: outCount ?? 0,
       inventoryValue: typeof valueRpc.data === 'number' ? valueRpc.data : 0,
-      lowStockCount: typeof lowRpc.data === 'number' ? lowRpc.data : 0,
+      lowStockCount: Math.max(
+        0,
+        (typeof lowRpc.data === 'number' ? lowRpc.data : 0) - (flaggedLow.count ?? 0),
+      ),
       thirtyDayMovements: moves ?? 0,
     });
     setLoading(false);
