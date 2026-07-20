@@ -21,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { IconChip } from '@/components/ui/row';
 import { useAuth } from '@/lib/auth-context';
 import { API_BASE } from '@/lib/api';
+import { scanDocumentPages } from '@/lib/document-scanner';
 import { resizeForUpload } from '@/lib/image-resize';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
@@ -120,6 +121,40 @@ export default function ScanPo() {
         uri: a.uri,
         fileName: a.fileName ?? `po-pick-${cur.length + i + 1}.jpg`,
         mimeType: a.mimeType ?? 'image/jpeg',
+      })),
+    ]);
+  }
+
+  /**
+   * Native document scanner (iOS VisionKit / Android ML Kit) — edge
+   * detection + perspective crop, so the AI parser gets a clean flattened
+   * page instead of a skewed photo (owner request 2026-07-18). Multi-page
+   * scans append one frame per page: the scan endpoint already accepts
+   * multiple frames, so no PDF assembly is needed here (unlike
+   * po-attachments, which archives the pages as a single document).
+   * scanDocumentPages lazy-loads the native module — an old binary without
+   * it degrades to a friendly alert, never a crash.
+   */
+  async function scanCleanDocument() {
+    if (frames.length >= MAX_FRAMES) {
+      Alert.alert('Limit reached', `Up to ${MAX_FRAMES} frames per scan.`);
+      return;
+    }
+    const result = await scanDocumentPages();
+    if (result.status === 'cancelled') return;
+    if (result.status === 'unavailable') {
+      Alert.alert(
+        'Scanner unavailable',
+        'Document scanning needs the latest app build. Use Take photo instead.',
+      );
+      return;
+    }
+    setFrames((cur) => [
+      ...cur,
+      ...result.pages.slice(0, MAX_FRAMES - cur.length).map((uri, i) => ({
+        uri,
+        fileName: `po-scan-${cur.length + i + 1}.jpg`,
+        mimeType: 'image/jpeg',
       })),
     ]);
   }
@@ -323,9 +358,18 @@ export default function ScanPo() {
               styles.primaryBtn,
               pressed && { opacity: 0.7 },
             ]}
+            onPress={scanCleanDocument}
+          >
+            <Text style={styles.primaryBtnText}>Scan document</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.secondaryBtn,
+              pressed && { opacity: 0.7 },
+            ]}
             onPress={openCamera}
           >
-            <Text style={styles.primaryBtnText}>📷  Take photo</Text>
+            <Text style={styles.secondaryBtnText}>Take photo</Text>
           </Pressable>
           <Pressable
             style={({ pressed }) => [
