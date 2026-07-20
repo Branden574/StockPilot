@@ -18,6 +18,12 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import {
+  createItemsFromPoLines,
+  findDuplicatesForPoLines,
+  type CreateItemsFromPoLinesInput,
+  type DuplicateCandidate,
+} from './po-imports-lines';
 import { buildPoCharges } from '@/lib/po-imports/charges';
 import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
@@ -1019,6 +1025,53 @@ export class PoImportsService {
     throw new ServiceError(
       'validation_error',
       'Pick a destination location for this warehouse.',
+    );
+  }
+
+  /**
+   * Duplicate-candidate lookup for the given import's lines (all lines when
+   * `lineIds` is omitted). Bearer-route entry point for the SAME
+   * implementation `findDuplicatesForPoLinesAction` uses on web — the shared
+   * function org-scopes the import id (foreign/unknown → not_found). The web
+   * action reaches the shared implementation directly (cookie context); this
+   * wrapper adds the service's module + permission asserts for the /api/v1
+   * surface, matching every other import mutation gate.
+   */
+  async findDuplicatesForLines(input: {
+    poImportId: string;
+    lineIds?: string[];
+  }): Promise<{ matches: Record<string, DuplicateCandidate[]> }> {
+    assertModuleEnabled(this.ctx, 'po_imports');
+    assertPermission(this.ctx, 'purchase_orders:manage');
+    return findDuplicatesForPoLines(
+      { supabase: this.ctx.supabase, organizationId: this.ctx.organizationId },
+      input,
+    );
+  }
+
+  /**
+   * Create-or-link items for the given import lines. Bearer-route entry
+   * point for the SAME implementation `createItemsFromPoLinesAction` uses on
+   * web (selected-charter-wins, advisory-only barcode/ISBN matching,
+   * item_created bookkeeping, vendor-mapping upserts). The shared function
+   * org-scopes the import id (foreign/unknown → not_found); this wrapper adds
+   * the service's module + permission asserts for the /api/v1 surface.
+   * InventoryService.create re-asserts its own item-create gate internally —
+   * same defense-in-depth the web action relies on.
+   */
+  async createItemsFromLines(
+    input: CreateItemsFromPoLinesInput,
+  ): Promise<{ created: number; mapped: number; linked: number; skipped: number }> {
+    assertModuleEnabled(this.ctx, 'po_imports');
+    assertPermission(this.ctx, 'purchase_orders:manage');
+    return createItemsFromPoLines(
+      {
+        supabase: this.ctx.supabase,
+        organizationId: this.ctx.organizationId,
+        inventorySvc: new InventoryService(this.ctx),
+        mappingsSvc: new VendorItemMappingsService(this.ctx),
+      },
+      input,
     );
   }
 

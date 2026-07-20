@@ -1,5 +1,6 @@
-import { useRouter } from 'expo-router';
-import { Upload } from 'lucide-react-native';
+import { can, type Role } from '@stockpilot/core';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { ScanLine, Upload } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 
@@ -7,7 +8,9 @@ import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { useRole } from '@/lib/use-role';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -43,13 +46,28 @@ const STATUS_META: Record<string, { label: string; status: 'ok' | 'warn' | 'crit
  * tab-bar content inset comes from DataListScreen, which reads
  * BottomTabBarHeightContext and pads only when rendered inside the tabs
  * navigator — the drawer rendering is unchanged. Extracted verbatim.
+ *
+ * Header carries the Scan/Import entry (→ /scan-po) so imports can start
+ * HERE, not only from the Receive tab; a card opens the native review screen
+ * at /po-import/[id] (parse-retry / cancel / full approve flow).
  */
 export default function POImportsScreen() {
   const router = useRouter();
   const { orgId } = useOrg();
+  const { c } = useTheme();
+  const { role } = useRole();
+  const permissions = useEffectivePermissions();
   const [rows, setRows] = React.useState<ImportRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+
+  // Scan entry gate — same 'purchase_orders:manage' the drawer link, the web
+  // imports surface, and every /api/v1/po-imports route assert. Cosmetic only;
+  // the scan + write APIs re-check server-side.
+  const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
+  const canManage =
+    isManager ||
+    (role !== null && can({ role: role as Role, permissions }, 'purchase_orders:manage'));
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
@@ -83,9 +101,13 @@ export default function POImportsScreen() {
     setLoading(false);
   }, [orgId]);
 
-  React.useEffect(() => {
-    void load();
-  }, [load]);
+  // Reload on FOCUS (not just mount) so returning from the detail screen —
+  // after an approve, cancel, or re-parse — shows the new status immediately.
+  useFocusEffect(
+    React.useCallback(() => {
+      void load();
+    }, [load]),
+  );
 
   async function refresh() {
     setRefreshing(true);
@@ -99,14 +121,48 @@ export default function POImportsScreen() {
       title="Import"
       italic="history."
       emptyTitle="No imports yet."
-      emptyBody="Scan a packing slip from the Receive tab — Gemini parses it and the import lands here as a draft PO."
+      emptyBody={
+        canManage
+          ? 'Scan a packing slip or PO with the Scan button above — the parsed import lands here for review and approval.'
+          : 'Scanned POs land here once someone with purchase-order access imports one.'
+      }
       emptyIcon={Upload}
       data={rows}
       loading={loading}
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(i) => i.id}
-      renderItem={(i) => <ImportCard row={i} onPress={() => router.push('/scan-po')} />}
+      renderItem={(i) => (
+        <ImportCard
+          row={i}
+          onPress={() => router.push({ pathname: '/po-import/[id]', params: { id: i.id } })}
+        />
+      )}
+      trailing={
+        canManage ? (
+          <Pressable
+            onPress={() => router.push('/scan-po')}
+            hitSlop={8}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              borderWidth: 1,
+              borderRadius: 999,
+              borderColor: c.hair,
+              backgroundColor: c.card,
+              opacity: pressed ? 0.7 : 1,
+            })}
+          >
+            <ScanLine size={14} color={c.ink} strokeWidth={1.6} />
+            <Mono size={11} tracking={0.04} color={c.ink} style={{ fontFamily: FONT.display }}>
+              Scan PO
+            </Mono>
+          </Pressable>
+        ) : undefined
+      }
     />
   );
 }
