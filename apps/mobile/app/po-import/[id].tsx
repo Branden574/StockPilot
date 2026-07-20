@@ -268,6 +268,14 @@ export default function PoImportDetailScreen() {
 
   const actions = header && canManage ? actionsForStatus(header.status) : [];
   const unmatched = React.useMemo(() => unmatchedLineIds(lines), [lines]);
+  // Stable identity: this is a dep of ApproveSheet's load effect — an inline
+  // `.filter()` would be a NEW array every parent render, and any context
+  // re-render while the sheet is open (theme/permission refresh) would reset
+  // the in-progress approve form and refetch suggestions (review finding).
+  const unmatchedLines = React.useMemo(
+    () => lines.filter((l) => unmatched.includes(l.id)),
+    [lines, unmatched],
+  );
 
   // Fallback total when the parser didn't extract one: sum of line totals.
   const lineTotalSum = React.useMemo(() => {
@@ -533,7 +541,7 @@ export default function PoImportDetailScreen() {
               orgId={orgId}
               defaultWarehouseId={header.warehouse_id}
               defaultVendorId={header.vendor_id}
-              unmatchedLines={lines.filter((l) => unmatched.includes(l.id))}
+              unmatchedLines={unmatchedLines}
               itemsById={itemsById}
               onClose={() => setApproveOpen(false)}
               onApproved={handleApproved}
