@@ -1,13 +1,17 @@
 import { useRouter } from 'expo-router';
-import { ClipboardList } from 'lucide-react-native';
+import { ClipboardList, ScanLine, Upload } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
+
+import { can, type Role } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
-import { Body, Mono } from '@/components/ui/text';
+import { Mono } from '@/components/ui/text';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { useRole } from '@/lib/use-role';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -42,9 +46,20 @@ const STATUS_META: Record<string, { label: string; status: 'ok' | 'warn' | 'crit
 export default function PurchaseOrdersScreen() {
   const router = useRouter();
   const { orgId } = useOrg();
+  const { c } = useTheme();
   const [rows, setRows] = React.useState<PORow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+
+  // Same gate as the Import history screen: managers, or anyone granted
+  // purchase_orders:manage. Owner report 2026-07-18: this screen is what the
+  // customizable tab bar labels "PO List" — people look for the scan/import
+  // entry HERE, not on the (often hidden) PO Imports tab, so both screens
+  // carry the same affordances.
+  const { role } = useRole();
+  const permissions = useEffectivePermissions();
+  const canManage =
+    role !== null && can({ role: role as Role, permissions }, 'purchase_orders:manage');
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
@@ -85,8 +100,39 @@ export default function PurchaseOrdersScreen() {
     setRefreshing(false);
   }
 
+  const headerBtn = ({ pressed }: { pressed: boolean }) => ({
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderRadius: 999,
+    borderColor: c.hair,
+    backgroundColor: c.card,
+    opacity: pressed ? 0.7 : 1,
+  });
+
   return (
     <DataListScreen
+      trailing={
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Pressable onPress={() => router.push('/po-imports' as never)} hitSlop={8} style={headerBtn}>
+            <Upload size={14} color={c.ink} strokeWidth={1.6} />
+            <Mono size={11} tracking={0.04} color={c.ink} style={{ fontFamily: FONT.display }}>
+              Imports
+            </Mono>
+          </Pressable>
+          {canManage ? (
+            <Pressable onPress={() => router.push('/scan-po')} hitSlop={8} style={headerBtn}>
+              <ScanLine size={14} color={c.ink} strokeWidth={1.6} />
+              <Mono size={11} tracking={0.04} color={c.ink} style={{ fontFamily: FONT.display }}>
+                Scan PO
+              </Mono>
+            </Pressable>
+          ) : null}
+        </View>
+      }
       eyebrow={`PROCUREMENT · ${rows.length} POs`}
       title="Purchase"
       italic="orders."
