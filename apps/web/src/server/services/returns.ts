@@ -860,51 +860,39 @@ export interface RequesterReturnOrderContext {
   lines: ReturnableLine[];
 }
 
+/** The order-row projection both requester-return loaders resolve first. */
+interface RequesterReturnOrderRow {
+  id: string;
+  organization_id: string;
+  status: string;
+  requester_email: string | null;
+  requester_name: string | null;
+}
+
 /**
- * Resolve a `return_token` to its single order's still-returnable lines, using
- * the service-role admin client (the requester has no JWT). Returns null when
- * the token is unknown/expired, the order is not returnable, or the org no
- * longer has the `returns` module enabled — every one of those is a closed-door
- * 404 on the public surface so we never leak which tokens are live. The token
- * scopes to EXACTLY ONE order (partial-unique index, 0156); we select by token
- * and read only that row's lines, so no cross-order data is ever exposed.
- *
- * `quantityRemaining` is the DURABLE budget (quantity_fulfilled -
- * returned_quantity) read directly off each source line — the same number the
- * staff path enforces. It is NOT a SUM over prior return rows.
+ * Shared second half of both requester-return loaders (token + B2B portal):
+ * given an ALREADY-AUTHORIZED order row (the caller proved the requester may
+ * act on this order — via return_token, or via the portal customer scope),
+ * verify it is returnable, verify the org still has the returns module
+ * enabled, and load the still-returnable lines with their DURABLE budget
+ * (quantity_fulfilled - returned_quantity, read straight off each source
+ * line). Returns null on any closed door — both public surfaces render that
+ * as a 404-shaped answer so nothing about the org leaks.
  */
-export async function loadRequesterReturnContext(
+async function buildRequesterReturnContext(
   admin: SupabaseClient,
-  token: string,
+  order: RequesterReturnOrderRow,
 ): Promise<RequesterReturnOrderContext | null> {
-  // A return_token is a uuid (0156). Reject anything that can't be one BEFORE
-  // hitting the DB so a malformed token is a cheap 404, not a 500.
-  if (!token || !/^[0-9a-fA-F-]{36}$/.test(token)) return null;
-
-  const { data: order, error: orderError } = await admin
-    .from('order_requests')
-    .select('id, organization_id, status, requester_email, requester_name')
-    .eq('return_token', token)
-    .maybeSingle();
-  if (orderError || !order) return null;
-
-  const o = order as {
-    id: string;
-    organization_id: string;
-    status: string;
-    requester_email: string | null;
-    requester_name: string | null;
-  };
-  if (!RETURNABLE_ORDER_STATUSES.has(o.status)) return null;
+  if (!RETURNABLE_ORDER_STATUSES.has(order.status)) return null;
 
   // The org must still have the returns module enabled. Mirror the public
   // order-request route's direct organization_modules check (no ServiceContext
-  // on this anonymous path). 404 (return null) rather than 403 so we don't
+  // on these external paths). 404 (return null) rather than 403 so we don't
   // leak that the org exists with the feature off.
   const { data: modRow, error: modErr } = await admin
     .from('organization_modules')
     .select('module_id')
-    .eq('organization_id', o.organization_id)
+    .eq('organization_id', order.organization_id)
     .eq('module_id', 'returns')
     .eq('enabled', true)
     .maybeSingle();
@@ -916,7 +904,7 @@ export async function loadRequesterReturnContext(
       `id, item_id, quantity_fulfilled, returned_quantity,
        item:inventory_items!item_id (id, name, sku)`,
     )
-    .eq('order_request_id', o.id);
+    .eq('order_request_id', order.id);
   if (linesError) return null;
 
   const lineRows = (orderLines as Array<{
@@ -948,12 +936,75 @@ export async function loadRequesterReturnContext(
   }
 
   return {
-    orderRequestId: o.id,
-    organizationId: o.organization_id,
-    requesterEmail: o.requester_email,
-    requesterName: o.requester_name,
+    orderRequestId: order.id,
+    organizationId: order.organization_id,
+    requesterEmail: order.requester_email,
+    requesterName: order.requester_name,
     lines,
   };
+}
+
+/**
+ * Resolve a `return_token` to its single order's still-returnable lines, using
+ * the service-role admin client (the requester has no JWT). Returns null when
+ * the token is unknown/expired, the order is not returnable, or the org no
+ * longer has the `returns` module enabled — every one of those is a closed-door
+ * 404 on the public surface so we never leak which tokens are live. The token
+ * scopes to EXACTLY ONE order (partial-unique index, 0156); we select by token
+ * and read only that row's lines, so no cross-order data is ever exposed.
+ *
+ * `quantityRemaining` is the DURABLE budget (quantity_fulfilled -
+ * returned_quantity) read directly off each source line — the same number the
+ * staff path enforces. It is NOT a SUM over prior return rows.
+ */
+export async function loadRequesterReturnContext(
+  admin: SupabaseClient,
+  token: string,
+): Promise<RequesterReturnOrderContext | null> {
+  // A return_token is a uuid (0156). Reject anything that can't be one BEFORE
+  // hitting the DB so a malformed token is a cheap 404, not a 500.
+  if (!token || !/^[0-9a-fA-F-]{36}$/.test(token)) return null;
+
+  const { data: order, error: orderError } = await admin
+    .from('order_requests')
+    .select('id, organization_id, status, requester_email, requester_name')
+    .eq('return_token', token)
+    .maybeSingle();
+  if (orderError || !order) return null;
+
+  return buildRequesterReturnContext(admin, order as RequesterReturnOrderRow);
+}
+
+/**
+ * Resolve a B2B portal customer's OWN order to its still-returnable lines.
+ * The portal principal is an external CUSTOMER (customer_users → NEVER
+ * org_members), so this runs on the service-role admin client and the scope
+ * (organizationId + customerId) MUST come from a server-resolved
+ * PortalContext — never the client. The order lookup filters by id AND
+ * organization_id AND customer_id, so a foreign or cross-customer order id
+ * resolves to null (the action surfaces that as not_found; existence is
+ * never leaked). Everything after the order row — returnable-status check,
+ * returns-module gate, durable line budget — is the SAME shared
+ * implementation the public token path uses.
+ */
+export async function loadPortalReturnContext(
+  admin: SupabaseClient,
+  scope: { organizationId: string; customerId: string; orderRequestId: string },
+): Promise<RequesterReturnOrderContext | null> {
+  // Same cheap pre-check as the token path: a malformed id is a 404 before
+  // any query, not a 500.
+  if (!scope.orderRequestId || !/^[0-9a-fA-F-]{36}$/.test(scope.orderRequestId)) return null;
+
+  const { data: order, error: orderError } = await admin
+    .from('order_requests')
+    .select('id, organization_id, status, requester_email, requester_name')
+    .eq('id', scope.orderRequestId)
+    .eq('organization_id', scope.organizationId)
+    .eq('customer_id', scope.customerId)
+    .maybeSingle();
+  if (orderError || !order) return null;
+
+  return buildRequesterReturnContext(admin, order as RequesterReturnOrderRow);
 }
 
 /**
@@ -993,6 +1044,44 @@ export async function createRequesterReturn(
     throw new ServiceError('not_found', 'This return link is invalid or has expired.');
   }
 
+  return insertRequesterReturn(admin, ctx, parsed);
+}
+
+/**
+ * B2B portal variant: same semantics as `createRequesterReturn` with the
+ * order resolved via the PORTAL principal (server-resolved org + customer
+ * scope) instead of a return token. Validation + insert are the ONE shared
+ * implementation (`insertRequesterReturn`) — do not fork it.
+ */
+export async function createPortalReturn(
+  admin: SupabaseClient,
+  scope: { organizationId: string; customerId: string; orderRequestId: string },
+  input: RequesterReturnInput,
+): Promise<{ id: string; returnNumber: string | null; organizationId: string }> {
+  const parsed = requesterReturnSchema.parse(input);
+
+  const ctx = await loadPortalReturnContext(admin, scope);
+  if (!ctx) {
+    // Foreign org, another customer's order, unknown id, non-returnable
+    // status, and module-off all collapse into ONE answer — no oracle.
+    throw new ServiceError('not_found', 'This order could not be found.');
+  }
+
+  return insertRequesterReturn(admin, ctx, parsed);
+}
+
+/**
+ * The shared requester-return core: validate the submitted lines against the
+ * resolved order context (durable budget + belonging + no duplicate lines),
+ * then insert the `status='requested'`, `source='requester'` header + lines.
+ * Callers (public token path, B2B portal path) are responsible for HOW the
+ * order context was authorized; everything from here down is identical.
+ */
+async function insertRequesterReturn(
+  admin: SupabaseClient,
+  ctx: RequesterReturnOrderContext,
+  parsed: RequesterReturnInput,
+): Promise<{ id: string; returnNumber: string | null; organizationId: string }> {
   const remainingByLine = new Map<string, ReturnableLine>();
   for (const l of ctx.lines) remainingByLine.set(l.orderRequestLineId, l);
 
