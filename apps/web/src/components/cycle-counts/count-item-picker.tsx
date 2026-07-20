@@ -62,6 +62,13 @@ export function CountItemPicker({
   const [total, setTotal] = React.useState(0);
   const [status, setStatus] = React.useState<'loading' | 'ready' | 'failed'>('loading');
   const [loadingMore, setLoadingMore] = React.useState(false);
+  // Load-more failures are NON-destructive: the already-loaded rows stay
+  // rendered and this drives a small inline notice by the button instead
+  // of flipping the whole list to status='failed'.
+  const [loadMoreError, setLoadMoreError] = React.useState(false);
+  // Aborted by the page-1 effect's cleanup so a late load-more response
+  // from a PREVIOUS tab/query/warehouse can never append stale rows.
+  const loadMoreAbortRef = React.useRef<AbortController | null>(null);
 
   const buildUrl = React.useCallback(
     (offset: number): string => {
@@ -96,6 +103,7 @@ export function CountItemPicker({
         setRows(body.items);
         setTotal(body.total);
         setStatus('ready');
+        setLoadMoreError(false); // fresh page 1 — any old load-more notice is moot
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') return;
         setRows([]);
@@ -106,15 +114,25 @@ export function CountItemPicker({
     return () => {
       clearTimeout(t);
       ac.abort();
+      // A filter change also orphans any in-flight load-more page — abort
+      // it so its stale rows can never append onto the fresh list.
+      loadMoreAbortRef.current?.abort();
     };
   }, [buildUrl]);
 
   async function loadMore() {
+    if (loadingMore || status !== 'ready') return;
+    const ac = new AbortController();
+    loadMoreAbortRef.current = ac;
     setLoadingMore(true);
+    setLoadMoreError(false);
     try {
-      const res = await fetch(buildUrl(rows.length));
+      const res = await fetch(buildUrl(rows.length), { signal: ac.signal });
       if (!res.ok) throw new Error(`search failed (${res.status})`);
       const body = (await res.json()) as { items: PickerRow[]; total: number };
+      // Same staleness rule page 1 uses: if the filters changed while this
+      // page was in flight, a newer fetch owns the list — drop the response.
+      if (ac.signal.aborted) return;
       setRows((prev) => {
         // De-dupe on id in case the list shifted between pages.
         const seen = new Set(prev.map((r) => r.id));
@@ -122,7 +140,10 @@ export function CountItemPicker({
       });
       setTotal(body.total);
     } catch {
-      setStatus('failed');
+      if (ac.signal.aborted) return; // superseded, not a failure
+      // Only the NEXT page failed — keep the loaded rows rendered and show
+      // an inline notice; the Load more button doubles as the retry.
+      setLoadMoreError(true);
     } finally {
       setLoadingMore(false);
     }
@@ -252,6 +273,11 @@ export function CountItemPicker({
             })}
             {rows.length < total && (
               <li className="p-2">
+                {loadMoreError && (
+                  <p className="text-destructive pb-1.5 text-center text-xs" role="alert">
+                    Couldn&apos;t load more — try again.
+                  </p>
+                )}
                 <Button
                   type="button"
                   variant="ghost"

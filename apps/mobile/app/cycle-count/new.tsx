@@ -255,9 +255,14 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
 
   async function loadMore() {
     if (loadingMore || status !== 'ready') return;
+    // Same staleness rule page 1 uses: capture the fetch id BEFORE the
+    // await — a tab/query change while page n+1 is in flight bumps seqRef,
+    // and appending that late response would mix stale rows into the
+    // fresh list.
+    const seq = seqRef.current;
     setLoadingMore(true);
     const res = await fetchPage(rows.length);
-    if (res) {
+    if (seq === seqRef.current && res) {
       setRows((prev) => mergeRows(prev, res.rows));
       setTotal(res.count);
     }

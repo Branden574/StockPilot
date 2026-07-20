@@ -46,6 +46,19 @@ describe('cycle-count/new.tsx — embedded picker wiring (mobile twin of 7b738cd
     expect(screen).toContain('useIsPicked(row.id)');
   });
 
+  it('load-more is staleness-guarded like page 1 (seq captured before the await, checked after)', () => {
+    // Page 1 already drops stale responses via the monotonic seqRef; the
+    // load-more path must use the SAME guard or a late page-2 response from
+    // a previous tab/query appends stale rows onto the fresh list.
+    const loadMoreSrc = screen.slice(screen.indexOf('async function loadMore'));
+    expect(loadMoreSrc).toContain('const seq = seqRef.current;');
+    expect(loadMoreSrc).toContain('seq === seqRef.current');
+    // …and the guard wraps the append (rows/total only change when current).
+    expect(loadMoreSrc).toMatch(
+      /if \(seq === seqRef\.current && res\) \{\s*setRows\(\(prev\) => mergeRows\(prev, res\.rows\)\);\s*setTotal\(res\.count\);/,
+    );
+  });
+
   it('the dead-end copy is gone and Start stays disabled at zero picks', () => {
     expect(screen).not.toContain('Go to Items or Books');
     expect(screen).not.toContain('then come back');

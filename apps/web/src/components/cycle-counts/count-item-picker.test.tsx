@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -176,6 +176,59 @@ describe('CountItemPicker', () => {
     expect(await screen.findByText('Part 50')).toBeInTheDocument();
     expect(screen.getByText('Part 0')).toBeInTheDocument();
     expect(lastUrl().searchParams.get('offset')).toBe('50');
+  });
+
+  it('a stale load-more response from a previous tab is dropped, not appended', async () => {
+    const user = userEvent.setup();
+    const first = Array.from({ length: 50 }, (_, i) => row({ id: `p${i}`, name: `Part ${i}` }));
+    fetchSpy.mockResolvedValue(jsonResponse(first, 60));
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    await screen.findByText('Part 0');
+
+    // Hold the product page-2 response open while the user switches tabs.
+    let releaseStale!: (r: Response) => void;
+    fetchSpy.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (releaseStale = resolve)),
+    );
+    await user.click(screen.getByRole('button', { name: /load more/i }));
+
+    fetchSpy.mockResolvedValue(
+      jsonResponse([row({ id: 'b1', name: 'Algebra I', item_type: 'book' })]),
+    );
+    await user.click(screen.getByRole('button', { name: 'Books' }));
+    await screen.findByText('Algebra I');
+
+    // The orphaned PRODUCT page 2 finally lands — it must NOT append onto
+    // the Books list (the tab switch aborted it).
+    await act(async () => {
+      releaseStale(jsonResponse([row({ id: 'p50', name: 'Part 50' })], 60));
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('Part 50')).not.toBeInTheDocument();
+    expect(screen.getByText('Algebra I')).toBeInTheDocument();
+  });
+
+  it('a failed load-more keeps the loaded rows and shows an inline retryable error', async () => {
+    const user = userEvent.setup();
+    const first = Array.from({ length: 50 }, (_, i) => row({ id: `p${i}`, name: `Part ${i}` }));
+    fetchSpy.mockResolvedValue(jsonResponse(first, 60));
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    await screen.findByText('Part 0');
+
+    fetchSpy.mockResolvedValueOnce({ ok: false, status: 500 } as Response);
+    await user.click(screen.getByRole('button', { name: /load more/i }));
+
+    // Page 1 stays rendered; the error is a small inline notice, NOT the
+    // destructive whole-list failed state.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load more/i);
+    expect(screen.getByText('Part 0')).toBeInTheDocument();
+    expect(screen.queryByText(/check your connection/i)).not.toBeInTheDocument();
+
+    // The Load more button doubles as the retry and clears the notice.
+    fetchSpy.mockResolvedValueOnce(jsonResponse([row({ id: 'p50', name: 'Part 50' })], 60));
+    await user.click(screen.getByRole('button', { name: /load more/i }));
+    expect(await screen.findByText('Part 50')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('keeps an unobtrusive escape hatch to the full Inventory page', async () => {
