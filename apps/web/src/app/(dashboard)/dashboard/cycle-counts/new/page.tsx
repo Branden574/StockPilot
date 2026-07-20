@@ -62,9 +62,9 @@ export default async function NewCycleCountPage() {
         </Link>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">Start a count</h1>
         <p className="text-muted-foreground mt-1 text-sm">
-          Count exactly the items you picked from Inventory/Books, or snapshot a
-          whole warehouse. Starting the count records each item&apos;s current
-          quantity-on-hand so we can compute variance later.
+          Pick the exact items to count below, or snapshot a whole warehouse.
+          Starting the count records each item&apos;s current quantity-on-hand
+          so we can compute variance later.
         </p>
       </div>
       <Card>

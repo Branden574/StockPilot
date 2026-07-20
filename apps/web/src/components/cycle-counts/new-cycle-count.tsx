@@ -11,8 +11,10 @@ type Mode = 'selection' | 'warehouse';
 
 /**
  * Client shell for the New cycle count screen. Two modes:
- *   • selection — count exactly the items picked from the Inventory/Books
- *     lists (read from the sessionStorage-backed count-selection store).
+ *   • selection — pick the exact items to count with the embedded
+ *     Inventory/Books picker (searches in place; also reads any picks
+ *     made via the Items/Books pages' select-mode from the shared
+ *     sessionStorage-backed count-selection store).
  *   • warehouse — the original "snapshot a whole warehouse / the org" form.
  *
  * Defaults to selection mode when the store has picks, otherwise warehouse.
@@ -54,7 +56,7 @@ export function NewCycleCount({
       </div>
 
       {mode === 'selection' ? (
-        <SelectionConfirm members={members} canAssign={canAssign} />
+        <SelectionConfirm members={members} canAssign={canAssign} warehouses={warehouses} />
       ) : (
         <StartCycleCountForm warehouses={warehouses} />
       )}
