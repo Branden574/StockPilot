@@ -178,6 +178,36 @@ describe('maybeSendReturnPrompt', () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
+  it('email-less order still MINTS a token (dashboard link) — no email, marker untouched', async () => {
+    // Staff-created internal orders have requester_email NULL by construction,
+    // but their requester is still entitled to the "Request a return" link on
+    // /dashboard/orders/[id], which requires a minted return_token. The mint is
+    // structural (status + module + fulfilled); only the EMAIL needs an address.
+    const stub = makeStub({
+      'order_requests.select': {
+        data: [{ ...COMPLETED_ORDER, requester_email: null, return_token: null }],
+        error: null,
+      },
+      'order_requests.update': {
+        data: [{ id: ORDER_ID, return_token: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }],
+        error: null,
+      },
+    });
+    const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+
+    expect(res).toEqual({ sent: false, reason: 'no_requester_email' });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+
+    // Exactly ONE update ran — the guarded token mint. The 0278 marker stays
+    // NULL (marker = email sent), so a later completion path can still prompt
+    // once if an email is ever added.
+    const updates = stub.chainArgsAll.get('order_requests.update') ?? [];
+    expect(updates).toHaveLength(1);
+    const mintArgs = updates[0]!;
+    expect(mintArgs).toContainEqual(['return_token', null]); // guarded mint
+    expect(mintArgs).not.toContainEqual(['return_prompt_sent_at', null]); // no marker claim
+  });
+
   it('skips when the returns module is disabled for the org', async () => {
     const stub = makeStub({
       'organization_modules.select': { data: [], error: null },

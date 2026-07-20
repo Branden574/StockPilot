@@ -139,6 +139,19 @@ describe('POST /api/v1/orders/[id]/returns', () => {
     expect(RMAService.forApiContext).not.toHaveBeenCalled();
   });
 
+  it('returns 400 for a fractional quantity (whole units only)', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    const res = await POST(
+      buildRequest({
+        lines: [{ orderRequestLineId: LINE_ID, quantity: 2.5, disposition: 'restock' }],
+      }),
+      buildParams(),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('validation_error');
+    expect(RMAService.forApiContext).not.toHaveBeenCalled();
+  });
+
   it('maps a service forbidden (missing returns:manage) to 403', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     mockService({

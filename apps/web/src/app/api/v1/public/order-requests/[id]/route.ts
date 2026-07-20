@@ -169,16 +169,18 @@ export async function GET(
     h.status === 'denied' ? 'Your request was not approved.' : null;
 
   // Returns-access Unit A: surface the requester's own self-service return
-  // link on the tracking page. Only when the order is COMPLETED with at least
-  // one fulfilled unit, a return_token was minted (0156 — happens on
-  // completion when the returns module is on), AND the org still has the
-  // module enabled (the portal 404s without it — never render a dead link).
-  // Safe to expose here: the caller already proved the token+id+email triad,
-  // i.e. this is the requester's own order, and the return_token is exactly
-  // the credential the /returns/request/[token] portal hands that requester.
+  // link on the tracking page. Only when the order is terminal-fulfilled —
+  // 'completed', or the legacy 'delivered' status every other returns surface
+  // also treats as returnable — with at least one fulfilled unit, a
+  // return_token was minted (0156 — happens on completion when the returns
+  // module is on), AND the org still has the module enabled (the portal 404s
+  // without it — never render a dead link). Safe to expose here: the caller
+  // already proved the token+id+email triad, i.e. this is the requester's own
+  // order, and the return_token is exactly the credential the
+  // /returns/request/[token] portal hands that requester.
   let returnPath: string | null = null;
   if (
-    h.status === 'completed' &&
+    (h.status === 'completed' || h.status === 'delivered') &&
     h.return_token &&
     lines.some((l) => l.quantityFulfilled > 0)
   ) {

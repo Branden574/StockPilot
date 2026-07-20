@@ -3,6 +3,8 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 
+import { createAdminClient } from '@/lib/supabase/admin';
+
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
 import {
@@ -144,7 +146,8 @@ export interface ReturnableLine {
 
 const createLineSchema = z.object({
   orderRequestLineId: z.string().uuid(),
-  quantity: z.number().positive(),
+  // Whole units only (matches the portal's .int() contract).
+  quantity: z.number().int().positive(),
   disposition: z.enum(['restock', 'scrap']),
   // Optional item identity assertion. The return ALWAYS restocks the item that
   // was fulfilled on the source line (the service stamps item_id from the order
@@ -165,6 +168,60 @@ export type CreateFromOrderInput = z.infer<typeof createFromOrderSchema>;
 /** Returnable order statuses: a fully-fulfilled 'completed' order, or the
  * legacy 'delivered' status some older orders still carry. */
 const RETURNABLE_ORDER_STATUSES = new Set<string>(['completed', 'delivered']);
+
+/**
+ * Live PENDING return demand per source line: the sum of unapplied
+ * return_lines quantities whose header is still live (not cancelled/denied).
+ * This mirrors the DB cap trigger (0153) EXACTLY — the trigger rejects an
+ * insert when returned_quantity + pending > quantity_fulfilled — so every
+ * app-side "remaining" number subtracts it too, and no surface offers a
+ * quantity the DB will refuse at insert.
+ *
+ * The DURABLE budget (quantity_fulfilled - returned_quantity, read off the
+ * immutable source line) stays the BASE: a cancelled/denied header still
+ * frees nothing that was already applied. Pending only narrows what is
+ * currently offerable; a cancel/deny of an unapplied return releases exactly
+ * its own pending demand, which is correct (nothing moved).
+ *
+ * The header-status filter is applied in JS (not a PostgREST `not.in`, which
+ * drops NULL-status rows — recurring pattern #23; status is NOT NULL today,
+ * but the JS filter can't regress). Works on either a user-authed client
+ * (returns are org-member readable) or the service-role admin client.
+ */
+export async function pendingReturnQuantitiesByLine(
+  client: SupabaseClient,
+  organizationId: string,
+  orderRequestLineIds: string[],
+): Promise<Map<string, number>> {
+  const pending = new Map<string, number>();
+  if (orderRequestLineIds.length === 0) return pending;
+
+  const { data, error } = await client
+    .from('return_lines')
+    .select('order_request_line_id, quantity, applied, return:returns!return_id (status)')
+    .eq('organization_id', organizationId)
+    .in('order_request_line_id', orderRequestLineIds)
+    .eq('applied', false);
+  if (error) throw new ServiceError('internal_error', error.message);
+
+  for (const row of (data as Array<{
+    order_request_line_id: string;
+    quantity: number | null;
+    applied: boolean;
+    return: { status: string } | { status: string }[] | null;
+  }> | null) ?? []) {
+    const header = Array.isArray(row.return) ? (row.return[0] ?? null) : (row.return ?? null);
+    const status = header?.status;
+    if (status === 'cancelled' || status === 'denied') continue;
+    const qty = Number(row.quantity) || 0;
+    if (qty <= 0) continue;
+    pending.set(
+      row.order_request_line_id,
+      (pending.get(row.order_request_line_id) ?? 0) + qty,
+    );
+  }
+  return pending;
+}
 
 export class RMAService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -237,12 +294,15 @@ export class RMAService {
   /**
    * The returnable lines for a fulfilled order, with the remaining returnable
    * quantity per source line. Remaining is the DURABLE budget read directly off
-   * the source line: quantity_fulfilled - returned_quantity (0153). It is NOT a
+   * the source line — quantity_fulfilled - returned_quantity (0153) — MINUS the
+   * live PENDING (unapplied, not cancelled/denied) return_lines demand, exactly
+   * the number the DB cap trigger enforces at insert. The durable half is NOT a
    * SUM over prior return rows — returned_quantity is incremented at apply-time
    * inside process_return_disposition and lives on the immutable order line, so
    * a cancelled/flipped/deleted return header can never reclaim budget that
-   * stock already moved against. Drives the "Create return" dialog: it pre-fills
-   * each line to its remaining-returnable default and caps the input. Returns an
+   * stock already moved against; the pending half only narrows what is
+   * currently offerable. Drives the "Create return" dialog: it pre-fills each
+   * line to its remaining-returnable default and caps the input. Returns an
    * empty array (not an error) when the order is not returnable, so the caller
    * can simply hide the affordance.
    *
@@ -283,12 +343,21 @@ export class RMAService {
         | null;
     }> | null) ?? [];
 
+    // Live pending demand (unapplied lines on not-cancelled/denied returns) —
+    // the DB trigger counts it, so the offered remaining must too.
+    const pending = await pendingReturnQuantitiesByLine(
+      this.ctx.supabase,
+      this.ctx.organizationId,
+      lineRows.map((l) => l.id),
+    );
+
     const out: ReturnableLine[] = [];
     for (const l of lineRows) {
       const fulfilled = Number(l.quantity_fulfilled) || 0;
       if (fulfilled <= 0) continue;
-      // Durable budget: remaining = fulfilled - already-applied returned units.
-      const remaining = fulfilled - (Number(l.returned_quantity) || 0);
+      // Remaining = durable budget (fulfilled - applied returns) - pending.
+      const remaining =
+        fulfilled - (Number(l.returned_quantity) || 0) - (pending.get(l.id) ?? 0);
       if (remaining <= 0) continue;
       const item = Array.isArray(l.item) ? (l.item[0] ?? null) : (l.item ?? null);
       out.push({
@@ -390,6 +459,15 @@ export class RMAService {
       });
     }
 
+    // Live pending demand per source line (unapplied lines on live returns).
+    // The DB cap trigger counts pending, so the early reject must too — else
+    // this path offers/accepts quantities the insert below would 500 on.
+    const pendingByLine = await pendingReturnQuantitiesByLine(
+      this.ctx.supabase,
+      this.ctx.organizationId,
+      lineIds,
+    );
+
     // 3. Validate each requested line against the durable budget. Also reject
     //    duplicate source lines in one request (the DB UNIQUE(return_id,
     //    order_request_line_id) would reject it, but a clear early error is
@@ -434,8 +512,12 @@ export class RMAService {
       // DURABLE budget: remaining = quantity_fulfilled - returned_quantity,
       // read straight off the immutable source line. This bounds over-return
       // ACROSS multiple returns (returned_quantity accumulates at apply-time and
-      // is never reclaimed by a cancel/flip/delete).
-      const remaining = orderLine.quantity_fulfilled - orderLine.returned_quantity;
+      // is never reclaimed by a cancel/flip/delete). Live PENDING (unapplied)
+      // demand is subtracted on top — matching the DB cap trigger exactly.
+      const remaining =
+        orderLine.quantity_fulfilled -
+        orderLine.returned_quantity -
+        (pendingByLine.get(orderLine.id) ?? 0);
       if (line.quantity > remaining) {
         throw new ServiceError(
           'validation_error',
@@ -482,6 +564,22 @@ export class RMAService {
       .insert(lineRows)
       .select('*');
     if (linesError) {
+      // Roll back the orphan header so a line-insert failure doesn't strand a
+      // 'requested' return with no lines (same pattern as the requester core).
+      // Must run on the service-role client: returns RLS deliberately denies
+      // DELETE (0153/0154 `for delete using(false)`), so a user-authed delete
+      // would silently no-op. Safe here — the header we just inserted has no
+      // lines (the insert failed atomically) and nothing was applied. Scoped
+      // by id AND org as defense-in-depth on the RLS-bypassing client.
+      try {
+        await createAdminClient()
+          .from('returns')
+          .delete()
+          .eq('id', header.id)
+          .eq('organization_id', this.ctx.organizationId);
+      } catch {
+        /* best-effort — the thrown error below is the primary signal */
+      }
       // The DB cap trigger raises 'return_exceeds_fulfilled' under a concurrent
       // race that slipped past the read-time check above. Surface it as a
       // validation error rather than a 500.
@@ -840,7 +938,8 @@ function generateReturnNumber(): string {
  */
 const requesterLineSchema = z.object({
   orderRequestLineId: z.string().uuid(),
-  quantity: z.number().positive(),
+  // Whole units only (matches the portal's .int() contract).
+  quantity: z.number().int().positive(),
 });
 
 const requesterReturnSchema = z.object({
@@ -876,8 +975,9 @@ interface RequesterReturnOrderRow {
  * verify it is returnable, verify the org still has the returns module
  * enabled, and load the still-returnable lines with their DURABLE budget
  * (quantity_fulfilled - returned_quantity, read straight off each source
- * line). Returns null on any closed door — both public surfaces render that
- * as a 404-shaped answer so nothing about the org leaks.
+ * line) minus the live PENDING (unapplied) return demand — the same number
+ * the DB cap trigger enforces. Returns null on any closed door — both public
+ * surfaces render that as a 404-shaped answer so nothing about the org leaks.
  */
 async function buildRequesterReturnContext(
   admin: SupabaseClient,
@@ -918,11 +1018,27 @@ async function buildRequesterReturnContext(
       | null;
   }> | null) ?? [];
 
+  // Live pending demand (unapplied lines on not-cancelled/denied returns).
+  // The DB cap trigger counts it, so the requester surfaces must not offer
+  // quantity the insert would reject. Any failure is the same closed door as
+  // the other reads (null → 404-shaped on the public surfaces).
+  let pending: Map<string, number>;
+  try {
+    pending = await pendingReturnQuantitiesByLine(
+      admin,
+      order.organization_id,
+      lineRows.map((l) => l.id),
+    );
+  } catch {
+    return null;
+  }
+
   const lines: ReturnableLine[] = [];
   for (const l of lineRows) {
     const fulfilled = Number(l.quantity_fulfilled) || 0;
     if (fulfilled <= 0) continue;
-    const remaining = fulfilled - (Number(l.returned_quantity) || 0);
+    const remaining =
+      fulfilled - (Number(l.returned_quantity) || 0) - (pending.get(l.id) ?? 0);
     if (remaining <= 0) continue;
     const item = Array.isArray(l.item) ? (l.item[0] ?? null) : (l.item ?? null);
     lines.push({

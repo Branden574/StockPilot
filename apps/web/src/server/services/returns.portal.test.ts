@@ -120,6 +120,29 @@ describe('loadPortalReturnContext (customer-own-order scoping)', () => {
     const stub = makeStub({ 'organization_modules.select': { data: [], error: null } });
     expect(await loadPortalReturnContext(stub.client, SCOPE)).toBeNull();
   });
+
+  it('subtracts live PENDING return demand from remaining (matches the DB cap trigger)', async () => {
+    // Fulfilled 10 with 4 units pending on the customer's earlier (unapplied)
+    // request → the portal must offer only 6, exactly what the DB trigger
+    // would accept at insert.
+    const stub = makeStub({
+      'return_lines.select': {
+        data: [
+          {
+            order_request_line_id: OLINE_ID,
+            quantity: 4,
+            applied: false,
+            return: { status: 'requested' },
+          },
+        ],
+        error: null,
+      },
+    });
+    const ctx = await loadPortalReturnContext(stub.client, SCOPE);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.lines).toHaveLength(1);
+    expect(ctx!.lines[0]).toMatchObject({ quantityFulfilled: 10, quantityRemaining: 6 });
+  });
 });
 
 describe('createPortalReturn (shared requester-return core)', () => {

@@ -41,10 +41,15 @@ const RETURN_STATUS_LABELS: Record<string, string> = {
 
 type ReturnableLine = PortalOrder['lines'][number] & { remaining: number };
 
-/** Lines with a positive durable budget (fulfilled − already returned). */
+/** Lines with a positive returnable budget: durable (fulfilled − already
+ *  returned) minus live PENDING return requests — the same number the DB cap
+ *  trigger enforces, so the form never offers a quantity the server rejects. */
 function returnableLines(order: PortalOrder): ReturnableLine[] {
   return order.lines
-    .map((l) => ({ ...l, remaining: l.quantityFulfilled - l.quantityReturned }))
+    .map((l) => ({
+      ...l,
+      remaining: l.quantityFulfilled - l.quantityReturned - l.quantityPendingReturn,
+    }))
     .filter((l) => l.remaining > 0);
 }
 

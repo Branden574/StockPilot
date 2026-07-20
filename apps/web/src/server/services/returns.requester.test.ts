@@ -149,6 +149,35 @@ describe('loadRequesterReturnContext (token validation)', () => {
     expect(ctx).not.toBeNull();
     expect(ctx!.lines).toHaveLength(0);
   });
+
+  it('subtracts live PENDING return demand from remaining (matches the DB cap trigger)', async () => {
+    // Fulfilled 10, durably returned 0, but 4 units already sit on a live
+    // 'requested' (unapplied) return — the page must offer only 6, exactly
+    // what the DB trigger would accept. A cancelled row's units don't count.
+    const stub = makeStub({
+      'return_lines.select': {
+        data: [
+          {
+            order_request_line_id: OLINE_ID,
+            quantity: 4,
+            applied: false,
+            return: { status: 'requested' },
+          },
+          {
+            order_request_line_id: OLINE_ID,
+            quantity: 5,
+            applied: false,
+            return: { status: 'cancelled' },
+          },
+        ],
+        error: null,
+      },
+    });
+    const ctx = await loadRequesterReturnContext(stub.client, TOKEN);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.lines).toHaveLength(1);
+    expect(ctx!.lines[0]).toMatchObject({ quantityFulfilled: 10, quantityRemaining: 6 });
+  });
 });
 
 describe('createRequesterReturn (server-side re-validation)', () => {
@@ -208,6 +237,39 @@ describe('createRequesterReturn (server-side re-validation)', () => {
         lines: [{ orderRequestLineId: OLINE_ID, quantity: 11 }],
       }),
     ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(stub.fromCalls).not.toContain('returns');
+  });
+
+  it('rejects a fractional quantity (whole units only)', async () => {
+    const stub = makeStub();
+    await expect(
+      createRequesterReturn(stub.client, TOKEN, {
+        lines: [{ orderRequestLineId: OLINE_ID, quantity: 2.5 }],
+      }),
+    ).rejects.toThrow(); // zod .int() reject
+    expect(stub.fromCalls).not.toContain('returns');
+  });
+
+  it('rejects a quantity the live PENDING demand no longer leaves room for', async () => {
+    // Fulfilled 10, durably returned 0, 8 pending on a live return → only 2
+    // remain offerable; asking for 3 fails BEFORE the insert the DB trigger
+    // would refuse.
+    const stub = makeStub({
+      'return_lines.select': {
+        data: [
+          {
+            order_request_line_id: OLINE_ID,
+            quantity: 8,
+            applied: false,
+            return: { status: 'approved' },
+          },
+        ],
+        error: null,
+      },
+    });
+    await expect(createRequesterReturn(stub.client, TOKEN, VALID_INPUT)).rejects.toMatchObject({
+      code: 'validation_error',
+    });
     expect(stub.fromCalls).not.toContain('returns');
   });
 

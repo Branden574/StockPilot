@@ -12,15 +12,23 @@ import { reportError } from '@/lib/error-reporter';
  * digital signature, physical (paper) signature, and close-partial — sends
  * the requester the same self-service return link, exactly once.
  *
- * Guards (all must hold, else a silent skip):
+ * TWO-STAGE FLOW — mint, then maybe email. This helper is the ONLY
+ * return_token mint site, and the token also powers the requester's
+ * "Request a return" link on their own /dashboard/orders/[id] page (and the
+ * public tracking page). So the MINT is gated only on the STRUCTURAL
+ * qualifiers — an order without a requester_email (staff-created internal
+ * orders have none by construction) still gets its token:
  *   • the order's status is 'completed' (the only terminal FULFILLED state —
- *     backordered/cancelled/denied never prompt);
- *   • a requester_email is on file;
- *   • at least one unit was actually fulfilled (a zero-fulfilled completion
- *     has nothing to return);
+ *     backordered/cancelled/denied never mint or prompt);
  *   • the org has the off-by-default `returns` module enabled (the public
- *     portal 404s without it — never email a dead link);
- *   • `return_prompt_sent_at` (0278) is still NULL.
+ *     portal 404s without it);
+ *   • at least one unit was actually fulfilled (a zero-fulfilled completion
+ *     has nothing to return).
+ * The EMAIL then additionally requires:
+ *   • a requester_email on file;
+ *   • `return_prompt_sent_at` (0278) still NULL (marker = email sent; an
+ *     email-less completion leaves it untouched, so if an email is added
+ *     later a subsequent completion path can still prompt once).
  *
  * RACE POSTURE — at-most-once. The marker is claimed FIRST via a guarded
  * update (`.is('return_prompt_sent_at', null).select(...)`): of any number of
@@ -79,9 +87,6 @@ export async function maybeSendReturnPrompt(
     };
 
     if (order.status !== 'completed') return { sent: false, reason: 'not_completed' };
-    if (!order.requester_email) return { sent: false, reason: 'no_requester_email' };
-    // Cheap pre-check; the guarded update below is the authoritative gate.
-    if (order.return_prompt_sent_at) return { sent: false, reason: 'already_sent' };
 
     // Off-by-default module — the portal 404s without it (never email a dead
     // link). Mirrors the direct organization_modules check the anonymous
@@ -107,9 +112,12 @@ export async function maybeSendReturnPrompt(
     );
     if (totalFulfilled <= 0) return { sent: false, reason: 'zero_fulfilled' };
 
-    // Ensure the per-order return token (0156) exists. Guarded mint: only
-    // while still NULL, so a concurrent completion never rotates a token
-    // that may already be in someone's inbox.
+    // Ensure the per-order return token (0156) exists. The mint happens for
+    // EVERY structurally-qualifying completion — BEFORE any email-specific
+    // guard — because the token also drives the requester's dashboard
+    // "Request a return" link (orders with no requester_email still get one).
+    // Guarded mint: only while still NULL, so a concurrent completion never
+    // rotates a token that may already be in someone's inbox.
     let token = order.return_token;
     if (!token) {
       const minted = crypto.randomUUID();
@@ -133,6 +141,12 @@ export async function maybeSendReturnPrompt(
       }
     }
     if (!token) return { sent: false, reason: 'no_token' };
+
+    // ── Email-specific guards — from here down we decide only whether the
+    // EMAIL sends; the token above is already minted either way. ──
+    if (!order.requester_email) return { sent: false, reason: 'no_requester_email' };
+    // Cheap pre-check; the guarded update below is the authoritative gate.
+    if (order.return_prompt_sent_at) return { sent: false, reason: 'already_sent' };
 
     // Claim the send BEFORE sending — only the winner of this guarded update
     // proceeds (at-most-once; see the race-posture note above).

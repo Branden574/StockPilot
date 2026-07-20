@@ -28,7 +28,9 @@ const bodySchema = z.object({
     .array(
       z.object({
         orderRequestLineId: z.string().uuid(),
-        quantity: z.coerce.number().positive(),
+        // Whole units only — fractional return quantities are data-shape
+        // nonsense (the DB cap trigger backstops over-return, not shape).
+        quantity: z.coerce.number().int().positive(),
         disposition: z.enum(['restock', 'scrap']),
       }),
     )
