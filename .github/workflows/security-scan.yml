@@ -29,11 +29,9 @@ jobs:
   semgrep:
     name: Semgrep SAST
     runs-on: ubuntu-latest
-    # ROLLOUT NOTE: starts NON-BLOCKING so the first runs surface a baseline
-    # without breaking the pipeline on pre-existing WARN/ERROR findings. Once the
-    # baseline is triaged, remove `continue-on-error: true` below to make
-    # ERROR-severity findings a hard gate on PRs.
-    continue-on-error: true
+    # Hard gate since 2026-07-20: the baseline is clean (the one pre-existing
+    # ERROR finding — the curl|sh TruffleHog install below — is fixed), so
+    # ERROR-severity findings now fail the build.
     steps:
       - uses: actions/checkout@v7
 
@@ -74,17 +72,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install TruffleHog (pinned release)
+      - name: Install TruffleHog (pinned release, checksum-verified)
         env:
-          # IMMUTABLE release tag — NOT `main`. Piping a script from a mutable
-          # upstream ref into sh means an upstream-branch compromise runs arbitrary
-          # code in CI (with repo + secret access). Pinning to a release tag makes
-          # the installer immutable, and it checksum-verifies the binary for this
-          # version. Bump manually (Dependabot doesn't track curl-pinned versions).
-          TRUFFLEHOG_VERSION: v3.95.6
+          # IMMUTABLE version + INLINE sha256 pin. No installer script runs at
+          # all (the previous curl|sh was our own Semgrep gate's one blocking
+          # finding): we download the release tarball for exactly this version
+          # and refuse to install unless it matches the hash recorded here, so
+          # neither an upstream branch compromise nor a swapped release asset
+          # can execute code in CI. Bump = update BOTH values from the release
+          # checksums file (Dependabot doesn't track curl-pinned versions).
+          TRUFFLEHOG_VERSION: '3.95.6'
+          TRUFFLEHOG_SHA256: '1b62ea3cbc672ed5fd36e0eebb00b1fb50bbb7ee35090f42437a5852a299e16b'
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/trufflesecurity/trufflehog/${TRUFFLEHOG_VERSION}/scripts/install.sh" \
-            | sh -s -- -b /usr/local/bin "${TRUFFLEHOG_VERSION}"
+          curl -sSfL -o trufflehog.tar.gz "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_amd64.tar.gz"
+          echo "${TRUFFLEHOG_SHA256}  trufflehog.tar.gz" | sha256sum -c -
+          tar -xzf trufflehog.tar.gz trufflehog
+          sudo install -m 0755 trufflehog /usr/local/bin/trufflehog
+          rm -f trufflehog trufflehog.tar.gz
 
       # Scan the working tree for VERIFIED (confirmed-live) secrets. node_modules
       # isn't installed in this job, so the scan stays fast and source-focused.
