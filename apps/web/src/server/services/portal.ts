@@ -66,7 +66,22 @@ export interface PortalOrder {
   status: string;
   created_at: string;
   total: number;
-  lines: Array<{ itemId: string; name: string; quantity: number; unitPrice: number }>;
+  lines: Array<{
+    orderRequestLineId: string;
+    itemId: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    /** Shipped units on this line — the base of the durable return budget. */
+    quantityFulfilled: number;
+    /** Units already on return requests (durable counter, mig 0153). */
+    quantityReturned: number;
+  }>;
+  /**
+   * The customer's OWN return requests on this order — status + date ONLY
+   * (portal-safe projection; never staff fields like approver/denial reason).
+   */
+  returns: Array<{ id: string; status: string; created_at: string }>;
 }
 
 /**
@@ -348,23 +363,51 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
   const { data } = await admin
     .from('order_requests')
     .select(
-      'id, status, created_at, lines:order_request_lines(item_id, quantity_requested, unit_price_at_request, item:inventory_items(name))',
+      'id, status, created_at, lines:order_request_lines(id, item_id, quantity_requested, quantity_fulfilled, returned_quantity, unit_price_at_request, item:inventory_items(name))',
     )
     .eq('organization_id', ctx.organizationId)
     .eq('customer_id', ctx.customerId)
     .order('created_at', { ascending: false })
     .limit(50);
 
-  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+
+  // The customer's own return requests on these orders — SAFE projection only
+  // (status + date; the id keys React rows). Never approver/denial/staff data.
+  const orderIds = rows.map((r) => r.id as string);
+  const returnsByOrder = new Map<string, PortalOrder['returns']>();
+  if (orderIds.length > 0) {
+    const { data: returnRows } = await admin
+      .from('returns')
+      .select('id, order_request_id, status, created_at')
+      .eq('organization_id', ctx.organizationId)
+      .in('order_request_id', orderIds)
+      .order('created_at', { ascending: false });
+    for (const ret of (returnRows ?? []) as Array<Record<string, unknown>>) {
+      const key = ret.order_request_id as string;
+      const list = returnsByOrder.get(key) ?? [];
+      list.push({
+        id: ret.id as string,
+        status: ret.status as string,
+        created_at: ret.created_at as string,
+      });
+      returnsByOrder.set(key, list);
+    }
+  }
+
+  return rows.map((r) => {
     const lines = ((r.lines as Array<Record<string, unknown>>) ?? []).map((l) => {
       const item = l.item as { name: string | null } | { name: string | null }[] | null;
       const itemObj = Array.isArray(item) ? item[0] : item;
       return {
+        orderRequestLineId: l.id as string,
         itemId: l.item_id as string,
         name: itemObj?.name ?? 'Item',
         quantity: Number(l.quantity_requested) || 0,
         // SELL price the customer paid — never the cost snapshot.
         unitPrice: Number(l.unit_price_at_request) || 0,
+        quantityFulfilled: Number(l.quantity_fulfilled) || 0,
+        quantityReturned: Number(l.returned_quantity) || 0,
       };
     });
     return {
@@ -373,6 +416,25 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
       created_at: r.created_at as string,
       total: lines.reduce((s, l) => s + l.quantity * l.unitPrice, 0),
       lines,
+      returns: returnsByOrder.get(r.id as string) ?? [],
     };
   });
+}
+
+/**
+ * Whether the supplier org has the `returns` module enabled — drives the
+ * portal's "Request a return" affordance. UI-gating only: the create path
+ * re-checks the module server-side (loadPortalReturnContext), so flipping
+ * the flag client-side buys nothing.
+ */
+export async function portalReturnsEnabled(ctx: PortalContext): Promise<boolean> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from('organization_modules')
+    .select('module_id')
+    .eq('organization_id', ctx.organizationId)
+    .eq('module_id', 'returns')
+    .eq('enabled', true)
+    .maybeSingle();
+  return Boolean(data);
 }
