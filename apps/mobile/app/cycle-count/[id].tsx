@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { CycleCountReassignSheet } from '@/components/cycle-count-reassign-sheet';
 import { CycleCountReleaseSheet } from '@/components/cycle-count-release-sheet';
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { useAuth } from '@/lib/auth-context';
@@ -75,6 +76,7 @@ export default function CycleCountDetail() {
   const isAssignee = !header?.assignedTo || header.assignedTo === user?.id;
   const canAdjust = canWrite && (isAssignee || canManage);
   const [releaseOpen, setReleaseOpen] = React.useState(false);
+  const [reassignOpen, setReassignOpen] = React.useState(false);
   const [posting, setPosting] = React.useState(false);
   const [pendingForThis, setPendingForThis] = React.useState(0);
   const [emptyState, setEmptyState] = React.useState<'none' | 'offline-uncached'>('none');
@@ -403,15 +405,26 @@ export default function CycleCountDetail() {
         </View>
         <View style={styles.badgeRow}>
           <SyncStatusBadge />
-          {isOpen && !!header?.assignedTo && (header.assignedTo === user?.id || canManage) ? (
-            <Pressable
-              onPress={() => setReleaseOpen(true)}
-              style={styles.releaseBtn}
-              hitSlop={8}
-            >
-              <Text style={styles.releaseBtnLabel}>Release</Text>
-            </Pressable>
-          ) : null}
+          <View style={{ flexDirection: 'row', gap: space.xs }}>
+            {isOpen && !!header?.assignedTo && (header.assignedTo === user?.id || canManage) ? (
+              <Pressable
+                onPress={() => setReleaseOpen(true)}
+                style={styles.releaseBtn}
+                hitSlop={8}
+              >
+                <Text style={styles.releaseBtnLabel}>Release</Text>
+              </Pressable>
+            ) : null}
+            {isOpen && canManage ? (
+              <Pressable
+                onPress={() => setReassignOpen(true)}
+                style={styles.releaseBtn}
+                hitSlop={8}
+              >
+                <Text style={styles.releaseBtnLabel}>Reassign</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
       </View>
 
@@ -542,6 +555,19 @@ export default function CycleCountDetail() {
           setReleaseOpen(false);
           // The count is no longer assigned to us — return to the list, which
           // reloads with the updated assignment.
+          router.back();
+        }}
+      />
+
+      <CycleCountReassignSheet
+        visible={reassignOpen}
+        cycleCountId={id}
+        orgId={orgId ?? null}
+        currentAssigneeId={header?.assignedTo ?? null}
+        onClose={() => setReassignOpen(false)}
+        onReassigned={() => {
+          setReassignOpen(false);
+          // Reassigned away — reflect the new assignment by reloading the list.
           router.back();
         }}
       />
