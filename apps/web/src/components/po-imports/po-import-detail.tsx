@@ -257,28 +257,39 @@ export function PoImportDetail({
 
   async function approve() {
     setBusy(true);
-    const r = await approvePoImportAction({
-      poImportId: header.id,
-      warehouseId,
-      vendorId,
-      // Guaranteed non-empty: openConfirm blocks approve without a location.
-      locationId,
-      charterId: billToCharterId || null,
-      expectedAt: expectedAt ? new Date(expectedAt).toISOString() : null,
-      lineOverrides: Object.entries(overrides).map(([lineId, o]) => ({
-        lineId,
-        itemId: o.itemId ?? null,
-        skip: o.skip === true,
-      })),
-    });
-    setBusy(false);
-    if (!r.ok) {
-      toast.error(r.error.message);
-      return;
+    // A THROWN action (network 500, or a stale bundle after a fresh deploy —
+    // the server-action id no longer resolves) must not leave the button
+    // spinning forever with no feedback: try/finally guarantees the spinner
+    // resets and the user sees a clear, actionable message.
+    try {
+      const r = await approvePoImportAction({
+        poImportId: header.id,
+        warehouseId,
+        vendorId,
+        // Guaranteed non-empty: openConfirm blocks approve without a location.
+        locationId,
+        charterId: billToCharterId || null,
+        expectedAt: expectedAt ? new Date(expectedAt).toISOString() : null,
+        lineOverrides: Object.entries(overrides).map(([lineId, o]) => ({
+          lineId,
+          itemId: o.itemId ?? null,
+          skip: o.skip === true,
+        })),
+      });
+      if (!r.ok) {
+        toast.error(r.error.message);
+        return;
+      }
+      setConfirmOpen(false);
+      toast.success('Import approved. Expected inbound PO created.');
+      router.push(`/dashboard/purchase-orders/${r.data.poId}`);
+    } catch {
+      toast.error(
+        'Could not reach the server to approve this import. If StockPilot just updated (see the reload prompt), reload the page and try again.',
+      );
+    } finally {
+      setBusy(false);
     }
-    setConfirmOpen(false);
-    toast.success('Import approved. Expected inbound PO created.');
-    router.push(`/dashboard/purchase-orders/${r.data.poId}`);
   }
 
   const canApprove =
