@@ -1,0 +1,117 @@
+<!doctype html>
+<!--
+StockPilot reference template · ORDER-STATUS ARCHETYPE (shown: Approved)
+Subject:   {{order_id}} is approved — packing has started
+Preheader: Reserved {{units}} units across {{lines}} lines. Ships {{ship_date}} from {{ship_from}}.
+From:      StockPilot <orders@stockpilotusa.com>   Reply-to: not monitored
+Footer:    preference-controlled (manage prefs + unsubscribe)
+Swap the pill/headline/timeline row per status; siblings: archetype-security.html · archetype-digest.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark"><meta name="x-apple-disable-message-reformatting">
+<title>{{order_id}} is approved</title>
+<!--[if mso]><style>*{font-family:Helvetica,Arial,sans-serif!important}</style><![endif]-->
+<style>
+  @media (max-width:620px){
+    .container{width:100%!important}
+    .px{padding-left:24px!important;padding-right:24px!important}
+    .h1{font-size:24px!important;line-height:1.15!important}
+    .grid td{display:block!important;width:100%!important;padding:0 20px 16px!important}
+    .grid td.first{padding-top:18px!important}
+    .btn a{display:block!important;text-align:center!important}
+  }
+  @media (prefers-color-scheme: dark){
+    body,.desk{background:#060607!important}
+    .paper{background:#161617!important}
+    .sunk{background:#1e1e20!important}
+    .ink{color:#f6f4ef!important}.ink2{color:#d5d2c9!important}.ink3{color:#a5a29a!important}.ink4{color:#7d7a72!important}
+    .okpill{background:#1c2b22!important;color:#8cc7a1!important}
+    .btn td{background:#f6f4ef!important}.btn a{background:#f6f4ef!important;color:#0c0c0e!important}
+  }
+</style>
+</head>
+<body class="desk" style="margin:0;padding:0;background:#e8e5dd;font-family:'Space Grotesk',Helvetica,Arial,sans-serif;color:#0c0c0e;-webkit-font-smoothing:antialiased">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">Reserved {{units}} units across {{lines}} lines. Ships {{ship_date}} from {{ship_from}}.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="desk" style="background:#e8e5dd">
+<tr><td align="center" style="padding:32px 16px">
+  <table role="presentation" class="container paper" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background:#f6f4ef;border-radius:6px;overflow:hidden">
+    <tr><td class="px" style="padding:20px 36px;border-bottom:1px solid rgba(12,12,14,0.12)">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td style="vertical-align:middle"><img src="{{asset_base}}/logo-mark-light.png" width="22" height="22" alt="StockPilot" style="display:inline-block;vertical-align:middle;border:0"> <span class="ink" style="font-size:15px;font-weight:600;letter-spacing:-0.025em;color:#0c0c0e">Stock<span style="font-weight:500;opacity:0.6">Pilot</span></span></td>
+        <td align="right" class="ink4" style="vertical-align:middle;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f">Order Update</td>
+      </tr></table>
+    </td></tr>
+    <tr><td class="px" style="padding:36px 36px 24px">
+      <div class="okpill" style="display:inline-block;padding:4px 10px;background:#e6efe7;border-radius:999px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:#2f6a4a;font-weight:600">&#9679; Approved</div>
+      <h1 class="h1 ink" style="margin:18px 0 14px;font-size:32px;line-height:1.1;letter-spacing:-0.03em;font-weight:500;color:#0c0c0e">{{order_id}} is approved.<br><span class="ink3" style="color:#5a5853;font-family:'Tinos',Georgia,serif;font-style:italic;font-weight:400">Packing starts now.</span></h1>
+      <p class="ink2" style="margin:0;font-size:14.5px;line-height:1.55;color:#2a2a2c;max-width:480px">Hi {{name}} — we&rsquo;ve reserved every unit on this request. You&rsquo;ll get another note the moment it leaves the dock.</p>
+    </td></tr>
+    <tr><td class="px" style="padding:0 36px 24px">
+      <!-- motion asset: settle.gif · frame 1 = resting composition · alt text carries the message -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td class="sunk" align="center" style="background:#eeece5;border:1px solid rgba(12,12,14,0.12);border-radius:8px">
+          <img src="{{asset_base}}/settle@2x.gif" width="528" height="194" alt="Three cartons settle into a row — your order is reserved and moving to packing" style="display:block;width:100%;max-width:528px;height:auto;border:0;border-radius:8px">
+        </td>
+      </tr></table>
+    </td></tr>
+    <tr><td class="px" style="padding:0 36px 26px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:8.5px;letter-spacing:0.08em;text-transform:uppercase"><tr>
+        <td align="center" class="ink3" style="color:#5a5853">&#9679;<br>Received</td>
+        <td align="center" style="color:#2f6a4a;font-weight:700">&#9679;<br>Approved</td>
+        <td align="center" class="ink4" style="color:#8b887f">&#9675;<br>Packing</td>
+        <td align="center" class="ink4" style="color:#8b887f">&#9675;<br>Ready</td>
+        <td align="center" class="ink4" style="color:#8b887f">&#9675;<br>In transit</td>
+        <td align="center" class="ink4" style="color:#8b887f">&#9675;<br>Delivered</td>
+      </tr></table>
+    </td></tr>
+    <tr><td class="px" style="padding:0 36px 28px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="grid" style="border:1px solid rgba(12,12,14,0.12);border-radius:6px">
+        <tr>
+          <td width="50%" class="first" style="padding:18px 20px 14px;vertical-align:top">
+            <div class="ink4" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;margin-bottom:5px">Order</div>
+            <div class="ink" style="font-size:14px;font-weight:600;color:#0c0c0e">{{order_id}}</div>
+            <div class="ink4" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;color:#8b887f;margin-top:3px">{{order_number}}</div>
+          </td>
+          <td width="50%" class="first" style="padding:18px 20px 14px;vertical-align:top">
+            <div class="ink4" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;margin-bottom:5px">Reserved</div>
+            <div class="ink" style="font-size:14px;font-weight:600;color:#0c0c0e">{{units}} units <span class="ink4" style="color:#8b887f;font-weight:400">&middot; {{lines}} lines</span></div>
+            <div class="ink3" style="font-size:11.5px;color:#5a5853;margin-top:3px">Ships {{ship_date}}</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 20px 18px;vertical-align:top">
+            <div class="ink4" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;margin-bottom:5px">From</div>
+            <div class="ink2" style="font-size:13px;color:#2a2a2c">{{ship_from}}</div>
+          </td>
+          <td style="padding:0 20px 18px;vertical-align:top">
+            <div class="ink4" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;margin-bottom:5px">To</div>
+            <div class="ink2" style="font-size:13px;color:#2a2a2c">{{ship_to}}</div>
+          </td>
+        </tr>
+        <tr>
+          <td colspan="2" style="padding:0 20px 18px;vertical-align:top;border-top:1px solid rgba(12,12,14,0.08)">
+            <div class="ink4" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;margin:14px 0 5px">Approved</div>
+            <div class="ink2" style="font-size:13px;color:#2a2a2c">{{approved_at}} &middot; by {{approver}}</div>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+    <tr><td class="px" style="padding:0 36px 30px">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="btn"><tr><td bgcolor="#0c0c0e" style="border-radius:6px;background:#0c0c0e">
+        <a href="{{track_url}}" style="display:inline-block;padding:13px 18px;background:#0c0c0e;color:#f6f4ef;border-radius:6px;font-family:'Space Grotesk',Helvetica,Arial,sans-serif;font-size:13.5px;font-weight:500;text-decoration:none">Track this order &rarr;</a>
+      </td></tr></table>
+      <div class="ink3" style="margin-top:14px;font-size:11.5px;color:#5a5853;line-height:1.55">Or paste this link into your browser: <span class="ink2" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;color:#2a2a2c;word-break:break-all">{{track_url}}</span></div>
+    </td></tr>
+    <tr><td class="px sunk" style="padding:18px 36px;border-top:1px solid rgba(12,12,14,0.12);background:#eeece5">
+      <div class="ink4" style="font-size:11px;color:#8b887f;line-height:1.6">Order-status updates for requests placed by <span class="ink2" style="color:#2a2a2c;text-decoration:underline">{{email}}</span>. Unsubscribing stops this notification type only — security and account emails still arrive.</div>
+      <div style="margin-top:8px;font-size:11px"><a class="ink2" href="{{prefs_url}}" style="color:#2a2a2c">Manage email preferences</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a class="ink2" href="{{unsubscribe_url}}" style="color:#2a2a2c">Unsubscribe</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a class="ink2" href="{{support_url}}" style="color:#2a2a2c">Support</a></div>
+      <div class="ink4" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(12,12,14,0.12);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9.5px;letter-spacing:0.18em;text-transform:uppercase;color:#8b887f">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="ink4" style="color:#8b887f">StockPilot &middot; Inventory + Order Mgmt</td><td align="right" class="ink4" style="color:#8b887f">stockpilotusa.com</td></tr></table>
+      </div>
+    </td></tr>
+  </table>
+</td></tr></table>
+</body>
+</html>

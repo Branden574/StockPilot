@@ -1,0 +1,127 @@
+<!doctype html>
+<!--
+StockPilot reference template · DIGEST ARCHETYPE (shown: Weekly digest)
+Subject:   StockPilot weekly digest — {{digest_date}}
+Preheader: {{action_count}} things need action · {{orders_received}} orders received · {{overdue_rentals}} overdue rental. Two-minute read.
+From:      StockPilot <digest@stockpilotusa.com>   Reply-to: not monitored
+Footer:    preference-controlled (manage prefs + one-click unsubscribe)
+For [Preview]: prepend the purple preview strip block (kept below, commented).
+Siblings: archetype-order-status.html · archetype-security.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark"><meta name="x-apple-disable-message-reformatting">
+<title>StockPilot weekly digest — {{digest_date}}</title>
+<!--[if mso]><style>*{font-family:Helvetica,Arial,sans-serif!important}</style><![endif]-->
+<style>
+  @media (max-width:620px){
+    .container{width:100%!important}
+    .px{padding-left:24px!important;padding-right:24px!important}
+    .h1{font-size:24px!important;line-height:1.15!important}
+    .kpi td{display:block!important;width:100%!important}
+    .kpi .cell{margin-bottom:10px!important}
+    .btn a{display:block!important;text-align:center!important}
+  }
+  @media (prefers-color-scheme: dark){
+    body,.desk{background:#060607!important}
+    .paper{background:#161617!important}
+    .sunk{background:#1e1e20!important}
+    .ink{color:#f6f4ef!important}.ink2{color:#d5d2c9!important}.ink3{color:#a5a29a!important}.ink4{color:#7d7a72!important}
+    .infopill{background:#1b2530!important;color:#93b4cc!important}
+    .btn td{background:#f6f4ef!important}.btn a{background:#f6f4ef!important;color:#0c0c0e!important}
+    .card,.cell{border-color:rgba(246,244,239,0.13)!important}
+  }
+</style>
+</head>
+<body class="desk" style="margin:0;padding:0;background:#e8e5dd;font-family:'Space Grotesk',Helvetica,Arial,sans-serif;color:#0c0c0e;-webkit-font-smoothing:antialiased">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">{{action_count}} things need action &middot; {{orders_received}} orders received &middot; {{overdue_rentals}} overdue rental. Two-minute read.&nbsp;&nbsp;&nbsp;</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="desk" style="background:#e8e5dd">
+<tr><td align="center" style="padding:32px 16px">
+  <table role="presentation" class="container paper" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background:#f6f4ef;border-radius:6px;overflow:hidden">
+    <!-- [Preview] variant: uncomment this strip
+    <tr><td style="padding:10px 36px;background:#eae4f1;border-bottom:1px solid rgba(12,12,14,0.12)">
+      <span style="font-size:11.5px;color:#2a2a2c"><strong style="color:#5b4a78">Preview.</strong> Sent only to you — not the scheduled Monday digest.</span>
+    </td></tr>
+    -->
+    <tr><td class="px" style="padding:20px 36px;border-bottom:1px solid rgba(12,12,14,0.12)">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td style="vertical-align:middle"><img src="{{asset_base}}/logo-mark-light.png" width="22" height="22" alt="StockPilot" style="display:inline-block;vertical-align:middle;border:0"> <span class="ink" style="font-size:15px;font-weight:600;letter-spacing:-0.025em;color:#0c0c0e">Stock<span style="font-weight:500;opacity:0.6">Pilot</span></span></td>
+        <td align="right" class="ink4" style="vertical-align:middle;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f">Weekly Digest</td>
+      </tr></table>
+    </td></tr>
+    <tr><td class="px" style="padding:36px 36px 24px">
+      <div class="infopill" style="display:inline-block;padding:4px 10px;background:#e4ebf0;border-radius:999px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:#3f5f78;font-weight:600">{{digest_range}}</div>
+      <h1 class="h1 ink" style="margin:18px 0 14px;font-size:32px;line-height:1.1;letter-spacing:-0.03em;font-weight:500;color:#0c0c0e">Your week, in order.<br><span class="ink3" style="color:#5a5853;font-family:'Tinos',Georgia,serif;font-style:italic;font-weight:400">Monday briefing &middot; two minutes.</span></h1>
+      <p class="ink2" style="margin:0;font-size:14.5px;line-height:1.55;color:#2a2a2c;max-width:480px">Hi {{name}} — here&rsquo;s what moved across <strong class="ink" style="font-weight:600;color:#0c0c0e">{{workspace}}</strong> last week, and the {{action_count}} things that need a hand.</p>
+    </td></tr>
+    <tr><td class="px" style="padding:0 36px 24px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="kpi">
+        <tr>
+          <td width="50%" style="padding:0 5px 10px 0"><div class="cell" style="border:1px solid rgba(12,12,14,0.12);border-radius:6px;padding:14px 16px">
+            <div class="ink4" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;margin-bottom:5px">Orders received</div>
+            <div class="ink" style="font-size:28px;font-weight:600;letter-spacing:-0.02em;color:#0c0c0e;line-height:1">{{orders_received}}</div>
+            <div class="ink3" style="font-size:11px;color:#5a5853;margin-top:4px">{{orders_received_delta}}</div>
+          </div></td>
+          <td width="50%" style="padding:0 0 10px 5px"><div class="cell" style="border:1px solid rgba(12,12,14,0.12);border-radius:6px;padding:14px 16px">
+            <div class="ink4" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;margin-bottom:5px">Approved</div>
+            <div class="ink" style="font-size:28px;font-weight:600;letter-spacing:-0.02em;color:#0c0c0e;line-height:1">{{orders_approved}}</div>
+            <div class="ink3" style="font-size:11px;color:#5a5853;margin-top:4px">{{orders_approved_note}}</div>
+          </div></td>
+        </tr>
+        <tr>
+          <td width="50%" style="padding:0 5px 0 0"><div class="cell" style="border:1px solid rgba(12,12,14,0.12);border-radius:6px;padding:14px 16px">
+            <div class="ink4" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;margin-bottom:5px">In transit</div>
+            <div class="ink" style="font-size:28px;font-weight:600;letter-spacing:-0.02em;color:#0c0c0e;line-height:1">{{orders_transit}}</div>
+            <div class="ink3" style="font-size:11px;color:#5a5853;margin-top:4px">{{orders_transit_note}}</div>
+          </div></td>
+          <td width="50%" style="padding:0 0 0 5px"><div class="cell" style="border:1px solid rgba(12,12,14,0.12);border-radius:6px;padding:14px 16px">
+            <div class="ink4" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f;margin-bottom:5px">Completed</div>
+            <div class="ink" style="font-size:28px;font-weight:600;letter-spacing:-0.02em;color:#0c0c0e;line-height:1">{{orders_completed}}</div>
+            <div class="ink3" style="font-size:11px;color:#5a5853;margin-top:4px">{{orders_completed_note}}</div>
+          </div></td>
+        </tr>
+      </table>
+    </td></tr>
+    <tr><td class="px" style="padding:0 36px 8px">
+      <div class="ink4" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f">Needs action</div>
+    </td></tr>
+    <tr><td class="px" style="padding:8px 36px 24px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="card" style="border:1px solid rgba(12,12,14,0.12);border-radius:6px">
+        <!-- repeat one row per action item {{#each actions}} -->
+        <tr><td style="padding:12px 16px;border-bottom:1px solid rgba(12,12,14,0.08)">
+          <span style="color:#7a5a1f">&#9679;</span>&nbsp;&nbsp;<span class="ink" style="font-size:13px;font-weight:600;color:#0c0c0e">{{action_1_title}}</span><br>
+          <span class="ink3" style="font-size:11.5px;color:#5a5853;padding-left:18px">{{action_1_detail}}</span>
+        </td></tr>
+        <tr><td style="padding:12px 16px;border-bottom:1px solid rgba(12,12,14,0.08)">
+          <span style="color:#7a5a1f">&#9679;</span>&nbsp;&nbsp;<span class="ink" style="font-size:13px;font-weight:600;color:#0c0c0e">{{action_2_title}}</span><br>
+          <span class="ink3" style="font-size:11.5px;color:#5a5853;padding-left:18px">{{action_2_detail}}</span>
+        </td></tr>
+        <tr><td style="padding:12px 16px">
+          <span style="color:#8a3d33">&#9679;</span>&nbsp;&nbsp;<span class="ink" style="font-size:13px;font-weight:600;color:#0c0c0e">{{action_3_title}}</span><br>
+          <span class="ink3" style="font-size:11.5px;color:#5a5853;padding-left:18px">{{action_3_detail}}</span>
+        </td></tr>
+        <!-- all-clear state: replace rows with one ok banner —
+        <tr><td style="padding:14px 16px;background:#e6efe7;border-radius:6px">
+          <span class="ink" style="font-size:12.5px;font-weight:600;color:#2f6a4a">All clear.</span>
+          <span class="ink2" style="font-size:12px;color:#2a2a2c"> Nothing needs your attention this week. See you next Monday.</span>
+        </td></tr>
+        -->
+      </table>
+    </td></tr>
+    <tr><td class="px" style="padding:0 36px 30px">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="btn"><tr><td bgcolor="#0c0c0e" style="border-radius:6px;background:#0c0c0e">
+        <a href="{{dashboard_url}}" style="display:inline-block;padding:13px 18px;background:#0c0c0e;color:#f6f4ef;border-radius:6px;font-family:'Space Grotesk',Helvetica,Arial,sans-serif;font-size:13.5px;font-weight:500;text-decoration:none">Open dashboard &rarr;</a>
+      </td></tr></table>
+    </td></tr>
+    <tr><td class="px sunk" style="padding:18px 36px;border-top:1px solid rgba(12,12,14,0.12);background:#eeece5">
+      <div class="ink4" style="font-size:11px;color:#8b887f;line-height:1.6">The weekly digest goes to workspace members who opted in — Mondays at 7:00 AM workspace time. Unsubscribing stops this notification type only.</div>
+      <div style="margin-top:8px;font-size:11px"><a class="ink2" href="{{prefs_url}}" style="color:#2a2a2c">Manage email preferences</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a class="ink2" href="{{unsubscribe_url}}" style="color:#2a2a2c">Unsubscribe</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a class="ink2" href="{{support_url}}" style="color:#2a2a2c">Support</a></div>
+      <div class="ink4" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(12,12,14,0.12);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9.5px;letter-spacing:0.18em;text-transform:uppercase;color:#8b887f">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="ink4" style="color:#8b887f">StockPilot &middot; Inventory + Order Mgmt</td><td align="right" class="ink4" style="color:#8b887f">stockpilotusa.com</td></tr></table>
+      </div>
+    </td></tr>
+  </table>
+</td></tr></table>
+</body>
+</html>

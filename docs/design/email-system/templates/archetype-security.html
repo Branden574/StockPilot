@@ -1,0 +1,81 @@
+<!doctype html>
+<!--
+StockPilot reference template · SECURITY ARCHETYPE (shown: Password reset)
+Subject:   Reset your StockPilot password
+Preheader: This link works for 60 minutes. If you didn't ask for it, you can safely ignore this email.
+From:      StockPilot Security <security@stockpilotusa.com>   Reply-to: not monitored
+Footer:    essential transactional (no unsubscribe)
+Siblings: archetype-order-status.html · archetype-digest.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark"><meta name="x-apple-disable-message-reformatting">
+<title>Reset your StockPilot password</title>
+<!--[if mso]><style>*{font-family:Helvetica,Arial,sans-serif!important}</style><![endif]-->
+<style>
+  @media (max-width:620px){
+    .container{width:100%!important}
+    .px{padding-left:24px!important;padding-right:24px!important}
+    .h1{font-size:24px!important;line-height:1.15!important}
+    .btn a{display:block!important;text-align:center!important}
+  }
+  @media (prefers-color-scheme: dark){
+    body,.desk{background:#060607!important}
+    .paper{background:#161617!important}
+    .sunk{background:#1e1e20!important}
+    .ink{color:#f6f4ef!important}.ink2{color:#d5d2c9!important}.ink3{color:#a5a29a!important}.ink4{color:#7d7a72!important}
+    .secpill{color:#f6f4ef!important;border-color:rgba(246,244,239,0.4)!important}
+    .btn td{background:#f6f4ef!important}.btn a{background:#f6f4ef!important;color:#0c0c0e!important}
+    .card{border-color:rgba(246,244,239,0.13)!important}
+  }
+</style>
+</head>
+<body class="desk" style="margin:0;padding:0;background:#e8e5dd;font-family:'Space Grotesk',Helvetica,Arial,sans-serif;color:#0c0c0e;-webkit-font-smoothing:antialiased">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0">This link works for 60 minutes. If you didn&rsquo;t ask for it, you can safely ignore this email.&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="desk" style="background:#e8e5dd">
+<tr><td align="center" style="padding:32px 16px">
+  <table role="presentation" class="container paper" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background:#f6f4ef;border-radius:6px;overflow:hidden">
+    <tr><td class="px" style="padding:20px 36px;border-bottom:1px solid rgba(12,12,14,0.12)">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td style="vertical-align:middle"><img src="{{asset_base}}/logo-mark-light.png" width="22" height="22" alt="StockPilot" style="display:inline-block;vertical-align:middle;border:0"> <span class="ink" style="font-size:15px;font-weight:600;letter-spacing:-0.025em;color:#0c0c0e">Stock<span style="font-weight:500;opacity:0.6">Pilot</span></span></td>
+        <td align="right" class="ink4" style="vertical-align:middle;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:#8b887f">Security</td>
+      </tr></table>
+    </td></tr>
+    <tr><td class="px" style="padding:36px 36px 24px">
+      <div class="secpill" style="display:inline-block;padding:4px 10px;border:1px solid rgba(12,12,14,0.35);border-radius:999px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:#0c0c0e;font-weight:600">&#9679; Security &middot; Password reset</div>
+      <h1 class="h1 ink" style="margin:18px 0 14px;font-size:32px;line-height:1.1;letter-spacing:-0.03em;font-weight:500;color:#0c0c0e">Reset your password.<br><span class="ink3" style="color:#5a5853;font-family:'Tinos',Georgia,serif;font-style:italic;font-weight:400">Takes about a minute.</span></h1>
+      <p class="ink2" style="margin:0;font-size:14.5px;line-height:1.55;color:#2a2a2c;max-width:480px">Hi {{name}} — we received a request to reset the password for <strong class="ink" style="font-weight:600;color:#0c0c0e">{{email}}</strong>. If that was you, set a new one below.</p>
+    </td></tr>
+    <tr><td class="px" style="padding:0 36px 24px">
+      <!-- motion asset: lock.gif · L1 restrained · plays once, no infinite loop on security -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td class="sunk" align="center" style="background:#eeece5;border:1px solid rgba(12,12,14,0.12);border-radius:8px">
+          <img src="{{asset_base}}/lock@2x.gif" width="528" height="194" alt="A lock closes with a soft verification ring — password-reset link secured" style="display:block;width:100%;max-width:528px;height:auto;border:0;border-radius:8px">
+        </td>
+      </tr></table>
+    </td></tr>
+    <tr><td class="px" style="padding:0 36px 26px">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" class="btn"><tr><td bgcolor="#0c0c0e" style="border-radius:6px;background:#0c0c0e">
+        <a href="{{reset_url}}" style="display:inline-block;padding:13px 18px;background:#0c0c0e;color:#f6f4ef;border-radius:6px;font-family:'Space Grotesk',Helvetica,Arial,sans-serif;font-size:13.5px;font-weight:500;text-decoration:none">Reset password &rarr;</a>
+      </td></tr></table>
+      <div class="ink3" style="margin-top:12px;font-size:11.5px;color:#5a5853;line-height:1.55">This link works for <strong class="ink2" style="font-weight:600;color:#2a2a2c">60 minutes</strong> and can be used once. Requested {{requested_at}}, from {{device}}.</div>
+      <div class="ink3" style="margin-top:12px;font-size:11.5px;color:#5a5853;line-height:1.55">Or paste this link into your browser: <span class="ink2" style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;color:#2a2a2c;word-break:break-all">{{reset_url}}</span></div>
+    </td></tr>
+    <tr><td class="px" style="padding:0 36px 30px">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="card" style="border:1px solid rgba(12,12,14,0.12);border-radius:6px"><tr><td style="padding:16px 20px">
+        <div class="ink" style="font-size:13px;font-weight:600;color:#0c0c0e;margin-bottom:5px">Didn&rsquo;t request this?</div>
+        <div class="ink3" style="font-size:12px;line-height:1.6;color:#5a5853">Your password hasn&rsquo;t changed and no one has accessed your account. You can safely ignore this email — or <a class="ink2" href="{{support_url}}" style="color:#2a2a2c">tell support</a> if resets keep arriving that you didn&rsquo;t ask for.</div>
+      </td></tr></table>
+    </td></tr>
+    <tr><td class="px sunk" style="padding:18px 36px;border-top:1px solid rgba(12,12,14,0.12);background:#eeece5">
+      <div class="ink4" style="font-size:11px;color:#8b887f;line-height:1.6">Sent to <span class="ink2" style="color:#2a2a2c;text-decoration:underline">{{email}}</span> because a password reset was requested for this StockPilot account. Security and account emails are sent whenever this activity happens — they keep your account safe and can&rsquo;t be unsubscribed.</div>
+      <div style="margin-top:8px;font-size:11px"><a class="ink2" href="{{support_url}}" style="color:#2a2a2c">Support</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a class="ink2" href="{{privacy_url}}" style="color:#2a2a2c">Privacy</a>&nbsp;&nbsp;&middot;&nbsp;&nbsp;<a class="ink2" href="{{terms_url}}" style="color:#2a2a2c">Terms</a></div>
+      <div class="ink4" style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(12,12,14,0.12);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:9.5px;letter-spacing:0.18em;text-transform:uppercase;color:#8b887f">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="ink4" style="color:#8b887f">StockPilot &middot; Inventory + Order Mgmt</td><td align="right" class="ink4" style="color:#8b887f">stockpilotusa.com</td></tr></table>
+      </div>
+    </td></tr>
+  </table>
+</td></tr></table>
+</body>
+</html>
