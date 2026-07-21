@@ -16,12 +16,9 @@ export function emailLogoImg(size = 28): string {
 
 // The invite + password-reset templates that used to live here moved to
 // the es design system: `es/families/invites.ts` (team-invite,
-// invite-reminder, ws-ready, portal-invite) and `es/families/security.ts`
-// (pw-reset, signin). The weekly digest below is E7's migration target.
-
-function escapeHtml(s: string) {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-}
+// invite-reminder, ws-ready, portal-invite), `es/families/security.ts`
+// (pw-reset, signin), and `es/families/digest.ts` (weekly digest + preview).
+// Only `emailLogoImg` remains as a shared legacy export.
 
 // ---------------------------------------------------------------------------
 // The weekly digest moved to the redesigned email system:
