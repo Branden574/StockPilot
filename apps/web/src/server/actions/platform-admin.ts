@@ -5,8 +5,8 @@ import { z } from 'zod';
 
 import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
 import { hashPassphrase, verifyPassphrase } from '@/lib/auth/platform-passphrase';
+import { renderWorkspaceReadyEmail } from '@/lib/email/es/families/invites';
 import { sendEmail } from '@/lib/email/resend';
-import { inviteEmailHtml, inviteEmailText } from '@/lib/email/templates';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -225,19 +225,20 @@ export async function createOrgForCustomerAction(
     ? `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(inviteHashedToken)}&type=invite&next=${encodeURIComponent('/reset/complete')}`
     : invited.properties?.action_link;
   if (actionLink) {
+    // ws-ready (es invitations family) — previously reused the generic
+    // invite template; now renders the dedicated workspace-ready design.
+    const message = renderWorkspaceReadyEmail({
+      email: parsed.data.email,
+      org: parsed.data.name,
+      openUrl: actionLink,
+      appUrl: env.NEXT_PUBLIC_APP_URL,
+    });
     const sent = await sendEmail({
       to: parsed.data.email,
-      subject: `Your ${parsed.data.name} workspace on StockPilot is ready`,
-      html: inviteEmailHtml({
-        organizationName: parsed.data.name,
-        inviterName: 'The StockPilot team',
-        acceptUrl: actionLink,
-      }),
-      text: inviteEmailText({
-        organizationName: parsed.data.name,
-        inviterName: 'The StockPilot team',
-        acceptUrl: actionLink,
-      }),
+      subject: message.subject,
+      html: message.html,
+      text: message.text,
+      from: message.from,
     });
     if (!sent.ok) {
       await reportError(new Error(sent.error ?? 'invite email send failed'), {

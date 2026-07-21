@@ -3,8 +3,11 @@ import 'server-only';
 import { randomBytes } from 'node:crypto';
 
 import { env } from '@/lib/env';
+import {
+  renderInviteReminderEmail,
+  renderTeamInviteEmail,
+} from '@/lib/email/es/families/invites';
 import { sendEmail } from '@/lib/email/resend';
-import { inviteEmailHtml, inviteEmailText } from '@/lib/email/templates';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { type Role } from '@stockpilot/core';
@@ -18,6 +21,16 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+
+/** "Wed, Jun 3" — the invite-email expiry date format (registry sample world). */
+function formatInviteExpiry(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
 
 export class TeamService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -146,6 +159,8 @@ export class TeamService {
     role: Exclude<Role, 'owner'>;
     organizationName: string;
     inviterName: string;
+    /** Optional; enriches the invite email's body + footer copy. */
+    inviterEmail?: string | null;
     charterId?: string | null;
     /**
      * Multi-charter invite: the charters this user will oversee for the
@@ -261,11 +276,23 @@ export class TeamService {
     // Short alias /i/<token> redirects to /invite/<token>; keeps the URL
     // on one line in chat clients so the entire link stays clickable.
     const acceptUrl = `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/i/${token}`;
+    const message = renderTeamInviteEmail({
+      email: normalizedEmail,
+      org: organizationName,
+      inviterName,
+      inviterEmail: params.inviterEmail ?? null,
+      role: params.role,
+      acceptUrl,
+      expiresOn: formatInviteExpiry(expiresAt),
+      window: '7 days',
+      appUrl: env.NEXT_PUBLIC_APP_URL,
+    });
     await sendEmail({
       to: normalizedEmail,
-      subject: `You're invited to join ${organizationName} on StockPilot`,
-      html: inviteEmailHtml({ organizationName, inviterName, acceptUrl }),
-      text: inviteEmailText({ organizationName, inviterName, acceptUrl }),
+      subject: message.subject,
+      html: message.html,
+      text: message.text,
+      from: message.from,
     });
 
     return { id: invite.id as string, token: invite.token as string, acceptUrl };
@@ -295,7 +322,7 @@ export class TeamService {
     const { data: invite, error: fetchErr } = await this.ctx.supabase
       .from('organization_invites')
       .select(
-        `id, email, token, accepted_at, organizations:organization_id (name)`,
+        `id, email, role, token, accepted_at, organizations:organization_id (name)`,
       )
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', inviteId)
@@ -310,11 +337,13 @@ export class TeamService {
     }
 
     // Refresh the expiry so a recipient who acts on a re-sent email
-    // doesn't immediately hit "invite expired".
+    // doesn't immediately hit "invite expired". The reminder email states
+    // this NEW expiry (registry: invite-reminder).
+    const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     const { error: updErr } = await this.ctx.supabase
       .from('organization_invites')
       .update({
-        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        expires_at: newExpiresAt,
       })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', inviteId);
@@ -342,11 +371,22 @@ export class TeamService {
       'StockPilot';
 
     const acceptUrl = `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/i/${invite.token as string}`;
+    const message = renderInviteReminderEmail({
+      email: invite.email as string,
+      org: organizationName,
+      inviterName,
+      inviterEmail: (profile?.email as string | null) ?? null,
+      role: (invite.role as Role | null) ?? 'staff',
+      acceptUrl,
+      expiresOn: formatInviteExpiry(newExpiresAt),
+      appUrl: env.NEXT_PUBLIC_APP_URL,
+    });
     await sendEmail({
       to: invite.email as string,
-      subject: `Reminder: you're invited to join ${organizationName} on StockPilot`,
-      html: inviteEmailHtml({ organizationName, inviterName, acceptUrl }),
-      text: inviteEmailText({ organizationName, inviterName, acceptUrl }),
+      subject: message.subject,
+      html: message.html,
+      text: message.text,
+      from: message.from,
     });
     await audit(
       {
