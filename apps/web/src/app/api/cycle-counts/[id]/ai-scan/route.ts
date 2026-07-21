@@ -100,10 +100,11 @@ export async function POST(
   }
   const mimeType = photoBlob.type.startsWith('image/') ? photoBlob.type : 'image/jpeg';
 
-  // Load the line set BEFORE uploading the photo — that way an empty
-  // / non-existent count fails fast without wasting a storage write.
-  // assertSessionAccess inside the service guards org membership +
-  // in_progress status.
+  // Load the line set BEFORE uploading the photo + calling the vision model —
+  // getLineSetForAiScan now runs the FULL pre-flight gate (module +
+  // stock:adjust permission + warehouse scope + assignee lock + in_progress
+  // status), so an unauthorized / non-assignee / closed-count request fails
+  // fast without wasting a paid vision call or a storage write.
   const svc = new CycleCountsService(ctx);
   let lineSet: ShelfScanLineInput[];
   try {

@@ -1015,10 +1015,29 @@ export class CycleCountsService {
     }>
   > {
     assertModuleEnabled(this.ctx, 'ai_shelf_scan');
-    // Reuse the existing session-access gate — same RBAC + warehouse
-    // scope as recordCount. Throws not_found / forbidden which the
-    // route handler maps to 404 / 403.
+    // Full pre-flight authorization BEFORE the caller (route) spends a paid
+    // vision call + photo upload. Previously only module + warehouse scope
+    // were checked here and the stock:adjust permission was deferred until
+    // the confirm/record step — so an unauthorized or non-assignee user could
+    // still trigger the expensive AI call. Gate on the SAME rules as
+    // recordCount: permission + warehouse scope + assignee lock + open status.
+    assertPermission(this.ctx, 'stock:adjust');
     await this.assertSessionAccess(cycleCountId);
+    await this.assertAssignee(cycleCountId);
+    const { data: statusRow, error: sErr } = await this.ctx.supabase
+      .from('cycle_counts')
+      .select('status')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', cycleCountId)
+      .maybeSingle();
+    if (sErr) throw new ServiceError('internal_error', sErr.message);
+    if (!statusRow) throw new ServiceError('not_found', 'Cycle count not found.');
+    if ((statusRow as { status: string }).status !== 'in_progress') {
+      throw new ServiceError(
+        'conflict',
+        'This cycle count is closed — it can no longer be scanned.',
+      );
+    }
 
     const { data, error } = await this.ctx.supabase
       .from('cycle_count_lines')

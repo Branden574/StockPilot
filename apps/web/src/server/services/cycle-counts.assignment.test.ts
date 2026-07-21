@@ -4,6 +4,8 @@
 // allowing the assignee, an unassigned count, and a manager override.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
+
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 // Full warehouse access — isolate the assignee check from warehouse scoping.
@@ -105,5 +107,39 @@ describe('CycleCountsService.clearCount — assignee lock', () => {
       makeServiceContext(stub.client, { role: 'staff', userId: 'me' }),
     );
     await expect(svc.clearCount(clearInput)).resolves.toBeUndefined();
+  });
+});
+
+// AI Shelf Scan pre-flight gate: getLineSetForAiScan must enforce the same
+// assignee lock + open-status BEFORE the route spends a paid vision call.
+describe('CycleCountsService.getLineSetForAiScan — pre-flight authorization', () => {
+  const aiModules = new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'ai_shelf_scan']);
+
+  function aiStub(assignedTo: string | null, status = 'in_progress') {
+    return makeSupabaseStub({
+      'cycle_counts.select': {
+        data: { warehouse_id: 'wh-a', assigned_to: assignedTo, status },
+        error: null,
+      },
+    });
+  }
+
+  it('blocks a non-assignee staffer before any vision work', async () => {
+    const stub = aiStub('another-user');
+    const svc = new CycleCountsService(
+      makeServiceContext(stub.client, { role: 'staff', userId: 'me', enabledModules: aiModules }),
+    );
+    await expect(svc.getLineSetForAiScan('cc-1')).rejects.toMatchObject({
+      code: 'forbidden',
+      details: { reason: 'assigned_to_another_user' },
+    });
+  });
+
+  it('blocks a closed count (conflict) before any vision work', async () => {
+    const stub = aiStub('me', 'completed');
+    const svc = new CycleCountsService(
+      makeServiceContext(stub.client, { role: 'staff', userId: 'me', enabledModules: aiModules }),
+    );
+    await expect(svc.getLineSetForAiScan('cc-1')).rejects.toMatchObject({ code: 'conflict' });
   });
 });
