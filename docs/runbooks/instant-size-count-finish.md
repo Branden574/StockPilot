@@ -10,10 +10,13 @@ A working **manual per-vendor size counter**, review-only (it does **not** chang
 - **Mobile (OTA'd):** a "Size count" drawer item → start a count (optional vendor/reference) → live tap-to-count grid of the 9 sizes (tap +1, long-press −1, Undo) → Finish (locks the list). Counts queue through the offline outbox and sync idempotently.
 - **Enabled for:** Demo Co (`71b27a4a-7948-4638-bc3f-535974713bd2`).
 
+**Also live — the training capture tool (Step 1 of the camera track):** mig 0284 (`size_count_training_samples` + private `size-count-training` bucket, on prod) + `POST /api/v1/size-counts/training` + the mobile capture screen. Reached from **Size count → New → "Capture training photos"**: frame a sticker, tap its size (or "Not a sticker"), and it captures + labels + uploads the example. This is how you build the dataset.
+
 ### To use it now
 1. On your phone, **force-close and reopen** the app to pull the OTA.
 2. Switch workspace to **Demo Co** (or enable the module for your production org — see below).
-3. Open the drawer → **Size count** → **Start counting** → tap sizes as you go → **Finish**.
+3. **Count:** drawer → **Size count** → **Start counting** → tap sizes → **Finish**.
+4. **Capture training data:** drawer → **Size count** → **Capture training photos** → frame each sticker, tap its size (use "Not a sticker" for buttons/logos/neck tags). Aim for lots of variety (sizes, brands, wear, plastic, lighting, angles). This pile becomes the model's training set.
 
 ### To enable it for your production org
 Settings → Modules → Premium → toggle **Instant size count** on (as an admin of that org). That's the only step; the drawer item and API turn on immediately.
