@@ -2,12 +2,13 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
-import { sendEmail } from '@/lib/email/resend';
 import {
-  weeklyDigestHtml,
+  DIGEST_FROM,
+  renderWeeklyDigestHtml,
   weeklyDigestSubject,
   weeklyDigestText,
-} from '@/lib/email/templates';
+} from '@/lib/email/es/families/digest';
+import { sendEmail } from '@/lib/email/resend';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -77,6 +78,7 @@ export async function GET(req: Request) {
     type RecipientRow = {
       id: string;
       email: string;
+      full_name: string | null;
       digest_section_low_stock: boolean | null;
       digest_section_open_pos: boolean | null;
       digest_section_cycle_counts: boolean | null;
@@ -95,7 +97,7 @@ export async function GET(req: Request) {
         .from('user_profiles')
         .select(
           `
-        id, email,
+        id, email, full_name,
         digest_section_low_stock,
         digest_section_open_pos,
         digest_section_cycle_counts,
@@ -115,6 +117,7 @@ export async function GET(req: Request) {
     interface RecipientLite {
       userId: string;
       email: string;
+      name: string | null;
       sections: { lowStock: boolean; openPos: boolean; cycleCounts: boolean };
     }
 
@@ -143,7 +146,12 @@ export async function GET(req: Request) {
           recipients: [],
         };
         if (!existing.recipients.some((r) => r.userId === row.id)) {
-          existing.recipients.push({ userId: row.id, email: row.email, sections });
+          existing.recipients.push({
+            userId: row.id,
+            email: row.email,
+            name: row.full_name,
+            sections,
+          });
         }
         byOrg.set(orgRow.id, existing);
       }
@@ -161,7 +169,7 @@ export async function GET(req: Request) {
       try {
         const fullPayload = await getDigestData(admin, orgId);
         const opts = { orgName: group.orgName, appUrl, settingsUrl };
-        for (const { userId, email: to, sections } of group.recipients) {
+        for (const { userId, email: to, name, sections } of group.recipients) {
           // Re-check membership + opt-in IMMEDIATELY before sending.
           // The recipient set was assembled at the top of this run — for
           // a large fleet that gap can be tens of seconds. If the user
@@ -202,7 +210,11 @@ export async function GET(req: Request) {
             skipped += 1;
             continue;
           }
-          const html = weeklyDigestHtml(payload, opts);
+          const html = renderWeeklyDigestHtml(payload, {
+            ...opts,
+            recipientName: name,
+            now: runStartedAt,
+          });
           const text = weeklyDigestText(payload, opts);
           // RFC 8058 List-Unsubscribe header. Until a dedicated
           // one-click endpoint ships, point at the in-app settings
@@ -214,6 +226,7 @@ export async function GET(req: Request) {
             subject,
             html,
             text,
+            from: DIGEST_FROM,
             headers: {
               'List-Unsubscribe': `<${settingsUrl}>`,
             },
