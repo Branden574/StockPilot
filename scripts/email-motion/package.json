@@ -1,0 +1,6 @@
+{
+  "name": "email-motion-pipeline",
+  "private": true,
+  "type": "module",
+  "description": "Regenerates the email motion GIFs in apps/web/public/email/motion. See README.md."
+}
