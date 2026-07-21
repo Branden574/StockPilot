@@ -30,7 +30,7 @@ export type ModuleId =
   | 'books' | 'rentals' | 'bundles' | 'orders' | 'cycle_counts' | 'procedures'
   | 'purchase_orders' | 'receiving' | 'po_imports' | 'suppliers' | 'schedule' | 'ai' | 'public_requests'
   | 'integrations' | 'shipping' | 'returns' | 'planning' | 'b2b_portal'
-  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'api_access' | 'price_tracking' | 'live_tracking' | 'zendesk';
+  | 'lot_serial' | 'reports_advanced' | 'ai_shelf_scan' | 'instant_size_count' | 'api_access' | 'price_tracking' | 'live_tracking' | 'zendesk';
 
 export interface NavPlacement {
   surface: NavSurface;
@@ -694,6 +694,23 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     ownsTables: [],
     minPlan: 'business',
     defaultOnFor: ['charter_school'],
+    placements: [],
+  },
+  instant_size_count: {
+    id: 'instant_size_count',
+    tier: 'premium',
+    title: 'Instant size count',
+    // Async uncertain-crop review + supervisor summaries run through the AI
+    // seam; the real-time detector is on-device (see the Phase 0 spec).
+    dependsOn: ['ai'],
+    permissions: [],
+    surfaces: ['mobile'],
+    apiPrefixes: ['/api/v1/size-counts'],
+    ownsTables: ['size_count_sessions', 'size_count_events', 'size_count_adjustments'],
+    minPlan: 'business',
+    // Off by default everywhere — gated behind a TestFlight pilot until the
+    // on-device model is validated. Enable per-org when piloting.
+    defaultOnFor: [],
     placements: [],
   },
   api_access: {
