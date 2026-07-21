@@ -79,6 +79,13 @@ export default function NewSizeCountScreen() {
             onSubmitEditing={start}
           />
           {error ? <Text style={styles.error}>{error}</Text> : null}
+
+          <Pressable
+            onPress={() => router.push('/size-count/capture' as never)}
+            style={styles.captureLink}
+          >
+            <Text style={styles.captureLinkText}>Capture training photos →</Text>
+          </Pressable>
         </View>
 
         <View style={styles.footer}>
@@ -119,6 +126,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   error: { color: '#dc2626', fontSize: 13, marginTop: 12 },
+  captureLink: { marginTop: space.lg, paddingVertical: space.sm },
+  captureLinkText: { color: theme.primary, fontSize: 14, fontWeight: '600' },
   footer: { marginTop: 'auto', padding: space.md },
   startBtn: {
     minHeight: 52,

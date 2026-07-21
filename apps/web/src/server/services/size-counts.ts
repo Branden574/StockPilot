@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import {
@@ -199,6 +200,60 @@ export class SizeCountsService {
       this.ctx,
     );
     return data as unknown as SizeCountSessionRow;
+  }
+
+  /**
+   * Record one opt-in LABELED training sample (photo + ground-truth size, or
+   * NONE for a hard negative) into the private size-count-training bucket +
+   * the samples table. This is Step 1 of the on-device-model track — the
+   * dataset the detector trains on. Uploads via the service-role admin client
+   * (the request is already authorized here); the row insert runs on the
+   * user client so RLS (staff + captured_by=self) applies.
+   */
+  async recordTrainingSample(input: {
+    imageBytes: ArrayBuffer;
+    mimeType: string;
+    sizeLabel: string;
+    isNegative?: boolean;
+    metadata?: Record<string, unknown>;
+    deviceId?: string | null;
+  }): Promise<{ id: string }> {
+    assertModuleEnabled(this.ctx, 'instant_size_count');
+    assertPermission(this.ctx, 'stock:adjust');
+    const ext =
+      input.mimeType === 'image/webp'
+        ? 'webp'
+        : input.mimeType === 'image/png'
+          ? 'png'
+          : 'jpg';
+    const path = `${this.ctx.organizationId}/${crypto.randomUUID()}.${ext}`;
+    const admin = createAdminClient();
+    const { error: upErr } = await admin.storage
+      .from('size-count-training')
+      .upload(path, input.imageBytes, { contentType: input.mimeType, upsert: false });
+    if (upErr) throw new ServiceError('internal_error', upErr.message);
+
+    const { data, error } = await this.ctx.supabase
+      .from('size_count_training_samples')
+      .insert({
+        organization_id: this.ctx.organizationId,
+        captured_by: this.ctx.userId,
+        image_storage_path: path,
+        size_label: input.sizeLabel,
+        is_negative: input.isNegative ?? false,
+        metadata: input.metadata ?? {},
+        device_id: input.deviceId ?? null,
+      })
+      .select('id')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) {
+      // Orphaned upload — best-effort cleanup so a failed row insert doesn't
+      // leave a dangling training image.
+      await admin.storage.from('size-count-training').remove([path]);
+      throw new ServiceError('forbidden', 'Could not save the training sample.');
+    }
+    return { id: (data as { id: string }).id };
   }
 
   /** Session header + the per-size tally (SUM of quantity_delta by size). */
