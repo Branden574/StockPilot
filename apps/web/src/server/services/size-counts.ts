@@ -276,6 +276,88 @@ export class SizeCountsService {
     return { counts, total };
   }
 
+  /**
+   * List recent training samples with short-lived SIGNED image URLs so the
+   * mobile review grid can render the private-bucket thumbnails. Newest first,
+   * optionally filtered by size.
+   */
+  async listTrainingSamples(opts?: {
+    size?: string;
+    limit?: number;
+  }): Promise<
+    Array<{
+      id: string;
+      sizeLabel: string;
+      isNegative: boolean;
+      capturedAt: string;
+      url: string | null;
+    }>
+  > {
+    assertModuleEnabled(this.ctx, 'instant_size_count');
+    let q = this.ctx.supabase
+      .from('size_count_training_samples')
+      .select('id, size_label, is_negative, image_storage_path, captured_at')
+      .eq('organization_id', this.ctx.organizationId)
+      .order('captured_at', { ascending: false })
+      .limit(Math.min(opts?.limit ?? 80, 200));
+    if (opts?.size) q = q.eq('size_label', opts.size);
+    const { data, error } = await q;
+    if (error) throw new ServiceError('internal_error', error.message);
+    const rows = (data ?? []) as Array<{
+      id: string;
+      size_label: string;
+      is_negative: boolean;
+      image_storage_path: string;
+      captured_at: string;
+    }>;
+    if (rows.length === 0) return [];
+    const admin = createAdminClient();
+    const { data: signed } = await admin.storage
+      .from('size-count-training')
+      .createSignedUrls(rows.map((r) => r.image_storage_path), 3600);
+    const urlByPath = new Map<string, string>();
+    for (const s of signed ?? []) {
+      if (s.path && s.signedUrl) urlByPath.set(s.path, s.signedUrl);
+    }
+    return rows.map((r) => ({
+      id: r.id,
+      sizeLabel: r.size_label,
+      isNegative: r.is_negative,
+      capturedAt: r.captured_at,
+      url: urlByPath.get(r.image_storage_path) ?? null,
+    }));
+  }
+
+  /** Delete one training sample (row + its storage object). Manager-gated by
+   *  the 0284 RLS; a non-manager gets a clean forbidden. */
+  async deleteTrainingSample(id: string): Promise<void> {
+    assertModuleEnabled(this.ctx, 'instant_size_count');
+    const { data: row, error } = await this.ctx.supabase
+      .from('size_count_training_samples')
+      .select('image_storage_path')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Training sample not found.');
+    const path = (row as { image_storage_path: string }).image_storage_path;
+
+    const { data: del, error: dErr } = await this.ctx.supabase
+      .from('size_count_training_samples')
+      .delete()
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
+    if (dErr) throw new ServiceError('internal_error', dErr.message);
+    if (!del) {
+      throw new ServiceError('forbidden', 'Only a manager can delete training samples.');
+    }
+    // Row gone — best-effort remove the storage object.
+    const admin = createAdminClient();
+    await admin.storage.from('size-count-training').remove([path]);
+  }
+
   /** Session header + the per-size tally (SUM of quantity_delta by size). */
   async getSession(sessionId: string): Promise<{
     session: SizeCountSessionRow;

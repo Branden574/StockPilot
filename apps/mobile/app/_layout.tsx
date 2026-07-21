@@ -165,6 +165,7 @@ function RootGate() {
         <Stack.Screen name="size-count/new" options={{ presentation: 'card' }} />
         <Stack.Screen name="size-count/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="size-count/capture" options={{ presentation: 'card' }} />
+        <Stack.Screen name="size-count/review" options={{ presentation: 'card' }} />
         <Stack.Screen name="bundles/index" options={{ presentation: 'card' }} />
         <Stack.Screen name="bundles/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="rentals/new" options={{ presentation: 'card' }} />

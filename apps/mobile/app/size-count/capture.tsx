@@ -159,6 +159,9 @@ export default function TrainingCaptureScreen() {
               {total} saved{lastLabel ? ` · last: ${lastLabel === 'failed' ? 'retry' : lastLabel}` : ''}
             </Text>
           </View>
+          <Pressable onPress={() => router.push('/size-count/review' as never)} style={styles.reviewBtn}>
+            <Text style={styles.reviewText}>Review</Text>
+          </Pressable>
         </View>
 
         <View style={styles.hintWrap} pointerEvents="none">
@@ -213,6 +216,11 @@ const styles = StyleSheet.create({
   },
   closeBtn: { paddingVertical: 6, paddingHorizontal: 4 },
   closeText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  reviewBtn: {
+    paddingVertical: 6, paddingHorizontal: 12, borderRadius: radius.md,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.5)',
+  },
+  reviewText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   title: { color: '#fff', fontSize: 16, fontWeight: '700' },
   subtitle: { color: 'rgba(255,255,255,0.8)', fontSize: 12, marginTop: 1 },
   hintWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
