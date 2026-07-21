@@ -47,10 +47,13 @@ export default function CycleCountDetail() {
   const router = useRouter();
   // Counting + posting are WRITES (stock:adjust). A cycle_counts:read-only
   // viewer gets a read-only view: inputs frozen, no post footer — mirroring
-  // the web detail's canAdjust=false mode. Cosmetic (the API enforces
-  // server-side); while permissions load, entry stays enabled.
+  // the web detail's canAdjust=false mode. The API enforces server-side;
+  // while permissions load, entry stays enabled.
   const perms = useEffectivePermissions();
-  const canAdjust = showWriteCta(perms, 'stock:adjust');
+  const canWrite = showWriteCta(perms, 'stock:adjust');
+  // Manager+ proxy: only manager/admin/owner hold cycle_counts:assign, and the
+  // server 0282 lock lets managers override the assignee. Used below.
+  const canManage = showWriteCta(perms, 'cycle_counts:assign');
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const syncSnapshot = useSyncStatus();
@@ -60,6 +63,16 @@ export default function CycleCountDetail() {
   const [lines, setLines] = React.useState<UiLine[]>([]);
   const [draft, setDraft] = React.useState<Record<string, string>>({});
   const [loading, setLoading] = React.useState(true);
+
+  // Assignee lock (mirrors the server 0282 RLS + service guard): a count
+  // assigned to another employee is READ-ONLY here for a non-manager —
+  // inputs frozen and the Scan / AI Scan entry points hidden — so the count
+  // screen matches what the server will actually allow. Unassigned counts
+  // stay open (parity with the RLS `assigned_to IS NULL` predicate). Managers
+  // override. Header not loaded yet → treat as writable so first paint isn't
+  // wrongly frozen; the write itself is still server-enforced.
+  const isAssignee = !header?.assignedTo || header.assignedTo === user?.id;
+  const canAdjust = canWrite && (isAssignee || canManage);
   const [posting, setPosting] = React.useState(false);
   const [pendingForThis, setPendingForThis] = React.useState(0);
   const [emptyState, setEmptyState] = React.useState<'none' | 'offline-uncached'>('none');
@@ -110,6 +123,7 @@ export default function CycleCountDetail() {
         .from('cycle_counts')
         .select(
           `id, organization_id, status, started_at, completed_at, warehouse_id,
+           assigned_to,
            warehouse:warehouses!warehouse_id (name)`,
         )
         .eq('organization_id', orgId)
@@ -144,6 +158,7 @@ export default function CycleCountDetail() {
       status: (ccRow.status as string | null) ?? 'in_progress',
       startedAt: (ccRow.started_at as string | null) ?? new Date().toISOString(),
       postedAt: (ccRow.completed_at as string | null) ?? null,
+      assignedTo: (ccRow.assigned_to as string | null) ?? null,
     };
 
     const fetchedLines = ((lineRows ?? []) as Array<Record<string, unknown>>).map((r) => {
@@ -365,7 +380,7 @@ export default function CycleCountDetail() {
               {header?.warehouseName ?? '—'} · {countedCount}/{lines.length} counted
             </Text>
           </View>
-          {header && (
+          {header && canAdjust && isOpen ? (
             <View style={{ flexDirection: 'row', gap: space.xs }}>
               <Pressable
                 onPress={() => router.push(`/cycle-count/ai-scan/${header.id}`)}
@@ -380,7 +395,9 @@ export default function CycleCountDetail() {
                 <Text style={styles.scanBtnLabel}>Scan</Text>
               </Pressable>
             </View>
-          )}
+          ) : header && isOpen && !isAssignee && !canManage ? (
+            <Text style={styles.lockedNote}>Assigned to another employee</Text>
+          ) : null}
         </View>
         <View style={styles.badgeRow}>
           <SyncStatusBadge />
@@ -545,6 +562,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#7c3aed',
   },
   scanBtnLabel: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  lockedNote: {
+    color: theme.textMuted,
+    fontSize: 12,
+    fontStyle: 'italic',
+    maxWidth: 140,
+    textAlign: 'right',
+  },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xl },
   card: {
     flexDirection: 'row',

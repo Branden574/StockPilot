@@ -22,6 +22,10 @@ export interface CachedCycleCountHeader {
   status: string;
   startedAt: string;
   postedAt: string | null;
+  /** Manager-set assignee (null = unassigned). Drives the read-only gate so a
+   *  non-assignee sees the count read-only, mirroring the server 0282 lock.
+   *  Optional for back-compat with cache entries written before this field. */
+  assignedTo?: string | null;
   cachedAt: number;
 }
 
