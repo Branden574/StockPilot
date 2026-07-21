@@ -3,8 +3,8 @@
 // Storefront root for /dashboard/orders/new. Owns catalog UI state,
 // the order-setup bar, the sticky toolbar, category sections, the
 // frequently-ordered carousel, and the review → submit → success flow.
-// Cart state + draft persistence come verbatim from the v2 cart
-// context; the submit payload matches v2/cart-rail.tsx exactly.
+// Cart state + draft persistence come from the shared v2 cart
+// context (components/orders/v2/cart-context.tsx).
 //
 // STREAMING: the page passes the catalog as an un-awaited promise so
 // the frame (head, flow indicator, setup bar) flushes immediately;
@@ -108,7 +108,7 @@ export function OrdersStorefront(props: OrdersStorefrontProps) {
   );
 }
 
-/* ---- frequently-ordered fetch (shape mirrors v2/quick-add.tsx) ---------- */
+/* ---- frequently-ordered fetch (GET /api/orders/freq) -------------------- */
 
 interface FreqApiItem {
   itemId: string;
@@ -734,7 +734,7 @@ function StorefrontCatalog({
 
   const railRef = React.useRef<HTMLDivElement>(null);
 
-  /* --- submit (payload + validation identical to v2/cart-rail.tsx) --- */
+  /* --- submit (createOrderRequestAction payload + validation) --- */
   function handleConfirmSubmit() {
     const lines = state.lines;
     if (lines.length === 0) {
