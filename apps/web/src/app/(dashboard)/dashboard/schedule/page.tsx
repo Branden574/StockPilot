@@ -26,13 +26,16 @@ export default async function SchedulePage({
   if (!moduleAccess.enabled) {
     return <ModuleNotEnabled moduleId="schedule" canManage={moduleAccess.canManage} />;
   }
-  // Schedule is manager+ — viewers can't add events and don't see the
-  // surface. Sidebar already filters this out for them; redirect on
-  // direct URL access.
+  // Visibility gates on schedule:read (manager+ by default, grantable to
+  // read-only members). schedule:manage holders keep access even if an org
+  // revokes the read perm from a managing role. Adding/editing events stays
+  // gated on schedule:manage (page gates on /new + /[id]/edit, plus the
+  // calendar's canManage prop below).
   const ctx = await requireOrgContext();
-  if (!can(ctx, 'schedule:manage')) {
+  if (!can(ctx, 'schedule:read') && !can(ctx, 'schedule:manage')) {
     redirect('/dashboard');
   }
+  const canManage = can(ctx, 'schedule:manage');
   const params = await searchParams;
   const today = new Date();
   let year = today.getFullYear();
@@ -84,12 +87,18 @@ export default async function SchedulePage({
           <p className="text-muted-foreground mt-1 text-[13.5px]">
             Jobs, deliveries, pickups, drops — anything time + location based.
             Each event is scoped to its warehouse: only staff assigned to
-            that warehouse can see it. Click a date to add an event.
+            that warehouse can see it.
+            {canManage ? ' Click a date to add an event.' : ''}
           </p>
         </div>
       </div>
 
-      <ScheduleCalendar year={year} month={month} events={calendarEvents} />
+      <ScheduleCalendar
+        year={year}
+        month={month}
+        events={calendarEvents}
+        canManage={canManage}
+      />
     </div>
   );
 }

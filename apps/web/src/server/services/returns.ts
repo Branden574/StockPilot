@@ -3,6 +3,8 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 
+import { can } from '@stockpilot/core';
+
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
@@ -48,10 +50,11 @@ import {
  *     transaction as the stock write. The disposition can therefore never be
  *     applied twice.
  *
- * Gating: every method asserts the 'returns' module is enabled AND the caller
- * holds 'returns:manage' (owner + admin + manager). Reads are gated the same
- * way (the module is off-by-default, so a member of an org without returns
- * should not even enumerate them).
+ * Gating: every method asserts the 'returns' module is enabled. Writes (and
+ * the create-flow read returnableLinesForOrder) additionally require
+ * 'returns:manage' (owner + admin + manager). The pure reads (list / get)
+ * accept the grantable 'returns:read' as well, so a read-only member (e.g.
+ * an auditor viewer) can view returns without being able to move stock.
  */
 
 /** Return lifecycle status (mirrors the 0153 returns.status CHECK). */
@@ -235,16 +238,32 @@ export class RMAService {
     return new RMAService(ctx);
   }
 
-  /** Both gates, applied at the top of every method. */
+  /** Both gates, applied at the top of every WRITE (and write-flow read). */
   private gate() {
     assertModuleEnabled(this.ctx, 'returns');
     assertPermission(this.ctx, 'returns:manage');
   }
 
+  /**
+   * Read gate: module on + returns:read OR returns:manage. The pure reads
+   * (list / get) accept the grantable read permission so a read-only member
+   * (e.g. an auditor viewer granted returns:read) can view returns; manage
+   * holders always pass so write flows keep reading even if an org revokes
+   * the read perm from a managing role. assertPermission also applies the
+   * org MFA floor, identical to the write gate.
+   */
+  private gateRead() {
+    assertModuleEnabled(this.ctx, 'returns');
+    assertPermission(
+      this.ctx,
+      can(this.ctx, 'returns:manage') ? 'returns:manage' : 'returns:read',
+    );
+  }
+
   // ── Reads ────────────────────────────────────────────────────────────
 
   async list(filters: ListReturnsFilters = {}): Promise<ReturnRow[]> {
-    this.gate();
+    this.gateRead();
 
     let query = this.ctx.supabase
       .from('returns')
@@ -266,7 +285,7 @@ export class RMAService {
   }
 
   async get(id: string): Promise<ReturnWithLines> {
-    this.gate();
+    this.gateRead();
 
     const { data: header, error: headerError } = await this.ctx.supabase
       .from('returns')

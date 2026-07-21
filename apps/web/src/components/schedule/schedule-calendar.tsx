@@ -24,6 +24,12 @@ interface Props {
   year: number;
   month: number;
   events: CalendarEvent[];
+  /** Whether the current user holds schedule:manage. When false (a read-only
+      grantee of schedule:read), every add-event affordance — the "+ New
+      event" header button and the per-day "+ Add" links — is hidden.
+      Defaults to false (fail closed); the server page passes the real
+      value. */
+  canManage?: boolean;
 }
 
 const WEEK_HEADERS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -74,7 +80,7 @@ function ymd(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-export function ScheduleCalendar({ year, month, events }: Props) {
+export function ScheduleCalendar({ year, month, events, canManage = false }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -151,9 +157,11 @@ export function ScheduleCalendar({ year, month, events }: Props) {
         <h2 className="font-display text-[20px] font-medium tracking-tight">
           {formatHeader(year, month)}
         </h2>
-        <Button asChild variant="gradient" size="sm">
-          <Link href="/dashboard/schedule/new">+ New event</Link>
-        </Button>
+        {canManage && (
+          <Button asChild variant="gradient" size="sm">
+            <Link href="/dashboard/schedule/new">+ New event</Link>
+          </Button>
+        )}
       </div>
 
       <div className="border-border bg-card overflow-hidden rounded-xl border">
@@ -197,13 +205,15 @@ export function ScheduleCalendar({ year, month, events }: Props) {
                   >
                     {d.getDate()}
                   </span>
-                  <Link
-                    href={`/dashboard/schedule/new?date=${ymd(d)}`}
-                    className="text-muted-foreground hover:text-foreground text-[10px] opacity-0 transition group-hover:opacity-100"
-                    aria-label={`Add event on ${ymd(d)}`}
-                  >
-                    + Add
-                  </Link>
+                  {canManage && (
+                    <Link
+                      href={`/dashboard/schedule/new?date=${ymd(d)}`}
+                      className="text-muted-foreground hover:text-foreground text-[10px] opacity-0 transition group-hover:opacity-100"
+                      aria-label={`Add event on ${ymd(d)}`}
+                    >
+                      + Add
+                    </Link>
+                  )}
                 </div>
                 <div className="mt-1 space-y-1">
                   {visible.map((ev) => {
