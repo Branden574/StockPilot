@@ -618,7 +618,11 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
       `Due ${p.due} — ${p.overdueFor} ago. Others are waiting on this equipment.`,
     badge: {
       variant: 'err',
-      label: (p: { overdueDays: number }) => `Overdue · ${p.overdueDays} days`,
+      // Owner-approved amendment 2026-07-20: the design's verbatim builder
+      // said "· N days" flat, but 1 day is the COMMON case (the cron nudges
+      // on the first overdue day) and "Overdue · 1 days" led the email.
+      label: (p: { overdueDays: number }) =>
+        `Overdue · ${p.overdueDays} ${p.overdueDays === 1 ? 'day' : 'days'}`,
     },
     cta: 'Review rental',
     cta2: 'Contact equipment desk',

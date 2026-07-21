@@ -432,8 +432,8 @@ export function renderRentalOverdue(p: RentalOverdueParams): RenderedRentalEmail
       '36px 36px 24px',
       `${statusPill({
         variant: def.badge.variant,
-        // Registry badge builder is normative ("Overdue · N days") — the
-        // "1 days" singular is a registry nit flagged for the owner.
+        // Registry badge builder pluralizes ("1 day" / "N days") since the
+        // owner-approved amendment 2026-07-20.
         label: def.badge.label({ overdueDays: p.overdueDays }),
       })}
       ${headline({

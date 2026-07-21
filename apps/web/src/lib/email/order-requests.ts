@@ -90,10 +90,10 @@ const REGISTRY_ID_BY_KIND: Record<OrderRequestEmailKind, string> = {
   confirm_request: 'confirm',
   approved: 'approved',
   denied: 'denied',
-  // LATENT: dispatch decision pending (see policy audit). Nothing in the
-  // codebase dispatches these two kinds; the templates exist and render,
-  // but sendOrderRequestEmail refuses to send them unless the
-  // ES_LATENT_ORDER_EMAILS flag is set (see the guard in the entry).
+  // LIVE since the 2026-07-20 owner decision: dispatched from the
+  // service's packing-slip + delivery-staging transitions. The
+  // ES_LATENT_ORDER_EMAILS=0 env kill-switch (guard in the entry) can
+  // silence them without a deploy.
   packing_slip_generated: 'packing',
   staged_for_delivery: 'staged',
   in_transit: 'transit',
@@ -1157,14 +1157,13 @@ export async function sendOrderRequestEmail(input: SendInput): Promise<void> {
     );
   }
 
-  // LATENT: dispatch decision pending (see policy audit). The packing +
-  // staged templates are fully designed and render (their tests exercise
-  // them with the flag set), but NOTHING may dispatch them until product
-  // decides — this guard keeps a future caller from flipping them on by
-  // accident. Fail-closed: skip, loudly.
-  if (LATENT_KINDS.has(kind) && process.env.ES_LATENT_ORDER_EMAILS !== '1') {
+  // Owner decision 2026-07-20: the packing + staged emails are LIVE by
+  // default (dispatched from the service's packing-slip and delivery-
+  // staging transitions). ES_LATENT_ORDER_EMAILS=0 remains as an env
+  // kill-switch to silence them without a deploy.
+  if (LATENT_KINDS.has(kind) && process.env.ES_LATENT_ORDER_EMAILS === '0') {
     console.warn(
-      `[order-requests] email kind "${kind}" is LATENT (dispatch decision pending) — skipping send. Set ES_LATENT_ORDER_EMAILS=1 only after the policy decision.`,
+      `[order-requests] email kind "${kind}" suppressed by the ES_LATENT_ORDER_EMAILS=0 kill-switch.`,
     );
     return;
   }

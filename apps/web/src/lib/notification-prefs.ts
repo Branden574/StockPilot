@@ -7,10 +7,10 @@
  * only export async functions, found object" during page collection.
  */
 
+// email_low_stock / email_po_status / email_team_invites removed 2026-07-20
+// (owner decision): dead toggles — no send path ever read them. Their DB
+// columns (0002) stay in place, just unread/unwritten; no migration needed.
 export const NOTIFICATION_PREF_KEYS = [
-  'email_low_stock',
-  'email_po_status',
-  'email_team_invites',
   'push_low_stock',
   'push_po_status',
   'push_stock_transfer',

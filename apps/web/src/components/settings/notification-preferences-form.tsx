@@ -25,25 +25,12 @@ interface ToggleDef {
  * here AND to `NOTIFICATION_PREF_KEYS` in the action module so the
  * full set stays in lockstep.
  */
+// email_low_stock / email_po_status / email_team_invites were removed
+// 2026-07-20 (owner decision): no send path ever read them — low-stock and
+// PO state live in the weekly digest, and invite emails are transactional
+// (the recipient isn't a member yet, so a preference can't apply). Their
+// DB columns remain, just unread.
 const TOGGLE_DEFS: ToggleDef[] = [
-  {
-    key: 'email_low_stock',
-    label: 'Low / out of stock',
-    hint: 'Email when an item drops to or below its reorder point.',
-    group: 'email',
-  },
-  {
-    key: 'email_po_status',
-    label: 'Purchase order status',
-    hint: 'Email when a PO moves between draft, ordered, partial, and received.',
-    group: 'email',
-  },
-  {
-    key: 'email_team_invites',
-    label: 'Team invites',
-    hint: 'Email when someone invites you to a workspace or your role changes.',
-    group: 'email',
-  },
   {
     key: 'push_low_stock',
     label: 'Low / out of stock',

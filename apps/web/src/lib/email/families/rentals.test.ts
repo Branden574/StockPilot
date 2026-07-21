@@ -242,14 +242,14 @@ describe('rental-overdue', () => {
     assertNoLeakage(html);
   });
 
-  it('day-count math comes from params (1 day renders singular copy this module owns)', () => {
+  it('day-count math comes from params (1 day renders singular copy everywhere)', () => {
     const { html } = renderRentalOverdue({ ...OVERDUE, overdueDays: 1 });
     expect(html).toContain('That was 1 day ago.');
     expect(html).toContain('— 1 day ago.'); // preheader overdueFor
-    // The registry badge builder is normative and interpolates the raw
-    // number ("Overdue · 1 days") — flagged as a registry nit, asserted
-    // here so a silent "fix" of normative copy gets noticed.
-    expect(html).toContain('Overdue · 1 days');
+    // Registry badge builder pluralizes since the owner-approved amendment
+    // (2026-07-20) — 1 day is the common case (cron nudges on day one).
+    expect(html).toContain('Overdue · 1 day');
+    expect(html).not.toContain('Overdue · 1 days');
   });
 
   it('templates are deterministic — no Date.now/new Date in the family code', () => {

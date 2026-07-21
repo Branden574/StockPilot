@@ -342,7 +342,9 @@ describe('sendOrderRequestEmail — es-layer rendering', () => {
     }
   });
 
-  it('latent kinds are fail-closed: no send without ES_LATENT_ORDER_EMAILS', async () => {
+  it('packing/staged send by default; ES_LATENT_ORDER_EMAILS=0 is the kill-switch', async () => {
+    // Owner decision 2026-07-20: live by default.
+    vi.stubEnv('ES_LATENT_ORDER_EMAILS', '0');
     for (const kind of LATENT_KINDS) {
       wireFullAdmin();
       await sendOrderRequestEmail({
@@ -354,11 +356,19 @@ describe('sendOrderRequestEmail — es-layer rendering', () => {
       });
     }
     expect(sendEmailMock).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+    wireFullAdmin();
+    await sendOrderRequestEmail({
+      kind: 'packing_slip_generated',
+      request: makeRow(),
+      recipientEmail: EMAIL,
+      recipientName: 'Jane Teacher',
+      appUrl: APP_URL,
+    });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
   });
 
-  it('latent templates render fully behind the flag (packing scanner, staged pin)', async () => {
-    vi.stubEnv('ES_LATENT_ORDER_EMAILS', '1');
-
+  it('packing scanner + staged pin templates render fully (live by default)', async () => {
     wireFullAdmin();
     const packing = await send('packing_slip_generated');
     expect(packing.html).toContain('motion/scanner@2x.gif');

@@ -18,6 +18,7 @@ import {
   heroSlot,
   infoCard,
   kpiGrid,
+  FOOTER_STACK_BLOCK,
   linkFallback,
   LOGO_SWAP_BLOCK,
   ogscBlock,
@@ -62,13 +63,16 @@ function normalize(html: string): string {
 
 /**
  * Remove the additive blocks before diffing against the archetype: the
- * Outlook.com [data-ogsc] duplicates and the light/dark logo swap rules
- * (both prompt-mandated on top of the archetype markup).
+ * Outlook.com [data-ogsc] duplicates, the light/dark logo swap rules, and
+ * the mobile footer-strip stack (all production additions on top of the
+ * archetype markup — the `fstrip` class is the strip's only markup hook).
  */
 function stripOgsc(html: string, styles: EmailShellStyles): string {
   return html
     .replace(`${ogscBlock(styles)}\n`, '')
-    .replace(`${LOGO_SWAP_BLOCK}\n`, '');
+    .replace(`${LOGO_SWAP_BLOCK}\n`, '')
+    .replace(`${FOOTER_STACK_BLOCK}\n`, '')
+    .replace(/ class="fstrip"/g, '');
 }
 
 function extractBlock(html: string, startMarker: string): string {

@@ -179,29 +179,47 @@ describe('createSupportTicket wire-level send', () => {
       pageUrl: TICKET.pageUrl,
     });
 
-    // notifySupport is fire-and-forget; wait for the send.
-    await vi.waitFor(() => expect(sendEmailMock).toHaveBeenCalledTimes(1));
-    const args = sendEmailMock.mock.calls[0]![0];
-    expect(args.to).toBe('hello@stockpilotusa.com');
-    expect(args.from).toBe('StockPilot Support <tickets@stockpilotusa.com>');
-    expect(args.replyTo).toBe('dana@meridiansupply.example');
-    expect(args.subject).toBe(
+    // Both sends are fire-and-forget: the internal triage notification AND
+    // (owner decision 2026-07-20) the submitter acknowledgment.
+    await vi.waitFor(() => expect(sendEmailMock).toHaveBeenCalledTimes(2));
+    type SendArgs = {
+      to: string; from?: string; replyTo?: string; subject: string;
+      html: string; text?: string;
+    };
+    const calls = sendEmailMock.mock.calls.map((c) => c[0] as SendArgs);
+    const triage = calls.find((c) => c.to === 'hello@stockpilotusa.com');
+    expect(triage).toBeDefined();
+    expect(triage!.from).toBe('StockPilot Support <tickets@stockpilotusa.com>');
+    expect(triage!.replyTo).toBe('dana@meridiansupply.example');
+    expect(triage!.subject).toBe(
       '[StockPilot support] Barcode labels misprinting from bulk export',
     );
-    expect(args.html).toContain(
+    expect(triage!.html).toContain(
       'Internal support notification — not customer-facing',
     );
     // The classic text part rides along unchanged.
-    expect(args.text).toContain('New support ticket — high priority · bug');
+    expect(triage!.text).toContain('New support ticket — high priority · bug');
+
+    // Submitter acknowledgment: support@ sender, human ticket ref, replies
+    // routed to the MONITORED inbox.
+    const ack = calls.find((c) => c.to === 'dana@meridiansupply.example');
+    expect(ack).toBeDefined();
+    expect(ack!.from).toBe('StockPilot Support <support@stockpilotusa.com>');
+    expect(ack!.replyTo).toBe('hello@stockpilotusa.com');
+    expect(ack!.subject).toBe(
+      'We got your request — Barcode labels misprinting from bulk export',
+    );
+    expect(ack!.html).toContain('SUP-A1B2C3D4');
+    expect(ack!.html).not.toContain('a1b2c3d4-0000');
   });
 });
 
-// ── Concepts — behind the disabled flag, never dispatched ───────────
+// ── Concepts — LIVE since the 2026-07-20 owner decision ─────────────
 
 describe('concept emails (support-received / support-resolved)', () => {
-  it('are registry concepts behind a disabled flag whose guard throws', () => {
-    expect(ES_CONCEPT_EMAILS_ENABLED).toBe(false);
-    expect(() => assertConceptEmailsEnabled()).toThrow(/concept emails/);
+  it('are enabled (owner decision 2026-07-20) and the guard passes', () => {
+    expect(ES_CONCEPT_EMAILS_ENABLED).toBe(true);
+    expect(() => assertConceptEmailsEnabled()).not.toThrow();
     expect(esEmailById('support-received').status).toBe('concept');
     expect(esEmailById('support-resolved').status).toBe('concept');
     expect(SUPPORT_CONCEPT_FROM).toBe(
@@ -259,9 +277,13 @@ describe('concept emails (support-received / support-resolved)', () => {
     expect(html).not.toMatch(/\bundefined\b/);
   });
 
-  it('has NO production call site — nothing outside this family references them', () => {
+  it('is dispatched ONLY from the support-tickets service (owner decision 2026-07-20)', () => {
     const SRC_ROOT = path.resolve(__dirname, '../../../..');
     const FAMILY_FILE = path.resolve(__dirname, 'support.ts');
+    const DISPATCH_FILE = path.resolve(
+      __dirname,
+      '../../../../server/services/support-tickets.ts',
+    );
     const NEEDLES = [
       'renderSupportReceivedEmailHtml',
       'renderSupportResolvedEmailHtml',
@@ -284,6 +306,9 @@ describe('concept emails (support-received / support-resolved)', () => {
       }
     };
     walk(SRC_ROOT);
-    expect(offenders).toEqual([]);
+    // The single sanctioned dispatch site; its sends call the guard.
+    expect(offenders).toEqual([DISPATCH_FILE]);
+    const dispatch = readFileSync(DISPATCH_FILE, 'utf8');
+    expect(dispatch).toContain('assertConceptEmailsEnabled()');
   });
 });

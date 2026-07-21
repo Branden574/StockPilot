@@ -1,8 +1,14 @@
 import 'server-only';
 
 import {
+  SUPPORT_CONCEPT_FROM,
   SUPPORT_TICKET_FROM,
+  assertConceptEmailsEnabled,
+  renderSupportReceivedEmailHtml,
+  renderSupportResolvedEmailHtml,
   renderSupportTicketEmailHtml,
+  supportReceivedSubject,
+  supportResolvedSubject,
   supportTicketSubject,
 } from '@/lib/email/es/families/support';
 import { sendEmail } from '@/lib/email/resend';
@@ -114,7 +120,76 @@ export async function createSupportTicket(input: CreateSupportTicketInput): Prom
   void notifySupport({ ...input, id }).catch((e) =>
     reportError(e, { tag: 'support-tickets.notify', extra: { id } }),
   );
+  // Owner decision 2026-07-20: the support-received concept is LIVE — a
+  // one-time acknowledgment to the submitter. Best-effort like the triage
+  // notification.
+  void sendSubmitterAck({ ...input, id }).catch((e) =>
+    reportError(e, { tag: 'support-tickets.ack', extra: { id } }),
+  );
   return { id };
+}
+
+/** Human ticket reference for submitter-facing emails (never a raw UUID). */
+function ticketRef(id: string): string {
+  return `SUP-${id.slice(0, 8).toUpperCase()}`;
+}
+
+function firstNameOf(name: string | null | undefined): string | null {
+  return name?.trim().split(/\s+/)[0] || null;
+}
+
+/** First-response expectation shown in the acknowledgment, per priority. */
+const ACK_SLA: Record<TicketPriority, string> = {
+  urgent: '4 business hours',
+  high: '4 business hours',
+  normal: '1 business day',
+  low: '2 business days',
+};
+
+async function sendSubmitterAck(t: CreateSupportTicketInput & { id: string }): Promise<void> {
+  assertConceptEmailsEnabled();
+  const ref = ticketRef(t.id);
+  const priority = t.priority ?? 'normal';
+  const sla = ACK_SLA[priority];
+  const submittedAt = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/Los_Angeles',
+  }).format(new Date());
+  const subject = t.subject.trim().slice(0, 200);
+  const html = renderSupportReceivedEmailHtml({
+    firstName: firstNameOf(t.name),
+    email: t.email,
+    subject,
+    ticketRef: ref,
+    priority,
+    submittedAt,
+    sla,
+    ticketUrl: `${SITE_URL}/dashboard/support`,
+    supportUrl: `${SITE_URL}/dashboard/support`,
+  });
+  const text = [
+    `We got your request — it's logged as ${ref}.`,
+    '',
+    `Subject: ${subject}`,
+    `Priority: ${priority}`,
+    `Typical first response: within ${sla}.`,
+    '',
+    `Track it: ${SITE_URL}/dashboard/support`,
+    'Add screenshots or details any time by replying to this email.',
+  ].join('\n');
+  await sendEmail({
+    to: t.email,
+    subject: supportReceivedSubject(subject),
+    html,
+    text,
+    from: SUPPORT_CONCEPT_FROM,
+    // Replies must reach the MONITORED inbox — the registry's "replies
+    // append to the ticket" routing, not the unmonitored sender address.
+    replyTo: SUPPORT_EMAIL,
+  });
 }
 
 async function notifySupport(t: CreateSupportTicketInput & { id: string }): Promise<void> {
@@ -222,6 +297,18 @@ export async function updateSupportTicket(
   id: string,
   patch: { status?: TicketStatus; priority?: TicketPriority; adminNotes?: string | null },
 ): Promise<void> {
+  const admin = createAdminClient();
+  // Prior state decides whether this update CROSSES into resolved — the
+  // submitter gets the resolution notice at most once per crossing (a
+  // re-save while already resolved must not resend it).
+  const { data: before, error: readErr } = await admin
+    .from('support_tickets')
+    .select('status, email, name, subject')
+    .eq('id', id)
+    .maybeSingle();
+  if (readErr) throw new Error(`support_tickets read: ${readErr.message}`);
+  if (!before) throw new Error('support_tickets update: ticket not found');
+
   const upd: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (patch.status) {
     upd.status = patch.status;
@@ -231,7 +318,70 @@ export async function updateSupportTicket(
   if (patch.priority) upd.priority = patch.priority;
   if (patch.adminNotes !== undefined) upd.admin_notes = patch.adminNotes?.trim() || null;
 
-  const admin = createAdminClient();
   const { error } = await admin.from('support_tickets').update(upd).eq('id', id);
   if (error) throw new Error(`support_tickets update: ${error.message}`);
+
+  // Owner decision 2026-07-20: the support-resolved concept is LIVE.
+  // Fires only on the open/in_progress -> resolved crossing; best-effort.
+  const b = before as { status: TicketStatus; email: string; name: string | null; subject: string };
+  if (patch.status === 'resolved' && b.status !== 'resolved' && b.status !== 'closed') {
+    void sendResolvedNotice(id, b).catch((e) =>
+      reportError(e, { tag: 'support-tickets.resolved', extra: { id } }),
+    );
+  }
+}
+
+async function sendResolvedNotice(
+  id: string,
+  t: { email: string; name: string | null; subject: string },
+): Promise<void> {
+  assertConceptEmailsEnabled();
+  const ref = ticketRef(id);
+  const now = new Date();
+  const closedOn = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'America/Los_Angeles',
+  }).format(now);
+  const resolvedLine = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'America/Los_Angeles',
+  }).format(now);
+  const subject = t.subject.trim();
+  // Headline summary stays short; the full subject rides the detail row.
+  const summary = subject.length > 48 ? `${subject.slice(0, 45).trimEnd()}…` : subject;
+  const reopenWindow = '7 days';
+  const html = renderSupportResolvedEmailHtml({
+    firstName: firstNameOf(t.name),
+    email: t.email,
+    subject,
+    summary,
+    ticketRef: ref,
+    closedOn,
+    resolvedLine,
+    reopenWindow,
+    // adminNotes is an INTERNAL field — never forwarded to the submitter.
+    resolutionNote: 'the team has resolved this ticket — thanks for the report.',
+    resolutionUrl: `${SITE_URL}/dashboard/support`,
+    supportUrl: `${SITE_URL}/dashboard/support`,
+  });
+  const text = [
+    `${ref} is resolved — thanks for the report.`,
+    '',
+    `Subject: ${subject}`,
+    `Resolved: ${resolvedLine}`,
+    '',
+    `Still seeing it? Reply within ${reopenWindow} and the ticket reopens with full history.`,
+    `Ticket history: ${SITE_URL}/dashboard/support`,
+  ].join('\n');
+  await sendEmail({
+    to: t.email,
+    subject: supportResolvedSubject(subject),
+    html,
+    text,
+    from: SUPPORT_CONCEPT_FROM,
+    replyTo: SUPPORT_EMAIL,
+  });
 }

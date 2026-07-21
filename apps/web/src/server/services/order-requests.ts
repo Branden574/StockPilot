@@ -1736,6 +1736,10 @@ export class OrderRequestsService {
       orderNumber: formatOrderNumber((updated as OrderRequestRow).order_number) ?? id.slice(0, 8).toUpperCase(),
       status: 'packing_slip_generated',
     });
+    // Owner decision 2026-07-20: the formerly-latent "being packaged" email
+    // is live (requires ES_LATENT_ORDER_EMAILS=1 — sendOrderRequestEmail
+    // fails closed without it). Honors email_order_status_changed prefs.
+    void this.notifyEmail(updated as OrderRequestRow, 'packing_slip_generated');
     return updated as OrderRequestRow;
   }
 
@@ -1822,6 +1826,13 @@ export class OrderRequestsService {
       orderNumber: formatOrderNumber((updated as OrderRequestRow).order_number) ?? id.slice(0, 8).toUpperCase(),
       status: target,
     });
+    // Owner decision 2026-07-20: the formerly-latent "is ready" email is
+    // live for DELIVERY staging (the template's pin-on-the-dock-line design
+    // is delivery-shaped; pickup staging stays email-free). Fails closed
+    // without ES_LATENT_ORDER_EMAILS=1.
+    if (target === 'staged_for_delivery') {
+      void this.notifyEmail(updated as OrderRequestRow, 'staged_for_delivery');
+    }
     return updated as OrderRequestRow;
   }
 

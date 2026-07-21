@@ -210,6 +210,20 @@ export const LOGO_SWAP_BLOCK = [
   '  [data-ogsc] .logo-light{display:none!important}',
 ].join('\n');
 
+/**
+ * FLAG: additive like LOGO_SWAP_BLOCK. At 375px the footer's bottom mono
+ * strip ("StockPilot · Inventory + Order Mgmt" | "stockpilotusa.com")
+ * collides mid-wrap; on mobile the two cells stack left-aligned instead.
+ * The archetype fidelity test strips this block (and the `fstrip` class
+ * hook) the same way it strips ogsc.
+ */
+export const FOOTER_STACK_BLOCK = [
+  '  @media (max-width:620px){',
+  '    .fstrip td{display:block!important;width:100%!important;text-align:left!important}',
+  '    .fstrip td+td{padding-top:2px}',
+  '  }',
+].join('\n');
+
 // ── email-shell ─────────────────────────────────────────────────────
 
 export interface EmailShellOptions {
@@ -253,6 +267,7 @@ export function emailShell({
 ${mobileBlock(styles.mobileExtras)}
 ${darkBlock(styles)}
 ${LOGO_SWAP_BLOCK}
+${FOOTER_STACK_BLOCK}
 ${ogscBlock(styles)}
 </style>
 </head>
@@ -1096,7 +1111,7 @@ export function footer({ kind, reasonHtml, note, urls = {} }: FooterOptions): st
       ${intBadge}<div class="ink4" style="font-size:11px;color:${L.ink4};line-height:1.6">${reason}</div>
       <div style="margin-top:8px;font-size:11px">${links}</div>
       <div class="ink4" style="margin-top:10px;padding-top:10px;border-top:1px solid ${L.hair};font-family:${ES_MONO_INLINE};font-size:9.5px;letter-spacing:0.18em;text-transform:uppercase;color:${L.ink4}">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="ink4" style="color:${L.ink4}">StockPilot &middot; Inventory + Order Mgmt</td><td align="right" class="ink4" style="color:${L.ink4}">stockpilotusa.com</td></tr></table>
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="fstrip"><tr><td class="ink4" style="color:${L.ink4}">StockPilot &middot; Inventory + Order Mgmt</td><td align="right" class="ink4" style="color:${L.ink4}">stockpilotusa.com</td></tr></table>
       </div>
     </td></tr>`;
 }

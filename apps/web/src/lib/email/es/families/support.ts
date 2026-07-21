@@ -225,7 +225,10 @@ export function renderSupportTicketEmailHtml(
  * signs off; any future dispatch path MUST call
  * `assertConceptEmailsEnabled()` before sending.
  */
-export const ES_CONCEPT_EMAILS_ENABLED = false;
+// Owner decision 2026-07-20: the two concept templates are LIVE —
+// support-received on ticket creation, support-resolved on the transition
+// into 'resolved' (dispatch in server/services/support-tickets.ts).
+export const ES_CONCEPT_EMAILS_ENABLED = true;
 
 /** Dispatch gate for the concept templates — throws while the flag is off. */
 export function assertConceptEmailsEnabled(): void {
