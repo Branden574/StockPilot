@@ -4,9 +4,15 @@ import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
+import {
+  renderSchedHour,
+  renderSchedTomorrow,
+} from '@/lib/email/families/schedule';
 import { sendEmail } from '@/lib/email/resend';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createNotification } from '@/server/services/notifications';
+
+import type { ScheduleReminderParams } from '@/lib/email/families/schedule';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,7 +37,18 @@ function secretsEqual(a: string, b: string): boolean {
  *
  * Dedupe by stamping reminded_*_at BEFORE sending (crash-safe direction:
  * losing one reminder beats spamming on retry loops). FAIL-OPEN per event.
+ *
+ * Emails render via the es-layer schedule family (sched-tmrw / sched-hour,
+ * lib/email/families/schedule.ts) — this replaced the raw one-line
+ * `<p><strong>` body. The dedupe stamps and recipient selection above are
+ * unchanged; only the rendering + send envelope (schedule@ sender,
+ * List-Unsubscribe header) moved into the family.
  */
+
+/** Format one field of a date in the org display timezone (PT). */
+function tzPart(d: Date, opts: Intl.DateTimeFormatOptions): string {
+  return d.toLocaleString('en-US', { ...opts, timeZone: 'America/Los_Angeles' });
+}
 export async function GET(req: Request) {
   if (!env.CRON_SECRET) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
@@ -52,7 +69,10 @@ export async function GET(req: Request) {
     organization_id: string;
     title: string;
     starts_at: string;
+    ends_at: string | null;
+    all_day: boolean | null;
     location_text: string | null;
+    details: string | null;
     warehouse_id: string | null;
     assigned_user_id: string | null;
     reminded_24h_at: string | null;
@@ -62,7 +82,7 @@ export async function GET(req: Request) {
   const { data, error } = await admin
     .from('schedule_events')
     .select(
-      'id, organization_id, title, starts_at, location_text, warehouse_id, assigned_user_id, reminded_24h_at, reminded_1h_at',
+      'id, organization_id, title, starts_at, ends_at, all_day, location_text, details, warehouse_id, assigned_user_id, reminded_24h_at, reminded_1h_at',
     )
     .eq('status', 'scheduled')
     .gte('starts_at', nowIso)
@@ -117,13 +137,47 @@ export async function GET(req: Request) {
       const body = `${when}${ev.location_text ? ` · ${ev.location_text}` : ''}`;
       const link = `/dashboard/schedule/${ev.id}`;
 
+      // es-template merge labels, all in the display timezone (PT — same
+      // hard-coded zone as `when` above).
+      const startsAt = new Date(ev.starts_at);
+      const startTime = tzPart(startsAt, { hour: 'numeric', minute: '2-digit' });
+      const endTime = ev.ends_at
+        ? tzPart(new Date(ev.ends_at), { hour: 'numeric', minute: '2-digit' })
+        : null;
+      const timeLabel = ev.all_day
+        ? 'All day'
+        : endTime
+          ? `${startTime} – ${endTime}`
+          : startTime;
+      const appUrl = env.NEXT_PUBLIC_APP_URL;
+      const settingsUrl = `${appUrl}/dashboard/settings/notifications`;
+      const sharedParams = {
+        eventTitle: ev.title,
+        month: tzPart(startsAt, { month: 'short' }),
+        day: tzPart(startsAt, { day: 'numeric' }),
+        dow: tzPart(startsAt, { weekday: 'short' }),
+        startTime,
+        timeLabel,
+        whenLabel: when,
+        location: ev.location_text,
+        details: ev.details,
+        scheduleUrl: `${appUrl}${link}`,
+        urls: { manage: settingsUrl, unsubscribe: settingsUrl, support: `${appUrl}/support` },
+      } satisfies Omit<
+        ScheduleReminderParams,
+        'assignedToYou' | 'firstName' | 'recipientEmail'
+      >;
+
       // Emails need addresses; one batch lookup for all recipients.
+      // (full_name feeds the greeting only — recipient selection unchanged.)
       const { data: profiles } = await admin
         .from('user_profiles')
-        .select('id, email')
+        .select('id, email, full_name')
         .in('id', [...userIds]);
-      const emailById = new Map(
-        ((profiles ?? []) as { id: string; email: string | null }[]).map((p) => [p.id, p.email]),
+      const profileById = new Map(
+        (
+          (profiles ?? []) as { id: string; email: string | null; full_name: string | null }[]
+        ).map((p) => [p.id, p]),
       );
       // Per-user prefs (0258), house fail-open pattern: missing row or null
       // column = subscribed; only an explicit false opts out.
@@ -158,13 +212,27 @@ export async function GET(req: Request) {
             metadata: { scheduleEventId: ev.id, horizon: isOneHour ? '1h' : '24h' },
           });
         }
-        const email = emailById.get(uid);
+        const profile = profileById.get(uid);
+        const email = profile?.email;
         if (email && wantsEmail) {
+          const params: ScheduleReminderParams = {
+            ...sharedParams,
+            assignedToYou: uid === ev.assigned_user_id,
+            firstName: (profile?.full_name ?? '').trim().split(/\s+/)[0] || null,
+            recipientEmail: email,
+          };
+          const rendered = isOneHour
+            ? renderSchedHour(params)
+            : renderSchedTomorrow(params);
+          // rendered.subject === `Reminder: ${ev.title} — ${horizon}` (the
+          // registry subject builders reproduce the legacy subject exactly).
           await sendEmail({
             to: email,
-            subject: title,
-            text: `${title}\n${body}\n\n${env.NEXT_PUBLIC_APP_URL}${link}`,
-            html: `<p><strong>${title}</strong></p><p>${body}</p><p><a href="${env.NEXT_PUBLIC_APP_URL}${link}">Open the event</a></p>`,
+            subject: rendered.subject,
+            text: rendered.text,
+            html: rendered.html,
+            from: rendered.from,
+            headers: rendered.headers,
           });
         }
       }
