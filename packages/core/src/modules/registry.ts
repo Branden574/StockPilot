@@ -703,7 +703,7 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // Async uncertain-crop review + supervisor summaries run through the AI
     // seam; the real-time detector is on-device (see the Phase 0 spec).
     dependsOn: ['ai'],
-    permissions: [],
+    permissions: ['stock:adjust'],
     surfaces: ['mobile'],
     apiPrefixes: ['/api/v1/size-counts'],
     ownsTables: ['size_count_sessions', 'size_count_events', 'size_count_adjustments'],
@@ -711,7 +711,19 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
     // Off by default everywhere — gated behind a TestFlight pilot until the
     // on-device model is validated. Enable per-org when piloting.
     defaultOnFor: [],
-    placements: [],
+    // Mobile-only entry; appears in the drawer only for orgs with the module
+    // enabled. Points at the start-a-count screen (v1 has no list yet).
+    placements: [
+      {
+        surface: 'mobile_drawer',
+        section: 'inventory',
+        label: 'Size count',
+        href: '/size-count/new',
+        iconName: 'ScanLine',
+        defaultSortOrder: 95,
+        requires: 'stock:adjust',
+      },
+    ],
   },
   api_access: {
     id: 'api_access',

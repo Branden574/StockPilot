@@ -366,6 +366,20 @@ async function sendOne(
       // queued adjusts.
       throw new Error('adjust_stock queueing not yet wired — adjust online for now');
     }
+    case 'size_count_event': {
+      // Instant Size Count: one tapped/detected garment = one event. The
+      // server dedups on idempotency_key, so a single-event batch is safe to
+      // replay. sessionId is the already-created (online) session.
+      const sessionId = String(payload.sessionId ?? '');
+      if (!sessionId) throw new Error('size_count_event: missing sessionId');
+      const { sessionId: _drop, ...event } = payload;
+      void _drop;
+      await api(`/api/v1/size-counts/${sessionId}/events`, {
+        method: 'POST',
+        body: { events: [{ ...event, idempotencyKey }] },
+      });
+      return;
+    }
     case 'create_book':
     case 'upload_image': {
       throw new Error(`${kind} queueing not yet wired`);

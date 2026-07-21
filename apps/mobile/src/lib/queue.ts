@@ -16,7 +16,8 @@ export type PendingActionKind =
   | 'record_count'
   | 'create_book'
   | 'distribute_bundle'
-  | 'upload_image';
+  | 'upload_image'
+  | 'size_count_event';
 
 export interface PendingActionRow {
   id: number;
