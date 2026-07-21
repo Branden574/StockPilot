@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { renderToStream } from '@react-pdf/renderer';
 
+import { can } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
@@ -30,10 +32,18 @@ export async function GET(
     // Cycle-count PDFs reveal counted qtys, variance, and notes that
     // can include WIP context (count notes often record discrepancies
     // before any adjustment is made). Restrict to the same permission
-    // that gates the rest of the cycle-count UI so viewers can't pull
-    // the report directly via URL. The dashboard page already redirects
-    // viewers; this is defense-in-depth against direct API calls.
-    assertPermission(ctx, 'stock:adjust');
+    // that gates the rest of the cycle-count UI so ungranted members
+    // can't pull the report directly via URL. The pages gate on
+    // cycle_counts:read (grantable read-only access — the PDF shows
+    // exactly what the read-only detail page shows) with stock:adjust
+    // as the write-side fallback; mirror that here. Defense-in-depth
+    // against direct API calls.
+    // assertPermission (vs a bare can()) keeps the org MFA floor applied
+    // on both branches.
+    assertPermission(
+      ctx,
+      can(ctx, 'cycle_counts:read') ? 'cycle_counts:read' : 'stock:adjust',
+    );
 
     const ccSvc = new CycleCountsService(ctx);
     const warehousesSvc = new WarehousesService(ctx);

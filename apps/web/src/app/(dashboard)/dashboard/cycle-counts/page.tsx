@@ -28,12 +28,15 @@ export default async function CycleCountsPage() {
   if (!moduleAccess.enabled) {
     return <ModuleNotEnabled moduleId="cycle_counts" canManage={moduleAccess.canManage} />;
   }
-  // Cycle counts emit stock_movements rows when posted — gated on
-  // stock:adjust (staff+). Viewers get bounced.
+  // Visibility gates on cycle_counts:read (staff+ by default, grantable to
+  // viewers for read-only audit access). stock:adjust holders keep access
+  // even if an org revokes the read perm from a role that can still count.
+  // Writing (starting/entering/posting a count) stays gated on stock:adjust.
   const ctx = await requireOrgContext();
-  if (!can(ctx, 'stock:adjust')) {
+  if (!can(ctx, 'cycle_counts:read') && !can(ctx, 'stock:adjust')) {
     redirect('/dashboard');
   }
+  const canStart = can(ctx, 'stock:adjust');
   const [ccSvc, warehousesSvc] = await Promise.all([
     CycleCountsService.forCurrentUser(),
     WarehousesService.forCurrentUser(),
@@ -75,9 +78,11 @@ export default async function CycleCountsPage() {
             for every variance and brings inventory in line with what was counted.
           </p>
         </div>
-        <Button asChild variant="gradient">
-          <Link href="/dashboard/cycle-counts/new">+ Start a count</Link>
-        </Button>
+        {canStart && (
+          <Button asChild variant="gradient">
+            <Link href="/dashboard/cycle-counts/new">+ Start a count</Link>
+          </Button>
+        )}
       </div>
 
       <div className="mt-8">
@@ -86,7 +91,11 @@ export default async function CycleCountsPage() {
             icon={ClipboardCheck}
             title="No cycle counts yet"
             description="Start a count to snapshot expected quantities, then enter actuals as you walk the warehouse. We post the variance adjustments for you."
-            cta={{ label: 'Start your first count', href: '/dashboard/cycle-counts/new' }}
+            cta={
+              canStart
+                ? { label: 'Start your first count', href: '/dashboard/cycle-counts/new' }
+                : undefined
+            }
           />
         ) : (
           <div className="bg-card overflow-x-auto rounded-xl border">

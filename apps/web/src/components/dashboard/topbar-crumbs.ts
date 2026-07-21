@@ -188,10 +188,12 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   ],
   [/^\/dashboard\/settings$/, [SECTION_WORKSPACE, SETTINGS_LIST]],
 
-  // Admin (all flat sub-routes; no list/detail nesting)
+  // Admin (all flat sub-routes; no list/detail nesting). The audit console
+  // lives at /dashboard/audit (grantable, outside the admin layout) but
+  // stays under the Admin crumb section to match its sidebar placement.
   [
-    /^\/dashboard\/admin\/audit$/,
-    [SECTION_ADMIN, { label: 'Audit log', href: '/dashboard/admin/audit' }],
+    /^\/dashboard\/audit$/,
+    [SECTION_ADMIN, { label: 'Audit log', href: '/dashboard/audit' }],
   ],
   [/^\/dashboard\/admin\/bins$/, [SECTION_ADMIN, { label: 'Bins', href: '/dashboard/admin/bins' }]],
   [

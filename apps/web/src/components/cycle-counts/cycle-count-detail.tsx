@@ -78,6 +78,12 @@ interface Props {
   /** Whether the current user has cycle_counts:assign (manager / admin /
       owner). When false, the AssigneePicker renders read-only. */
   canAssign?: boolean;
+  /** Whether the current user holds stock:adjust. When false (a read-only
+      grantee of cycle_counts:read), EVERY write affordance disappears —
+      count-entry inputs, clear buttons, cancel, and post — and the page is a
+      genuinely read-only view of the count. Defaults to false (fail closed);
+      the server page passes the real value. */
+  canAdjust?: boolean;
   /** Org members eligible for assignment. Only populated when
       `canAssign` is true. */
   members?: Member[];
@@ -101,6 +107,7 @@ export function CycleCountDetail({
   search,
   filter,
   canAssign = false,
+  canAdjust = false,
   members = [],
   assigneeName = null,
   itemsInScopeCount,
@@ -186,8 +193,9 @@ export function CycleCountDetail({
   // We can't directly observe Input draft state from here, so we
   // gate on "open + any line still uncounted" — the user came to the
   // page to count and there's still work pending. Closed counts never
-  // arm the listener.
-  const hasPendingWork = open && uncounted > 0;
+  // arm the listener, and read-only visitors (no stock:adjust) can't
+  // have unsaved input to lose.
+  const hasPendingWork = open && canAdjust && uncounted > 0;
   React.useEffect(() => {
     if (!hasPendingWork) return;
     const handler = (e: BeforeUnloadEvent) => {
@@ -271,7 +279,7 @@ export function CycleCountDetail({
           {formatNumber(summary.counted)} of {formatNumber(summary.total)} counted ·{' '}
           {formatNumber(summary.varianceCount)} with variance
         </span>
-        {open && (
+        {open && canAdjust && (
           <div className="ml-auto flex gap-2">
             <Button
               variant="ghost"
@@ -363,7 +371,8 @@ export function CycleCountDetail({
               <CountRow
                 key={l.id}
                 line={l}
-                disabled={!open}
+                disabled={!open || !canAdjust}
+                readOnly={!canAdjust}
                 busy={busyLine === l.id}
                 onSave={(value) => saveCount(l, value)}
                 onClear={() => clearLine(l)}
@@ -416,6 +425,7 @@ export function CycleCountDetail({
         </div>
       )}
 
+      {canAdjust && (
       <DestructiveConfirm
         open={cancelOpen}
         onOpenChange={setCancelOpen}
@@ -426,7 +436,9 @@ export function CycleCountDetail({
         pending={cancelBusy}
         onConfirm={confirmCancel}
       />
+      )}
 
+      {canAdjust && (
       <Dialog open={confirmOpen} onOpenChange={(o) => !postBusy && setConfirmOpen(o)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -465,11 +477,18 @@ export function CycleCountDetail({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      )}
 
       {(completed || canceled) && (
         <p className="text-muted-foreground text-xs">
           This count is {completed ? 'completed' : 'canceled'}. Lines are
           read-only.
+        </p>
+      )}
+      {open && !canAdjust && (
+        <p className="text-muted-foreground text-xs">
+          You have view-only access to this count. Entering quantities and
+          posting adjustments require the stock adjustment permission.
         </p>
       )}
     </div>
@@ -479,12 +498,17 @@ export function CycleCountDetail({
 function CountRow({
   line,
   disabled,
+  readOnly = false,
   busy,
   onSave,
   onClear,
 }: {
   line: CycleCountLineWithItem;
   disabled: boolean;
+  /** Read-only visitor (no stock:adjust): render the counted quantity as
+      plain text instead of a (disabled) entry input — no write affordances
+      at all. */
+  readOnly?: boolean;
   busy: boolean;
   onSave: (value: string) => void;
   onClear: () => void;
@@ -525,6 +549,11 @@ function CountRow({
         {formatNumber(line.expected_quantity)}
       </TableCell>
       <TableCell className="text-right">
+        {readOnly ? (
+          <span className="text-right tabular-nums">
+            {line.counted_quantity != null ? formatNumber(line.counted_quantity) : '—'}
+          </span>
+        ) : (
         <Input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -549,6 +578,7 @@ function CountRow({
           disabled={disabled || busy}
           className="ml-auto h-8 max-w-[110px] text-right text-[12.5px] tabular-nums"
         />
+        )}
       </TableCell>
       <TableCell
         className={

@@ -110,7 +110,7 @@ describe('MODULE_REGISTRY', () => {
       '/dashboard/notifications','/dashboard/team','/dashboard/support','/dashboard/settings',
       '/dashboard/admin','/dashboard/admin/charters','/dashboard/admin/warehouses',
       '/dashboard/admin/bins','/dashboard/admin/users','/dashboard/admin/vendor-mappings',
-      '/dashboard/admin/uom-conversions','/dashboard/admin/reconciliation','/dashboard/admin/audit',
+      '/dashboard/admin/uom-conversions','/dashboard/admin/reconciliation','/dashboard/audit',
     ]) expect(webHrefs).toContain(href);
   });
   it('covers the current mobile drawer hrefs', () => {

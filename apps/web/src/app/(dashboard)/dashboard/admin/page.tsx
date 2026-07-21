@@ -72,7 +72,7 @@ export default async function AdminOverviewPage() {
       count: membersRes.count ?? 0,
     },
     {
-      href: '/dashboard/admin/audit',
+      href: '/dashboard/audit',
       icon: FileLock,
       title: 'Audit log',
       description: 'Every sensitive action — who, when, before/after diff. Read-only.',

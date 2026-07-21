@@ -125,8 +125,8 @@ export interface ActivityCursor {
  * Display-duplication rule (Movement/Activity P2 Task 2): `InventoryService`
  * now emits an `audit_logs` row for every adjust/transfer/receive/remove
  * (`stock.adjusted` / `stock.transferred` / `stock.received` /
- * `stock.removed`) so the GLOBAL audit page (`/dashboard/admin/audit`,
- * `/dashboard/settings/audit` — which query `audit_logs` directly, NOT this
+ * `stock.removed`) so the GLOBAL audit page (`/dashboard/audit` — which
+ * queries `audit_logs` directly via AuditLogService, NOT this
  * method) gets full before/after attribution for stock changes. But every
  * one of those mutations ALSO already writes a `stock_movements` row, and
  * `forItem` is the ONE feed that merges both sources for the item's

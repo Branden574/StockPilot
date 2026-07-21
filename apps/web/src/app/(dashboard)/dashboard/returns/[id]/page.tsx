@@ -36,10 +36,13 @@ export default async function ReturnDetailPage({
   if (!moduleAccess.enabled) {
     return <ModuleNotEnabled moduleId="returns" canManage={moduleAccess.canManage} />;
   }
+  // Mirrors the list page: returns:read (or manage) can view. The action
+  // panel below renders only for returns:manage holders.
   const ctx = await requireOrgContext();
-  if (!can(ctx, 'returns:manage')) {
+  if (!can(ctx, 'returns:read') && !can(ctx, 'returns:manage')) {
     redirect('/dashboard');
   }
+  const canManage = can(ctx, 'returns:manage');
 
   const svc = await RMAService.forCurrentUser();
   let detail;
@@ -206,6 +209,7 @@ export default async function ReturnDetailPage({
             </section>
           )}
 
+          {canManage && (
           <ReturnActionsPanel
             returnId={detail.id}
             status={detail.status}
@@ -225,6 +229,7 @@ export default async function ReturnDetailPage({
                 : null
             }
           />
+          )}
         </div>
 
         <aside className="space-y-4">

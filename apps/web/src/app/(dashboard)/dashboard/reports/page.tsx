@@ -14,6 +14,9 @@ import {
   Truck,
 } from 'lucide-react';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
+
+import { can } from '@stockpilot/core';
 
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -92,7 +95,13 @@ const REPORTS: Report[] = [
 ];
 
 export default async function ReportsPage() {
-  await requireOrgContext();
+  // Explicit page gate to match the sidebar placement (requires
+  // reports:read) — previously nav-only, so any member could load the
+  // hub via direct URL. Viewer gains it only via an explicit grant.
+  const ctx = await requireOrgContext();
+  if (!can(ctx, 'reports:read')) {
+    redirect('/dashboard');
+  }
   const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
   const reports: Report[] = lotSerialEnabled
     ? [

@@ -23,6 +23,10 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   // Matches bare `/dashboard/orders` and `?status=…` (query dropped → the full
   // Orders list) but NOT `/dashboard/orders/<uuid>` (handled by the rule above).
   { re: /\/dashboard\/orders(\?.*)?$/, to: () => '/orders' },
+  // Audit console: the web surface consolidated onto /dashboard/audit (old
+  // /dashboard/admin/audit redirects there); the native twin stays at
+  // /admin/audit. Query (filters) dropped → the full audit list.
+  { re: /\/dashboard\/(admin\/)?audit(\?.*)?$/, to: () => '/admin/audit' },
   { re: /^\/dashboard(\/.*)?$/, to: () => '/' },
 ];
 

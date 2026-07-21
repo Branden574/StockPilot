@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolveSurface, SECTION_ORDER } from './resolve';
-import { DEFAULT_MODULE_IDS, MODULE_REGISTRY } from './registry';
+import { DEFAULT_MODULE_IDS, MODULE_REGISTRY, type ModuleId } from './registry';
 
 const ALL = new Set(DEFAULT_MODULE_IDS);
 
@@ -42,6 +42,59 @@ describe('resolveSurface', () => {
       permissions: new Set(['items:read']),
     }).flatMap((s) => s.items.map((i) => i.href));
     expect(withoutRead).not.toContain('/dashboard/purchase-orders');
+  });
+  it('read-permission grants surface the five auditor-readable modules for a viewer', () => {
+    // Default viewer: none of the five read perms → none of the surfaces.
+    const without = resolveSurface('web_sidebar', {
+      role: 'viewer',
+      enabledModules: ALL,
+      permissions: new Set(['items:read']),
+    }).flatMap((s) => s.items.map((i) => i.href));
+    for (const href of [
+      '/dashboard/cycle-counts', '/dashboard/schedule', '/dashboard/bundles',
+      '/dashboard/rentals', '/dashboard/audit',
+    ]) expect(without).not.toContain(href);
+
+    // Grant the read perms (Auditor preset shape) → every surface appears,
+    // WITHOUT any write permission and without being an admin.
+    const withReads = resolveSurface('web_sidebar', {
+      role: 'viewer',
+      enabledModules: ALL,
+      permissions: new Set([
+        'items:read', 'cycle_counts:read', 'schedule:read', 'bundles:read',
+        'rentals:read', 'activity_logs:read',
+      ]),
+    }).flatMap((s) => s.items.map((i) => i.href));
+    for (const href of [
+      '/dashboard/cycle-counts', '/dashboard/schedule', '/dashboard/bundles',
+      '/dashboard/rentals', '/dashboard/audit',
+    ]) expect(withReads).toContain(href);
+  });
+  it('returns placement gates on returns:read (module on, web only)', () => {
+    const withReturns = new Set<ModuleId>([...ALL, 'returns']);
+    const granted = resolveSurface('web_sidebar', {
+      role: 'viewer',
+      enabledModules: withReturns,
+      permissions: new Set(['returns:read']),
+    }).flatMap((s) => s.items.map((i) => i.href));
+    expect(granted).toContain('/dashboard/returns');
+    const ungranted = resolveSurface('web_sidebar', {
+      role: 'viewer',
+      enabledModules: withReturns,
+      permissions: new Set(['items:read']),
+    }).flatMap((s) => s.items.map((i) => i.href));
+    expect(ungranted).not.toContain('/dashboard/returns');
+  });
+  it('mobile audit drawer item is permission-gated, not admin-gated', () => {
+    const granted = resolveSurface('mobile_drawer', {
+      role: 'viewer',
+      enabledModules: ALL,
+      permissions: new Set(['activity_logs:read']),
+    }).flatMap((s) => s.items.map((i) => i.href));
+    expect(granted).toContain('/admin/audit');
+    // …but the rest of the admin section stays requiresAdmin-only.
+    expect(granted).not.toContain('/admin');
+    expect(granted).not.toContain('/admin/users');
   });
   it('disabling an optional module removes its items (core stays)', () => {
     const without = new Set([...ALL].filter((m) => m !== 'rentals'));
@@ -92,7 +145,9 @@ describe('nav order is frozen to the original static nav', () => {
       '/dashboard/team', '/dashboard/support', '/dashboard/settings',
       '/dashboard/admin', '/dashboard/admin/charters', '/dashboard/admin/warehouses',
       '/dashboard/admin/bins', '/dashboard/admin/users', '/dashboard/admin/vendor-mappings',
-      '/dashboard/admin/uom-conversions', '/dashboard/admin/reconciliation', '/dashboard/admin/audit',
+      // Audit log moved to the grantable non-admin route (auditor visibility);
+      // same position in the Admin section.
+      '/dashboard/admin/uom-conversions', '/dashboard/admin/reconciliation', '/dashboard/audit',
     ]);
   });
 

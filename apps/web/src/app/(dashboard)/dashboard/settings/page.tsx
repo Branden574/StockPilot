@@ -40,7 +40,7 @@ const MANAGER_SECTIONS = [
 ];
 
 const ADMIN_SECTIONS = [
-  { href: '/dashboard/settings/audit', title: 'Audit log', description: 'Every privileged action across the org.' },
+  { href: '/dashboard/audit', title: 'Audit log', description: 'Every privileged action across the org.' },
 ];
 
 // AI settings (embeddings backfill, etc.) — gated on the explicit
