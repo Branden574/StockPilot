@@ -360,9 +360,8 @@ export function renderWeeklyDigestHtml(
 }
 
 // ── Plain-text part ─────────────────────────────────────────────────
-// Byte-identical to the legacy templates.tsx renderer — the text part is
-// outside the design package, and keeping it stable preserves the
-// multipart behavior for text-preferring clients.
+// The text part is outside the design package; keeping it stable
+// preserves the multipart behavior for text-preferring clients.
 
 export interface WeeklyDigestTextOptions {
   orgName: string;

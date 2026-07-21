@@ -24,7 +24,7 @@ import { ES_LIGHT, ES_MAX_HTML_BYTES, esAssetUrl } from './tokens';
 import type { EsStatusVariant } from './tokens';
 
 describe('esAssetUrl', () => {
-  it('serves from /email/ under the public web origin (emailLogoImg convention)', () => {
+  it('serves from /email/ under the public web origin', () => {
     expect(esAssetUrl('lock@2x.gif')).toBe('https://stockpilotusa.com/email/lock@2x.gif');
     expect(esAssetUrl('logo-mark-dark.png')).toBe(
       'https://stockpilotusa.com/email/logo-mark-dark.png',

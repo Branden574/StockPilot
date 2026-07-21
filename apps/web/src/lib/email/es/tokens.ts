@@ -182,8 +182,7 @@ export const ES_HERO_IMG_HEIGHT = 194;
 export const ES_MAX_HTML_BYTES = 102 * 1024;
 
 // ── Asset origin ────────────────────────────────────────────────────
-// Matches the existing `emailLogoImg` convention (lib/email/templates.tsx):
-// a hard-coded absolute URL on the public production origin — email
+// A hard-coded absolute URL on the public production origin — email
 // clients need absolute URLs and Google's image proxy caches per-URL, so
 // we never derive this from a request-time env. ES assets are served
 // from `apps/web/public/email/` → `https://stockpilotusa.com/email/...`.
@@ -194,9 +193,8 @@ export const ES_ASSET_BASE = 'https://stockpilotusa.com/email';
  * Absolute URL for an es asset file (logo marks, motion GIFs).
  * `esAssetUrl('lock@2x.gif')` → `https://stockpilotusa.com/email/lock@2x.gif`.
  *
- * `version` appends `?v=N` — the same GoogleImageProxy cache-bust escape
- * hatch the legacy logo needed (the proxy caches failures per-URL; see
- * the `?v=2` note on EMAIL_LOGO_URL). Leave unset until an asset needs
+ * `version` appends `?v=N` — a GoogleImageProxy cache-bust escape hatch
+ * (the proxy caches failures per-URL). Leave unset until an asset needs
  * a bust.
  */
 export function esAssetUrl(file: string, version?: number): string {
